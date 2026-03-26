@@ -13,7 +13,9 @@ MCP defines what an agent can do. It says nothing about who the agent is, whethe
 
 Agents carry persistent Ed25519 identities (`did:key` URIs), accumulate verifiable trust through signed execution receipts, and enforce zero-trust policy at every tool boundary. Receipts embed the signer's public key — self-verifiable offline, without contacting any authority. Key rotation uses dual-signed succession chains verifiable end-to-end from genesis key to current key. Cross-agent delegation produces nested receipts with cryptographic chain-of-custody.
 
-This is a working implementation (40 workspaces, 166,000 lines of TypeScript (92,000 production, 74,000 tests), 3,900+ tests, three open specifications), not a proposal. Three MIT protocol packages are published on npm (`@motebit/sdk`, `@motebit/verify`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The protocol layer is MIT licensed and the verification library has zero dependencies — any system can verify a Motebit agent's identity, receipts, and credentials without running Motebit software. Multi-agent delegation with signed receipts and budget settlement has been verified in reference deployments and integration tests across independent services.
+This is a working implementation (44 workspaces, 175,000 lines of TypeScript (98,000 production, 77,000 tests), 3,900+ tests, four open specifications), not a proposal. Three MIT protocol packages are published on npm (`@motebit/sdk`, `@motebit/verify`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The protocol layer is MIT licensed and the verification library has zero dependencies — any system can verify a Motebit agent's identity, receipts, and credentials without running Motebit software.
+
+The system implements a complete two-sided agent economy: agents deposit funds, delegate tasks to specialized agents on the network, and settle payments through cryptographically verified receipts. All monetary amounts are stored as integer micro-units (1 USD = 1,000,000 units) with zero floating-point arithmetic. Multi-agent orchestration decomposes complex tasks into capability-tagged steps and delegates each to the best available agent via trust-weighted semiring routing — each hop settles independently with a 5% relay fee. This has been verified in reference deployments, integration tests, and end-to-end settlement tests across independent services.
 
 We offer Motebit as a reference implementation and potential NCCoE technology collaborator. This comment responds directly to the six question categories in the Note to Reviewers.
 
@@ -27,7 +29,9 @@ Motebit is deployed across six surfaces (`apps/desktop/`, `apps/cli/`, `apps/mob
 
 **Which use-cases are in the near future?**
 
-Agent-to-agent delegation across organizational boundaries. Today, an enterprise agent calls tools within its own trust domain. The near-future shift is agents delegating tasks to agents operated by other organizations — a procurement agent requesting quotes from a vendor's agent, a compliance agent querying a regulator's agent. This requires cryptographic identity that is portable across trust domains, delegation receipts that prove chain-of-custody, and budget-gated settlement between parties. Motebit's relay federation specification (`motebit/relay-federation@1.0`) addresses this directly: cross-relay task routing via semiring-algebraic graph traversal, settlement chains with receipt co-signing, and circuit breakers for forward-path health. This is implemented — not planned — in `services/api/src/federation.ts`, `packages/market/src/graph-routing.ts`, and `packages/market/src/settlement.ts`, with end-to-end federation tests.
+Agent-to-agent delegation across organizational boundaries is implemented and operational. An agent on one relay can delegate tasks to agents on a peered relay — a procurement agent requesting quotes from a vendor's agent, a compliance agent querying a regulator's agent. This requires cryptographic identity that is portable across trust domains, delegation receipts that prove chain-of-custody, and budget-gated settlement between parties. Motebit's relay federation specification (`motebit/relay-federation@1.0`, stable) implements this: cross-relay task routing via semiring-algebraic graph traversal, settlement chains with receipt co-signing, and circuit breakers for forward-path health (`services/api/src/federation.ts`, `packages/market/src/graph-routing.ts`, `packages/market/src/settlement.ts`), with end-to-end federation tests.
+
+The near-future extension is multi-agent orchestration from a single user command. The CLI's `--plan` flag decomposes a complex task into capability-tagged steps, discovers the best available agent for each step via trust-weighted routing, delegates each step independently, and composes the results — with per-hop budget settlement. This transforms the agent from a single-capability tool into an orchestrator that hires specialists from an open marketplace.
 
 **What opportunities do agents present?**
 
@@ -202,6 +206,8 @@ The identity file's `owner_id` field binds the agent to a human identity. The op
 - Governance thresholds: Section 3.3 of `spec/identity-v1.md`
 - Execution receipts: `packages/runtime/src/execution-ledger.ts`
 - Delegation via MCP: `packages/mcp-server/`, `services/api/src/task-routing.ts`
+- Market specification: `spec/market-v1.md` (budget allocation, settlement, micro-unit precision)
+- Multi-agent orchestration: `packages/planner/` (PlanEngine with delegation adapter)
 - Shell hardening: `packages/tools/src/builtins/shell-exec.ts` (allowlist, blocklist, destructive detection)
 - File sandboxing: `packages/tools/src/builtins/path-sandbox.ts` (shared symlink-safe path validation)
 
@@ -298,7 +304,7 @@ Motebit's architecture engages with several standards referenced in the concept 
 
 - **Source code:** [github.com/motebit/motebit](https://github.com/motebit/motebit) (source-available, BSL 1.1)
 - **Protocol layer:** MIT licensed — specifications, SDK, verification library, scaffolder
-- **Specifications:** `motebit/identity@1.0` (stable), `motebit/execution-ledger@1.0` (stable), `motebit/relay-federation@1.0` (draft)
+- **Specifications:** `motebit/identity@1.0` (stable), `motebit/execution-ledger@1.0` (stable), `motebit/relay-federation@1.0` (stable), `motebit/market@1.0` (stable)
 - **npm packages:** `@motebit/sdk`, `@motebit/verify`, `create-motebit`, `motebit`
 - **Live demo:** [motebit.com](https://motebit.com)
 
