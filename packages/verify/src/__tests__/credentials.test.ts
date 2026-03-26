@@ -472,6 +472,20 @@ describe("verify — data integrity proof edge cases", () => {
     expect(r.errors).toBeUndefined();
   });
 
+  it("fails when did:key decodes to wrong number of bytes (not 34)", async () => {
+    const kp = await makeKeypair();
+    const vc = await makeSignedCredential(kp);
+
+    // Build a did:key that decodes to only 10 bytes (not 34)
+    const shortBytes = new Uint8Array(10);
+    const wrongDid = `did:key:z${base58btcEncode(shortBytes)}`;
+    vc.proof.verificationMethod = `${wrongDid}#${wrongDid.slice("did:key:".length)}`;
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+  });
+
   it("verifies presentation passed as JSON string", async () => {
     const kp = await makeKeypair();
     const vc = await makeSignedCredential(kp);

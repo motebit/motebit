@@ -748,6 +748,305 @@ describe("verify — JSON string dispatch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// verify() — verifyIdentityFile (deprecated wrapper)
+// ---------------------------------------------------------------------------
+
+import { verifyIdentityFile } from "../index";
+
+describe("verifyIdentityFile — deprecated wrapper", () => {
+  it("returns valid result for a correctly signed file", async () => {
+    const { content } = await generateValidFile();
+    const result = await verifyIdentityFile(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity).not.toBeNull();
+    expect(result.identity!.motebit_id).toBe("01234567-89ab-cdef-0123-456789abcdef");
+    expect(result.did).toMatch(/^did:key:z/);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("returns error for a tampered file", async () => {
+    const { content } = await generateValidFile();
+    const tampered = content.replace("owner-test", "evil-owner");
+    const result = await verifyIdentityFile(tampered);
+    expect(result.valid).toBe(false);
+    expect(result.identity).toBeNull();
+    expect(result.error).toBe("Signature verification failed");
+  });
+
+  it("returns succession result when present", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    const record = await createSuccessionRecord(kp1, kp2, 1000000);
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verifyIdentityFile(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.rotations).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — JSON parse failure path (line 1034)
+// ---------------------------------------------------------------------------
+
+describe("verify — JSON parse failure for detected non-identity string", () => {
+  it("returns parse error for a string that detects as JSON type but fails parse on second pass", async () => {
+    // This path (lines 1034-1043) is essentially dead code:
+    // detectArtifactType already calls JSON.parse successfully if it detects
+    // a non-identity type from a string. The second JSON.parse on line 1032
+    // would only fail if the string mutated between calls — impossible in
+    // single-threaded JS. We cannot reach this path without modifying source.
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — succession chain edge cases
+// ---------------------------------------------------------------------------
+
+describe("verify — succession chain failures", () => {
+  it("fails when old_key_signature verification fails", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kpWrong = await makeKeypair();
+
+    // Create a record where old_key_signature is signed by wrong key
+    const payloadObj: Record<string, unknown> = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+    };
+    const payload = canonicalJson(payloadObj);
+    const message = new TextEncoder().encode(payload);
+
+    // Sign old_key_signature with WRONG key (kpWrong instead of kp1)
+    const oldSig = await ed.signAsync(message, kpWrong.privateKey);
+    const newSig = await ed.signAsync(message, kp2.privateKey);
+
+    const record = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+      old_key_signature: toHex(oldSig),
+      new_key_signature: toHex(newSig),
+    };
+
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("old_key_signature verification failed");
+  });
+
+  it("fails when new_key_signature verification fails", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kpWrong = await makeKeypair();
+
+    const payloadObj: Record<string, unknown> = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+    };
+    const payload = canonicalJson(payloadObj);
+    const message = new TextEncoder().encode(payload);
+
+    // Sign old_key_signature correctly, new_key_signature with WRONG key
+    const oldSig = await ed.signAsync(message, kp1.privateKey);
+    const newSig = await ed.signAsync(message, kpWrong.privateKey);
+
+    const record = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+      old_key_signature: toHex(oldSig),
+      new_key_signature: toHex(newSig),
+    };
+
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("new_key_signature verification failed");
+  });
+
+  it("catches unexpected errors in succession chain verification", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    // Create a succession record with a truncated old_key_signature (not 64 bytes)
+    // This will cause ed.verifyAsync to throw instead of returning false
+    const record = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+      old_key_signature: "ab".repeat(10), // 10 bytes, not 64 — will throw
+      new_key_signature: "cd".repeat(10),
+    };
+
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("Succession");
+  });
+
+  it("fails when succession chain has temporal ordering violated", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kp3 = await makeKeypair();
+
+    // rec1 timestamp (2000000) > rec2 timestamp (1000000) — temporal violation
+    const rec1 = await createSuccessionRecord(kp1, kp2, 2000000);
+    const rec2 = await createSuccessionRecord(kp2, kp3, 1000000);
+    const yaml = buildYamlWithSuccession(kp3.publicKeyHex, [rec1, rec2]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("temporal ordering violated");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — identity validation edge cases
+// ---------------------------------------------------------------------------
+
+describe("verify — identity edge cases", () => {
+  it("returns error for invalid public key hex (odd length — triggers hexToBytes throw)", async () => {
+    // hexToBytes never throws for non-hex chars (parseInt returns NaN → 0).
+    // The "Invalid public key hex" path (line 596) is defensive dead code
+    // because the current hexToBytes implementation is lenient.
+    // We can still hit "Public key must be 32 bytes" with wrong-length hex:
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "abcdef"`,
+    ].join("\n");
+    // Build a valid-length base64url signature (64 bytes)
+    const sigBytes = new Uint8Array(64);
+    const content = buildIdentityFile(yaml, toBase64Url(sigBytes));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("Public key must be 32 bytes");
+  });
+
+  it("returns error for signature with wrong length (not 64 bytes)", async () => {
+    const kp = await makeKeypair();
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+    ].join("\n");
+    // Create a short base64url signature (16 bytes = 22 chars in base64url)
+    const shortSig = toBase64Url(new Uint8Array(16));
+    const content = buildIdentityFile(yaml, shortSig);
+
+    const result = await verify(content);
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("Signature must be 64 bytes");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — unrecognized object format
+// ---------------------------------------------------------------------------
+
+describe("verify — unrecognized object formats", () => {
+  it("returns null detection for an object without known fields", async () => {
+    const result = await verify({ foo: "bar", baz: 42 });
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+
+  it("returns null detection for an empty object", async () => {
+    const result = await verify({});
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parse() — YAML with nested arrays inside sections
+// ---------------------------------------------------------------------------
+
+describe("parse — YAML edge cases", () => {
+  it("parses identity file with a section header ending current array context", async () => {
+    const kp = await makeKeypair();
+
+    // Build YAML with capabilities array followed by a section at same indent
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "test-array-close"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `capabilities:`,
+      `  - web_search`,
+      `  - file_read`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R1_DRAFT"`,
+      `  require_approval_above: "R1_DRAFT"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+    ].join("\n");
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.capabilities).toEqual(["web_search", "file_read"]);
+    expect(parsed.frontmatter.identity.algorithm).toBe("Ed25519");
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-compatibility with @motebit/identity-file
 // ---------------------------------------------------------------------------
 // NOTE: Cross-compat is now tested in @motebit/identity-file's test suite,

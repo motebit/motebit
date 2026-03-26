@@ -9,7 +9,12 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // Import after mocks
-import { discoverByDns, discoverByWellKnown, discoverMotebit } from "../discovery.js";
+import {
+  discoverByDns,
+  discoverByWellKnown,
+  discoverMotebit,
+  discoverViaRelay,
+} from "../discovery.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -246,5 +251,104 @@ describe("discoverMotebit", () => {
     const result = await discoverMotebit("example.com");
     expect(result.identityVerified).toBe(true);
     expect(result.motebitUrl).toBe("https://example.com/.well-known/motebit.md");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// discoverViaRelay
+// ---------------------------------------------------------------------------
+
+describe("discoverViaRelay", () => {
+  it("returns agents from successful relay response", async () => {
+    const agents = [
+      {
+        motebit_id: "mote-1",
+        endpoint_url: "https://example.com/mcp",
+        capabilities: ["web_search"],
+        public_key: "ab".repeat(32),
+      },
+    ];
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ agents }),
+    });
+
+    const result = await discoverViaRelay({
+      relayUrl: "https://relay.example.com",
+      capability: "web_search",
+      limit: 5,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.motebit_id).toBe("mote-1");
+    // Verify correct URL was constructed
+    const calledUrl = mockFetch.mock.calls[0]![0] as string;
+    expect(calledUrl).toContain("/api/v1/agents/discover");
+    expect(calledUrl).toContain("capability=web_search");
+    expect(calledUrl).toContain("limit=5");
+  });
+
+  it("passes authToken as Bearer header", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ agents: [] }),
+    });
+
+    await discoverViaRelay({
+      relayUrl: "https://relay.example.com",
+      authToken: "my-token",
+    });
+
+    const headers = mockFetch.mock.calls[0]![1]?.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer my-token");
+  });
+
+  it("returns empty array on non-ok response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+    });
+
+    const result = await discoverViaRelay({
+      relayUrl: "https://relay.example.com",
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array when agents field is not an array", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ agents: "not an array" }),
+    });
+
+    const result = await discoverViaRelay({
+      relayUrl: "https://relay.example.com",
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array on network error", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("Network failure"));
+
+    const result = await discoverViaRelay({
+      relayUrl: "https://relay.example.com",
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("works without optional fields", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ agents: [] }),
+    });
+
+    const result = await discoverViaRelay({
+      relayUrl: "https://relay.example.com",
+    });
+    expect(result).toEqual([]);
+    // URL should not have capability or limit params
+    const calledUrl = mockFetch.mock.calls[0]![0] as string;
+    expect(calledUrl).not.toContain("capability=");
+    expect(calledUrl).not.toContain("limit=");
   });
 });

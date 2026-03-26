@@ -416,6 +416,34 @@ describe("MemoryGraph", () => {
     });
   });
 
+  describe("queryNodes with sensitivity_filter", () => {
+    it("filters memories by sensitivity level", async () => {
+      await graph.formMemory(
+        { content: "public info", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0, 0],
+      );
+      await graph.formMemory(
+        { content: "personal info", confidence: 0.9, sensitivity: SensitivityLevel.Personal },
+        [0, 1, 0],
+      );
+      await graph.formMemory(
+        { content: "financial info", confidence: 0.9, sensitivity: SensitivityLevel.Financial },
+        [0, 0, 1],
+      );
+
+      const results = await storage.queryNodes({
+        motebit_id: motebitId,
+        sensitivity_filter: [SensitivityLevel.None, SensitivityLevel.Personal],
+      });
+
+      expect(results).toHaveLength(2);
+      const sensitivities = results.map((n) => n.sensitivity);
+      expect(sensitivities).toContain(SensitivityLevel.None);
+      expect(sensitivities).toContain(SensitivityLevel.Personal);
+      expect(sensitivities).not.toContain(SensitivityLevel.Financial);
+    });
+  });
+
   describe("deleteMemory (tombstoning)", () => {
     it("tombstones the memory node", async () => {
       const node = await graph.formMemory(

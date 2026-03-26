@@ -365,4 +365,124 @@ describe("MemoryGraph.consolidateAndForm", () => {
     expect(updated!.half_life).toBe(originalHalfLife * 1.5);
     expect(updated!.last_accessed).toBeGreaterThanOrEqual(originalAccessed);
   });
+
+  it("UPDATE: proceeds without oldNode when existingNodeId is missing", async () => {
+    // Pre-populate to ensure LLM call is triggered (similar memory needed)
+    await graph.formMemory(
+      { content: "User works at Acme", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      [1, 0, 0],
+    );
+
+    // Provider returns UPDATE but without existingNodeId
+    const provider: ConsolidationProvider = {
+      classify: async () => ({
+        action: ConsolidationAction.UPDATE,
+        reason: "Job changed but no ref",
+      }),
+    };
+
+    const { node, decision } = await graph.consolidateAndForm(
+      { content: "User now at Tesla", confidence: 0.85, sensitivity: SensitivityLevel.None },
+      [0.95, 0.05, 0],
+      provider,
+    );
+
+    expect(decision.action).toBe("update");
+    expect(node).not.toBeNull();
+    expect(node!.content).toBe("User now at Tesla");
+  });
+
+  it("REINFORCE: handles missing existingNodeId gracefully", async () => {
+    await graph.formMemory(
+      { content: "User likes Python", confidence: 0.7, sensitivity: SensitivityLevel.None },
+      [1, 0, 0],
+    );
+
+    const provider: ConsolidationProvider = {
+      classify: async () => ({
+        action: ConsolidationAction.REINFORCE,
+        reason: "Confirms but no ref",
+      }),
+    };
+
+    const { node, decision } = await graph.consolidateAndForm(
+      { content: "User confirmed Python", confidence: 0.6, sensitivity: SensitivityLevel.None },
+      [0.95, 0.05, 0],
+      provider,
+    );
+
+    expect(decision.action).toBe("reinforce");
+    expect(node).toBeNull();
+  });
+
+  it("NOOP: handles missing existingNodeId gracefully", async () => {
+    await graph.formMemory(
+      { content: "User likes tea", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      [1, 0, 0],
+    );
+
+    const provider: ConsolidationProvider = {
+      classify: async () => ({
+        action: ConsolidationAction.NOOP,
+        reason: "Duplicate but no ref",
+      }),
+    };
+
+    const { node, decision } = await graph.consolidateAndForm(
+      { content: "User likes tea", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      [0.99, 0.01, 0],
+      provider,
+    );
+
+    expect(decision.action).toBe("noop");
+    expect(node).toBeNull();
+  });
+
+  it("logConsolidation catch: survives event store failure", async () => {
+    // Create graph with a failing event store
+    const failingEventAdapter = new InMemoryEventStore();
+    const failingEventStore = new EventStore(failingEventAdapter);
+    const failGraph = new MemoryGraph(storage, failingEventStore, "test-mote");
+
+    // Pre-populate
+    await failGraph.formMemory(
+      { content: "Existing memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      [1, 0, 0],
+    );
+
+    // Make event store throw on appendWithClock (used by logConsolidation)
+    const origAppendWithClock = failingEventAdapter.appendWithClock!.bind(failingEventAdapter);
+    let callCount = 0;
+    failingEventAdapter.appendWithClock = async (event) => {
+      callCount++;
+      // Let formMemory events through, fail on logConsolidation call
+      if (callCount > 2) throw new Error("Event store failure");
+      return origAppendWithClock(event);
+    };
+
+    const provider = mockProvider({ action: "add", reason: "New info" });
+    // Should not throw despite event store failure in logConsolidation
+    // Use similar embedding so LLM path is triggered (and logConsolidation is called)
+    const { node, decision } = await failGraph.consolidateAndForm(
+      { content: "New fact", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      [0.95, 0.05, 0],
+      provider,
+    );
+
+    expect(decision.action).toBe("add");
+    expect(node).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseConsolidationResponse — catch block
+// ---------------------------------------------------------------------------
+
+describe("parseConsolidationResponse — JSON parse error catch", () => {
+  it("falls back to NOOP when regex matches but JSON.parse throws", () => {
+    // The regex /{[\s\S]*?}/ matches "{invalid json}" but JSON.parse will throw
+    const decision = parseConsolidationResponse("response: {not: valid: json}", ["m1"]);
+    expect(decision.action).toBe(ConsolidationAction.NOOP);
+    expect(decision.reason).toContain("Failed to parse");
+  });
 });

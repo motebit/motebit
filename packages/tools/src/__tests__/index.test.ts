@@ -131,4 +131,21 @@ describe("InMemoryToolRegistry", () => {
     const result = await reg.execute("new", {});
     expect(result.data).toBe("fresh");
   });
+
+  it("unregister() removes an existing tool", () => {
+    const reg = new InMemoryToolRegistry();
+    reg.register(makeTool("removable"), async () => ({ ok: true }));
+    expect(reg.has("removable")).toBe(true);
+
+    const removed = reg.unregister("removable");
+    expect(removed).toBe(true);
+    expect(reg.has("removable")).toBe(false);
+    expect(reg.size).toBe(0);
+  });
+
+  it("unregister() returns false for non-existent tool", () => {
+    const reg = new InMemoryToolRegistry();
+    const removed = reg.unregister("nonexistent");
+    expect(removed).toBe(false);
+  });
 });

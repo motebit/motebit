@@ -272,4 +272,17 @@ describe("verify — execution receipts", () => {
     expect(result.valid).toBe(false);
     expect(result.errors![0]!.message).toContain("64 bytes");
   });
+
+  it("fails on receipt with invalid hex in public_key (non-hex chars)", async () => {
+    const kp = await makeKeypair();
+    const body = makeReceiptBody(kp.publicKeyHex);
+    // Set public_key to invalid hex (odd length, non-hex characters)
+    body.public_key = "zzzz-not-hex";
+    const receipt = await signReceipt(body, kp.privateKey);
+
+    const result = await verify(receipt);
+    expect(result.type).toBe("receipt");
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toContain("No embedded public_key");
+  });
 });

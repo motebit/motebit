@@ -88,6 +88,37 @@ describe("buildPrecisionContext", () => {
     expect(ctx).toContain("low");
     expect(ctx).toContain("clarifying");
   });
+
+  it("returns decisive guidance for high trust", () => {
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.9,
+      explorationDrive: 0.1,
+      retrievalPrecision: 0.8,
+      curiosityModulation: 0.1,
+    });
+    expect(ctx).toContain("high");
+    expect(ctx).toContain("decisively");
+  });
+
+  it("includes low exploration note for low exploration drive", () => {
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.9,
+      explorationDrive: 0.2,
+      retrievalPrecision: 0.8,
+      curiosityModulation: 0.2,
+    });
+    expect(ctx).toContain("well-established");
+  });
+
+  it("returns empty string when both in middle band and no exploration", () => {
+    const ctx = buildPrecisionContext({
+      selfTrust: 0.5,
+      explorationDrive: 0.5,
+      retrievalPrecision: 0.5,
+      curiosityModulation: 0.5,
+    });
+    expect(ctx).toContain("moderate");
+  });
 });
 
 describe("summarizeGradientHistory", () => {
@@ -116,6 +147,163 @@ describe("summarizeGradientHistory", () => {
     expect(summary.strengths.length).toBeGreaterThan(0);
     expect(summary.weaknesses.length).toBeGreaterThan(0);
   });
+
+  it("detects stable trajectory", () => {
+    const old = makeSnapshot({ gradient: 0.5, delta: 0.001, timestamp: Date.now() - 3600000 });
+    const recent = makeSnapshot({ gradient: 0.51, delta: 0.001, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([recent, old]);
+    expect(summary.trajectory).toContain("Stable");
+  });
+
+  it("detects declining trajectory", () => {
+    const old = makeSnapshot({ gradient: 0.6, delta: -0.05, timestamp: Date.now() - 3600000 });
+    const recent = makeSnapshot({ gradient: 0.3, delta: -0.05, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([recent, old]);
+    expect(summary.trajectory).toContain("declining");
+  });
+
+  it("narrates rapidly rising trajectory", () => {
+    const old = makeSnapshot({ gradient: 0.3, delta: 0.05, timestamp: Date.now() - 3600000 });
+    const recent = makeSnapshot({ gradient: 0.6, delta: 0.05, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([recent, old]);
+    expect(summary.trajectory).toContain("rapidly");
+    expect(summary.trajectory).toContain("rising");
+  });
+
+  it("narrates gradually rising trajectory", () => {
+    const old = makeSnapshot({ gradient: 0.5, delta: 0.002, timestamp: Date.now() - 3600000 });
+    const recent = makeSnapshot({ gradient: 0.54, delta: 0.002, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([recent, old]);
+    expect(summary.trajectory).toContain("gradually");
+    expect(summary.trajectory).toContain("rising");
+  });
+
+  it("shows consistency note for volatile trajectory", () => {
+    // Mix of rising and falling deltas → low consistency
+    const s1 = makeSnapshot({ gradient: 0.3, delta: 0.05, timestamp: Date.now() - 3000 });
+    const s2 = makeSnapshot({ gradient: 0.35, delta: -0.05, timestamp: Date.now() - 2000 });
+    const s3 = makeSnapshot({ gradient: 0.32, delta: 0.05, timestamp: Date.now() - 1000 });
+    const s4 = makeSnapshot({ gradient: 0.6, delta: -0.05, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([s4, s3, s2, s1]);
+    expect(summary.trajectory).toContain("volatility");
+  });
+
+  it("shows 'some fluctuation' for moderate consistency", () => {
+    // 3 rising, 1 falling → consistency = 3/4 = 0.75 (between 0.5 and 0.8)
+    const s1 = makeSnapshot({ gradient: 0.3, delta: 0.05, timestamp: Date.now() - 4000 });
+    const s2 = makeSnapshot({ gradient: 0.35, delta: 0.05, timestamp: Date.now() - 3000 });
+    const s3 = makeSnapshot({ gradient: 0.4, delta: -0.05, timestamp: Date.now() - 2000 });
+    const s4 = makeSnapshot({ gradient: 0.6, delta: 0.05, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([s4, s3, s2, s1]);
+    expect(summary.trajectory).toContain("some fluctuation");
+  });
+
+  it("uses hours format for spans under 48 hours", () => {
+    const old = makeSnapshot({ gradient: 0.3, delta: 0.05, timestamp: Date.now() - 10 * 3600000 });
+    const recent = makeSnapshot({ gradient: 0.6, delta: 0.05, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([recent, old]);
+    expect(summary.trajectory).toMatch(/\d+h/);
+  });
+
+  it("uses days format for spans over 48 hours", () => {
+    const old = makeSnapshot({
+      gradient: 0.3,
+      delta: 0.05,
+      timestamp: Date.now() - 72 * 3600000,
+    });
+    const recent = makeSnapshot({ gradient: 0.6, delta: 0.05, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([recent, old]);
+    expect(summary.trajectory).toMatch(/\d+d/);
+  });
+
+  it("uses minutes format for spans under 1 hour", () => {
+    const old = makeSnapshot({ gradient: 0.3, delta: 0.05, timestamp: Date.now() - 30 * 60000 });
+    const recent = makeSnapshot({ gradient: 0.6, delta: 0.05, timestamp: Date.now() });
+    const summary = summarizeGradientHistory([recent, old]);
+    expect(summary.trajectory).toMatch(/\d+m/);
+  });
+
+  it("narrates balanced strengths and weaknesses", () => {
+    // One strength, one weakness → balanced
+    const s = makeSnapshot({
+      gradient: 0.5,
+      tool_efficiency: 0.9,
+      knowledge_density: 0.1,
+      // All others in middle range
+      knowledge_quality: 0.5,
+      graph_connectivity: 0.3,
+      temporal_stability: 0.5,
+      retrieval_quality: 0.5,
+      interaction_efficiency: 0.6,
+      curiosity_pressure: 0.5,
+    });
+    const summary = summarizeGradientHistory([s]);
+    expect(summary.overall).toContain("Balanced");
+  });
+
+  it("narrates more strengths than weaknesses", () => {
+    const s = makeSnapshot({
+      gradient: 0.8,
+      tool_efficiency: 0.9,
+      knowledge_density: 0.7,
+      knowledge_quality: 0.7,
+      graph_connectivity: 0.5,
+      temporal_stability: 0.7,
+      retrieval_quality: 0.7,
+      interaction_efficiency: 0.8,
+      curiosity_pressure: 0.7,
+    });
+    const summary = summarizeGradientHistory([s]);
+    expect(summary.overall).toContain("More strengths than weaknesses");
+  });
+
+  it("narrates more weaknesses than strengths", () => {
+    const s = makeSnapshot({
+      gradient: 0.2,
+      tool_efficiency: 0.3,
+      knowledge_density: 0.1,
+      knowledge_quality: 0.1,
+      graph_connectivity: 0.05,
+      temporal_stability: 0.1,
+      retrieval_quality: 0.1,
+      interaction_efficiency: 0.2,
+      curiosity_pressure: 0.1,
+    });
+    const summary = summarizeGradientHistory([s]);
+    expect(summary.overall).toContain("More weaknesses than strengths");
+  });
+
+  it("narrates exploring posture for low self-trust", () => {
+    // Low gradient → low selfTrust
+    const s = makeSnapshot({ gradient: 0.1, delta: -0.1 });
+    const summary = summarizeGradientHistory([s]);
+    expect(summary.posture).toContain("Exploring");
+  });
+
+  it("narrates exploiting posture for high self-trust", () => {
+    // High gradient → high selfTrust
+    const s = makeSnapshot({ gradient: 0.95, delta: 0 });
+    const summary = summarizeGradientHistory([s]);
+    expect(summary.posture).toContain("Exploiting");
+  });
+
+  it("narrates very low gradient level", () => {
+    const s = makeSnapshot({ gradient: 0.1 });
+    const summary = summarizeGradientHistory([s]);
+    expect(summary.overall).toContain("very low");
+  });
+
+  it("narrates high gradient level", () => {
+    const s = makeSnapshot({ gradient: 0.8 });
+    const summary = summarizeGradientHistory([s]);
+    expect(summary.overall).toContain("high");
+  });
+
+  it("narrates low gradient level", () => {
+    const s = makeSnapshot({ gradient: 0.3 });
+    const summary = summarizeGradientHistory([s]);
+    expect(summary.overall).toContain("low");
+  });
 });
 
 describe("narrateEconomicConsequences", () => {
@@ -139,6 +327,33 @@ describe("narrateEconomicConsequences", () => {
   it("notes strong gradient positively", () => {
     const consequences = narrateEconomicConsequences(makeSnapshot({ gradient: 0.8 }));
     expect(consequences.some((c) => c.includes("Strong gradient"))).toBe(true);
+  });
+
+  it("flags low retrieval quality", () => {
+    const consequences = narrateEconomicConsequences(makeSnapshot({ retrieval_quality: 0.2 }));
+    expect(consequences.some((c) => c.includes("Retrieval quality"))).toBe(true);
+  });
+
+  it("flags low interaction efficiency", () => {
+    const consequences = narrateEconomicConsequences(makeSnapshot({ interaction_efficiency: 0.3 }));
+    expect(consequences.some((c) => c.includes("many iterations"))).toBe(true);
+  });
+
+  it("flags sparse knowledge base", () => {
+    const consequences = narrateEconomicConsequences(makeSnapshot({ knowledge_density: 0.1 }));
+    expect(consequences.some((c) => c.includes("sparse"))).toBe(true);
+  });
+
+  it("flags decaying knowledge (low curiosity pressure)", () => {
+    const consequences = narrateEconomicConsequences(makeSnapshot({ curiosity_pressure: 0.2 }));
+    expect(consequences.some((c) => c.includes("decaying"))).toBe(true);
+  });
+
+  it("flags low overall gradient", () => {
+    const consequences = narrateEconomicConsequences(
+      makeSnapshot({ gradient: 0.2, tool_efficiency: 0.8, retrieval_quality: 0.7 }),
+    );
+    expect(consequences.some((c) => c.includes("Overall gradient is low"))).toBe(true);
   });
 });
 

@@ -29,6 +29,7 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
 
 vi.mock("@motebit/crypto", () => ({
   createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
+  secureErase: vi.fn((bytes: Uint8Array) => bytes.fill(0)),
 }));
 
 // Import after mocks are set up
@@ -140,6 +141,18 @@ describe("McpClientAdapter — HTTP transport", () => {
     expect(mockConnect).toHaveBeenCalledTimes(1);
     expect(adapter.isConnected).toBe(true);
   });
+
+  it("passes static authToken as Bearer header", async () => {
+    const adapter = new McpClientAdapter(httpConfig({ authToken: "my-secret-token" }));
+    await adapter.connect();
+
+    expect(mockHttpTransport).toHaveBeenCalledTimes(1);
+    // The second arg to StreamableHTTPClientTransport is the options with requestInit
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
+      | { requestInit?: { headers?: Record<string, string> } }
+      | undefined;
+    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer my-secret-token");
+  });
 });
 
 describe("McpClientAdapter — connect idempotency", () => {
@@ -171,6 +184,16 @@ describe("McpClientAdapter — disconnect", () => {
     expect(mockClose).toHaveBeenCalledTimes(1);
     expect(adapter.isConnected).toBe(false);
     expect(adapter.getTools()).toEqual([]);
+  });
+
+  it("erases callerPrivateKey on disconnect", async () => {
+    const privateKey = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const adapter = new McpClientAdapter(stdioConfig({ callerPrivateKey: privateKey }));
+    await adapter.connect();
+    await adapter.disconnect();
+
+    // secureErase zeroes out the bytes
+    expect(privateKey.every((b) => b === 0)).toBe(true);
   });
 
   it("is a no-op when not connected", async () => {
@@ -1506,5 +1529,83 @@ describe("McpClientAdapter — key rotation grace period", () => {
       Date.now() - 25 * 60 * 60 * 1000;
 
     await expect(adapter.connect()).rejects.toThrow("public key mismatch");
+  });
+});
+
+// ============================================================
+// createCallerToken — null return and catch paths
+// ============================================================
+
+describe("McpClientAdapter — createCallerToken paths", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListTools.mockResolvedValue(mcpToolsResponse([]));
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  it("skips signed token when callerDeviceId is missing", async () => {
+    // Has callerMotebitId and callerPrivateKey but no callerDeviceId
+    // createCallerToken returns null → no Authorization header
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "no-device",
+        motebit: true,
+        callerMotebitId: "mote-123",
+        callerPrivateKey: new Uint8Array(32),
+        // callerDeviceId omitted
+      } as McpServerConfig),
+    );
+
+    // Mock identity verification
+    mockCallTool.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-mote", public_key: "ab".repeat(32) }),
+        },
+      ],
+      isError: false,
+    });
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Id" }]),
+    );
+
+    await adapter.connect();
+    // Should connect successfully (no token, but no crash)
+    expect(adapter.isConnected).toBe(true);
+  });
+
+  it("catches createSignedToken error and connects without token", async () => {
+    // Mock createSignedToken to throw
+    const { createSignedToken } = await import("@motebit/crypto");
+    (createSignedToken as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("Signing failed"),
+    );
+
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "sign-fail",
+        motebit: true,
+        callerMotebitId: "mote-123",
+        callerDeviceId: "dev-123",
+        callerPrivateKey: new Uint8Array(32),
+      } as McpServerConfig),
+    );
+
+    mockCallTool.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-mote", public_key: "ab".repeat(32) }),
+        },
+      ],
+      isError: false,
+    });
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Id" }]),
+    );
+
+    await adapter.connect();
+    expect(adapter.isConnected).toBe(true);
   });
 });

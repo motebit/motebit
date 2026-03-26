@@ -110,6 +110,67 @@ describe("embedText (hash fallback when pipeline fails)", () => {
   });
 });
 
+describe("remoteEmbed error response", () => {
+  afterEach(() => {
+    setRemoteEmbedUrl(null);
+    resetPipeline();
+    vi.restoreAllMocks();
+  });
+
+  it("throws when remote returns ok:false", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: "Model not loaded" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    setRemoteEmbedUrl("https://example.com/v1/embed");
+    // Remote fails with ok:false, falls through to local/hash fallback
+    const vec = await embedText("hello");
+    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
+  });
+
+  it("throws when remote returns ok:true but no embeddings", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    setRemoteEmbedUrl("https://example.com/v1/embed");
+    const vec = await embedText("hello");
+    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
+  });
+});
+
+describe("embedText with mock pipeline (successful ONNX path)", () => {
+  afterEach(() => {
+    resetPipeline();
+    vi.restoreAllMocks();
+  });
+
+  it("uses pipeline output when available", async () => {
+    const mockData = new Float32Array(384).fill(0.05);
+    const mockExtractor = vi.fn().mockResolvedValue({ data: mockData });
+
+    // Dynamically mock the module for this test
+    vi.doMock("@xenova/transformers", () => ({
+      pipeline: vi.fn().mockResolvedValue(mockExtractor),
+    }));
+    resetPipeline(); // clear cached state so it retries
+
+    // Re-import to pick up the new mock
+    const { embedText: embedTextFresh, resetPipeline: resetFresh } =
+      await import("../embeddings.js");
+    const vec = await embedTextFresh("test pipeline");
+    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
+    // Should contain the mock data values
+    expect(vec[0]).toBeCloseTo(0.05, 5);
+    resetFresh();
+    vi.doUnmock("@xenova/transformers");
+  });
+});
+
 describe("setRemoteEmbedUrl (remote backend)", () => {
   afterEach(() => {
     setRemoteEmbedUrl(null);

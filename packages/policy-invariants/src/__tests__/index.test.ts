@@ -287,6 +287,31 @@ describe("validateState", () => {
     const violations = validateState(makeDefaultState({ curiosity: 1.5 }));
     expect(violations.some((v) => v.includes("curiosity"))).toBe(true);
   });
+
+  it("reports processing above 1", () => {
+    const violations = validateState(makeDefaultState({ processing: 1.5 }));
+    expect(violations.some((v) => v.includes("processing"))).toBe(true);
+  });
+
+  it("reports confidence out of range", () => {
+    const violations = validateState(makeDefaultState({ confidence: -0.1 }));
+    expect(violations.some((v) => v.includes("confidence"))).toBe(true);
+  });
+
+  it("reports social_distance above 1", () => {
+    const violations = validateState(makeDefaultState({ social_distance: 1.5 }));
+    expect(violations.some((v) => v.includes("social_distance"))).toBe(true);
+  });
+
+  it("reports affect_valence below -1", () => {
+    const violations = validateState(makeDefaultState({ affect_valence: -1.5 }));
+    expect(violations.some((v) => v.includes("affect_valence"))).toBe(true);
+  });
+
+  it("reports curiosity below 0", () => {
+    const violations = validateState(makeDefaultState({ curiosity: -0.1 }));
+    expect(violations.some((v) => v.includes("curiosity"))).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -296,5 +321,15 @@ describe("validateState", () => {
 describe("assertSpeciesIntegrity", () => {
   it("does not throw for intact constraints", () => {
     expect(() => assertSpeciesIntegrity()).not.toThrow();
+  });
+
+  it("throws when SPECIES_CONSTRAINTS is not frozen", () => {
+    const original = Object.isFrozen;
+    Object.isFrozen = () => false;
+    try {
+      expect(() => assertSpeciesIntegrity()).toThrow("SPECIES_CONSTRAINTS must be frozen");
+    } finally {
+      Object.isFrozen = original;
+    }
   });
 });

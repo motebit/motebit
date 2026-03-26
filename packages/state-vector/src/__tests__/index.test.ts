@@ -571,6 +571,33 @@ describe("StateVectorEngine", () => {
   // InterpolatedState type
   // ============================================================
 
+  it("hysteresis returns false while sustain timer is running (mid-sustain)", () => {
+    // Use a longer sustain time so that the second tick fires before sustain elapses
+    const slowEngine = new StateVectorEngine({
+      tick_rate_hz: 2, // tick every 500ms
+      ema_alpha: 0.3,
+      hysteresis_threshold: 0.05,
+      hysteresis_sustain_ms: 1500, // 1500ms sustain — needs 3 ticks to pass
+    });
+    slowEngine.pushUpdate({ attention: 1.0 });
+    slowEngine.start();
+
+    // Tick 1 at 500ms: entry created (sustained_since = ~500)
+    vi.advanceTimersByTime(500);
+    // Tick 2 at 1000ms: sustained = ~500 < 1500 → returns false (line 237)
+    vi.advanceTimersByTime(500);
+    const midState = slowEngine.getState();
+    // Attention should still be 0 — hysteresis hasn't committed yet
+    expect(midState.attention).toBe(0);
+
+    // Tick 3+ at 2000ms+: sustained = ~1500 >= 1500 → commits
+    vi.advanceTimersByTime(1000);
+    const finalState = slowEngine.getState();
+    expect(finalState.attention).toBeGreaterThan(0);
+
+    slowEngine.stop();
+  });
+
   it("getInterpolatedState includes interpolation_t field", () => {
     const interp: InterpolatedState = engine.getInterpolatedState(0.75);
     expect(interp.interpolation_t).toBe(0.75);

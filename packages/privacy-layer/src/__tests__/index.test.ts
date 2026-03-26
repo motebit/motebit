@@ -467,5 +467,11 @@ describe("PrivacyLayer", () => {
       expect(secret.max_retention_days).toBe(30);
       expect(secret.display_allowed).toBe(false);
     });
+
+    it("returns fail-closed defaults for unknown sensitivity level", () => {
+      const unknown = privacyLayer.getRetentionRules("unknown_level" as SensitivityLevel);
+      expect(unknown.max_retention_days).toBe(0);
+      expect(unknown.display_allowed).toBe(false);
+    });
   });
 });

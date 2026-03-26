@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { IdentityManager, InMemoryIdentityStorage } from "../index";
-import type { DeviceRegistration } from "../index";
+import { IdentityManager, InMemoryIdentityStorage, rotateIdentityKeys } from "../index";
+import type { DeviceRegistration, IdentityStorage } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
+import { generateKeypair } from "@motebit/crypto";
 
 // ---------------------------------------------------------------------------
 // InMemoryIdentityStorage
@@ -319,5 +320,135 @@ describe("IdentityManager", () => {
     );
     expect(updateEvent).toBeDefined();
     expect((updateEvent!.payload as Record<string, unknown>).new_public_key).toBe("updatedkey");
+  });
+
+  it("listDevices() returns all devices for a motebit identity", async () => {
+    const identity = await manager.create("owner-1");
+    await manager.registerDevice(identity.motebit_id, "Phone");
+    await manager.registerDevice(identity.motebit_id, "Laptop");
+
+    const devices = await manager.listDevices(identity.motebit_id);
+    expect(devices).toHaveLength(2);
+    expect(devices.map((d) => d.device_name).sort()).toEqual(["Laptop", "Phone"]);
+  });
+
+  it("listDevices() returns empty array for unknown motebit_id", async () => {
+    const devices = await manager.listDevices("nonexistent");
+    expect(devices).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IdentityManager with storage lacking device methods (InMemoryDeviceStore fallback)
+// ---------------------------------------------------------------------------
+
+describe("IdentityManager with minimal storage (fallback device store)", () => {
+  it("falls back to InMemoryDeviceStore when storage lacks device methods", async () => {
+    // Storage that only implements save/load/loadByOwner — no device methods
+    const minimalStorage: IdentityStorage = {
+      save: async () => {},
+      load: async () => null,
+      loadByOwner: async () => null,
+    };
+    const eventStore = new EventStore(new InMemoryEventStore());
+    const manager = new IdentityManager(minimalStorage, eventStore);
+
+    // This should use the internal InMemoryDeviceStore fallback
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id, "Phone", "pubkey");
+
+    // listDevices uses the fallback store
+    const devices = await manager.listDevices(identity.motebit_id);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]!.device_name).toBe("Phone");
+
+    // loadDeviceById uses the fallback store
+    const loaded = await manager.loadDeviceById(device.device_id, device.motebit_id);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.public_key).toBe("pubkey");
+  });
+
+  it("reuses the same InMemoryDeviceStore fallback across calls", async () => {
+    const minimalStorage: IdentityStorage = {
+      save: async () => {},
+      load: async () => null,
+      loadByOwner: async () => null,
+    };
+    const eventStore = new EventStore(new InMemoryEventStore());
+    const manager = new IdentityManager(minimalStorage, eventStore);
+
+    const identity = await manager.create("owner-1");
+    await manager.registerDevice(identity.motebit_id, "D1");
+    await manager.registerDevice(identity.motebit_id, "D2");
+
+    // Both devices should be findable
+    const devices = await manager.listDevices(identity.motebit_id);
+    expect(devices).toHaveLength(2);
+  });
+
+  it("InMemoryDeviceStore loadDeviceByToken works for token-based lookup", async () => {
+    const minimalStorage: IdentityStorage = {
+      save: async () => {},
+      load: async () => null,
+      loadByOwner: async () => null,
+    };
+    const eventStore = new EventStore(new InMemoryEventStore());
+    const manager = new IdentityManager(minimalStorage, eventStore);
+
+    const identity = await manager.create("owner-1");
+    const device = await manager.registerDevice(identity.motebit_id, "Phone");
+
+    // The device_token should be set
+    expect(device.device_token).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rotateIdentityKeys
+// ---------------------------------------------------------------------------
+
+describe("rotateIdentityKeys", () => {
+  it("generates new keypair and dual-signed succession record", async () => {
+    const oldKeypair = await generateKeypair();
+
+    const result = await rotateIdentityKeys({
+      oldPrivateKey: oldKeypair.privateKey,
+      oldPublicKey: oldKeypair.publicKey,
+      reason: "test rotation",
+    });
+
+    expect(result.newPublicKey).toBeInstanceOf(Uint8Array);
+    expect(result.newPrivateKey).toBeInstanceOf(Uint8Array);
+    expect(result.newPublicKeyHex).toHaveLength(64);
+    expect(result.successionRecord).toBeDefined();
+    expect(result.successionRecord.new_public_key).toBeTruthy();
+    expect(result.successionRecord.old_public_key).toBeTruthy();
+  });
+
+  it("works without reason", async () => {
+    const oldKeypair = await generateKeypair();
+
+    const result = await rotateIdentityKeys({
+      oldPrivateKey: oldKeypair.privateKey,
+      oldPublicKey: oldKeypair.publicKey,
+    });
+
+    expect(result.newPublicKeyHex).toHaveLength(64);
+    expect(result.successionRecord).toBeDefined();
+  });
+
+  it("produces a new keypair distinct from the old one", async () => {
+    const oldKeypair = await generateKeypair();
+
+    const result = await rotateIdentityKeys({
+      oldPrivateKey: oldKeypair.privateKey,
+      oldPublicKey: oldKeypair.publicKey,
+    });
+
+    // New key should differ from old
+    const oldHex = Array.from(oldKeypair.publicKey)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    expect(result.newPublicKeyHex).not.toBe(oldHex);
   });
 });

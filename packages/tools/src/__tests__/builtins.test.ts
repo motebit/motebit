@@ -17,6 +17,7 @@ import {
   isDirectoryAllowed,
   DESTRUCTIVE_PATTERNS,
 } from "../builtins/index";
+import { createSelfReflectHandler } from "../builtins/self-reflect";
 
 // ---------- web_search ----------
 
@@ -1009,5 +1010,407 @@ describe("registerBuiltinTools", () => {
     });
     expect(writeResult.ok).toBe(false);
     expect(writeResult.error).toContain("Access denied");
+  });
+});
+
+// ---------- self_reflect ----------
+
+describe("self_reflect", () => {
+  it("returns formatted reflection output", async () => {
+    const handler = createSelfReflectHandler(async () => ({
+      selfAssessment: "Doing well overall",
+      insights: ["Insight A", "Insight B"],
+      planAdjustments: ["Adjust X"],
+      patterns: ["Pattern 1"],
+    }));
+
+    const result = await handler({});
+    expect(result.ok).toBe(true);
+    expect(result.data as string).toContain("Assessment: Doing well overall");
+    expect(result.data as string).toContain("Insights:");
+    expect(result.data as string).toContain("  - Insight A");
+    expect(result.data as string).toContain("  - Insight B");
+    expect(result.data as string).toContain("Adjustments:");
+    expect(result.data as string).toContain("  - Adjust X");
+    expect(result.data as string).toContain("Recurring patterns:");
+    expect(result.data as string).toContain("  - Pattern 1");
+  });
+
+  it("returns 'No reflection output.' when all sections are empty", async () => {
+    const handler = createSelfReflectHandler(async () => ({
+      selfAssessment: "",
+      insights: [],
+      planAdjustments: [],
+      patterns: [],
+    }));
+
+    const result = await handler({});
+    expect(result.ok).toBe(true);
+    expect(result.data).toBe("No reflection output.");
+  });
+
+  it("returns error when reflectFn throws", async () => {
+    const handler = createSelfReflectHandler(async () => {
+      throw new Error("Reflection engine offline");
+    });
+
+    const result = await handler({});
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Reflection failed: Reflection engine offline");
+  });
+
+  it("handles non-Error throw in reflectFn", async () => {
+    const handler = createSelfReflectHandler(async () => {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- testing non-Error throw handling
+      throw "string error";
+    });
+
+    const result = await handler({});
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Reflection failed: string error");
+  });
+
+  it("handles partial sections (only assessment)", async () => {
+    const handler = createSelfReflectHandler(async () => ({
+      selfAssessment: "Just assessment",
+      insights: [],
+      planAdjustments: [],
+      patterns: [],
+    }));
+
+    const result = await handler({});
+    expect(result.ok).toBe(true);
+    expect(result.data).toBe("Assessment: Just assessment");
+  });
+});
+
+// ---------- read_url proxy path ----------
+
+describe("read_url proxy", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("routes through proxy when proxyUrl is provided", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      json: async () => ({ ok: true, data: "Proxied content" }),
+    }) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler({ proxyUrl: "https://proxy.example.com/fetch" });
+    const result = await handler({ url: "https://target.com" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toBe("Proxied content");
+    expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+      "https://proxy.example.com/fetch",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ url: "https://target.com" }),
+      }),
+    );
+  });
+
+  it("returns proxy error when proxy reports failure", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      json: async () => ({ ok: false, error: "Proxy timeout" }),
+    }) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler({ proxyUrl: "https://proxy.example.com/fetch" });
+    const result = await handler({ url: "https://target.com" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Proxy timeout");
+  });
+
+  it("returns default proxy error when proxy reports failure without message", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      json: async () => ({ ok: false }),
+    }) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler({ proxyUrl: "https://proxy.example.com/fetch" });
+    const result = await handler({ url: "https://target.com" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Proxy fetch failed");
+  });
+
+  it("returns proxy data with empty string fallback", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      json: async () => ({ ok: true }),
+    }) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler({ proxyUrl: "https://proxy.example.com/fetch" });
+    const result = await handler({ url: "https://target.com" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toBe("");
+  });
+
+  it("returns error on fetch exception", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new Error("Network down")) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler();
+    const result = await handler({ url: "https://example.com" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Fetch error: Network down");
+  });
+
+  it("handles non-Error throw in fetch", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue("raw string error") as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler();
+    const result = await handler({ url: "https://example.com" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Fetch error: raw string error");
+  });
+});
+
+// ---------- BraveSearchProvider additional coverage ----------
+
+describe("BraveSearchProvider additional", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("handles body read error gracefully", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => {
+        throw new Error("body read failed");
+      },
+    }) as unknown as typeof fetch;
+
+    const provider = new BraveSearchProvider("test-key");
+    await expect(provider.search("test")).rejects.toThrow(SearchProviderError);
+
+    try {
+      await provider.search("test");
+    } catch (err) {
+      const spe = err as SearchProviderError;
+      expect(spe.status).toBe(500);
+      // Body should be empty since read failed
+      expect(spe.message).toContain("500");
+    }
+  });
+
+  it("parses successful response and filters results", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        web: {
+          results: [
+            { title: "Good", url: "https://good.com", description: "desc" },
+            { title: "", url: "https://no-title.com" }, // missing title
+            { url: "https://no-title-2.com" }, // no title at all
+            { title: "No URL" }, // missing url
+            { title: "Also Good", url: "https://also.com" }, // no description
+          ],
+        },
+      }),
+    }) as unknown as typeof fetch;
+
+    const provider = new BraveSearchProvider("test-key");
+    const results = await provider.search("test", 10);
+
+    // Only results with both title and url
+    expect(results).toHaveLength(2);
+    expect(results[0]!.title).toBe("Good");
+    expect(results[0]!.snippet).toBe("desc");
+    expect(results[1]!.title).toBe("Also Good");
+    expect(results[1]!.snippet).toBe(""); // no description → empty string
+  });
+
+  it("handles response with empty web results", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ web: {} }),
+    }) as unknown as typeof fetch;
+
+    const provider = new BraveSearchProvider("test-key");
+    const results = await provider.search("test");
+    expect(results).toEqual([]);
+  });
+
+  it("handles response with no web field", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    }) as unknown as typeof fetch;
+
+    const provider = new BraveSearchProvider("test-key");
+    const results = await provider.search("test");
+    expect(results).toEqual([]);
+  });
+});
+
+// ---------- FallbackSearchProvider non-Error throw ----------
+
+describe("FallbackSearchProvider non-Error throw", () => {
+  it("wraps non-Error throw in generic Error", async () => {
+    const provider = new FallbackSearchProvider([
+      {
+        search: vi.fn().mockRejectedValue("string error"),
+      },
+    ]);
+
+    await expect(provider.search("test")).rejects.toThrow("All search providers failed");
+  });
+});
+
+// ---------- shell_exec additional ----------
+
+describe("shell_exec additional", () => {
+  it("returns error on exec failure", async () => {
+    const handler = createShellExecHandler({ commandAllowList: ["nonexistent_cmd_12345"] });
+    const result = await handler({ command: "nonexistent_cmd_12345", args: [] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Exec error");
+  });
+
+  it("resolves cwd to canonical path when within allowed paths", async () => {
+    const handler = createShellExecHandler({
+      commandAllowList: ["pwd"],
+      allowedPaths: ["/tmp"],
+    });
+    // Provide explicit cwd within the allowed paths
+    const result = await handler({ command: "pwd", cwd: "/tmp" });
+    expect(result.ok).toBe(true);
+    // pwd should output /tmp or /private/tmp (macOS canonical)
+    expect(result.data as string).toContain("tmp");
+  });
+});
+
+// ---------- write_file error path ----------
+
+describe("write_file error path", () => {
+  it("returns write error on permission failure", async () => {
+    const handler = createWriteFileHandler({ enableBackup: false });
+    // Writing to a read-only system path should fail
+    const result = await handler({ path: "/proc/nonexistent/file", content: "test" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Write error");
+  });
+});
+
+// ---------- undo_write error paths ----------
+
+describe("undo_write error paths", () => {
+  const testDir = "/tmp/__motebit_test_undo_errors__";
+
+  afterEach(async () => {
+    const fs = await import("node:fs/promises");
+    await fs.rm(testDir, { recursive: true, force: true });
+  });
+
+  it("skips corrupt meta files", async () => {
+    const fs = await import("node:fs/promises");
+    const backupDir = `${testDir}/backups`;
+
+    // Create a corrupt meta file
+    await fs.mkdir(backupDir, { recursive: true });
+    await fs.writeFile(`${backupDir}/corrupt.meta.json`, "not json", "utf-8");
+
+    const undoer = createUndoWriteHandler({ backupDir });
+    const result = await undoer({ path: `${testDir}/some-file.txt` });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("No backup found");
+  });
+
+  it("returns undo error when backup file is missing", async () => {
+    const fs = await import("node:fs/promises");
+    const backupDir = `${testDir}/backups`;
+    const targetPath = `${testDir}/target.txt`;
+    const resolved = (await import("node:path")).resolve(targetPath);
+
+    // Create a valid meta file pointing to a non-existent backup
+    await fs.mkdir(backupDir, { recursive: true });
+    await fs.writeFile(
+      `${backupDir}/backup1.meta.json`,
+      JSON.stringify({ originalPath: resolved, timestamp: Date.now() }),
+      "utf-8",
+    );
+    // No actual backup1 file
+
+    const undoer = createUndoWriteHandler({ backupDir });
+    const result = await undoer({ path: targetPath });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Undo error");
+  });
+});
+
+// ---------- path_sandbox non-ENOENT error ----------
+
+describe("path_sandbox non-ENOENT error", () => {
+  it("returns error for non-ENOENT resolve failure", () => {
+    // A path with null bytes causes a non-ENOENT error
+    const result = isPathAllowed("/tmp/\x00invalid", ["/tmp"]);
+    expect(result.allowed).toBe(false);
+    expect(result.error).toContain("Cannot resolve path");
+  });
+});
+
+// ---------- DuckDuckGo title fallback ----------
+
+describe("DuckDuckGo title fallback", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("uses query as title when title text cannot be extracted", async () => {
+    // Craft HTML where result__a has href but the tag content is empty/nested tags
+    const mockHtml = `
+      <div class="result results_links results_links_deep web-result">
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F"><img src="icon.png"/></a>
+        <a class="result__snippet">Some snippet text</a>
+      </div>
+    `;
+    const { DuckDuckGoSearchProvider } = await import("../providers/duckduckgo");
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => mockHtml,
+    }) as unknown as typeof fetch;
+
+    const provider = new DuckDuckGoSearchProvider();
+    const results = await provider.search("my query");
+
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    // Title should fall back to the query
+    expect(results[0]!.title).toBe("my query");
+  });
+});
+
+// ---------- web-safe re-exports ----------
+
+describe("web-safe exports", () => {
+  it("re-exports all expected symbols", async () => {
+    const webSafe = await import("../web-safe");
+    expect(webSafe.webSearchDefinition).toBeDefined();
+    expect(webSafe.createWebSearchHandler).toBeDefined();
+    expect(webSafe.readUrlDefinition).toBeDefined();
+    expect(webSafe.createReadUrlHandler).toBeDefined();
+    expect(webSafe.recallMemoriesDefinition).toBeDefined();
+    expect(webSafe.createRecallMemoriesHandler).toBeDefined();
+    expect(webSafe.listEventsDefinition).toBeDefined();
+    expect(webSafe.createListEventsHandler).toBeDefined();
+    expect(webSafe.selfReflectDefinition).toBeDefined();
+    expect(webSafe.createSelfReflectHandler).toBeDefined();
+    expect(webSafe.FallbackSearchProvider).toBeDefined();
+    expect(webSafe.BraveSearchProvider).toBeDefined();
+    expect(webSafe.DuckDuckGoSearchProvider).toBeDefined();
+    expect(webSafe.InMemoryToolRegistry).toBeDefined();
+    expect(webSafe.createSubGoalDefinition).toBeDefined();
+    expect(webSafe.completeGoalDefinition).toBeDefined();
+    expect(webSafe.reportProgressDefinition).toBeDefined();
   });
 });

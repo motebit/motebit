@@ -924,6 +924,78 @@ describe("serializeYaml branch coverage via generate()", () => {
     expect(result.valid).toBe(true);
   });
 
+  it("serializes non-standard primitive type via String() fallback", async () => {
+    const kp = await makeKeypairHex();
+
+    const base = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+      },
+      kp.privateKey,
+    );
+
+    // Force a bigint value into a field via type assertion to exercise the
+    // serializeValue fallback branch (line 80: return String(value))
+    const content = await update(
+      base,
+      {
+        memory: {
+          half_life_days: BigInt(7) as unknown as number,
+          confidence_threshold: 0.3,
+          per_turn_limit: 5,
+        },
+      } as Parameters<typeof update>[1],
+      kp.privateKey,
+    );
+
+    // BigInt(7) should be serialized as "7" via String()
+    expect(content).toContain("half_life_days: 7");
+  });
+
+  it("serializes nested object containing array property (approval_quorum.approvers)", async () => {
+    const kp = await makeKeypairHex();
+
+    // Generate a base identity, then update with approval_quorum
+    const base = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+      },
+      kp.privateKey,
+    );
+
+    const content = await update(
+      base,
+      {
+        governance: {
+          trust_mode: "guarded",
+          max_risk_auto: "R1_DRAFT",
+          require_approval_above: "R1_DRAFT",
+          deny_above: "R4_MONEY",
+          operator_mode: false,
+          approval_quorum: {
+            threshold: 2,
+            approvers: ["alice", "bob"],
+          },
+        },
+      },
+      kp.privateKey,
+    );
+
+    // The nested array property (approvers inside approval_quorum inside governance)
+    // exercises the Array.isArray(v) && v.length > 0 branch in serializeValue for objects
+    expect(content).toContain("approval_quorum:");
+    expect(content).toContain("threshold: 2");
+    expect(content).toContain("approvers:");
+    expect(content).toContain('"alice"');
+    expect(content).toContain('"bob"');
+  });
+
   it("serializes top-level scalar fields (spec, motebit_id, etc.)", async () => {
     const kp = await makeKeypairHex();
 
