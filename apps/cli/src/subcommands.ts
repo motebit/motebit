@@ -1612,6 +1612,54 @@ function getRelayUrl(config: CliConfig): string {
   return url.replace(/\/+$/, "");
 }
 
+/**
+ * Build auth headers for relay API calls. Tries in order:
+ * 1. --sync-token / MOTEBIT_API_TOKEN (master token)
+ * 2. Signed device token (decrypts private key from config, prompts for passphrase)
+ * 3. No auth (unauthenticated)
+ */
+async function getRelayAuthHeaders(
+  config: CliConfig,
+  opts?: { aud?: string; json?: boolean },
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (opts?.json) headers["Content-Type"] = "application/json";
+
+  // 1. Master token
+  const master = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+  if (master) {
+    headers["Authorization"] = `Bearer ${master}`;
+    return headers;
+  }
+
+  // 2. Signed device token from encrypted private key
+  const fullConfig = loadFullConfig();
+  if (fullConfig.cli_encrypted_key && fullConfig.motebit_id && fullConfig.device_id) {
+    try {
+      const passphrase = await promptPassphrase("Passphrase (for relay auth): ");
+      const privateKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+      const privateKeyBytes = fromHex(privateKeyHex);
+      const token = await createSignedToken(
+        {
+          mid: fullConfig.motebit_id,
+          did: fullConfig.device_id,
+          iat: Date.now(),
+          exp: Date.now() + 5 * 60 * 1000,
+          jti: crypto.randomUUID(),
+          aud: opts?.aud ?? "admin:query",
+        },
+        privateKeyBytes,
+      );
+      secureErase(privateKeyBytes);
+      headers["Authorization"] = `Bearer ${token}`;
+    } catch {
+      // Passphrase wrong or key unavailable — continue without auth
+    }
+  }
+
+  return headers;
+}
+
 export async function handleFederationStatus(config: CliConfig): Promise<void> {
   const relayUrl = getRelayUrl(config);
   const result = await fetchRelayJson(`${relayUrl}/federation/v1/identity`, {});
@@ -2124,6 +2172,246 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
     console.error(`Error: could not reach relay: ${msg}`);
     process.exit(1);
   }
+}
+
+// ---------------------------------------------------------------------------
+// motebit fund <amount> — deposit via Stripe Checkout
+// ---------------------------------------------------------------------------
+
+export async function handleFund(config: CliConfig): Promise<void> {
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (motebitId == null || motebitId === "") {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+
+  const amountStr = config.positionals[1];
+  if (!amountStr) {
+    console.error("Usage: motebit fund <amount>");
+    process.exit(1);
+  }
+  const amount = parseFloat(amountStr);
+  if (isNaN(amount) || amount < 0.5) {
+    console.error("Error: minimum amount is $0.50.");
+    process.exit(1);
+  }
+
+  const relayUrl = getRelayUrl(config);
+  const headers = await getRelayAuthHeaders(config, { json: true });
+
+  // Create Stripe Checkout session
+  let checkoutUrl: string;
+  try {
+    const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/checkout`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ amount }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`Checkout failed (${res.status}): ${text.slice(0, 200)}`);
+      process.exit(1);
+    }
+    const data = (await res.json()) as { checkout_url: string; session_id: string };
+    checkoutUrl = data.checkout_url;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: could not reach relay: ${msg}`);
+    process.exit(1);
+  }
+
+  // Open in browser
+  console.log(`\nOpening Stripe Checkout for $${amount.toFixed(2)}...\n`);
+  console.log(`  ${checkoutUrl}\n`);
+  try {
+    const { execSync } = await import("node:child_process");
+    const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
+    execSync(`${openCmd} "${checkoutUrl}"`, { stdio: "ignore" });
+  } catch {
+    console.log("Could not open browser. Please visit the URL above to complete payment.");
+  }
+
+  // Poll for deposit confirmation (120s max, 3s intervals)
+  console.log("Waiting for payment confirmation...");
+  const startBalance = await getBalanceAmount(relayUrl, motebitId, headers);
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+    const currentBalance = await getBalanceAmount(relayUrl, motebitId, headers);
+    if (currentBalance !== null && startBalance !== null && currentBalance > startBalance) {
+      console.log(`\nDeposit confirmed! Balance: $${currentBalance.toFixed(2)}`);
+      return;
+    }
+    process.stdout.write(".");
+  }
+  console.log("\nPayment not yet confirmed. Check `motebit balance` after completing checkout.");
+}
+
+async function getBalanceAmount(
+  relayUrl: string,
+  motebitId: string,
+  headers: Record<string, string>,
+): Promise<number | null> {
+  try {
+    const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/balance`, { headers });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { balance: number };
+    return data.balance;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// motebit delegate "<prompt>" — delegate a task to a worker agent
+// ---------------------------------------------------------------------------
+
+export async function handleDelegate(config: CliConfig): Promise<void> {
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (motebitId == null || motebitId === "") {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+
+  const prompt = config.positionals.slice(1).join(" ");
+  if (!prompt) {
+    console.error('Usage: motebit delegate "<prompt>" [--capability web_search] [--target <id>]');
+    process.exit(1);
+  }
+
+  const relayUrl = getRelayUrl(config);
+  const headers = await getRelayAuthHeaders(config, { aud: "task:submit", json: true });
+
+  const capability = config.capability ?? "web_search";
+  let targetMotebitId = config.target;
+
+  // Discover a worker if no target specified
+  if (!targetMotebitId) {
+    try {
+      const maxBudget = config.budget ? parseFloat(config.budget) : 10;
+      const discoverRes = await fetch(
+        `${relayUrl}/api/v1/market/candidates?capability=${encodeURIComponent(capability)}&max_budget=${maxBudget}&limit=5`,
+        { headers },
+      );
+      if (!discoverRes.ok) {
+        const text = await discoverRes.text();
+        console.error(`Discovery failed (${discoverRes.status}): ${text.slice(0, 200)}`);
+        process.exit(1);
+      }
+      const discoverData = (await discoverRes.json()) as {
+        candidates: Array<{
+          motebit_id: string;
+          composite: number;
+          pricing?: Array<{ capability: string; unit_cost: number }>;
+          description?: string;
+          selected?: boolean;
+        }>;
+      };
+      const candidates = discoverData.candidates ?? [];
+      if (candidates.length === 0) {
+        console.error(`No agents found with capability "${capability}". Is a worker running?`);
+        process.exit(1);
+      }
+      const best = candidates.find((c) => c.selected) ?? candidates[0]!;
+      targetMotebitId = best.motebit_id;
+      const price = best.pricing?.find((p) => p.capability === capability)?.unit_cost;
+      console.log(
+        `Found worker: ${targetMotebitId.slice(0, 12)}...` +
+          (price != null ? ` ($${price.toFixed(4)}/request)` : "") +
+          (best.description ? ` — ${best.description}` : ""),
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`Discovery error: ${msg}`);
+      process.exit(1);
+    }
+  }
+
+  // Submit task
+  let taskId: string;
+  try {
+    console.log(`Delegating to ${targetMotebitId.slice(0, 12)}...`);
+    const submitRes = await fetch(`${relayUrl}/agent/${targetMotebitId}/task`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt,
+        submitted_by: motebitId,
+        required_capabilities: [capability],
+      }),
+    });
+    if (submitRes.status === 402) {
+      console.error("Insufficient balance. Run `motebit fund <amount>` to deposit.");
+      process.exit(1);
+    }
+    if (!submitRes.ok) {
+      const text = await submitRes.text();
+      console.error(`Task submission failed (${submitRes.status}): ${text.slice(0, 200)}`);
+      process.exit(1);
+    }
+    const submitData = (await submitRes.json()) as { task_id: string };
+    taskId = submitData.task_id;
+    console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Task submission error: ${msg}`);
+    process.exit(1);
+  }
+
+  // Poll for result (60s max, 2s intervals)
+  const POLL_INTERVAL_MS = 2000;
+  const MAX_POLLS = 30;
+  process.stdout.write("Waiting");
+
+  for (let poll = 0; poll < MAX_POLLS; poll++) {
+    await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    try {
+      const pollRes = await fetch(`${relayUrl}/agent/${targetMotebitId}/task/${taskId}`, {
+        headers,
+      });
+      if (!pollRes.ok) {
+        process.stdout.write(".");
+        continue;
+      }
+      const pollData = (await pollRes.json()) as {
+        task: { status: string };
+        receipt: {
+          status: string;
+          result: string;
+          motebit_id: string;
+          tools_used?: string[];
+          completed_at?: number;
+          submitted_at?: number;
+        } | null;
+      };
+      if (pollData.receipt != null) {
+        console.log(); // newline after dots
+        const r = pollData.receipt;
+        if (r.status === "completed") {
+          console.log(`\n--- Result ---\n`);
+          console.log(r.result);
+          console.log();
+          if (r.tools_used && r.tools_used.length > 0) {
+            console.log(`Tools: ${r.tools_used.join(", ")}`);
+          }
+          if (r.submitted_at && r.completed_at) {
+            const latency = r.completed_at - r.submitted_at;
+            console.log(`Latency: ${latency}ms`);
+          }
+        } else {
+          console.log(`Task ${r.status}: ${r.result || "(no result)"}`);
+        }
+        return;
+      }
+      process.stdout.write(".");
+    } catch {
+      process.stdout.write(".");
+    }
+  }
+  console.log("\nTask timed out after 60s. The worker may still be running.");
+  console.log(`Check status: curl ${relayUrl}/agent/${targetMotebitId}/task/${taskId}`);
 }
 
 // ---------------------------------------------------------------------------

@@ -961,9 +961,10 @@ describe("Delegation E2E", () => {
     const s = settleBody.settlements.find((r) => r.allocation_id === `x402-${taskId}`);
     expect(s).toBeDefined();
     expect(s!.status).toBe("completed");
-    // Gross = $1.00 / (1 - 0.05) = ~$1.052632. Fee = gross * 0.05 = ~$0.052632. Net = ~$1.00.
-    expect(s!.platform_fee).toBeCloseTo(0.052632, 4);
-    expect(s!.amount_settled).toBeCloseTo(1.0, 4);
+    // Gross = toMicro($1.00 / 0.95) = 1052632. Fee = round(1052632 * 0.05) = 52632. Net = 1000000.
+    // Settlement values are stored in micro-units (1 USD = 1,000,000).
+    expect(s!.platform_fee).toBe(52632);
+    expect(s!.amount_settled).toBe(1_000_000);
   });
 
   // === Settlement Idempotency & Duplicate Receipt Prevention ===

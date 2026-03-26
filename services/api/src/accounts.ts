@@ -12,6 +12,33 @@ import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "accounts" });
 
+// ── Micro-unit accounting ────────────────────────────────────────────────
+// All money is stored as INTEGER micro-units: 1 USD = 1,000,000 units.
+// This matches USDC on-chain precision (6 decimals) and eliminates
+// IEEE 754 floating-point drift entirely.  No rounding, no tolerance.
+//
+// API boundary converts: toMicro(dollars) on ingest, fromMicro(units) on egress.
+// Internal functions ONLY deal in micro-units.
+
+const MICRO = 1_000_000;
+
+/** Convert dollars (float from API) to integer micro-units. */
+export function toMicro(dollars: number): number {
+  return Math.round(dollars * MICRO);
+}
+
+/** Convert integer micro-units back to dollars (for API responses). */
+export function fromMicro(micro: number): number {
+  return micro / MICRO;
+}
+
+/**
+ * @deprecated Use toMicro/fromMicro instead. Kept for backward compat during migration.
+ */
+export function roundMoney(n: number): number {
+  return Math.round(n * MICRO) / MICRO;
+}
+
 export interface VirtualAccount {
   motebit_id: string;
   balance: number;
@@ -43,7 +70,7 @@ export function createAccountTables(db: DatabaseDriver): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS relay_accounts (
       motebit_id TEXT PRIMARY KEY,
-      balance REAL NOT NULL DEFAULT 0,
+      balance INTEGER NOT NULL DEFAULT 0,
       currency TEXT NOT NULL DEFAULT 'USD',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -53,8 +80,8 @@ export function createAccountTables(db: DatabaseDriver): void {
       transaction_id TEXT PRIMARY KEY,
       motebit_id TEXT NOT NULL,
       type TEXT NOT NULL,
-      amount REAL NOT NULL,
-      balance_after REAL NOT NULL,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
       reference_id TEXT,
       description TEXT,
       created_at INTEGER NOT NULL
@@ -128,6 +155,9 @@ export function getAccountBalanceDetailed(
  * Credit an account (deposit, settlement_credit, allocation_release).
  * Creates the account if it doesn't exist.
  * Returns the new balance.
+ *
+ * Uses atomic UPDATE SET balance = balance + amount to prevent lost updates
+ * if the relay ever moves to Postgres or a multi-process setup.
  */
 export function creditAccount(
   db: DatabaseDriver,
@@ -140,14 +170,19 @@ export function creditAccount(
   const now = Date.now();
   const transactionId = crypto.randomUUID();
 
-  const account = getOrCreateAccount(db, motebitId);
-  const newBalance = account.balance + amount;
+  // Ensure account exists before atomic update
+  getOrCreateAccount(db, motebitId);
 
-  db.prepare("UPDATE relay_accounts SET balance = ?, updated_at = ? WHERE motebit_id = ?").run(
-    newBalance,
-    now,
-    motebitId,
-  );
+  // Atomic: credit without read-then-write race
+  db.prepare(
+    "UPDATE relay_accounts SET balance = balance + ?, updated_at = ? WHERE motebit_id = ?",
+  ).run(amount, now, motebitId);
+
+  // Read the new balance after the atomic update
+  const updated = db
+    .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+    .get(motebitId) as { balance: number } | undefined;
+  const newBalance = updated?.balance ?? 0;
 
   db.prepare(
     `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
@@ -257,6 +292,9 @@ export function hasTransactionWithReference(
  *
  * @returns true if the deposit was applied, false if it was already processed (idempotent replay).
  */
+/**
+ * @param amount — in DOLLARS (parsed from Stripe metadata). Converted to micro-units internally.
+ */
 export function processStripeCheckout(
   db: DatabaseDriver,
   sessionId: string,
@@ -275,7 +313,7 @@ export function processStripeCheckout(
   creditAccount(
     db,
     motebitId,
-    amount,
+    toMicro(amount),
     "deposit",
     sessionId,
     paymentIntent ? `Stripe Checkout: ${paymentIntent}` : `Stripe Checkout: ${sessionId}`,
@@ -314,7 +352,7 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
     CREATE TABLE IF NOT EXISTS relay_withdrawals (
       withdrawal_id TEXT PRIMARY KEY,
       motebit_id TEXT NOT NULL,
-      amount REAL NOT NULL,
+      amount INTEGER NOT NULL,
       currency TEXT NOT NULL DEFAULT 'USD',
       destination TEXT NOT NULL DEFAULT 'pending',
       status TEXT NOT NULL DEFAULT 'pending',
@@ -381,7 +419,7 @@ export function requestWithdrawal(
     amount,
     "withdrawal",
     withdrawalId,
-    `Withdrawal request: ${amount} to ${destination}`,
+    `Withdrawal request: $${fromMicro(amount).toFixed(6)} to ${destination}`,
   );
   if (newBalance === null) return null;
 
@@ -566,20 +604,20 @@ export function reconcileLedger(db: DatabaseDriver): ReconciliationResult {
     .prepare("SELECT COALESCE(SUM(balance), 0) as total FROM relay_accounts")
     .get() as { total: number };
 
-  // Compare with tolerance for floating point
-  if (Math.abs(txnSum.net - balanceSum.total) > 0.001) {
+  // Exact match — integer micro-units have no drift
+  if (txnSum.net !== balanceSum.total) {
     errors.push(
-      `Balance equation violated: transaction net ${txnSum.net.toFixed(4)} != account balance sum ${balanceSum.total.toFixed(4)}`,
+      `Balance equation violated: transaction net ${txnSum.net} != account balance sum ${balanceSum.total}`,
     );
   }
 
   // 2. No negative balances
   const negativeAccounts = db
-    .prepare("SELECT motebit_id, balance FROM relay_accounts WHERE balance < -0.001")
+    .prepare("SELECT motebit_id, balance FROM relay_accounts WHERE balance < 0")
     .all() as Array<{ motebit_id: string; balance: number }>;
   for (const acct of negativeAccounts) {
     errors.push(
-      `Negative balance: agent ${acct.motebit_id} has balance ${acct.balance.toFixed(4)}`,
+      `Negative balance: agent ${acct.motebit_id} has balance ${acct.balance} (${fromMicro(acct.balance).toFixed(6)} USD)`,
     );
   }
 

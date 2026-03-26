@@ -50,7 +50,7 @@ import {
   lexicographicComposite,
 } from "@motebit/market";
 import type { CandidateProfile, CompositeFunction } from "@motebit/market";
-import { getAccountBalance, creditAccount, debitAccount } from "./accounts.js";
+import { getAccountBalance, creditAccount, debitAccount, toMicro } from "./accounts.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
 import { forwardTaskViaMcp, type ReceiptCandidate } from "./task-routing.js";
@@ -522,7 +522,8 @@ export async function handleReceiptIngestion(
 
         const subUnitCost = getListingUnitCost(moteDb, sub.motebit_id as string);
         const subGross =
-          subEntry.price_snapshot ?? (subUnitCost > 0 ? subUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
+          subEntry.price_snapshot ??
+          (subUnitCost > 0 ? toMicro(subUnitCost / (1 - PLATFORM_FEE_RATE)) : 0);
         if (subGross <= 0) {
           // No cost — still recurse into nested receipts
           const nestedReceipts = sub.delegation_receipts ?? [];
@@ -545,6 +546,8 @@ export async function handleReceiptIngestion(
         };
 
         const subSettlement = settleOnReceipt(subAllocation, sub, null, subSettlementId);
+        subSettlement.amount_settled = Math.round(subSettlement.amount_settled);
+        subSettlement.platform_fee = Math.round(subSettlement.platform_fee);
 
         try {
           moteDb.db.exec("BEGIN");
@@ -657,7 +660,7 @@ export async function handleReceiptIngestion(
       const grossAmount =
         entry.price_snapshot ??
         persistentAlloc?.amount_locked ??
-        (fallbackUnitCost > 0 ? fallbackUnitCost / (1 - PLATFORM_FEE_RATE) : 0);
+        (fallbackUnitCost > 0 ? toMicro(fallbackUnitCost / (1 - PLATFORM_FEE_RATE)) : 0);
 
       const settlementId = asSettlementId(crypto.randomUUID());
       const allocationId = persistentAlloc
@@ -674,6 +677,9 @@ export async function handleReceiptIngestion(
       };
 
       const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
+      // Round to integer micro-units for DB storage
+      settlement.amount_settled = Math.round(settlement.amount_settled);
+      settlement.platform_fee = Math.round(settlement.platform_fee);
 
       let credentialRow: {
         credential_id: string;
@@ -1133,9 +1139,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         }
 
         if (delegatorId) {
-          const gross = currentPricing.unitCost / (1 - PLATFORM_FEE_RATE);
+          const grossMicro = toMicro(currentPricing.unitCost / (1 - PLATFORM_FEE_RATE));
           const account = getAccountBalance(moteDb.db, delegatorId);
-          if (account && account.balance >= gross) {
+          if (account && account.balance >= grossMicro) {
             return next();
           }
         }
@@ -1220,10 +1226,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Snapshot the listing price at submission time so the settlement audit
     // matches what x402 actually charged. If the agent updates pricing between
     // submission and receipt delivery, the snapshot ensures consistency.
+    // unit_cost is in dollars from the listing JSON. Convert to micro-units for accounting.
     const unitCostAtSubmission = getListingUnitCost(moteDb, motebitId);
     const priceSnapshot =
       unitCostAtSubmission > 0
-        ? unitCostAtSubmission / (1 - PLATFORM_FEE_RATE) // gross = what x402 charged (unit_cost + platform fee)
+        ? toMicro(unitCostAtSubmission / (1 - PLATFORM_FEE_RATE)) // gross in micro-units
         : undefined;
 
     // Capture x402 payment proof from the settlement hook (set during middleware).
@@ -1318,13 +1325,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         );
 
         if (allocation) {
+          // Round to integer micro-units (allocateBudget may produce fractional from risk multiplier)
+          allocation.amount_locked = Math.round(allocation.amount_locked);
           // Lock the risk-buffered amount
           moteDb.db.exec("BEGIN");
           try {
             debitAccount(
               moteDb.db,
               delegatorId,
-              allocation.amount_locked, // Uses risk-buffered amount
+              allocation.amount_locked, // Uses risk-buffered amount (rounded to micro-unit)
               "allocation_hold",
               `x402-${taskId}`,
               `Hold for task ${taskId} to ${motebitId}`,

@@ -8,9 +8,10 @@ import type {
 } from "@motebit/sdk";
 
 /**
- * Round to 6 decimal places (USDC precision). USDC has 6 on-chain decimals;
- * rounding to 2 would kill micropayments (e.g. $0.001 × 5% = $0.00005 → $0.00).
- * Always round half-up so the platform never under-charges due to floating point.
+ * Round to 6 decimal places (USDC precision). When the relay stores amounts
+ * as integer micro-units (1 USD = 1,000,000), this is equivalent to rounding
+ * to the nearest integer. When amounts are in dollars, it preserves sub-cent
+ * precision for micropayments.
  */
 function microRound(n: number): number {
   return Math.round(n * 1_000_000) / 1_000_000;
@@ -61,7 +62,7 @@ export function settleOnReceipt(
     const total = ledger.steps.length;
     const completed = ledger.steps.filter((s) => s.status === "completed").length;
     if (completed < total && completed > 0) {
-      gross = allocation.amount_locked * (completed / total);
+      gross = microRound(allocation.amount_locked * (completed / total));
       status = "partial";
     }
   }

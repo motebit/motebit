@@ -7,7 +7,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
-import { processStripeCheckout, getOrCreateAccount, getTransactions } from "../accounts.js";
+import {
+  processStripeCheckout,
+  getOrCreateAccount,
+  getTransactions,
+  toMicro,
+} from "../accounts.js";
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 
@@ -25,7 +30,7 @@ describe("processStripeCheckout", () => {
     moteDb.db.exec(`
       CREATE TABLE IF NOT EXISTS relay_accounts (
         motebit_id TEXT PRIMARY KEY,
-        balance REAL NOT NULL DEFAULT 0,
+        balance INTEGER NOT NULL DEFAULT 0,
         currency TEXT NOT NULL DEFAULT 'USD',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -34,8 +39,8 @@ describe("processStripeCheckout", () => {
         transaction_id TEXT PRIMARY KEY,
         motebit_id TEXT NOT NULL,
         type TEXT NOT NULL,
-        amount REAL NOT NULL,
-        balance_after REAL NOT NULL,
+        amount INTEGER NOT NULL,
+        balance_after INTEGER NOT NULL,
         reference_id TEXT,
         description TEXT,
         created_at INTEGER NOT NULL
@@ -56,13 +61,13 @@ describe("processStripeCheckout", () => {
     expect(applied).toBe(true);
 
     const account = getOrCreateAccount(moteDb.db, motebitId);
-    expect(account.balance).toBe(25.0);
+    expect(account.balance).toBe(toMicro(25));
 
     const txns = getTransactions(moteDb.db, motebitId);
     expect(txns).toHaveLength(1);
     const txn = txns[0]!;
     expect(txn.type).toBe("deposit");
-    expect(txn.amount).toBe(25.0);
+    expect(txn.amount).toBe(toMicro(25));
     expect(txn.reference_id).toBe(sessionId);
     expect(txn.description).toBe("Stripe Checkout: pi_xyz");
   });
@@ -78,7 +83,7 @@ describe("processStripeCheckout", () => {
     expect(second).toBe(false);
 
     const account = getOrCreateAccount(moteDb.db, motebitId);
-    expect(account.balance).toBe(50.0); // not 100
+    expect(account.balance).toBe(toMicro(50)); // not 100
 
     const txns = getTransactions(moteDb.db, motebitId);
     expect(txns).toHaveLength(1);
@@ -112,7 +117,7 @@ describe("processStripeCheckout", () => {
     processStripeCheckout(moteDb.db, "cs_3", motebitId, 30.0);
 
     const account = getOrCreateAccount(moteDb.db, motebitId);
-    expect(account.balance).toBe(60.0);
+    expect(account.balance).toBe(toMicro(60));
 
     const txns = getTransactions(moteDb.db, motebitId);
     expect(txns).toHaveLength(3);

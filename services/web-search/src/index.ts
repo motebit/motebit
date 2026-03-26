@@ -385,6 +385,7 @@ async function main(): Promise<void> {
   }
 
   // 5. Wire deps + start server (scaffold handles MCP, relay, shutdown)
+  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.10");
   const deps = wireServerDeps(runtime, {
     motebitId,
     publicKeyHex,
@@ -395,6 +396,18 @@ async function main(): Promise<void> {
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,
   });
+
+  // Publish service listing with pricing so the relay allocates budget and settles real money
+  deps.getServiceListing = () =>
+    Promise.resolve({
+      capabilities: ["web_search", "read_url"],
+      pricing: [
+        { capability: "web_search", unit_cost: unitCost, currency: "USD", per: "request" },
+        { capability: "read_url", unit_cost: unitCost, currency: "USD", per: "request" },
+      ],
+      sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
+      description: `motebit-web-search-${motebitId.slice(0, 8)}`,
+    });
 
   await startServiceServer(deps, {
     name: `motebit-web-search-${motebitId.slice(0, 8)}`,

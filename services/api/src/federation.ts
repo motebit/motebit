@@ -169,9 +169,9 @@ export function createFederationTables(db: DatabaseDriver): void {
       upstream_relay_id TEXT NOT NULL,
       downstream_relay_id TEXT,
       agent_id TEXT,
-      gross_amount REAL NOT NULL,
-      fee_amount REAL NOT NULL,
-      net_amount REAL NOT NULL,
+      gross_amount INTEGER NOT NULL,
+      fee_amount INTEGER NOT NULL,
+      net_amount INTEGER NOT NULL,
       fee_rate REAL NOT NULL,
       settled_at INTEGER NOT NULL,
       receipt_hash TEXT NOT NULL
