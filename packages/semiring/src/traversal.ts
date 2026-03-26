@@ -31,6 +31,8 @@ import type { WeightedDigraph } from "./graph.js";
  */
 export function optimalPaths<T>(graph: WeightedDigraph<T>, source: string): Map<string, T> {
   const sr = graph.sr;
+  const srEq = sr.eq;
+  const eq = (a: T, b: T): boolean => (srEq ? srEq(a, b) : a === b);
   const dist = new Map<string, T>();
 
   // Initialize: source = 1 (identity), everything else = 0 (worst)
@@ -53,7 +55,7 @@ export function optimalPaths<T>(graph: WeightedDigraph<T>, source: string): Map<
         const current = dist.get(neighbor)!;
         const combined = sr.add(current, candidate);
         // Only update if the value actually changed
-        if (combined !== current) {
+        if (!eq(combined, current)) {
           dist.set(neighbor, combined);
           changed = true;
         }
@@ -156,6 +158,8 @@ export function optimalPathTrace<T>(
 
   const nodes = [...graph.nodes()];
 
+  const srEq = sr.eq;
+  const eq = (a: T, b: T): boolean => (srEq ? srEq(a, b) : a === b);
   for (let i = 0; i < nodes.length - 1; i++) {
     let changed = false;
     for (const node of nodes) {
@@ -164,7 +168,7 @@ export function optimalPathTrace<T>(
         const candidate = sr.mul(dNode, weight);
         const current = dist.get(neighbor)!;
         const combined = sr.add(current, candidate);
-        if (combined !== current) {
+        if (!eq(combined, current)) {
           dist.set(neighbor, combined);
           pred.set(neighbor, node);
           changed = true;

@@ -41,6 +41,3 @@ export class FixedWindowLimiter {
     }
   }
 }
-
-/** @deprecated Renamed to FixedWindowLimiter. Alias kept for backward compatibility. */
-export { FixedWindowLimiter as SlidingWindowLimiter };

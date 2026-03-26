@@ -1365,7 +1365,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       } catch (err) {
         // Re-throw intentional HTTP errors (402)
         if (err instanceof HTTPException) throw err;
-        // Best-effort allocation — don't block task submission on accounting errors
+        // For paid agents, accounting errors must not be silently swallowed —
+        // allowing the task through without a budget hold means unpaid work.
+        if (requiresPayment) {
+          logger.error("task.budget_hold_failed", {
+            correlationId: taskId,
+            taskId,
+            motebitId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw new HTTPException(500, {
+            message: "Budget allocation failed — retry or contact support",
+          });
+        }
+        // Free agent — best-effort allocation, don't block task submission
       }
     }
 

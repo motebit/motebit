@@ -37,6 +37,9 @@ export function settleOnReceipt(
   settlementId: SettlementId,
   feeRate: number = PLATFORM_FEE_RATE,
 ): SettlementRecord {
+  if (feeRate < 0 || feeRate > 1) {
+    throw new Error(`feeRate must be in [0, 1], got ${feeRate}`);
+  }
   const receiptHash = receipt.result_hash ?? "";
 
   if (receipt.status === "failed" || receipt.status === "denied") {

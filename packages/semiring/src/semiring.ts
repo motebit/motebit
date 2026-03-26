@@ -27,6 +27,16 @@ export interface Semiring<T> {
   add(a: T, b: T): T;
   /** ⊗: compose sequential edges (associative). */
   mul(a: T, b: T): T;
+  /**
+   * Value equality. Used by graph traversal for convergence detection.
+   * Defaults to `===` when absent — correct for primitive semirings (number, boolean).
+   * Required for compound semirings (record, product, annotated) where `add()`
+   * returns a new object even when the value is semantically unchanged.
+   *
+   * Declared as a property (not method) so extracting it doesn't trigger
+   * unbound-method lint — semiring objects are plain data, never class instances.
+   */
+  readonly eq?: ((a: T, b: T) => boolean) | undefined;
 }
 
 // ── Concrete Semirings ──────────────────────────────────────────────
@@ -108,11 +118,16 @@ export const BooleanSemiring: Semiring<boolean> = {
  * One graph traversal computes trust × cost × latency in a single pass.
  */
 export function productSemiring<A, B>(sa: Semiring<A>, sb: Semiring<B>): Semiring<readonly [A, B]> {
+  const saEq = sa.eq;
+  const sbEq = sb.eq;
+  const eqA = (a: A, b: A): boolean => (saEq ? saEq(a, b) : a === b);
+  const eqB = (a: B, b: B): boolean => (sbEq ? sbEq(a, b) : a === b);
   return {
     zero: [sa.zero, sb.zero] as const,
     one: [sa.one, sb.one] as const,
     add: (x, y) => [sa.add(x[0], y[0]), sb.add(x[1], y[1])] as const,
     mul: (x, y) => [sa.mul(x[0], y[0]), sb.mul(x[1], y[1])] as const,
+    eq: (x, y) => eqA(x[0], y[0]) && eqB(x[1], y[1]),
   };
 }
 
@@ -129,10 +144,15 @@ export function recordSemiring<R extends Record<string, unknown>>(fields: {
   const keys = Object.keys(fields) as (keyof R)[];
   const zero = {} as R;
   const one = {} as R;
+  const eqs = {} as { [K in keyof R]: (a: R[K], b: R[K]) => boolean };
   for (const k of keys) {
     const f = fields[k];
     zero[k] = f.zero;
     one[k] = f.one;
+    const fEq = f.eq;
+    eqs[k] = fEq
+      ? (a: R[typeof k], b: R[typeof k]) => fEq(a, b)
+      : (a: R[typeof k], b: R[typeof k]) => a === b;
   }
   return {
     zero,
@@ -153,6 +173,12 @@ export function recordSemiring<R extends Record<string, unknown>>(fields: {
       }
       return r;
     },
+    eq(a, b) {
+      for (const k of keys) {
+        if (!eqs[k](a[k], b[k])) return false;
+      }
+      return true;
+    },
   };
 }
 
@@ -165,10 +191,13 @@ export function mappedSemiring<T, U>(
   to: (t: T) => U,
   from: (u: U) => T,
 ): Semiring<U> {
+  const bEq = base.eq;
+  const baseEq = (a: T, b: T): boolean => (bEq ? bEq(a, b) : a === b);
   return {
     zero: to(base.zero),
     one: to(base.one),
     add: (a, b) => to(base.add(from(a), from(b))),
     mul: (a, b) => to(base.mul(from(a), from(b))),
+    eq: (a, b) => baseEq(from(a), from(b)),
   };
 }

@@ -93,6 +93,8 @@ export interface Annotated<T> {
 
 export function annotatedSemiring<T>(base: Semiring<T>, maxPaths = 100): Semiring<Annotated<T>> {
   const prov = boundedProvenanceSemiring(maxPaths);
+  const bEq = base.eq;
+  const baseEq = (a: T, b: T): boolean => (bEq ? bEq(a, b) : a === b);
   return {
     zero: { value: base.zero, why: prov.zero },
     one: { value: base.one, why: prov.one },
@@ -111,6 +113,9 @@ export function annotatedSemiring<T>(base: Semiring<T>, maxPaths = 100): Semirin
         value: base.mul(a.value, b.value),
         why: prov.mul(a.why, b.why),
       };
+    },
+    eq(a, b) {
+      return baseEq(a.value, b.value) && a.why.length === b.why.length;
     },
   };
 }
