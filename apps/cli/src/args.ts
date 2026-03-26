@@ -25,6 +25,7 @@ export interface CliConfig {
   target: string | undefined;
   budget: string | undefined;
   price: string | undefined;
+  plan: boolean;
   serveTransport: string | undefined;
   servePort: string | undefined;
   tools: string | undefined;
@@ -67,6 +68,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       target: { type: "string" },
       budget: { type: "string" },
       price: { type: "string" },
+      plan: { type: "boolean", default: false },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
       tools: { type: "string" },
@@ -130,6 +132,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     target: values.target,
     budget: values.budget,
     price: values.price,
+    plan: values.plan,
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
     tools: values.tools,
@@ -257,6 +260,7 @@ Commands:
     --capability <cap>        Required capability (default: web_search)
     --target <id>             Skip discovery, delegate to specific agent
     --budget <amount>         Max spend in USD (default: from listing price)
+    --plan                    Decompose into multi-step plan, delegate each to specialists
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail

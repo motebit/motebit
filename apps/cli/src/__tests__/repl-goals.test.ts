@@ -50,6 +50,7 @@ const stubConfig = {
   target: undefined,
   budget: undefined,
   price: undefined,
+  plan: false,
   serveTransport: undefined,
   servePort: undefined,
   tools: undefined,

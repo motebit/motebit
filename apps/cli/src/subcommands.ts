@@ -6,6 +6,8 @@ import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { EventStore } from "@motebit/event-log";
 import { EventType, RiskLevel } from "@motebit/sdk";
+import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
+import type { StepDelegationAdapter } from "@motebit/planner";
 import {
   generate as generateIdentityFile,
   verifyIdentityFile,
@@ -2264,6 +2266,162 @@ async function getBalanceAmount(
 }
 
 // ---------------------------------------------------------------------------
+// motebit delegate --plan — multi-agent orchestration via PlanEngine
+// ---------------------------------------------------------------------------
+
+async function handleDelegatePlan(
+  config: CliConfig,
+  motebitId: string,
+  prompt: string,
+): Promise<void> {
+  const relayUrl = getRelayUrl(config);
+
+  // Build auth headers for relay calls
+  const authHeaders = await getRelayAuthHeaders(config, { aud: "task:submit", json: true });
+
+  // Initialize runtime with AI provider for plan decomposition
+  const { createProvider, buildToolRegistry, buildStorageAdapters } =
+    await import("./runtime-factory.js");
+  const { MotebitRuntime, NullRenderer } = await import("@motebit/runtime");
+
+  const dbPath = getDbPath(config.dbPath);
+  const moteDb = await openMotebitDatabase(dbPath);
+
+  const runtimeRef: { current: InstanceType<typeof MotebitRuntime> | null } = { current: null };
+  const provider = createProvider(config);
+  const registry = buildToolRegistry(config, runtimeRef, motebitId);
+  const storage = buildStorageAdapters(moteDb);
+
+  const runtime = new MotebitRuntime(
+    { motebitId, policy: {} },
+    { storage, renderer: new NullRenderer(), tools: registry },
+  );
+  runtimeRef.current = runtime;
+  await runtime.init();
+  runtime.setProvider(provider);
+
+  // HTTP-polling delegation adapter (no WebSocket needed for one-shot)
+  const httpDelegationAdapter: StepDelegationAdapter = {
+    async delegateStep(
+      step: PlanStep,
+      timeoutMs: number,
+      onTaskSubmitted?: (taskId: string) => void,
+    ): Promise<DelegatedStepResult> {
+      const body: Record<string, unknown> = {
+        prompt: step.prompt,
+        submitted_by: motebitId,
+        required_capabilities: step.required_capabilities,
+        step_id: step.step_id,
+        routing_strategy: config.routingStrategy,
+      };
+
+      const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify(body),
+      });
+
+      if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
+      }
+
+      const taskResp = (await resp.json()) as { task_id: string };
+      const taskId = taskResp.task_id;
+      onTaskSubmitted?.(taskId);
+
+      // Poll for result
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await new Promise<void>((r) => setTimeout(r, 2000));
+        try {
+          const pollResp = await fetch(`${relayUrl}/agent/${motebitId}/task/${taskId}`, {
+            headers: authHeaders,
+          });
+          if (!pollResp.ok) continue;
+          const data = (await pollResp.json()) as {
+            receipt: ExecutionReceipt | null;
+          };
+          if (data.receipt) {
+            return {
+              step_id: step.step_id,
+              task_id: taskId,
+              receipt: data.receipt,
+              result_text: data.receipt.result,
+            };
+          }
+        } catch {
+          // Network error — keep polling
+        }
+      }
+      throw new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`);
+    },
+  };
+
+  // Wire delegation: empty local capabilities forces all steps to delegate to the network
+  runtime.setLocalCapabilities([]);
+  runtime.setDelegationAdapter(httpDelegationAdapter);
+
+  // Execute plan
+  const goalId = crypto.randomUUID();
+  console.log(`\nDecomposing: "${prompt.slice(0, 80)}${prompt.length > 80 ? "..." : ""}"\n`);
+
+  let stepCount = 0;
+  let completedCount = 0;
+
+  try {
+    for await (const chunk of runtime.executePlan(goalId, prompt)) {
+      switch (chunk.type) {
+        case "plan_created":
+          stepCount = chunk.steps.length;
+          console.log(`Plan: ${chunk.plan.title}`);
+          console.log(`  ${stepCount} steps\n`);
+          break;
+
+        case "step_started":
+          console.log(
+            `Step ${chunk.step.ordinal + 1}/${stepCount}: ${chunk.step.description}` +
+              (chunk.step.required_capabilities?.length
+                ? ` (${chunk.step.required_capabilities.join(", ")})`
+                : ""),
+          );
+          break;
+
+        case "step_delegated":
+          console.log(
+            `  → Delegated${chunk.routing_choice?.selected_agent ? ` to ${chunk.routing_choice.selected_agent.slice(0, 12)}...` : ""} (task: ${chunk.task_id.slice(0, 12)}...)`,
+          );
+          break;
+
+        case "step_completed": {
+          completedCount++;
+          const summary = chunk.step.result_summary ?? "";
+          const preview = summary.length > 200 ? summary.slice(0, 200) + "..." : summary;
+          console.log(`  ✓ ${preview || "completed"}\n`);
+          break;
+        }
+
+        case "step_failed":
+          console.log(`  ✗ ${chunk.error}\n`);
+          break;
+
+        case "plan_completed":
+          console.log(`\nPlan complete. ${completedCount}/${stepCount} steps executed.`);
+          break;
+
+        case "plan_failed":
+          console.error(`\nPlan failed: ${chunk.reason}`);
+          break;
+      }
+    }
+  } finally {
+    runtime.stop();
+    moteDb.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // motebit delegate "<prompt>" — delegate a task to a worker agent
 // ---------------------------------------------------------------------------
 
@@ -2279,6 +2437,12 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
   if (!prompt) {
     console.error('Usage: motebit delegate "<prompt>" [--capability web_search] [--target <id>]');
     process.exit(1);
+  }
+
+  // --plan: multi-agent orchestration via PlanEngine
+  if (config.plan) {
+    await handleDelegatePlan(config, motebitId, prompt);
+    return;
   }
 
   const relayUrl = getRelayUrl(config);
