@@ -107,7 +107,7 @@ describe("Heartbeat Sender", () => {
     expect(peer!.state).toBe("removed");
   });
 
-  it("resets missed count and reactivates on successful heartbeat", async () => {
+  it("decrements missed count on successful heartbeat (hysteresis)", async () => {
     insertPeer(db, "recovering-peer", "http://recovering.test", "suspended", 3);
 
     vi.stubGlobal("fetch", async () => {
@@ -122,10 +122,21 @@ describe("Heartbeat Sender", () => {
       );
     });
 
+    // First success: 3 → 2 (still suspended)
     await sendHeartbeats(db, identity);
+    let peer = getPeer(db, "recovering-peer");
+    expect(peer!.missed_heartbeats).toBe(2);
+    expect(peer!.state).toBe("suspended");
 
-    const peer = getPeer(db, "recovering-peer");
-    expect(peer).toBeDefined();
+    // Second success: 2 → 1 (still suspended)
+    await sendHeartbeats(db, identity);
+    peer = getPeer(db, "recovering-peer");
+    expect(peer!.missed_heartbeats).toBe(1);
+    expect(peer!.state).toBe("suspended");
+
+    // Third success: 1 → 0 (reactivated)
+    await sendHeartbeats(db, identity);
+    peer = getPeer(db, "recovering-peer");
     expect(peer!.missed_heartbeats).toBe(0);
     expect(peer!.state).toBe("active");
   });

@@ -66,9 +66,12 @@ export function parseConsolidationResponse(
   raw: string,
   validNodeIds: string[],
 ): ConsolidationDecision {
+  // Default to NOOP on parse failure — not ADD. A bad LLM response should not
+  // silently create duplicate memories. The candidate stays in conversation
+  // context and can be consolidated on the next reflection cycle.
   const fallback: ConsolidationDecision = {
-    action: ConsolidationAction.ADD,
-    reason: "Failed to parse consolidation response — defaulting to ADD",
+    action: ConsolidationAction.NOOP,
+    reason: "Failed to parse consolidation response — defaulting to NOOP",
   };
 
   try {

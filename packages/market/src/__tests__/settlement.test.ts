@@ -218,4 +218,16 @@ describe("settleOnReceipt", () => {
     expect(result.status).toBe("completed");
     expect(result.amount_settled).toBe(0.95);
   });
+
+  it("throws on feeRate > 1", () => {
+    expect(() => settleOnReceipt(makeAllocation(), makeReceipt(), null, SID, 1.5)).toThrow(
+      "feeRate must be in [0, 1]",
+    );
+  });
+
+  it("throws on negative feeRate", () => {
+    expect(() => settleOnReceipt(makeAllocation(), makeReceipt(), null, SID, -0.1)).toThrow(
+      "feeRate must be in [0, 1]",
+    );
+  });
 });

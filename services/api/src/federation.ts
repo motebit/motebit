@@ -566,10 +566,14 @@ export async function sendHeartbeats(
     const succeeded = result.status === "fulfilled" && result.value.ok;
 
     if (succeeded) {
-      // Reset missed count, reactivate if suspended
+      // Hysteresis: decrement missed count by 1 rather than resetting to 0.
+      // A suspended peer (3 misses) needs 3 consecutive successes to reactivate,
+      // preventing rapid suspended↔active oscillation on flaky connections.
+      const newMissed = Math.max(0, peer.missed_heartbeats - 1);
+      const newState = newMissed === 0 ? "active" : peer.state;
       db.prepare(
-        "UPDATE relay_peers SET missed_heartbeats = 0, state = 'active', last_heartbeat_at = ? WHERE peer_relay_id = ?",
-      ).run(Date.now(), peer.peer_relay_id);
+        "UPDATE relay_peers SET missed_heartbeats = ?, state = ?, last_heartbeat_at = ? WHERE peer_relay_id = ?",
+      ).run(newMissed, newState, Date.now(), peer.peer_relay_id);
     } else {
       const newMissed = peer.missed_heartbeats + 1;
       if (newMissed >= HEARTBEAT_REMOVE_THRESHOLD) {
@@ -1041,7 +1045,9 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       .prepare(
         "SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
       )
-      .get(relay_id) as { peer_relay_id: string; public_key: string; state: string } | undefined;
+      .get(relay_id) as
+      | { peer_relay_id: string; public_key: string; state: string; missed_heartbeats: number }
+      | undefined;
     if (!peer) throw new HTTPException(404, { message: "No active or suspended peer found" });
 
     const encoder = new TextEncoder();
@@ -1062,9 +1068,12 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(403, { message: "Heartbeat signature verification failed" });
 
     const now = Date.now();
+    // Hysteresis: decrement rather than reset, matching the sending side.
+    const newMissed = Math.max(0, peer.missed_heartbeats - 1);
+    const newState = newMissed === 0 ? "active" : peer.state;
     db.prepare(
-      `UPDATE relay_peers SET last_heartbeat_at = ?, missed_heartbeats = 0, agent_count = ?, state = ? WHERE peer_relay_id = ?`,
-    ).run(now, agent_count, peer.state === "suspended" ? "active" : peer.state, relay_id);
+      `UPDATE relay_peers SET last_heartbeat_at = ?, missed_heartbeats = ?, agent_count = ?, state = ? WHERE peer_relay_id = ?`,
+    ).run(now, newMissed, agent_count, newState, relay_id);
 
     // Process incoming revocation events (best-effort)
     if (revocations && Array.isArray(revocations) && revocations.length > 0) {

@@ -70,42 +70,42 @@ describe("parseConsolidationResponse", () => {
     expect(decision.existingNodeId).toBe("m3");
   });
 
-  it("falls back to ADD on malformed response", () => {
+  it("falls back to NOOP on malformed response", () => {
     const decision = parseConsolidationResponse("not json at all", validIds);
-    expect(decision.action).toBe(ConsolidationAction.ADD);
+    expect(decision.action).toBe(ConsolidationAction.NOOP);
     expect(decision.reason).toContain("Failed to parse");
   });
 
-  it("falls back to ADD on invalid action", () => {
+  it("falls back to NOOP on invalid action", () => {
     const raw = '{"action": "explode", "reason": "Invalid"}';
     const decision = parseConsolidationResponse(raw, validIds);
-    expect(decision.action).toBe(ConsolidationAction.ADD);
+    expect(decision.action).toBe(ConsolidationAction.NOOP);
   });
 
-  it("falls back to ADD when node ID is invalid", () => {
+  it("falls back to NOOP when node ID is invalid", () => {
     const raw = '{"action": "update", "existingNodeId": "invalid-id", "reason": "Test"}';
     const decision = parseConsolidationResponse(raw, validIds);
-    expect(decision.action).toBe(ConsolidationAction.ADD);
+    expect(decision.action).toBe(ConsolidationAction.NOOP);
   });
 
-  it("falls back to ADD when UPDATE/REINFORCE/NOOP missing node ID", () => {
+  it("falls back to NOOP when UPDATE/REINFORCE/NOOP missing node ID", () => {
     const raw = '{"action": "update", "reason": "No node ID"}';
     const decision = parseConsolidationResponse(raw, validIds);
-    expect(decision.action).toBe(ConsolidationAction.ADD);
+    expect(decision.action).toBe(ConsolidationAction.NOOP);
   });
 
-  it("falls back to ADD when REINFORCE references nodeId not in validNodeIds", () => {
+  it("falls back to NOOP when REINFORCE references nodeId not in validNodeIds", () => {
     const raw = '{"action": "reinforce", "existingNodeId": "unknown-node", "reason": "Confirms"}';
     const decision = parseConsolidationResponse(raw, validIds);
-    expect(decision.action).toBe(ConsolidationAction.ADD);
+    expect(decision.action).toBe(ConsolidationAction.NOOP);
     expect(decision.reason).toContain("Failed to parse");
     expect(decision.existingNodeId).toBeUndefined();
   });
 
-  it("falls back to ADD when NOOP references nodeId not in validNodeIds", () => {
+  it("falls back to NOOP when NOOP references nodeId not in validNodeIds", () => {
     const raw = '{"action": "noop", "existingNodeId": "bogus", "reason": "Duplicate"}';
     const decision = parseConsolidationResponse(raw, validIds);
-    expect(decision.action).toBe(ConsolidationAction.ADD);
+    expect(decision.action).toBe(ConsolidationAction.NOOP);
     expect(decision.reason).toContain("Failed to parse");
   });
 
