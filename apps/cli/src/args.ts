@@ -21,6 +21,9 @@ export interface CliConfig {
   project: string | undefined;
   reason: string | undefined;
   destination: string | undefined;
+  capability: string | undefined;
+  target: string | undefined;
+  budget: string | undefined;
   serveTransport: string | undefined;
   servePort: string | undefined;
   tools: string | undefined;
@@ -59,6 +62,9 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       project: { type: "string" },
       reason: { type: "string" },
       destination: { type: "string" },
+      capability: { type: "string" },
+      target: { type: "string" },
+      budget: { type: "string" },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
       tools: { type: "string" },
@@ -118,6 +124,9 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     project: values.project,
     reason: values.reason,
     destination: values.destination,
+    capability: values.capability,
+    target: values.target,
+    budget: values.budget,
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
     tools: values.tools,
@@ -239,6 +248,11 @@ Commands:
   ledger <goal_id>          Show execution ledger for a goal [--json]
   credentials               List credentials from relay [--presentation]
   balance                   Show virtual account balance and recent transactions
+  fund <amount>             Deposit via Stripe Checkout (opens browser)
+  delegate "<prompt>"       Delegate a task to a worker agent
+    --capability <cap>        Required capability (default: web_search)
+    --target <id>             Skip discovery, delegate to specific agent
+    --budget <amount>         Max spend in USD (default: from listing price)
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail

@@ -658,11 +658,11 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     // Verify individual settlement record
     const settlement = data.settlements.find((s) => s.allocation_id === `x402-${settlementTaskId}`);
     expect(settlement).toBeDefined();
-    // Gross = unit_cost / (1 - 0.05) = $1.052632 (what x402 charges the caller).
-    // Fee = gross * 0.05 = ~$0.052632 → agent receives ~$1.00 (their listed price).
-    expect(settlement!.platform_fee).toBeCloseTo(0.052632, 4);
+    // Gross = toMicro($1.00 / 0.95) = 1052632 micro. Fee = round(1052632 * 0.05) = 52632.
+    // Net = 1052632 - 52632 = 1000000 micro. Settlement values are in micro-units.
+    expect(settlement!.platform_fee).toBe(52632);
     expect(settlement!.platform_fee_rate).toBe(0.05);
-    expect(settlement!.amount_settled).toBeCloseTo(1.0, 4);
+    expect(settlement!.amount_settled).toBe(1_000_000);
     expect(settlement!.status).toBe("completed");
   });
 
@@ -1149,12 +1149,11 @@ describe("x402 Payment Gate", () => {
 
     const settlement = data.settlements.find((s) => s.allocation_id === `x402-${snapshotTaskId}`);
     expect(settlement).toBeDefined();
-    // Gross = $2.00 / (1 - 0.05) = ~$2.105263 (what x402 charged)
-    // Fee = gross * 0.05 = ~$0.105263
-    // Net = gross - fee = ~$2.0 (agent gets their unit_cost back)
+    // Gross = toMicro($2.00 / 0.95) = 2105263 micro. Fee = round(2105263 * 0.05) = 105263.
+    // Net = 2105263 - 105263 = 2000000 micro. Settlement values are in micro-units.
     // The key assertion: settlement is based on $2.00 snapshot, NOT current $5.00
-    expect(settlement!.amount_settled).toBeCloseTo(2.0, 1); // Would be ~$5.0 if using $5.00
-    expect(settlement!.platform_fee).toBeCloseTo(0.105263, 4); // Would be ~$0.263 if using $5.00
+    expect(settlement!.amount_settled).toBe(2_000_000); // Would be ~5,000,000 if using $5.00
+    expect(settlement!.platform_fee).toBe(105263); // Would be ~263,158 if using $5.00
 
     relay.connections.delete(motebitIdB);
   });

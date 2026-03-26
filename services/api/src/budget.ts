@@ -22,6 +22,8 @@ import {
   getPendingWithdrawals,
   reconcileLedger,
   processStripeCheckout,
+  toMicro,
+  fromMicro,
 } from "./accounts.js";
 import Stripe from "stripe";
 
@@ -54,6 +56,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     if (typeof body.amount !== "number" || body.amount <= 0)
       throw new HTTPException(400, { message: "amount must be a positive number" });
 
+    const amountMicro = toMicro(body.amount);
+
     if (body.reference) {
       if (hasTransactionWithReference(moteDb.db, motebitId, body.reference)) {
         const account = getOrCreateAccount(moteDb.db, motebitId);
@@ -64,7 +68,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         });
         return c.json({
           motebit_id: motebitId,
-          balance: account.balance,
+          balance: fromMicro(account.balance),
           transaction_id: null,
           idempotent: true,
         });
@@ -76,7 +80,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     moteDb.db.exec("BEGIN");
     try {
       const account = getOrCreateAccount(moteDb.db, motebitId);
-      newBalance = account.balance + body.amount;
+      newBalance = account.balance + amountMicro;
       const now = Date.now();
       moteDb.db
         .prepare("UPDATE relay_accounts SET balance = ?, updated_at = ? WHERE motebit_id = ?")
@@ -88,7 +92,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         .run(
           txnId,
           motebitId,
-          body.amount,
+          amountMicro,
           newBalance,
           body.reference ?? null,
           body.description ?? null,
@@ -104,10 +108,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       correlationId,
       motebitId,
       amount: body.amount,
+      amountMicro,
       balanceAfter: newBalance,
       reference: body.reference ?? null,
     });
-    return c.json({ motebit_id: motebitId, balance: newBalance, transaction_id: txnId });
+    return c.json({ motebit_id: motebitId, balance: fromMicro(newBalance), transaction_id: txnId });
   });
 
   // --- Balance ---
@@ -124,13 +129,17 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         transactions: [],
       });
     const detailed = getAccountBalanceDetailed(moteDb.db, motebitId);
-    const transactions = getTransactions(moteDb.db, motebitId, 50);
+    const transactions = getTransactions(moteDb.db, motebitId, 50).map((tx) => ({
+      ...tx,
+      amount: fromMicro(tx.amount),
+      balance_after: fromMicro(tx.balance_after),
+    }));
     return c.json({
       motebit_id: motebitId,
-      balance: detailed.balance,
+      balance: fromMicro(detailed.balance),
       currency: detailed.currency,
-      pending_withdrawals: detailed.pending_withdrawals,
-      pending_allocations: detailed.pending_allocations,
+      pending_withdrawals: fromMicro(detailed.pending_withdrawals),
+      pending_allocations: fromMicro(detailed.pending_allocations),
       transactions,
     });
   });
@@ -147,16 +156,22 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     if (typeof body.amount !== "number" || body.amount <= 0)
       throw new HTTPException(400, { message: "amount must be a positive number" });
 
+    const amountMicro = toMicro(body.amount);
     const idempotencyKey = body.idempotency_key ?? c.req.header("Idempotency-Key") ?? undefined;
     const result = requestWithdrawal(
       moteDb.db,
       motebitId,
-      body.amount,
+      amountMicro,
       body.destination ?? "pending",
       idempotencyKey,
     );
     if (result === null)
       throw new HTTPException(402, { message: "Insufficient balance for withdrawal" });
+
+    const toWithdrawalResponse = <T extends { amount: number }>(w: T) => ({
+      ...w,
+      amount: fromMicro(w.amount),
+    });
 
     if ("existing" in result) {
       logger.info("withdrawal.endpoint.idempotent", {
@@ -165,7 +180,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         withdrawalId: result.existing.withdrawal_id,
         idempotencyKey,
       });
-      return c.json({ motebit_id: motebitId, withdrawal: result.existing, idempotent: true });
+      return c.json({
+        motebit_id: motebitId,
+        withdrawal: toWithdrawalResponse(result.existing),
+        idempotent: true,
+      });
     }
 
     logger.info("withdrawal.endpoint.requested", {
@@ -176,7 +195,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       destination: result.destination,
       idempotencyKey: idempotencyKey ?? null,
     });
-    return c.json({ motebit_id: motebitId, withdrawal: result });
+    return c.json({ motebit_id: motebitId, withdrawal: toWithdrawalResponse(result) });
   });
 
   // --- Withdrawal history ---

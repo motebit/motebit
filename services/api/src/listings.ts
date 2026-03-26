@@ -8,6 +8,7 @@ import type { MotebitDatabase } from "@motebit/persistence";
 import { asMotebitId, asListingId } from "@motebit/sdk";
 import { graphRankCandidates } from "@motebit/market";
 import type { TaskRouter } from "./task-routing.js";
+import { fromMicro } from "./accounts.js";
 
 export interface ListingsDeps {
   app: Hono;
@@ -120,12 +121,15 @@ export function registerListingsRoutes(deps: ListingsDeps): void {
 
     return c.json({
       period_days: days,
-      ...totals,
+      settlement_count: totals.settlement_count,
+      total_settled: fromMicro(totals.total_settled),
+      total_platform_fees: fromMicro(totals.total_platform_fees),
+      total_gross_volume: fromMicro(totals.total_gross_volume),
       daily: daily.map((d) => ({
         date: new Date(d.day_epoch * 86_400_000).toISOString().slice(0, 10),
         settlement_count: d.count,
-        platform_fees: d.fees,
-        gross_volume: d.volume,
+        platform_fees: fromMicro(d.fees),
+        gross_volume: fromMicro(d.volume),
       })),
     });
   });

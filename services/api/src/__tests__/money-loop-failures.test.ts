@@ -11,7 +11,7 @@ import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
-import { reconcileLedger } from "../accounts.js";
+import { reconcileLedger, toMicro } from "../accounts.js";
 
 const API_TOKEN = "test-token";
 const AUTH = { Authorization: `Bearer ${API_TOKEN}` };
@@ -191,7 +191,8 @@ describe("Money Loop Failure Injection", () => {
       .prepare("SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'")
       .get(taskId) as { allocation_id: string; amount_locked: number } | undefined;
     expect(alloc).toBeDefined();
-    expect(alloc!.amount_locked).toBeCloseTo(lockedAmount, 2);
+    // alloc.amount_locked is in micro-units (DB), lockedAmount is in dollars (API)
+    expect(alloc!.amount_locked).toBe(toMicro(lockedAmount));
 
     // Simulate stale cleanup: backdate the allocation created_at to > 1 hour ago
     relay.moteDb.db
