@@ -99,6 +99,7 @@ export function AdminApp(): React.ReactElement {
   const [connected, setConnected] = useState(false);
   const [activePanel, setActivePanel] = useState<string>("state");
   const maxClockRef = useRef(0);
+  const consecutiveErrorsRef = useRef(0);
   const { historyRef, push: pushHistory } = useStateHistory();
 
   const cues = computeRawCues(state);
@@ -215,8 +216,10 @@ export function AdminApp(): React.ReactElement {
         }
 
         setConnected(true);
+        consecutiveErrorsRef.current = 0;
       } catch (err) {
         if (!(err instanceof DOMException && err.name === "AbortError")) {
+          consecutiveErrorsRef.current++;
           setConnected(false);
         }
       }
@@ -227,12 +230,22 @@ export function AdminApp(): React.ReactElement {
   useEffect(() => {
     const controller = new AbortController();
     void refresh(controller.signal);
-    const interval = setInterval(() => {
-      void refresh(controller.signal);
-    }, 2000);
+    // Adaptive polling: 2s normally, backs off to 10s on consecutive errors
+    // to avoid saturating the relay's read rate limit under failure.
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = (): void => {
+      const delay =
+        consecutiveErrorsRef.current > 0
+          ? Math.min(2000 * 2 ** consecutiveErrorsRef.current, 10_000)
+          : 2000;
+      timer = setTimeout(() => {
+        void refresh(controller.signal).finally(schedule);
+      }, delay);
+    };
+    schedule();
     return () => {
       controller.abort();
-      clearInterval(interval);
+      clearTimeout(timer);
     };
   }, [refresh]);
 

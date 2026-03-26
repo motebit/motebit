@@ -229,4 +229,45 @@ describe("mappedSemiring", () => {
     expect(SecondsCost.add(5, 3)).toBe(3); // min
     expect(SecondsCost.mul(2, 3)).toBe(5); // mapped: (2000+3000)/1000
   });
+
+  it("eq delegates through the mapping", () => {
+    expect(SecondsCost.eq!(3, 3)).toBe(true);
+    expect(SecondsCost.eq!(3, 4)).toBe(false);
+  });
+});
+
+// ── Semiring eq (value equality for convergence) ────────────────────
+
+describe("Semiring eq — value equality for compound semirings", () => {
+  it("productSemiring eq compares both components", () => {
+    const TC = productSemiring(TrustSemiring, CostSemiring);
+    expect(TC.eq!([0.8, 10] as const, [0.8, 10] as const)).toBe(true);
+    expect(TC.eq!([0.8, 10] as const, [0.9, 10] as const)).toBe(false);
+    expect(TC.eq!([0.8, 10] as const, [0.8, 11] as const)).toBe(false);
+  });
+
+  it("recordSemiring eq compares all fields", () => {
+    const Multi = recordSemiring({ trust: TrustSemiring, cost: CostSemiring });
+    expect(Multi.eq!({ trust: 0.5, cost: 10 }, { trust: 0.5, cost: 10 })).toBe(true);
+    expect(Multi.eq!({ trust: 0.5, cost: 10 }, { trust: 0.6, cost: 10 })).toBe(false);
+    expect(Multi.eq!({ trust: 0.5, cost: 10 }, { trust: 0.5, cost: 11 })).toBe(false);
+  });
+
+  it("recordSemiring with nested eq propagates through fields", () => {
+    // Build a record where one field is itself a product (has non-trivial eq)
+    const Inner = productSemiring(TrustSemiring, CostSemiring);
+    const Outer = recordSemiring({ inner: Inner, lat: LatencySemiring });
+    expect(
+      Outer.eq!({ inner: [0.5, 3] as const, lat: 10 }, { inner: [0.5, 3] as const, lat: 10 }),
+    ).toBe(true);
+    expect(
+      Outer.eq!({ inner: [0.5, 3] as const, lat: 10 }, { inner: [0.5, 4] as const, lat: 10 }),
+    ).toBe(false);
+  });
+
+  it("primitive semirings do not define eq (defaults to ===)", () => {
+    expect(TrustSemiring.eq).toBeUndefined();
+    expect(CostSemiring.eq).toBeUndefined();
+    expect(BooleanSemiring.eq).toBeUndefined();
+  });
 });

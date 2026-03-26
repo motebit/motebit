@@ -626,6 +626,8 @@ export async function* runTurnStreaming(
       // After MAX_CONSECUTIVE_SAME_TOOL identical iterations, force synthesis
       if (consecutiveSameToolCalls >= MAX_CONSECUTIVE_SAME_TOOL) {
         forcesynthesis = true;
+        consecutiveSameToolCalls = 0;
+        lastToolName = "";
       }
       // Retrieval tools always force synthesis on next iteration
       if (RETRIEVAL_TOOLS.has(toolName)) {

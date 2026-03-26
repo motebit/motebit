@@ -132,4 +132,16 @@ describe("annotatedSemiring — trust with provenance", () => {
     expect(paths.get("C")!.value).toBe(0);
     expect(paths.get("C")!.why).toEqual([]);
   });
+
+  it("annotatedSemiring eq compares value and provenance length", () => {
+    const sr = annotatedSemiring(TrustSemiring);
+    const a = { value: 0.5, why: [["X"]] as const };
+    const b = { value: 0.5, why: [["Y"]] as const };
+    const c = { value: 0.6, why: [["X"]] as const };
+    const d = { value: 0.5, why: [["X"], ["Y"]] as const };
+
+    expect(sr.eq!(a, b)).toBe(true); // same value, same provenance length
+    expect(sr.eq!(a, c)).toBe(false); // different value
+    expect(sr.eq!(a, d)).toBe(false); // different provenance length
+  });
 });

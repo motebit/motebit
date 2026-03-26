@@ -32,13 +32,6 @@ export function fromMicro(micro: number): number {
   return micro / MICRO;
 }
 
-/**
- * @deprecated Use toMicro/fromMicro instead. Kept for backward compat during migration.
- */
-export function roundMoney(n: number): number {
-  return Math.round(n * MICRO) / MICRO;
-}
-
 export interface VirtualAccount {
   motebit_id: string;
   balance: number;

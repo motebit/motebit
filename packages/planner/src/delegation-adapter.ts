@@ -62,9 +62,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     step: PlanStep,
     timeoutMs: number,
     onTaskSubmitted?: (taskId: string) => void,
+    crossStepExclude?: string[],
   ): Promise<DelegatedStepResult> {
     const maxRetries = this.config.maxDelegationRetries ?? 2;
-    const excludeAgents: string[] = [];
+    const excludeAgents: string[] = [...(crossStepExclude ?? [])];
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {

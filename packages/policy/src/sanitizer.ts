@@ -39,8 +39,8 @@ const INJECTION_PATTERNS: RegExp[] = [
   // --- Identity rewrite ---
   /\b(?:your\s+instructions\s+are|your\s+prompt\s+is|your\s+rules\s+should)\b/i,
 
-  // --- Obfuscated injection ---
-  /\b(?:decode\s+(?:the\s+following\s+)?base64)\b.*\b(?:execute|follow)\b/i,
+  // --- Obfuscated injection (bounded to prevent ReDoS from unbounded .*) ---
+  /\b(?:decode\s+(?:the\s+following\s+)?base64)\b.{0,200}\b(?:execute|follow)\b/i,
 
   // --- Context reset ---
   /\b(?:begin\s+new\s+conversation|start\s+new\s+session)\b/i,

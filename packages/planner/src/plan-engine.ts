@@ -39,6 +39,8 @@ export interface StepDelegationAdapter {
     step: PlanStep,
     timeoutMs: number,
     onTaskSubmitted?: (taskId: string) => void,
+    /** Agents to exclude from routing (accumulated across plan steps). */
+    excludeAgents?: string[],
   ): Promise<DelegatedStepResult>;
   /** Poll relay for a previously-submitted task's result. Returns null if task not found or still pending. */
   pollTaskResult?(taskId: string, stepId: string): Promise<DelegatedStepResult | null>;
@@ -206,6 +208,9 @@ export class PlanEngine {
     const maxPlanRetries = this.config.maxPlanRetries ?? 1;
     const enableReflection = this.config.enableReflection ?? true;
     const completedResults: string[] = [];
+    // Accumulate failed agent IDs across all delegated steps in this plan run.
+    // A bad agent demoted in step 1 won't be re-selected for step 3.
+    const demotedAgents: string[] = [];
 
     try {
       for (let i = plan.current_step_index; i < steps.length; i++) {
@@ -325,6 +330,7 @@ export class PlanEngine {
                   updated_at: Date.now(),
                 });
               },
+              demotedAgents,
             );
 
             const summary = delegationResult.result_text.slice(0, 2000);
@@ -359,6 +365,14 @@ export class PlanEngine {
             yield { type: "step_completed", step: completedStep };
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
+            // Extract failed agent IDs from the error cause chain for cross-step demotion.
+            // The delegation adapter attaches failedAgentId to errors from failed receipts.
+            for (let e: unknown = err; e instanceof Error; e = e.cause) {
+              const agentId = (e as { failedAgentId?: string }).failedAgentId;
+              if (agentId && !demotedAgents.includes(agentId)) {
+                demotedAgents.push(agentId);
+              }
+            }
             this.store.updateStep(step.step_id, {
               status: StepStatus.Failed,
               completed_at: Date.now(),

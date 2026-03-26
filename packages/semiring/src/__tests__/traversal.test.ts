@@ -361,3 +361,35 @@ describe("WeightedDigraph — query methods", () => {
     expect(g.hasNode("C")).toBe(true);
   });
 });
+
+// ── Compound semiring convergence (exercises sr.eq) ─────────────────
+
+describe("optimalPaths with compound semiring (product)", () => {
+  it("converges correctly using value equality", () => {
+    const TC = productSemiring(TrustSemiring, CostSemiring);
+    const g = new WeightedDigraph(TC);
+    g.setEdge("A", "B", [0.9, 5] as const);
+    g.setEdge("B", "C", [0.8, 3] as const);
+    g.setEdge("A", "C", [0.5, 2] as const);
+
+    const paths = optimalPaths(g, "A");
+    const toC = paths.get("C")!;
+    // Trust: max(0.9*0.8, 0.5) = max(0.72, 0.5) = 0.72
+    expect(toC[0]).toBeCloseTo(0.72);
+    // Cost: min(5+3, 2) = 2
+    expect(toC[1]).toBe(2);
+  });
+
+  it("optimalPathTrace works with compound semiring", () => {
+    const TC = productSemiring(TrustSemiring, CostSemiring);
+    const g = new WeightedDigraph(TC);
+    g.setEdge("A", "B", [0.9, 5] as const);
+    g.setEdge("B", "C", [0.8, 3] as const);
+
+    const trace = optimalPathTrace(g, "A", "C");
+    expect(trace).not.toBeNull();
+    expect(trace!.path).toEqual(["A", "B", "C"]);
+    expect(trace!.value[0]).toBeCloseTo(0.72);
+    expect(trace!.value[1]).toBe(8);
+  });
+});
