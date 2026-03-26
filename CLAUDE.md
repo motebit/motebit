@@ -142,6 +142,7 @@ motebit delegate "<prompt>"            # Discover worker, submit task, get resul
   --capability <cap>                   #   Required capability (default: web_search)
   --target <id>                        #   Skip discovery, delegate to specific agent
   --budget <amount>                    #   Max spend in USD
+  --plan                               #   Decompose into steps, delegate each to specialists
 motebit balance                        # Show account balance + recent transactions
 motebit withdraw <amount>              # Request withdrawal
 

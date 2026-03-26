@@ -31,6 +31,7 @@ motebit delegate "review owner/repo#42"  # Discover worker → submit → get re
   --capability review_pr             #   Required capability (default: web_search)
   --target <motebit-id>              #   Skip discovery, delegate to specific agent
   --budget 10                        #   Max spend in USD
+  --plan                             #   Decompose into steps, multi-agent orchestration
 
 # Account
 motebit balance                      # Show balance + recent transactions

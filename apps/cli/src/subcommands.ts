@@ -2080,9 +2080,7 @@ export async function handleBalance(config: CliConfig): Promise<void> {
   }
 
   const relayUrl = getRelayUrl(config);
-  const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-  const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const headers = await getRelayAuthHeaders(config);
 
   const result = await fetchRelayJson(`${relayUrl}/api/v1/agents/${motebitId}/balance`, headers);
   if (!result.ok) {
@@ -2142,9 +2140,7 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
   }
 
   const relayUrl = getRelayUrl(config);
-  const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const headers = await getRelayAuthHeaders(config, { json: true });
 
   const body: Record<string, unknown> = { amount };
   if (config.destination) body["destination"] = config.destination;
@@ -2301,63 +2297,115 @@ async function handleDelegatePlan(
   runtime.setProvider(provider);
 
   // HTTP-polling delegation adapter (no WebSocket needed for one-shot)
+  // HTTP-polling delegation adapter with retry logic matching RelayDelegationAdapter
+  const MAX_RETRIES = 2;
   const httpDelegationAdapter: StepDelegationAdapter = {
     async delegateStep(
       step: PlanStep,
       timeoutMs: number,
       onTaskSubmitted?: (taskId: string) => void,
     ): Promise<DelegatedStepResult> {
-      const body: Record<string, unknown> = {
-        prompt: step.prompt,
-        submitted_by: motebitId,
-        required_capabilities: step.required_capabilities,
-        step_id: step.step_id,
-        routing_strategy: config.routingStrategy,
-      };
+      const excludeAgents: string[] = [];
+      let lastError: Error | undefined;
 
-      const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify(body),
-      });
-
-      if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
-      }
-
-      const taskResp = (await resp.json()) as { task_id: string };
-      const taskId = taskResp.task_id;
-      onTaskSubmitted?.(taskId);
-
-      // Poll for result
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        await new Promise<void>((r) => setTimeout(r, 2000));
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-          const pollResp = await fetch(`${relayUrl}/agent/${motebitId}/task/${taskId}`, {
-            headers: authHeaders,
-          });
-          if (!pollResp.ok) continue;
-          const data = (await pollResp.json()) as {
-            receipt: ExecutionReceipt | null;
-          };
-          if (data.receipt) {
-            return {
-              step_id: step.step_id,
-              task_id: taskId,
-              receipt: data.receipt,
-              result_text: data.receipt.result,
-            };
+          const result = await attemptDelegation(
+            step,
+            timeoutMs,
+            excludeAgents,
+            attempt === 0 ? onTaskSubmitted : undefined,
+          );
+          return result;
+        } catch (err: unknown) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+          // Extract failed agent ID from receipt if available
+          const failedId = (lastError as { failedAgentId?: string }).failedAgentId;
+          if (failedId) excludeAgents.push(failedId);
+          // Don't retry non-retryable errors (submission failures, payment required)
+          if (
+            lastError.message.includes("Relay task submission failed") ||
+            lastError.message.includes("HTTP 402")
+          ) {
+            break;
           }
-        } catch {
-          // Network error — keep polling
+          if (attempt < MAX_RETRIES) {
+            console.log(
+              `  ↻ Retrying step "${step.description}" (attempt ${attempt + 2}/${MAX_RETRIES + 1})`,
+            );
+          }
         }
       }
-      throw new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`);
+      throw new Error(
+        `Delegation failed after ${Math.min(excludeAgents.length, MAX_RETRIES) + 1} attempt(s): ${lastError?.message ?? "unknown"}`,
+        { cause: lastError },
+      );
     },
   };
+
+  async function attemptDelegation(
+    step: PlanStep,
+    timeoutMs: number,
+    excludeAgents: string[],
+    onTaskSubmitted?: (taskId: string) => void,
+  ): Promise<DelegatedStepResult> {
+    const body: Record<string, unknown> = {
+      prompt: step.prompt,
+      submitted_by: motebitId,
+      required_capabilities: step.required_capabilities,
+      step_id: step.step_id,
+      routing_strategy: config.routingStrategy,
+    };
+    if (excludeAgents.length > 0) body.exclude_agents = excludeAgents;
+
+    const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify(body),
+    });
+
+    if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
+    }
+
+    const taskResp = (await resp.json()) as { task_id: string };
+    const taskId = taskResp.task_id;
+    onTaskSubmitted?.(taskId);
+
+    // Poll for result
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise<void>((r) => setTimeout(r, 2000));
+      try {
+        const pollResp = await fetch(`${relayUrl}/agent/${motebitId}/task/${taskId}`, {
+          headers: authHeaders,
+        });
+        if (!pollResp.ok) continue;
+        const data = (await pollResp.json()) as {
+          receipt: ExecutionReceipt | null;
+        };
+        if (data.receipt) {
+          if (data.receipt.status !== "completed") {
+            const err = new Error(`Delegated step ${data.receipt.status}: ${data.receipt.result}`);
+            (err as { failedAgentId?: string }).failedAgentId = data.receipt.motebit_id;
+            throw err;
+          }
+          return {
+            step_id: step.step_id,
+            task_id: taskId,
+            receipt: data.receipt,
+            result_text: data.receipt.result,
+          };
+        }
+      } catch (err) {
+        if (err instanceof Error && (err as { failedAgentId?: string }).failedAgentId) throw err;
+        // Network error — keep polling
+      }
+    }
+    throw new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`);
+  }
 
   // Wire delegation: empty local capabilities forces all steps to delegate to the network
   runtime.setLocalCapabilities([]);

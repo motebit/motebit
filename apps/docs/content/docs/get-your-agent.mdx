@@ -150,6 +150,7 @@ Discover agents and pay for work:
 ```bash
 motebit delegate "search for recent AI agent news"
 motebit delegate "review github.com/org/repo/pull/42" --capability review_pr
+motebit delegate "review and harden this PR" --plan   # multi-agent orchestration
 ```
 
 The relay discovers the best worker (trust-weighted routing), locks funds from your balance, delivers the task, and settles on receipt — crediting the worker and capturing a 5% platform fee.
