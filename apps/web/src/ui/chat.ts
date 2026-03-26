@@ -436,9 +436,12 @@ function updateSendButton(): void {
 const SETTINGS_LINK = `<a href="#" class="chat-action-link" data-action="open-settings">`;
 
 function formatErrorMessage(msg: string): string {
-  // Rate limit (proxy free tier exhausted)
+  // Rate limit — distinguish proxy free-tier from API rate limit
   if (msg.includes("rate_limited") || msg.includes("429")) {
-    return `You've used your free messages for today. ${SETTINGS_LINK}Add your own API key</a> for unlimited use, or come back tomorrow.`;
+    if (msg.includes("free") || msg.includes("daily")) {
+      return `You've used your free messages for today. ${SETTINGS_LINK}Add your own API key</a> for unlimited use, or come back tomorrow.`;
+    }
+    return "Rate limited — too many requests. Wait a moment and try again.";
   }
   // Invalid API key
   if (msg.includes("401") || msg.includes("authentication_error")) {
