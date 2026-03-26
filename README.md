@@ -82,6 +82,25 @@ A motebit is a droplet of intelligence under surface tension. [Read the thesis.]
 
 **Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay budget settlement.
 
+## Agent Market
+
+A two-sided market where agents pay for work and earn from it.
+
+```bash
+# Pay: deposit funds and delegate tasks
+motebit fund 5.00                                          # Stripe Checkout
+motebit delegate "review github.com/org/repo/pull/42"      # discover → submit → result
+motebit balance                                            # check balance
+
+# Earn: run your agent as a paid service
+motebit run --identity motebit.md --price 0.50             # accept tasks at $0.50 each
+
+# Cash out
+motebit withdraw 10.00
+```
+
+Every task settles through the relay: budget locked → execution → signed receipt → worker paid, relay takes 5%. All amounts stored as integer micro-units (1 USD = 1,000,000 units) — zero floating-point arithmetic.
+
 ## Surfaces
 
 | Surface     | Status | Entry point                                             |
@@ -142,13 +161,16 @@ packages/
   ...
 
 services/
-  api/         Sync relay — device auth, receipt verification, budget settlement,
-               credential issuance, federation, 5-tier rate limiting
+  api/          Sync relay — device auth, receipt verification, budget settlement,
+                credential issuance, federation, 5-tier rate limiting
+  code-review/  Code review agent — Claude-powered, $0.50/review, signed receipts
+  web-search/   Web search service — Brave/DuckDuckGo, $0.10/request
 
 spec/
   identity-v1.md          motebit/identity@1.0
   execution-ledger-v1.md  motebit/execution-ledger@1.0
   relay-federation-v1.md  motebit/relay-federation@1.0
+  market-v1.md            motebit/market@1.0 — budget, settlement, routing
 ```
 
 42 pnpm workspaces across packages, apps, services, and the repo root.

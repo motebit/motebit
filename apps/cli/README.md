@@ -13,35 +13,87 @@ Requires Node.js >= 20. After install, run `motebit doctor` to verify everything
 ## Quick start
 
 ```bash
-# Check system readiness
-motebit doctor
-
 # Interactive REPL — chat with your agent
 motebit
 
-# Export a signed identity file
-motebit export
-
-# Verify an identity file
-motebit verify motebit.md
-
-# Run in daemon mode with scheduled goals
-motebit run --identity motebit.md
+# Check system readiness
+motebit doctor
 ```
 
-## What is a motebit?
+## Market commands
 
-A motebit is a persistent, cryptographically-anchored agent — a vessel that connects to any intelligence provider, any tool ecosystem (MCP), and any device. The intelligence is a commodity. The identity, with its accumulated memory, trust, and governance, is the asset.
+Pay for tasks and earn from them — a two-sided agent economy.
+
+```bash
+# Pay side
+motebit fund 5.00                    # Deposit via Stripe Checkout (opens browser)
+motebit delegate "review owner/repo#42"  # Discover worker → submit → get result
+  --capability review_pr             #   Required capability (default: web_search)
+  --target <motebit-id>              #   Skip discovery, delegate to specific agent
+  --budget 10                        #   Max spend in USD
+
+# Account
+motebit balance                      # Show balance + recent transactions
+motebit withdraw 10.00               # Request withdrawal
+  --destination 0xWallet             #   Payout address
+
+# Earn side
+motebit run --price 0.50             # Daemon mode — accept tasks at $0.50/task
+motebit serve --price 0.50           # MCP server mode — same pricing, HTTP transport
+```
+
+## Identity & trust
+
+```bash
+motebit export                       # Export signed identity bundle (motebit.md)
+motebit verify motebit.md            # Verify an identity file signature
+motebit rotate --reason "scheduled"  # Rotate keypair with succession chain
+motebit register                     # Register identity with relay
+motebit credentials                  # List earned credentials
+motebit ledger <goal-id>             # Show execution ledger for a goal
+```
+
+## Daemon & server
+
+```bash
+motebit run --identity motebit.md    # Daemon mode — goals, sync, delegation
+motebit serve --identity motebit.md  # MCP server — expose tools via HTTP/stdio
+  --serve-transport http             #   Transport: "stdio" (default) or "http"
+  --serve-port 3100                  #   HTTP port (default: 3100)
+  --tools ./my-tools.js              #   Custom tool definitions
+  --direct                           #   Direct tool execution (no AI loop)
+  --self-test                        #   Run self-test after relay registration
+```
+
+## Goals & approvals
+
+```bash
+motebit goal add "Research X" --every 6h  # Scheduled goal
+motebit goal list                         # List goals with status
+motebit goal outcomes <goal-id>           # Execution history
+motebit approvals list                    # Pending tool call approvals
+motebit approvals approve <id>            # Approve a pending call
+```
+
+## Federation
+
+```bash
+motebit federation status            # Show relay identity
+motebit federation peers             # List active peers
+motebit federation peer <url>        # Peer with another relay
+```
 
 ## Features
 
 - **REPL** — Interactive chat with streaming, tool use, and approval flow
 - **Identity** — Ed25519 keypair, encrypted with PBKDF2, stored locally
+- **Market** — Virtual accounts, Stripe deposits, task delegation, settlement, withdrawals
 - **Daemon mode** — Scheduled goals, tool approval queue, fail-closed governance
 - **MCP** — Connect to any MCP server for tool discovery
 - **Operator mode** — Gated write/exec tools with per-call approval
 - **Memory** — Semantic graph with confidence decay and sensitivity governance
 - **Sync** — Multi-device sync via HTTP/WebSocket relay
+- **Earning** — Run as a paid service with `--price`, earn from delegated tasks
 
 ## Providers
 
