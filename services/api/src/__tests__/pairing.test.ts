@@ -262,11 +262,9 @@ describe("Pairing Protocol", () => {
     expect(approveRes.status).toBe(200);
     const approveBody = (await approveRes.json()) as {
       device_id: string;
-      device_token: string;
       motebit_id: string;
     };
     expect(approveBody.device_id).toBeTruthy();
-    expect(approveBody.device_token).toBeTruthy();
     expect(approveBody.motebit_id).toBe(motebitId);
 
     // 5. Status poll (Device B)
@@ -275,7 +273,6 @@ describe("Pairing Protocol", () => {
     const status = (await statusRes.json()) as {
       status: string;
       device_id: string;
-      device_token: string;
       motebit_id: string;
     };
     expect(status.status).toBe("approved");

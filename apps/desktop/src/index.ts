@@ -1698,7 +1698,7 @@ export class DesktopApp {
    */
   async completePairing(
     invoke: InvokeFn,
-    result: { motebitId: string; deviceId: string; deviceToken: string },
+    result: { motebitId: string; deviceId: string },
   ): Promise<void> {
     const raw = await invoke<string>("read_config");
     const config = JSON.parse(raw) as Record<string, unknown>;
@@ -1710,8 +1710,7 @@ export class DesktopApp {
     };
     await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
 
-    // Store device token in keyring for sync auth
-    await invoke<void>("keyring_set", { key: "device_token", value: result.deviceToken });
+    // Auth uses signed JWTs — no device_token storage needed
 
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;

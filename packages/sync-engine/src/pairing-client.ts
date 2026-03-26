@@ -25,7 +25,6 @@ export interface PairingStatus {
   status: "pending" | "claimed" | "approved" | "denied";
   motebit_id?: string;
   device_id?: string;
-  device_token?: string;
 }
 
 export class PairingClient {
@@ -106,7 +105,7 @@ export class PairingClient {
   async approve(
     pairingId: string,
     authToken: string,
-  ): Promise<{ deviceId: string; deviceToken: string; motebitId: string }> {
+  ): Promise<{ deviceId: string; motebitId: string }> {
     const res = await fetch(`${this.relayUrl}/pairing/${pairingId}/approve`, {
       method: "POST",
       headers: { Authorization: `Bearer ${authToken}` },
@@ -117,10 +116,9 @@ export class PairingClient {
     }
     const body = (await res.json()) as {
       device_id: string;
-      device_token: string;
       motebit_id: string;
     };
-    return { deviceId: body.device_id, deviceToken: body.device_token, motebitId: body.motebit_id };
+    return { deviceId: body.device_id, motebitId: body.motebit_id };
   }
 
   /**

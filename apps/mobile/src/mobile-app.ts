@@ -1387,12 +1387,13 @@ export class MobileApp {
   }
 
   async completePairing(
-    result: { motebitId: string; deviceId: string; deviceToken: string },
+    result: { motebitId: string; deviceId: string },
     syncUrl?: string,
   ): Promise<void> {
     await this.keyring.set("motebit_id", result.motebitId);
     await this.keyring.set("device_id", result.deviceId);
-    await this.keyring.set("device_token", result.deviceToken);
+
+    // Auth uses signed JWTs — no device_token storage needed
 
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;

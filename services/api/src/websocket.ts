@@ -97,7 +97,11 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             if (apiToken != null && apiToken !== "" && token === apiToken) {
               // OK — master token (WebSocket)
               logger.info("auth.master_token_ws", { motebitId });
-            } else if (token.includes(".")) {
+            } else if (!token.includes(".")) {
+              // Legacy device tokens (plain UUIDs) are no longer accepted — signed JWTs only
+              ws.close(4003, "Legacy device tokens are no longer accepted");
+              return;
+            } else {
               // Signed token verification — O(1) lookup by device ID from token payload
               const verified = await verifySignedTokenForDevice(
                 token,
@@ -108,13 +112,6 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 isAgentRevoked,
               );
               if (!verified) {
-                ws.close(4003, "Unauthorized");
-                return;
-              }
-            } else {
-              // Legacy device token validation
-              const device = await identityManager.validateDeviceToken(token, motebitId);
-              if (!device) {
                 ws.close(4003, "Unauthorized");
                 return;
               }

@@ -204,7 +204,6 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
               await ctx.app.completePairing(invoke, {
                 motebitId: status.motebit_id,
                 deviceId: status.device_id,
-                deviceToken: status.device_token ?? "",
               });
               void ctx.app.startSync(invoke, syncUrl).catch(() => {});
               close();

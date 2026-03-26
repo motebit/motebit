@@ -1676,7 +1676,6 @@ export function App(): React.ReactElement {
                 {
                   motebitId: status.motebit_id,
                   deviceId: status.device_id,
-                  deviceToken: status.device_token ?? "",
                 },
                 syncUrl,
               );

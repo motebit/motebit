@@ -63,7 +63,9 @@ export class InMemoryIdentityStorage implements IdentityStorage {
 
   saveDevice(device: DeviceRegistration): Promise<void> {
     this.devices.set(device.device_id, { ...device });
-    this.devicesByToken.set(device.device_token, { ...device });
+    if (device.device_token) {
+      this.devicesByToken.set(device.device_token, { ...device });
+    }
     return Promise.resolve();
   }
 
@@ -189,26 +191,6 @@ export class IdentityManager {
       device_name: deviceName,
     };
     await this.deviceStore.saveDevice(device);
-    return device;
-  }
-
-  /**
-   * Validate a device token for a specific motebitId. Returns the device
-   * registration if valid, null otherwise.
-   */
-  async validateDeviceToken(token: string, motebitId: string): Promise<DeviceRegistration | null> {
-    const device = await this.deviceStore.loadDeviceByToken(token);
-    if (!device || device.motebit_id !== motebitId) return null;
-    return device;
-  }
-
-  /**
-   * Load a device by token (alias for token-based lookup). Returns the device
-   * registration if found and matches motebitId, null otherwise.
-   */
-  async loadDeviceByToken(token: string, motebitId: string): Promise<DeviceRegistration | null> {
-    const device = await this.deviceStore.loadDeviceByToken(token);
-    if (!device || device.motebit_id !== motebitId) return null;
     return device;
   }
 
@@ -459,7 +441,9 @@ class InMemoryDeviceStore {
 
   saveDevice(device: DeviceRegistration): Promise<void> {
     this.devices.set(device.device_id, { ...device });
-    this.devicesByToken.set(device.device_token, { ...device });
+    if (device.device_token) {
+      this.devicesByToken.set(device.device_token, { ...device });
+    }
     return Promise.resolve();
   }
 

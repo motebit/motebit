@@ -470,7 +470,7 @@ describe("Sync Relay — device auth", () => {
     expect(res.status).toBe(200);
   });
 
-  it("allows sync with a valid device token for the correct motebitId", async () => {
+  it("rejects sync with a legacy device token (plain UUID)", async () => {
     const motebitId = await getIdentityMotebitId();
     const device = await registerDevice(motebitId);
 
@@ -478,27 +478,17 @@ describe("Sync Relay — device auth", () => {
       method: "GET",
       headers: { Authorization: `Bearer ${device.device_token}` },
     });
-    expect(res.status).toBe(200);
+    // Legacy device tokens (no dot) are rejected with 401
+    expect(res.status).toBe(401);
   });
 
-  it("rejects sync with a valid device token for a different motebitId", async () => {
-    const motebitIdA = await getIdentityMotebitId();
-    const motebitIdB = await getIdentityMotebitId();
-    const deviceA = await registerDevice(motebitIdA);
-
-    const res = await relay.app.request(`/sync/${motebitIdB}/clock`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${deviceA.device_token}` },
-    });
-    expect(res.status).toBe(403);
-  });
-
-  it("rejects sync with an invalid device token", async () => {
+  it("rejects sync with an invalid token", async () => {
     const res = await relay.app.request(`/sync/${MOTEBIT_ID}/clock`, {
       method: "GET",
       headers: { Authorization: "Bearer invalid-token" },
     });
-    expect(res.status).toBe(403);
+    // Plain string tokens (no dot) are rejected as legacy
+    expect(res.status).toBe(401);
   });
 });
 

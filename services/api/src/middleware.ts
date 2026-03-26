@@ -327,25 +327,24 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         throw new HTTPException(400, { message: "Missing motebitId" });
       }
 
-      if (token.includes(".")) {
-        // Signed token verification — O(1) lookup by device ID from token payload
-        const verified = await deps.verifySignedTokenForDevice(
-          token,
-          motebitId,
-          deps.identityManager,
-          "sync",
-          deps.isTokenBlacklisted,
-          deps.isAgentRevoked,
-        );
-        if (!verified) {
-          throw new HTTPException(403, { message: "Device not authorized for this motebit" });
-        }
-      } else {
-        // Legacy device token validation
-        const device = await deps.identityManager.validateDeviceToken(token, motebitId);
-        if (!device) {
-          throw new HTTPException(403, { message: "Device not authorized for this motebit" });
-        }
+      if (!token.includes(".")) {
+        // Legacy device tokens (plain UUIDs) are no longer accepted — signed JWTs only
+        throw new HTTPException(401, {
+          message: "Legacy device tokens are no longer accepted — use signed JWTs",
+        });
+      }
+
+      // Signed token verification — O(1) lookup by device ID from token payload
+      const verified = await deps.verifySignedTokenForDevice(
+        token,
+        motebitId,
+        deps.identityManager,
+        "sync",
+        deps.isTokenBlacklisted,
+        deps.isAgentRevoked,
+      );
+      if (!verified) {
+        throw new HTTPException(403, { message: "Device not authorized for this motebit" });
       }
       await next();
     });

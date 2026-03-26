@@ -250,13 +250,12 @@ export function registerPairingRoutes(deps: PairingDeps): void {
 
     db.prepare(
       `
-      UPDATE pairing_sessions SET status = 'approved', approved_device_id = ?, approved_device_token = ? WHERE pairing_id = ?
+      UPDATE pairing_sessions SET status = 'approved', approved_device_id = ? WHERE pairing_id = ?
     `,
-    ).run(registeredDevice.device_id, registeredDevice.device_token, pairingId);
+    ).run(registeredDevice.device_id, pairingId);
 
     return c.json({
       device_id: registeredDevice.device_id,
-      device_token: registeredDevice.device_token,
       motebit_id: session.motebit_id,
     });
   });
@@ -299,7 +298,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     const session = db
       .prepare(
         `
-      SELECT status, motebit_id, approved_device_id, approved_device_token FROM pairing_sessions WHERE pairing_id = ?
+      SELECT status, motebit_id, approved_device_id FROM pairing_sessions WHERE pairing_id = ?
     `,
       )
       .get(pairingId) as Record<string, unknown> | undefined;
@@ -312,7 +311,6 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     if ((session.status as string) === "approved") {
       result.motebit_id = session.motebit_id;
       result.device_id = session.approved_device_id;
-      result.device_token = session.approved_device_token;
     }
 
     return c.json(result);

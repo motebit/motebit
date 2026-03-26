@@ -116,9 +116,7 @@ describe("PairingClient", () => {
 
   describe("approve", () => {
     it("sends POST and returns device info", async () => {
-      mockFetch.mockResolvedValue(
-        mockResponse(200, { device_id: "dev-2", device_token: "tok-2", motebit_id: "mote-1" }),
-      );
+      mockFetch.mockResolvedValue(mockResponse(200, { device_id: "dev-2", motebit_id: "mote-1" }));
 
       const result = await client.approve("pid-1", "my-token");
 
@@ -127,7 +125,6 @@ describe("PairingClient", () => {
         expect.objectContaining({ method: "POST" }),
       );
       expect(result.deviceId).toBe("dev-2");
-      expect(result.deviceToken).toBe("tok-2");
       expect(result.motebitId).toBe("mote-1");
     });
   });
@@ -152,7 +149,6 @@ describe("PairingClient", () => {
           status: "approved",
           motebit_id: "mote-1",
           device_id: "dev-2",
-          device_token: "tok-2",
         }),
       );
 

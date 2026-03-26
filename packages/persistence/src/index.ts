@@ -685,7 +685,7 @@ export class SqliteIdentityStorage implements IdentityStorage {
     this.stmtSaveDevice.run(
       device.device_id,
       device.motebit_id,
-      device.device_token,
+      device.device_token ?? "",
       device.public_key,
       device.registered_at,
       device.device_name ?? null,

@@ -259,28 +259,6 @@ describe("IdentityManager", () => {
     expect(device1.device_id).not.toBe(device2.device_id);
   });
 
-  it("validateDeviceToken() returns the device for a valid token and motebitId", async () => {
-    const identity = await manager.create("owner-1");
-    const device = await manager.registerDevice(identity.motebit_id);
-
-    const result = await manager.validateDeviceToken(device.device_token, identity.motebit_id);
-    expect(result).not.toBeNull();
-    expect(result!.device_id).toBe(device.device_id);
-  });
-
-  it("validateDeviceToken() returns null for wrong motebitId", async () => {
-    const identity = await manager.create("owner-1");
-    const device = await manager.registerDevice(identity.motebit_id);
-
-    const result = await manager.validateDeviceToken(device.device_token, "wrong-motebit-id");
-    expect(result).toBeNull();
-  });
-
-  it("validateDeviceToken() returns null for unknown token", async () => {
-    const result = await manager.validateDeviceToken("unknown-token", "any-id");
-    expect(result).toBeNull();
-  });
-
   // --- Key rotation ---
 
   it("rotateKey() updates the device's public key", async () => {

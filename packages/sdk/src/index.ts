@@ -1452,7 +1452,7 @@ export interface MemoryStorageAdapter {
 export interface DeviceRegistration {
   device_id: string;
   motebit_id: string;
-  device_token: string;
+  device_token?: string; // Legacy — retained for DB compat, no longer used for auth
   public_key: string; // hex-encoded Ed25519 public key
   registered_at: number;
   device_name?: string;
