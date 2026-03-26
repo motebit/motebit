@@ -546,6 +546,8 @@ export async function handleReceiptIngestion(
         };
 
         const subSettlement = settleOnReceipt(subAllocation, sub, null, subSettlementId);
+        subSettlement.amount_settled = Math.round(subSettlement.amount_settled);
+        subSettlement.platform_fee = Math.round(subSettlement.platform_fee);
 
         try {
           moteDb.db.exec("BEGIN");
@@ -675,6 +677,9 @@ export async function handleReceiptIngestion(
       };
 
       const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
+      // Round to integer micro-units for DB storage
+      settlement.amount_settled = Math.round(settlement.amount_settled);
+      settlement.platform_fee = Math.round(settlement.platform_fee);
 
       let credentialRow: {
         credential_id: string;
@@ -1320,13 +1325,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         );
 
         if (allocation) {
+          // Round to integer micro-units (allocateBudget may produce fractional from risk multiplier)
+          allocation.amount_locked = Math.round(allocation.amount_locked);
           // Lock the risk-buffered amount
           moteDb.db.exec("BEGIN");
           try {
             debitAccount(
               moteDb.db,
               delegatorId,
-              allocation.amount_locked, // Uses risk-buffered amount
+              allocation.amount_locked, // Uses risk-buffered amount (rounded to micro-unit)
               "allocation_hold",
               `x402-${taskId}`,
               `Hold for task ${taskId} to ${motebitId}`,

@@ -25,7 +25,7 @@ export function allocateBudget(
   allocationId: AllocationId,
 ): BudgetAllocation | null {
   const risk = request.risk_factor ?? 1.0;
-  const lockAmount = Math.round(request.estimated_cost * (1 + risk * 0.2));
+  const lockAmount = request.estimated_cost * (1 + risk * 0.2);
   const capped = Math.min(lockAmount, available);
 
   if (capped < request.estimated_cost) return null;

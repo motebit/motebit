@@ -1336,6 +1336,52 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
 
+  services/code-review:
+    dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.52.0
+        version: 0.52.0
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@motebit/identity-file':
+        specifier: workspace:*
+        version: link:../../packages/identity-file
+      '@motebit/mcp-server':
+        specifier: workspace:*
+        version: link:../../packages/mcp-server
+      '@motebit/memory-graph':
+        specifier: workspace:*
+        version: link:../../packages/memory-graph
+      '@motebit/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
+      '@motebit/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+    devDependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.12.0
+        version: 1.26.0(zod@4.3.6)
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
+
   services/embed:
     dependencies:
       '@xenova/transformers':
@@ -1541,6 +1587,10 @@ packages:
   '@ampproject/remapping@2.3.0':
     resolution: {integrity: sha512-30iZtAPgz+LTIYoeivqYo853f02jBYSd5uGnGpkFV0M3xOt9aN73erkgYAmZU43x4VfqcnLxW9Kpg3R5LC4YYw==}
     engines: {node: '>=6.0.0'}
+
+  '@anthropic-ai/sdk@0.52.0':
+    resolution: {integrity: sha512-d4c+fg+xy9e46c8+YnrrgIQR45CZlAi7PwdzIfDXDM6ACxEZli1/fxhURsq30ZpMZy6LvSkr41jGq5aF5TD7rQ==}
+    hasBin: true
 
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
@@ -10100,6 +10150,8 @@ snapshots:
     dependencies:
       '@jridgewell/gen-mapping': 0.3.13
       '@jridgewell/trace-mapping': 0.3.31
+
+  '@anthropic-ai/sdk@0.52.0': {}
 
   '@asamuzakjp/css-color@3.2.0':
     dependencies:
