@@ -1294,8 +1294,11 @@ describe("shell_exec additional", () => {
 describe("write_file error path", () => {
   it("returns write error on permission failure", async () => {
     const handler = createWriteFileHandler({ enableBackup: false });
-    // Writing to a read-only system path should fail
-    const result = await handler({ path: "/proc/nonexistent/file", content: "test" });
+    // Writing to a deeply nested nonexistent directory should fail fast on all platforms
+    const result = await handler({
+      path: "/nonexistent_a1b2c3/nonexistent_d4e5f6/file.txt",
+      content: "test",
+    });
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Write error");
   });
