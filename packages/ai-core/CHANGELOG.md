@@ -1,5 +1,16 @@
 # @motebit/ai-core
 
+## 0.1.15
+
+### Patch Changes
+
+- Updated dependencies [[`4f40061`](https://github.com/motebit/motebit/commit/4f40061bdd13598e3bf8d95835106e606cd8bb17), [`0cf07ea`](https://github.com/motebit/motebit/commit/0cf07ea7fec3543b041edd2e793abee75180f9e9), [`49d8037`](https://github.com/motebit/motebit/commit/49d8037a5ed45634c040a74206f57117fdb69842)]:
+  - @motebit/sdk@0.6.11
+  - @motebit/behavior-engine@0.1.15
+  - @motebit/event-log@0.1.15
+  - @motebit/memory-graph@0.1.15
+  - @motebit/state-vector@0.1.15
+
 ## 0.1.14
 
 ### Patch Changes
