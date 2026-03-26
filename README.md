@@ -174,7 +174,7 @@ spec/
   market-v1.md            motebit/market@1.0 — budget, settlement, routing
 ```
 
-42 pnpm workspaces across packages, apps, services, and the repo root.
+44 pnpm workspaces across packages, apps, services, and the repo root.
 
 ## Verify & integrate
 
