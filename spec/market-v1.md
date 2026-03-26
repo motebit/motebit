@@ -53,13 +53,17 @@ All balance changes are recorded as transactions. Each transaction records the b
 | `withdrawal`         | debit     | Funds withdrawn to external address.               |
 | `fee`                | debit     | Platform fee extracted during settlement.          |
 
-### 2.3 — Debit Semantics
+### 2.3 — Precision
+
+All monetary amounts MUST be stored as integers in **micro-units**: 1 USD = 1,000,000 units. This matches USDC on-chain precision (6 decimals) and eliminates floating-point arithmetic entirely. API boundaries convert between dollars and micro-units; internal operations are integer-only. The reconciliation invariant holds exactly, not approximately.
+
+### 2.4 — Debit Semantics
 
 Debits are atomic: `UPDATE accounts SET balance = balance - amount WHERE balance >= amount`. If the balance is insufficient, the debit fails and returns null. No overdraft is permitted. This guarantee is the foundation of budget-gated delegation.
 
-### 2.4 — Reconciliation Invariant
+### 2.5 — Reconciliation Invariant
 
-At any point, the following MUST hold:
+At any point, the following MUST hold exactly (integer equality, not approximate):
 
 ```
 SUM(all transaction amounts) = SUM(all account balances)

@@ -70,6 +70,7 @@ spec/
 services/
   api/          Relay server (modules: index, federation, task-routing,
                 credentials, pairing, data-sync, accounts, a2a-bridge, logger)
+  code-review/  Code review agent ($0.50/review, Claude-powered, signed receipts)
   web-search/   Reference MCP service (single-hop + multi-hop delegation proof)
   read-url/     Minimal read-url service (second hop in multi-hop proof)
   proxy/        Vercel edge CORS proxy for web app (Anthropic API, fetch, embed)
@@ -79,7 +80,7 @@ services/
 
 ## Principles
 
-These are not suggestions. They are the architectural invariants that make 26 packages coherent. Violating them breaks CI, breaks the product, or breaks the thesis.
+These are not suggestions. They are the architectural invariants that make the monorepo coherent. Violating them breaks CI, breaks the product, or breaks the thesis.
 
 **Metabolic principle.** Do not build what the medium already carries. Absorb solved problems (VAD, STT, embeddings, inference) through adapter boundaries with fallback chains. Build the enzymes (identity, memory, trust, governance, agentic loops), not the glucose (raw capabilities).
 
@@ -129,6 +130,27 @@ pnpm run lint           # Lint all packages
 pnpm run check-deps     # Validate layer architecture
 pnpm --filter @motebit/runtime test   # Test single package
 ```
+
+## CLI Market Commands
+
+Two-sided market: any motebit can pay for tasks and earn from them.
+
+```bash
+# Pay side
+motebit fund <amount>                  # Deposit via Stripe Checkout (opens browser)
+motebit delegate "<prompt>"            # Discover worker, submit task, get result
+  --capability <cap>                   #   Required capability (default: web_search)
+  --target <id>                        #   Skip discovery, delegate to specific agent
+  --budget <amount>                    #   Max spend in USD
+motebit balance                        # Show account balance + recent transactions
+motebit withdraw <amount>              # Request withdrawal
+
+# Earn side
+motebit run --price 0.50               # Accept tasks at $0.50/task (daemon mode)
+motebit serve --price 0.50             # Accept tasks at $0.50/task (MCP server mode)
+```
+
+**Money model.** All amounts stored as integer micro-units (1 USD = 1,000,000 units). API boundary converts: `toMicro(dollars)` on ingest, `fromMicro(micro)` on egress. Zero floating-point arithmetic in the money path.
 
 ## Conventions
 
