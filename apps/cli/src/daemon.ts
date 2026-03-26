@@ -435,6 +435,37 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
       if (regResp.ok) {
         console.log(`Discovery: registered with relay (${toolNames.length} tools)`);
+
+        // Publish service listing with pricing if --price is set (enables earning)
+        const priceStr = config.price ?? process.env["MOTEBIT_PRICE"];
+        if (priceStr) {
+          const unitCost = parseFloat(priceStr);
+          if (unitCost > 0) {
+            try {
+              const listingResp = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/listing`, {
+                method: "POST",
+                headers: regHeaders,
+                body: JSON.stringify({
+                  capabilities: toolNames,
+                  pricing: toolNames.map((cap) => ({
+                    capability: cap,
+                    unit_cost: unitCost,
+                    currency: "USD",
+                    per: "task",
+                  })),
+                  sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
+                  description: `daemon-${motebitId.slice(0, 8)}`,
+                }),
+              });
+              if (listingResp.ok) {
+                console.log(`Pricing: $${unitCost.toFixed(2)}/task — earning enabled`);
+              }
+            } catch {
+              // Best-effort listing
+            }
+          }
+        }
+
         // Heartbeat every 5 minutes to keep the registry entry alive
         daemonHeartbeatTimer = setInterval(
           () => {
@@ -1022,6 +1053,37 @@ export async function handleServe(config: CliConfig): Promise<void> {
       });
       if (regResp.ok) {
         log(`Registered with relay: ${syncUrl}`);
+
+        // Publish service listing with pricing if --price is set (enables earning)
+        const priceStr = config.price ?? process.env["MOTEBIT_PRICE"];
+        if (priceStr) {
+          const unitCost = parseFloat(priceStr);
+          if (unitCost > 0) {
+            try {
+              const listingResp = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/listing`, {
+                method: "POST",
+                headers: regHeaders,
+                body: JSON.stringify({
+                  capabilities: toolNames,
+                  pricing: toolNames.map((cap) => ({
+                    capability: cap,
+                    unit_cost: unitCost,
+                    currency: "USD",
+                    per: "task",
+                  })),
+                  sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
+                  description: serverConfig.name ?? `serve-${motebitId.slice(0, 8)}`,
+                }),
+              });
+              if (listingResp.ok) {
+                log(`Pricing: $${unitCost.toFixed(2)}/task — earning enabled`);
+              }
+            } catch {
+              // Best-effort listing
+            }
+          }
+        }
+
         // Heartbeat every 5 minutes
         heartbeatTimer = setInterval(
           () => {

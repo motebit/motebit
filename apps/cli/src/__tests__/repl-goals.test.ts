@@ -49,6 +49,7 @@ const stubConfig = {
   capability: undefined,
   target: undefined,
   budget: undefined,
+  price: undefined,
   serveTransport: undefined,
   servePort: undefined,
   tools: undefined,

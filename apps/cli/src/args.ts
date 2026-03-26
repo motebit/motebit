@@ -24,6 +24,7 @@ export interface CliConfig {
   capability: string | undefined;
   target: string | undefined;
   budget: string | undefined;
+  price: string | undefined;
   serveTransport: string | undefined;
   servePort: string | undefined;
   tools: string | undefined;
@@ -65,6 +66,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       capability: { type: "string" },
       target: { type: "string" },
       budget: { type: "string" },
+      price: { type: "string" },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
       tools: { type: "string" },
@@ -127,6 +129,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     capability: values.capability,
     target: values.target,
     budget: values.budget,
+    price: values.price,
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
     tools: values.tools,
@@ -232,6 +235,7 @@ Commands:
   register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
   run [--identity <path>]   Start daemon mode (uses exported motebit.md)
+    --price <amount>          Set per-task price in USD (enables earning from delegated tasks)
   serve [--identity <path>] Start as MCP server (stdio by default)
     --serve-transport <mode>  Transport: "stdio" (default) or "http"
     --serve-port <port>       HTTP port (default: 3100)
