@@ -1612,6 +1612,54 @@ function getRelayUrl(config: CliConfig): string {
   return url.replace(/\/+$/, "");
 }
 
+/**
+ * Build auth headers for relay API calls. Tries in order:
+ * 1. --sync-token / MOTEBIT_API_TOKEN (master token)
+ * 2. Signed device token (decrypts private key from config, prompts for passphrase)
+ * 3. No auth (unauthenticated)
+ */
+async function getRelayAuthHeaders(
+  config: CliConfig,
+  opts?: { aud?: string; json?: boolean },
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (opts?.json) headers["Content-Type"] = "application/json";
+
+  // 1. Master token
+  const master = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+  if (master) {
+    headers["Authorization"] = `Bearer ${master}`;
+    return headers;
+  }
+
+  // 2. Signed device token from encrypted private key
+  const fullConfig = loadFullConfig();
+  if (fullConfig.cli_encrypted_key && fullConfig.motebit_id && fullConfig.device_id) {
+    try {
+      const passphrase = await promptPassphrase("Passphrase (for relay auth): ");
+      const privateKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+      const privateKeyBytes = fromHex(privateKeyHex);
+      const token = await createSignedToken(
+        {
+          mid: fullConfig.motebit_id,
+          did: fullConfig.device_id,
+          iat: Date.now(),
+          exp: Date.now() + 5 * 60 * 1000,
+          jti: crypto.randomUUID(),
+          aud: opts?.aud ?? "admin:query",
+        },
+        privateKeyBytes,
+      );
+      secureErase(privateKeyBytes);
+      headers["Authorization"] = `Bearer ${token}`;
+    } catch {
+      // Passphrase wrong or key unavailable — continue without auth
+    }
+  }
+
+  return headers;
+}
+
 export async function handleFederationStatus(config: CliConfig): Promise<void> {
   const relayUrl = getRelayUrl(config);
   const result = await fetchRelayJson(`${relayUrl}/federation/v1/identity`, {});
@@ -2150,9 +2198,7 @@ export async function handleFund(config: CliConfig): Promise<void> {
   }
 
   const relayUrl = getRelayUrl(config);
-  const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const headers = await getRelayAuthHeaders(config, { json: true });
 
   // Create Stripe Checkout session
   let checkoutUrl: string;
@@ -2188,14 +2234,11 @@ export async function handleFund(config: CliConfig): Promise<void> {
 
   // Poll for deposit confirmation (120s max, 3s intervals)
   console.log("Waiting for payment confirmation...");
-  const balHeaders: Record<string, string> = {};
-  if (token) balHeaders["Authorization"] = `Bearer ${token}`;
-
-  const startBalance = await getBalanceAmount(relayUrl, motebitId, balHeaders);
+  const startBalance = await getBalanceAmount(relayUrl, motebitId, headers);
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     await new Promise<void>((resolve) => setTimeout(resolve, 3000));
-    const currentBalance = await getBalanceAmount(relayUrl, motebitId, balHeaders);
+    const currentBalance = await getBalanceAmount(relayUrl, motebitId, headers);
     if (currentBalance !== null && startBalance !== null && currentBalance > startBalance) {
       console.log(`\nDeposit confirmed! Balance: $${currentBalance.toFixed(2)}`);
       return;
@@ -2239,9 +2282,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
   }
 
   const relayUrl = getRelayUrl(config);
-  const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const headers = await getRelayAuthHeaders(config, { aud: "task:submit", json: true });
 
   const capability = config.capability ?? "web_search";
   let targetMotebitId = config.target;
