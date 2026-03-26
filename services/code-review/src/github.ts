@@ -55,10 +55,16 @@ export async function fetchPullRequest(
   owner: string,
   repo: string,
   prNumber: number,
+  githubToken?: string,
 ): Promise<PullRequestInfo> {
+  const authHeaders: Record<string, string> = {
+    "User-Agent": "motebit-code-review",
+    ...(githubToken ? { Authorization: `token ${githubToken}` } : {}),
+  };
+
   // Fetch metadata
   const metaResp = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}`, {
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "motebit-code-review" },
+    headers: { ...authHeaders, Accept: "application/vnd.github+json" },
   });
   if (!metaResp.ok) {
     const text = await metaResp.text().catch(() => "");
@@ -77,7 +83,7 @@ export async function fetchPullRequest(
 
   // Fetch diff
   const diffResp = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}`, {
-    headers: { Accept: "application/vnd.github.diff", "User-Agent": "motebit-code-review" },
+    headers: { ...authHeaders, Accept: "application/vnd.github.diff" },
   });
   if (!diffResp.ok) {
     throw new Error(`GitHub diff fetch failed: ${diffResp.status}`);

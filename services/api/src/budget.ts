@@ -201,12 +201,19 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   // --- Withdrawal history ---
   app.get("/api/v1/agents/:motebitId/withdrawals", (c) => {
     const motebitId = c.req.param("motebitId");
-    return c.json({ motebit_id: motebitId, withdrawals: getWithdrawals(moteDb.db, motebitId, 50) });
+    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map((w) => ({
+      ...w,
+      amount: fromMicro(w.amount),
+    }));
+    return c.json({ motebit_id: motebitId, withdrawals });
   });
 
   // --- Admin: pending withdrawals ---
   app.get("/api/v1/admin/withdrawals/pending", (c) => {
-    const withdrawals = getPendingWithdrawals(moteDb.db);
+    const withdrawals = getPendingWithdrawals(moteDb.db).map((w) => ({
+      ...w,
+      amount: fromMicro(w.amount),
+    }));
     return c.json({ withdrawals, count: withdrawals.length });
   });
 
@@ -234,7 +241,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       {
         withdrawal_id: withdrawalId,
         motebit_id: withdrawal.motebit_id,
-        amount: withdrawal.amount,
+        amount: fromMicro(withdrawal.amount),
         currency: withdrawal.currency,
         destination: withdrawal.destination,
         payout_reference: body.payout_reference,

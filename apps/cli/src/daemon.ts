@@ -48,6 +48,52 @@ import {
   buildStorageAdapters,
 } from "./runtime-factory.js";
 
+/**
+ * Publish a service listing with pricing after relay registration.
+ * Shared by handleRun and handleServe — avoids duplication.
+ */
+async function publishServiceListing(
+  syncUrl: string,
+  motebitId: string,
+  headers: Record<string, string>,
+  toolNames: string[],
+  priceStr: string | undefined,
+  description: string,
+  log: (msg: string) => void = console.log,
+): Promise<void> {
+  const raw = priceStr ?? process.env["MOTEBIT_PRICE"];
+  if (!raw) return;
+
+  const unitCost = parseFloat(raw);
+  if (isNaN(unitCost) || unitCost <= 0) {
+    log(`Warning: --price "${raw}" is not a valid positive number — earning disabled`);
+    return;
+  }
+
+  try {
+    const resp = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/listing`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        capabilities: toolNames,
+        pricing: toolNames.map((cap) => ({
+          capability: cap,
+          unit_cost: unitCost,
+          currency: "USD",
+          per: "task",
+        })),
+        sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
+        description,
+      }),
+    });
+    if (resp.ok) {
+      log(`Pricing: $${unitCost.toFixed(2)}/task — earning enabled`);
+    }
+  } catch {
+    // Best-effort listing
+  }
+}
+
 export async function handleRun(config: CliConfig): Promise<void> {
   const identityPath =
     config.identity != null && config.identity !== ""
@@ -436,35 +482,14 @@ export async function handleRun(config: CliConfig): Promise<void> {
       if (regResp.ok) {
         console.log(`Discovery: registered with relay (${toolNames.length} tools)`);
 
-        // Publish service listing with pricing if --price is set (enables earning)
-        const priceStr = config.price ?? process.env["MOTEBIT_PRICE"];
-        if (priceStr) {
-          const unitCost = parseFloat(priceStr);
-          if (unitCost > 0) {
-            try {
-              const listingResp = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/listing`, {
-                method: "POST",
-                headers: regHeaders,
-                body: JSON.stringify({
-                  capabilities: toolNames,
-                  pricing: toolNames.map((cap) => ({
-                    capability: cap,
-                    unit_cost: unitCost,
-                    currency: "USD",
-                    per: "task",
-                  })),
-                  sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
-                  description: `daemon-${motebitId.slice(0, 8)}`,
-                }),
-              });
-              if (listingResp.ok) {
-                console.log(`Pricing: $${unitCost.toFixed(2)}/task — earning enabled`);
-              }
-            } catch {
-              // Best-effort listing
-            }
-          }
-        }
+        await publishServiceListing(
+          syncUrl,
+          motebitId,
+          regHeaders,
+          toolNames,
+          config.price,
+          `daemon-${motebitId.slice(0, 8)}`,
+        );
 
         // Heartbeat every 5 minutes to keep the registry entry alive
         daemonHeartbeatTimer = setInterval(
@@ -1054,35 +1079,15 @@ export async function handleServe(config: CliConfig): Promise<void> {
       if (regResp.ok) {
         log(`Registered with relay: ${syncUrl}`);
 
-        // Publish service listing with pricing if --price is set (enables earning)
-        const priceStr = config.price ?? process.env["MOTEBIT_PRICE"];
-        if (priceStr) {
-          const unitCost = parseFloat(priceStr);
-          if (unitCost > 0) {
-            try {
-              const listingResp = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/listing`, {
-                method: "POST",
-                headers: regHeaders,
-                body: JSON.stringify({
-                  capabilities: toolNames,
-                  pricing: toolNames.map((cap) => ({
-                    capability: cap,
-                    unit_cost: unitCost,
-                    currency: "USD",
-                    per: "task",
-                  })),
-                  sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
-                  description: serverConfig.name ?? `serve-${motebitId.slice(0, 8)}`,
-                }),
-              });
-              if (listingResp.ok) {
-                log(`Pricing: $${unitCost.toFixed(2)}/task — earning enabled`);
-              }
-            } catch {
-              // Best-effort listing
-            }
-          }
-        }
+        await publishServiceListing(
+          syncUrl,
+          motebitId,
+          regHeaders,
+          toolNames,
+          config.price,
+          serverConfig.name ?? `serve-${motebitId.slice(0, 8)}`,
+          log,
+        );
 
         // Heartbeat every 5 minutes
         heartbeatTimer = setInterval(

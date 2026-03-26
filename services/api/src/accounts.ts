@@ -419,7 +419,7 @@ export function requestWithdrawal(
     amount,
     "withdrawal",
     withdrawalId,
-    `Withdrawal request: ${amount} to ${destination}`,
+    `Withdrawal request: $${fromMicro(amount).toFixed(6)} to ${destination}`,
   );
   if (newBalance === null) return null;
 

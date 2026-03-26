@@ -50,7 +50,7 @@ const reviewPrDefinition: ToolDefinition = {
   riskHint: { risk: 1 }, // R1_DRAFT — network read, no side effects
 };
 
-function createReviewPrHandler(anthropicApiKey: string): ToolHandler {
+function createReviewPrHandler(anthropicApiKey: string, githubToken?: string): ToolHandler {
   return async (args: Record<string, unknown>) => {
     const owner = args["owner"] as string;
     const repo = args["repo"] as string;
@@ -61,7 +61,7 @@ function createReviewPrHandler(anthropicApiKey: string): ToolHandler {
     }
 
     try {
-      const pr = await fetchPullRequest(owner, repo, prNumber);
+      const pr = await fetchPullRequest(owner, repo, prNumber, githubToken);
       log(
         `fetched PR ${owner}/${repo}#${prNumber}: "${pr.title}" (${pr.changed_files} files, +${pr.additions} -${pr.deletions})`,
       );
@@ -114,7 +114,10 @@ async function main(): Promise<void> {
 
   // 2. Build tool registry
   const registry = new InMemoryToolRegistry();
-  registry.register(reviewPrDefinition, createReviewPrHandler(config.anthropicApiKey));
+  registry.register(
+    reviewPrDefinition,
+    createReviewPrHandler(config.anthropicApiKey, config.githubToken),
+  );
 
   // 3. Open database + create runtime (no AI provider — LLM used directly in tool handler)
   const dbDir = path.dirname(path.resolve(config.dbPath));
@@ -188,7 +191,12 @@ async function main(): Promise<void> {
         };
       } else {
         try {
-          const pr = await fetchPullRequest(prRef.owner, prRef.repo, prRef.number);
+          const pr = await fetchPullRequest(
+            prRef.owner,
+            prRef.repo,
+            prRef.number,
+            config.githubToken,
+          );
           log(
             `PR ${prRef.owner}/${prRef.repo}#${prRef.number}: "${pr.title}" (${pr.changed_files} files)`,
           );

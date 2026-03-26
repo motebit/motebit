@@ -1139,9 +1139,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         }
 
         if (delegatorId) {
-          const gross = currentPricing.unitCost / (1 - PLATFORM_FEE_RATE);
+          const grossMicro = toMicro(currentPricing.unitCost / (1 - PLATFORM_FEE_RATE));
           const account = getAccountBalance(moteDb.db, delegatorId);
-          if (account && account.balance >= gross) {
+          if (account && account.balance >= grossMicro) {
             return next();
           }
         }

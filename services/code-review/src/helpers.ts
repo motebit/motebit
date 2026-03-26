@@ -19,5 +19,6 @@ export function loadConfig() {
     apiToken: process.env["MOTEBIT_API_TOKEN"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
+    githubToken: process.env["GITHUB_TOKEN"],
   };
 }

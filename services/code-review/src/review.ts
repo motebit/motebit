@@ -23,11 +23,20 @@ For each review, provide:
 
 Be direct. No filler. If the PR is clean, say so briefly. If it has problems, be specific about each one.`;
 
+let cachedClient: Anthropic | null = null;
+
+function getClient(apiKey: string): Anthropic {
+  if (!cachedClient) {
+    cachedClient = new Anthropic({ apiKey });
+  }
+  return cachedClient;
+}
+
 export async function reviewPullRequest(
   pr: PullRequestInfo,
   anthropicApiKey: string,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey: anthropicApiKey });
+  const client = getClient(anthropicApiKey);
 
   const userMessage = [
     `# PR: ${pr.title}`,
