@@ -97,7 +97,7 @@ export {
   COMMAND_DEFINITIONS,
   type CommandResult,
   type RelayConfig,
-} from "./commands.js";
+} from "./commands/index.js";
 import type {
   GradientSnapshot,
   GradientStoreAdapter,

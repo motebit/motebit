@@ -1,4 +1,6 @@
 import { stripPartialActionTag } from "@motebit/ai-core";
+import { executeCommand } from "@motebit/runtime";
+import type { RelayConfig } from "@motebit/runtime";
 import {
   isSlashCommand,
   parseSlashCommand,
@@ -791,58 +793,56 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
 
   // === Slash Command Handler ===
 
+  /** Build RelayConfig from current desktop context, or null if not connected. */
+  async function getRelayConfig(): Promise<RelayConfig | null> {
+    const config = ctx.getConfig();
+    if (!config?.syncUrl || !config.invoke) return null;
+    try {
+      const keypair = await ctx.app.getDeviceKeypair(config.invoke);
+      if (!keypair) return null;
+      const token = await ctx.app.createSyncToken(keypair.privateKey);
+      return { relayUrl: config.syncUrl, authToken: token, motebitId: ctx.app.motebitId };
+    } catch {
+      return null;
+    }
+  }
+
   function handleSlashCommand(command: string, args: string): void {
+    // Surface-specific commands (UI actions, platform features)
     switch (command) {
       case "model":
-        if (!args) {
-          const current = ctx.app.currentModel ?? "none";
-          addMessage("system", `Current model: ${current}`);
-        } else {
+        if (args) {
           try {
             ctx.app.setModel(args);
             callbacks.updateModelIndicator();
           } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            addMessage("system", `Error: ${msg}`);
+            addMessage("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
           }
+          return;
         }
-        break;
-
+        break; // fall through to shared layer for /model without args
       case "memories":
         callbacks.openMemoryPanel();
-        break;
-
-      case "state": {
-        const state = ctx.app.getState();
-        if (!state) {
-          addMessage("system", "State vector not available (AI not initialized)");
-        } else {
-          const entries = Object.entries(state);
-          const summary = `State vector — ${entries.length} dimensions`;
-          const detail = entries
-            .map(([k, v]) => `${k}: ${typeof v === "number" ? v.toFixed(3) : String(v)}`)
-            .join("\n");
-          addExpandableCard(summary, detail);
-        }
-        break;
-      }
-
-      case "forget":
-        if (!args) {
-          addMessage("system", "Usage: /forget <nodeId>");
-        } else {
-          void ctx.app
-            .deleteMemory(args)
-            .then(() => {
-              showToast("Memory deleted");
-            })
-            .catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              addMessage("system", `Error: ${msg}`);
-            });
-        }
-        break;
-
+        return;
+      case "clear":
+        ctx.app.startNewConversation();
+        chatLog.innerHTML = "";
+        return;
+      case "conversations":
+        callbacks.openConversationsPanel();
+        return;
+      case "goals":
+        callbacks.openGoalsPanel();
+        return;
+      case "settings":
+        callbacks.openSettings();
+        return;
+      case "help":
+        addMessage("system", formatHelpText());
+        return;
+      case "operator":
+        addMessage("system", `Operator mode: ${ctx.app.isOperatorMode ? "enabled" : "disabled"}`);
+        return;
       case "export":
         void ctx.app
           .exportAllData()
@@ -857,46 +857,12 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
             showToast("Export downloaded");
           })
           .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            addMessage("system", `Export failed: ${msg}`);
+            addMessage(
+              "system",
+              `Export failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
           });
-        break;
-
-      case "clear":
-        ctx.app.startNewConversation();
-        chatLog.innerHTML = "";
-        break;
-
-      case "conversations":
-        callbacks.openConversationsPanel();
-        break;
-
-      case "goals":
-        callbacks.openGoalsPanel();
-        break;
-
-      case "tools": {
-        const tools = ctx.app.listTools();
-        if (tools.length === 0) {
-          addMessage("system", "No tools registered");
-        } else {
-          const lines = [`${tools.length} tool${tools.length === 1 ? "" : "s"} registered:`];
-          for (const t of tools) {
-            lines.push(`  ${t.name} — ${t.description || "(no description)"}`);
-          }
-          addMessage("system", lines.join("\n"));
-        }
-        break;
-      }
-
-      case "settings":
-        callbacks.openSettings();
-        break;
-
-      case "operator":
-        addMessage("system", `Operator mode: ${ctx.app.isOperatorMode ? "enabled" : "disabled"}`);
-        break;
-
+        return;
       case "sync": {
         const config = ctx.getConfig();
         if (config?.syncUrl != null && config.syncUrl !== "") {
@@ -911,175 +877,16 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
               showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
             })
             .catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              addMessage("system", `Sync failed: ${msg}`);
+              addMessage(
+                "system",
+                `Sync failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
             });
         } else {
           addMessage("system", "No sync relay configured");
         }
-        break;
+        return;
       }
-
-      case "summarize":
-        void ctx.app
-          .summarizeConversation()
-          .then((summary) => {
-            if (summary != null && summary !== "") {
-              addMessage("system", `Summary: ${summary}`);
-            } else {
-              addMessage("system", "No conversation to summarize");
-            }
-          })
-          .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            addMessage("system", `Summarization failed: ${msg}`);
-          });
-        break;
-
-      case "help":
-        addMessage("system", formatHelpText());
-        break;
-
-      case "graph":
-        void (async () => {
-          try {
-            const stats = await ctx.app.getMemoryGraphStats();
-            if (!stats) {
-              addMessage("system", "Memory graph not available (AI not initialized)");
-            } else {
-              addExpandableCard(
-                `Memory graph — ${stats.nodes} nodes, ${stats.edges} edges, ${stats.pinned} pinned`,
-                `Nodes: ${stats.nodes}\nEdges: ${stats.edges}\nPinned: ${stats.pinned}`,
-              );
-            }
-          } catch (err: unknown) {
-            addMessage("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        })();
-        break;
-
-      case "curious": {
-        const targets = ctx.app.getCuriosityTargets();
-        if (targets.length === 0) {
-          addMessage("system", "No curiosity targets");
-        } else {
-          const lines = [`${targets.length} curiosity target${targets.length === 1 ? "" : "s"}:`];
-          for (const t of targets) {
-            const label =
-              t.node.content.length > 60 ? t.node.content.slice(0, 60) + "..." : t.node.content;
-            lines.push(`  ${label} (score: ${t.curiosityScore.toFixed(2)})`);
-          }
-          addMessage("system", lines.join("\n"));
-        }
-        break;
-      }
-
-      case "reflect":
-        void (async () => {
-          try {
-            addMessage("system", "Reflecting...");
-            const result = await ctx.app.reflect();
-            const summary = result.selfAssessment || "Reflection complete";
-            const detailLines: string[] = [];
-            if (result.insights.length > 0) {
-              detailLines.push("Insights:");
-              for (const i of result.insights) detailLines.push(`  - ${i}`);
-            }
-            if (result.planAdjustments.length > 0) {
-              detailLines.push("Adjustments:");
-              for (const a of result.planAdjustments) detailLines.push(`  - ${a}`);
-            }
-            if (result.patterns.length > 0) {
-              detailLines.push("Recurring patterns:");
-              for (const p of result.patterns) detailLines.push(`  - ${p}`);
-            }
-            if (detailLines.length > 0) {
-              addExpandableCard(summary, detailLines.join("\n"));
-            } else {
-              addExpandableCard(summary, "No additional detail.");
-            }
-          } catch (err: unknown) {
-            addMessage(
-              "system",
-              `Reflection failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        })();
-        break;
-
-      case "gradient":
-        void (async () => {
-          const g = ctx.app.getGradient();
-          if (!g) {
-            addMessage("system", "No gradient data yet (computed during housekeeping)");
-            return;
-          }
-          const gradientSummary = ctx.app.getGradientSummary();
-          const summaryLine = `Gradient ${g.gradient.toFixed(3)} (${g.delta >= 0 ? "+" : ""}${g.delta.toFixed(3)}) — ${gradientSummary.posture}`;
-          const detailLines: string[] = [];
-          if (gradientSummary.snapshotCount > 0) {
-            detailLines.push(gradientSummary.trajectory);
-            detailLines.push(gradientSummary.overall);
-            if (gradientSummary.strengths.length > 0)
-              detailLines.push(`Strengths: ${gradientSummary.strengths.join("; ")}`);
-            if (gradientSummary.weaknesses.length > 0)
-              detailLines.push(`Weaknesses: ${gradientSummary.weaknesses.join("; ")}`);
-          }
-          const { narrateEconomicConsequences } = await import("@motebit/gradient");
-          const econ = narrateEconomicConsequences(g);
-          if (econ.length > 0) {
-            detailLines.push("");
-            detailLines.push("Economic position:");
-            for (const c of econ) detailLines.push(`  - ${c}`);
-          }
-          const lastRef = ctx.app.getLastReflection();
-          if (lastRef?.selfAssessment) {
-            detailLines.push("");
-            detailLines.push(`Last reflection: ${lastRef.selfAssessment}`);
-          }
-          addExpandableCard(summaryLine, detailLines.join("\n"));
-        })();
-        break;
-
-      case "audit":
-        void (async () => {
-          const auditResult = await ctx.app.auditMemory();
-          const issues =
-            auditResult.phantomCertainties.length +
-            auditResult.conflicts.length +
-            auditResult.nearDeath.length;
-
-          // Build audit flags map for memory panel
-          const auditFlags = new Map<string, string>();
-          for (const p of auditResult.phantomCertainties) {
-            auditFlags.set(p.node.node_id, "phantom");
-          }
-          for (const c of auditResult.conflicts) {
-            auditFlags.set(c.a.node_id, "conflict");
-            auditFlags.set(c.b.node_id, "conflict");
-          }
-          for (const nd of auditResult.nearDeath) {
-            auditFlags.set(nd.node.node_id, "near-death");
-          }
-
-          if (issues === 0) {
-            addMessage("system", `Audit clean — ${auditResult.nodesAudited} nodes, no issues.`);
-          } else {
-            const parts: string[] = [];
-            if (auditResult.phantomCertainties.length > 0)
-              parts.push(`${auditResult.phantomCertainties.length} phantom`);
-            if (auditResult.conflicts.length > 0)
-              parts.push(`${auditResult.conflicts.length} conflict`);
-            if (auditResult.nearDeath.length > 0)
-              parts.push(`${auditResult.nearDeath.length} near-death`);
-            addMessage("system", `Audit found ${parts.join(", ")} — flagged in memory panel.`);
-          }
-
-          // Open memory panel with audit indicators
-          callbacks.openMemoryPanel(undefined, auditFlags);
-        })();
-        break;
-
       case "agents":
         void (async () => {
           try {
@@ -1099,232 +906,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
             addMessage("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
           }
         })();
-        break;
-
-      case "discover": {
-        const discoverConfig = ctx.getConfig();
-        if (!discoverConfig?.syncUrl) {
-          addMessage("system", "No relay configured");
-          break;
-        }
-        void (async () => {
-          try {
-            const invoke = discoverConfig.invoke;
-            if (!invoke) {
-              addMessage("system", "No Tauri invoke available");
-              return;
-            }
-            const keypair = await ctx.app.getDeviceKeypair(invoke);
-            if (!keypair) {
-              addMessage("system", "No device keypair");
-              return;
-            }
-            const token = await ctx.app.createSyncToken(keypair.privateKey);
-            const res = await fetch(`${discoverConfig.syncUrl}/api/v1/agents/discover`, {
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-            });
-            if (!res.ok) throw new Error(`${res.status}`);
-            const data = (await res.json()) as {
-              agents?: Array<{ motebit_id: string; capabilities?: string[] }>;
-            };
-            const agents = data.agents ?? [];
-            if (agents.length === 0) {
-              addMessage("system", "No agents discovered on relay");
-            } else {
-              const lines = [`${agents.length} agent${agents.length === 1 ? "" : "s"} on relay:`];
-              for (const a of agents) {
-                const caps = a.capabilities?.join(", ") ?? "none";
-                lines.push(`  ${a.motebit_id} (${caps})`);
-              }
-              addMessage("system", lines.join("\n"));
-            }
-          } catch (err: unknown) {
-            addMessage(
-              "system",
-              `Discovery error: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        })();
-        break;
-      }
-
-      case "approvals": {
-        const pending = ctx.app.hasPendingApproval();
-        if (!pending) {
-          addMessage("system", "No pending approvals");
-        } else {
-          const info = ctx.app.pendingApprovalInfo;
-          if (info) {
-            addMessage(
-              "system",
-              `Pending approval:\n  Tool: ${info.toolName}\n  Args: ${JSON.stringify(info.args)}`,
-            );
-          } else {
-            addMessage("system", "Approval pending (no details available)");
-          }
-        }
-        break;
-      }
-
-      case "balance": {
-        const balanceConfig = ctx.getConfig();
-        if (!balanceConfig?.syncUrl) {
-          addMessage("system", "No relay configured");
-          break;
-        }
-        void (async () => {
-          try {
-            const invoke = balanceConfig.invoke;
-            if (!invoke) {
-              addMessage("system", "No Tauri invoke available");
-              return;
-            }
-            const keypair = await ctx.app.getDeviceKeypair(invoke);
-            if (!keypair) {
-              addMessage("system", "No device keypair");
-              return;
-            }
-            const token = await ctx.app.createSyncToken(keypair.privateKey);
-            const res = await fetch(
-              `${balanceConfig.syncUrl}/api/v1/agents/${ctx.app.motebitId}/balance`,
-              {
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              },
-            );
-            if (!res.ok) throw new Error(`${res.status}`);
-            const data = (await res.json()) as {
-              balance?: number;
-              currency?: string;
-              pending_allocations?: number;
-            };
-            addMessage(
-              "system",
-              `Balance: ${data.balance ?? 0} ${data.currency ?? "USDC"}\nPending: ${data.pending_allocations ?? 0}`,
-            );
-          } catch (err: unknown) {
-            addMessage(
-              "system",
-              `Balance error: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        })();
-        break;
-      }
-
-      case "deposits": {
-        const depositsConfig = ctx.getConfig();
-        if (!depositsConfig?.syncUrl) {
-          addMessage("system", "No relay configured");
-          break;
-        }
-        void (async () => {
-          try {
-            const invoke = depositsConfig.invoke;
-            if (!invoke) {
-              addMessage("system", "No Tauri invoke available");
-              return;
-            }
-            const keypair = await ctx.app.getDeviceKeypair(invoke);
-            if (!keypair) {
-              addMessage("system", "No device keypair");
-              return;
-            }
-            const token = await ctx.app.createSyncToken(keypair.privateKey);
-            const res = await fetch(
-              `${depositsConfig.syncUrl}/api/v1/agents/${ctx.app.motebitId}/deposits`,
-              {
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              },
-            );
-            if (!res.ok) throw new Error(`${res.status}`);
-            const data = (await res.json()) as {
-              deposits?: Array<{ amount: number; timestamp: number; source?: string }>;
-            };
-            const deps = data.deposits ?? [];
-            if (deps.length === 0) {
-              addMessage("system", "No deposit history");
-            } else {
-              const lines = [`${deps.length} deposit${deps.length === 1 ? "" : "s"}:`];
-              for (const d of deps) {
-                const date = new Date(d.timestamp).toLocaleDateString();
-                lines.push(`  ${d.amount} ${d.source ? `(${d.source})` : ""} — ${date}`);
-              }
-              addMessage("system", lines.join("\n"));
-            }
-          } catch (err: unknown) {
-            addMessage(
-              "system",
-              `Deposits error: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        })();
-        break;
-      }
-
-      case "proposals": {
-        const proposalsConfig = ctx.getConfig();
-        if (!proposalsConfig?.syncUrl) {
-          addMessage("system", "No relay configured");
-          break;
-        }
-        void (async () => {
-          try {
-            const invoke = proposalsConfig.invoke;
-            if (!invoke) {
-              addMessage("system", "No Tauri invoke available");
-              return;
-            }
-            const keypair = await ctx.app.getDeviceKeypair(invoke);
-            if (!keypair) {
-              addMessage("system", "No device keypair");
-              return;
-            }
-            const token = await ctx.app.createSyncToken(keypair.privateKey);
-            const res = await fetch(
-              `${proposalsConfig.syncUrl}/api/v1/agents/${ctx.app.motebitId}/proposals`,
-              {
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              },
-            );
-            if (!res.ok) throw new Error(`${res.status}`);
-            const data = (await res.json()) as {
-              proposals?: Array<{ id: string; status: string; description?: string }>;
-            };
-            const props = data.proposals ?? [];
-            if (props.length === 0) {
-              addMessage("system", "No active proposals");
-            } else {
-              const lines = [`${props.length} proposal${props.length === 1 ? "" : "s"}:`];
-              for (const p of props) {
-                lines.push(`  ${p.id} [${p.status}] ${p.description ?? ""}`);
-              }
-              addMessage("system", lines.join("\n"));
-            }
-          } catch (err: unknown) {
-            addMessage(
-              "system",
-              `Proposals error: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        })();
-        break;
-      }
-
-      case "delegate":
-        addMessage(
-          "system",
-          "Delegation happens transparently via AI. Use CLI for manual: motebit delegate <id> <prompt>",
-        );
-        break;
-
-      case "propose":
-        addMessage("system", "Use CLI: motebit propose <ids> <goal>");
-        break;
-
-      case "withdraw":
-        addMessage("system", "Use CLI: motebit withdraw");
-        break;
-
+        return;
       case "mcp": {
         const mcpServers = ctx.app.getMcpStatus();
         if (mcpServers.length === 0) {
@@ -1338,10 +920,9 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           }
           addMessage("system", lines.join("\n"));
         }
-        break;
+        return;
       }
-
-      case "serve": {
+      case "serve":
         if (ctx.app.isServing()) {
           ctx.app.stopServing();
           addMessage("system", "Stopped serving — no longer accepting delegations");
@@ -1355,12 +936,54 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
             }
           })();
         }
-        break;
-      }
-
-      default:
-        addMessage("system", `Unknown command: /${command}`);
+        return;
     }
+
+    // Shared commands — same data extraction and formatting as all surfaces
+    const runtime = ctx.app.getRuntime();
+    if (!runtime) {
+      addMessage("system", "Runtime not initialized.");
+      return;
+    }
+
+    void (async () => {
+      try {
+        const relay = await getRelayConfig();
+        const result = await executeCommand(
+          runtime,
+          command,
+          args || undefined,
+          relay ?? undefined,
+        );
+        if (!result) {
+          addMessage("system", `Unknown command: /${command}`);
+          return;
+        }
+
+        if (result.detail) {
+          addExpandableCard(result.summary, result.detail);
+        } else {
+          addMessage("system", result.summary);
+        }
+
+        // Special case: audit opens memory panel with flags
+        if (command === "audit" && result.data) {
+          const auditFlags = new Map<string, string>();
+          for (const id of (result.data["phantomIds"] as string[]) ?? [])
+            auditFlags.set(id, "phantom");
+          for (const id of (result.data["conflictIds"] as string[]) ?? [])
+            auditFlags.set(id, "conflict");
+          for (const id of (result.data["nearDeathIds"] as string[]) ?? [])
+            auditFlags.set(id, "near-death");
+          if (auditFlags.size > 0) callbacks.openMemoryPanel(undefined, auditFlags);
+        }
+      } catch (err: unknown) {
+        addMessage(
+          "system",
+          `${command} error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    })();
   }
 
   // === Processing State ===
