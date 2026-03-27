@@ -301,7 +301,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       try {
         if (entry.price_snapshot != null && entry.price_snapshot > 0) {
           const grossAmount = entry.price_snapshot;
-          const feeAmount = grossAmount * PLATFORM_FEE_RATE;
+          const feeAmount = Math.round(grossAmount * PLATFORM_FEE_RATE);
           const netAmount = grossAmount - feeAmount;
           const receiptHash = verified.receipt.result_hash ?? verified.receipt.signature ?? "";
           const settlementId = crypto.randomUUID();
@@ -390,7 +390,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       x402TxHash?: string;
       x402Network?: string;
     }) {
-      const feeAmount = verified.grossAmount * PLATFORM_FEE_RATE;
+      const feeAmount = Math.round(verified.grossAmount * PLATFORM_FEE_RATE);
       const netAmount = verified.grossAmount - feeAmount;
       moteDb.db
         .prepare(
