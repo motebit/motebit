@@ -50,6 +50,7 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import {
   IdbConversationStore,
+  IdbConversationSyncStore,
   IdbPlanStore,
   IdbPlanSyncStore,
   IdbGradientStore,
@@ -61,6 +62,8 @@ import {
   decryptEventPayload,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
+  ConversationSyncEngine,
+  HttpConversationSyncAdapter,
   type SyncStatus,
 } from "@motebit/sync-engine";
 import { OrbitalDynamics, estimateBodyAnchors, getAnchorForReference } from "./index";
@@ -73,9 +76,10 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 // === Configuration ===
 
 export interface SpatialAIConfig {
-  provider: "anthropic" | "ollama" | "openai";
+  provider: "anthropic" | "ollama" | "openai" | "proxy";
   model?: string;
   apiKey?: string;
+  baseUrl?: string;
   maxTokens?: number;
   personalityConfig?: MotebitPersonalityConfig;
 }
@@ -204,6 +208,8 @@ export class SpatialApp {
   private _syncUnsubscribe: (() => void) | null = null;
   private _planStore: IdbPlanStore | null = null;
   private _planSyncEngine: PlanSyncEngine | null = null;
+  private _convSyncEngine: ConversationSyncEngine | null = null;
+  private _pendingApprovalResolve: ((approved: boolean) => void) | null = null;
   private _syncStatus:
     | "offline"
     | "connecting"
@@ -250,18 +256,28 @@ export class SpatialApp {
       },
     });
 
-    // Wire gesture callbacks
+    // Wire gesture callbacks — pinch approves, dismiss denies pending tool calls
     this.gestures.setCallbacks({
       onGesture: (event) => {
         switch (event.type) {
           case "pinch":
-            this.bumpAttention(0.3);
+            if (this._pendingApprovalResolve) {
+              this._pendingApprovalResolve(true);
+              this._pendingApprovalResolve = null;
+            } else {
+              this.bumpAttention(0.3);
+            }
             break;
           case "beckon":
             this.bumpAttention(0.5);
             break;
           case "dismiss":
-            this.decayAttention();
+            if (this._pendingApprovalResolve) {
+              this._pendingApprovalResolve(false);
+              this._pendingApprovalResolve = null;
+            } else {
+              this.decayAttention();
+            }
             break;
           case "pause":
             this.setPresenceState("dormant");
@@ -403,7 +419,18 @@ export class SpatialApp {
     const temperature = resolved?.temperature;
 
     let provider;
-    if (config.provider === "ollama") {
+    if (config.provider === "proxy") {
+      const model =
+        config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
+      provider = new CloudProvider({
+        provider: "anthropic",
+        api_key: "proxy",
+        model,
+        base_url: config.baseUrl,
+        max_tokens: config.maxTokens,
+        temperature,
+      });
+    } else if (config.provider === "ollama") {
       const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
       provider = new OllamaProvider({
         model,
@@ -932,7 +959,25 @@ export class SpatialApp {
           this._planSyncEngine.start();
         }
 
-        // 5. Recover orphaned delegated steps from a previous session
+        // 5. Conversation sync — push/pull conversations for cross-device visibility
+        if (this.storage?.conversationStore) {
+          const convSyncStore = new IdbConversationSyncStore(
+            this.storage.conversationStore as IdbConversationStore,
+            this.motebitId,
+          );
+          this._convSyncEngine = new ConversationSyncEngine(convSyncStore, this.motebitId);
+          this._convSyncEngine.connectRemote(
+            new HttpConversationSyncAdapter({
+              baseUrl: relayUrl,
+              motebitId: this.motebitId,
+              authToken: authToken ?? undefined,
+            }),
+          );
+          void this._convSyncEngine.sync();
+          this._convSyncEngine.start();
+        }
+
+        // 6. Recover orphaned delegated steps from a previous session
         void (async () => {
           try {
             for await (const _chunk of this.runtime!.recoverDelegatedSteps()) {
@@ -1042,6 +1087,12 @@ export class SpatialApp {
       this._planSyncEngine = null;
     }
 
+    // Stop conversation sync
+    if (this._convSyncEngine) {
+      this._convSyncEngine.stop();
+      this._convSyncEngine = null;
+    }
+
     // Unsubscribe event listeners
     if (this._wsUnsubOnEvent) {
       this._wsUnsubOnEvent();
@@ -1088,6 +1139,164 @@ export class SpatialApp {
     this.setSyncStatus("disconnected");
   }
 
+  // === Voice Commands ===
+
+  /**
+   * Try to handle a voice transcript as a command. Returns spoken response if handled,
+   * or null to fall through to AI conversation.
+   *
+   * Voice commands are natural-language equivalents of slash commands. The user doesn't
+   * need to know the exact syntax — fuzzy matching routes to the right handler.
+   */
+  private async tryVoiceCommand(text: string): Promise<string | null> {
+    const lower = text.toLowerCase().trim();
+
+    // State / introspection
+    if (/^(what('?s| is) my )?state/.test(lower) || /^show ?(me )?(the )?state/.test(lower)) {
+      if (!this.runtime) return "Runtime not ready.";
+      const state = this.runtime.getState();
+      const entries = Object.entries(state)
+        .filter(([, v]) => typeof v === "number")
+        .map(([k, v]) => `${k}: ${(v as number).toFixed(2)}`);
+      return `Your state vector. ${entries.join(". ")}.`;
+    }
+
+    // Balance
+    if (/^(what('?s| is) my )?balance/.test(lower) || /^show ?(me )?(the )?balance/.test(lower)) {
+      return this.relayCommand("balance");
+    }
+
+    // Memories
+    if (/^(show |list |what are )?(my )?memories/.test(lower)) {
+      if (!this.runtime) return "Runtime not ready.";
+      const { nodes } = await this.runtime.memory.exportAll();
+      if (nodes.length === 0) return "No memories stored yet.";
+      const active = nodes.filter((n) => n.confidence > 0.3);
+      const top = active
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, 5)
+        .map((n) => n.content.slice(0, 60));
+      return `You have ${active.length} active memories. Top ones: ${top.join(". ")}.`;
+    }
+
+    // Curiosity targets
+    if (/^(what('?s| is) )?(my )?curios/.test(lower)) {
+      if (!this.runtime) return "Runtime not ready.";
+      const targets = this.runtime.getCuriosityTargets();
+      if (targets.length === 0) return "No curiosity targets. Memory graph is stable.";
+      const lines = targets.slice(0, 3).map((t) => t.node.content.slice(0, 60));
+      return `${targets.length} fading memories need attention. ${lines.join(". ")}.`;
+    }
+
+    // Gradient
+    if (/^(what('?s| is) )?(my )?gradient/.test(lower) || /^how am i doing/.test(lower)) {
+      if (!this.runtime) return "Runtime not ready.";
+      const g = this.runtime.getGradient();
+      if (!g) return "No gradient data yet.";
+      const summary = this.runtime.getGradientSummary();
+      return `Gradient ${g.gradient.toFixed(3)}, delta ${g.delta >= 0 ? "plus" : "minus"} ${Math.abs(g.delta).toFixed(3)}. Posture: ${summary.posture}.`;
+    }
+
+    // Reflect
+    if (/^reflect/.test(lower) || /^self.?reflect/.test(lower)) {
+      if (!this.runtime) return "Runtime not ready.";
+      const result = await this.runtime.reflect();
+      return result.selfAssessment || "Reflection complete.";
+    }
+
+    // Discover agents
+    if (
+      /^(discover|find|search for) agent/.test(lower) ||
+      /^who('?s| is) (on|available)/.test(lower)
+    ) {
+      return this.relayCommand("discover");
+    }
+
+    // Approvals
+    if (/^(show |any |pending )?approval/.test(lower)) {
+      if (!this.runtime) return "Runtime not ready.";
+      if (!this.runtime.hasPendingApproval) return "No pending approvals.";
+      const info = this.runtime.pendingApprovalInfo;
+      return info
+        ? `Pending approval for tool: ${info.toolName}. Pinch to approve, dismiss to deny.`
+        : "No pending approvals.";
+    }
+
+    // Serve toggle
+    if (/^(start |begin )?serv(e|ing)/.test(lower) || /^accept (task|delegation)/.test(lower)) {
+      return "Serving is configured through the relay. Use the CLI to start serving with a price.";
+    }
+
+    // Clear conversation
+    if (/^(clear|reset|new) (conversation|chat|session)/.test(lower)) {
+      this.resetConversation();
+      return "Conversation cleared.";
+    }
+
+    // Model
+    if (/^(what |which )?(model|ai)/.test(lower)) {
+      if (!this.runtime) return "Runtime not ready.";
+      return `Current model: ${this.runtime.currentModel ?? "unknown"}.`;
+    }
+
+    // MCP servers
+    if (/^(list |show )?(mcp|servers)/.test(lower)) {
+      const servers = this.getMcpServers();
+      if (servers.length === 0) return "No MCP servers connected.";
+      return `${servers.length} MCP servers: ${servers.map((s) => s.name).join(", ")}.`;
+    }
+
+    // Not a command — fall through to AI
+    return null;
+  }
+
+  /** Fetch data from relay for voice command responses. */
+  private async relayCommand(cmd: "balance" | "discover"): Promise<string> {
+    const { relayUrl } = this.networkSettings;
+    if (!relayUrl || !this.relayAuthToken) return "Not connected to relay.";
+
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.relayAuthToken}`,
+      };
+
+      if (cmd === "balance") {
+        const resp = await fetch(`${relayUrl}/api/v1/agents/${this.motebitId}/balance`, {
+          headers,
+        });
+        if (!resp.ok) return "Could not fetch balance.";
+        const data = (await resp.json()) as {
+          balance: number;
+          pending_allocations: number;
+          currency: string;
+        };
+        return `Balance: ${data.balance} ${data.currency ?? "USDC"}. Pending: ${data.pending_allocations ?? 0}.`;
+      }
+
+      if (cmd === "discover") {
+        const resp = await fetch(`${relayUrl}/api/v1/agents/discover`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ capability: "web_search" }),
+        });
+        if (!resp.ok) return "Could not discover agents.";
+        const data = (await resp.json()) as {
+          agents: Array<{ motebit_id: string; capabilities: string[] }>;
+        };
+        const agents = data.agents ?? [];
+        if (agents.length === 0) return "No agents found on relay.";
+        return `Found ${agents.length} agents. ${agents
+          .slice(0, 3)
+          .map((a) => a.motebit_id.slice(0, 8))
+          .join(", ")}.`;
+      }
+    } catch {
+      return `Relay ${cmd} failed.`;
+    }
+    return "Unknown command.";
+  }
+
   // === Messaging ===
 
   /**
@@ -1099,11 +1308,18 @@ export class SpatialApp {
   }
 
   /**
-   * Send a message and speak the response. Convenience method for voice flow.
-   * Returns the accumulated display text.
+   * Send a message and speak the response. Handles voice commands, tool approvals,
+   * and streaming TTS. Returns the accumulated display text.
    */
   async sendAndSpeak(text: string): Promise<string> {
     if (!this.runtime) return "";
+
+    // Check for voice commands first
+    const commandResponse = await this.tryVoiceCommand(text);
+    if (commandResponse != null) {
+      await this.voicePipeline.speak(commandResponse);
+      return commandResponse;
+    }
 
     this.setPresenceState("processing");
 
@@ -1111,14 +1327,46 @@ export class SpatialApp {
     for await (const chunk of this.runtime.sendMessageStreaming(text)) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
-      }
-      if (chunk.type === "result") {
+      } else if (chunk.type === "approval_request") {
+        // Announce the approval request via TTS
+        await this.voicePipeline.speak(
+          `Tool ${chunk.name} needs approval. Pinch to approve, dismiss to deny.`,
+        );
+
+        // Wait for gesture resolution
+        const approved = await new Promise<boolean>((resolve) => {
+          this._pendingApprovalResolve = resolve;
+          // Auto-deny after 30 seconds if no gesture
+          setTimeout(() => {
+            if (this._pendingApprovalResolve === resolve) {
+              this._pendingApprovalResolve = null;
+              resolve(false);
+            }
+          }, 30_000);
+        });
+
+        // Resume the stream after approval
+        for await (const resumeChunk of this.runtime.resolveApprovalVote(
+          approved,
+          this.motebitId,
+        )) {
+          if (resumeChunk.type === "text") {
+            accumulated += resumeChunk.text;
+          } else if (resumeChunk.type === "result") {
+            accumulated = accumulated || resumeChunk.result.response;
+          }
+        }
+
+        await this.voicePipeline.speak(approved ? "Approved." : "Denied.");
+      } else if (chunk.type === "result") {
         accumulated = accumulated || chunk.result.response;
       }
     }
 
     // Speak the response (strips tags internally)
-    await this.voicePipeline.speak(accumulated);
+    if (accumulated) {
+      await this.voicePipeline.speak(accumulated);
+    }
 
     // Background housekeeping (memory decay, gradient computation)
     void this.runtime.housekeeping();

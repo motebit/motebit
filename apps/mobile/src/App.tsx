@@ -6,11 +6,10 @@
  *
  * Initialization flow:
  * 1. loadSettings → load saved settings from AsyncStorage
- * 2. bootstrap → check/create cryptographic identity
- * 3. If first launch → WelcomeOverlay → wait for acceptance
- * 4. initAI → connect AI provider
- * 5. Apply saved governance settings
- * 6. start → begin state tick loop
+ * 2. bootstrap → create/load cryptographic identity (silent)
+ * 3. initAI → connect AI provider
+ * 4. Apply saved governance settings
+ * 5. start → begin state tick loop
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,7 +50,6 @@ import type {
   GoalCompleteEvent,
   GoalApprovalEvent,
 } from "./mobile-app";
-import { WelcomeOverlay } from "./components/WelcomeOverlay";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { PinDialog } from "./components/PinDialog";
 import type { PinMode } from "./components/PinDialog";
@@ -112,7 +110,6 @@ export function App(): React.ReactElement {
   const flatListRef = useRef<FlatList>(null);
 
   // Modal state
-  const [showWelcome, setShowWelcome] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showPin, setShowPin] = useState(false);
   const [pinMode, setPinMode] = useState<PinMode>("setup");
@@ -253,16 +250,10 @@ export function App(): React.ReactElement {
       const loaded = await a.loadSettings();
       setSettings(loaded);
 
-      // 2. Bootstrap identity
-      const { isFirstLaunch } = await a.bootstrap();
+      // 2. Bootstrap identity (silent — creature is already present)
+      await a.bootstrap();
 
-      if (isFirstLaunch) {
-        // 3. Show welcome overlay, wait for acceptance
-        setShowWelcome(true);
-        return; // Will continue after acceptance
-      }
-
-      // 4. Init AI with saved settings
+      // 3. Init AI with saved settings
       await initializeAI(a, loaded);
       setCurrentModel(a.currentModel);
 
@@ -472,33 +463,6 @@ export function App(): React.ReactElement {
     app.current.startNewConversation();
     setMessages([]);
     setShowConversationPanel(false);
-  }, []);
-
-  // === Welcome acceptance ===
-  const handleWelcomeAccept = useCallback(async () => {
-    setShowWelcome(false);
-    const a = app.current;
-
-    // Identity already exists from bootstrap — just init AI and start
-    const s = settings || (await a.loadSettings());
-    await initializeAI(a, s);
-    setCurrentModel(a.currentModel);
-    await initVoice();
-    a.start();
-    subscribeToState(a);
-    startGoals(a);
-    // No conversation to restore on first launch, but call for consistency
-    restoreConversation(a);
-    setInitialized(true);
-  }, [settings, initializeAI, initVoice, subscribeToState, startGoals, restoreConversation]);
-
-  // === Welcome link existing ===
-  const handleWelcomeLinkExisting = useCallback(() => {
-    setShowWelcome(false);
-    setPairingMode("claim");
-    setPairingCodeInput("");
-    setPairingStatusText("Enter the code from your other device");
-    setShowPairing(true);
   }, []);
 
   // === System message helper (used by voice + goals) ===
@@ -1765,7 +1729,7 @@ export function App(): React.ReactElement {
   const ds = useMemo(() => createDynamicStyles(themeColors), [themeColors]);
 
   // === Loading state ===
-  if (!initialized && !showWelcome) {
+  if (!initialized) {
     return (
       <ThemeContext.Provider value={themeColors}>
         <View style={ds.container}>
@@ -2014,12 +1978,6 @@ export function App(): React.ReactElement {
         </View>
 
         {/* Modals */}
-        <WelcomeOverlay
-          visible={showWelcome}
-          onAccept={() => void handleWelcomeAccept()}
-          onLinkExisting={handleWelcomeLinkExisting}
-        />
-
         {settings && (
           <SettingsModal
             visible={showSettings}

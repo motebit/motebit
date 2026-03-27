@@ -161,7 +161,7 @@ document.addEventListener("keydown", (e) => {
 /**
  * Attempt identity bootstrap with error recovery UI.
  * On failure, shows an actionable message with Retry and Skip options.
- * On skip, closes welcome overlay and runs in limited mode.
+ * On skip, runs in limited mode with a banner.
  */
 async function tryBootstrapIdentity(
   invoke: import("./tauri-storage.js").InvokeFn,
@@ -177,12 +177,7 @@ async function tryBootstrapIdentity(
         label: "Retry",
         primary: true,
         onClick: () => {
-          void tryBootstrapIdentity(invoke).then((result) => {
-            if (result?.isFirstLaunch === true) {
-              // first launch detected
-              addMessage("system", "Your mote has been created");
-            }
-          });
+          void tryBootstrapIdentity(invoke);
         },
       },
       {
@@ -196,10 +191,6 @@ async function tryBootstrapIdentity(
               void tryBootstrapIdentity(invoke).then((result) => {
                 if (result) {
                   dismissBanner("identity-limited");
-                  if (result.isFirstLaunch) {
-                    // first launch detected
-                    addMessage("system", "Your mote has been created");
-                  }
                 }
               });
             },
@@ -663,66 +654,26 @@ async function bootstrap(): Promise<void> {
   };
   requestAnimationFrame(loop);
 
-  // Identity bootstrap (Tauri only)
+  // Identity bootstrap (Tauri only) — silent, no welcome dialog
   const config = await loadDesktopConfig();
   currentConfig = config;
-
-  const welcomeBackdrop = document.getElementById("welcome-backdrop") as HTMLDivElement;
 
   if (config.isTauri && config.invoke) {
     const invoke = config.invoke;
     const raw = await invoke<string>("read_config");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (parsed.motebit_id != null) {
-      welcomeBackdrop.classList.remove("open");
-      await tryBootstrapIdentity(invoke);
-    } else {
-      const action = await new Promise<"create" | "link">((resolve) => {
-        document
-          .getElementById("welcome-start")!
-          .addEventListener("click", () => resolve("create"));
-        document
-          .getElementById("welcome-link-existing")!
-          .addEventListener("click", () => resolve("link"));
-      });
 
-      if (action === "link") {
-        const linkSyncUrl = (parsed.sync_url as string | undefined) ?? "";
-        if (linkSyncUrl === "") {
-          welcomeBackdrop.classList.remove("open");
-          addMessage(
-            "system",
-            "No sync relay configured \u2014 set sync_url in config to link devices",
-          );
-          const result = await tryBootstrapIdentity(invoke);
-          if (result?.isFirstLaunch === true) {
-            // first launch detected
-            addMessage("system", "Your mote has been created");
-          }
-        } else {
-          try {
-            await app.bootstrap(invoke);
-          } catch {
-            /* Non-fatal — we just need the keypair */
-          }
-          pairing.startClaim(invoke, linkSyncUrl);
-        }
-      } else {
-        welcomeBackdrop.classList.remove("open");
-        const result = await tryBootstrapIdentity(invoke);
-        if (result?.isFirstLaunch === true) {
-          addMessage("system", "Your mote has been created");
-        }
+    // Bootstrap identity silently — creature is already breathing
+    await tryBootstrapIdentity(invoke);
 
-        if (
-          config.syncUrl != null &&
-          config.syncUrl !== "" &&
-          config.syncMasterToken != null &&
-          config.syncMasterToken !== ""
-        ) {
-          void trySyncRegistration(invoke, config.syncUrl, config.syncMasterToken);
-        }
-      }
+    // Auto-register with sync relay if configured
+    if (
+      config.syncUrl != null &&
+      config.syncUrl !== "" &&
+      config.syncMasterToken != null &&
+      config.syncMasterToken !== ""
+    ) {
+      void trySyncRegistration(invoke, config.syncUrl, config.syncMasterToken);
     }
 
     // Load persisted settings from config
@@ -816,8 +767,6 @@ async function bootstrap(): Promise<void> {
     } catch {
       /* Keyring unavailable */
     }
-  } else {
-    welcomeBackdrop.classList.remove("open");
   }
 
   // AI init (with error recovery)

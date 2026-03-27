@@ -71,7 +71,7 @@ let lastGazeHit = false;
 // === Settings persistence ===
 
 interface SpatialSettings {
-  provider: "anthropic" | "ollama" | "openai";
+  provider: "anthropic" | "ollama" | "openai" | "proxy";
   apiKey: string;
   model: string;
   voiceEnabled: boolean;
@@ -134,6 +134,38 @@ function saveSettings(s: SpatialSettings): void {
   localStorage.setItem("motebit:spatial_settings", JSON.stringify(s));
 }
 
+// === Proxy auto-connect ===
+
+const PROXY_BASE_URL =
+  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
+    ?.VITE_PROXY_URL ?? "https://api.motebit.com";
+const DEFAULT_PROXY_MODEL = "claude-sonnet-4-20250514";
+
+/** Try to connect via the free proxy — instant, no download. */
+async function autoInitProxy(): Promise<boolean> {
+  try {
+    const res = await fetch(`${PROXY_BASE_URL}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: DEFAULT_PROXY_MODEL, messages: [], max_tokens: 1 }),
+    });
+    // 400 = proxy alive but rejected empty messages (expected)
+    // 429 = rate limited but proxy exists
+    if (res.status === 400 || res.status === 429 || res.ok) {
+      const proxySettings: SpatialSettings = {
+        ...loadSettings(),
+        provider: "proxy",
+        model: DEFAULT_PROXY_MODEL,
+      };
+      saveSettings(proxySettings);
+      return tryInitAI(proxySettings);
+    }
+  } catch {
+    // Network error, proxy unreachable
+  }
+  return false;
+}
+
 // === Initialization ===
 
 async function init(): Promise<void> {
@@ -144,7 +176,7 @@ async function init(): Promise<void> {
     });
   }
 
-  // Bootstrap identity (generates keypair on first launch)
+  // Bootstrap identity (silent — generates keypair on first launch)
   await app.bootstrap();
 
   // Initialize WebXR adapter
@@ -152,7 +184,7 @@ async function init(): Promise<void> {
 
   // Load saved settings and populate form
   const settings = loadSettings();
-  providerSelect.value = settings.provider;
+  providerSelect.value = settings.provider === "proxy" ? "anthropic" : settings.provider;
   apiKeyInput.value = settings.apiKey;
   modelInput.value = settings.model;
   voiceToggle.checked = settings.voiceEnabled;
@@ -166,7 +198,7 @@ async function init(): Promise<void> {
     "settings-max-tokens",
   ) as HTMLSelectElement | null;
   if (maxTokensSelect) maxTokensSelect.value = String(settings.maxTokens);
-  updateProviderUI(settings.provider);
+  updateProviderUI(settings.provider === "proxy" ? "anthropic" : settings.provider);
   buildColorSwatches(settings);
 
   // Apply network settings (best-effort relay — does not block boot)
@@ -176,14 +208,22 @@ async function init(): Promise<void> {
   if (await tryInitAI(settings)) {
     settingsOverlay.classList.add("hidden");
     void initVoiceIfEnabled(settings);
-    // Connect to relay after AI init — best-effort, non-blocking
     void app.connectRelay().then(() => void loadCredentials());
     renderMcpServers();
     showMainOverlay();
   } else {
-    // Show settings overlay first
-    settingsOverlay.classList.remove("hidden");
-    overlay.classList.add("hidden");
+    // No saved config — try free proxy before showing settings
+    if (await autoInitProxy()) {
+      settingsOverlay.classList.add("hidden");
+      void initVoiceIfEnabled(loadSettings());
+      void app.connectRelay().then(() => void loadCredentials());
+      renderMcpServers();
+      showMainOverlay();
+    } else {
+      // Proxy unreachable — show settings overlay
+      settingsOverlay.classList.remove("hidden");
+      overlay.classList.add("hidden");
+    }
   }
 }
 
@@ -192,6 +232,7 @@ async function tryInitAI(settings: SpatialSettings): Promise<boolean> {
     provider: settings.provider,
     model: settings.model || undefined,
     apiKey: settings.apiKey || undefined,
+    baseUrl: settings.provider === "proxy" ? `${PROXY_BASE_URL}/v1` : undefined,
     maxTokens: settings.maxTokens,
   };
 
@@ -406,7 +447,7 @@ settingsSave?.addEventListener(
     void (async (e: Event) => {
       e.preventDefault();
       const settings: SpatialSettings = {
-        provider: providerSelect.value as "anthropic" | "ollama" | "openai",
+        provider: providerSelect.value as "anthropic" | "ollama" | "openai" | "proxy",
         apiKey: apiKeyInput.value.trim(),
         model: modelInput.value.trim(),
         voiceEnabled: voiceToggle.checked,

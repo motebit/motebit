@@ -3048,57 +3048,6 @@
       color: var(--accent-text);
     }
 
-    /* Welcome dialog */
-    #welcome-backdrop {
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      background: var(--bg-overlay);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.25s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    #welcome-backdrop.open { opacity: 1; pointer-events: auto; }
-    #welcome-dialog {
-      background: var(--bg-glass-strong);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid var(--border-input);
-      border-radius: 16px;
-      padding: 28px 24px;
-      width: 320px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: var(--text-primary);
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      text-align: center;
-    }
-    #welcome-title {
-      font-size: 17px;
-      font-weight: 600;
-    }
-    #welcome-text {
-      font-size: 13px;
-      line-height: 1.5;
-      color: var(--text-muted);
-    }
-    #welcome-start {
-      padding: 10px 0;
-      border: none;
-      border-radius: 10px;
-      background: var(--accent-soft);
-      color: #fff;
-      font-size: 14px;
-      cursor: pointer;
-      font-family: inherit;
-      margin-top: 4px;
-    }
-    #welcome-start:hover { background: var(--accent-hover); }
-
     /* System action messages (error recovery buttons in chat) */
     .chat-bubble.system.system-action {
       display: flex;
@@ -4515,19 +4464,6 @@
       <div class="pairing-actions" id="pairing-actions">
         <button class="pairing-btn-cancel" id="pairing-cancel">Cancel</button>
       </div>
-    </div>
-  </div>
-  <div id="welcome-backdrop" class="open">
-    <div id="welcome-dialog" role="dialog" aria-modal="true" aria-label="Welcome">
-      <div id="welcome-title">Welcome to Motebit</div>
-      <div id="welcome-text">
-        This is your motebit — a sovereign agent that belongs to you.
-        It creates a local cryptographic identity, stored in your system
-        keyring. Your motebit runs locally — connect to Ollama for free
-        local AI, or add an Anthropic API key for cloud intelligence.
-      </div>
-      <button id="welcome-start">Get started</button>
-      <button id="welcome-link-existing" class="settings-link-btn" style="margin-top:8px;">I have an existing motebit</button>
     </div>
   </div>
   <div id="chat-container">

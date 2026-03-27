@@ -37,7 +37,6 @@ export function initKeyboard(deps: KeyboardDeps): void {
   const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
   const pinDialog = document.getElementById("pin-dialog") as HTMLDivElement;
   const pairingDialog = document.getElementById("pairing-dialog") as HTMLDivElement;
-  const welcomeDialog = document.getElementById("welcome-dialog") as HTMLDivElement;
   const shortcutDialog = document.getElementById("shortcut-dialog") as HTMLDivElement;
 
   // Close shortcut help
@@ -167,14 +166,6 @@ export function initKeyboard(deps: KeyboardDeps): void {
   document.addEventListener("keydown", (e) => {
     if (pairingBackdrop.classList.contains("open")) {
       trapFocus(pairingDialog, e);
-    }
-  });
-
-  // Trap focus in welcome dialog
-  const welcomeBackdrop = document.getElementById("welcome-backdrop") as HTMLDivElement;
-  document.addEventListener("keydown", (e) => {
-    if (welcomeBackdrop.classList.contains("open")) {
-      trapFocus(welcomeDialog, e);
     }
   });
 

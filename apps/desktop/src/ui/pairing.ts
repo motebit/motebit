@@ -207,8 +207,6 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
               });
               void ctx.app.startSync(invoke, syncUrl).catch(() => {});
               close();
-              const welcomeBackdrop = document.getElementById("welcome-backdrop") as HTMLDivElement;
-              welcomeBackdrop.classList.remove("open");
               ctx.showToast("Linked to existing motebit");
             } else if (status.status === "denied") {
               if (pairingPollTimer) {
