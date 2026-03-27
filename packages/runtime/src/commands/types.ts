@@ -40,5 +40,5 @@ export async function relayFetch(
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status}: ${text}`);
   }
-  return res.json() as Promise<unknown>;
+  return res.json();
 }
