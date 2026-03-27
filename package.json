@@ -65,7 +65,8 @@
       "esbuild": ">=0.25.0 <0.28.0",
       "undici": ">=6.24.0 <7.0.0",
       "flatted": ">=3.4.2 <4.0.0",
-      "picomatch@>=4.0.0 <4.0.4": ">=4.0.4"
+      "picomatch@>=4.0.0 <4.0.4": ">=4.0.4",
+      "node-forge": ">=1.4.0 <2.0.0"
     },
     "peerDependencyRules": {
       "allowedVersions": {
