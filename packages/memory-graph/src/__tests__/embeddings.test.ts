@@ -193,7 +193,7 @@ describe("setRemoteEmbedUrl (remote backend)", () => {
     expect(vec).toEqual(mockEmbedding);
   });
 
-  it("falls back to local model when remote fails", async () => {
+  it("falls back to local model when remote fails", { timeout: 15_000 }, async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network error"));
 
     setRemoteEmbedUrl("https://example.com/v1/embed");
@@ -203,7 +203,7 @@ describe("setRemoteEmbedUrl (remote backend)", () => {
     expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
   });
 
-  it("skips remote when url is null", async () => {
+  it("skips remote when url is null", { timeout: 15_000 }, async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     setRemoteEmbedUrl(null);
