@@ -10,13 +10,12 @@ The protocol specification, type definitions, identity verification, and scaffol
 | -------------------------- | ------------------- | ---------------------------------------------------- |
 | `spec/`                    | —                   | Identity, execution-ledger, federation, market specs |
 | `packages/protocol/`       | `@motebit/protocol` | Network protocol types (0 deps)                      |
+| `packages/sdk/`            | `@motebit/sdk`      | Full type vocabulary (re-exports protocol)           |
 | `packages/verify/`         | `@motebit/verify`   | Standalone signature verification (0 deps)           |
 | `packages/create-motebit/` | `create-motebit`    | Identity scaffolding CLI (0 deps)                    |
 | `packages/github-action/`  | —                   | GitHub Action for identity verification              |
 
 These components have their own `LICENSE` files. They are **not** subject to the Business Source License.
-
-> **Note:** `@motebit/sdk` was previously MIT but is now BSL-1.1. It re-exports `@motebit/protocol` (MIT) and adds product-specific types. If you only need protocol types for interoperability, use `@motebit/protocol` directly.
 
 ## Runtime Layer — Business Source License 1.1
 
@@ -84,7 +83,7 @@ After four years, the recipe is free. By then, the network of sovereign agents w
 ## Quick reference
 
 ```
-MIT (now, any use):          protocol · verify · create-motebit · spec · github-action
-BSL-1.1 (source-visible):   sdk · runtime · apps · services · everything else
+MIT (now, any use):          protocol · sdk · verify · create-motebit · spec · github-action
+BSL-1.1 (source-visible):   runtime · engines · apps · services · everything else
 BSL → Apache 2.0 conversion: 4 years per version, automatic, irrevocable
 ```

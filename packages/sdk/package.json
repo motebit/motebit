@@ -1,7 +1,7 @@
 {
   "name": "@motebit/sdk",
   "version": "0.6.11",
-  "description": "Motebit product types — state vectors, behavior, rendering, memory graph, AI provider interface. Re-exports @motebit/protocol.",
+  "description": "Motebit types — protocol (re-exported) + product (state vectors, behavior, rendering, memory graph, AI provider). Zero-dep type vocabulary for the motebit ecosystem.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +20,7 @@
     "README.md"
   ],
   "sideEffects": false,
-  "license": "BSL-1.1",
+  "license": "MIT",
   "keywords": [
     "motebit",
     "agent",

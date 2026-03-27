@@ -139,7 +139,7 @@ apps/
 
 packages/
   protocol/        Network protocol types — zero deps, MIT licensed
-  sdk/             Product types (re-exports protocol) — BSL-1.1
+  sdk/             Full type vocabulary (re-exports protocol) — MIT
   verify/          Signature verifier — zero deps, MIT licensed
   create-motebit/  Scaffolder — MIT licensed
   runtime/         Orchestrator — wires all engines, streaming AI loop
@@ -206,9 +206,9 @@ Four npm packages, all zero monorepo dependencies:
 | Package                                                                | Description                                                                | License |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
 | [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Network protocol types — identity, receipts, credentials, settlement       | MIT     |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Full type vocabulary — re-exports protocol + product types                 | MIT     |
 | [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)     | Signature verification — zero dependencies                                 | MIT     |
 | [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | `npm create motebit` — scaffold identity or `--agent` for runnable service | MIT     |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Product types — state vectors, behavior, rendering. Re-exports protocol.   | BSL-1.1 |
 | [`motebit`](https://www.npmjs.com/package/motebit)                     | CLI — REPL, daemon, operator console                                       | BSL-1.1 |
 
 ## Specification
@@ -237,7 +237,7 @@ The **protocol layer** is MIT licensed — use it freely, build on it, implement
 - [`packages/verify/`](packages/verify/) — verification library (zero dependencies)
 - [`packages/create-motebit/`](packages/create-motebit/) — CLI scaffolder
 
-The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/sdk` (product types), `@motebit/runtime`, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
+The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
 
 "Motebit" is a trademark of Motebit, Inc. See [TRADEMARK.md](TRADEMARK.md).
 

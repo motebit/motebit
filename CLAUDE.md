@@ -33,7 +33,7 @@ apps/
 
 packages/
   protocol/           Network protocol types (Layer 0, MIT, 0 deps)
-  sdk/                Product types, re-exports protocol (Layer 0, BSL)
+  sdk/                Full type vocabulary, re-exports protocol (Layer 0, MIT)
   verify/             Standalone identity verifier (Layer 0, MIT, 0 deps)
   create-motebit/     CLI scaffolder: npm create motebit (Layer 0, MIT)
   crypto/             Ed25519, AES-256-GCM, PBKDF2, signed tokens, W3C VC 2.0
@@ -180,10 +180,10 @@ Motebit is calm software. Do not confirm what the user can already see.
 
 ## Published Packages
 
-Five npm packages: three MIT (protocol adoption), two BSL (product):
+Five npm packages: four MIT (types + verification), one BSL (runtime):
 
 - `@motebit/protocol` — Network protocol types (identity, receipts, credentials, settlement, trust algebra). MIT, 0 deps.
+- `@motebit/sdk` — Full type vocabulary (re-exports protocol + product types). MIT, depends on protocol.
 - `@motebit/verify` — Standalone identity verifier. MIT, 0 deps (noble bundled).
 - `create-motebit` — Scaffold signed identity. MIT, zero-deps CLI. `npm create motebit`, `--agent` for runnable project.
-- `@motebit/sdk` — Product types (state vectors, behavior, rendering, AI provider). BSL-1.1. Re-exports protocol.
 - `motebit` — Operator console. BSL-1.1. REPL, daemon, MCP server, delegation, export/verify/rotate.

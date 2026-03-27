@@ -30,4 +30,4 @@ Everything from `@motebit/protocol` (re-exported), plus:
 
 ## License
 
-BSL-1.1. See [LICENSE](LICENSE) for details.
+MIT
