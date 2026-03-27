@@ -2,7 +2,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
+import { MotebitRuntime, NullRenderer, executeCommand } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
 
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
@@ -344,6 +344,30 @@ export async function handleRun(config: CliConfig): Promise<void> {
           console.log(
             `\nCollaborative step ${stepId}... (proposal ${proposalId}...) ${stepStatus} by ${contributor}...`,
           );
+          return;
+        }
+
+        // Handle remote command requests (forwarded by relay)
+        if (msg.type === "command_request") {
+          const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+          void (async () => {
+            try {
+              const result = await executeCommand(runtime, cmdMsg.command, cmdMsg.args);
+              wsAdapter!.sendRaw(
+                JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
+              );
+            } catch (err: unknown) {
+              wsAdapter!.sendRaw(
+                JSON.stringify({
+                  type: "command_response",
+                  id: cmdMsg.id,
+                  result: {
+                    summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+                  },
+                }),
+              );
+            }
+          })();
           return;
         }
 
@@ -1017,6 +1041,30 @@ export async function handleServe(config: CliConfig): Promise<void> {
       // Handle task dispatch — same pattern as daemon mode
       const handleTask = deps.handleAgentTask.bind(deps);
       serveWsAdapter.onCustomMessage((msg) => {
+        // Handle remote command requests (forwarded by relay)
+        if (msg.type === "command_request" && runtimeRef.current) {
+          const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+          void (async () => {
+            try {
+              const result = await executeCommand(runtimeRef.current!, cmdMsg.command, cmdMsg.args);
+              serveWsAdapter!.sendRaw(
+                JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
+              );
+            } catch (err: unknown) {
+              serveWsAdapter!.sendRaw(
+                JSON.stringify({
+                  type: "command_response",
+                  id: cmdMsg.id,
+                  result: {
+                    summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+                  },
+                }),
+              );
+            }
+          })();
+          return;
+        }
+
         if (msg.type !== "task_request" || msg.task == null) return;
         const task = msg.task as AgentTask;
         log(

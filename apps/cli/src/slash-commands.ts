@@ -1,6 +1,7 @@
 // --- REPL slash command handler ---
 
-import type { MotebitRuntime, ReflectionResult } from "@motebit/runtime";
+import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
+import { executeCommand } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MotebitDatabase } from "@motebit/persistence";
@@ -177,6 +178,49 @@ function printHelp(): void {
   console.log(
     `  ${dim("quit, exit")}${" ".repeat(Math.max(1, col - "quit, exit".length))}${dim("Exit")}\n`,
   );
+}
+
+/** Build RelayConfig from CLI context for shared command layer. */
+async function buildRelayConfig(
+  config: CliConfig,
+  fullConfig?: FullConfig,
+  repl?: ReplContext,
+): Promise<RelayConfig | undefined> {
+  const relayUrl = getRelaySyncUrl(config, fullConfig);
+  if (!relayUrl) return undefined;
+  const token = await getRelayToken(config, repl);
+  if (!token) return undefined;
+  const motebitId = repl?.motebitId ?? "";
+  if (!motebitId) return undefined;
+  return { relayUrl, authToken: token, motebitId };
+}
+
+/**
+ * Try executing a command via the shared layer. Returns true if handled.
+ * The shared layer handles: state, model (read-only), tools, memories, graph,
+ * curious, forget, audit, gradient, reflect, summarize, approvals, conversations,
+ * balance, deposits, discover, proposals, withdraw, delegate, propose.
+ */
+async function trySharedCommand(
+  runtime: MotebitRuntime,
+  cmd: string,
+  args: string,
+  config: CliConfig,
+  fullConfig?: FullConfig,
+  repl?: ReplContext,
+): Promise<boolean> {
+  const relay = await buildRelayConfig(config, fullConfig, repl);
+  const result = await executeCommand(runtime, cmd, args || undefined, relay);
+  if (!result) return false;
+
+  // CLI rendering: summary always shown, detail indented below
+  console.log(result.summary);
+  if (result.detail) {
+    for (const line of result.detail.split("\n")) {
+      console.log(`  ${line}`);
+    }
+  }
+  return true;
 }
 
 export async function handleSlashCommand(
@@ -2128,9 +2172,14 @@ export async function handleSlashCommand(
       break;
     }
 
-    default:
-      console.log(
-        `Unknown command: ${command("/" + cmd)}. Type ${command("/help")} for available commands.`,
-      );
+    default: {
+      // Try the shared command layer before giving up
+      const handled = await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);
+      if (!handled) {
+        console.log(
+          `Unknown command: ${command("/" + cmd)}. Type ${command("/help")} for available commands.`,
+        );
+      }
+    }
   }
 }
