@@ -291,20 +291,6 @@ export interface GradientStoreAdapter {
   list(motebitId: string, limit?: number): GradientSnapshot[];
 }
 
-export interface GradientCredentialSubject {
-  id: string;
-  gradient: number;
-  knowledge_density: number;
-  knowledge_quality: number;
-  graph_connectivity: number;
-  temporal_stability: number;
-  retrieval_quality: number;
-  interaction_efficiency: number;
-  tool_efficiency: number;
-  curiosity_pressure: number;
-  measured_at: number;
-}
-
 // === Root Storage Container ===
 
 export interface StorageAdapters {
