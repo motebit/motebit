@@ -1,7 +1,7 @@
 {
   "name": "@motebit/sdk",
   "version": "0.6.11",
-  "description": "Core types for the motebit protocol — state vectors, identity, memory, policy, tools, and agent delegation",
+  "description": "Motebit product types — state vectors, behavior, rendering, memory graph, AI provider interface. Re-exports @motebit/protocol.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +20,7 @@
     "README.md"
   ],
   "sideEffects": false,
-  "license": "MIT",
+  "license": "BSL-1.1",
   "keywords": [
     "motebit",
     "agent",

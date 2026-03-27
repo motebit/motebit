@@ -13,7 +13,7 @@ MCP defines what an agent can do. It says nothing about who the agent is, whethe
 
 Agents carry persistent Ed25519 identities (`did:key` URIs), accumulate verifiable trust through signed execution receipts, and enforce zero-trust policy at every tool boundary. Receipts embed the signer's public key — self-verifiable offline, without contacting any authority. Key rotation uses dual-signed succession chains verifiable end-to-end from genesis key to current key. Cross-agent delegation produces nested receipts with cryptographic chain-of-custody.
 
-This is a working implementation (44 workspaces, 186,000 lines of TypeScript (106,000 production, 80,000 tests), 4,100+ tests, four open specifications), not a proposal. Three MIT protocol packages are published on npm (`@motebit/sdk`, `@motebit/verify`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The protocol layer is MIT licensed and the verification library has zero dependencies — any system can verify a Motebit agent's identity, receipts, and credentials without running Motebit software.
+This is a working implementation (44 workspaces, 186,000 lines of TypeScript (106,000 production, 80,000 tests), 4,100+ tests, four open specifications), not a proposal. Three MIT protocol packages are published on npm (`@motebit/protocol`, `@motebit/verify`, `create-motebit`); the product SDK and CLI runtime are source-available under BSL 1.1. The protocol layer is MIT licensed with zero dependencies — any system can verify a Motebit agent's identity, receipts, and credentials without running Motebit software.
 
 The system implements a complete two-sided agent economy: agents deposit funds, delegate tasks to specialized agents on the network, and settle payments through cryptographically verified receipts. All monetary amounts are stored as integer micro-units (1 USD = 1,000,000 units) with zero floating-point arithmetic. Multi-agent orchestration decomposes complex tasks into capability-tagged steps and delegates each to the best available agent via trust-weighted semiring routing — each hop settles independently with a configurable relay fee (default 5% in the reference deployment; the protocol supports any fee structure via `MOTEBIT_PLATFORM_FEE_RATE`). All settlement arithmetic uses integer micro-units with the invariant `net + fee = gross` verified across 63 fee-rate × amount combinations. This has been verified in reference deployments, integration tests, and end-to-end settlement tests across independent services.
 
@@ -306,7 +306,7 @@ Motebit's architecture engages with several standards referenced in the concept 
 ## Availability
 
 - **Source code:** [github.com/motebit/motebit](https://github.com/motebit/motebit) (source-available, BSL 1.1)
-- **Protocol layer:** MIT licensed — specifications, SDK, verification library, scaffolder
+- **Protocol layer:** MIT licensed — specifications, protocol types (`@motebit/protocol`), verification library (`@motebit/verify`), scaffolder (`create-motebit`)
 - **Specifications:** `motebit/identity@1.0` (stable), `motebit/execution-ledger@1.0` (stable), `motebit/relay-federation@1.0` (stable), `motebit/market@1.0` (stable)
 - **npm packages:** `@motebit/sdk`, `@motebit/verify`, `create-motebit`, `motebit`
 - **Live demo:** [motebit.com](https://motebit.com)
