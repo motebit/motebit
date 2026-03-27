@@ -180,9 +180,184 @@ describe("executeCommand", () => {
     });
   });
 
+  describe("memory commands (with data)", () => {
+    const memoryRuntime = () =>
+      mockRuntime({
+        memory: {
+          exportAll: async () => ({
+            nodes: [
+              {
+                node_id: "n1",
+                content: "Meeting with Alice about API design",
+                confidence: 0.9,
+                tombstoned: false,
+                valid_until: null,
+                pinned: true,
+              },
+              {
+                node_id: "n2",
+                content: "Bob prefers REST over GraphQL",
+                confidence: 0.6,
+                tombstoned: false,
+                valid_until: null,
+                pinned: false,
+              },
+              {
+                node_id: "n3",
+                content: "Old note",
+                confidence: 0.1,
+                tombstoned: true,
+                valid_until: null,
+                pinned: false,
+              },
+            ],
+            edges: [
+              { relation_type: "related_to" },
+              { relation_type: "related_to" },
+              { relation_type: "contradicts" },
+            ],
+          }),
+          deleteMemory: vi.fn(),
+        },
+      });
+
+    it("memories: returns active count and top content", async () => {
+      const result = await executeCommand(memoryRuntime(), "memories");
+      expect(result!.summary).toContain("2 active memories");
+      expect(result!.summary).toContain("3 edges");
+      expect(result!.detail).toContain("Meeting with Alice");
+    });
+
+    it("graph: returns node/edge/pinned breakdown", async () => {
+      const result = await executeCommand(memoryRuntime(), "graph");
+      expect(result!.summary).toContain("2 nodes");
+      expect(result!.summary).toContain("3 edges");
+      expect(result!.summary).toContain("1 pinned");
+      expect(result!.detail).toContain("related_to: 2");
+      expect(result!.detail).toContain("contradicts: 1");
+    });
+
+    it("curious: returns targets when present", async () => {
+      const rt = mockRuntime({
+        getCuriosityTargets: () => [
+          { node: { content: "Fading memory about deployment" }, curiosityScore: 0.8 },
+          {
+            node: {
+              content:
+                "Another fading one that is quite long and should be truncated at eighty characters for display",
+            },
+            curiosityScore: 0.5,
+          },
+        ],
+      });
+      const result = await executeCommand(rt, "curious");
+      expect(result!.summary).toContain("2 curiosity targets");
+      expect(result!.detail).toContain("Fading memory about deployment");
+    });
+
+    it("forget: deletes matching memory", async () => {
+      const rt = memoryRuntime();
+      const result = await executeCommand(rt, "forget", "Alice");
+      expect(result!.summary).toContain("Forgot:");
+      expect(result!.summary).toContain("Meeting with Alice");
+      expect(result!.data!["deletedId"]).toBe("n1");
+    });
+  });
+
+  describe("intelligence commands (with data)", () => {
+    it("gradient: returns full detail with economic consequences", async () => {
+      const rt = mockRuntime({
+        getGradient: () => ({
+          gradient: 0.72,
+          delta: 0.05,
+          experience: 0.8,
+          resilience: 0.6,
+          valence_bias: 0.1,
+          curiosity_drive: 0.5,
+          trust_tendency: 0.7,
+          autonomy: 0.4,
+        }),
+        getGradientSummary: () => ({
+          posture: "growth",
+          snapshotCount: 5,
+          trajectory: "Improving steadily",
+          overall: "Strong operational state",
+          strengths: ["memory consolidation"],
+          weaknesses: ["exploration breadth"],
+        }),
+        getLastReflection: () => ({ selfAssessment: "Operating well" }),
+      });
+      const result = await executeCommand(rt, "gradient");
+      expect(result!.summary).toContain("0.720");
+      expect(result!.summary).toContain("+0.050");
+      expect(result!.summary).toContain("growth");
+      expect(result!.detail).toContain("Improving steadily");
+      expect(result!.detail).toContain("Strengths: memory consolidation");
+      expect(result!.detail).toContain("Weaknesses: exploration breadth");
+      expect(result!.detail).toContain("Operating well");
+    });
+
+    it("reflect: returns adjustments and patterns", async () => {
+      const rt = mockRuntime({
+        reflect: async () => ({
+          selfAssessment: "Needs improvement",
+          insights: ["Insight A"],
+          planAdjustments: ["Adjust B"],
+          patterns: ["Pattern C"],
+        }),
+      });
+      const result = await executeCommand(rt, "reflect");
+      expect(result!.detail).toContain("Adjust B");
+      expect(result!.detail).toContain("Pattern C");
+      expect(result!.data!["adjustments"]).toEqual(["Adjust B"]);
+    });
+  });
+
+  describe("conversations command (with data)", () => {
+    it("returns conversation list", async () => {
+      const rt = mockRuntime({
+        listConversations: () => [
+          {
+            conversationId: "c1",
+            startedAt: Date.now() - 86400000,
+            lastActiveAt: Date.now(),
+            title: "API Design",
+            messageCount: 12,
+          },
+          {
+            conversationId: "c2",
+            startedAt: Date.now() - 172800000,
+            lastActiveAt: Date.now() - 86400000,
+            title: null,
+            messageCount: 3,
+          },
+        ],
+      });
+      const result = await executeCommand(rt, "conversations");
+      expect(result!.summary).toBe("2 conversations");
+      expect(result!.detail).toContain("API Design (12 messages)");
+      expect(result!.detail).toContain("Untitled");
+    });
+  });
+
   describe("relay commands", () => {
     it("balance: returns not connected without relay", async () => {
       const result = await executeCommand(mockRuntime(), "balance");
+      expect(result!.summary).toBe("Not connected to relay.");
+    });
+
+    it("deposits: returns not connected without relay", async () => {
+      const result = await executeCommand(mockRuntime(), "deposits");
+      expect(result!.summary).toBe("Not connected to relay.");
+    });
+
+    it("discover: returns not connected without relay", async () => {
+      const result = await executeCommand(mockRuntime(), "discover");
+      expect(result!.summary).toBe("Not connected to relay.");
+    });
+
+    it("proposals: returns not connected without relay", async () => {
+      const result = await executeCommand(mockRuntime(), "proposals");
       expect(result!.summary).toBe("Not connected to relay.");
     });
 
@@ -194,6 +369,11 @@ describe("executeCommand", () => {
     it("delegate: returns info message", async () => {
       const result = await executeCommand(mockRuntime(), "delegate");
       expect(result!.summary).toContain("transparently");
+    });
+
+    it("propose: returns CLI instruction", async () => {
+      const result = await executeCommand(mockRuntime(), "propose");
+      expect(result!.summary).toContain("motebit propose");
     });
   });
 });
