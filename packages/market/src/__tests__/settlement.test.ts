@@ -230,4 +230,25 @@ describe("settleOnReceipt", () => {
       "feeRate must be in [0, 1]",
     );
   });
+
+  it("preserves net + fee = gross invariant across fee rates", () => {
+    // Test multiple fee rates that could produce floating-point edge cases.
+    // Amounts are integer micro-units (production format per CLAUDE.md).
+    const feeRates = [0.01, 0.03, 0.05, 0.07, 0.1, 0.15, 0.25, 0.33, 0.5];
+    const grossAmounts = [1, 10000, 500000, 1000000, 9990000, 100000000, 999999999];
+
+    for (const rate of feeRates) {
+      for (const gross of grossAmounts) {
+        const result = settleOnReceipt(
+          makeAllocation({ amount_locked: gross }),
+          makeReceipt(),
+          null,
+          SID,
+          rate,
+        );
+        const sum = result.amount_settled + result.platform_fee;
+        expect(sum).toBe(gross);
+      }
+    }
+  });
 });

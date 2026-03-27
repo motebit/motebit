@@ -71,6 +71,9 @@ export function settleOnReceipt(
   }
 
   const fee = microRound(gross * feeRate);
+  // Derive net from gross − fee, then round to micro-unit precision.
+  // Both operands are already at micro-unit precision, but IEEE 754 subtraction
+  // can introduce noise (e.g. 9.99 - 0.70 = 9.289999...98). microRound cleans it.
   const net = microRound(gross - fee);
 
   return {
