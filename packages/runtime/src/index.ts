@@ -92,6 +92,12 @@ import type { AgentTrustDeps } from "./agent-trust.js";
 import { handleAgentTask as handleAgentTaskFn } from "./agent-task-handler.js";
 import type { AgentTaskHandlerDeps } from "./agent-task-handler.js";
 export { canonicalJson } from "./execution-ledger.js";
+export {
+  executeCommand,
+  COMMAND_DEFINITIONS,
+  type CommandResult,
+  type RelayConfig,
+} from "./commands.js";
 import type {
   GradientSnapshot,
   GradientStoreAdapter,

@@ -23,10 +23,10 @@
  * - Token refresh every 4.5 minutes (tokens expire at 5 min)
  */
 
-import { MotebitRuntime } from "@motebit/runtime";
+import { MotebitRuntime, executeCommand } from "@motebit/runtime";
 import { RelayDelegationAdapter } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
-import type { StreamChunk, KeyringAdapter, StorageAdapters } from "@motebit/runtime";
+import type { StreamChunk, KeyringAdapter, StorageAdapters, RelayConfig } from "@motebit/runtime";
 import type { PlanChunk, ConversationMessage } from "@motebit/runtime";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import type { InteriorColor } from "@motebit/render-engine";
@@ -1168,259 +1168,194 @@ export class SpatialApp {
   // === Voice Commands ===
 
   /**
-   * Try to handle a voice transcript as a command. Returns spoken response if handled,
-   * or null to fall through to AI conversation.
+   * Try to handle a voice transcript as a command. Routes natural-language voice
+   * input to the shared command layer (executeCommand) via fuzzy pattern matching.
    *
-   * Voice commands are natural-language equivalents of slash commands. The user doesn't
-   * need to know the exact syntax — fuzzy matching routes to the right handler.
+   * Returns spoken response if handled, or null to fall through to AI conversation.
    */
   private async tryVoiceCommand(text: string): Promise<string | null> {
+    if (!this.runtime) return null;
+
     const lower = text.toLowerCase().trim();
 
-    // State / introspection
-    if (/^(what('?s| is) my )?state/.test(lower) || /^show ?(me )?(the )?state/.test(lower)) {
-      if (!this.runtime) return "Runtime not ready.";
-      const state = this.runtime.getState();
-      const entries = Object.entries(state)
-        .filter(([, v]) => typeof v === "number")
-        .map(([k, v]) => `${k}: ${(v as number).toFixed(2)}`);
-      return `Your state vector. ${entries.join(". ")}.`;
-    }
+    // Map natural-language patterns to shared command names + args
+    const command = this.matchVoicePattern(lower);
+    if (!command) return null;
 
-    // Balance
-    if (/^(what('?s| is) my )?balance/.test(lower) || /^show ?(me )?(the )?balance/.test(lower)) {
-      return this.relayCommand("balance");
-    }
+    const { name, args } = command;
 
-    // Memories
-    if (/^(show |list |what are )?(my )?memories/.test(lower)) {
-      if (!this.runtime) return "Runtime not ready.";
-      const { nodes } = await this.runtime.memory.exportAll();
-      if (nodes.length === 0) return "No memories stored yet.";
-      const active = nodes.filter((n) => n.confidence > 0.3);
-      const top = active
-        .sort((a, b) => b.confidence - a.confidence)
-        .slice(0, 5)
-        .map((n) => n.content.slice(0, 60));
-      return `You have ${active.length} active memories. Top ones: ${top.join(". ")}.`;
-    }
-
-    // Curiosity targets
-    if (/^(what('?s| is) )?(my )?curios/.test(lower)) {
-      if (!this.runtime) return "Runtime not ready.";
-      const targets = this.runtime.getCuriosityTargets();
-      if (targets.length === 0) return "No curiosity targets. Memory graph is stable.";
-      const lines = targets.slice(0, 3).map((t) => t.node.content.slice(0, 60));
-      return `${targets.length} fading memories need attention. ${lines.join(". ")}.`;
-    }
-
-    // Gradient
-    if (/^(what('?s| is) )?(my )?gradient/.test(lower) || /^how am i doing/.test(lower)) {
-      if (!this.runtime) return "Runtime not ready.";
-      const g = this.runtime.getGradient();
-      if (!g) return "No gradient data yet.";
-      const summary = this.runtime.getGradientSummary();
-      return `Gradient ${g.gradient.toFixed(3)}, delta ${g.delta >= 0 ? "plus" : "minus"} ${Math.abs(g.delta).toFixed(3)}. Posture: ${summary.posture}.`;
-    }
-
-    // Reflect
-    if (/^reflect/.test(lower) || /^self.?reflect/.test(lower)) {
-      if (!this.runtime) return "Runtime not ready.";
-      const result = await this.runtime.reflect();
-      return result.selfAssessment || "Reflection complete.";
-    }
-
-    // Discover agents
-    if (
-      /^(discover|find|search for) agent/.test(lower) ||
-      /^who('?s| is) (on|available)/.test(lower)
-    ) {
-      return this.relayCommand("discover");
-    }
-
-    // Approvals
-    if (/^(show |any |pending )?approval/.test(lower)) {
-      if (!this.runtime) return "Runtime not ready.";
-      if (!this.runtime.hasPendingApproval) return "No pending approvals.";
-      const info = this.runtime.pendingApprovalInfo;
-      return info
-        ? `Pending approval for tool: ${info.toolName}. Pinch to approve, dismiss to deny.`
-        : "No pending approvals.";
-    }
-
-    // Serve toggle
-    if (/^(start |begin )?serv(e|ing)/.test(lower) || /^accept (task|delegation)/.test(lower)) {
-      return "Serving is configured through the relay. Use the CLI to start serving with a price.";
-    }
-
-    // Forget/delete a memory
-    if (/^forget (about |memory )?(.+)/i.test(lower)) {
-      if (!this.runtime) return "Runtime not ready.";
-      const keyword = lower.replace(/^forget (about |memory )?/i, "").trim();
-      if (!keyword) return "Tell me what to forget.";
-      const { nodes } = await this.runtime.memory.exportAll();
-      const match = nodes.find((n) => n.content.toLowerCase().includes(keyword));
-      if (!match) return `No memory matching "${keyword}".`;
-      await this.deleteMemory(match.node_id);
-      return `Forgot memory: ${match.content.slice(0, 60)}.`;
-    }
-
-    // Audit memory integrity
-    if (/^audit (my )?(memory|memories)/.test(lower)) {
-      const result = await this.auditMemory();
-      if (result.total === 0) return "No memories to audit.";
-      const issues = result.phantoms + result.conflicts + result.nearDeath;
-      if (issues === 0) return `Audited ${result.total} memories. All healthy.`;
-      return `Audited ${result.total} memories. ${result.phantoms} phantom, ${result.conflicts} conflict, ${result.nearDeath} near-death.`;
-    }
-
-    // Summarize conversation
-    if (/^summarize/.test(lower) || /^sum up/.test(lower)) {
-      const summary = await this.summarize();
-      return summary ?? "Nothing to summarize yet.";
-    }
-
-    // List conversations
-    if (/^(list |show |my )?(previous |past )?(conversation|chat|session)s/.test(lower)) {
-      const convs = this.listConversations();
-      if (convs.length === 0) return "No previous conversations.";
-      const recent = convs
-        .slice(0, 5)
-        .map((c) => c.title ?? `Conversation from ${new Date(c.startedAt).toLocaleDateString()}`);
-      return `${convs.length} conversations. Recent: ${recent.join(". ")}.`;
-    }
-
-    // Load a previous conversation
-    if (/^(load|open|resume) (conversation|chat) /.test(lower)) {
-      const convs = this.listConversations();
-      if (convs.length === 0) return "No conversations to load.";
-      // Try to match by title keyword
-      const keyword = lower.replace(/^(load|open|resume) (conversation|chat) ?/i, "").trim();
-      const match = keyword
-        ? convs.find((c) => c.title?.toLowerCase().includes(keyword))
-        : convs[0];
-      if (!match) return `No conversation matching "${keyword}".`;
-      this.loadConversationById(match.conversationId);
-      return `Loaded: ${match.title ?? "untitled conversation"}.`;
-    }
-
-    // Delete a conversation
-    if (/^delete (conversation|chat) /.test(lower)) {
-      const convs = this.listConversations();
-      const keyword = lower.replace(/^delete (conversation|chat) ?/i, "").trim();
-      const match = keyword ? convs.find((c) => c.title?.toLowerCase().includes(keyword)) : null;
-      if (!match) return `No conversation matching "${keyword}".`;
-      this.deleteConversation(match.conversationId);
-      return `Deleted: ${match.title ?? "untitled conversation"}.`;
-    }
-
-    // Execute a goal
-    if (/^(goal|plan|do|execute|run):? (.+)/i.test(lower)) {
-      const prompt = text.replace(/^(goal|plan|do|execute|run):?\s*/i, "").trim();
-      if (!prompt) return "What should the goal be?";
-      const goalId = crypto.randomUUID();
-      let lastStep = "";
-      try {
-        for await (const chunk of this.executeGoal(goalId, prompt)) {
-          if (chunk.type === "step_completed") {
-            lastStep = chunk.step.description ?? "";
-          }
-        }
-        return lastStep ? `Goal complete. Last step: ${lastStep}.` : "Goal complete.";
-      } catch (err: unknown) {
-        return `Goal failed: ${err instanceof Error ? err.message : String(err)}.`;
-      }
-    }
-
-    // Deposits
-    if (/^(show |my )?deposit/.test(lower)) {
-      return this.relayCommand("deposits");
-    }
-
-    // Clear conversation
-    if (/^(clear|reset|new) (conversation|chat|session)/.test(lower)) {
+    // Surface-specific commands that can't go through the shared layer
+    if (name === "clear") {
       this.resetConversation();
       return "Conversation cleared.";
     }
-
-    // Model
-    if (/^(what |which )?(model|ai)/.test(lower)) {
-      if (!this.runtime) return "Runtime not ready.";
-      return `Current model: ${this.runtime.currentModel ?? "unknown"}.`;
-    }
-
-    // MCP servers
-    if (/^(list |show )?(mcp|servers)/.test(lower)) {
+    if (name === "mcp") {
       const servers = this.getMcpServers();
       if (servers.length === 0) return "No MCP servers connected.";
       return `${servers.length} MCP servers: ${servers.map((s) => s.name).join(", ")}.`;
     }
+    if (name === "serve") {
+      return "Serving is configured through the relay. Use the CLI to start serving with a price.";
+    }
+    if (name === "load_conversation") {
+      return this.handleLoadConversation(lower);
+    }
+    if (name === "delete_conversation") {
+      return this.handleDeleteConversation(lower);
+    }
+    if (name === "goal") {
+      return this.handleGoalExecution(text);
+    }
 
-    // Not a command — fall through to AI
+    // Shared command layer — same data extraction and formatting as all surfaces
+    const relay = this.getRelayConfig();
+    try {
+      const result = await executeCommand(this.runtime, name, args, relay ?? undefined);
+      if (!result) return null;
+
+      // For TTS: speak summary, include detail if short enough
+      if (result.detail && result.detail.length < 200) {
+        return `${result.summary}. ${result.detail}`;
+      }
+      return result.summary;
+    } catch (err: unknown) {
+      return `${name} failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  /** Build RelayConfig from current connection state, or null if not connected. */
+  private getRelayConfig(): RelayConfig | null {
+    const { relayUrl } = this.networkSettings;
+    if (!relayUrl || !this.relayAuthToken) return null;
+    return { relayUrl, authToken: this.relayAuthToken, motebitId: this.motebitId };
+  }
+
+  /**
+   * Match natural-language voice input to a command name.
+   * Returns null if no pattern matches (fall through to AI).
+   */
+  private matchVoicePattern(lower: string): { name: string; args?: string } | null {
+    // State
+    if (/^(what('?s| is) my )?state/.test(lower) || /^show ?(me )?(the )?state/.test(lower))
+      return { name: "state" };
+
+    // Balance
+    if (/^(what('?s| is) my )?balance/.test(lower) || /^show ?(me )?(the )?balance/.test(lower))
+      return { name: "balance" };
+
+    // Memories
+    if (/^(show |list |what are )?(my )?memories/.test(lower)) return { name: "memories" };
+
+    // Graph
+    if (/^(memory )?graph/.test(lower)) return { name: "graph" };
+
+    // Curiosity
+    if (/^(what('?s| is) )?(my )?curios/.test(lower)) return { name: "curious" };
+
+    // Gradient
+    if (/^(what('?s| is) )?(my )?gradient/.test(lower) || /^how am i doing/.test(lower))
+      return { name: "gradient" };
+
+    // Reflect
+    if (/^reflect/.test(lower) || /^self.?reflect/.test(lower)) return { name: "reflect" };
+
+    // Discover
+    if (
+      /^(discover|find|search for) agent/.test(lower) ||
+      /^who('?s| is) (on|available)/.test(lower)
+    )
+      return { name: "discover" };
+
+    // Approvals
+    if (/^(show |any |pending )?approval/.test(lower)) return { name: "approvals" };
+
+    // Forget
+    if (/^forget (about |memory )?(.+)/i.test(lower)) {
+      const keyword = lower.replace(/^forget (about |memory )?/i, "").trim();
+      return { name: "forget", args: keyword };
+    }
+
+    // Audit
+    if (/^audit (my )?(memory|memories)/.test(lower)) return { name: "audit" };
+
+    // Summarize
+    if (/^summarize/.test(lower) || /^sum up/.test(lower)) return { name: "summarize" };
+
+    // Conversations list
+    if (/^(list |show |my )?(previous |past )?(conversation|chat|session)s/.test(lower))
+      return { name: "conversations" };
+
+    // Load conversation (surface-specific — needs state mutation)
+    if (/^(load|open|resume) (conversation|chat) /.test(lower))
+      return { name: "load_conversation" };
+
+    // Delete conversation (surface-specific — needs state mutation)
+    if (/^delete (conversation|chat) /.test(lower)) return { name: "delete_conversation" };
+
+    // Goal execution (surface-specific — streaming)
+    if (/^(goal|plan|do|execute|run):? (.+)/i.test(lower)) return { name: "goal" };
+
+    // Deposits
+    if (/^(show |my )?deposit/.test(lower)) return { name: "deposits" };
+
+    // Proposals
+    if (/^(show |my |list )?proposal/.test(lower)) return { name: "proposals" };
+
+    // Clear
+    if (/^(clear|reset|new) (conversation|chat|session)/.test(lower)) return { name: "clear" };
+
+    // Model
+    if (/^(what |which )?(model|ai)/.test(lower)) return { name: "model" };
+
+    // MCP
+    if (/^(list |show )?(mcp|servers)/.test(lower)) return { name: "mcp" };
+
+    // Tools
+    if (/^(list |show |what )?(my )?tools/.test(lower)) return { name: "tools" };
+
+    // Serve
+    if (/^(start |begin )?serv(e|ing)/.test(lower) || /^accept (task|delegation)/.test(lower))
+      return { name: "serve" };
+
     return null;
   }
 
-  /** Fetch data from relay for voice command responses. */
-  private async relayCommand(cmd: "balance" | "discover" | "deposits"): Promise<string> {
-    const { relayUrl } = this.networkSettings;
-    if (!relayUrl || !this.relayAuthToken) return "Not connected to relay.";
+  // --- Surface-specific command handlers (state mutations, streaming) ---
 
+  private handleLoadConversation(lower: string): string {
+    const convs = this.listConversations();
+    if (convs.length === 0) return "No conversations to load.";
+    const keyword = lower.replace(/^(load|open|resume) (conversation|chat) ?/i, "").trim();
+    const match = keyword ? convs.find((c) => c.title?.toLowerCase().includes(keyword)) : convs[0];
+    if (!match) return `No conversation matching "${keyword}".`;
+    this.loadConversationById(match.conversationId);
+    return `Loaded: ${match.title ?? "untitled conversation"}.`;
+  }
+
+  private handleDeleteConversation(lower: string): string {
+    const convs = this.listConversations();
+    const keyword = lower.replace(/^delete (conversation|chat) ?/i, "").trim();
+    const match = keyword ? convs.find((c) => c.title?.toLowerCase().includes(keyword)) : null;
+    if (!match) return `No conversation matching "${keyword}".`;
+    this.deleteConversation(match.conversationId);
+    return `Deleted: ${match.title ?? "untitled conversation"}.`;
+  }
+
+  private async handleGoalExecution(text: string): Promise<string> {
+    const prompt = text.replace(/^(goal|plan|do|execute|run):?\s*/i, "").trim();
+    if (!prompt) return "What should the goal be?";
+    const goalId = crypto.randomUUID();
+    let lastStep = "";
     try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.relayAuthToken}`,
-      };
-
-      if (cmd === "balance") {
-        const resp = await fetch(`${relayUrl}/api/v1/agents/${this.motebitId}/balance`, {
-          headers,
-        });
-        if (!resp.ok) return "Could not fetch balance.";
-        const data = (await resp.json()) as {
-          balance: number;
-          pending_allocations: number;
-          currency: string;
-        };
-        return `Balance: ${data.balance} ${data.currency ?? "USDC"}. Pending: ${data.pending_allocations ?? 0}.`;
+      for await (const chunk of this.executeGoal(goalId, prompt)) {
+        if (chunk.type === "step_completed") {
+          lastStep = chunk.step.description ?? "";
+        }
       }
-
-      if (cmd === "deposits") {
-        const resp = await fetch(`${relayUrl}/api/v1/agents/${this.motebitId}/balance`, {
-          headers,
-        });
-        if (!resp.ok) return "Could not fetch deposits.";
-        const data = (await resp.json()) as {
-          transactions?: Array<{ type: string; amount: number; created_at: string }>;
-        };
-        const deposits = (data.transactions ?? []).filter((t) => t.type === "deposit");
-        if (deposits.length === 0) return "No deposits found.";
-        const recent = deposits
-          .slice(0, 3)
-          .map((d) => `${d.amount} on ${new Date(d.created_at).toLocaleDateString()}`);
-        return `${deposits.length} deposits. Recent: ${recent.join(", ")}.`;
-      }
-
-      if (cmd === "discover") {
-        const resp = await fetch(`${relayUrl}/api/v1/agents/discover`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ capability: "web_search" }),
-        });
-        if (!resp.ok) return "Could not discover agents.";
-        const data = (await resp.json()) as {
-          agents: Array<{ motebit_id: string; capabilities: string[] }>;
-        };
-        const agents = data.agents ?? [];
-        if (agents.length === 0) return "No agents found on relay.";
-        return `Found ${agents.length} agents. ${agents
-          .slice(0, 3)
-          .map((a) => a.motebit_id.slice(0, 8))
-          .join(", ")}.`;
-      }
-    } catch {
-      return `Relay ${cmd} failed.`;
+      return lastStep ? `Goal complete. Last step: ${lastStep}.` : "Goal complete.";
+    } catch (err: unknown) {
+      return `Goal failed: ${err instanceof Error ? err.message : String(err)}.`;
     }
-    return "Unknown command.";
   }
 
   // === Messaging ===
