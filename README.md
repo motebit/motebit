@@ -166,7 +166,7 @@ services/
   api/          Sync relay — device auth, receipt verification, budget settlement,
                 credential issuance, federation, 5-tier rate limiting
   code-review/  Code review agent — Claude-powered, $0.50/review, signed receipts
-  web-search/   Web search service — Brave/DuckDuckGo, $0.10/request
+  web-search/   Web search service — Brave/DuckDuckGo, $0.05/request
 
 spec/
   identity-v1.md          motebit/identity@1.0

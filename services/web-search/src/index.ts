@@ -385,7 +385,7 @@ async function main(): Promise<void> {
   }
 
   // 5. Wire deps + start server (scaffold handles MCP, relay, shutdown)
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.10");
+  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.05");
   const deps = wireServerDeps(runtime, {
     motebitId,
     publicKeyHex,
