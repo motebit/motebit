@@ -15,7 +15,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@motebit/sdk": "workspace:*"
+    "@motebit/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

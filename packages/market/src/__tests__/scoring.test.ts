@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { scoreCandidate, rankCandidates, applyPrecisionToMarketConfig } from "../scoring.js";
 import type { CandidateProfile, TaskRequirements } from "../scoring.js";
-import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/sdk";
-import type { AgentTrustRecord, AgentServiceListing } from "@motebit/sdk";
+import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/protocol";
+import type { AgentTrustRecord, AgentServiceListing } from "@motebit/protocol";
 
 function makeTrustRecord(overrides: Partial<AgentTrustRecord> = {}): AgentTrustRecord {
   return {

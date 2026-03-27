@@ -1,5 +1,5 @@
-import { RiskLevel, DataClass, SideEffect } from "@motebit/sdk";
-import type { ToolDefinition, ToolRiskProfile } from "@motebit/sdk";
+import { RiskLevel, DataClass, SideEffect } from "@motebit/protocol";
+import type { ToolDefinition, ToolRiskProfile } from "@motebit/protocol";
 
 /**
  * Risk classification rules — pattern-based inference when tools don't declare

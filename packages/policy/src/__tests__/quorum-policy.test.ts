@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { PolicyGate, InMemoryAuditSink } from "../index.js";
-import { RiskLevel, DataClass, SideEffect } from "@motebit/sdk";
-import type { ToolDefinition, TurnContext } from "@motebit/sdk";
+import { RiskLevel, DataClass, SideEffect } from "@motebit/protocol";
+import type { ToolDefinition, TurnContext } from "@motebit/protocol";
 
 function makeTool(name: string, riskHint?: ToolDefinition["riskHint"]): ToolDefinition {
   return { name, description: `Tool ${name}`, inputSchema: { type: "object" }, riskHint };

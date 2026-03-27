@@ -16,8 +16,8 @@
  *   - Unknown agents return 0.0
  */
 
-import { AgentTrustLevel } from "@motebit/sdk";
-import type { AgentTrustRecord } from "@motebit/sdk";
+import { AgentTrustLevel } from "@motebit/protocol";
+import type { AgentTrustRecord } from "@motebit/protocol";
 
 const MS_PER_DAY = 86_400_000;
 const VOLUME_SATURATION = 50;

@@ -10,8 +10,8 @@
  * attestation_value × attester_authority × recency × confidence.
  */
 
-import type { ReputationCredentialSubject } from "@motebit/sdk";
-import { VC_TYPE_REPUTATION } from "@motebit/sdk";
+import type { ReputationCredentialSubject } from "@motebit/protocol";
+import { VC_TYPE_REPUTATION } from "@motebit/protocol";
 
 /**
  * Minimal VerifiableCredential shape — avoids adding @motebit/crypto dependency.

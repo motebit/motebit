@@ -27,6 +27,7 @@ const ROOT = resolve(__dirname, "..");
 
 const LAYER: Record<string, number> = {
   // Layer 0 — Foundation (zero internal deps)
+  "@motebit/protocol": 0,
   "@motebit/sdk": 0,
   "@motebit/verify": 0,
   "@motebit/voice": 0,
@@ -299,11 +300,15 @@ function checkLayerOrdering(packages: PkgInfo[]): void {
       continue;
     }
 
-    // Production deps must be strictly lower layer
+    // Production deps must be strictly lower layer.
+    // Exception: same-layer re-export deps (sdk re-exports protocol, both Layer 0).
+    const SAME_LAYER_PROD_ALLOWED = new Set(["@motebit/sdk->@motebit/protocol"]);
     for (const dep of pkg.deps) {
       const depLayer = LAYER[dep];
       if (depLayer === undefined) continue; // external or unregistered (caught above)
       if (depLayer >= effectiveLayer && effectiveLayer !== APP_LAYER) {
+        const pair = `${pkg.name}->${dep}`;
+        if (depLayer === effectiveLayer && SAME_LAYER_PROD_ALLOWED.has(pair)) continue;
         fail(
           "layer",
           `"${pkg.name}" (layer ${effectiveLayer}) depends on "${dep}" (layer ${depLayer}) — ` +

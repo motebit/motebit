@@ -1,5 +1,5 @@
-import type { MotebitIdentity } from "@motebit/sdk";
-import { EventType } from "@motebit/sdk";
+import type { MotebitIdentity } from "@motebit/protocol";
+import { EventType } from "@motebit/protocol";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { EventStore } from "@motebit/event-log";
 import { generateKeypair, signKeySuccession, bytesToHex } from "@motebit/crypto";
@@ -33,8 +33,8 @@ function generateUUIDv7(): string {
 
 // === Device Registration & Identity Storage ===
 
-export type { DeviceRegistration, IdentityStorage } from "@motebit/sdk";
-import type { DeviceRegistration, IdentityStorage } from "@motebit/sdk";
+export type { DeviceRegistration, IdentityStorage } from "@motebit/protocol";
+import type { DeviceRegistration, IdentityStorage } from "@motebit/protocol";
 
 // === In-Memory Storage (for testing) ===
 

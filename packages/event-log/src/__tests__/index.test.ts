@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryEventStore, EventStore, type EventStoreAdapter } from "../index";
-import { EventType } from "@motebit/sdk";
-import type { EventLogEntry } from "@motebit/sdk";
+import { EventType } from "@motebit/protocol";
+import type { EventLogEntry } from "@motebit/protocol";
 
 // ---------------------------------------------------------------------------
 // Helpers

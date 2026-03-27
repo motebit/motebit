@@ -1,11 +1,11 @@
-import { PLATFORM_FEE_RATE } from "@motebit/sdk";
+import { PLATFORM_FEE_RATE } from "@motebit/protocol";
 import type {
   BudgetAllocation,
   ExecutionReceipt,
   GoalExecutionManifest,
   SettlementId,
   SettlementRecord,
-} from "@motebit/sdk";
+} from "@motebit/protocol";
 
 /**
  * Round to 6 decimal places (USDC precision). When the relay stores amounts

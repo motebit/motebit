@@ -1,4 +1,4 @@
-import { RiskLevel, AgentTrustLevel } from "@motebit/sdk";
+import { RiskLevel, AgentTrustLevel } from "@motebit/protocol";
 import type {
   ToolDefinition,
   ToolResult,
@@ -7,7 +7,7 @@ import type {
   TurnContext,
   InjectionWarning,
   ApprovalQuorum,
-} from "@motebit/sdk";
+} from "@motebit/protocol";
 import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
 import type { BudgetConfig } from "./budget.js";

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeServiceReputation } from "../reputation.js";
-import { AgentTrustLevel, asMotebitId } from "@motebit/sdk";
-import type { AgentTrustRecord, ExecutionReceipt } from "@motebit/sdk";
+import { AgentTrustLevel, asMotebitId } from "@motebit/protocol";
+import type { AgentTrustRecord, ExecutionReceipt } from "@motebit/protocol";
 
 const MID = asMotebitId("agent-1");
 

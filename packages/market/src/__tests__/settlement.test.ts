@@ -6,8 +6,8 @@ import {
   asMotebitId,
   asSettlementId,
   PLATFORM_FEE_RATE,
-} from "@motebit/sdk";
-import type { BudgetAllocation, ExecutionReceipt, GoalExecutionManifest } from "@motebit/sdk";
+} from "@motebit/protocol";
+import type { BudgetAllocation, ExecutionReceipt, GoalExecutionManifest } from "@motebit/protocol";
 
 function makeAllocation(overrides: Partial<BudgetAllocation> = {}): BudgetAllocation {
   return {

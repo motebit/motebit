@@ -8,8 +8,8 @@ import {
 } from "../graph-routing.js";
 import type { ExplainedRouteScore } from "../graph-routing.js";
 import type { CandidateProfile, TaskRequirements } from "../scoring.js";
-import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/sdk";
-import type { AgentTrustRecord, AgentServiceListing } from "@motebit/sdk";
+import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/protocol";
+import type { AgentTrustRecord, AgentServiceListing } from "@motebit/protocol";
 import type { RouteWeight } from "@motebit/semiring";
 
 // Cover the barrel re-export file (index.ts)

@@ -19,8 +19,8 @@ import type {
   GradientCredentialSubject,
   ReputationCredentialSubject,
   TrustCredentialSubject,
-} from "@motebit/sdk";
-import { VC_TYPE_GRADIENT, VC_TYPE_REPUTATION, VC_TYPE_TRUST } from "@motebit/sdk";
+} from "@motebit/protocol";
+import { VC_TYPE_GRADIENT, VC_TYPE_REPUTATION, VC_TYPE_TRUST } from "@motebit/protocol";
 
 // === Types ===
 

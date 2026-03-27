@@ -42,5 +42,5 @@ export {
   evaluateTrustTransition,
   DEFAULT_TRUST_THRESHOLDS,
   PLATFORM_FEE_RATE,
-} from "@motebit/sdk";
-export type { TrustTransitionThresholds } from "@motebit/sdk";
+} from "@motebit/protocol";
+export type { TrustTransitionThresholds } from "@motebit/protocol";

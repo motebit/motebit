@@ -8,8 +8,8 @@
  * rankCandidates) is retained for reference but no longer exported from the package.
  */
 
-import type { MotebitId, RouteScore } from "@motebit/sdk";
-import { AgentTrustLevel, trustLevelToScore } from "@motebit/sdk";
+import type { MotebitId, RouteScore } from "@motebit/protocol";
+import { AgentTrustLevel, trustLevelToScore } from "@motebit/protocol";
 import {
   WeightedDigraph,
   RouteWeightSemiring,

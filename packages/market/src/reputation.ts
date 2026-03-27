@@ -1,5 +1,5 @@
-import type { AgentTrustRecord, ExecutionReceipt, MotebitId } from "@motebit/sdk";
-import { trustLevelToScore } from "@motebit/sdk";
+import type { AgentTrustRecord, ExecutionReceipt, MotebitId } from "@motebit/protocol";
+import { trustLevelToScore } from "@motebit/protocol";
 
 export interface ReputationSnapshot {
   motebit_id: MotebitId;

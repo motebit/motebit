@@ -27,4 +27,4 @@ export type {
   PolicyDecision,
   TurnContext,
   ToolAuditEntry,
-} from "@motebit/sdk";
+} from "@motebit/protocol";

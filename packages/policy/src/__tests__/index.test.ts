@@ -12,8 +12,14 @@ import {
   classifyTool,
   isToolAllowed,
 } from "../index.js";
-import { RiskLevel, DataClass, SideEffect, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
-import type { ToolDefinition, MemoryCandidate, TurnContext } from "@motebit/sdk";
+import {
+  RiskLevel,
+  DataClass,
+  SideEffect,
+  SensitivityLevel,
+  AgentTrustLevel,
+} from "@motebit/protocol";
+import type { ToolDefinition, MemoryCandidate, TurnContext } from "@motebit/protocol";
 
 function makeTool(
   name: string,

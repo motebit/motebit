@@ -1,7 +1,7 @@
 {
-  "name": "@motebit/sdk",
+  "name": "@motebit/protocol",
   "version": "0.6.11",
-  "description": "Core types for the motebit protocol — state vectors, identity, memory, policy, tools, and agent delegation",
+  "description": "Motebit network protocol types — identity, receipts, credentials, settlement, trust algebra. MIT, zero dependencies.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -23,24 +23,24 @@
   "license": "MIT",
   "keywords": [
     "motebit",
+    "protocol",
     "agent",
     "identity",
-    "protocol",
-    "types",
-    "state-vector",
-    "memory",
-    "policy",
     "ed25519",
-    "ai"
+    "receipts",
+    "credentials",
+    "settlement",
+    "trust",
+    "semiring"
   ],
-  "homepage": "https://github.com/motebit/motebit/tree/main/packages/sdk#readme",
+  "homepage": "https://github.com/motebit/motebit/tree/main/packages/protocol#readme",
   "bugs": {
     "url": "https://github.com/motebit/motebit/issues"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/motebit/motebit",
-    "directory": "packages/sdk"
+    "directory": "packages/protocol"
   },
   "publishConfig": {
     "access": "public"
@@ -53,9 +53,6 @@
     "lint": "eslint src/",
     "clean": "rm -rf dist .turbo *.tsbuildinfo",
     "prepublishOnly": "npm run build"
-  },
-  "dependencies": {
-    "@motebit/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

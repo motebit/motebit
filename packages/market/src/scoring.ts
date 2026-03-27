@@ -4,8 +4,8 @@ import type {
   MotebitId,
   MarketConfig,
   RouteScore,
-} from "@motebit/sdk";
-import { AgentTrustLevel, trustLevelToScore } from "@motebit/sdk";
+} from "@motebit/protocol";
+import { AgentTrustLevel, trustLevelToScore } from "@motebit/protocol";
 
 export interface CandidateProfile {
   motebit_id: MotebitId;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { PolicyGate, InMemoryAuditSink } from "../index.js";
-import type { ToolDefinition, TurnContext } from "@motebit/sdk";
+import type { ToolDefinition, TurnContext } from "@motebit/protocol";
 
 function makeTool(name: string): ToolDefinition {
   return { name, description: `Tool ${name}`, inputSchema: { type: "object" } };

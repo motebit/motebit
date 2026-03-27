@@ -266,7 +266,7 @@ describe("blendCredentialTrust", () => {
 describe("credential reputation in routing graph", () => {
   it("candidate with credential reputation gets adjusted trust in graph", async () => {
     const { buildRoutingGraph } = await import("../graph-routing.js");
-    const { asMotebitId } = await import("@motebit/sdk");
+    const { asMotebitId } = await import("@motebit/protocol");
 
     const selfId = asMotebitId("self");
     const agentId = asMotebitId("agent-1");

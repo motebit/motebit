@@ -1,5 +1,5 @@
-import type { MemoryCandidate } from "@motebit/sdk";
-import { SensitivityLevel } from "@motebit/sdk";
+import type { MemoryCandidate } from "@motebit/protocol";
+import { SensitivityLevel } from "@motebit/protocol";
 import { RedactionEngine } from "./redaction.js";
 import { ContentSanitizer } from "./sanitizer.js";
 

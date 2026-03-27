@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { asMotebitId, AgentTrustLevel } from "@motebit/sdk";
-import type { AgentTrustRecord, MotebitId, ExecutionReceipt } from "@motebit/sdk";
+import { asMotebitId, AgentTrustLevel } from "@motebit/protocol";
+import type { AgentTrustRecord, MotebitId, ExecutionReceipt } from "@motebit/protocol";
 import {
   buildAgentGraph,
   addDelegationEdges,

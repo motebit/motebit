@@ -1,6 +1,6 @@
-import type { EventLogEntry } from "@motebit/sdk";
-export type { EventFilter, EventStoreAdapter } from "@motebit/sdk";
-import type { EventFilter, EventStoreAdapter } from "@motebit/sdk";
+import type { EventLogEntry } from "@motebit/protocol";
+export type { EventFilter, EventStoreAdapter } from "@motebit/protocol";
+import type { EventFilter, EventStoreAdapter } from "@motebit/protocol";
 
 // === In-Memory Adapter (for testing and lightweight use) ===
 

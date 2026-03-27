@@ -1,4 +1,4 @@
-import type { TurnContext } from "@motebit/sdk";
+import type { TurnContext } from "@motebit/protocol";
 
 export interface BudgetConfig {
   /** Maximum tool calls per turn (default 10) */

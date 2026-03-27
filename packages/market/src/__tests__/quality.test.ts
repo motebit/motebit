@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { scoreResultQuality, QUALITY_FAILURE_THRESHOLD } from "../quality.js";
-import type { ExecutionReceipt } from "@motebit/sdk";
-import type { MotebitId, DeviceId } from "@motebit/sdk";
+import type { ExecutionReceipt } from "@motebit/protocol";
+import type { MotebitId, DeviceId } from "@motebit/protocol";
 
 function makeReceipt(overrides: Partial<ExecutionReceipt> = {}): ExecutionReceipt {
   return {

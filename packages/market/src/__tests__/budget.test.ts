@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { allocateBudget, estimateCost, allocateCollaborativeBudget } from "../budget.js";
-import { asAllocationId, asGoalId, asMotebitId } from "@motebit/sdk";
+import { asAllocationId, asGoalId, asMotebitId } from "@motebit/protocol";
 import type { AllocationRequest } from "../budget.js";
 
 function makeRequest(overrides: Partial<AllocationRequest> = {}): AllocationRequest {

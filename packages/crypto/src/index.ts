@@ -1035,8 +1035,8 @@ export async function verifyKeySuccession(record: KeySuccessionRecord): Promise<
 
 // === Succession Chain Verification ===
 
-import type { SuccessionChainResult } from "@motebit/sdk";
-export type { SuccessionChainResult } from "@motebit/sdk";
+import type { SuccessionChainResult } from "@motebit/protocol";
+export type { SuccessionChainResult } from "@motebit/protocol";
 
 /**
  * Verify a full key succession chain — an ordered array of KeySuccessionRecords

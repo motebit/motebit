@@ -1,4 +1,4 @@
-import type { ExecutionReceipt } from "@motebit/sdk";
+import type { ExecutionReceipt } from "@motebit/protocol";
 
 /**
  * Score the quality of a delegation result from [0, 1].

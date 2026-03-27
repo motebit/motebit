@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { AgentTrustLevel } from "@motebit/sdk";
-import type { AgentTrustRecord } from "@motebit/sdk";
+import { AgentTrustLevel } from "@motebit/protocol";
+import type { AgentTrustRecord } from "@motebit/protocol";
 import { computeReputationScore } from "../reputation.js";
 
 const NOW = Date.now();

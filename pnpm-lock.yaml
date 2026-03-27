@@ -699,9 +699,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
-      '@motebit/sdk':
+      '@motebit/protocol':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -739,9 +739,9 @@ importers:
 
   packages/crypto:
     dependencies:
-      '@motebit/sdk':
+      '@motebit/protocol':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../protocol
       '@noble/ciphers':
         specifier: ^1.0.0
         version: 1.3.0
@@ -764,9 +764,9 @@ importers:
 
   packages/event-log:
     dependencies:
-      '@motebit/sdk':
+      '@motebit/protocol':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -818,9 +818,9 @@ importers:
 
   packages/market:
     dependencies:
-      '@motebit/sdk':
+      '@motebit/protocol':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../protocol
       '@motebit/semiring':
         specifier: workspace:*
         version: link:../semiring
@@ -978,9 +978,9 @@ importers:
 
   packages/policy:
     dependencies:
-      '@motebit/sdk':
+      '@motebit/protocol':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1022,6 +1022,18 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
+
+  packages/protocol:
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1154,6 +1166,10 @@ importers:
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1)(lightningcss@1.30.2)(terser@5.46.0)
 
   packages/sdk:
+    dependencies:
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1167,9 +1183,9 @@ importers:
 
   packages/semiring:
     dependencies:
-      '@motebit/sdk':
+      '@motebit/protocol':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

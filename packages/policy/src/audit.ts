@@ -1,4 +1,4 @@
-import type { ToolAuditEntry, PolicyDecision, InjectionWarning } from "@motebit/sdk";
+import type { ToolAuditEntry, PolicyDecision, InjectionWarning } from "@motebit/protocol";
 
 /**
  * AuditLogger — records every policy decision and tool execution for
@@ -8,8 +8,8 @@ import type { ToolAuditEntry, PolicyDecision, InjectionWarning } from "@motebit/
  * it succeeded, failed, was denied, or required approval.
  */
 
-export type { AuditStatsSince, AuditLogSink } from "@motebit/sdk";
-import type { AuditStatsSince, AuditLogSink } from "@motebit/sdk";
+export type { AuditStatsSince, AuditLogSink } from "@motebit/protocol";
+import type { AuditStatsSince, AuditLogSink } from "@motebit/protocol";
 
 const DEFAULT_MAX_ENTRIES = 10_000;
 

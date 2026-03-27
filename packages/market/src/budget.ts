@@ -4,7 +4,7 @@ import type {
   MotebitId,
   BudgetAllocation,
   CapabilityPrice,
-} from "@motebit/sdk";
+} from "@motebit/protocol";
 
 export interface AllocationRequest {
   goal_id: GoalId;
