@@ -20,8 +20,9 @@ import { cmdMemories, cmdGraph, cmdCurious, cmdForget, cmdAudit } from "./memory
 import { cmdGradient, cmdReflect } from "./intelligence";
 import { cmdBalance, cmdDeposits, cmdDiscover, cmdProposals } from "./market";
 
-// Re-export types
+// Re-export types and plan aggregator
 export type { CommandResult, RelayConfig } from "./types";
+export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans";
 
 /**
  * All commands the shared layer can execute. Surface-specific commands

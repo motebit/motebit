@@ -95,8 +95,11 @@ export { canonicalJson } from "./execution-ledger.js";
 export {
   executeCommand,
   COMMAND_DEFINITIONS,
+  PlanExecutionVM,
   type CommandResult,
   type RelayConfig,
+  type PlanSnapshot,
+  type PlanEvent,
 } from "./commands/index.js";
 import type {
   GradientSnapshot,

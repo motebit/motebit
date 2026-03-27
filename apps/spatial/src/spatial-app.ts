@@ -23,7 +23,7 @@
  * - Token refresh every 4.5 minutes (tokens expire at 5 min)
  */
 
-import { MotebitRuntime, executeCommand } from "@motebit/runtime";
+import { MotebitRuntime, executeCommand, PlanExecutionVM } from "@motebit/runtime";
 import { RelayDelegationAdapter } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
 import type { StreamChunk, KeyringAdapter, StorageAdapters, RelayConfig } from "@motebit/runtime";
@@ -1345,14 +1345,23 @@ export class SpatialApp {
     const prompt = text.replace(/^(goal|plan|do|execute|run):?\s*/i, "").trim();
     if (!prompt) return "What should the goal be?";
     const goalId = crypto.randomUUID();
-    let lastStep = "";
+    const evm = new PlanExecutionVM();
     try {
       for await (const chunk of this.executeGoal(goalId, prompt)) {
-        if (chunk.type === "step_completed") {
-          lastStep = chunk.step.description ?? "";
+        evm.apply(chunk);
+        // Announce step completions via TTS as they happen
+        const snap = evm.snapshot();
+        if (chunk.type === "step_completed" && snap.progress.total > 1) {
+          await this.voicePipeline.speak(
+            `Step ${snap.progress.completed} of ${snap.progress.total}: ${chunk.step.description}.`,
+          );
         }
       }
-      return lastStep ? `Goal complete. Last step: ${lastStep}.` : "Goal complete.";
+      const snap = evm.snapshot();
+      if (snap.status === "completed") {
+        return snap.reflection ?? `Goal complete: ${snap.title}.`;
+      }
+      return `Goal ${snap.status}: ${snap.failureReason ?? snap.title}.`;
     } catch (err: unknown) {
       return `Goal failed: ${err instanceof Error ? err.message : String(err)}.`;
     }
