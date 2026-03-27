@@ -18,7 +18,7 @@ import {
   asAllocationId,
   asSettlementId,
   asGoalId,
-  PLATFORM_FEE_RATE,
+  PLATFORM_FEE_RATE as DEFAULT_PLATFORM_FEE_RATE,
   AgentTrustLevel,
   EventType,
   evaluateTrustTransition,
@@ -82,6 +82,13 @@ export type TaskQueueEntry = {
   settled?: boolean;
 };
 
+/**
+ * Platform fee rate — configurable per-relay deployment.
+ * Defaults to SDK constant (0.05 / 5%). Set by registerTaskRoutes from config.
+ * The protocol supports any fee structure; this is the reference deployment setting.
+ */
+let PLATFORM_FEE_RATE = DEFAULT_PLATFORM_FEE_RATE;
+
 export interface TasksDeps {
   app: Hono;
   moteDb: MotebitDatabase;
@@ -115,6 +122,8 @@ export interface TasksDeps {
   ) => Promise<boolean>;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
+  /** Platform fee rate (0–1). Defaults to SDK constant (0.05) if not provided. */
+  platformFeeRate?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -988,6 +997,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     isTokenBlacklisted,
     isAgentRevoked,
   } = deps;
+
+  // Apply configured fee rate (affects module-level PLATFORM_FEE_RATE used by handleReceiptIngestion)
+  if (deps.platformFeeRate != null) {
+    PLATFORM_FEE_RATE = deps.platformFeeRate;
+  }
 
   const ingestionDeps = {
     moteDb,

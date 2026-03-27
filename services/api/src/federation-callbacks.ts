@@ -14,7 +14,7 @@ import type { IdentityManager } from "@motebit/core-identity";
 import {
   AgentTaskStatus,
   asMotebitId,
-  PLATFORM_FEE_RATE,
+  PLATFORM_FEE_RATE as DEFAULT_PLATFORM_FEE_RATE,
   AgentTrustLevel,
   evaluateTrustTransition,
   trustLevelToScore,
@@ -49,7 +49,12 @@ export interface FederationCallbackDeps {
   maxTaskQueueSize: number;
   maxTasksPerSubmitter: number;
   taskTtlMs: number;
+  /** Platform fee rate (0–1). Defaults to SDK constant (0.05). */
+  platformFeeRate?: number;
 }
+
+/** Configurable platform fee rate — set by createFederationCallbacks from deps. */
+let PLATFORM_FEE_RATE = DEFAULT_PLATFORM_FEE_RATE;
 
 /**
  * Build the three federation callback functions that registerFederationRoutes expects.
@@ -69,6 +74,10 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
     maxTasksPerSubmitter,
     taskTtlMs,
   } = deps;
+
+  if (deps.platformFeeRate != null) {
+    PLATFORM_FEE_RATE = deps.platformFeeRate;
+  }
 
   return {
     onTaskForwarded(verified: {

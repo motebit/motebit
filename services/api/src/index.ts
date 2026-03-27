@@ -157,6 +157,8 @@ export interface SyncRelayConfig {
     /** Blocklist of relay IDs that cannot peer. Takes precedence over allowlist. */
     blockedPeers?: string[];
   };
+  /** Platform fee rate for settlement (0–1). Default: 0.05 (5%). Protocol supports any value. */
+  platformFeeRate?: number;
   /** Stripe Checkout configuration. Omit to disable Stripe deposits. */
   stripe?: {
     secretKey: string;
@@ -194,6 +196,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     issueCredentials = process.env.MOTEBIT_RELAY_ISSUE_CREDENTIALS === "true",
     federation: federationConfig,
     stripe: stripeConfig,
+    platformFeeRate = parseFloat(process.env.MOTEBIT_PLATFORM_FEE_RATE ?? "0.05"),
   } = config;
 
   // Emergency freeze: runtime toggle for kill switch. When true, all state-mutating
@@ -400,6 +403,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     maxTaskQueueSize: MAX_TASK_QUEUE_SIZE,
     maxTasksPerSubmitter: MAX_TASKS_PER_SUBMITTER,
     taskTtlMs: TASK_TTL_MS,
+    platformFeeRate,
   });
 
   registerFederationRoutes({
@@ -571,6 +575,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice,
     isTokenBlacklisted,
     isAgentRevoked,
+    platformFeeRate,
   });
 
   // --- Close / cleanup ---

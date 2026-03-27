@@ -1094,9 +1094,9 @@ export interface BudgetAllocation {
 }
 
 /**
- * The relay's settlement fee rate (5%).
- * Applied to every completed or partial settlement that flows through the relay.
- * This is the Stripe model: the relay proves the work happened, takes its cut.
+ * Default platform fee rate (5%) — used by the reference relay deployment.
+ * The protocol supports any fee structure; relays configure their own rate
+ * via MOTEBIT_PLATFORM_FEE_RATE env or config.platformFeeRate.
  */
 export const PLATFORM_FEE_RATE = 0.05;
 
