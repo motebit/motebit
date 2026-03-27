@@ -747,6 +747,10 @@ export class SpatialApp {
     return this.runtime?.listConversations() ?? [];
   }
 
+  deleteConversation(id: string): void {
+    this.runtime?.deleteConversation(id);
+  }
+
   async autoTitle(): Promise<string | null> {
     return this.runtime?.autoTitle() ?? null;
   }
@@ -757,6 +761,28 @@ export class SpatialApp {
 
   async housekeeping(): Promise<void> {
     await this.runtime?.housekeeping();
+  }
+
+  /** Delete a memory node by ID. */
+  async deleteMemory(nodeId: string): Promise<void> {
+    await this.runtime?.memory.deleteMemory(nodeId);
+  }
+
+  /** Audit memory integrity — find phantoms, conflicts, near-death nodes. */
+  async auditMemory(): Promise<{
+    phantoms: number;
+    conflicts: number;
+    nearDeath: number;
+    total: number;
+  }> {
+    if (!this.runtime) return { phantoms: 0, conflicts: 0, nearDeath: 0, total: 0 };
+    const result = await this.runtime.auditMemory();
+    return {
+      phantoms: result.phantomCertainties.length,
+      conflicts: result.conflicts.length,
+      nearDeath: result.nearDeath.length,
+      total: result.nodesAudited,
+    };
   }
 
   // === Goals (one-shot) ===
@@ -1227,6 +1253,90 @@ export class SpatialApp {
       return "Serving is configured through the relay. Use the CLI to start serving with a price.";
     }
 
+    // Forget/delete a memory
+    if (/^forget (about |memory )?(.+)/i.test(lower)) {
+      if (!this.runtime) return "Runtime not ready.";
+      const keyword = lower.replace(/^forget (about |memory )?/i, "").trim();
+      if (!keyword) return "Tell me what to forget.";
+      const { nodes } = await this.runtime.memory.exportAll();
+      const match = nodes.find((n) => n.content.toLowerCase().includes(keyword));
+      if (!match) return `No memory matching "${keyword}".`;
+      await this.deleteMemory(match.node_id);
+      return `Forgot memory: ${match.content.slice(0, 60)}.`;
+    }
+
+    // Audit memory integrity
+    if (/^audit (my )?(memory|memories)/.test(lower)) {
+      const result = await this.auditMemory();
+      if (result.total === 0) return "No memories to audit.";
+      const issues = result.phantoms + result.conflicts + result.nearDeath;
+      if (issues === 0) return `Audited ${result.total} memories. All healthy.`;
+      return `Audited ${result.total} memories. ${result.phantoms} phantom, ${result.conflicts} conflict, ${result.nearDeath} near-death.`;
+    }
+
+    // Summarize conversation
+    if (/^summarize/.test(lower) || /^sum up/.test(lower)) {
+      const summary = await this.summarize();
+      return summary ?? "Nothing to summarize yet.";
+    }
+
+    // List conversations
+    if (/^(list |show |my )?(previous |past )?(conversation|chat|session)s/.test(lower)) {
+      const convs = this.listConversations();
+      if (convs.length === 0) return "No previous conversations.";
+      const recent = convs
+        .slice(0, 5)
+        .map((c) => c.title ?? `Conversation from ${new Date(c.startedAt).toLocaleDateString()}`);
+      return `${convs.length} conversations. Recent: ${recent.join(". ")}.`;
+    }
+
+    // Load a previous conversation
+    if (/^(load|open|resume) (conversation|chat) /.test(lower)) {
+      const convs = this.listConversations();
+      if (convs.length === 0) return "No conversations to load.";
+      // Try to match by title keyword
+      const keyword = lower.replace(/^(load|open|resume) (conversation|chat) ?/i, "").trim();
+      const match = keyword
+        ? convs.find((c) => c.title?.toLowerCase().includes(keyword))
+        : convs[0];
+      if (!match) return `No conversation matching "${keyword}".`;
+      this.loadConversationById(match.conversationId);
+      return `Loaded: ${match.title ?? "untitled conversation"}.`;
+    }
+
+    // Delete a conversation
+    if (/^delete (conversation|chat) /.test(lower)) {
+      const convs = this.listConversations();
+      const keyword = lower.replace(/^delete (conversation|chat) ?/i, "").trim();
+      const match = keyword ? convs.find((c) => c.title?.toLowerCase().includes(keyword)) : null;
+      if (!match) return `No conversation matching "${keyword}".`;
+      this.deleteConversation(match.conversationId);
+      return `Deleted: ${match.title ?? "untitled conversation"}.`;
+    }
+
+    // Execute a goal
+    if (/^(goal|plan|do|execute|run):? (.+)/i.test(lower)) {
+      const prompt = text.replace(/^(goal|plan|do|execute|run):?\s*/i, "").trim();
+      if (!prompt) return "What should the goal be?";
+      const goalId = crypto.randomUUID();
+      let lastStep = "";
+      try {
+        for await (const chunk of this.executeGoal(goalId, prompt)) {
+          if (chunk.type === "step_completed") {
+            lastStep = chunk.step.description ?? "";
+          }
+        }
+        return lastStep ? `Goal complete. Last step: ${lastStep}.` : "Goal complete.";
+      } catch (err: unknown) {
+        return `Goal failed: ${err instanceof Error ? err.message : String(err)}.`;
+      }
+    }
+
+    // Deposits
+    if (/^(show |my )?deposit/.test(lower)) {
+      return this.relayCommand("deposits");
+    }
+
     // Clear conversation
     if (/^(clear|reset|new) (conversation|chat|session)/.test(lower)) {
       this.resetConversation();
@@ -1251,7 +1361,7 @@ export class SpatialApp {
   }
 
   /** Fetch data from relay for voice command responses. */
-  private async relayCommand(cmd: "balance" | "discover"): Promise<string> {
+  private async relayCommand(cmd: "balance" | "discover" | "deposits"): Promise<string> {
     const { relayUrl } = this.networkSettings;
     if (!relayUrl || !this.relayAuthToken) return "Not connected to relay.";
 
@@ -1272,6 +1382,22 @@ export class SpatialApp {
           currency: string;
         };
         return `Balance: ${data.balance} ${data.currency ?? "USDC"}. Pending: ${data.pending_allocations ?? 0}.`;
+      }
+
+      if (cmd === "deposits") {
+        const resp = await fetch(`${relayUrl}/api/v1/agents/${this.motebitId}/balance`, {
+          headers,
+        });
+        if (!resp.ok) return "Could not fetch deposits.";
+        const data = (await resp.json()) as {
+          transactions?: Array<{ type: string; amount: number; created_at: string }>;
+        };
+        const deposits = (data.transactions ?? []).filter((t) => t.type === "deposit");
+        if (deposits.length === 0) return "No deposits found.";
+        const recent = deposits
+          .slice(0, 3)
+          .map((d) => `${d.amount} on ${new Date(d.created_at).toLocaleDateString()}`);
+        return `${deposits.length} deposits. Recent: ${recent.join(", ")}.`;
       }
 
       if (cmd === "discover") {
