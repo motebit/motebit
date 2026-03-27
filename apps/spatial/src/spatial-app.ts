@@ -955,6 +955,30 @@ export class SpatialApp {
           })();
         });
 
+        // Handle remote command requests (forwarded by relay)
+        wsAdapter.onCustomMessage((msg) => {
+          if (msg.type !== "command_request" || !this.runtime) return;
+          const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+          void (async () => {
+            try {
+              const result = await executeCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
+              wsAdapter.sendRaw(
+                JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
+              );
+            } catch (err: unknown) {
+              wsAdapter.sendRaw(
+                JSON.stringify({
+                  type: "command_response",
+                  id: cmdMsg.id,
+                  result: {
+                    summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+                  },
+                }),
+              );
+            }
+          })();
+        });
+
         this.runtime.connectSync(encryptedWs);
         wsAdapter.connect();
 

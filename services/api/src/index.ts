@@ -105,6 +105,7 @@ import { registerBudgetRoutes } from "./budget.js";
 import { registerAgentRoutes } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes, type TaskQueueEntry } from "./tasks.js";
+import { registerCommandRoutes, handleCommandResponse } from "./command-route.js";
 import Stripe from "stripe";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
@@ -367,6 +368,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice,
     parseTokenPayloadUnsafe,
     logger,
+    onCommandResponse: handleCommandResponse,
   });
 
   // --- Sync routes (HTTP fallback, device registration, identity CRUD) ---
@@ -487,6 +489,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isTokenBlacklisted,
     isAgentRevoked,
   });
+
+  // --- Command endpoint (unified remote execution) ---
+  registerCommandRoutes({ app, db: moteDb.db, connections, logger });
 
   // --- Federation background loops ---
 

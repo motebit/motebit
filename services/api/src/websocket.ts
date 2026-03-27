@@ -51,6 +51,7 @@ export interface WebSocketDeps {
     token: string,
   ) => { mid: string; did: string; iat: number; exp: number; jti?: string } | null;
   logger: ReturnType<typeof createLogger>;
+  onCommandResponse?: (commandId: string, result: unknown) => void;
 }
 
 export function registerWebSocketRoutes(deps: WebSocketDeps): void {
@@ -186,6 +187,15 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 const self = peers.find((p) => p.ws === ws);
                 if (self) self.capabilities = msg.capabilities;
               }
+            }
+
+            // Agent protocol: command_response (forwarded runtime command result)
+            if (
+              msg.type === "command_response" &&
+              typeof (msg as Record<string, unknown>).id === "string"
+            ) {
+              const cmdMsg = msg as unknown as { id: string; result: unknown };
+              deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result);
             }
 
             // Agent protocol: task_claim

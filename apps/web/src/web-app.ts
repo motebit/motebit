@@ -1,4 +1,4 @@
-import { MotebitRuntime, RelayDelegationAdapter } from "@motebit/runtime";
+import { MotebitRuntime, RelayDelegationAdapter, executeCommand } from "@motebit/runtime";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import type {
   ConversationMessage,
@@ -885,6 +885,30 @@ export class WebApp {
     // Wire task handler — accept delegations while the tab is open.
     if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
     this._wsUnsubOnCustom = wsAdapter.onCustomMessage((msg) => {
+      // Handle remote command requests (forwarded by relay)
+      if (msg.type === "command_request" && this.runtime) {
+        const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+        void (async () => {
+          try {
+            const result = await executeCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
+            this._wsAdapter?.sendRaw(
+              JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
+            );
+          } catch (err: unknown) {
+            this._wsAdapter?.sendRaw(
+              JSON.stringify({
+                type: "command_response",
+                id: cmdMsg.id,
+                result: {
+                  summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+                },
+              }),
+            );
+          }
+        })();
+        return;
+      }
+
       if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
       if (!this.runtime) return;
 
