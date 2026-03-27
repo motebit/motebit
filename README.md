@@ -138,7 +138,8 @@ apps/
   spatial/     WebXR — 6DOF anchoring, spatial audio reactivity
 
 packages/
-  sdk/             Core types — zero deps, MIT licensed
+  protocol/        Network protocol types — zero deps, MIT licensed
+  sdk/             Product types (re-exports protocol) — BSL-1.1
   verify/          Signature verifier — zero deps, MIT licensed
   create-motebit/  Scaffolder — MIT licensed
   runtime/         Orchestrator — wires all engines, streaming AI loop
@@ -202,12 +203,13 @@ import type { ExecutionReceipt, MotebitState, AgentTrustRecord } from "@motebit/
 
 Four npm packages, all zero monorepo dependencies:
 
-| Package                                                            | Description                                                                      | License |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------- | ------- |
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit)   | `npm create motebit` — scaffold identity or `--agent` for runnable service agent | MIT     |
-| [`motebit`](https://www.npmjs.com/package/motebit)                 | CLI — REPL, daemon, operator console                                             | BSL-1.1 |
-| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) | Signature verification — zero dependencies                                       | MIT     |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)       | Protocol types — zero dependencies                                               | MIT     |
+| Package                                                                | Description                                                                | License |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
+| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Network protocol types — identity, receipts, credentials, settlement       | MIT     |
+| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)     | Signature verification — zero dependencies                                 | MIT     |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | `npm create motebit` — scaffold identity or `--agent` for runnable service | MIT     |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Product types — state vectors, behavior, rendering. Re-exports protocol.   | BSL-1.1 |
+| [`motebit`](https://www.npmjs.com/package/motebit)                     | CLI — REPL, daemon, operator console                                       | BSL-1.1 |
 
 ## Specification
 
@@ -230,12 +232,12 @@ pnpm run lint          # Lint all packages
 
 The **protocol layer** is MIT licensed — use it freely, build on it, implement the spec in any language:
 
-- [`spec/`](spec/) — identity specification
-- [`packages/verify/`](packages/verify/) — verification library
+- [`spec/`](spec/) — identity, execution-ledger, relay-federation, market specifications
+- [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, settlement, trust algebra)
+- [`packages/verify/`](packages/verify/) — verification library (zero dependencies)
 - [`packages/create-motebit/`](packages/create-motebit/) — CLI scaffolder
-- [`packages/sdk/`](packages/sdk/) — core protocol types
 
-The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. See [LICENSING.md](LICENSING.md) for details.
+The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/sdk` (product types), `@motebit/runtime`, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
 
 "Motebit" is a trademark of Motebit, Inc. See [TRADEMARK.md](TRADEMARK.md).
 
