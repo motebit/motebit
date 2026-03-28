@@ -136,8 +136,8 @@ export async function* handleAgentTask(
   if (delegationReceipts.length > 0 && deps.agentTrustStore != null) {
     try {
       const { verifyExecutionReceipt } = await import("@motebit/crypto");
-      const { composeDelegationTrust, trustLevelToScore, AgentTrustLevel } =
-        await import("@motebit/sdk");
+      const { composeDelegationTrust, trustLevelToScore } = await import("@motebit/semiring");
+      const { AgentTrustLevel } = await import("@motebit/sdk");
 
       // Pre-fetch trust scores for all agents in receipt trees into a sync map
       const collectIds = (r: ExecutionReceipt): string[] => {

@@ -24,6 +24,22 @@ export { optimalPaths, optimalPath, transitiveClosure, optimalPathTrace } from "
 export type { Provenance, Annotated } from "./provenance.js";
 export { ProvenanceSemiring, boundedProvenanceSemiring, annotatedSemiring } from "./provenance.js";
 
+// ── Trust Algebra ──────────────────────────────────────────────────
+export type { DelegationReceiptLike } from "./trust-algebra.js";
+export {
+  TRUST_LEVEL_SCORES,
+  trustLevelToScore,
+  TRUST_ZERO,
+  TRUST_ONE,
+  trustAdd,
+  trustMultiply,
+  composeTrustChain,
+  joinParallelRoutes,
+  DEFAULT_TRUST_THRESHOLDS,
+  evaluateTrustTransition,
+  composeDelegationTrust,
+} from "./trust-algebra.js";
+
 // ── Agent Network Bridge ────────────────────────────────────────────
 export type { RouteWeight, AgentProfile } from "./agent-network.js";
 export {

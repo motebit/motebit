@@ -9,7 +9,8 @@
  */
 
 import type { MotebitId, RouteScore } from "@motebit/protocol";
-import { AgentTrustLevel, trustLevelToScore } from "@motebit/protocol";
+import { AgentTrustLevel } from "@motebit/protocol";
+import { trustLevelToScore } from "@motebit/semiring";
 import {
   WeightedDigraph,
   RouteWeightSemiring,

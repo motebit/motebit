@@ -16,9 +16,8 @@ import {
   asMotebitId,
   PLATFORM_FEE_RATE as DEFAULT_PLATFORM_FEE_RATE,
   AgentTrustLevel,
-  evaluateTrustTransition,
-  trustLevelToScore,
 } from "@motebit/sdk";
+import { evaluateTrustTransition, trustLevelToScore } from "@motebit/market";
 import type { AgentTask, AgentTrustRecord } from "@motebit/sdk";
 /* eslint-disable no-restricted-imports -- Relay service generates its own keypair (not a user surface) */
 import {

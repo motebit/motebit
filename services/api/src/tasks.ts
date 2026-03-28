@@ -21,9 +21,8 @@ import {
   PLATFORM_FEE_RATE as DEFAULT_PLATFORM_FEE_RATE,
   AgentTrustLevel,
   EventType,
-  evaluateTrustTransition,
-  trustLevelToScore,
 } from "@motebit/sdk";
+import { evaluateTrustTransition, trustLevelToScore } from "@motebit/market";
 import type {
   ExecutionReceipt,
   AgentTask,

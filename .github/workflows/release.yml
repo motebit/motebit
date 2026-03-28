@@ -33,6 +33,7 @@ jobs:
 
       - name: Test published packages
         run: |
+          pnpm --filter @motebit/protocol test
           pnpm --filter @motebit/sdk test
           pnpm --filter @motebit/verify test
           pnpm --filter create-motebit test

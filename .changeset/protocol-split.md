@@ -6,10 +6,14 @@
 "motebit": minor
 ---
 
-Split @motebit/sdk into @motebit/protocol (MIT) + @motebit/sdk (MIT).
+Move trust algebra from MIT sdk to BSL semiring — enforce IP boundary.
 
-New package @motebit/protocol contains all network protocol types — identity, receipts, credentials, settlement, trust algebra. MIT licensed, zero dependencies. Third-party relay and verifier implementations should import from @motebit/protocol.
+**Breaking:** The following exports have been removed from `@motebit/sdk`:
 
-@motebit/sdk re-exports @motebit/protocol and adds product types (state vectors, behavior, rendering, AI provider interface). Both packages are MIT. All existing imports from @motebit/sdk continue to work unchanged.
+- `trustLevelToScore`, `trustAdd`, `trustMultiply`, `composeTrustChain`, `joinParallelRoutes`
+- `evaluateTrustTransition`, `composeDelegationTrust`
+- `TRUST_LEVEL_SCORES`, `DEFAULT_TRUST_THRESHOLDS`, `TRUST_ZERO`, `TRUST_ONE`
 
-Types define the vocabulary. Implementations (runtime, engines, apps, services) are BSL-1.1.
+These are trust algebra algorithms that belong in the BSL-licensed runtime, not the MIT-licensed type vocabulary. Type definitions (`TrustTransitionThresholds`, `DelegationReceiptLike`, `AgentTrustLevel`, `AgentTrustRecord`) remain in the SDK unchanged.
+
+Also adds CI enforcement (checks 9-10 in check-deps) preventing algorithm code from leaking into MIT packages in the future.

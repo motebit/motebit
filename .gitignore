@@ -57,3 +57,7 @@ infra/secrets/
 docs/ops/
 docs/strategy/
 .npmrc
+
+# Patent filings (confidential, never public)
+patents/
+PATENT-BLUEPRINT.md

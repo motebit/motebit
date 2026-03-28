@@ -41,6 +41,7 @@ export {
   TRUST_LEVEL_SCORES,
   evaluateTrustTransition,
   DEFAULT_TRUST_THRESHOLDS,
-  PLATFORM_FEE_RATE,
-} from "@motebit/protocol";
+} from "@motebit/semiring";
+export type { DelegationReceiptLike } from "@motebit/semiring";
+export { PLATFORM_FEE_RATE } from "@motebit/protocol";
 export type { TrustTransitionThresholds } from "@motebit/protocol";

@@ -80,7 +80,7 @@ export async function bumpTrustFromReceipt(
       quality_sample_count: (existing.quality_sample_count ?? 0) + 1,
     };
     // Evaluate trust level transition (promotion or demotion)
-    const { evaluateTrustTransition } = await import("@motebit/sdk");
+    const { evaluateTrustTransition } = await import("@motebit/semiring");
     const newLevel = evaluateTrustTransition(updated);
     if (newLevel != null) {
       const previousLevel = updated.trust_level;

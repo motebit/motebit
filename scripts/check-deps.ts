@@ -1,7 +1,7 @@
 /**
  * Architectural dependency enforcement for the Motebit monorepo.
  *
- * Eight checks:
+ * Ten checks:
  *   1. No circular dependencies between @motebit/* packages
  *   2. No imports from internal paths (@motebit/foo/src/* or /dist/*)
  *   3. Layer ordering — lower layers cannot depend on higher layers
@@ -10,6 +10,9 @@
  *   6. package.json field order — name, version, license, private for private packages
  *   7. tsconfig.json references — must match production @motebit/* dependencies
  *   8. No license text in source files — license lives in package.json, not headers
+ *   9. MIT purity — MIT packages must not import from BSL packages
+ *  10. MIT export surface — MIT packages must export only types, enums, branded
+ *      casts, and constants (no algorithms)
  *
  * Exit code 1 on any violation. Designed to run in CI before typecheck.
  */
@@ -71,6 +74,43 @@ const LAYER: Record<string, number> = {
 };
 
 const APP_LAYER = 6;
+
+// MIT-licensed packages — must not import from BSL packages, must export only types.
+const MIT_PACKAGES = new Set([
+  "@motebit/protocol",
+  "@motebit/sdk",
+  "@motebit/verify",
+  "create-motebit",
+]);
+
+// MIT packages allowed to import from other MIT packages only (plus external deps).
+// create-motebit is bundled (tsup) so devDeps are inlined — but only MIT deps allowed.
+const MIT_IMPORT_ALLOWED = new Set([
+  "@motebit/protocol",
+  "@motebit/sdk",
+  "@motebit/verify",
+  "create-motebit",
+]);
+
+// Allowlisted non-trivial exported functions in MIT packages.
+// These are reviewed and confirmed safe: branded casts, parse/verify utilities.
+// Any new function export in an MIT package requires explicit allowlisting here.
+const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
+  "@motebit/protocol": new Set([
+    "asMotebitId",
+    "asDeviceId",
+    "asNodeId",
+    "asGoalId",
+    "asEventId",
+    "asConversationId",
+    "asPlanId",
+    "asAllocationId",
+    "asSettlementId",
+    "asListingId",
+    "asProposalId",
+  ]),
+  "@motebit/verify": new Set(["verify", "verifyIdentityFile", "parse"]),
+};
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -509,6 +549,70 @@ function checkNoLicenseInSource(packages: PkgInfo[]): void {
   }
 }
 
+// Check 9: MIT purity — MIT packages must not import from BSL packages
+function checkMitPurity(packages: PkgInfo[]): void {
+  for (const pkg of packages) {
+    if (!MIT_PACKAGES.has(pkg.name)) continue;
+
+    const srcDir = join(pkg.dir, "src");
+    if (!existsSync(srcDir)) continue;
+
+    for (const file of collectSourceFiles(srcDir)) {
+      if (isTestFile(file)) continue; // tests can import anything
+      for (const imp of extractImports(file)) {
+        const depName = extractPkgName(imp.specifier);
+        if (!depName) continue;
+        if (depName === pkg.name) continue; // self-import
+        if (imp.typeOnly) continue; // type-only imports are erased at compile time
+
+        if (!MIT_IMPORT_ALLOWED.has(depName)) {
+          const rel = relative(ROOT, file);
+          fail(
+            "mit-purity",
+            `${rel}:${imp.line} — MIT package "${pkg.name}" imports BSL package "${depName}". ` +
+              `MIT packages must only import from other MIT packages (or use "import type").`,
+          );
+        }
+      }
+    }
+  }
+}
+
+// Check 10: MIT export surface — MIT packages must not export unapproved functions
+function checkMitExportSurface(packages: PkgInfo[]): void {
+  // Only check packages that publish their own source (not create-motebit which bundles)
+  const CHECKED_MIT = ["@motebit/protocol", "@motebit/sdk"];
+
+  for (const pkg of packages) {
+    if (!CHECKED_MIT.includes(pkg.name)) continue;
+
+    const indexPath = join(pkg.dir, "src", "index.ts");
+    if (!existsSync(indexPath)) continue;
+    const content = readFileSync(indexPath, "utf-8");
+    const lines = content.split("\n");
+
+    const allowed = MIT_ALLOWED_FUNCTIONS[pkg.name] ?? new Set<string>();
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Match "export function NAME" or "export async function NAME"
+      const fnMatch = /^export\s+(?:async\s+)?function\s+(\w+)/.exec(line);
+      if (fnMatch) {
+        const fnName = fnMatch[1];
+        if (!allowed.has(fnName)) {
+          fail(
+            "mit-export",
+            `${pkg.name} src/index.ts:${i + 1} exports function "${fnName}" — ` +
+              `MIT packages must export only types, enums, and allowlisted utilities. ` +
+              `Move this function to a BSL package or add it to MIT_ALLOWED_FUNCTIONS in check-deps.ts.`,
+          );
+        }
+      }
+    }
+  }
+}
+
 // Check for wildcard exports (warnings, not errors)
 function warnWildcardExports(packages: PkgInfo[]): void {
   for (const pkg of packages) {
@@ -541,6 +645,8 @@ checkUndeclaredDeps(packages);
 checkPackageJsonOrder(packages);
 checkTsconfigReferences(packages);
 checkNoLicenseInSource(packages);
+checkMitPurity(packages);
+checkMitExportSurface(packages);
 
 if (violations.length === 0) {
   console.log("\n  All architectural checks passed.\n");

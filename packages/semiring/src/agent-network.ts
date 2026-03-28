@@ -17,7 +17,8 @@ import type {
   MotebitId,
   ExecutionReceipt,
 } from "@motebit/protocol";
-import { trustLevelToScore, AgentTrustLevel } from "@motebit/protocol";
+import { AgentTrustLevel } from "@motebit/protocol";
+import { trustLevelToScore } from "./trust-algebra.js";
 import { WeightedDigraph } from "./graph.js";
 import {
   TrustSemiring,

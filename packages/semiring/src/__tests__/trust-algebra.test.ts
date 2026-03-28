@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { AgentTrustLevel } from "@motebit/protocol";
+import type { AgentTrustRecord, MotebitId } from "@motebit/protocol";
 import {
-  AgentTrustLevel,
   TRUST_LEVEL_SCORES,
   trustLevelToScore,
   TRUST_ZERO,
@@ -13,8 +14,6 @@ import {
   evaluateTrustTransition,
   DEFAULT_TRUST_THRESHOLDS,
   type DelegationReceiptLike,
-  type AgentTrustRecord,
-  type MotebitId,
 } from "../index.js";
 
 describe("Trust Semiring Algebra", () => {
