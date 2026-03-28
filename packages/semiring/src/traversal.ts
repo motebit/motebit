@@ -49,6 +49,8 @@ export function optimalPaths<T>(graph: WeightedDigraph<T>, source: string): Map<
     let changed = false;
     for (const node of nodes) {
       const dNode = dist.get(node)!;
+      // Skip unreachable nodes — mul(zero, w) = zero (annihilation), so no update possible
+      if (eq(dNode, sr.zero)) continue;
       for (const [neighbor, weight] of graph.neighbors(node)) {
         // New candidate: path-to-node ⊗ edge-weight
         const candidate = sr.mul(dNode, weight);
@@ -164,6 +166,7 @@ export function optimalPathTrace<T>(
     let changed = false;
     for (const node of nodes) {
       const dNode = dist.get(node)!;
+      if (eq(dNode, sr.zero)) continue;
       for (const [neighbor, weight] of graph.neighbors(node)) {
         const candidate = sr.mul(dNode, weight);
         const current = dist.get(neighbor)!;

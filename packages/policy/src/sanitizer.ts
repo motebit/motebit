@@ -47,6 +47,12 @@ const INJECTION_PATTERNS: RegExp[] = [
 
   // --- Boundary manipulation ---
   /\b(?:end\s+of\s+system\s+prompt|---\s*end\s+instructions)\b/i,
+
+  // --- Data exfiltration ---
+  /\bsend\s+(?:the\s+)?(?:system\s+)?(?:prompt|instructions|context)\s+to\b/i,
+
+  // --- Encoding evasion (standalone encoded payload) ---
+  /base64\s*:\s*[A-Za-z0-9+/=]{20,}/i,
 ];
 
 // Cyrillic/Greek homoglyphs that visually match Latin characters but aren't

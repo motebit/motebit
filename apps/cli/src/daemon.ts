@@ -2,7 +2,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { MotebitRuntime, NullRenderer, executeCommand } from "@motebit/runtime";
+import { MotebitRuntime, NullRenderer, executeCommand, cmdSelfTest } from "@motebit/runtime";
+import type { MintToken } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
 
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
@@ -1150,103 +1151,44 @@ export async function handleServe(config: CliConfig): Promise<void> {
           5 * 60 * 1000,
         );
 
-        // Self-test: submit a task to ourselves via the relay using signed device tokens.
-        // This exercises the exact auth flow production agents use — if device auth is
-        // broken, onboarding breaks. The self-delegation also validates all four sybil
-        // defense layers (no bogus trust credentials from self→self tasks).
+        // Self-test: adversarial onboarding probe via shared command layer.
+        // Exercises the exact auth flow production agents use and validates all
+        // five sybil defense layers. See packages/runtime/src/commands/self-test.ts.
         if (config.selfTest) {
-          await (async () => {
-            try {
-              await new Promise((r) => setTimeout(r, 500));
-              // Use the last tool name — externally loaded tools are registered after builtins
-              const firstToolName = toolNames[toolNames.length - 1] ?? "echo";
+          await new Promise((r) => setTimeout(r, 500));
 
-              // Mint audience-scoped device tokens (same as production delegation flow).
-              // Falls back to master token only when device keys are unavailable.
-              const mintToken = async (audience: string): Promise<string> => {
-                if (servePrivateKey && fullConfigForServe.device_id) {
-                  return createSignedToken(
-                    {
-                      mid: motebitId,
-                      did: fullConfigForServe.device_id,
-                      iat: Date.now(),
-                      exp: Date.now() + 5 * 60 * 1000,
-                      jti: crypto.randomUUID(),
-                      aud: audience,
-                    },
-                    servePrivateKey,
-                  );
-                }
-                return masterToken ?? "";
-              };
-
-              const submitToken = await mintToken("task:submit");
-              const queryToken = await mintToken("task:query");
-              const authMethod =
-                servePrivateKey && fullConfigForServe.device_id ? "device token" : "master token";
-              log(`[self-test] submitting task via relay (auth: ${authMethod})...`);
-
-              const taskResp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${submitToken}`,
+          // Surface-provided token minter — the shared layer doesn't know about keys
+          const mintToken: MintToken = async (audience: string): Promise<string> => {
+            if (servePrivateKey && fullConfigForServe.device_id) {
+              return createSignedToken(
+                {
+                  mid: motebitId,
+                  did: fullConfigForServe.device_id,
+                  iat: Date.now(),
+                  exp: Date.now() + 5 * 60 * 1000,
+                  jti: crypto.randomUUID(),
+                  aud: audience,
                 },
-                body: JSON.stringify({
-                  prompt: "self-test",
-                  submitted_by: motebitId,
-                  required_capabilities: [firstToolName],
-                }),
-              });
-              if (!taskResp.ok) {
-                const status = taskResp.status;
-                const body = await taskResp.text().catch(() => "");
-                log(
-                  `[self-test] failed — relay returned ${status}${body ? `: ${body.slice(0, 100)}` : ""}`,
-                );
-                if (status === 402) log("[self-test] hint: fund the agent's budget on the relay");
-                if (status === 401 || status === 403)
-                  log("[self-test] hint: device may not be registered with relay");
-                return;
-              }
-
-              const taskData = (await taskResp.json()) as { task_id?: string };
-              const taskId = taskData.task_id;
-              if (!taskId) {
-                log("[self-test] failed — no task_id in response");
-                return;
-              }
-              log(`[self-test] task routed (task_id=${taskId.slice(0, 8)}...)`);
-
-              // Poll for completion using task:query audience token
-              const deadline = Date.now() + 30_000;
-              let settled = false;
-              while (Date.now() < deadline) {
-                await new Promise((r) => setTimeout(r, 2_000));
-                const pollResp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
-                  headers: { Authorization: `Bearer ${queryToken}` },
-                });
-                if (!pollResp.ok) continue;
-                const pollData = (await pollResp.json()) as { status?: string };
-                if (pollData.status === "completed" || pollData.status === "failed") {
-                  if (pollData.status === "completed") {
-                    log("[self-test] receipt signed \u2713");
-                    log("[self-test] complete — agent is a live network participant");
-                  } else {
-                    log(`[self-test] task ${pollData.status}`);
-                  }
-                  settled = true;
-                  break;
-                }
-              }
-              if (!settled) {
-                log("[self-test] timed out after 30s — the agent may still complete the task");
-              }
-            } catch (err: unknown) {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              log(`[self-test] error: ${errMsg}`);
+                servePrivateKey,
+              );
             }
-          })();
+            return masterToken ?? "";
+          };
+
+          const authMethod =
+            servePrivateKey && fullConfigForServe.device_id ? "device token" : "master token";
+          log(`[self-test] submitting task via relay (auth: ${authMethod})...`);
+
+          try {
+            const result = await cmdSelfTest(runtimeRef.current!, {
+              relay: { relayUrl: syncUrl, authToken: masterToken ?? "", motebitId },
+              mintToken,
+            });
+            log(`[self-test] ${result.summary}`);
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log(`[self-test] error: ${errMsg}`);
+          }
         }
       } else {
         log(`Registry registration failed: ${regResp.status}`);

@@ -22,6 +22,8 @@ import { cmdBalance, cmdDeposits, cmdDiscover, cmdProposals } from "./market";
 
 // Re-export types and plan aggregator
 export type { CommandResult, RelayConfig } from "./types";
+export type { SelfTestConfig, MintToken } from "./self-test";
+export { cmdSelfTest } from "./self-test";
 export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans";
 
 /**
@@ -49,6 +51,7 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
   { name: "withdraw", description: "Request withdrawal" },
   { name: "delegate", description: "Delegate task to agent" },
   { name: "propose", description: "Propose collaborative plan" },
+  { name: "self-test", description: "Run adversarial self-test via relay" },
 ];
 
 /**
@@ -117,6 +120,15 @@ export async function executeCommand(
       };
     case "propose":
       return { summary: "Collaborative proposals require the CLI. Run: motebit propose" };
+
+    // Self-test requires SelfTestConfig — surfaces should call cmdSelfTest() directly
+    // after relay registration. This case handles interactive dispatch with a
+    // degraded message since the dispatcher doesn't carry token-minting context.
+    case "self-test":
+      return {
+        summary:
+          "Self-test runs automatically after relay registration. Use cmdSelfTest() programmatically.",
+      };
 
     default:
       return null;

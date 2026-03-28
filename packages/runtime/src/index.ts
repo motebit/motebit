@@ -94,10 +94,13 @@ import type { AgentTaskHandlerDeps } from "./agent-task-handler.js";
 export { canonicalJson } from "./execution-ledger.js";
 export {
   executeCommand,
+  cmdSelfTest,
   COMMAND_DEFINITIONS,
   PlanExecutionVM,
   type CommandResult,
   type RelayConfig,
+  type SelfTestConfig,
+  type MintToken,
   type PlanSnapshot,
   type PlanEvent,
 } from "./commands/index.js";
