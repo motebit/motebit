@@ -15,7 +15,13 @@ import { ProxySession } from "@motebit/runtime";
 import type { ProxyProviderConfig } from "@motebit/runtime";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
-import { checkWebGPU, WebLLMProvider, PROXY_BASE_URL } from "./providers";
+import {
+  checkWebGPU,
+  WebLLMProvider,
+  PROXY_BASE_URL,
+  detectOllamaModels,
+  DEFAULT_OLLAMA_URL,
+} from "./providers";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initConversations } from "./ui/conversations";
@@ -205,6 +211,27 @@ async function autoInitProxy(): Promise<boolean> {
   return proxySession.bootstrap();
 }
 
+/** Try to connect to a local Ollama instance — free, fast, no download. */
+async function autoInitOllama(): Promise<boolean> {
+  const models = await detectOllamaModels(DEFAULT_OLLAMA_URL);
+  if (models.length === 0) return false;
+
+  // Prefer the largest/best model available
+  const preferred =
+    models.find((m) => m.includes("70b")) ??
+    models.find((m) => m.includes("32b")) ??
+    models.find((m) => m.includes("8b")) ??
+    models[0]!;
+
+  const config: ProviderConfig = { type: "ollama", model: preferred, baseUrl: DEFAULT_OLLAMA_URL };
+  app.connectProvider(config);
+  currentConfig = config;
+  saveProviderConfig(config);
+  settings.updateModelIndicator();
+  settings.updateConnectPrompt();
+  return true;
+}
+
 /** Fallback: load a language model into the browser via WebLLM. */
 async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<void> {
   const heading = document.getElementById("connect-prompt-heading");
@@ -299,9 +326,8 @@ async function bootstrap(): Promise<void> {
     if (savedConfig.type === "proxy") {
       // For proxy users, always go through autoInitProxy to handle token refresh
       void autoInitProxy().then(async (ok) => {
-        if (!ok && checkWebGPU()) {
-          await autoInitWebLLM();
-        }
+        if (!ok) ok = await autoInitOllama();
+        if (!ok && checkWebGPU()) await autoInitWebLLM();
         settings.updateConnectPrompt();
       });
     } else if (savedConfig.type === "webllm") {
@@ -319,11 +345,10 @@ async function bootstrap(): Promise<void> {
   } else {
     // First visit — no subscription yet. Try local inference first (zero API cost).
     // Proxy is for paying subscribers only per metabolic principle.
-    // Boot sequence: subscriber proxy → WebLLM (browser) → upgrade prompt.
+    // Boot sequence: subscriber proxy → Ollama (local) → WebLLM (browser) → upgrade prompt.
     void autoInitProxy().then(async (ok) => {
-      if (!ok && checkWebGPU()) {
-        await autoInitWebLLM();
-      }
+      if (!ok) ok = await autoInitOllama();
+      if (!ok && checkWebGPU()) await autoInitWebLLM();
       settings.updateConnectPrompt();
     });
   }
