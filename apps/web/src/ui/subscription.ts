@@ -185,10 +185,38 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
   function updateTierDisplay(): void {
     const tier = loadProxyToken()?.tier ?? loadSubscriptionTier();
     const isSubscribed = tier === "pro" || tier === "ultra";
+    const isUltra = tier === "ultra";
 
-    // Subscribed: show tier badge + detail, hide upgrade form + checkout
+    // Show badge + detail for subscribers
     if (activeDiv) activeDiv.style.display = isSubscribed ? "" : "none";
-    if (upgradeDiv) upgradeDiv.style.display = isSubscribed ? "none" : "";
+
+    // For Pro users: hide full subscribe form but show upgrade-to-ultra
+    // For Ultra users: hide everything
+    // For free users: show full subscribe form
+    if (upgradeDiv) {
+      if (isUltra) {
+        upgradeDiv.style.display = "none";
+      } else if (tier === "pro") {
+        // Show only the Ultra option for Pro users
+        upgradeDiv.style.display = "";
+        if (planSelect) {
+          planSelect.value = "ultra";
+          planSelect.style.display = "none";
+        }
+        if (modelPreview) {
+          modelPreview.value = "Claude Opus 4";
+          modelPreview.style.display = "none";
+        }
+        if (subscribeBtn) subscribeBtn.textContent = "Upgrade to Ultra — Opus · $50/mo";
+      } else {
+        // Free user: show full form
+        upgradeDiv.style.display = "";
+        if (planSelect) planSelect.style.display = "";
+        if (modelPreview) modelPreview.style.display = "";
+        if (subscribeBtn) subscribeBtn.textContent = "Subscribe";
+      }
+    }
+
     if (isSubscribed && checkoutContainer) {
       checkoutContainer.style.display = "none";
       checkoutContainer.innerHTML = "";
@@ -196,11 +224,11 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
 
     if (isSubscribed && badge) {
       badge.className = `tier-badge tier-${tier}`;
-      badge.textContent = tier === "ultra" ? "Ultra" : "Pro";
+      badge.textContent = isUltra ? "Ultra" : "Pro";
     }
     if (isSubscribed && detail) {
-      const modelLabel = tier === "ultra" ? "Opus" : "Sonnet";
-      const limitLabel = tier === "ultra" ? "1,000" : "500";
+      const modelLabel = isUltra ? "Opus" : "Sonnet";
+      const limitLabel = isUltra ? "1,000" : "500";
       detail.textContent = `${modelLabel} · ${limitLabel} msgs/day`;
     }
 
