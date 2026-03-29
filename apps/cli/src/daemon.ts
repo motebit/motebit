@@ -1180,7 +1180,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
           log(`[self-test] submitting task via relay (auth: ${authMethod})...`);
 
           try {
-            const result = await cmdSelfTest(runtimeRef.current!, {
+            const result = await cmdSelfTest(runtimeRef.current, {
               relay: { relayUrl: syncUrl, authToken: masterToken ?? "", motebitId },
               mintToken,
             });
