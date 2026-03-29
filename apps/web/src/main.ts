@@ -214,7 +214,7 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
   const fill = document.getElementById("connect-prompt-progress-fill");
 
   if (heading) heading.textContent = "Waking up";
-  if (text) text.textContent = "Loading a small language model into your browser...";
+  if (text) text.textContent = "Preparing...";
   if (btn) btn.style.display = "none";
   if (progress) progress.style.display = "block";
 
@@ -242,7 +242,7 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
     if (heading) heading.textContent = "Give it a voice";
     if (text)
       text.textContent =
-        "Connect an AI provider and this little drop of glass will start talking back.";
+        "Open Settings to connect — your little drop of glass will start talking back.";
     if (btn) btn.style.display = "";
     if (progress) progress.style.display = "none";
   }
