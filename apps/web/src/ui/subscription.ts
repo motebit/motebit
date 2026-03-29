@@ -1,7 +1,9 @@
 import type { WebContext } from "../types";
 import { loadSubscriptionTier, loadProxyToken, loadSyncUrl } from "../storage";
-/** Relay URL for subscription checkout when no sync URL is saved. */
-const DEFAULT_RELAY_URL = "https://motebit-sync.fly.dev";
+/** Relay URL for subscription checkout when no sync URL is saved. Override via VITE_RELAY_URL. */
+const DEFAULT_RELAY_URL: string =
+  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
+    ?.VITE_RELAY_URL ?? "https://motebit-sync.fly.dev";
 
 export interface SubscriptionAPI {
   updateTierDisplay(): void;
