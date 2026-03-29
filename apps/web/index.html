@@ -4808,46 +4808,66 @@
       </div>
       <!-- Intelligence pane (web-specific: provider tabs) -->
       <div class="settings-pane" id="pane-intelligence" role="tabpanel" aria-labelledby="tab-intelligence">
-        <!-- Subscription card -->
         <div class="settings-card">
           <div class="card-title">AI Provider</div>
           <div class="provider-tabs" id="provider-tabs">
-            <button class="provider-tab active" data-provider="anthropic">Anthropic</button>
-            <button class="provider-tab" data-provider="openai">OpenAI</button>
+            <button class="provider-tab active" data-provider="proxy">Motebit Cloud</button>
+            <button class="provider-tab" data-provider="anthropic">API Key</button>
             <button class="provider-tab" data-provider="ollama">Local</button>
             <button class="provider-tab" data-provider="webllm">WebLLM</button>
           </div>
-          <!-- Anthropic config -->
-          <div class="provider-config active" id="provider-anthropic">
-            <div class="settings-field">
-              <label for="anthropic-api-key">API Key</label>
-              <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." autocomplete="off" />
+          <!-- Motebit Cloud (subscription) -->
+          <div class="provider-config active" id="provider-proxy">
+            <div id="subscription-content" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+              <span id="subscription-tier-badge" class="tier-badge" style="display:none;"></span>
+              <span id="subscription-tier-detail" style="font-size:13px; color:var(--text-muted);"></span>
             </div>
-            <div class="settings-field">
-              <label for="anthropic-model">Model</label>
-              <select id="anthropic-model">
-                <option value="claude-sonnet-4-20250514">claude-sonnet-4-20250514</option>
-                <option value="claude-haiku-4-5-20251001">claude-haiku-4-5-20251001</option>
-                <option value="claude-opus-4-20250514">claude-opus-4-20250514</option>
-              </select>
+            <div id="subscription-upgrade" style="display:flex; flex-direction:column; gap:8px;">
+              <button id="upgrade-pro-btn" class="upgrade-btn">Pro — Sonnet · $20/mo</button>
+              <button id="upgrade-ultra-btn" class="upgrade-btn upgrade-ultra">Ultra — Opus · $50/mo</button>
+            </div>
+            <div style="margin-top:12px; font-size:12px; color:var(--text-muted);">No API key needed. We handle everything.</div>
+          </div>
+          <!-- API Key (BYOK) -->
+          <div class="provider-config" id="provider-anthropic">
+            <div class="settings-field" style="margin-bottom:10px;">
+              <label>Provider</label>
+              <div style="display:flex; gap:6px;">
+                <button class="byok-provider-btn active" data-byok="anthropic" style="flex:1; padding:6px; border:1px solid var(--border-light); border-radius:6px; background:var(--accent-bg); color:var(--text-heading); font-size:12px; cursor:pointer;">Anthropic</button>
+                <button class="byok-provider-btn" data-byok="openai" style="flex:1; padding:6px; border:1px solid var(--border-light); border-radius:6px; background:transparent; color:var(--text-muted); font-size:12px; cursor:pointer;">OpenAI</button>
+              </div>
+            </div>
+            <div id="byok-anthropic">
+              <div class="settings-field">
+                <label for="anthropic-api-key">API Key</label>
+                <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." autocomplete="off" />
+              </div>
+              <div class="settings-field">
+                <label for="anthropic-model">Model</label>
+                <select id="anthropic-model">
+                  <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                  <option value="claude-opus-4-20250514">Claude Opus 4</option>
+                  <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                </select>
+              </div>
+            </div>
+            <div id="byok-openai" style="display:none;">
+              <div class="settings-field">
+                <label for="openai-api-key">API Key</label>
+                <input id="openai-api-key" type="password" placeholder="sk-..." autocomplete="off" />
+              </div>
+              <div class="settings-field">
+                <label for="openai-model">Model</label>
+                <select id="openai-model">
+                  <option value="gpt-4o">GPT-4o</option>
+                  <option value="gpt-4o-mini">GPT-4o Mini</option>
+                </select>
+              </div>
             </div>
           </div>
-          <!-- OpenAI config -->
-          <div class="provider-config" id="provider-openai">
-            <div class="settings-field">
-              <label for="openai-api-key">API Key</label>
-              <input id="openai-api-key" type="password" placeholder="sk-..." autocomplete="off" />
-            </div>
-            <div class="settings-field">
-              <label for="openai-model">Model</label>
-              <select id="openai-model">
-                <option value="gpt-4o">gpt-4o</option>
-                <option value="gpt-4o-mini">gpt-4o-mini</option>
-                <option value="gpt-4-turbo">gpt-4-turbo</option>
-              </select>
-            </div>
-          </div>
-          <!-- Ollama config -->
+          <!-- OpenAI (hidden — merged into API Key tab, kept for settings.ts compat) -->
+          <div class="provider-config" id="provider-openai" style="display:none !important;"></div>
+          <!-- Local config -->
           <div class="provider-config" id="provider-ollama">
             <div class="settings-field">
               <label for="ollama-base-url">Base URL</label>
@@ -4876,17 +4896,6 @@
               <div class="webllm-progress-bar"><div class="webllm-progress-fill" id="webllm-progress-fill"></div></div>
               <div class="webllm-progress-text" id="webllm-progress-text"></div>
             </div>
-          </div>
-        </div>
-        <!-- Cloud AI subscription -->
-        <div class="settings-card" id="subscription-card">
-          <div id="subscription-content" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
-            <span id="subscription-tier-badge" class="tier-badge" style="display:none;"></span>
-            <span id="subscription-tier-detail" style="font-size:13px; color:var(--text-muted);">Don't want to manage API keys?</span>
-          </div>
-          <div id="subscription-upgrade" style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button id="upgrade-pro-btn" class="upgrade-btn">Pro — Sonnet · $20/mo</button>
-            <button id="upgrade-ultra-btn" class="upgrade-btn upgrade-ultra">Ultra — Opus · $50/mo</button>
           </div>
         </div>
         <!-- Response length -->
