@@ -460,13 +460,29 @@ export function registerSubscriptionRoutes(
           const status = subscription.status;
           const isActive = status === "active" || status === "trialing";
 
+          // Detect tier from price ID (don't hardcode "pro")
+          const ultraPriceId = process.env.STRIPE_ULTRA_PRICE_ID;
+          const priceId = subscription.items?.data?.[0]?.price?.id;
+          const detectedTier = isActive
+            ? ultraPriceId && priceId === ultraPriceId
+              ? "ultra"
+              : "pro"
+            : "free";
+
+          // If cancel_at_period_end is set, mark as cancelling (not active)
+          const dbStatus = !isActive
+            ? "past_due"
+            : subscription.cancel_at_period_end
+              ? "cancelling"
+              : "active";
+
           db.prepare(
             `UPDATE relay_subscriptions
              SET tier = ?, status = ?, current_period_start = ?, current_period_end = ?, updated_at = ?
              WHERE stripe_subscription_id = ?`,
           ).run(
-            isActive ? "pro" : "free",
-            isActive ? "active" : "past_due",
+            detectedTier,
+            dbStatus,
             subscription.current_period_start * 1000,
             subscription.current_period_end * 1000,
             now,
@@ -477,7 +493,7 @@ export function registerSubscriptionRoutes(
             motebitId: row.motebit_id,
             subscriptionId: subId,
             stripeStatus: status,
-            tier: isActive ? "pro" : "free",
+            tier: detectedTier,
           });
           break;
         }
@@ -524,6 +540,61 @@ export function registerSubscriptionRoutes(
     return c.json({ received: true });
   });
 
+  // ── POST /api/v1/subscriptions/:motebitId/cancel ──────────────────────
+  // Cancel a subscription at period end. The user keeps access until the
+  // billing period expires, then the webhook sets tier to "free".
+  app.post("/api/v1/subscriptions/:motebitId/cancel", async (c) => {
+    const motebitId = c.req.param("motebitId");
+
+    const row = db
+      .prepare(
+        "SELECT stripe_subscription_id, status, current_period_end FROM relay_subscriptions WHERE motebit_id = ?",
+      )
+      .get(motebitId) as
+      | { stripe_subscription_id: string | null; status: string; current_period_end: number | null }
+      | undefined;
+
+    if (!row?.stripe_subscription_id) {
+      return c.json({ error: "no active subscription" }, 404);
+    }
+
+    if (row.status === "cancelled" || row.status === "cancelling") {
+      return c.json({ error: "subscription already cancelled" }, 409);
+    }
+
+    try {
+      const stripe = getStripe();
+      const updated = await stripe.subscriptions.update(row.stripe_subscription_id, {
+        cancel_at_period_end: true,
+      });
+
+      const periodEnd = updated.current_period_end * 1000;
+      const now = Date.now();
+      db.prepare(
+        `UPDATE relay_subscriptions
+         SET status = 'cancelling', current_period_end = ?, updated_at = ?
+         WHERE motebit_id = ?`,
+      ).run(periodEnd, now, motebitId);
+
+      logger.info("subscription.cancel_scheduled", {
+        motebitId,
+        subscriptionId: row.stripe_subscription_id,
+        activeUntil: new Date(periodEnd).toISOString(),
+      });
+
+      return c.json({
+        status: "cancelling",
+        active_until: periodEnd,
+      });
+    } catch (err) {
+      logger.error("subscription.cancel_failed", {
+        motebitId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return c.json({ error: "failed to cancel subscription" }, 500);
+    }
+  });
+
   // ── GET /api/v1/subscriptions/:motebitId/status ───────────────────────
   // Returns subscription tier, usage, and limits.
   // Usage is read from the proxy's KV counter (single source of truth).
@@ -534,9 +605,18 @@ export function registerSubscriptionRoutes(
     const config = TIER_CONFIG[tier];
     const usage = await getProxyDailyUsage(motebitId);
 
+    // Include cancellation status if applicable
+    const row = db
+      .prepare("SELECT status, current_period_end FROM relay_subscriptions WHERE motebit_id = ?")
+      .get(motebitId) as { status: string; current_period_end: number | null } | undefined;
+
     return c.json({
       motebit_id: motebitId,
       tier,
+      status: row?.status ?? "active",
+      ...(row?.status === "cancelling" && row.current_period_end
+        ? { active_until: row.current_period_end }
+        : {}),
       daily_limit: config.daily_limit === Infinity ? null : config.daily_limit,
       daily_used: usage,
       daily_remaining:

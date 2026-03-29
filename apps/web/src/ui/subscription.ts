@@ -182,6 +182,67 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
     openEmbeddedCheckout().catch(() => {});
   });
 
+  // Cancel subscription — inline confirmation, no redirect
+  const cancelLink = document.getElementById("subscription-cancel-link");
+  cancelLink?.addEventListener("click", async (e) => {
+    e.preventDefault();
+
+    // Inline confirmation: replace the link with confirm/dismiss
+    const manageEl = document.getElementById("subscription-manage");
+    if (!manageEl) return;
+
+    const relayUrl = loadSyncUrl() ?? DEFAULT_RELAY_URL;
+    const motebitId = localStorage.getItem("motebit:motebit_id");
+    if (!motebitId) return;
+
+    manageEl.innerHTML =
+      '<span style="font-size:12px; color:var(--text-muted);">Cancel your plan? You keep access until the period ends.</span>' +
+      '<div style="display:flex; gap:8px; justify-content:center; margin-top:6px;">' +
+      '<button id="cancel-confirm" style="font-size:11px; padding:4px 12px; border:1px solid #e55; border-radius:4px; background:transparent; color:#e55; cursor:pointer;">Yes, cancel</button>' +
+      '<button id="cancel-dismiss" style="font-size:11px; padding:4px 12px; border:1px solid var(--border-light); border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer;">Keep plan</button>' +
+      "</div>";
+
+    document.getElementById("cancel-dismiss")?.addEventListener("click", () => {
+      manageEl.innerHTML =
+        '<a id="subscription-cancel-link" href="#" style="font-size:11px; color:var(--text-muted); opacity:0.6; text-decoration:none; cursor:pointer;">Cancel plan</a>';
+      // Re-attach handler by re-initializing (simpler than re-binding)
+      document.getElementById("subscription-cancel-link")?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        cancelLink.click();
+      });
+    });
+
+    document.getElementById("cancel-confirm")?.addEventListener("click", async () => {
+      const confirmBtn = document.getElementById("cancel-confirm") as HTMLButtonElement | null;
+      if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "Cancelling…";
+      }
+
+      try {
+        const res = await fetch(`${relayUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+
+        if (res.ok) {
+          const data = (await res.json()) as { active_until?: number };
+          const until = data.active_until ? new Date(data.active_until).toLocaleDateString() : "";
+          manageEl.innerHTML = `<span style="font-size:12px; color:var(--text-muted);">Plan cancels${until ? ` on ${until}` : " at period end"}. You have access until then.</span>`;
+        } else {
+          const err = await res.json().catch(() => ({ error: "cancel failed" }));
+          ctx.showToast((err as { error?: string }).error ?? "Cancel failed");
+          manageEl.innerHTML =
+            '<a id="subscription-cancel-link" href="#" style="font-size:11px; color:var(--text-muted); opacity:0.6; text-decoration:none; cursor:pointer;">Cancel plan</a>';
+        }
+      } catch {
+        ctx.showToast("Network error — try again");
+        manageEl.innerHTML =
+          '<a id="subscription-cancel-link" href="#" style="font-size:11px; color:var(--text-muted); opacity:0.6; text-decoration:none; cursor:pointer;">Cancel plan</a>';
+      }
+    });
+  });
+
   function updateTierDisplay(): void {
     const tier = loadProxyToken()?.tier ?? loadSubscriptionTier();
     const isSubscribed = tier === "pro" || tier === "ultra";
@@ -229,7 +290,7 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
       detail.textContent = `${modelLabel} · ${limitLabel} msgs/day`;
     }
 
-    // Show/hide manage link for active subscribers
+    // Show/hide cancel link for active subscribers
     const manageEl = document.getElementById("subscription-manage");
     if (manageEl) manageEl.style.display = isSubscribed ? "" : "none";
   }

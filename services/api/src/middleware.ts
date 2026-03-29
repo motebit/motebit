@@ -362,7 +362,8 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         c.req.path.startsWith("/api/v1/credentials/verify") ||
         c.req.path.startsWith("/api/v1/credentials/batch-status") ||
         c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/) ||
-        c.req.path.startsWith("/api/v1/stripe/")
+        c.req.path.startsWith("/api/v1/stripe/") ||
+        c.req.path.startsWith("/api/v1/subscriptions/")
       ) {
         await next();
         return;
