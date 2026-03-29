@@ -89,7 +89,7 @@ export function getSubscriptionTier(db: DatabaseDriver, motebitId: string): Subs
     .get(motebitId) as { tier: string } | undefined;
   if (!row) return "free";
   const tier = row.tier as SubscriptionTier;
-  return tier === "pro" || tier === "byok" ? tier : "free";
+  return tier === "pro" || tier === "ultra" || tier === "byok" ? tier : "free";
 }
 
 /** Get or initialize a subscription record. Returns the current tier. */
@@ -197,29 +197,35 @@ export function registerSubscriptionRoutes(
   relayIdentity: RelayIdentity,
 ): void {
   // ── POST /api/v1/subscriptions/checkout ───────────────────────────────
-  // Creates a Stripe Checkout session for a Pro subscription.
+  // Creates a Stripe Checkout session. Supports embedded (web) and hosted (fallback) modes.
   app.post("/api/v1/subscriptions/checkout", async (c) => {
     const body = await c.req.json<{
       motebit_id: string;
+      tier?: "pro" | "ultra";
+      ui_mode?: "embedded" | "hosted";
+      return_url?: string;
       success_url?: string;
       cancel_url?: string;
     }>();
     const { motebit_id } = body;
+    const tier = body.tier ?? "pro";
+    const uiMode = body.ui_mode ?? "embedded";
 
     if (!motebit_id || typeof motebit_id !== "string") {
       return c.json({ error: "motebit_id required" }, 400);
     }
 
-    const priceId = process.env.STRIPE_PRO_PRICE_ID;
+    const priceId =
+      tier === "ultra" ? process.env.STRIPE_ULTRA_PRICE_ID : process.env.STRIPE_PRO_PRICE_ID;
     if (!priceId) {
-      logger.error("checkout.missing_price_id", {});
+      logger.error("checkout.missing_price_id", { tier });
       return c.json({ error: "subscription checkout not configured" }, 500);
     }
 
-    // If already pro, don't create another checkout
+    // If already subscribed to requested tier (or higher), don't create another checkout
     const currentTier = getSubscriptionTier(db, motebit_id);
-    if (currentTier === "pro") {
-      return c.json({ error: "already subscribed to pro" }, 409);
+    if (currentTier === tier || (currentTier === "ultra" && tier === "pro")) {
+      return c.json({ error: `already subscribed to ${currentTier}` }, 409);
     }
 
     try {
@@ -240,18 +246,46 @@ export function registerSubscriptionRoutes(
         customerId = customer.id;
       }
 
+      if (uiMode === "embedded") {
+        // Embedded mode: return client secret for Stripe.js embedded checkout
+        const session = await stripe.checkout.sessions.create({
+          customer: customerId,
+          mode: "subscription",
+          ui_mode: "embedded",
+          line_items: [{ price: priceId, quantity: 1 }],
+          metadata: { motebit_id, tier },
+          return_url:
+            body.return_url ??
+            `${c.req.url.split("/api")[0]}/?checkout_session_id={CHECKOUT_SESSION_ID}`,
+        });
+
+        logger.info("checkout.created", {
+          motebitId: motebit_id,
+          sessionId: session.id,
+          uiMode: "embedded",
+          tier,
+        });
+        return c.json({ clientSecret: session.client_secret, session_id: session.id });
+      }
+
+      // Hosted mode: redirect-based checkout (CLI, fallback)
       const session = await stripe.checkout.sessions.create({
         customer: customerId,
         mode: "subscription",
         line_items: [{ price: priceId, quantity: 1 }],
-        metadata: { motebit_id },
+        metadata: { motebit_id, tier },
         success_url:
           body.success_url ??
           `${c.req.url.split("/api")[0]}/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: body.cancel_url ?? `${c.req.url.split("/api")[0]}/subscription/cancel`,
       });
 
-      logger.info("checkout.created", { motebitId: motebit_id, sessionId: session.id });
+      logger.info("checkout.created", {
+        motebitId: motebit_id,
+        sessionId: session.id,
+        uiMode: "hosted",
+        tier,
+      });
       return c.json({ checkout_url: session.url, session_id: session.id });
     } catch (err) {
       logger.error("checkout.failed", {
@@ -313,6 +347,7 @@ export function registerSubscriptionRoutes(
             break;
           }
 
+          const checkoutTier = session.metadata?.tier === "ultra" ? "ultra" : "pro";
           const now = Date.now();
           // Upsert subscription record
           const existingRow = db
@@ -322,16 +357,16 @@ export function registerSubscriptionRoutes(
           if (existingRow) {
             db.prepare(
               `UPDATE relay_subscriptions
-               SET tier = 'pro', stripe_customer_id = ?, stripe_subscription_id = ?,
+               SET tier = ?, stripe_customer_id = ?, stripe_subscription_id = ?,
                    status = 'active', updated_at = ?
                WHERE motebit_id = ?`,
-            ).run(customerId, subscriptionId, now, motebitId);
+            ).run(checkoutTier, customerId, subscriptionId, now, motebitId);
           } else {
             db.prepare(
               `INSERT INTO relay_subscriptions
                  (motebit_id, tier, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
-               VALUES (?, 'pro', ?, ?, 'active', ?, ?)`,
-            ).run(motebitId, customerId, subscriptionId, now, now);
+               VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+            ).run(motebitId, checkoutTier, customerId, subscriptionId, now, now);
           }
 
           logger.info("webhook.subscription.activated", {
