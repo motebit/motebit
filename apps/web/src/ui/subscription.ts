@@ -6,9 +6,9 @@ export interface SubscriptionAPI {
 }
 
 export function initSubscription(ctx: WebContext): SubscriptionAPI {
-  const badge = document.getElementById("subscription-tier-badge");
-  const detail = document.getElementById("subscription-tier-detail");
-  const upgradeDiv = document.getElementById("subscription-upgrade");
+  const badge = document.getElementById("subscription-tier-badge") as HTMLElement | null;
+  const detail = document.getElementById("subscription-tier-detail") as HTMLElement | null;
+  const upgradeDiv = document.getElementById("subscription-upgrade") as HTMLElement | null;
   const proBtn = document.getElementById("upgrade-pro-btn");
   const ultraBtn = document.getElementById("upgrade-ultra-btn");
 
@@ -31,33 +31,40 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
 
   function updateTierDisplay(): void {
     const tier = loadProxyToken()?.tier ?? loadSubscriptionTier();
+    const isSubscribed = tier === "pro" || tier === "ultra";
+    const isByok = tier === "byok";
 
+    // Badge: only show for active subscribers
     if (badge) {
-      badge.className = `tier-badge tier-${tier}`;
-      badge.textContent =
-        tier === "ultra" ? "Ultra" : tier === "pro" ? "Pro" : tier === "byok" ? "BYOK" : "Free";
-    }
-
-    if (detail) {
-      switch (tier) {
-        case "ultra":
-          detail.textContent = "Opus · 1,000 msgs/day";
-          break;
-        case "pro":
-          detail.textContent = "Sonnet · 500 msgs/day";
-          break;
-        case "byok":
-          detail.textContent = "Your own API key";
-          break;
-        default:
-          detail.textContent = "Running locally";
+      if (isSubscribed) {
+        badge.style.display = "";
+        badge.className = `tier-badge tier-${tier}`;
+        badge.textContent = tier === "ultra" ? "Ultra" : "Pro";
+      } else if (isByok) {
+        badge.style.display = "";
+        badge.className = "tier-badge tier-byok";
+        badge.textContent = "BYOK";
+      } else {
+        badge.style.display = "none";
       }
     }
 
-    // Hide upgrade buttons if already subscribed or BYOK
+    // Detail text
+    if (detail) {
+      if (tier === "ultra") {
+        detail.textContent = "Opus · 1,000 msgs/day";
+      } else if (tier === "pro") {
+        detail.textContent = "Sonnet · 500 msgs/day";
+      } else if (isByok) {
+        detail.textContent = "Using your own API key";
+      } else {
+        detail.textContent = "";
+      }
+    }
+
+    // Upgrade buttons: hide if subscribed or BYOK
     if (upgradeDiv) {
-      upgradeDiv.style.display =
-        tier === "pro" || tier === "ultra" || tier === "byok" ? "none" : "";
+      upgradeDiv.style.display = isSubscribed || isByok ? "none" : "";
     }
   }
 
