@@ -23,7 +23,8 @@
  * - Token refresh every 4.5 minutes (tokens expire at 5 min)
  */
 
-import { MotebitRuntime, executeCommand, PlanExecutionVM } from "@motebit/runtime";
+import { MotebitRuntime, executeCommand, PlanExecutionVM, ProxySession } from "@motebit/runtime";
+import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import { RelayDelegationAdapter } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
 import type { StreamChunk, KeyringAdapter, StorageAdapters, RelayConfig } from "@motebit/runtime";
@@ -223,6 +224,10 @@ export class SpatialApp {
   private mcpAdapters = new Map<string, McpClientAdapter>();
   private _mcpServers: McpServerConfig[] = [];
 
+  // Proxy session state
+  private _proxySession: ProxySession | null = null;
+  private _proxyConfig: ProxyProviderConfig | null = null;
+
   // Interior color
   private _interiorColor: InteriorColor | null = null;
 
@@ -408,6 +413,76 @@ export class SpatialApp {
     return { isFirstLaunch: result.isFirstLaunch };
   }
 
+  // === Proxy Session ===
+
+  /**
+   * Attempt proxy bootstrap before requiring an API key.
+   * Call after bootstrap() but before initAI(). If this returns true,
+   * pass { provider: "proxy" } to initAI() — the token and model are stored internally.
+   */
+  async tryProxyBootstrap(): Promise<boolean> {
+    const app = this;
+    const adapter: ProxySessionAdapter = {
+      getSyncUrl() {
+        try {
+          return localStorage.getItem("motebit:sync_url");
+        } catch {
+          return null;
+        }
+      },
+      getMotebitId() {
+        return app.motebitId !== "spatial-local" ? app.motebitId : null;
+      },
+      loadToken() {
+        try {
+          const raw = localStorage.getItem("motebit:proxy_token");
+          if (raw)
+            return JSON.parse(raw) as {
+              token: string;
+              tier: string;
+              expiresAt: number;
+              motebitId: string;
+            };
+        } catch {
+          // localStorage unavailable or corrupt
+        }
+        return null;
+      },
+      saveToken(data) {
+        try {
+          localStorage.setItem("motebit:proxy_token", JSON.stringify(data));
+        } catch {
+          // localStorage unavailable
+        }
+      },
+      clearToken() {
+        try {
+          localStorage.removeItem("motebit:proxy_token");
+        } catch {
+          // localStorage unavailable
+        }
+      },
+      saveTier(tier) {
+        try {
+          localStorage.setItem("motebit:subscription_tier", tier);
+        } catch {
+          // localStorage unavailable
+        }
+      },
+      onProviderReady(config: ProxyProviderConfig) {
+        app._proxyConfig = config;
+      },
+    };
+
+    this._proxySession = new ProxySession(adapter);
+    return this._proxySession.bootstrap();
+  }
+
+  /** Dispose proxy session refresh timer. Call on app shutdown. */
+  disposeProxySession(): void {
+    this._proxySession?.dispose();
+  }
+
   // === AI Integration ===
 
   /**
@@ -420,15 +495,22 @@ export class SpatialApp {
 
     let provider;
     if (config.provider === "proxy") {
+      const pc = this._proxyConfig;
       const model =
-        config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
+        config.model != null && config.model !== ""
+          ? config.model
+          : (pc?.model ?? "claude-sonnet-4-20250514");
+      const proxyUrl = pc?.baseUrl ?? config.baseUrl ?? "https://api.motebit.com";
+      const extraHeaders: Record<string, string> = {};
+      if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
       provider = new CloudProvider({
         provider: "anthropic",
-        api_key: "proxy",
+        api_key: "",
         model,
-        base_url: config.baseUrl,
+        base_url: proxyUrl,
         max_tokens: config.maxTokens,
         temperature,
+        extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
       });
     } else if (config.provider === "ollama") {
       const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
@@ -1574,6 +1656,9 @@ export class SpatialApp {
       void adapter.disconnect();
     }
     this.mcpAdapters.clear();
+
+    // Clean up proxy session
+    this.disposeProxySession();
 
     // Clean up relay
     void this.disconnectRelay();
