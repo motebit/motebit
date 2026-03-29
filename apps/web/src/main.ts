@@ -211,25 +211,72 @@ async function autoInitProxy(): Promise<boolean> {
   return proxySession.bootstrap();
 }
 
-/** Try to connect to a local Ollama instance — free, fast, no download. */
-async function autoInitOllama(): Promise<boolean> {
-  const models = await detectOllamaModels(DEFAULT_OLLAMA_URL);
-  if (models.length === 0) return false;
+/**
+ * Detect any local inference server — Ollama, LM Studio, LocalAI, llama.cpp, Jan, vLLM.
+ * Probes known ports in parallel. First to respond with a model list wins.
+ * All speak OpenAI-compatible /v1/models (Ollama also probed via /api/tags).
+ */
+const LOCAL_INFERENCE_ENDPOINTS = [
+  { url: DEFAULT_OLLAMA_URL, type: "ollama" as const }, // :11434
+  { url: "http://localhost:1234", type: "openai" as const }, // LM Studio
+  { url: "http://localhost:8080", type: "openai" as const }, // LocalAI / llama.cpp
+  { url: "http://localhost:1337", type: "openai" as const }, // Jan
+  { url: "http://localhost:8000", type: "openai" as const }, // vLLM
+] as const;
 
-  // Prefer the largest/best model available
-  const preferred =
+async function probeLocalModels(
+  baseUrl: string,
+  type: "ollama" | "openai",
+): Promise<{ baseUrl: string; type: "ollama" | "openai"; models: string[] } | null> {
+  try {
+    // Try Ollama-native API first for Ollama, then OpenAI-compatible for all
+    if (type === "ollama") {
+      const models = await detectOllamaModels(baseUrl);
+      if (models.length > 0) return { baseUrl, type, models };
+    }
+    // OpenAI-compatible /v1/models
+    const res = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { data?: Array<{ id: string }> };
+    const models = (data.data ?? []).map((m) => m.id);
+    if (models.length > 0) return { baseUrl, type: "openai", models };
+  } catch {
+    // Not running on this port
+  }
+  return null;
+}
+
+/** Prefer the largest/best model from a list. */
+function pickBestModel(models: string[]): string {
+  return (
     models.find((m) => m.includes("70b")) ??
     models.find((m) => m.includes("32b")) ??
     models.find((m) => m.includes("8b")) ??
-    models[0]!;
+    models[0]!
+  );
+}
 
-  const config: ProviderConfig = { type: "ollama", model: preferred, baseUrl: DEFAULT_OLLAMA_URL };
-  app.connectProvider(config);
-  currentConfig = config;
-  saveProviderConfig(config);
-  settings.updateModelIndicator();
-  settings.updateConnectPrompt();
-  return true;
+async function autoInitLocalInference(): Promise<boolean> {
+  // Race all probes — first to find models wins
+  const probes = LOCAL_INFERENCE_ENDPOINTS.map((ep) => probeLocalModels(ep.url, ep.type));
+  const results = await Promise.allSettled(probes);
+
+  // Find the first successful probe
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      const { baseUrl, type, models } = result.value;
+      const model = pickBestModel(models);
+      const config: ProviderConfig =
+        type === "ollama" ? { type: "ollama", model, baseUrl } : { type: "openai", model, baseUrl };
+      app.connectProvider(config);
+      currentConfig = config;
+      saveProviderConfig(config);
+      settings.updateModelIndicator();
+      settings.updateConnectPrompt();
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Fallback: load a language model into the browser via WebLLM. */
@@ -326,7 +373,7 @@ async function bootstrap(): Promise<void> {
     if (savedConfig.type === "proxy") {
       // For proxy users, always go through autoInitProxy to handle token refresh
       void autoInitProxy().then(async (ok) => {
-        if (!ok) ok = await autoInitOllama();
+        if (!ok) ok = await autoInitLocalInference();
         if (!ok && checkWebGPU()) await autoInitWebLLM();
         settings.updateConnectPrompt();
       });
@@ -347,7 +394,7 @@ async function bootstrap(): Promise<void> {
     // Proxy is for paying subscribers only per metabolic principle.
     // Boot sequence: subscriber proxy → Ollama (local) → WebLLM (browser) → upgrade prompt.
     void autoInitProxy().then(async (ok) => {
-      if (!ok) ok = await autoInitOllama();
+      if (!ok) ok = await autoInitLocalInference();
       if (!ok && checkWebGPU()) await autoInitWebLLM();
       settings.updateConnectPrompt();
     });
