@@ -58,7 +58,7 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
       } else if (isByok) {
         detail.textContent = "Using your own API key";
       } else {
-        detail.textContent = "";
+        detail.textContent = "Don\u2019t want to manage API keys?";
       }
     }
 
