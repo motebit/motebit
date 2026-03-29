@@ -29,6 +29,7 @@ const identityPublicKey = document.getElementById("identity-public-key") as HTML
 // === Provider Tab DOM ===
 const providerTabs = document.querySelectorAll<HTMLButtonElement>("#provider-tabs .provider-tab");
 const providerConfigs = {
+  proxy: document.getElementById("provider-proxy") as HTMLDivElement,
   anthropic: document.getElementById("provider-anthropic") as HTMLDivElement,
   openai: document.getElementById("provider-openai") as HTMLDivElement,
   ollama: document.getElementById("provider-ollama") as HTMLDivElement,
@@ -68,7 +69,8 @@ const voiceResponse = document.getElementById("settings-voice-response") as HTML
 
 // === State ===
 
-let activeProviderTab: ProviderType = "anthropic";
+let activeProviderTab: ProviderType | "proxy" = "proxy";
+let activeByokProvider: "anthropic" | "openai" = "anthropic";
 
 // === Settings API ===
 
@@ -290,7 +292,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   // === Provider Tab Switching ===
 
-  function switchProviderTab(provider: ProviderType): void {
+  function switchProviderTab(provider: ProviderType | "proxy"): void {
     activeProviderTab = provider;
     providerTabs.forEach((tab) => {
       tab.classList.toggle("active", tab.dataset.provider === provider);
@@ -318,8 +320,27 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   providerTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
-      const provider = tab.dataset.provider as ProviderType;
-      if (provider) switchProviderTab(provider);
+      const provider = tab.dataset.provider as ProviderType | "proxy";
+      if (provider) switchProviderTab(provider as ProviderType);
+    });
+  });
+
+  // === BYOK Sub-Provider Toggle ===
+  document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const byok = btn.dataset.byok as "anthropic" | "openai";
+      if (!byok) return;
+      activeByokProvider = byok;
+      document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
+        const isActive = b.dataset.byok === byok;
+        b.classList.toggle("active", isActive);
+        b.style.background = isActive ? "var(--accent-bg)" : "transparent";
+        b.style.color = isActive ? "var(--text-heading)" : "var(--text-muted)";
+      });
+      const anthropicSection = document.getElementById("byok-anthropic");
+      const openaiSection = document.getElementById("byok-openai");
+      if (anthropicSection) anthropicSection.style.display = byok === "anthropic" ? "" : "none";
+      if (openaiSection) openaiSection.style.display = byok === "openai" ? "" : "none";
     });
   });
 
@@ -456,13 +477,28 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const maxTokens = parseInt(maxTokensSelect.value, 10) || undefined;
     let config: ProviderConfig;
     switch (activeProviderTab) {
+      case "proxy":
+        // Proxy tab — subscription handles the connection via ProxySession
+        // Just save a proxy config; the bootstrap flow handles the rest
+        config = { type: "proxy", model: "claude-sonnet-4-20250514", maxTokens };
+        break;
       case "anthropic":
-        config = {
-          type: "anthropic",
-          apiKey: anthropicApiKey.value.trim(),
-          model: anthropicModel.value,
-          maxTokens,
-        };
+        // API Key tab — check which BYOK sub-provider is active
+        if (activeByokProvider === "openai") {
+          config = {
+            type: "openai",
+            apiKey: openaiApiKey.value.trim(),
+            model: openaiModel.value,
+            maxTokens,
+          };
+        } else {
+          config = {
+            type: "anthropic",
+            apiKey: anthropicApiKey.value.trim(),
+            model: anthropicModel.value,
+            maxTokens,
+          };
+        }
         break;
       case "openai":
         config = {
