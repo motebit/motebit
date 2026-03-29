@@ -4809,23 +4809,12 @@
       <!-- Intelligence pane (web-specific: provider tabs) -->
       <div class="settings-pane" id="pane-intelligence" role="tabpanel" aria-labelledby="tab-intelligence">
         <!-- Subscription card -->
-        <div class="settings-card" id="subscription-card">
-          <div class="card-title">Cloud AI</div>
-          <div id="subscription-content" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-            <span id="subscription-tier-badge" class="tier-badge" style="display:none;"></span>
-            <span id="subscription-tier-detail" style="font-size:13px; color:var(--text-muted);"></span>
-          </div>
-          <div id="subscription-upgrade" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button id="upgrade-pro-btn" class="upgrade-btn">Pro — Sonnet · $20/mo</button>
-            <button id="upgrade-ultra-btn" class="upgrade-btn upgrade-ultra">Ultra — Opus · $50/mo</button>
-          </div>
-        </div>
         <div class="settings-card">
           <div class="card-title">AI Provider</div>
           <div class="provider-tabs" id="provider-tabs">
             <button class="provider-tab active" data-provider="anthropic">Anthropic</button>
             <button class="provider-tab" data-provider="openai">OpenAI</button>
-            <button class="provider-tab" data-provider="ollama">Ollama</button>
+            <button class="provider-tab" data-provider="ollama">Local</button>
             <button class="provider-tab" data-provider="webllm">WebLLM</button>
           </div>
           <!-- Anthropic config -->
@@ -4886,6 +4875,17 @@
             <div class="webllm-progress" id="webllm-progress" style="display:none;">
               <div class="webllm-progress-bar"><div class="webllm-progress-fill" id="webllm-progress-fill"></div></div>
               <div class="webllm-progress-text" id="webllm-progress-text"></div>
+            </div>
+          </div>
+          <!-- Subscription: below all provider configs -->
+          <div id="subscription-card" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border-light);">
+            <div id="subscription-content" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+              <span id="subscription-tier-badge" class="tier-badge" style="display:none;"></span>
+              <span id="subscription-tier-detail" style="font-size:13px; color:var(--text-muted);"></span>
+            </div>
+            <div id="subscription-upgrade" style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button id="upgrade-pro-btn" class="upgrade-btn">Pro — Sonnet · $20/mo</button>
+              <button id="upgrade-ultra-btn" class="upgrade-btn upgrade-ultra">Ultra — Opus · $50/mo</button>
             </div>
           </div>
         </div>
