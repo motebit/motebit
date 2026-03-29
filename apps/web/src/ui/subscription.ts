@@ -1,5 +1,11 @@
 import type { WebContext } from "../types";
-import { loadSubscriptionTier, loadProxyToken, loadSyncUrl } from "../storage";
+import {
+  loadSubscriptionTier,
+  loadProxyToken,
+  loadSyncUrl,
+  saveSubscriptionTier,
+  saveSyncUrl,
+} from "../storage";
 /** Relay URL for subscription checkout when no sync URL is saved. Override via VITE_RELAY_URL. */
 const DEFAULT_RELAY_URL: string =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
@@ -11,6 +17,7 @@ const STRIPE_PUBLISHABLE_KEY: string =
 
 export interface SubscriptionAPI {
   updateTierDisplay(): void;
+  verifyCheckoutAndActivate(sessionId: string): Promise<void>;
 }
 
 const PLAN_MODELS: Record<string, string> = {
@@ -175,15 +182,6 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
     openEmbeddedCheckout().catch(() => {});
   });
 
-  // Check for checkout completion on page load (redirect back from Stripe)
-  const params = new URLSearchParams(window.location.search);
-  if (params.has("checkout_session_id")) {
-    params.delete("checkout_session_id");
-    const cleanUrl = window.location.pathname + (params.toString() ? `?${params.toString()}` : "");
-    window.history.replaceState({}, "", cleanUrl);
-    // Tier will be updated by the next proxy token refresh
-  }
-
   function updateTierDisplay(): void {
     const tier = loadProxyToken()?.tier ?? loadSubscriptionTier();
     const isSubscribed = tier === "pro" || tier === "ultra";
@@ -201,11 +199,67 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
       badge.textContent = tier === "ultra" ? "Ultra" : "Pro";
     }
     if (isSubscribed && detail) {
-      detail.textContent = tier === "ultra" ? "Opus · 1,000 msgs/day" : "Sonnet · 500 msgs/day";
+      const modelLabel = tier === "ultra" ? "Opus" : "Sonnet";
+      const limitLabel = tier === "ultra" ? "1,000" : "500";
+      detail.textContent = `${modelLabel} · ${limitLabel} msgs/day`;
     }
+
+    // Show/hide manage link for active subscribers
+    const manageEl = document.getElementById("subscription-manage");
+    if (manageEl) manageEl.style.display = isSubscribed ? "" : "none";
+  }
+
+  /**
+   * Verify a Stripe Checkout session with the relay and activate the subscription.
+   * Called on page load when a checkout_session_id URL parameter is present.
+   * Polls up to 5 times (every 2s) to handle webhook propagation delay.
+   */
+  async function verifyCheckoutAndActivate(sessionId: string): Promise<void> {
+    const relayUrl = loadSyncUrl() ?? DEFAULT_RELAY_URL;
+    const maxAttempts = 5;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const res = await fetch(
+          `${relayUrl}/api/v1/subscriptions/session-status?session_id=${encodeURIComponent(sessionId)}`,
+        );
+        if (!res.ok) break;
+
+        const data = (await res.json()) as {
+          status: string;
+          tier?: string;
+          motebit_id?: string;
+        };
+
+        if (data.status === "complete" && data.tier) {
+          // Persist subscription state
+          saveSubscriptionTier(data.tier);
+          saveSyncUrl(relayUrl);
+
+          // Update UI immediately
+          updateTierDisplay();
+          ctx.showToast("Pro activated");
+          return;
+        }
+
+        if (data.status === "expired") {
+          ctx.showToast("Checkout session expired");
+          return;
+        }
+
+        // Session still open — wait and retry (webhook may be delayed)
+        if (attempt < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      } catch {
+        break;
+      }
+    }
+
+    ctx.showToast("Payment processing — check back shortly");
   }
 
   updateTierDisplay();
 
-  return { updateTierDisplay };
+  return { updateTierDisplay, verifyCheckoutAndActivate };
 }

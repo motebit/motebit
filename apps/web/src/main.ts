@@ -406,6 +406,28 @@ async function bootstrap(): Promise<void> {
   // For returning users with saved config, update prompt immediately
   if (savedConfig != null) settings.updateConnectPrompt();
 
+  // Check for checkout return — verify payment and activate subscription
+  const checkoutSessionId = new URLSearchParams(window.location.search).get("checkout_session_id");
+  if (checkoutSessionId) {
+    // Clean URL immediately so refreshes don't re-trigger
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete("checkout_session_id");
+    window.history.replaceState({}, "", cleanUrl.toString());
+
+    // Verify with relay, then bootstrap proxy to switch to cloud provider
+    subscription
+      .verifyCheckoutAndActivate(checkoutSessionId)
+      .then(() => {
+        void autoInitProxy().then((ok) => {
+          if (ok) {
+            settings.updateModelIndicator();
+            settings.updateConnectPrompt();
+          }
+        });
+      })
+      .catch(() => {});
+  }
+
   // Auto-connect sync if a relay URL was previously saved
   const syncUrl = loadSyncUrl();
   if (syncUrl) {

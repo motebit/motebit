@@ -189,6 +189,41 @@ function getStripe(): Stripe {
   return new Stripe(key, { apiVersion: "2025-03-31.basil" as Stripe.LatestApiVersion });
 }
 
+// ── Shared upsert ──────────────────────────────────────────────────────
+
+/**
+ * Upsert a subscription record after a completed checkout session.
+ * Shared between the webhook handler and the session-status polling endpoint
+ * to avoid logic duplication.
+ */
+function upsertSubscriptionFromCheckout(
+  db: DatabaseDriver,
+  motebitId: string,
+  tier: "pro" | "ultra",
+  customerId: string,
+  subscriptionId: string,
+): void {
+  const now = Date.now();
+  const existingRow = db
+    .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
+    .get(motebitId);
+
+  if (existingRow) {
+    db.prepare(
+      `UPDATE relay_subscriptions
+       SET tier = ?, stripe_customer_id = ?, stripe_subscription_id = ?,
+           status = 'active', updated_at = ?
+       WHERE motebit_id = ?`,
+    ).run(tier, customerId, subscriptionId, now, motebitId);
+  } else {
+    db.prepare(
+      `INSERT INTO relay_subscriptions
+         (motebit_id, tier, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+    ).run(motebitId, tier, customerId, subscriptionId, now, now);
+  }
+}
+
 // ── Route registration ──────────────────────────────────────────────────
 
 export function registerSubscriptionRoutes(
@@ -276,7 +311,7 @@ export function registerSubscriptionRoutes(
         metadata: { motebit_id, tier },
         success_url:
           body.success_url ??
-          `${c.req.url.split("/api")[0]}/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
+          `${c.req.url.split("/api")[0]}/?checkout_session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: body.cancel_url ?? `${c.req.url.split("/api")[0]}/subscription/cancel`,
       });
 
@@ -293,6 +328,56 @@ export function registerSubscriptionRoutes(
         error: err instanceof Error ? err.message : String(err),
       });
       return c.json({ error: "failed to create checkout session" }, 500);
+    }
+  });
+
+  // ── GET /api/v1/subscriptions/session-status ──────────────────────────
+  // Verify a Stripe Checkout session's payment status. Used by the web app
+  // immediately after redirect to activate the subscription without waiting
+  // for the webhook (which remains the reliable production path).
+  app.get("/api/v1/subscriptions/session-status", async (c) => {
+    const sessionId = c.req.query("session_id");
+    if (!sessionId || typeof sessionId !== "string") {
+      return c.json({ error: "session_id query parameter required" }, 400);
+    }
+
+    try {
+      const stripe = getStripe();
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+      if (session.status === "complete" && session.payment_status === "paid") {
+        const motebitId = session.metadata?.motebit_id;
+        const tier = session.metadata?.tier === "ultra" ? "ultra" : "pro";
+
+        if (motebitId) {
+          const subscriptionId =
+            typeof session.subscription === "string"
+              ? session.subscription
+              : session.subscription?.id;
+          const customerId =
+            typeof session.customer === "string" ? session.customer : session.customer?.id;
+
+          if (subscriptionId && customerId) {
+            upsertSubscriptionFromCheckout(db, motebitId, tier, customerId, subscriptionId);
+            logger.info("session-status.activated", { motebitId, sessionId, tier });
+          }
+        }
+
+        return c.json({ status: "complete", tier, motebit_id: motebitId ?? null });
+      }
+
+      if (session.status === "expired") {
+        return c.json({ status: "expired" });
+      }
+
+      // open or incomplete
+      return c.json({ status: "open" });
+    } catch (err) {
+      logger.error("session-status.failed", {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return c.json({ error: "failed to retrieve session" }, 500);
     }
   });
 
@@ -348,26 +433,7 @@ export function registerSubscriptionRoutes(
           }
 
           const checkoutTier = session.metadata?.tier === "ultra" ? "ultra" : "pro";
-          const now = Date.now();
-          // Upsert subscription record
-          const existingRow = db
-            .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
-            .get(motebitId);
-
-          if (existingRow) {
-            db.prepare(
-              `UPDATE relay_subscriptions
-               SET tier = ?, stripe_customer_id = ?, stripe_subscription_id = ?,
-                   status = 'active', updated_at = ?
-               WHERE motebit_id = ?`,
-            ).run(checkoutTier, customerId, subscriptionId, now, motebitId);
-          } else {
-            db.prepare(
-              `INSERT INTO relay_subscriptions
-                 (motebit_id, tier, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-            ).run(motebitId, checkoutTier, customerId, subscriptionId, now, now);
-          }
+          upsertSubscriptionFromCheckout(db, motebitId, checkoutTier, customerId, subscriptionId);
 
           logger.info("webhook.subscription.activated", {
             motebitId,
