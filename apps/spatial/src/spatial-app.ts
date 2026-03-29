@@ -436,7 +436,7 @@ export class SpatialApp {
    * pass { provider: "proxy" } to initAI() — the token and model are stored internally.
    */
   async tryProxyBootstrap(): Promise<boolean> {
-    const app = this;
+    const motebitId = this.motebitId;
     const adapter: ProxySessionAdapter = {
       getSyncUrl() {
         try {
@@ -446,7 +446,7 @@ export class SpatialApp {
         }
       },
       getMotebitId() {
-        return app.motebitId !== "spatial-local" ? app.motebitId : null;
+        return motebitId !== "spatial-local" ? motebitId : null;
       },
       loadToken() {
         try {
@@ -484,8 +484,8 @@ export class SpatialApp {
           // localStorage unavailable
         }
       },
-      onProviderReady(config: ProxyProviderConfig) {
-        app._proxyConfig = config;
+      onProviderReady: (config: ProxyProviderConfig) => {
+        this._proxyConfig = config;
       },
     };
 
