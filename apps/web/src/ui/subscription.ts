@@ -197,22 +197,19 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
       if (isUltra) {
         upgradeDiv.style.display = "none";
       } else if (tier === "pro") {
-        // Show only the Ultra option for Pro users
+        // Show only the upgrade button for Pro users
         upgradeDiv.style.display = "";
         if (planSelect) {
           planSelect.value = "ultra";
-          planSelect.style.display = "none";
+          planSelect.parentElement!.style.display = "none";
         }
-        if (modelPreview) {
-          modelPreview.value = "Claude Opus 4";
-          modelPreview.style.display = "none";
-        }
+        if (modelPreview) modelPreview.parentElement!.style.display = "none";
         if (subscribeBtn) subscribeBtn.textContent = "Upgrade to Ultra — Opus · $50/mo";
       } else {
         // Free user: show full form
         upgradeDiv.style.display = "";
-        if (planSelect) planSelect.style.display = "";
-        if (modelPreview) modelPreview.style.display = "";
+        if (planSelect) planSelect.parentElement!.style.display = "";
+        if (modelPreview) modelPreview.parentElement!.style.display = "";
         if (subscribeBtn) subscribeBtn.textContent = "Subscribe";
       }
     }
