@@ -104,6 +104,15 @@ export {
   type PlanSnapshot,
   type PlanEvent,
 } from "./commands/index.js";
+export {
+  ProxySession,
+  fetchProxyToken,
+  tierModel,
+  DEFAULT_PROXY_BASE_URL,
+  type ProxySessionAdapter,
+  type ProxyTokenData,
+  type ProxyProviderConfig,
+} from "./proxy-session.js";
 import type {
   GradientSnapshot,
   GradientStoreAdapter,
