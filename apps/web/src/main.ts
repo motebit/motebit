@@ -301,15 +301,18 @@ async function bootstrap(): Promise<void> {
       }
     }
   } else {
-    // First visit — try free proxy (instant), fall back to WebLLM
-    void autoInitProxy().then((ok) => {
+    // First visit — try free proxy (instant), fall back to WebLLM.
+    // Connect prompt starts hidden; only reveal after all attempts fail.
+    void autoInitProxy().then(async (ok) => {
       if (!ok && checkWebGPU()) {
-        void autoInitWebLLM();
+        await autoInitWebLLM();
       }
+      settings.updateConnectPrompt();
     });
   }
 
-  settings.updateConnectPrompt();
+  // For returning users with saved config, update prompt immediately
+  if (savedConfig != null) settings.updateConnectPrompt();
 
   // Auto-connect sync if a relay URL was previously saved
   const syncUrl = loadSyncUrl();
