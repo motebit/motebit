@@ -1,4 +1,9 @@
-import { MotebitRuntime, RelayDelegationAdapter, executeCommand } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  RelayDelegationAdapter,
+  executeCommand,
+  cmdSelfTest,
+} from "@motebit/runtime";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import type {
   ConversationMessage,
@@ -1086,6 +1091,42 @@ export class WebApp {
         }
       })();
     }, 4.5 * 60_000);
+
+    // Adversarial onboarding: run self-test once after first relay connection
+    void this.runOnboardingSelfTest(relayUrl);
+  }
+
+  /**
+   * Run cmdSelfTest exactly once per device. Uses localStorage flag to avoid
+   * repeating on subsequent launches. Best-effort — failures are logged, never blocking.
+   */
+  private async runOnboardingSelfTest(relayUrl: string): Promise<void> {
+    const FLAG = "motebit:self-test-done";
+    if (localStorage.getItem(FLAG) === "true") return;
+    if (!this.runtime) return;
+
+    try {
+      const token = await this.createSyncToken("task:submit");
+      if (!token) return;
+
+      const result = await cmdSelfTest(this.runtime, {
+        relay: { relayUrl, authToken: token, motebitId: this._motebitId },
+        mintToken: async () => {
+          const t = await this.createSyncToken("task:submit");
+          return t ?? "";
+        },
+        timeoutMs: 30_000,
+      });
+
+      // eslint-disable-next-line no-console
+      console.log("[self-test]", result.summary);
+      if (result.data?.status === "passed" || result.data?.status === "skipped") {
+        localStorage.setItem(FLAG, "true");
+      }
+    } catch (err: unknown) {
+      // eslint-disable-next-line no-console
+      console.warn("[self-test] error:", err instanceof Error ? err.message : String(err));
+    }
   }
 
   async startServing(): Promise<{ ok: boolean; error?: string }> {

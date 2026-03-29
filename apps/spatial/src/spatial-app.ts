@@ -23,7 +23,13 @@
  * - Token refresh every 4.5 minutes (tokens expire at 5 min)
  */
 
-import { MotebitRuntime, executeCommand, PlanExecutionVM, ProxySession } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  executeCommand,
+  PlanExecutionVM,
+  ProxySession,
+  cmdSelfTest,
+} from "@motebit/runtime";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import { RelayDelegationAdapter } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
@@ -44,6 +50,7 @@ import {
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
 import { createSignedToken, deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
+import { generate as generateIdentityFile } from "@motebit/identity-file";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { DeviceCapability } from "@motebit/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
@@ -76,6 +83,13 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 
 // === Configuration ===
 
+export interface SpatialGovernanceConfig {
+  approvalPreset: "cautious" | "balanced" | "autonomous";
+  persistenceThreshold: number;
+  rejectSecrets: boolean;
+  maxCallsPerTurn: number;
+}
+
 export interface SpatialAIConfig {
   provider: "anthropic" | "ollama" | "openai" | "proxy";
   model?: string;
@@ -83,6 +97,7 @@ export interface SpatialAIConfig {
   baseUrl?: string;
   maxTokens?: number;
   personalityConfig?: MotebitPersonalityConfig;
+  governance?: SpatialGovernanceConfig;
 }
 
 export interface SpatialNetworkSettings {
@@ -546,8 +561,38 @@ export class SpatialApp {
 
     const storage = this.storage ?? (await createBrowserStorage());
 
+    // Governance config → policy + memory governance
+    const gov = config.governance;
+    const presetConfigs: Record<
+      string,
+      { maxRiskLevel: number; requireApprovalAbove: number; denyAbove: number }
+    > = {
+      cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
+      balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
+      autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
+    };
+    const preset = gov
+      ? (presetConfigs[gov.approvalPreset] ?? presetConfigs.balanced!)
+      : presetConfigs.balanced!;
+
     this.runtime = new MotebitRuntime(
-      { motebitId: this.motebitId, tickRateHz: 2 },
+      {
+        motebitId: this.motebitId,
+        tickRateHz: 2,
+        policy: {
+          operatorMode: false,
+          maxRiskLevel: preset.maxRiskLevel,
+          requireApprovalAbove: preset.requireApprovalAbove,
+          denyAbove: preset.denyAbove,
+          budget: gov ? { maxCallsPerTurn: gov.maxCallsPerTurn } : undefined,
+        },
+        memoryGovernance: gov
+          ? {
+              persistenceThreshold: gov.persistenceThreshold,
+              rejectSecrets: gov.rejectSecrets,
+            }
+          : undefined,
+      },
       { storage, renderer: this.adapter, ai: provider, keyring: this.keyring },
     );
 
@@ -1120,7 +1165,10 @@ export class SpatialApp {
           }
         })();
 
-        // 6. Token refresh every 4.5 min — rebuild WS with fresh auth
+        // Adversarial onboarding: run self-test once after first relay connection
+        void this.runOnboardingSelfTest(relayUrl, authToken ?? "");
+
+        // 7. Token refresh every 4.5 min — rebuild WS with fresh auth
         this._wsTokenRefreshTimer = setInterval(() => {
           void (async () => {
             try {
@@ -1269,6 +1317,44 @@ export class SpatialApp {
     }
 
     this.setSyncStatus("disconnected");
+  }
+
+  /**
+   * Run cmdSelfTest exactly once per device. Uses localStorage flag to avoid
+   * repeating on subsequent launches. Best-effort — failures are logged, never blocking.
+   */
+  private async runOnboardingSelfTest(relayUrl: string, authToken: string): Promise<void> {
+    const FLAG = "motebit:self-test-done";
+    try {
+      if (localStorage.getItem(FLAG) === "true") return;
+    } catch {
+      return; // localStorage unavailable
+    }
+    if (!this.runtime) return;
+
+    try {
+      const mintToken = async (): Promise<string> => {
+        if (this.tokenFactory) return this.tokenFactory();
+        return authToken;
+      };
+      const token = await mintToken();
+      if (!token) return;
+
+      const result = await cmdSelfTest(this.runtime, {
+        relay: { relayUrl, authToken: token, motebitId: this.motebitId },
+        mintToken,
+        timeoutMs: 30_000,
+      });
+
+      // eslint-disable-next-line no-console
+      console.log("[self-test]", result.summary);
+      if (result.data?.status === "passed" || result.data?.status === "skipped") {
+        localStorage.setItem(FLAG, "true");
+      }
+    } catch (err: unknown) {
+      // eslint-disable-next-line no-console
+      console.warn("[self-test] error:", err instanceof Error ? err.message : String(err));
+    }
   }
 
   // === Voice Commands ===
@@ -1640,6 +1726,39 @@ export class SpatialApp {
   async setupOperatorPin(pin: string): Promise<void> {
     if (!this.runtime) throw new Error("AI not initialized");
     return this.runtime.setupOperatorPin(pin);
+  }
+
+  // === Identity Export ===
+
+  /**
+   * Export a signed motebit.md identity file as a string.
+   * The browser UI layer can trigger a download via Blob URL or copy to clipboard.
+   * Returns null if identity is not bootstrapped or private key unavailable.
+   */
+  async exportIdentity(): Promise<string | null> {
+    if (this.motebitId === "spatial-local") return null;
+    if (!this._privKeyBytes) return null;
+
+    try {
+      return await generateIdentityFile(
+        {
+          motebitId: this.motebitId,
+          ownerId: this.motebitId,
+          publicKeyHex: this.publicKey,
+          devices: [
+            {
+              device_id: this.deviceId,
+              name: "Spatial",
+              public_key: this.publicKey,
+              registered_at: new Date().toISOString(),
+            },
+          ],
+        },
+        this._privKeyBytes,
+      );
+    } catch {
+      return null;
+    }
   }
 
   // === Cleanup ===

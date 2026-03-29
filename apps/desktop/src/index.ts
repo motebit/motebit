@@ -5,7 +5,13 @@
  * Provides Tauri-specific storage adapters and AI provider creation.
  */
 
-import { MotebitRuntime, SimpleToolRegistry, executeCommand, ProxySession } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  SimpleToolRegistry,
+  executeCommand,
+  ProxySession,
+  cmdSelfTest,
+} from "@motebit/runtime";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import type {
   TurnResult,
@@ -3207,6 +3213,43 @@ export class DesktopApp {
         });
       })
       .catch(() => {});
+
+    // Adversarial onboarding: run self-test once after first relay connection
+    void this.runOnboardingSelfTest(syncUrl, keypair.privateKey);
+  }
+
+  /**
+   * Run cmdSelfTest exactly once per device. Uses localStorage flag to avoid
+   * repeating on subsequent launches. Best-effort — failures are logged, never blocking.
+   */
+  private async runOnboardingSelfTest(syncUrl: string, privateKeyHex: string): Promise<void> {
+    const FLAG = "motebit:self-test-done";
+    try {
+      if (localStorage.getItem(FLAG) === "true") return;
+    } catch {
+      return; // localStorage unavailable
+    }
+    if (!this.runtime) return;
+
+    try {
+      const token = await this.createSyncToken(privateKeyHex, "task:submit");
+      if (!token) return;
+
+      const result = await cmdSelfTest(this.runtime, {
+        relay: { relayUrl: syncUrl, authToken: token, motebitId: this.motebitId },
+        mintToken: async () => this.createSyncToken(privateKeyHex, "task:submit"),
+        timeoutMs: 30_000,
+      });
+
+      // eslint-disable-next-line no-console
+      console.log("[self-test]", result.summary);
+      if (result.data?.status === "passed" || result.data?.status === "skipped") {
+        localStorage.setItem(FLAG, "true");
+      }
+    } catch (err: unknown) {
+      // eslint-disable-next-line no-console
+      console.warn("[self-test] error:", err instanceof Error ? err.message : String(err));
+    }
   }
 
   /**

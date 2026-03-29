@@ -16,6 +16,7 @@ import {
   RelayDelegationAdapter,
   executeCommand,
   ProxySession,
+  cmdSelfTest,
 } from "@motebit/runtime";
 import type {
   StreamChunk,
@@ -1650,6 +1651,44 @@ export class MobileApp {
 
     // Immediate first sync after short delay (let initialization settle)
     setTimeout(() => void this.syncCycle(url), 3000);
+
+    // Adversarial onboarding: run self-test once after first relay connection
+    void this.runOnboardingSelfTest(url);
+  }
+
+  /**
+   * Run cmdSelfTest exactly once per device. Uses AsyncStorage flag to avoid
+   * repeating on subsequent launches. Best-effort — failures are logged, never blocking.
+   */
+  private async runOnboardingSelfTest(syncUrl: string): Promise<void> {
+    const FLAG = "motebit:self-test-done";
+    try {
+      const done = await AsyncStorage.getItem(FLAG);
+      if (done === "true") return;
+    } catch {
+      return;
+    }
+    if (!this.runtime) return;
+
+    try {
+      const token = await this.createSyncToken("task:submit");
+      if (!token) return;
+
+      const result = await cmdSelfTest(this.runtime, {
+        relay: { relayUrl: syncUrl, authToken: token, motebitId: this.motebitId },
+        mintToken: async () => this.createSyncToken("task:submit"),
+        timeoutMs: 30_000,
+      });
+
+      // eslint-disable-next-line no-console
+      console.log("[self-test]", result.summary);
+      if (result.data?.status === "passed" || result.data?.status === "skipped") {
+        await AsyncStorage.setItem(FLAG, "true");
+      }
+    } catch (err: unknown) {
+      // eslint-disable-next-line no-console
+      console.warn("[self-test] error:", err instanceof Error ? err.message : String(err));
+    }
   }
 
   stopSync(): void {
@@ -2319,6 +2358,44 @@ export class MobileApp {
       summary: null,
       error,
     });
+  }
+
+  /**
+   * Export a signed motebit.md identity file as a string.
+   * The React Native UI layer can present this via Share sheet or clipboard.
+   * Returns null if identity is not bootstrapped or private key unavailable.
+   */
+  async exportIdentity(): Promise<string | null> {
+    if (this.motebitId === "mobile-local") return null;
+
+    const privKeyHex = await this.keyring.get("device_private_key");
+    if (privKeyHex == null || privKeyHex === "") return null;
+
+    const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
+    for (let i = 0; i < privKeyHex.length; i += 2) {
+      privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
+    }
+
+    try {
+      return await generateIdentityFile(
+        {
+          motebitId: this.motebitId,
+          ownerId: this.motebitId,
+          publicKeyHex: this.publicKey,
+          devices: [
+            {
+              device_id: this.deviceId,
+              name: "Mobile",
+              public_key: this.publicKey,
+              registered_at: new Date().toISOString(),
+            },
+          ],
+        },
+        privKeyBytes,
+      );
+    } finally {
+      secureErase(privKeyBytes);
+    }
   }
 }
 

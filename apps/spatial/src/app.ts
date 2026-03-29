@@ -70,6 +70,13 @@ let lastGazeHit = false;
 
 // === Settings persistence ===
 
+interface GovernanceConfig {
+  approvalPreset: "cautious" | "balanced" | "autonomous";
+  persistenceThreshold: number;
+  rejectSecrets: boolean;
+  maxCallsPerTurn: number;
+}
+
 interface SpatialSettings {
   provider: "anthropic" | "ollama" | "openai" | "proxy";
   apiKey: string;
@@ -85,6 +92,7 @@ interface SpatialSettings {
   customHue: number;
   customSaturation: number;
   maxTokens: number;
+  governance: GovernanceConfig;
 }
 
 function loadSettings(): SpatialSettings {
@@ -92,6 +100,12 @@ function loadSettings(): SpatialSettings {
     const raw = localStorage.getItem("motebit:spatial_settings");
     if (raw != null && raw !== "") {
       const parsed = JSON.parse(raw) as Partial<SpatialSettings>;
+      const defaultGov: GovernanceConfig = {
+        approvalPreset: "balanced",
+        persistenceThreshold: 0.5,
+        rejectSecrets: true,
+        maxCallsPerTurn: 10,
+      };
       return {
         provider: parsed.provider ?? "anthropic",
         apiKey: parsed.apiKey ?? "",
@@ -107,6 +121,7 @@ function loadSettings(): SpatialSettings {
         customHue: parsed.customHue ?? 220,
         customSaturation: parsed.customSaturation ?? 0.7,
         maxTokens: parsed.maxTokens ?? 4096,
+        governance: parsed.governance ? { ...defaultGov, ...parsed.governance } : defaultGov,
       };
     }
   } catch {
@@ -127,6 +142,12 @@ function loadSettings(): SpatialSettings {
     customHue: 220,
     customSaturation: 0.7,
     maxTokens: 4096,
+    governance: {
+      approvalPreset: "balanced",
+      persistenceThreshold: 0.5,
+      rejectSecrets: true,
+      maxCallsPerTurn: 10,
+    },
   };
 }
 
@@ -234,6 +255,7 @@ async function tryInitAI(settings: SpatialSettings): Promise<boolean> {
     apiKey: settings.apiKey || undefined,
     baseUrl: settings.provider === "proxy" ? `${PROXY_BASE_URL}/v1` : undefined,
     maxTokens: settings.maxTokens,
+    governance: settings.governance,
   };
 
   const ok = await app.initAI(config);
@@ -464,6 +486,7 @@ settingsSave?.addEventListener(
           (document.getElementById("settings-max-tokens") as HTMLSelectElement)?.value ?? "4096",
           10,
         ),
+        governance: loadSettings().governance,
       };
       saveSettings(settings);
 

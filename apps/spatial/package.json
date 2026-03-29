@@ -22,6 +22,7 @@
     "@motebit/runtime": "workspace:*",
     "@motebit/ai-core": "workspace:*",
     "@motebit/crypto": "workspace:*",
+    "@motebit/identity-file": "workspace:*",
     "@motebit/core-identity": "workspace:*",
     "@motebit/browser-persistence": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
