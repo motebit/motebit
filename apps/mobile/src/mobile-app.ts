@@ -430,30 +430,29 @@ export class MobileApp {
    * pass { provider: "proxy" } to initAI() — the token and model are stored internally.
    */
   async tryProxyBootstrap(): Promise<boolean> {
-    const app = this;
     const adapter: ProxySessionAdapter = {
-      getSyncUrl() {
-        return app._proxySyncUrlCache;
+      getSyncUrl: () => {
+        return this._proxySyncUrlCache;
       },
-      getMotebitId() {
-        return app.motebitId !== "mobile-local" ? app.motebitId : null;
+      getMotebitId: () => {
+        return this.motebitId !== "mobile-local" ? this.motebitId : null;
       },
-      loadToken() {
-        return app._proxyTokenCache;
+      loadToken: () => {
+        return this._proxyTokenCache;
       },
-      saveToken(data) {
-        app._proxyTokenCache = data;
+      saveToken: (data) => {
+        this._proxyTokenCache = data;
         void AsyncStorage.setItem(MobileApp.PROXY_TOKEN_KEY, JSON.stringify(data)).catch(() => {});
       },
-      clearToken() {
-        app._proxyTokenCache = null;
+      clearToken: () => {
+        this._proxyTokenCache = null;
         void AsyncStorage.removeItem(MobileApp.PROXY_TOKEN_KEY).catch(() => {});
       },
-      saveTier(tier) {
+      saveTier: (tier) => {
         void AsyncStorage.setItem(MobileApp.PROXY_TIER_KEY, tier).catch(() => {});
       },
-      onProviderReady(config: ProxyProviderConfig) {
-        app._proxyConfig = config;
+      onProviderReady: (config: ProxyProviderConfig) => {
+        this._proxyConfig = config;
       },
     };
 

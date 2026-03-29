@@ -410,7 +410,7 @@ export function registerSubscriptionRoutes(
     try {
       switch (event.type) {
         case "checkout.session.completed": {
-          const session = event.data.object as Stripe.Checkout.Session;
+          const session = event.data.object;
           if (session.mode !== "subscription") break;
 
           const motebitId = session.metadata?.motebit_id;
@@ -444,7 +444,7 @@ export function registerSubscriptionRoutes(
         }
 
         case "customer.subscription.updated": {
-          const subscription = event.data.object as Stripe.Subscription;
+          const subscription = event.data.object;
           const subId = subscription.id;
 
           const row = db
@@ -499,7 +499,7 @@ export function registerSubscriptionRoutes(
         }
 
         case "customer.subscription.deleted": {
-          const subscription = event.data.object as Stripe.Subscription;
+          const subscription = event.data.object;
           const subId = subscription.id;
 
           const row = db

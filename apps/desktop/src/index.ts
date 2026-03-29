@@ -674,21 +674,20 @@ export class DesktopApp {
    * pass { provider: "proxy" } to initAI() — the token and model are stored internally.
    */
   async tryProxyBootstrap(invoke: InvokeFn): Promise<boolean> {
-    const app = this;
     const adapter: ProxySessionAdapter = {
-      getSyncUrl() {
+      getSyncUrl: () => {
         // syncUrl is read synchronously from the last config read.
         // For the adapter, we cache it during bootstrap.
-        return app._proxySyncUrlCache;
+        return this._proxySyncUrlCache;
       },
-      getMotebitId() {
-        return app.motebitId !== "desktop-local" ? app.motebitId : null;
+      getMotebitId: () => {
+        return this.motebitId !== "desktop-local" ? this.motebitId : null;
       },
-      loadToken() {
-        return app._proxyTokenCache;
+      loadToken: () => {
+        return this._proxyTokenCache;
       },
-      saveToken(data) {
-        app._proxyTokenCache = data;
+      saveToken: (data) => {
+        this._proxyTokenCache = data;
         // Persist to Tauri config (best-effort, non-blocking)
         void invoke<string>("read_config")
           .then((raw) => {
@@ -697,8 +696,8 @@ export class DesktopApp {
           })
           .catch(() => {});
       },
-      clearToken() {
-        app._proxyTokenCache = null;
+      clearToken: () => {
+        this._proxyTokenCache = null;
         void invoke<string>("read_config")
           .then((raw) => {
             const config = JSON.parse(raw) as Record<string, unknown>;
@@ -707,11 +706,11 @@ export class DesktopApp {
           })
           .catch(() => {});
       },
-      saveTier(_tier) {
+      saveTier: (_tier) => {
         // Tier is captured in the proxy config model via tierModel()
       },
-      onProviderReady(config: ProxyProviderConfig) {
-        app._proxyConfig = config;
+      onProviderReady: (config: ProxyProviderConfig) => {
+        this._proxyConfig = config;
       },
     };
 
