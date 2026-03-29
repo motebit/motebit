@@ -13,7 +13,7 @@ export const MAX_RESPONSE_SIZE = 100_000; // 100KB
 export const FETCH_TIMEOUT_MS = 15_000;
 
 /** Free tier model allowlist — BYOK users can use any model */
-export const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
+export const FREE_MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001"];
 
 /** Tier-aware limits for all authentication modes */
 export const TIER_LIMITS = {

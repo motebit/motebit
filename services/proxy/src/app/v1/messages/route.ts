@@ -8,12 +8,13 @@ import {
 } from "../../../validation";
 
 // Free tier model allowlist — BYOK users can use any model
-const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
+const FREE_MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001"];
 
 // Tier → Anthropic model mapping (proxy-token users get the model for their tier)
 const TIER_MODEL_MAP: Record<string, string> = {
-  free: "claude-haiku-3-5-20241022",
+  free: "claude-haiku-4-5-20251001",
   pro: "claude-sonnet-4-20250514",
+  anonymous: "claude-haiku-4-5-20251001",
 };
 
 const ALLOWED_ORIGINS = new Set([
@@ -65,8 +66,8 @@ async function checkRateLimit(
       remaining: Math.max(0, dailyLimit - count),
     };
   } catch {
-    // KV unavailable — allow the request but mark as last free message
-    return { allowed: true, remaining: 0 };
+    // KV unavailable — fail closed, deny the request
+    return { allowed: false, remaining: 0 };
   }
 }
 
@@ -117,8 +118,12 @@ export async function POST(request: Request): Promise<Response> {
   let tokenPayload: ProxyTokenPayload | null = null;
   let tierName: TierName = "anonymous";
 
-  if (proxyTokenStr) {
-    // Mode 1: Proxy token — verify signature and extract tier
+  if (clientApiKey != null && clientApiKey !== "") {
+    // Mode 1: BYOK — user's own API key always takes precedence
+    authMode = "byok";
+    tierName = "byok";
+  } else if (proxyTokenStr) {
+    // Mode 2: Proxy token — verify signature and extract tier
     const relayPubKey = process.env.RELAY_PUBLIC_KEY;
     if (!relayPubKey) {
       return new Response(
@@ -140,10 +145,8 @@ export async function POST(request: Request): Promise<Response> {
 
     authMode = "proxy-token";
     tierName = (tokenPayload.tier in TIER_LIMITS ? tokenPayload.tier : "free") as TierName;
-  } else if (clientApiKey != null && clientApiKey !== "") {
-    authMode = "byok";
-    tierName = "byok";
   } else {
+    // Mode 3: Anonymous — IP-based rate limiting
     authMode = "anonymous";
     tierName = "anonymous";
   }
@@ -164,7 +167,7 @@ export async function POST(request: Request): Promise<Response> {
   if (authMode === "proxy-token" && tokenPayload) {
     // Keyed by motebit ID + date
     const key = `proxy:sub:${tokenPayload.mid}:${todayDate()}`;
-    const dailyLimit = tokenPayload.lim || limits.dailyLimit;
+    const dailyLimit = limits.dailyLimit; // Use tier config, not token payload
     const { allowed } = await checkRateLimit(key, dailyLimit);
     if (!allowed) {
       return new Response(
@@ -184,6 +187,11 @@ export async function POST(request: Request): Promise<Response> {
         },
       );
     }
+    // Also count against IP limit to prevent token→anonymous evasion
+    const ip = getClientIP(request);
+    void checkRateLimit(`proxy:${ip}:${todayDate()}`, TIER_LIMITS.anonymous.dailyLimit).catch(
+      () => {},
+    );
   } else if (authMode === "anonymous") {
     // IP-based rate limiting (backward compatible)
     const ip = getClientIP(request);
@@ -300,10 +308,8 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // --- Build proxied request ---
-  const maxTokensCap =
-    authMode === "proxy-token" && tokenPayload
-      ? tokenPayload.mtk || limits.maxTokens
-      : limits.maxTokens;
+  // Use canonical tier limits, not token payload fields
+  const maxTokensCap = limits.maxTokens;
 
   const proxiedBody: Record<string, unknown> = {
     model: resolvedModel,

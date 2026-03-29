@@ -2,6 +2,39 @@ export const runtime = "edge";
 
 const MAX_RESPONSE_SIZE = 100_000; // 100KB
 const FETCH_TIMEOUT_MS = 15_000;
+const FETCH_DAILY_LIMIT = 50;
+
+function getClientIP(request: Request): string {
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip") ??
+    "unknown"
+  );
+}
+
+function todayDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function checkRateLimit(
+  key: string,
+  dailyLimit: number,
+): Promise<{ allowed: boolean; remaining: number }> {
+  try {
+    const { kv } = await import("@vercel/kv");
+    const count = await kv.incr(key);
+    if (count === 1) {
+      await kv.expire(key, 86400);
+    }
+    return {
+      allowed: count <= dailyLimit,
+      remaining: Math.max(0, dailyLimit - count),
+    };
+  } catch {
+    // KV unavailable — fail closed, deny the request
+    return { allowed: false, remaining: 0 };
+  }
+}
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -41,6 +74,24 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const cors = corsHeaders(origin);
+
+  // IP-based rate limiting
+  const ip = getClientIP(request);
+  const rateLimitKey = `proxy:fetch:${ip}:${todayDate()}`;
+  const { allowed } = await checkRateLimit(rateLimitKey, FETCH_DAILY_LIMIT);
+  if (!allowed) {
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "rate_limited",
+        message: `Fetch limit of ${FETCH_DAILY_LIMIT}/day exceeded. Try again tomorrow.`,
+      }),
+      {
+        status: 429,
+        headers: { ...cors, "Content-Type": "application/json", "Retry-After": "86400" },
+      },
+    );
+  }
 
   let body: { url?: string };
   try {

@@ -5,6 +5,39 @@ export const runtime = "edge";
 import { type NextRequest, NextResponse } from "next/server";
 
 const EMBED_SERVICE_URL = process.env.EMBED_SERVICE_URL ?? "https://motebit-embed.fly.dev";
+const EMBED_DAILY_LIMIT = 100;
+
+function getClientIP(request: NextRequest): string {
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip") ??
+    "unknown"
+  );
+}
+
+function todayDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function checkRateLimit(
+  key: string,
+  dailyLimit: number,
+): Promise<{ allowed: boolean; remaining: number }> {
+  try {
+    const { kv } = await import("@vercel/kv");
+    const count = await kv.incr(key);
+    if (count === 1) {
+      await kv.expire(key, 86400);
+    }
+    return {
+      allowed: count <= dailyLimit,
+      remaining: Math.max(0, dailyLimit - count),
+    };
+  } catch {
+    // KV unavailable — fail closed, deny the request
+    return { allowed: false, remaining: 0 };
+  }
+}
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -39,6 +72,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const cors = corsHeaders(origin);
+
+  // IP-based rate limiting
+  const ip = getClientIP(request);
+  const rateLimitKey = `proxy:embed:${ip}:${todayDate()}`;
+  const { allowed } = await checkRateLimit(rateLimitKey, EMBED_DAILY_LIMIT);
+  if (!allowed) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "rate_limited",
+        message: `Embed limit of ${EMBED_DAILY_LIMIT}/day exceeded. Try again tomorrow.`,
+      },
+      { status: 429, headers: { ...cors, "Retry-After": "86400" } },
+    );
+  }
 
   try {
     // Pass through to embed service
