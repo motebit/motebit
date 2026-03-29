@@ -160,29 +160,59 @@ function saveSettings(s: SpatialSettings): void {
 const PROXY_BASE_URL =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
     ?.VITE_PROXY_URL ?? "https://api.motebit.com";
-const DEFAULT_PROXY_MODEL = "claude-sonnet-4-20250514";
 
-/** Try to connect via the free proxy — instant, no download. */
-async function autoInitProxy(): Promise<boolean> {
+/** Detect any local inference server — same probe as web surface. */
+const LOCAL_INFERENCE_ENDPOINTS = [
+  { url: "http://localhost:11434", type: "ollama" as const },
+  { url: "http://localhost:1234", type: "openai" as const },
+  { url: "http://localhost:8080", type: "openai" as const },
+  { url: "http://localhost:1337", type: "openai" as const },
+  { url: "http://localhost:8000", type: "openai" as const },
+] as const;
+
+async function probeLocalModels(
+  baseUrl: string,
+  type: "ollama" | "openai",
+): Promise<{ baseUrl: string; type: "ollama" | "openai"; models: string[] } | null> {
   try {
-    const res = await fetch(`${PROXY_BASE_URL}/v1/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: DEFAULT_PROXY_MODEL, messages: [], max_tokens: 1 }),
-    });
-    // 400 = proxy alive but rejected empty messages (expected)
-    // 429 = rate limited but proxy exists
-    if (res.status === 400 || res.status === 429 || res.ok) {
-      const proxySettings: SpatialSettings = {
-        ...loadSettings(),
-        provider: "proxy",
-        model: DEFAULT_PROXY_MODEL,
-      };
-      saveSettings(proxySettings);
-      return tryInitAI(proxySettings);
+    if (type === "ollama") {
+      const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        const data = (await res.json()) as { models?: Array<{ name: string }> };
+        const models = (data.models ?? []).map((m: { name: string }) => m.name);
+        if (models.length > 0) return { baseUrl, type, models };
+      }
     }
+    const res = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { data?: Array<{ id: string }> };
+    const models = (data.data ?? []).map((m: { id: string }) => m.id);
+    if (models.length > 0) return { baseUrl, type: "openai", models };
   } catch {
-    // Network error, proxy unreachable
+    // Not running
+  }
+  return null;
+}
+
+async function autoInitLocalInference(): Promise<boolean> {
+  const probes = LOCAL_INFERENCE_ENDPOINTS.map((ep) => probeLocalModels(ep.url, ep.type));
+  const results = await Promise.allSettled(probes);
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      const { type, models } = result.value;
+      const model =
+        models.find((m) => m.includes("70b")) ??
+        models.find((m) => m.includes("32b")) ??
+        models.find((m) => m.includes("8b")) ??
+        models[0]!;
+      const localSettings: SpatialSettings = {
+        ...loadSettings(),
+        provider: type === "ollama" ? "ollama" : "openai",
+        model,
+      };
+      saveSettings(localSettings);
+      return tryInitAI(localSettings);
+    }
   }
   return false;
 }
@@ -233,15 +263,16 @@ async function init(): Promise<void> {
     renderMcpServers();
     showMainOverlay();
   } else {
-    // No saved config — try free proxy before showing settings
-    if (await autoInitProxy()) {
+    // No saved config — try local inference first (zero API cost), then show settings
+    const hasLocal = await autoInitLocalInference();
+    if (hasLocal) {
       settingsOverlay.classList.add("hidden");
       void initVoiceIfEnabled(loadSettings());
       void app.connectRelay().then(() => void loadCredentials());
       renderMcpServers();
       showMainOverlay();
     } else {
-      // Proxy unreachable — show settings overlay
+      // No local inference — show settings overlay
       settingsOverlay.classList.remove("hidden");
       overlay.classList.add("hidden");
     }
