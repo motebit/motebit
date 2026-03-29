@@ -15,6 +15,40 @@ export const FETCH_TIMEOUT_MS = 15_000;
 /** Free tier model allowlist — BYOK users can use any model */
 export const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
 
+/** Tier-aware limits for all authentication modes */
+export const TIER_LIMITS = {
+  free: { maxBody: 100_000, maxMsgLen: 10_000, maxMsgs: 50, maxTokens: 4096, dailyLimit: 50 },
+  pro: { maxBody: 500_000, maxMsgLen: 50_000, maxMsgs: 100, maxTokens: 8192, dailyLimit: 500 },
+  byok: {
+    maxBody: 1_000_000,
+    maxMsgLen: 200_000,
+    maxMsgs: 200,
+    maxTokens: 0,
+    dailyLimit: Infinity,
+  },
+  anonymous: { maxBody: 100_000, maxMsgLen: 10_000, maxMsgs: 50, maxTokens: 4096, dailyLimit: 5 },
+} as const;
+
+export type TierName = keyof typeof TIER_LIMITS;
+
+/** Payload embedded in relay-signed proxy tokens */
+export interface ProxyTokenPayload {
+  /** Motebit ID */
+  mid: string;
+  /** Tier name */
+  tier: string;
+  /** Daily request limit */
+  lim: number;
+  /** Allowed model identifiers */
+  models: string[];
+  /** Max tokens per request */
+  mtk: number;
+  /** Issued-at timestamp (ms) */
+  iat: number;
+  /** Expiry timestamp (ms) */
+  exp: number;
+}
+
 const PROD_ORIGINS = ["https://motebit.com", "https://www.motebit.com"];
 const DEV_ORIGINS = ["http://localhost:3000", "http://localhost:3002", "http://localhost:5173"];
 
@@ -28,13 +62,71 @@ export function corsHeaders(origin: string): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, x-api-key, anthropic-version",
+    "Access-Control-Allow-Headers": "Content-Type, x-api-key, x-proxy-token, anthropic-version",
     "Access-Control-Max-Age": "86400",
   };
 }
 
 export function isAllowedOrigin(origin: string, allowedOrigins: Set<string>): boolean {
   return allowedOrigins.has(origin);
+}
+
+// --- Proxy Token ---
+
+/** Base64url decode (no padding) → Uint8Array */
+function base64urlDecode(s: string): Uint8Array {
+  // Restore standard base64
+  const base64 = s.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = (4 - (base64.length % 4)) % 4;
+  const padded = base64 + "=".repeat(pad);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Parse and verify a relay-signed proxy token.
+ * Returns decoded payload if valid, null otherwise.
+ *
+ * Token format: base64url(payload_json).base64url(ed25519_signature)
+ * Signature covers the raw payload bytes (UTF-8 JSON).
+ */
+export async function parseProxyToken(
+  tokenStr: string,
+  relayPublicKeyHex: string,
+): Promise<ProxyTokenPayload | null> {
+  try {
+    const dotIndex = tokenStr.indexOf(".");
+    if (dotIndex === -1) return null;
+
+    const payloadB64 = tokenStr.slice(0, dotIndex);
+    const sigB64 = tokenStr.slice(dotIndex + 1);
+
+    const payloadBytes = base64urlDecode(payloadB64);
+    const sigBytes = base64urlDecode(sigB64);
+
+    // Decode public key from hex
+    const pubKeyBytes = new Uint8Array(
+      relayPublicKeyHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)),
+    );
+
+    // Dynamic import — works in Edge Runtime
+    const ed = await import("@noble/ed25519");
+    const valid = await ed.verifyAsync(sigBytes, payloadBytes, pubKeyBytes);
+    if (!valid) return null;
+
+    const payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as ProxyTokenPayload;
+
+    // Check expiry
+    if (payload.exp <= Date.now()) return null;
+
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 // --- Request Validation ---
@@ -100,20 +192,31 @@ export function validateFetchUrl(url: unknown): MessageValidation {
 
 /**
  * Build the proxied request body for the Anthropic Messages API.
- * Free tier: clamp max_tokens to 4096, strip tools.
+ * Accepts explicit limits for tier-aware clamping.
+ * Free/anonymous: clamp max_tokens, strip tools.
+ * Pro: clamp max_tokens to tier limit, strip tools.
  * BYOK: pass through max_tokens and tools.
  */
 export function buildProxiedBody(
   body: Record<string, unknown>,
   isBYOK: boolean,
+  opts?: { maxTokens?: number },
 ): Record<string, unknown> {
+  const defaultMax = 4096;
+  let maxTokens: number;
+  if (isBYOK) {
+    maxTokens = (body.max_tokens as number) || defaultMax;
+  } else if (opts?.maxTokens) {
+    maxTokens = Math.min((body.max_tokens as number) || opts.maxTokens, opts.maxTokens);
+  } else {
+    maxTokens = Math.min((body.max_tokens as number) || defaultMax, defaultMax);
+  }
+
   const proxied: Record<string, unknown> = {
     model: body.model,
     messages: body.messages,
     system: body.system,
-    max_tokens: isBYOK
-      ? (body.max_tokens as number) || 4096
-      : Math.min((body.max_tokens as number) || 4096, 4096),
+    max_tokens: maxTokens,
     temperature: body.temperature,
     stream: true,
   };

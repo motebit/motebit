@@ -91,6 +91,7 @@ import {
 import type { RelayIdentity } from "./federation.js";
 import { startBatchAnchorLoop } from "./anchoring.js";
 import { registerCredentialRoutes } from "./credentials.js";
+import { registerSubscriptionRoutes, createSubscriptionTables } from "./subscriptions.js";
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { createTaskRouter } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
@@ -221,6 +222,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   createDataSyncTables(moteDb.db);
   createAccountTables(moteDb.db);
   createWithdrawalTables(moteDb.db);
+  createSubscriptionTables(moteDb.db);
 
   // --- Schema: relay-owned tables, migrations, startup cleanup ---
   const { isTokenBlacklisted, isAgentRevoked } = createRelaySchema(moteDb.db);
@@ -418,6 +420,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     onTaskResultReceived: (v) => federationCallbacks.onTaskResultReceived(v),
     onSettlementReceived: (v) => federationCallbacks.onSettlementReceived(v),
   });
+
+  // --- Subscription routes ---
+  registerSubscriptionRoutes(app, moteDb.db, relayIdentity);
 
   // --- Credential routes ---
   registerCredentialRoutes({

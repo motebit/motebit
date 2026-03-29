@@ -40,6 +40,8 @@ export interface CloudProviderConfig {
   max_tokens?: number;
   temperature?: number;
   personalityConfig?: import("./config.js").MotebitPersonalityConfig;
+  /** Additional headers injected into every request (e.g. proxy auth tokens). */
+  extra_headers?: Record<string, string>;
 }
 
 export interface HybridProviderConfig {
@@ -516,6 +518,7 @@ export class CloudProvider implements StreamingProvider {
         "Content-Type": "application/json",
         "x-api-key": this.config.api_key,
         "anthropic-version": "2023-06-01",
+        ...this.config.extra_headers,
       },
       body: JSON.stringify(body),
     });
@@ -567,6 +570,7 @@ export class CloudProvider implements StreamingProvider {
         "Content-Type": "application/json",
         "x-api-key": this.config.api_key,
         "anthropic-version": "2023-06-01",
+        ...this.config.extra_headers,
       },
       body: JSON.stringify(body),
     });

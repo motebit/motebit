@@ -9,6 +9,8 @@ export interface ProviderConfig {
   baseUrl?: string;
   maxTokens?: number;
   temperature?: number;
+  /** Proxy auth token — injected as x-proxy-token header for authenticated proxy requests. */
+  proxyToken?: string;
 }
 
 const PROVIDER_KEY = "motebit-provider";
@@ -177,6 +179,62 @@ export function markCeilingShown(): void {
     sessionStorage.setItem(CEILING_KEY, "1");
   } catch {
     // sessionStorage unavailable
+  }
+}
+
+// === Subscription / Proxy Token ===
+
+const PROXY_TOKEN_KEY = "motebit-proxy-token";
+const SUBSCRIPTION_TIER_KEY = "motebit-subscription-tier";
+
+export interface ProxyTokenData {
+  token: string; // The full signed token string
+  tier: string; // "free" | "pro"
+  expiresAt: number; // epoch ms
+  motebitId: string; // for display
+}
+
+export function saveProxyToken(data: ProxyTokenData): void {
+  try {
+    localStorage.setItem(PROXY_TOKEN_KEY, JSON.stringify(data));
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function loadProxyToken(): ProxyTokenData | null {
+  try {
+    const raw = localStorage.getItem(PROXY_TOKEN_KEY);
+    if (raw) {
+      return JSON.parse(raw) as ProxyTokenData;
+    }
+  } catch {
+    // localStorage unavailable or corrupt
+  }
+  return null;
+}
+
+export function clearProxyToken(): void {
+  try {
+    localStorage.removeItem(PROXY_TOKEN_KEY);
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function saveSubscriptionTier(tier: string): void {
+  try {
+    localStorage.setItem(SUBSCRIPTION_TIER_KEY, tier);
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function loadSubscriptionTier(): string {
+  try {
+    return localStorage.getItem(SUBSCRIPTION_TIER_KEY) ?? "free";
+  } catch {
+    return "free";
   }
 }
 

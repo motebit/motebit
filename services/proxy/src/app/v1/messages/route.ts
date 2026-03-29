@@ -1,16 +1,20 @@
 export const runtime = "edge";
 
-const DAILY_LIMIT = 5;
-// Free tier: strict limits to control cost
-const FREE_MAX_BODY_SIZE = 100_000; // 100KB
-const FREE_MAX_MESSAGE_LENGTH = 10_000;
-const FREE_MAX_MESSAGES = 50;
-// BYOK: relaxed but bounded — user pays, but protect infra
-const BYOK_MAX_BODY_SIZE = 1_000_000; // 1MB
-const BYOK_MAX_MESSAGE_LENGTH = 200_000;
-const BYOK_MAX_MESSAGES = 200;
+import {
+  type ProxyTokenPayload,
+  type TierName,
+  TIER_LIMITS,
+  parseProxyToken,
+} from "../../../validation";
+
 // Free tier model allowlist — BYOK users can use any model
 const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
+
+// Tier → Anthropic model mapping (proxy-token users get the model for their tier)
+const TIER_MODEL_MAP: Record<string, string> = {
+  free: "claude-haiku-3-5-20241022",
+  pro: "claude-sonnet-4-20250514",
+};
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -25,7 +29,7 @@ function corsHeaders(origin: string): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, x-api-key, anthropic-version",
+    "Access-Control-Allow-Headers": "Content-Type, x-api-key, x-proxy-token, anthropic-version",
     "Access-Control-Max-Age": "86400",
   };
 }
@@ -38,23 +42,45 @@ function getClientIP(request: Request): string {
   );
 }
 
-async function checkRateLimit(ip: string): Promise<{ allowed: boolean; remaining: number }> {
+function todayDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function currentMonth(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+async function checkRateLimit(
+  key: string,
+  dailyLimit: number,
+): Promise<{ allowed: boolean; remaining: number }> {
   try {
     const { kv } = await import("@vercel/kv");
-    const today = new Date().toISOString().slice(0, 10);
-    const key = `proxy:${ip}:${today}`;
     const count = await kv.incr(key);
     if (count === 1) {
       await kv.expire(key, 86400);
     }
     return {
-      allowed: count <= DAILY_LIMIT,
-      remaining: Math.max(0, DAILY_LIMIT - count),
+      allowed: count <= dailyLimit,
+      remaining: Math.max(0, dailyLimit - count),
     };
   } catch {
     // KV unavailable — allow the request but mark as last free message
-    // to avoid crashing the proxy when KV is not provisioned
     return { allowed: true, remaining: 0 };
+  }
+}
+
+async function recordUsage(motebitId: string): Promise<void> {
+  try {
+    const { kv } = await import("@vercel/kv");
+    const key = `proxy:usage:${motebitId}:${currentMonth()}`;
+    const count = await kv.incr(key);
+    if (count === 1) {
+      // Expire after 90 days — enough for billing reconciliation
+      await kv.expire(key, 90 * 86400);
+    }
+  } catch {
+    // Best-effort usage tracking — don't fail the request
   }
 }
 
@@ -79,11 +105,54 @@ export async function POST(request: Request): Promise<Response> {
 
   const cors = corsHeaders(origin);
 
-  // Determine API key: user's own key (BYOK) or server's free-tier key
-  const clientApiKey = request.headers.get("x-api-key");
-  const isBYOK = clientApiKey != null && clientApiKey !== "";
-  const apiKey = isBYOK ? clientApiKey : process.env.ANTHROPIC_API_KEY;
+  // --- Authentication: three modes ---
+  // 1. Proxy token (relay-signed, contains tier)
+  // 2. BYOK (user's own API key)
+  // 3. Anonymous (IP-based rate limiting)
 
+  const proxyTokenStr = request.headers.get("x-proxy-token");
+  const clientApiKey = request.headers.get("x-api-key");
+
+  let authMode: "proxy-token" | "byok" | "anonymous";
+  let tokenPayload: ProxyTokenPayload | null = null;
+  let tierName: TierName = "anonymous";
+
+  if (proxyTokenStr) {
+    // Mode 1: Proxy token — verify signature and extract tier
+    const relayPubKey = process.env.RELAY_PUBLIC_KEY;
+    if (!relayPubKey) {
+      return new Response(
+        JSON.stringify({
+          error: "server_error",
+          message: "Proxy token verification not configured",
+        }),
+        { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+
+    tokenPayload = await parseProxyToken(proxyTokenStr, relayPubKey);
+    if (!tokenPayload) {
+      return new Response(
+        JSON.stringify({ error: "invalid_token", message: "Invalid or expired proxy token" }),
+        { status: 401, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+
+    authMode = "proxy-token";
+    tierName = (tokenPayload.tier in TIER_LIMITS ? tokenPayload.tier : "free") as TierName;
+  } else if (clientApiKey != null && clientApiKey !== "") {
+    authMode = "byok";
+    tierName = "byok";
+  } else {
+    authMode = "anonymous";
+    tierName = "anonymous";
+  }
+
+  const isBYOK = authMode === "byok";
+  const limits = TIER_LIMITS[tierName];
+
+  // Resolve API key
+  const apiKey = isBYOK ? clientApiKey! : process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return new Response(
       JSON.stringify({ error: "server_error", message: "Proxy not configured" }),
@@ -91,15 +160,40 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // Rate limit — only for free tier, BYOK users pay their own way
-  if (!isBYOK) {
-    const ip = getClientIP(request);
-    const { allowed } = await checkRateLimit(ip);
+  // --- Rate limiting ---
+  if (authMode === "proxy-token" && tokenPayload) {
+    // Keyed by motebit ID + date
+    const key = `proxy:sub:${tokenPayload.mid}:${todayDate()}`;
+    const dailyLimit = tokenPayload.lim || limits.dailyLimit;
+    const { allowed } = await checkRateLimit(key, dailyLimit);
     if (!allowed) {
       return new Response(
         JSON.stringify({
           error: "rate_limited",
-          message: `You've used your ${DAILY_LIMIT} free messages today. Add your own API key in Settings for unlimited use, or try again tomorrow.`,
+          message: `You've used your ${dailyLimit} daily messages. Upgrade your tier or try again tomorrow.`,
+          remaining: 0,
+        }),
+        {
+          status: 429,
+          headers: {
+            ...cors,
+            "Content-Type": "application/json",
+            "Retry-After": "86400",
+            "X-RateLimit-Remaining": "0",
+          },
+        },
+      );
+    }
+  } else if (authMode === "anonymous") {
+    // IP-based rate limiting (backward compatible)
+    const ip = getClientIP(request);
+    const key = `proxy:${ip}:${todayDate()}`;
+    const { allowed } = await checkRateLimit(key, limits.dailyLimit);
+    if (!allowed) {
+      return new Response(
+        JSON.stringify({
+          error: "rate_limited",
+          message: `You've used your ${limits.dailyLimit} free messages today. Add your own API key in Settings for unlimited use, or try again tomorrow.`,
           remaining: 0,
         }),
         {
@@ -114,11 +208,11 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
   }
+  // BYOK: no rate limiting — user pays their own way
 
-  // Parse and validate body — post-parse size is the true boundary
-  const maxBody = isBYOK ? BYOK_MAX_BODY_SIZE : FREE_MAX_BODY_SIZE;
+  // --- Parse and validate body ---
   const raw = await request.text();
-  if (raw.length > maxBody) {
+  if (raw.length > limits.maxBody) {
     return new Response(JSON.stringify({ error: "request_too_large" }), {
       status: 413,
       headers: { ...cors, "Content-Type": "application/json" },
@@ -135,25 +229,44 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // Validate model — free tier is restricted, BYOK can use any model
-  const model = body.model as string | undefined;
-  if (!model) {
+  // --- Validate model ---
+  const requestedModel = body.model as string | undefined;
+  if (!requestedModel) {
     return new Response(JSON.stringify({ error: "invalid_model", message: "Model is required" }), {
       status: 400,
       headers: { ...cors, "Content-Type": "application/json" },
     });
   }
-  if (!isBYOK && !FREE_MODEL_ALLOWLIST.includes(model)) {
-    return new Response(
-      JSON.stringify({
-        error: "invalid_model",
-        message: `Free tier model must be one of: ${FREE_MODEL_ALLOWLIST.join(", ")}. Add your own API key for other models.`,
-      }),
-      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
-    );
+
+  let resolvedModel = requestedModel;
+
+  if (authMode === "proxy-token" && tokenPayload) {
+    // Enforce model allowlist from token
+    if (tokenPayload.models.length > 0 && !tokenPayload.models.includes(requestedModel)) {
+      return new Response(
+        JSON.stringify({
+          error: "invalid_model",
+          message: `Your tier allows: ${tokenPayload.models.join(", ")}. Upgrade for access to other models.`,
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+    // Map tier to the correct Anthropic model
+    resolvedModel = TIER_MODEL_MAP[tierName] ?? requestedModel;
+  } else if (!isBYOK) {
+    // Anonymous: enforce free model allowlist
+    if (!FREE_MODEL_ALLOWLIST.includes(requestedModel)) {
+      return new Response(
+        JSON.stringify({
+          error: "invalid_model",
+          message: `Free tier model must be one of: ${FREE_MODEL_ALLOWLIST.join(", ")}. Add your own API key for other models.`,
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
   }
 
-  // Validate messages — graduated limits by tier
+  // --- Validate messages ---
   const messages = body.messages as Array<{ role: string; content: string }> | undefined;
   if (!Array.isArray(messages) || messages.length === 0) {
     return new Response(JSON.stringify({ error: "invalid_messages" }), {
@@ -161,18 +274,16 @@ export async function POST(request: Request): Promise<Response> {
       headers: { ...cors, "Content-Type": "application/json" },
     });
   }
-  const maxMessages = isBYOK ? BYOK_MAX_MESSAGES : FREE_MAX_MESSAGES;
-  const maxMsgLen = isBYOK ? BYOK_MAX_MESSAGE_LENGTH : FREE_MAX_MESSAGE_LENGTH;
-  if (messages.length > maxMessages) {
+  if (messages.length > limits.maxMsgs) {
     return new Response(
-      JSON.stringify({ error: "too_many_messages", message: `Max ${maxMessages} messages` }),
+      JSON.stringify({ error: "too_many_messages", message: `Max ${limits.maxMsgs} messages` }),
       { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }
   let totalChars = 0;
   for (const msg of messages) {
     if (typeof msg.content === "string") {
-      if (msg.content.length > maxMsgLen) {
+      if (msg.content.length > limits.maxMsgLen) {
         return new Response(JSON.stringify({ error: "message_too_long" }), {
           status: 400,
           headers: { ...cors, "Content-Type": "application/json" },
@@ -181,31 +292,36 @@ export async function POST(request: Request): Promise<Response> {
       totalChars += msg.content.length;
     }
   }
-  if (totalChars > maxBody) {
+  if (totalChars > limits.maxBody) {
     return new Response(JSON.stringify({ error: "payload_too_large" }), {
       status: 413,
       headers: { ...cors, "Content-Type": "application/json" },
     });
   }
 
-  // Build proxied request
+  // --- Build proxied request ---
+  const maxTokensCap =
+    authMode === "proxy-token" && tokenPayload
+      ? tokenPayload.mtk || limits.maxTokens
+      : limits.maxTokens;
+
   const proxiedBody: Record<string, unknown> = {
-    model: body.model,
+    model: resolvedModel,
     messages: body.messages,
     system: body.system,
     max_tokens: isBYOK
       ? (body.max_tokens as number) || 4096
-      : Math.min((body.max_tokens as number) || 4096, 4096),
+      : Math.min((body.max_tokens as number) || maxTokensCap, maxTokensCap),
     temperature: body.temperature,
     stream: body.stream ?? true,
   };
 
-  // BYOK users get tool support; free tier strips tools to keep costs down
+  // BYOK users get tool support; free/proxy-token tiers strip tools to keep costs down
   if (isBYOK && body.tools != null) {
     proxiedBody.tools = body.tools;
   }
 
-  // Forward to Anthropic
+  // --- Forward to Anthropic ---
   const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -215,6 +331,12 @@ export async function POST(request: Request): Promise<Response> {
     },
     body: JSON.stringify(proxiedBody),
   });
+
+  // Record usage for proxy-token requests (best-effort, non-blocking)
+  if (authMode === "proxy-token" && tokenPayload) {
+    // Fire-and-forget — don't await, don't block the response
+    void recordUsage(tokenPayload.mid);
+  }
 
   // Pipe Anthropic's streaming response directly to the client
   return new Response(anthropicRes.body, {

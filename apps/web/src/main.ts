@@ -1,7 +1,17 @@
 import { WebApp } from "./web-app";
 import type { WebContext } from "./types";
 import type { ProviderConfig } from "./storage";
-import { loadProviderConfig, loadSoulColor, loadSyncUrl, saveProviderConfig } from "./storage";
+import {
+  loadProviderConfig,
+  loadSoulColor,
+  loadSyncUrl,
+  saveProviderConfig,
+  loadProxyToken,
+  saveProxyToken,
+  clearProxyToken,
+  saveSubscriptionTier,
+  type ProxyTokenData,
+} from "./storage";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { checkWebGPU, WebLLMProvider, PROXY_BASE_URL } from "./providers";
@@ -165,10 +175,120 @@ document.addEventListener("keydown", (e) => {
 const DEFAULT_PROXY_MODEL = "claude-sonnet-4-20250514";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
-/** Try to connect via the free proxy — instant, no download. */
-async function autoInitProxy(): Promise<boolean> {
+/** Model to use per subscription tier. */
+function tierModel(tier: string): string {
+  switch (tier) {
+    case "pro":
+      return "claude-sonnet-4-20250514";
+    default:
+      return DEFAULT_PROXY_MODEL;
+  }
+}
+
+/** Fetch a proxy token from the relay for authenticated proxy access. */
+async function fetchProxyToken(syncUrl: string, motebitId: string): Promise<ProxyTokenData | null> {
   try {
-    // Quick connectivity check — HEAD-like request to confirm the proxy is reachable
+    const res = await fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/proxy-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      token: string;
+      tier: string;
+      expires_at: number;
+      motebit_id: string;
+    };
+    return {
+      token: data.token,
+      tier: data.tier,
+      expiresAt: data.expires_at,
+      motebitId: data.motebit_id,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Schedule a proxy token refresh before it expires. */
+let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleTokenRefresh(expiresAt: number): void {
+  if (tokenRefreshTimer != null) clearTimeout(tokenRefreshTimer);
+  // Refresh 60 seconds before expiry, minimum 5 seconds from now
+  const delay = Math.max(expiresAt - Date.now() - 60_000, 5_000);
+  tokenRefreshTimer = setTimeout(() => {
+    void refreshProxyToken();
+  }, delay);
+}
+
+async function refreshProxyToken(): Promise<void> {
+  const syncUrl = loadSyncUrl();
+  const motebitId = localStorage.getItem("motebit:motebit_id");
+  if (!syncUrl || !motebitId) return;
+
+  const token = await fetchProxyToken(syncUrl, motebitId);
+  if (!token) return;
+
+  saveProxyToken(token);
+  saveSubscriptionTier(token.tier);
+
+  // Reconnect provider with fresh token
+  const config: ProviderConfig = {
+    type: "proxy",
+    model: tierModel(token.tier),
+    proxyToken: token.token,
+  };
+  app.connectProvider(config);
+  currentConfig = config;
+  saveProviderConfig(config);
+  settings.updateModelIndicator();
+
+  scheduleTokenRefresh(token.expiresAt);
+}
+
+/** Try to connect via the proxy — with auth token if relay-connected, anonymous otherwise. */
+async function autoInitProxy(): Promise<boolean> {
+  const syncUrl = loadSyncUrl();
+  const motebitId = localStorage.getItem("motebit:motebit_id");
+
+  // Authenticated path: relay-connected user gets a proxy token
+  if (syncUrl && motebitId) {
+    let token = loadProxyToken();
+
+    // Refresh if expired or expiring within 60 seconds
+    if (!token || token.expiresAt < Date.now() + 60_000) {
+      const fresh = await fetchProxyToken(syncUrl, motebitId);
+      if (fresh) {
+        token = fresh;
+        saveProxyToken(token);
+        saveSubscriptionTier(token.tier);
+      } else if (token) {
+        // Fetch failed but we have a (possibly stale) token — clear it
+        clearProxyToken();
+        token = null;
+      }
+    }
+
+    if (token) {
+      const config: ProviderConfig = {
+        type: "proxy",
+        model: tierModel(token.tier),
+        proxyToken: token.token,
+      };
+      app.connectProvider(config);
+      currentConfig = config;
+      saveProviderConfig(config);
+      settings.updateModelIndicator();
+      settings.updateConnectPrompt();
+      scheduleTokenRefresh(token.expiresAt);
+      return true;
+    }
+    // Fall through to anonymous proxy if token fetch failed
+  }
+
+  // Anonymous path: first visit or relay unavailable — backward compatible
+  try {
     const res = await fetch(`${PROXY_BASE_URL}/v1/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -178,7 +298,7 @@ async function autoInitProxy(): Promise<boolean> {
     // 429 = rate limited but proxy exists
     // 200 = shouldn't happen with empty messages but fine
     if (res.status === 400 || res.status === 429 || res.ok) {
-      const config = { type: "proxy" as const, model: DEFAULT_PROXY_MODEL };
+      const config: ProviderConfig = { type: "proxy", model: DEFAULT_PROXY_MODEL };
       app.connectProvider(config);
       currentConfig = config;
       saveProviderConfig(config);
@@ -283,16 +403,19 @@ async function bootstrap(): Promise<void> {
   // Restore provider config and auto-connect
   const savedConfig = loadProviderConfig();
   if (savedConfig != null) {
-    // Migrate stale proxy model — proxy allowlist may have changed
-    if (savedConfig.type === "proxy" && savedConfig.model !== DEFAULT_PROXY_MODEL) {
-      savedConfig.model = DEFAULT_PROXY_MODEL;
-      saveProviderConfig(savedConfig);
-    }
-    currentConfig = savedConfig;
-
-    if (savedConfig.type === "webllm") {
+    if (savedConfig.type === "proxy") {
+      // For proxy users, always go through autoInitProxy to handle token refresh
+      void autoInitProxy().then(async (ok) => {
+        if (!ok && checkWebGPU()) {
+          await autoInitWebLLM();
+        }
+        settings.updateConnectPrompt();
+      });
+    } else if (savedConfig.type === "webllm") {
+      currentConfig = savedConfig;
       void autoInitWebLLM(savedConfig.model);
     } else {
+      currentConfig = savedConfig;
       try {
         app.connectProvider(savedConfig);
         settings.updateModelIndicator();

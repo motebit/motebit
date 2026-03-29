@@ -248,6 +248,10 @@ export function createProvider(config: ProviderConfig): StreamingProvider | Inte
         maxTokens: config.maxTokens,
       });
     case "proxy": {
+      const extraHeaders: Record<string, string> = {};
+      if (config.proxyToken) {
+        extraHeaders["x-proxy-token"] = config.proxyToken;
+      }
       const proxyConfig: CloudProviderConfig = {
         provider: "anthropic",
         api_key: "", // proxy supplies the key server-side
@@ -255,6 +259,7 @@ export function createProvider(config: ProviderConfig): StreamingProvider | Inte
         base_url: config.baseUrl ?? PROXY_BASE_URL,
         max_tokens: config.maxTokens,
         temperature: config.temperature,
+        extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
       };
       return new CloudProvider(proxyConfig);
     }
