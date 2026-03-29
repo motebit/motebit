@@ -320,7 +320,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   providerTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
-      const provider = tab.dataset.provider as ProviderType | "proxy";
+      const provider = tab.dataset.provider;
       if (provider) switchProviderTab(provider as ProviderType);
     });
   });

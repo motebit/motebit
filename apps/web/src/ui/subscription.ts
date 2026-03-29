@@ -50,18 +50,16 @@ function loadStripeJs(): Promise<unknown> {
 }
 
 export function initSubscription(ctx: WebContext): SubscriptionAPI {
-  const activeDiv = document.getElementById("subscription-active") as HTMLElement | null;
-  const badge = document.getElementById("subscription-tier-badge") as HTMLElement | null;
-  const detail = document.getElementById("subscription-tier-detail") as HTMLElement | null;
-  const upgradeDiv = document.getElementById("subscription-upgrade") as HTMLElement | null;
+  const activeDiv = document.getElementById("subscription-active");
+  const badge = document.getElementById("subscription-tier-badge");
+  const detail = document.getElementById("subscription-tier-detail");
+  const upgradeDiv = document.getElementById("subscription-upgrade");
   const planSelect = document.getElementById("subscription-plan") as HTMLSelectElement | null;
   const modelPreview = document.getElementById(
     "subscription-model-preview",
   ) as HTMLInputElement | null;
   const subscribeBtn = document.getElementById("upgrade-pro-btn") as HTMLButtonElement | null;
-  const checkoutContainer = document.getElementById(
-    "stripe-checkout-container",
-  ) as HTMLElement | null;
+  const checkoutContainer = document.getElementById("stripe-checkout-container");
 
   // Plan selector updates model preview
   planSelect?.addEventListener("change", () => {
@@ -121,8 +119,10 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
           }),
         });
         if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: "checkout request failed" }));
-          throw new Error((err as { error?: string }).error ?? "checkout request failed");
+          const err = (await res.json().catch(() => ({ error: "checkout request failed" }))) as {
+            error?: string;
+          };
+          throw new Error(err.error ?? "checkout request failed");
         }
         const data = (await res.json()) as { clientSecret: string };
         return data.clientSecret;
@@ -184,7 +184,7 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
 
   // Cancel subscription — inline confirmation, no redirect
   const cancelLink = document.getElementById("subscription-cancel-link");
-  cancelLink?.addEventListener("click", async (e) => {
+  cancelLink?.addEventListener("click", (e) => {
     e.preventDefault();
 
     // Inline confirmation: replace the link with confirm/dismiss
@@ -195,6 +195,9 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
     const motebitId = localStorage.getItem("motebit:motebit_id");
     if (!motebitId) return;
 
+    const cancelLinkHtml =
+      '<a id="subscription-cancel-link" href="#" style="font-size:11px; color:var(--text-muted); opacity:0.6; text-decoration:none; cursor:pointer;">Cancel plan</a>';
+
     manageEl.innerHTML =
       '<span style="font-size:12px; color:var(--text-muted);">Cancel your plan? You keep access until the period ends.</span>' +
       '<div style="display:flex; gap:8px; justify-content:center; margin-top:6px;">' +
@@ -203,43 +206,47 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
       "</div>";
 
     document.getElementById("cancel-dismiss")?.addEventListener("click", () => {
-      manageEl.innerHTML =
-        '<a id="subscription-cancel-link" href="#" style="font-size:11px; color:var(--text-muted); opacity:0.6; text-decoration:none; cursor:pointer;">Cancel plan</a>';
-      // Re-attach handler by re-initializing (simpler than re-binding)
+      manageEl.innerHTML = cancelLinkHtml;
       document.getElementById("subscription-cancel-link")?.addEventListener("click", (ev) => {
         ev.preventDefault();
         cancelLink.click();
       });
     });
 
-    document.getElementById("cancel-confirm")?.addEventListener("click", async () => {
+    document.getElementById("cancel-confirm")?.addEventListener("click", () => {
       const confirmBtn = document.getElementById("cancel-confirm") as HTMLButtonElement | null;
       if (confirmBtn) {
         confirmBtn.disabled = true;
         confirmBtn.textContent = "Cancelling…";
       }
 
-      try {
-        const res = await fetch(`${relayUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+      fetch(`${relayUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+        .then((res) => {
+          if (res.ok) {
+            void res.json().then((data: { active_until?: number }) => {
+              const until =
+                data.active_until != null && data.active_until > 0
+                  ? new Date(data.active_until).toLocaleDateString()
+                  : "";
+              manageEl.innerHTML = `<span style="font-size:12px; color:var(--text-muted);">Plan cancels${until ? ` on ${until}` : " at period end"}. You have access until then.</span>`;
+            });
+          } else {
+            void res
+              .json()
+              .catch(() => ({ error: "cancel failed" }))
+              .then((err: { error?: string }) => {
+                ctx.showToast(err.error ?? "Cancel failed");
+                manageEl.innerHTML = cancelLinkHtml;
+              });
+          }
+        })
+        .catch(() => {
+          ctx.showToast("Network error — try again");
+          manageEl.innerHTML = cancelLinkHtml;
         });
-
-        if (res.ok) {
-          const data = (await res.json()) as { active_until?: number };
-          const until = data.active_until ? new Date(data.active_until).toLocaleDateString() : "";
-          manageEl.innerHTML = `<span style="font-size:12px; color:var(--text-muted);">Plan cancels${until ? ` on ${until}` : " at period end"}. You have access until then.</span>`;
-        } else {
-          const err = await res.json().catch(() => ({ error: "cancel failed" }));
-          ctx.showToast((err as { error?: string }).error ?? "Cancel failed");
-          manageEl.innerHTML =
-            '<a id="subscription-cancel-link" href="#" style="font-size:11px; color:var(--text-muted); opacity:0.6; text-decoration:none; cursor:pointer;">Cancel plan</a>';
-        }
-      } catch {
-        ctx.showToast("Network error — try again");
-        manageEl.innerHTML =
-          '<a id="subscription-cancel-link" href="#" style="font-size:11px; color:var(--text-muted); opacity:0.6; text-decoration:none; cursor:pointer;">Cancel plan</a>';
-      }
     });
   });
 
