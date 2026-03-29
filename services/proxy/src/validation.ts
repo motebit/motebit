@@ -43,6 +43,8 @@ export interface ProxyTokenPayload {
   models: string[];
   /** Max tokens per request */
   mtk: number;
+  /** Unique token ID (nonce) */
+  jti: string;
   /** Issued-at timestamp (ms) */
   iat: number;
   /** Expiry timestamp (ms) */

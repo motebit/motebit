@@ -44,6 +44,7 @@ export interface ProxyToken {
   lim: number; // daily message limit
   models: string[]; // allowed models
   mtk: number; // max_tokens per request
+  jti: string; // unique token id (nonce) — prevents replay identification
   iat: number; // issued at (epoch ms)
   exp: number; // expires at (epoch ms)
 }
@@ -168,6 +169,7 @@ export async function issueProxyToken(
     lim: config.daily_limit,
     models: [...config.models],
     mtk: config.max_tokens,
+    jti: crypto.randomUUID(),
     iat: now,
     exp: now + PROXY_TOKEN_TTL_MS,
   };
