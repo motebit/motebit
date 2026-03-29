@@ -4818,13 +4818,25 @@
           </div>
           <!-- Motebit Cloud (subscription) -->
           <div class="provider-config active" id="provider-proxy">
-            <div id="subscription-content" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-              <span id="subscription-tier-badge" class="tier-badge" style="display:none;"></span>
-              <span id="subscription-tier-detail" style="font-size:13px; color:var(--text-muted);"></span>
+            <div id="subscription-active" style="display:none;">
+              <div id="subscription-content" style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+                <span id="subscription-tier-badge" class="tier-badge"></span>
+                <span id="subscription-tier-detail" style="font-size:13px; color:var(--text-muted);"></span>
+              </div>
             </div>
-            <div id="subscription-upgrade" style="display:flex; gap:8px; flex-wrap:wrap;">
-              <button id="upgrade-pro-btn" class="upgrade-btn">Pro — Sonnet · $20/mo</button>
-              <button id="upgrade-ultra-btn" class="upgrade-btn upgrade-ultra">Ultra — Opus · $50/mo</button>
+            <div id="subscription-upgrade">
+              <div class="settings-field">
+                <label for="subscription-plan">Plan</label>
+                <select id="subscription-plan">
+                  <option value="pro">Pro — Sonnet · $20/mo</option>
+                  <option value="ultra">Ultra — Opus · $50/mo</option>
+                </select>
+              </div>
+              <div class="settings-field">
+                <label>Model</label>
+                <input type="text" id="subscription-model-preview" value="Claude Sonnet 4" readonly style="opacity:0.6; cursor:default;" />
+              </div>
+              <button id="upgrade-pro-btn" class="upgrade-btn" style="margin-top:10px; width:100%;">Subscribe</button>
             </div>
           </div>
           <!-- API Key (BYOK) -->

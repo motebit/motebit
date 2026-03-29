@@ -5,16 +5,32 @@ export interface SubscriptionAPI {
   updateTierDisplay(): void;
 }
 
+const PLAN_MODELS: Record<string, string> = {
+  pro: "Claude Sonnet 4",
+  ultra: "Claude Opus 4",
+};
+
 export function initSubscription(ctx: WebContext): SubscriptionAPI {
+  const activeDiv = document.getElementById("subscription-active") as HTMLElement | null;
   const badge = document.getElementById("subscription-tier-badge") as HTMLElement | null;
   const detail = document.getElementById("subscription-tier-detail") as HTMLElement | null;
   const upgradeDiv = document.getElementById("subscription-upgrade") as HTMLElement | null;
-  const proBtn = document.getElementById("upgrade-pro-btn");
-  const ultraBtn = document.getElementById("upgrade-ultra-btn");
+  const planSelect = document.getElementById("subscription-plan") as HTMLSelectElement | null;
+  const modelPreview = document.getElementById(
+    "subscription-model-preview",
+  ) as HTMLInputElement | null;
+  const subscribeBtn = document.getElementById("upgrade-pro-btn") as HTMLButtonElement | null;
 
-  function openCheckout(tier: "pro" | "ultra"): void {
+  // Plan selector updates model preview
+  planSelect?.addEventListener("change", () => {
+    if (modelPreview) modelPreview.value = PLAN_MODELS[planSelect.value] ?? "";
+  });
+
+  // Subscribe button opens checkout for selected plan
+  subscribeBtn?.addEventListener("click", () => {
     const syncUrl = loadSyncUrl();
     const motebitId = localStorage.getItem("motebit:motebit_id");
+    const plan = planSelect?.value ?? "pro";
 
     if (!syncUrl || !motebitId) {
       ctx.showToast("Connect to a relay first to subscribe");
@@ -22,49 +38,24 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
     }
 
     const returnUrl = encodeURIComponent(window.location.href);
-    const checkoutUrl = `${syncUrl}/api/v1/subscriptions/checkout?motebit_id=${motebitId}&tier=${tier}&return_url=${returnUrl}`;
+    const checkoutUrl = `${syncUrl}/api/v1/subscriptions/checkout?motebit_id=${motebitId}&tier=${plan}&return_url=${returnUrl}`;
     window.open(checkoutUrl, "_blank");
-  }
-
-  proBtn?.addEventListener("click", () => openCheckout("pro"));
-  ultraBtn?.addEventListener("click", () => openCheckout("ultra"));
+  });
 
   function updateTierDisplay(): void {
     const tier = loadProxyToken()?.tier ?? loadSubscriptionTier();
     const isSubscribed = tier === "pro" || tier === "ultra";
-    const isByok = tier === "byok";
 
-    // Badge: only show for active subscribers
-    if (badge) {
-      if (isSubscribed) {
-        badge.style.display = "";
-        badge.className = `tier-badge tier-${tier}`;
-        badge.textContent = tier === "ultra" ? "Ultra" : "Pro";
-      } else if (isByok) {
-        badge.style.display = "";
-        badge.className = "tier-badge tier-byok";
-        badge.textContent = "BYOK";
-      } else {
-        badge.style.display = "none";
-      }
+    // Subscribed: show tier badge + detail, hide upgrade form
+    if (activeDiv) activeDiv.style.display = isSubscribed ? "" : "none";
+    if (upgradeDiv) upgradeDiv.style.display = isSubscribed ? "none" : "";
+
+    if (isSubscribed && badge) {
+      badge.className = `tier-badge tier-${tier}`;
+      badge.textContent = tier === "ultra" ? "Ultra" : "Pro";
     }
-
-    // Detail text
-    if (detail) {
-      if (tier === "ultra") {
-        detail.textContent = "Opus · 1,000 msgs/day";
-      } else if (tier === "pro") {
-        detail.textContent = "Sonnet · 500 msgs/day";
-      } else if (isByok) {
-        detail.textContent = "Using your own API key";
-      } else {
-        detail.textContent = "";
-      }
-    }
-
-    // Upgrade buttons: hide if subscribed or BYOK
-    if (upgradeDiv) {
-      upgradeDiv.style.display = isSubscribed || isByok ? "none" : "";
+    if (isSubscribed && detail) {
+      detail.textContent = tier === "ultra" ? "Opus · 1,000 msgs/day" : "Sonnet · 500 msgs/day";
     }
   }
 
