@@ -5,10 +5,16 @@
  * uses this module. The surface provides platform-specific adapters for
  * storage and provider connection; this module handles the protocol.
  *
- * Three modes:
- *   1. Authenticated: relay-connected user → proxy token → tier-aware proxy
- *   2. Anonymous: no relay → IP-rate-limited proxy (free tier)
- *   3. BYOK: user's own API key → no proxy involvement
+ * The proxy is for PAYING subscribers only (Pro/Ultra). Free users run
+ * local inference (Ollama, WebLLM) — zero API cost per the metabolic
+ * principle: absorb what the medium carries, don't buy it.
+ *
+ * Two modes:
+ *   1. Subscriber: relay-connected paying user → proxy token → cloud model
+ *   2. BYOK: user's own API key → no proxy involvement
+ *
+ * Free users never touch the proxy. The surface's boot sequence is:
+ *   Ollama (local) → WebLLM (browser) → "Upgrade to Pro for cloud AI"
  */
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -52,8 +58,8 @@ export interface ProxyProviderConfig {
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-const DEFAULT_PROXY_MODEL = "claude-haiku-4-5-20251001";
-const PRO_MODEL = "claude-sonnet-4-20250514";
+const SONNET_MODEL = "claude-sonnet-4-20250514";
+const OPUS_MODEL = "claude-opus-4-20250115";
 
 /** Default proxy base URL — surfaces can override. */
 export const DEFAULT_PROXY_BASE_URL = "https://api.motebit.com";
@@ -63,10 +69,12 @@ export const DEFAULT_PROXY_BASE_URL = "https://api.motebit.com";
 /** Map subscription tier to the appropriate model. */
 export function tierModel(tier: string): string {
   switch (tier) {
+    case "ultra":
+      return OPUS_MODEL;
     case "pro":
-      return PRO_MODEL;
+      return SONNET_MODEL;
     default:
-      return DEFAULT_PROXY_MODEL;
+      return SONNET_MODEL;
   }
 }
 
@@ -103,6 +111,9 @@ export async function fetchProxyToken(
 /**
  * ProxySession manages the proxy token lifecycle for a single surface.
  * Create one per app, pass the platform adapter, call `bootstrap()` on startup.
+ *
+ * Returns false if the user is not a paying subscriber — the surface should
+ * then fall through to local inference (Ollama → WebLLM → upgrade prompt).
  */
 export class ProxySession {
   private adapter: ProxySessionAdapter;
@@ -123,72 +134,44 @@ export class ProxySession {
   }
 
   /**
-   * Bootstrap proxy connection. Tries authenticated first, falls back to anonymous.
-   * Returns true if a proxy connection was established.
+   * Bootstrap proxy connection for paying subscribers only.
+   * Returns true if the user has an active subscription and a proxy token was obtained.
+   * Returns false if the user is not subscribed — surface should use local inference.
    */
   async bootstrap(): Promise<boolean> {
-    // Authenticated path: relay-connected user gets a proxy token
     const syncUrl = this.adapter.getSyncUrl();
     const motebitId = this.adapter.getMotebitId();
 
-    if (syncUrl && motebitId) {
-      let token = this.adapter.loadToken();
+    if (!syncUrl || !motebitId) return false;
 
-      // Refresh if expired or expiring within 60 seconds
-      if (!token || token.expiresAt < Date.now() + 60_000) {
-        const fresh = await fetchProxyToken(syncUrl, motebitId);
-        if (fresh) {
-          token = fresh;
-          this.adapter.saveToken(token);
-          this.adapter.saveTier(token.tier);
-        } else if (token) {
-          this.adapter.clearToken();
-          token = null;
-        }
-      }
+    let token = this.adapter.loadToken();
 
-      if (token) {
-        this.adapter.onProviderReady({
-          type: "proxy",
-          model: tierModel(token.tier),
-          proxyToken: token.token,
-          baseUrl: this.proxyBaseUrl,
-        });
-        this.scheduleRefresh(token.expiresAt);
-        return true;
+    // Refresh if expired or expiring within 60 seconds
+    if (!token || token.expiresAt < Date.now() + 60_000) {
+      const fresh = await fetchProxyToken(syncUrl, motebitId);
+      if (fresh) {
+        token = fresh;
+        this.adapter.saveToken(token);
+        this.adapter.saveTier(token.tier);
+      } else if (token) {
+        this.adapter.clearToken();
+        token = null;
       }
-      // Fall through to anonymous if token fetch failed
     }
 
-    // Anonymous path: first visit or relay unavailable
-    return this.tryAnonymous();
-  }
-
-  /** Attempt anonymous proxy connection (probe the endpoint). */
-  private async tryAnonymous(): Promise<boolean> {
-    try {
-      const res = await fetch(`${this.proxyBaseUrl}/v1/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: DEFAULT_PROXY_MODEL,
-          messages: [],
-          max_tokens: 1,
-        }),
+    // Only proceed if the user has a paying tier
+    if (token && (token.tier === "pro" || token.tier === "ultra")) {
+      this.adapter.onProviderReady({
+        type: "proxy",
+        model: tierModel(token.tier),
+        proxyToken: token.token,
+        baseUrl: this.proxyBaseUrl,
       });
-      // 400 = proxy alive, rejected empty messages (expected)
-      // 429 = rate limited but proxy exists
-      if (res.status === 400 || res.status === 429 || res.ok) {
-        this.adapter.onProviderReady({
-          type: "proxy",
-          model: DEFAULT_PROXY_MODEL,
-          baseUrl: this.proxyBaseUrl,
-        });
-        return true;
-      }
-    } catch {
-      // Proxy unreachable
+      this.scheduleRefresh(token.expiresAt);
+      return true;
     }
+
+    // Free tier or no token — surface should use local inference
     return false;
   }
 

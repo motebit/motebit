@@ -22,14 +22,19 @@ const logger = createLogger({ service: "relay", module: "subscriptions" });
 
 // ── Tier configuration ──────────────────────────────────────────────────
 
-export type SubscriptionTier = "free" | "pro" | "byok";
+export type SubscriptionTier = "free" | "pro" | "ultra" | "byok";
 
 const TIER_CONFIG = {
-  free: { daily_limit: 50, models: ["claude-haiku-4-5-20251001"], max_tokens: 4096 },
+  free: { daily_limit: 0, models: [], max_tokens: 0 }, // no proxy — local inference only
   pro: {
     daily_limit: 500,
-    models: ["claude-sonnet-4-20250514", "claude-haiku-4-5-20251001"],
+    models: ["claude-sonnet-4-20250514"],
     max_tokens: 8192,
+  },
+  ultra: {
+    daily_limit: 1000,
+    models: ["claude-opus-4-20250115", "claude-sonnet-4-20250514"],
+    max_tokens: 16384,
   },
   byok: { daily_limit: Infinity, models: [], max_tokens: 0 }, // no proxy limits
 } as const;

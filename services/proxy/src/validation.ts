@@ -12,13 +12,20 @@ export const MAX_MESSAGES = 50;
 export const MAX_RESPONSE_SIZE = 100_000; // 100KB
 export const FETCH_TIMEOUT_MS = 15_000;
 
-/** Free tier model allowlist — BYOK users can use any model */
-export const FREE_MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001"];
+/** Anonymous model allowlist — only used if anonymous proxy access is ever re-enabled */
+export const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
 
 /** Tier-aware limits for all authentication modes */
 export const TIER_LIMITS = {
-  free: { maxBody: 100_000, maxMsgLen: 10_000, maxMsgs: 50, maxTokens: 4096, dailyLimit: 50 },
+  free: { maxBody: 0, maxMsgLen: 0, maxMsgs: 0, maxTokens: 0, dailyLimit: 0 }, // no proxy access
   pro: { maxBody: 500_000, maxMsgLen: 50_000, maxMsgs: 100, maxTokens: 8192, dailyLimit: 500 },
+  ultra: {
+    maxBody: 1_000_000,
+    maxMsgLen: 100_000,
+    maxMsgs: 200,
+    maxTokens: 16384,
+    dailyLimit: 1000,
+  },
   byok: {
     maxBody: 1_000_000,
     maxMsgLen: 200_000,
@@ -52,7 +59,12 @@ export interface ProxyTokenPayload {
 }
 
 const PROD_ORIGINS = ["https://motebit.com", "https://www.motebit.com"];
-const DEV_ORIGINS = ["http://localhost:3000", "http://localhost:3002", "http://localhost:5173"];
+const DEV_ORIGINS = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:3002",
+  "http://localhost:5173",
+];
 
 export function getAllowedOrigins(isDev: boolean): Set<string> {
   return new Set([...PROD_ORIGINS, ...(isDev ? DEV_ORIGINS : [])]);

@@ -317,8 +317,9 @@ async function bootstrap(): Promise<void> {
       }
     }
   } else {
-    // First visit — try free proxy (instant), fall back to WebLLM.
-    // Connect prompt starts hidden; only reveal after all attempts fail.
+    // First visit — no subscription yet. Try local inference first (zero API cost).
+    // Proxy is for paying subscribers only per metabolic principle.
+    // Boot sequence: subscriber proxy → WebLLM (browser) → upgrade prompt.
     void autoInitProxy().then(async (ok) => {
       if (!ok && checkWebGPU()) {
         await autoInitWebLLM();

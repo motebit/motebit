@@ -7,14 +7,13 @@ import {
   parseProxyToken,
 } from "../../../validation";
 
-// Free tier model allowlist — BYOK users can use any model
-const FREE_MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001"];
+// Subscriber model allowlist — only paying tiers use the proxy
+const SUBSCRIBER_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514", "claude-opus-4-20250115"];
 
 // Tier → Anthropic model mapping (proxy-token users get the model for their tier)
 const TIER_MODEL_MAP: Record<string, string> = {
-  free: "claude-haiku-4-5-20251001",
   pro: "claude-sonnet-4-20250514",
-  anonymous: "claude-haiku-4-5-20251001",
+  ultra: "claude-opus-4-20250115",
 };
 
 const ALLOWED_ORIGINS = new Set([
@@ -22,6 +21,7 @@ const ALLOWED_ORIGINS = new Set([
   "https://www.motebit.com",
   // Localhost is safe — the proxy validates API keys regardless of origin
   "http://localhost:3000",
+  "http://localhost:3001",
   "http://localhost:3002",
   "http://localhost:5173",
 ]);
@@ -262,12 +262,12 @@ export async function POST(request: Request): Promise<Response> {
     // Map tier to the correct Anthropic model
     resolvedModel = TIER_MODEL_MAP[tierName] ?? requestedModel;
   } else if (!isBYOK) {
-    // Anonymous: enforce free model allowlist
-    if (!FREE_MODEL_ALLOWLIST.includes(requestedModel)) {
+    // Anonymous: enforce subscriber model allowlist
+    if (!SUBSCRIBER_MODEL_ALLOWLIST.includes(requestedModel)) {
       return new Response(
         JSON.stringify({
           error: "invalid_model",
-          message: `Free tier model must be one of: ${FREE_MODEL_ALLOWLIST.join(", ")}. Add your own API key for other models.`,
+          message: `Model must be one of: ${SUBSCRIBER_MODEL_ALLOWLIST.join(", ")}. Subscribe or add your own API key.`,
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
       );
