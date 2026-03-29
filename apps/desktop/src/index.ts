@@ -5,7 +5,8 @@
  * Provides Tauri-specific storage adapters and AI provider creation.
  */
 
-import { MotebitRuntime, SimpleToolRegistry, executeCommand } from "@motebit/runtime";
+import { MotebitRuntime, SimpleToolRegistry, executeCommand, ProxySession } from "@motebit/runtime";
+import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import type {
   TurnResult,
   StorageAdapters,
@@ -395,6 +396,8 @@ export class DesktopApp {
   private _servingSyncUrl: string | null = null;
   private _servingAuthToken: string | null = null;
   private _activeTaskCount = 0;
+  private _proxySession: ProxySession | null = null;
+  private _proxyConfig: ProxyProviderConfig | null = null;
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -660,6 +663,89 @@ export class DesktopApp {
   }
 
   /**
+   * Attempt proxy bootstrap before requiring an API key.
+   * Call after bootstrap() but before initAI(). If this returns true,
+   * pass { provider: "proxy" } to initAI() — the token and model are stored internally.
+   */
+  async tryProxyBootstrap(invoke: InvokeFn): Promise<boolean> {
+    const app = this;
+    const adapter: ProxySessionAdapter = {
+      getSyncUrl() {
+        // syncUrl is read synchronously from the last config read.
+        // For the adapter, we cache it during bootstrap.
+        return app._proxySyncUrlCache;
+      },
+      getMotebitId() {
+        return app.motebitId !== "desktop-local" ? app.motebitId : null;
+      },
+      loadToken() {
+        return app._proxyTokenCache;
+      },
+      saveToken(data) {
+        app._proxyTokenCache = data;
+        // Persist to Tauri config (best-effort, non-blocking)
+        void invoke<string>("read_config")
+          .then((raw) => {
+            const config = { ...(JSON.parse(raw) as Record<string, unknown>), _proxy_token: data };
+            return invoke<void>("write_config", { json: JSON.stringify(config) });
+          })
+          .catch(() => {});
+      },
+      clearToken() {
+        app._proxyTokenCache = null;
+        void invoke<string>("read_config")
+          .then((raw) => {
+            const config = JSON.parse(raw) as Record<string, unknown>;
+            delete config._proxy_token;
+            return invoke<void>("write_config", { json: JSON.stringify(config) });
+          })
+          .catch(() => {});
+      },
+      saveTier(_tier) {
+        // Tier is captured in the proxy config model via tierModel()
+      },
+      onProviderReady(config: ProxyProviderConfig) {
+        app._proxyConfig = config;
+      },
+    };
+
+    // Pre-load sync URL and cached token from Tauri config
+    try {
+      const raw = await invoke<string>("read_config");
+      const configData = JSON.parse(raw) as Record<string, unknown>;
+      this._proxySyncUrlCache = (configData.sync_url as string) ?? null;
+      const cached = configData._proxy_token as
+        | {
+            token: string;
+            tier: string;
+            expiresAt: number;
+            motebitId: string;
+          }
+        | undefined;
+      this._proxyTokenCache = cached ?? null;
+    } catch {
+      this._proxySyncUrlCache = null;
+      this._proxyTokenCache = null;
+    }
+
+    this._proxySession = new ProxySession(adapter);
+    return this._proxySession.bootstrap();
+  }
+
+  // Internal cache fields for proxy adapter (synchronous access required by ProxySessionAdapter)
+  private _proxySyncUrlCache: string | null = null;
+  private _proxyTokenCache: {
+    token: string;
+    tier: string;
+    expiresAt: number;
+    motebitId: string;
+  } | null = null;
+  /** Dispose proxy session refresh timer. Call on app shutdown. */
+  disposeProxySession(): void {
+    this._proxySession?.dispose();
+  }
+
+  /**
    * Initialize AI, tools, governance, and state persistence.
    * Must be called after bootstrap() for Tauri builds (needs motebitId).
    * Returns false only if Anthropic provider is selected but no API key is provided.
@@ -711,8 +797,12 @@ export class DesktopApp {
       });
       this._activeProvider = "hybrid";
     } else if (config.provider === "proxy") {
-      const model = "claude-sonnet-4-20250514";
-      const proxyUrl = (import.meta.env?.VITE_PROXY_URL as string) ?? "https://api.motebit.com";
+      const pc = this._proxyConfig;
+      const model = pc?.model ?? "claude-sonnet-4-20250514";
+      const proxyUrl =
+        pc?.baseUrl ?? (import.meta.env?.VITE_PROXY_URL as string) ?? "https://api.motebit.com";
+      const extraHeaders: Record<string, string> = {};
+      if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: "",
@@ -720,6 +810,7 @@ export class DesktopApp {
         base_url: proxyUrl,
         max_tokens: config.maxTokens,
         temperature,
+        extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
       });
       this._activeProvider = "proxy";
     } else {

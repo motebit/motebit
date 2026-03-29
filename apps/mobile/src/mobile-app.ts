@@ -11,7 +11,12 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { MotebitRuntime, RelayDelegationAdapter, executeCommand } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  RelayDelegationAdapter,
+  executeCommand,
+  ProxySession,
+} from "@motebit/runtime";
 import type {
   StreamChunk,
   OperatorModeResult,
@@ -20,6 +25,8 @@ import type {
   MemoryGovernanceConfig,
   ReflectionResult,
   CuriosityTarget,
+  ProxyProviderConfig,
+  ProxySessionAdapter,
 } from "@motebit/runtime";
 import type { GradientSnapshot } from "@motebit/runtime";
 import {
@@ -315,6 +322,10 @@ export class MobileApp {
   deviceId = "mobile-local";
   publicKey = "";
 
+  // Proxy session state
+  private _proxySession: ProxySession | null = null;
+  private _proxyConfig: ProxyProviderConfig | null = null;
+
   constructor() {
     this.renderer = new ExpoGLAdapter();
     this.keyring = new SecureStoreAdapter();
@@ -407,6 +418,82 @@ export class MobileApp {
     };
   }
 
+  // === Proxy Bootstrap ===
+
+  private static readonly PROXY_TOKEN_KEY = "@motebit/proxy_token";
+  private static readonly PROXY_TIER_KEY = "@motebit/proxy_tier";
+
+  /**
+   * Attempt proxy bootstrap before requiring an API key.
+   * Call after bootstrap() but before initAI(). If this returns true,
+   * pass { provider: "proxy" } to initAI() — the token and model are stored internally.
+   */
+  async tryProxyBootstrap(): Promise<boolean> {
+    const app = this;
+    const adapter: ProxySessionAdapter = {
+      getSyncUrl() {
+        return app._proxySyncUrlCache;
+      },
+      getMotebitId() {
+        return app.motebitId !== "mobile-local" ? app.motebitId : null;
+      },
+      loadToken() {
+        return app._proxyTokenCache;
+      },
+      saveToken(data) {
+        app._proxyTokenCache = data;
+        void AsyncStorage.setItem(MobileApp.PROXY_TOKEN_KEY, JSON.stringify(data)).catch(() => {});
+      },
+      clearToken() {
+        app._proxyTokenCache = null;
+        void AsyncStorage.removeItem(MobileApp.PROXY_TOKEN_KEY).catch(() => {});
+      },
+      saveTier(tier) {
+        void AsyncStorage.setItem(MobileApp.PROXY_TIER_KEY, tier).catch(() => {});
+      },
+      onProviderReady(config: ProxyProviderConfig) {
+        app._proxyConfig = config;
+      },
+    };
+
+    // Pre-load sync URL and cached token from AsyncStorage
+    try {
+      const [syncUrl, tokenRaw] = await Promise.all([
+        AsyncStorage.getItem(MobileApp.SYNC_URL_KEY),
+        AsyncStorage.getItem(MobileApp.PROXY_TOKEN_KEY),
+      ]);
+      this._proxySyncUrlCache = syncUrl;
+      this._proxyTokenCache = tokenRaw
+        ? (JSON.parse(tokenRaw) as {
+            token: string;
+            tier: string;
+            expiresAt: number;
+            motebitId: string;
+          })
+        : null;
+    } catch {
+      this._proxySyncUrlCache = null;
+      this._proxyTokenCache = null;
+    }
+
+    this._proxySession = new ProxySession(adapter);
+    return this._proxySession.bootstrap();
+  }
+
+  // Internal cache fields for proxy adapter (synchronous access required by ProxySessionAdapter)
+  private _proxySyncUrlCache: string | null = null;
+  private _proxyTokenCache: {
+    token: string;
+    tier: string;
+    expiresAt: number;
+    motebitId: string;
+  } | null = null;
+
+  /** Dispose proxy session refresh timer. Call on app shutdown. */
+  disposeProxySession(): void {
+    this._proxySession?.dispose();
+  }
+
   // === AI ===
 
   async initAI(config: MobileAIConfig): Promise<boolean> {
@@ -426,15 +513,21 @@ export class MobileApp {
         max_tokens: config.maxTokens,
       });
     } else if (config.provider === "proxy") {
-      const model = "claude-sonnet-4-20250514";
+      const pc = this._proxyConfig;
+      const model = pc?.model ?? "claude-sonnet-4-20250514";
       const proxyUrl =
-        (await AsyncStorage.getItem("@motebit/proxy_url")) ?? "https://api.motebit.com";
+        pc?.baseUrl ??
+        (await AsyncStorage.getItem("@motebit/proxy_url")) ??
+        "https://api.motebit.com";
+      const extraHeaders: Record<string, string> = {};
+      if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: "",
         model,
         base_url: proxyUrl,
         max_tokens: config.maxTokens,
+        extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
       });
     } else if (config.provider === "hybrid") {
       if (config.apiKey == null || config.apiKey === "") return false;
