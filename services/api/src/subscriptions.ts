@@ -70,13 +70,9 @@ export function createSubscriptionTables(db: DatabaseDriver): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_subs_stripe_sub
       ON relay_subscriptions (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;
 
-    CREATE TABLE IF NOT EXISTS relay_subscription_usage (
-      motebit_id TEXT NOT NULL,
-      usage_date TEXT NOT NULL,
-      message_count INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (motebit_id, usage_date)
-    );
   `);
+  // Note: usage tracking is handled by the proxy's Vercel KV (single source of truth).
+  // No relay-side usage table — the relay reads the proxy's counter via Upstash REST API.
 }
 
 // ── Tier lookups ────────────────────────────────────────────────────────
@@ -106,38 +102,38 @@ function getOrCreateSubscription(db: DatabaseDriver, motebitId: string): Subscri
 }
 
 // ── Usage tracking ──────────────────────────────────────────────────────
+//
+// Single source of truth: the proxy's Vercel KV (Upstash Redis).
+// The proxy increments `proxy:sub:{mid}:{date}` on every message at the edge.
+// The relay reads that same counter via the Upstash REST API — no shadow table,
+// no divergence. If KV is unreachable, usage defaults to 0 (the proxy enforces
+// limits independently, so the relay's read is for display, not enforcement).
 
 function todayDateString(): string {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD in UTC
 }
 
-/** Get message count for today. */
-function getDailyUsage(db: DatabaseDriver, motebitId: string): number {
-  const today = todayDateString();
-  const row = db
-    .prepare(
-      "SELECT message_count FROM relay_subscription_usage WHERE motebit_id = ? AND usage_date = ?",
-    )
-    .get(motebitId, today) as { message_count: number } | undefined;
-  return row?.message_count ?? 0;
-}
+/**
+ * Read the proxy's authoritative daily usage counter from Vercel KV (Upstash REST API).
+ * Returns 0 if KV is unreachable or not configured — the proxy enforces limits
+ * independently, so the relay's read is for display and token-issuance gating only.
+ */
+async function getProxyDailyUsage(motebitId: string): Promise<number> {
+  const kvUrl = process.env["KV_REST_API_URL"];
+  const kvToken = process.env["KV_REST_API_TOKEN"];
+  if (!kvUrl || !kvToken) return 0;
 
-/** Increment daily usage. Returns the new count. */
-function incrementDailyUsage(db: DatabaseDriver, motebitId: string): number {
-  const today = todayDateString();
-  db.prepare(
-    `INSERT INTO relay_subscription_usage (motebit_id, usage_date, message_count)
-     VALUES (?, ?, 1)
-     ON CONFLICT (motebit_id, usage_date)
-     DO UPDATE SET message_count = message_count + 1`,
-  ).run(motebitId, today);
-
-  const row = db
-    .prepare(
-      "SELECT message_count FROM relay_subscription_usage WHERE motebit_id = ? AND usage_date = ?",
-    )
-    .get(motebitId, today) as { message_count: number };
-  return row.message_count;
+  const key = `proxy:sub:${motebitId}:${todayDateString()}`;
+  try {
+    const res = await fetch(`${kvUrl}/get/${key}`, {
+      headers: { Authorization: `Bearer ${kvToken}` },
+    });
+    if (!res.ok) return 0;
+    const data = (await res.json()) as { result: string | null };
+    return data.result != null ? parseInt(data.result, 10) : 0;
+  } catch {
+    return 0;
+  }
 }
 
 // ── Proxy token issuance ────────────────────────────────────────────────
@@ -424,12 +420,13 @@ export function registerSubscriptionRoutes(
 
   // ── GET /api/v1/subscriptions/:motebitId/status ───────────────────────
   // Returns subscription tier, usage, and limits.
-  app.get("/api/v1/subscriptions/:motebitId/status", (c) => {
+  // Usage is read from the proxy's KV counter (single source of truth).
+  app.get("/api/v1/subscriptions/:motebitId/status", async (c) => {
     const motebitId = c.req.param("motebitId");
 
     const tier = getOrCreateSubscription(db, motebitId);
     const config = TIER_CONFIG[tier];
-    const usage = getDailyUsage(db, motebitId);
+    const usage = await getProxyDailyUsage(motebitId);
 
     return c.json({
       motebit_id: motebitId,
@@ -454,9 +451,9 @@ export function registerSubscriptionRoutes(
       return c.json({ error: "byok agents use their own API key" }, 400);
     }
 
-    // Check usage before issuing a token
-    const usage = getDailyUsage(db, motebitId);
+    // Check usage from proxy KV (single source of truth) before issuing token
     const config = TIER_CONFIG[tier];
+    const usage = await getProxyDailyUsage(motebitId);
 
     if (usage >= config.daily_limit) {
       return c.json(
@@ -473,21 +470,18 @@ export function registerSubscriptionRoutes(
     try {
       const token = await issueProxyToken(motebitId, tier, relayIdentity);
 
-      // Increment usage on token issuance
-      const newCount = incrementDailyUsage(db, motebitId);
-
       logger.info("proxy-token.issued", {
         motebitId,
         tier,
-        dailyUsage: newCount,
+        dailyUsage: usage,
       });
 
       return c.json({
         token,
         tier,
         expires_at: Date.now() + PROXY_TOKEN_TTL_MS,
-        daily_used: newCount,
-        daily_remaining: Math.max(0, config.daily_limit - newCount),
+        daily_used: usage,
+        daily_remaining: Math.max(0, config.daily_limit - usage),
       });
     } catch (err) {
       logger.error("proxy-token.failed", {
