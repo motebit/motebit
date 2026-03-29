@@ -3,64 +3,65 @@ import { loadSubscriptionTier, loadProxyToken, loadSyncUrl } from "../storage";
 
 export interface SubscriptionAPI {
   updateTierDisplay(): void;
-  openUpgrade(): void;
 }
 
 export function initSubscription(ctx: WebContext): SubscriptionAPI {
-  // Inject tier badge into settings panel if the container exists
-  const container = document.getElementById("subscription-tier");
+  const badge = document.getElementById("subscription-tier-badge");
+  const detail = document.getElementById("subscription-tier-detail");
+  const upgradeDiv = document.getElementById("subscription-upgrade");
+  const proBtn = document.getElementById("upgrade-pro-btn");
+  const ultraBtn = document.getElementById("upgrade-ultra-btn");
 
-  function updateTierDisplay(): void {
-    if (!container) return;
-    const tier = loadSubscriptionTier();
-    const token = loadProxyToken();
-    const displayTier = token?.tier ?? tier;
-
-    container.textContent = "";
-
-    const badge = document.createElement("span");
-    badge.className = `tier-badge tier-${displayTier}`;
-    badge.textContent = displayTier === "pro" ? "Pro" : "Free";
-    badge.style.cssText =
-      displayTier === "pro"
-        ? "background: rgba(139, 92, 246, 0.2); color: #a78bfa; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;"
-        : "background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.5); padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;";
-    container.appendChild(badge);
-
-    // Show upgrade button for free tier
-    if (displayTier !== "pro") {
-      const upgradeBtn = document.createElement("button");
-      upgradeBtn.className = "upgrade-btn";
-      upgradeBtn.textContent = "Upgrade to Pro";
-      upgradeBtn.style.cssText =
-        "margin-left: 8px; background: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; transition: background 0.15s;";
-      upgradeBtn.addEventListener("mouseenter", () => {
-        upgradeBtn.style.background = "rgba(139, 92, 246, 0.3)";
-      });
-      upgradeBtn.addEventListener("mouseleave", () => {
-        upgradeBtn.style.background = "rgba(139, 92, 246, 0.15)";
-      });
-      upgradeBtn.addEventListener("click", () => openUpgrade());
-      container.appendChild(upgradeBtn);
-    }
-  }
-
-  function openUpgrade(): void {
+  function openCheckout(tier: "pro" | "ultra"): void {
     const syncUrl = loadSyncUrl();
     const motebitId = localStorage.getItem("motebit:motebit_id");
 
     if (!syncUrl || !motebitId) {
-      ctx.showToast("Connect to a relay first to upgrade");
+      ctx.showToast("Connect to a relay first to subscribe");
       return;
     }
 
-    // Redirect to relay's Stripe Checkout endpoint
-    const checkoutUrl = `${syncUrl}/api/v1/subscriptions/${motebitId}/checkout?return_url=${encodeURIComponent(window.location.href)}`;
+    const returnUrl = encodeURIComponent(window.location.href);
+    const checkoutUrl = `${syncUrl}/api/v1/subscriptions/checkout?motebit_id=${motebitId}&tier=${tier}&return_url=${returnUrl}`;
     window.open(checkoutUrl, "_blank");
   }
 
-  // Initial render
+  proBtn?.addEventListener("click", () => openCheckout("pro"));
+  ultraBtn?.addEventListener("click", () => openCheckout("ultra"));
+
+  function updateTierDisplay(): void {
+    const tier = loadProxyToken()?.tier ?? loadSubscriptionTier();
+
+    if (badge) {
+      badge.className = `tier-badge tier-${tier}`;
+      badge.textContent =
+        tier === "ultra" ? "Ultra" : tier === "pro" ? "Pro" : tier === "byok" ? "BYOK" : "Free";
+    }
+
+    if (detail) {
+      switch (tier) {
+        case "ultra":
+          detail.textContent = "Opus · 1,000 msgs/day";
+          break;
+        case "pro":
+          detail.textContent = "Sonnet · 500 msgs/day";
+          break;
+        case "byok":
+          detail.textContent = "Your own API key";
+          break;
+        default:
+          detail.textContent = "Running locally";
+      }
+    }
+
+    // Hide upgrade buttons if already subscribed or BYOK
+    if (upgradeDiv) {
+      upgradeDiv.style.display =
+        tier === "pro" || tier === "ultra" || tier === "byok" ? "none" : "";
+    }
+  }
+
   updateTierDisplay();
 
-  return { updateTierDisplay, openUpgrade };
+  return { updateTierDisplay };
 }

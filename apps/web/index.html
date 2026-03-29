@@ -624,6 +624,37 @@
       border-radius: 12px;
       padding: 16px;
     }
+    .settings-card + .settings-card { margin-top: 12px; }
+    .tier-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 3px 10px;
+      border-radius: 6px;
+    }
+    .tier-free { background: rgba(255,255,255,0.08); color: var(--text-muted); }
+    .tier-pro { background: rgba(99,102,241,0.15); color: #818cf8; }
+    .tier-ultra { background: rgba(234,179,8,0.15); color: #facc15; }
+    .tier-byok { background: rgba(34,197,94,0.15); color: #4ade80; }
+    .upgrade-btn {
+      font-size: 13px;
+      font-family: inherit;
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--accent-border);
+      background: var(--accent-bg);
+      color: var(--text-heading);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .upgrade-btn:hover { background: var(--accent-bg-strong); }
+    .upgrade-ultra {
+      border-color: rgba(234,179,8,0.3);
+      background: rgba(234,179,8,0.08);
+    }
+    .upgrade-ultra:hover { background: rgba(234,179,8,0.15); }
     .card-title {
       font-size: 12px;
       font-weight: 600;
@@ -4777,6 +4808,18 @@
       </div>
       <!-- Intelligence pane (web-specific: provider tabs) -->
       <div class="settings-pane" id="pane-intelligence" role="tabpanel" aria-labelledby="tab-intelligence">
+        <!-- Subscription card -->
+        <div class="settings-card" id="subscription-card">
+          <div class="card-title">Subscription</div>
+          <div id="subscription-content" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <span id="subscription-tier-badge" class="tier-badge tier-free">Free</span>
+            <span id="subscription-tier-detail" style="font-size:13px; color:var(--text-muted);">Running locally</span>
+          </div>
+          <div id="subscription-upgrade" style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="upgrade-pro-btn" class="upgrade-btn">Upgrade to Pro — Sonnet · $20/mo</button>
+            <button id="upgrade-ultra-btn" class="upgrade-btn upgrade-ultra">Upgrade to Ultra — Opus · $50/mo</button>
+          </div>
+        </div>
         <div class="settings-card">
           <div class="card-title">AI Provider</div>
           <div class="provider-tabs" id="provider-tabs">

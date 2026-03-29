@@ -24,6 +24,7 @@ import {
 } from "./providers";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
+import { initSubscription } from "./ui/subscription";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
 import { setStreamingTTSEnabled, isTTSAudioPlaying, setTTSVoice } from "./ui/chat";
@@ -68,6 +69,7 @@ const chatAPI = initChat(ctx, {
 });
 
 const settings = initSettings(ctx, { colorPicker });
+const subscription = initSubscription(ctx);
 
 const conversations = initConversations(ctx, {
   onLoad: () => {
@@ -201,6 +203,7 @@ const proxySession = new ProxySession(
       saveProviderConfig(config);
       settings.updateModelIndicator();
       settings.updateConnectPrompt();
+      subscription.updateTierDisplay();
     },
   },
   PROXY_BASE_URL,
