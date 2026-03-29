@@ -1,5 +1,7 @@
 import type { WebContext } from "../types";
 import { loadSubscriptionTier, loadProxyToken, loadSyncUrl } from "../storage";
+/** Relay URL for subscription checkout when no sync URL is saved. */
+const DEFAULT_RELAY_URL = "https://motebit-sync.fly.dev";
 
 export interface SubscriptionAPI {
   updateTierDisplay(): void;
@@ -28,17 +30,17 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
 
   // Subscribe button opens checkout for selected plan
   subscribeBtn?.addEventListener("click", () => {
-    const syncUrl = loadSyncUrl();
+    const relayUrl = loadSyncUrl() ?? DEFAULT_RELAY_URL;
     const motebitId = localStorage.getItem("motebit:motebit_id");
     const plan = planSelect?.value ?? "pro";
 
-    if (!syncUrl || !motebitId) {
-      ctx.showToast("Connect to a relay first to subscribe");
+    if (!motebitId) {
+      ctx.showToast("Identity not ready — try again in a moment");
       return;
     }
 
     const returnUrl = encodeURIComponent(window.location.href);
-    const checkoutUrl = `${syncUrl}/api/v1/subscriptions/checkout?motebit_id=${motebitId}&tier=${plan}&return_url=${returnUrl}`;
+    const checkoutUrl = `${relayUrl}/api/v1/subscriptions/checkout?motebit_id=${motebitId}&tier=${plan}&return_url=${returnUrl}`;
     window.open(checkoutUrl, "_blank");
   });
 
