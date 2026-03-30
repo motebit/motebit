@@ -70,7 +70,7 @@ const voiceResponse = document.getElementById("settings-voice-response") as HTML
 // === State ===
 
 let activeProviderTab: ProviderType | "proxy" = "proxy";
-let activeByokProvider: "anthropic" | "openai" = "anthropic";
+let activeByokProvider: "anthropic" | "openai" | "google" = "anthropic";
 
 // === Settings API ===
 
@@ -328,7 +328,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // === BYOK Sub-Provider Toggle ===
   document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const byok = btn.dataset.byok as "anthropic" | "openai";
+      const byok = btn.dataset.byok as "anthropic" | "openai" | "google";
       if (!byok) return;
       activeByokProvider = byok;
       document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
@@ -339,8 +339,10 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       });
       const anthropicSection = document.getElementById("byok-anthropic");
       const openaiSection = document.getElementById("byok-openai");
+      const googleSection = document.getElementById("byok-google");
       if (anthropicSection) anthropicSection.style.display = byok === "anthropic" ? "" : "none";
       if (openaiSection) openaiSection.style.display = byok === "openai" ? "" : "none";
+      if (googleSection) googleSection.style.display = byok === "google" ? "" : "none";
     });
   });
 
@@ -493,7 +495,17 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         break;
       case "anthropic":
         // API Key tab — check which BYOK sub-provider is active
-        if (activeByokProvider === "openai") {
+        if (activeByokProvider === "google") {
+          const googleApiKey = document.getElementById("google-api-key") as HTMLInputElement | null;
+          const googleModel = document.getElementById("google-model") as HTMLSelectElement | null;
+          config = {
+            type: "openai", // Google uses OpenAI-compatible API format
+            apiKey: googleApiKey?.value.trim() ?? "",
+            model: googleModel?.value ?? "gemini-2.5-pro",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            maxTokens,
+          };
+        } else if (activeByokProvider === "openai") {
           config = {
             type: "openai",
             apiKey: openaiApiKey.value.trim(),
