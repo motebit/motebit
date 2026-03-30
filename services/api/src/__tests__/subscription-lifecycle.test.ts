@@ -34,15 +34,20 @@ afterEach(() => {
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /** Seed a subscription record directly in the database. */
-function seedSubscription(motebitId: string, status: string, stripeSubId = "sub_test_123"): void {
+function seedSubscription(
+  motebitId: string,
+  status: string,
+  stripeSubId = "sub_test_123",
+  periodEnd?: number,
+): void {
   const now = Date.now();
   relay.moteDb.db
     .prepare(
       `INSERT OR REPLACE INTO relay_subscriptions
-       (motebit_id, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       (motebit_id, stripe_customer_id, stripe_subscription_id, status, current_period_end, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(motebitId, "cus_test_123", stripeSubId, status, now, now);
+    .run(motebitId, "cus_test_123", stripeSubId, status, periodEnd ?? null, now, now);
 }
 
 // ── GET /api/v1/subscriptions/session-status ─────────────────────────────
@@ -155,6 +160,55 @@ describe("GET /api/v1/subscriptions/:motebitId/status", () => {
     expect(typeof body.balance_usd).toBe("number");
     expect(Array.isArray(body.models)).toBe(true);
   });
+
+  it("returns cancelling status with active_until when subscription is cancelling", async () => {
+    const periodEnd = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days from now
+    seedSubscription("cancel-mote", "cancelling", "sub_cancel_123", periodEnd);
+
+    const res = await relay.app.request("/api/v1/subscriptions/cancel-mote/status", {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.subscribed).toBe(true);
+    expect(body.subscription_status).toBe("cancelling");
+    expect(body.active_until).toBe(periodEnd);
+  });
+
+  it("returns subscribed: false for cancelled subscription", async () => {
+    seedSubscription("done-mote", "cancelled");
+
+    const res = await relay.app.request("/api/v1/subscriptions/done-mote/status", {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.subscribed).toBe(false);
+    expect(body.subscription_status).toBe("cancelled");
+    expect(body.active_until).toBeUndefined();
+  });
+
+  it("returns non-empty models when balance is positive", async () => {
+    // Seed account with positive balance
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_accounts (motebit_id, balance, currency, created_at, updated_at)
+         VALUES (?, ?, 'USD', ?, ?)`,
+      )
+      .run("funded-mote", 1_000_000, Date.now(), Date.now());
+
+    const res = await relay.app.request("/api/v1/subscriptions/funded-mote/status", {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.balance).toBe(1_000_000);
+    expect(body.balance_usd).toBe(1);
+    expect(body.models.length).toBeGreaterThan(0);
+  });
 });
 
 // ── POST /api/v1/subscriptions/checkout ─────────────────────────────────
@@ -169,6 +223,30 @@ describe("POST /api/v1/subscriptions/checkout", () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toBe("motebit_id required");
+  });
+
+  it("returns 409 when agent is already subscribed", async () => {
+    const original = process.env.STRIPE_CLOUD_PRICE_ID;
+    process.env.STRIPE_CLOUD_PRICE_ID = "price_test_fake";
+
+    try {
+      seedSubscription("already-sub-mote", "active");
+
+      const res = await relay.app.request("/api/v1/subscriptions/checkout", {
+        method: "POST",
+        headers: { ...AUTH_HEADER, "Content-Type": "application/json" },
+        body: JSON.stringify({ motebit_id: "already-sub-mote" }),
+      });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error).toBe("already subscribed");
+    } finally {
+      if (original !== undefined) {
+        process.env.STRIPE_CLOUD_PRICE_ID = original;
+      } else {
+        delete process.env.STRIPE_CLOUD_PRICE_ID;
+      }
+    }
   });
 
   it("returns 500 when STRIPE_CLOUD_PRICE_ID is not set", async () => {
