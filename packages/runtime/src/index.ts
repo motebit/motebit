@@ -107,7 +107,6 @@ export {
 export {
   ProxySession,
   fetchProxyToken,
-  tierModel,
   DEFAULT_PROXY_BASE_URL,
   type ProxySessionAdapter,
   type ProxyTokenData,

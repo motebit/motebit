@@ -454,7 +454,8 @@ export class SpatialApp {
           if (raw)
             return JSON.parse(raw) as {
               token: string;
-              tier: string;
+              balance: number;
+              balanceUsd: number;
               expiresAt: number;
               motebitId: string;
             };
@@ -473,13 +474,6 @@ export class SpatialApp {
       clearToken() {
         try {
           localStorage.removeItem("motebit:proxy_token");
-        } catch {
-          // localStorage unavailable
-        }
-      },
-      saveTier(tier) {
-        try {
-          localStorage.setItem("motebit:subscription_tier", tier);
         } catch {
           // localStorage unavailable
         }

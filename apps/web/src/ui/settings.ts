@@ -420,6 +420,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       switchProviderTab(config.type);
       maxTokensSelect.value = String(config.maxTokens ?? 4096);
       switch (config.type) {
+        case "proxy": {
+          const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
+          if (cloudModelEl) cloudModelEl.value = config.model;
+          break;
+        }
         case "anthropic":
           anthropicApiKey.value = config.apiKey ?? "";
           anthropicModel.value = config.model;
@@ -478,9 +483,13 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     let config: ProviderConfig;
     switch (activeProviderTab) {
       case "proxy":
-        // Proxy tab — subscription handles the connection via ProxySession
-        // Just save a proxy config; the bootstrap flow handles the rest
-        config = { type: "proxy", model: "claude-sonnet-4-20250514", maxTokens };
+        {
+          // Proxy tab — read model from the cloud model selector
+          const cloudModel =
+            (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ??
+            "claude-sonnet-4-20250514";
+          config = { type: "proxy", model: cloudModel, maxTokens };
+        }
         break;
       case "anthropic":
         // API Key tab — check which BYOK sub-provider is active
@@ -535,12 +544,22 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         : { preset };
     saveSoulColor(soulColor);
 
-    // Connect provider
-    if (activeProviderTab === "webllm") {
-      // WebLLM needs async init
-      void initWebLLM(config);
-    } else {
-      ctx.app.connectProvider(config);
+    // Only reconnect provider if the provider config actually changed
+    const prev = ctx.getConfig();
+    const providerChanged =
+      !prev ||
+      prev.type !== config.type ||
+      prev.model !== config.model ||
+      prev.apiKey !== config.apiKey ||
+      prev.baseUrl !== config.baseUrl ||
+      prev.maxTokens !== config.maxTokens;
+
+    if (providerChanged) {
+      if (activeProviderTab === "webllm") {
+        void initWebLLM(config);
+      } else {
+        ctx.app.connectProvider(config);
+      }
     }
 
     saveProviderConfig(config);

@@ -422,7 +422,6 @@ export class MobileApp {
   // === Proxy Bootstrap ===
 
   private static readonly PROXY_TOKEN_KEY = "@motebit/proxy_token";
-  private static readonly PROXY_TIER_KEY = "@motebit/proxy_tier";
 
   /**
    * Attempt proxy bootstrap before requiring an API key.
@@ -448,9 +447,6 @@ export class MobileApp {
         this._proxyTokenCache = null;
         void AsyncStorage.removeItem(MobileApp.PROXY_TOKEN_KEY).catch(() => {});
       },
-      saveTier: (tier) => {
-        void AsyncStorage.setItem(MobileApp.PROXY_TIER_KEY, tier).catch(() => {});
-      },
       onProviderReady: (config: ProxyProviderConfig) => {
         this._proxyConfig = config;
       },
@@ -466,7 +462,8 @@ export class MobileApp {
       this._proxyTokenCache = tokenRaw
         ? (JSON.parse(tokenRaw) as {
             token: string;
-            tier: string;
+            balance: number;
+            balanceUsd: number;
             expiresAt: number;
             motebitId: string;
           })
@@ -484,7 +481,8 @@ export class MobileApp {
   private _proxySyncUrlCache: string | null = null;
   private _proxyTokenCache: {
     token: string;
-    tier: string;
+    balance: number;
+    balanceUsd: number;
     expiresAt: number;
     motebitId: string;
   } | null = null;

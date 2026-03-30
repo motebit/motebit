@@ -91,7 +91,7 @@ import {
 import type { RelayIdentity } from "./federation.js";
 import { startBatchAnchorLoop } from "./anchoring.js";
 import { registerCredentialRoutes } from "./credentials.js";
-import { registerSubscriptionRoutes, createSubscriptionTables } from "./subscriptions.js";
+import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { createTaskRouter } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
@@ -421,8 +421,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     onSettlementReceived: (v) => federationCallbacks.onSettlementReceived(v),
   });
 
-  // --- Subscription routes ---
-  registerSubscriptionRoutes(app, moteDb.db, relayIdentity);
+  // --- Proxy token + balance routes ---
+  registerProxyTokenRoutes(app, moteDb.db, relayIdentity);
 
   // --- Credential routes ---
   registerCredentialRoutes({

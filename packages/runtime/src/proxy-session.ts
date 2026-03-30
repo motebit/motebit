@@ -5,16 +5,11 @@
  * uses this module. The surface provides platform-specific adapters for
  * storage and provider connection; this module handles the protocol.
  *
- * The proxy is for PAYING subscribers only (Pro/Ultra). Free users run
- * local inference (Ollama, WebLLM) — zero API cost per the metabolic
- * principle: absorb what the medium carries, don't buy it.
+ * Deposit model: users fund their account, every cloud AI message deducts
+ * actual cost + margin. When balance reaches zero, the creature falls back
+ * to local inference — it doesn't die, it forages locally.
  *
- * Two modes:
- *   1. Subscriber: relay-connected paying user → proxy token → cloud model
- *   2. BYOK: user's own API key → no proxy involvement
- *
- * Free users never touch the proxy. The surface's boot sequence is:
- *   Ollama (local) → WebLLM (browser) → "Upgrade to Pro for cloud AI"
+ * BYOK users bring their own API key — no proxy involvement.
  */
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -22,7 +17,8 @@
 /** Proxy token data returned by the relay and cached by the surface. */
 export interface ProxyTokenData {
   token: string;
-  tier: string;
+  balance: number; // micro-units
+  balanceUsd: number;
   expiresAt: number;
   motebitId: string;
 }
@@ -42,8 +38,6 @@ export interface ProxySessionAdapter {
   saveToken(data: ProxyTokenData): void;
   /** Clear the cached proxy token. */
   clearToken(): void;
-  /** Save the subscription tier string. */
-  saveTier(tier: string): void;
   /** Called when a new provider config should be applied. */
   onProviderReady(config: ProxyProviderConfig): void;
 }
@@ -58,25 +52,12 @@ export interface ProxyProviderConfig {
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-const SONNET_MODEL = "claude-sonnet-4-20250514";
-const OPUS_MODEL = "claude-opus-4-20250115";
+const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 
 /** Default proxy base URL — surfaces can override. */
 export const DEFAULT_PROXY_BASE_URL = "https://api.motebit.com";
 
 // ── Core logic ───────────────────────────────────────────────────────────
-
-/** Map subscription tier to the appropriate model. */
-export function tierModel(tier: string): string {
-  switch (tier) {
-    case "ultra":
-      return OPUS_MODEL;
-    case "pro":
-      return SONNET_MODEL;
-    default:
-      return SONNET_MODEL;
-  }
-}
 
 /** Fetch a proxy token from the relay. */
 export async function fetchProxyToken(
@@ -84,22 +65,23 @@ export async function fetchProxyToken(
   motebitId: string,
 ): Promise<ProxyTokenData | null> {
   try {
-    const res = await fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/proxy-token`, {
+    const res = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/proxy-token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       token: string;
-      tier: string;
+      balance: number;
+      balance_usd: number;
       expires_at: number;
-      motebit_id: string;
     };
     return {
       token: data.token,
-      tier: data.tier,
+      balance: data.balance,
+      balanceUsd: data.balance_usd,
       expiresAt: data.expires_at,
-      motebitId: data.motebit_id,
+      motebitId,
     };
   } catch {
     return null;
@@ -112,8 +94,8 @@ export async function fetchProxyToken(
  * ProxySession manages the proxy token lifecycle for a single surface.
  * Create one per app, pass the platform adapter, call `bootstrap()` on startup.
  *
- * Returns false if the user is not a paying subscriber — the surface should
- * then fall through to local inference (Ollama → WebLLM → upgrade prompt).
+ * Returns false if the user has no balance — the surface should then fall
+ * through to local inference (Ollama → WebLLM → deposit prompt).
  */
 export class ProxySession {
   private adapter: ProxySessionAdapter;
@@ -134,9 +116,9 @@ export class ProxySession {
   }
 
   /**
-   * Bootstrap proxy connection for paying subscribers only.
-   * Returns true if the user has an active subscription and a proxy token was obtained.
-   * Returns false if the user is not subscribed — surface should use local inference.
+   * Bootstrap proxy connection for users with balance.
+   * Returns true if the user has funds and a proxy token was obtained.
+   * Returns false if balance is zero — surface should use local inference.
    */
   async bootstrap(): Promise<boolean> {
     const syncUrl = this.adapter.getSyncUrl();
@@ -152,18 +134,17 @@ export class ProxySession {
       if (fresh) {
         token = fresh;
         this.adapter.saveToken(token);
-        this.adapter.saveTier(token.tier);
       } else if (token) {
         this.adapter.clearToken();
         token = null;
       }
     }
 
-    // Only proceed if the user has a paying tier
-    if (token && (token.tier === "pro" || token.tier === "ultra")) {
+    // Only proceed if the user has balance
+    if (token && token.balance > 0) {
       this.adapter.onProviderReady({
         type: "proxy",
-        model: tierModel(token.tier),
+        model: DEFAULT_MODEL,
         proxyToken: token.token,
         baseUrl: this.proxyBaseUrl,
       });
@@ -171,7 +152,7 @@ export class ProxySession {
       return true;
     }
 
-    // Free tier or no token — surface should use local inference
+    // No balance — surface should use local inference
     return false;
   }
 
@@ -185,14 +166,15 @@ export class ProxySession {
     if (!token) return;
 
     this.adapter.saveToken(token);
-    this.adapter.saveTier(token.tier);
 
-    this.adapter.onProviderReady({
-      type: "proxy",
-      model: tierModel(token.tier),
-      proxyToken: token.token,
-      baseUrl: this.proxyBaseUrl,
-    });
+    if (token.balance > 0) {
+      this.adapter.onProviderReady({
+        type: "proxy",
+        model: DEFAULT_MODEL,
+        proxyToken: token.token,
+        baseUrl: this.proxyBaseUrl,
+      });
+    }
 
     this.scheduleRefresh(token.expiresAt);
   }

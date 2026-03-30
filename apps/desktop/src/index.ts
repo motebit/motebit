@@ -706,9 +706,6 @@ export class DesktopApp {
           })
           .catch(() => {});
       },
-      saveTier: (_tier) => {
-        // Tier is captured in the proxy config model via tierModel()
-      },
       onProviderReady: (config: ProxyProviderConfig) => {
         this._proxyConfig = config;
       },
@@ -722,7 +719,8 @@ export class DesktopApp {
       const cached = configData._proxy_token as
         | {
             token: string;
-            tier: string;
+            balance: number;
+            balanceUsd: number;
             expiresAt: number;
             motebitId: string;
           }
@@ -741,7 +739,8 @@ export class DesktopApp {
   private _proxySyncUrlCache: string | null = null;
   private _proxyTokenCache: {
     token: string;
-    tier: string;
+    balance: number;
+    balanceUsd: number;
     expiresAt: number;
     motebitId: string;
   } | null = null;

@@ -1,14 +1,12 @@
 /**
- * Subscription management — tier-based access control for the proxy.
+ * Subscription + proxy token management.
  *
- * Stripe is source of truth for billing. The relay caches the active tier locally
- * for fast lookups and issues short-lived Ed25519-signed proxy tokens that the
- * edge proxy can verify without roundtrips.
+ * Hybrid model: $20/mo subscription → $20 in cloud AI credits deposited monthly.
+ * Credits deducted per-token by the proxy (actual cost + 20% margin).
+ * When credits run out, creature falls back to local inference until next month.
  *
- * Three tiers:
- *   free — 50 msgs/day, haiku only
- *   pro  — 500 msgs/day, sonnet + haiku, $20 credit pool
- *   byok — unlimited, any model (bring your own key)
+ * The subscription is the funding pipe. The account ledger is the spending engine.
+ * Stripe handles recurring billing. The relay credits the account on each cycle.
  */
 
 import type { Hono } from "hono";
@@ -17,128 +15,61 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import { canonicalJson, sign, toBase64Url } from "@motebit/crypto";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import {
+  getAccountBalance,
+  getOrCreateAccount,
+  creditAccount,
+  debitAccount,
+  toMicro,
+  fromMicro,
+} from "./accounts.js";
 
-const logger = createLogger({ service: "relay", module: "subscriptions" });
+const logger = createLogger({ service: "relay", module: "proxy-tokens" });
 
-// ── Tier configuration ──────────────────────────────────────────────────
-
-export type SubscriptionTier = "free" | "pro" | "ultra" | "byok";
-
-const TIER_CONFIG = {
-  free: { daily_limit: 0, models: [], max_tokens: 0 }, // no proxy — local inference only
-  pro: {
-    daily_limit: 500,
-    models: ["claude-sonnet-4-20250514"],
-    max_tokens: 8192,
-  },
-  ultra: {
-    daily_limit: 1000,
-    models: ["claude-opus-4-20250115", "claude-sonnet-4-20250514"],
-    max_tokens: 16384,
-  },
-  byok: { daily_limit: Infinity, models: [], max_tokens: 0 }, // no proxy limits
-} as const;
+/** All subscribers can access these models. The proxy enforces per-request cost. */
+const DEPOSIT_MODELS = ["claude-sonnet-4-20250514", "claude-opus-4-20250115"];
 
 const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+/** Monthly credit amount in dollars — matches subscription price. */
+const MONTHLY_CREDIT_USD = 20;
+
+// ── Stripe helper ───────────────────────────────────────────────────────
+
+function getStripe(): Stripe {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("STRIPE_SECRET_KEY not configured");
+  return new Stripe(key, { apiVersion: "2025-03-31.basil" as Stripe.LatestApiVersion });
+}
+
+// ── Subscription table ──────────────────────────────────────────────────
+
+/** Track subscription status (minimal — Stripe is source of truth). */
+export function createSubscriptionTables(db: DatabaseDriver): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS relay_subscriptions (
+      motebit_id TEXT PRIMARY KEY,
+      stripe_customer_id TEXT,
+      stripe_subscription_id TEXT,
+      status TEXT NOT NULL DEFAULT 'inactive',
+      current_period_end INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_relay_subs_stripe_sub
+      ON relay_subscriptions (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;
+  `);
+}
 
 // ── Proxy token types ───────────────────────────────────────────────────
 
 export interface ProxyToken {
   mid: string; // motebit_id
-  tier: string; // "free" | "pro"
-  lim: number; // daily message limit
+  bal: number; // balance in micro-units (1 USD = 1,000,000)
   models: string[]; // allowed models
-  mtk: number; // max_tokens per request
   jti: string; // unique token id (nonce) — prevents replay identification
   iat: number; // issued at (epoch ms)
   exp: number; // expires at (epoch ms)
-}
-
-// ── Database schema ─────────────────────────────────────────────────────
-
-/** Create subscription tables. Idempotent. */
-export function createSubscriptionTables(db: DatabaseDriver): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS relay_subscriptions (
-      motebit_id TEXT PRIMARY KEY,
-      tier TEXT NOT NULL DEFAULT 'free',
-      stripe_customer_id TEXT,
-      stripe_subscription_id TEXT,
-      status TEXT NOT NULL DEFAULT 'active',
-      current_period_start INTEGER,
-      current_period_end INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_relay_subs_stripe_customer
-      ON relay_subscriptions (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_subs_stripe_sub
-      ON relay_subscriptions (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;
-
-  `);
-  // Note: usage tracking is handled by the proxy's Vercel KV (single source of truth).
-  // No relay-side usage table — the relay reads the proxy's counter via Upstash REST API.
-}
-
-// ── Tier lookups ────────────────────────────────────────────────────────
-
-/** Get the current subscription tier for an agent. Defaults to "free". */
-export function getSubscriptionTier(db: DatabaseDriver, motebitId: string): SubscriptionTier {
-  const row = db
-    .prepare("SELECT tier FROM relay_subscriptions WHERE motebit_id = ? AND status = 'active'")
-    .get(motebitId) as { tier: string } | undefined;
-  if (!row) return "free";
-  const tier = row.tier as SubscriptionTier;
-  return tier === "pro" || tier === "ultra" || tier === "byok" ? tier : "free";
-}
-
-/** Get or initialize a subscription record. Returns the current tier. */
-function getOrCreateSubscription(db: DatabaseDriver, motebitId: string): SubscriptionTier {
-  const existing = db
-    .prepare("SELECT tier FROM relay_subscriptions WHERE motebit_id = ?")
-    .get(motebitId) as { tier: string } | undefined;
-  if (existing) return existing.tier as SubscriptionTier;
-
-  const now = Date.now();
-  db.prepare(
-    "INSERT INTO relay_subscriptions (motebit_id, tier, status, created_at, updated_at) VALUES (?, 'free', 'active', ?, ?)",
-  ).run(motebitId, now, now);
-  return "free";
-}
-
-// ── Usage tracking ──────────────────────────────────────────────────────
-//
-// Single source of truth: the proxy's Vercel KV (Upstash Redis).
-// The proxy increments `proxy:sub:{mid}:{date}` on every message at the edge.
-// The relay reads that same counter via the Upstash REST API — no shadow table,
-// no divergence. If KV is unreachable, usage defaults to 0 (the proxy enforces
-// limits independently, so the relay's read is for display, not enforcement).
-
-function todayDateString(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD in UTC
-}
-
-/**
- * Read the proxy's authoritative daily usage counter from Vercel KV (Upstash REST API).
- * Returns 0 if KV is unreachable or not configured — the proxy enforces limits
- * independently, so the relay's read is for display and token-issuance gating only.
- */
-async function getProxyDailyUsage(motebitId: string): Promise<number> {
-  const kvUrl = process.env["KV_REST_API_URL"];
-  const kvToken = process.env["KV_REST_API_TOKEN"];
-  if (!kvUrl || !kvToken) return 0;
-
-  const key = `proxy:sub:${motebitId}:${todayDateString()}`;
-  try {
-    const res = await fetch(`${kvUrl}/get/${key}`, {
-      headers: { Authorization: `Bearer ${kvToken}` },
-    });
-    if (!res.ok) return 0;
-    const data = (await res.json()) as { result: string | null };
-    return data.result != null ? parseInt(data.result, 10) : 0;
-  } catch {
-    return 0;
-  }
 }
 
 // ── Proxy token issuance ────────────────────────────────────────────────
@@ -149,27 +80,19 @@ async function getProxyDailyUsage(motebitId: string): Promise<number> {
  * Format: base64url(payload_json) + "." + base64url(Ed25519(payload_bytes))
  *
  * The proxy can verify the signature with the relay's public key and enforce
- * tier limits without any relay roundtrip.
+ * balance > 0 without any relay roundtrip.
  */
 export async function issueProxyToken(
   motebitId: string,
-  tier: SubscriptionTier,
+  balanceMicro: number,
   relayIdentity: RelayIdentity,
 ): Promise<string> {
-  // byok agents use their own key — no proxy token needed
-  if (tier === "byok") {
-    throw new Error("byok agents do not use proxy tokens");
-  }
-
-  const config = TIER_CONFIG[tier];
   const now = Date.now();
 
   const payload: ProxyToken = {
     mid: motebitId,
-    tier,
-    lim: config.daily_limit,
-    models: [...config.models],
-    mtk: config.max_tokens,
+    bal: balanceMicro,
+    models: [...DEPOSIT_MODELS],
     jti: crypto.randomUUID(),
     iat: now,
     exp: now + PROXY_TOKEN_TTL_MS,
@@ -181,165 +104,103 @@ export async function issueProxyToken(
   return toBase64Url(payloadBytes) + "." + toBase64Url(signature);
 }
 
-// ── Stripe helpers ──────────────────────────────────────────────────────
-
-function getStripe(): Stripe {
-  const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) throw new Error("STRIPE_SECRET_KEY not configured");
-  return new Stripe(key, { apiVersion: "2025-03-31.basil" as Stripe.LatestApiVersion });
-}
-
-// ── Shared upsert ──────────────────────────────────────────────────────
-
-/**
- * Upsert a subscription record after a completed checkout session.
- * Shared between the webhook handler and the session-status polling endpoint
- * to avoid logic duplication.
- */
-function upsertSubscriptionFromCheckout(
-  db: DatabaseDriver,
-  motebitId: string,
-  tier: "pro" | "ultra",
-  customerId: string,
-  subscriptionId: string,
-): void {
-  const now = Date.now();
-  const existingRow = db
-    .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
-    .get(motebitId);
-
-  if (existingRow) {
-    db.prepare(
-      `UPDATE relay_subscriptions
-       SET tier = ?, stripe_customer_id = ?, stripe_subscription_id = ?,
-           status = 'active', updated_at = ?
-       WHERE motebit_id = ?`,
-    ).run(tier, customerId, subscriptionId, now, motebitId);
-  } else {
-    db.prepare(
-      `INSERT INTO relay_subscriptions
-         (motebit_id, tier, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-    ).run(motebitId, tier, customerId, subscriptionId, now, now);
-  }
-}
-
 // ── Route registration ──────────────────────────────────────────────────
 
-export function registerSubscriptionRoutes(
+export function registerProxyTokenRoutes(
   app: Hono,
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
 ): void {
-  // ── POST /api/v1/subscriptions/checkout ───────────────────────────────
-  // Creates a Stripe Checkout session. Supports embedded (web) and hosted (fallback) modes.
-  app.post("/api/v1/subscriptions/checkout", async (c) => {
-    const body = await c.req.json<{
-      motebit_id: string;
-      tier?: "pro" | "ultra";
-      ui_mode?: "embedded" | "hosted";
-      return_url?: string;
-      success_url?: string;
-      cancel_url?: string;
-    }>();
-    const { motebit_id } = body;
-    const tier = body.tier ?? "pro";
-    const uiMode = body.ui_mode ?? "embedded";
+  // ── POST /api/v1/agents/:motebitId/proxy-token ────────────────────────
+  // Issue a signed proxy token carrying the agent's current balance.
+  // The proxy checks bal > 0 before serving and debits after each response.
+  app.post("/api/v1/agents/:motebitId/proxy-token", async (c) => {
+    const motebitId = c.req.param("motebitId");
 
-    if (!motebit_id || typeof motebit_id !== "string") {
-      return c.json({ error: "motebit_id required" }, 400);
-    }
+    const account = getAccountBalance(db, motebitId);
+    const balance = account?.balance ?? 0;
 
-    const priceId =
-      tier === "ultra" ? process.env.STRIPE_ULTRA_PRICE_ID : process.env.STRIPE_PRO_PRICE_ID;
-    if (!priceId) {
-      logger.error("checkout.missing_price_id", { tier });
-      return c.json({ error: "subscription checkout not configured" }, 500);
-    }
-
-    // If already subscribed to requested tier (or higher), don't create another checkout
-    const currentTier = getSubscriptionTier(db, motebit_id);
-    if (currentTier === tier || (currentTier === "ultra" && tier === "pro")) {
-      return c.json({ error: `already subscribed to ${currentTier}` }, 409);
-    }
-
+    // Issue token even with zero balance — the proxy will reject (402)
+    // and the client will fall back to local inference.
     try {
-      const stripe = getStripe();
+      const token = await issueProxyToken(motebitId, balance, relayIdentity);
 
-      // Reuse existing Stripe customer if we have one
-      const existing = db
-        .prepare(
-          "SELECT stripe_customer_id FROM relay_subscriptions WHERE motebit_id = ? AND stripe_customer_id IS NOT NULL",
-        )
-        .get(motebit_id) as { stripe_customer_id: string } | undefined;
-
-      let customerId = existing?.stripe_customer_id;
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          metadata: { motebit_id },
-        });
-        customerId = customer.id;
-      }
-
-      if (uiMode === "embedded") {
-        // Embedded mode: return client secret for Stripe.js embedded checkout
-        const session = await stripe.checkout.sessions.create({
-          customer: customerId,
-          mode: "subscription",
-          ui_mode: "embedded",
-          line_items: [{ price: priceId, quantity: 1 }],
-          metadata: { motebit_id, tier },
-          return_url:
-            body.return_url ??
-            `${c.req.url.split("/api")[0]}/?checkout_session_id={CHECKOUT_SESSION_ID}`,
-        });
-
-        logger.info("checkout.created", {
-          motebitId: motebit_id,
-          sessionId: session.id,
-          uiMode: "embedded",
-          tier,
-        });
-        return c.json({ clientSecret: session.client_secret, session_id: session.id });
-      }
-
-      // Hosted mode: redirect-based checkout (CLI, fallback)
-      const session = await stripe.checkout.sessions.create({
-        customer: customerId,
-        mode: "subscription",
-        line_items: [{ price: priceId, quantity: 1 }],
-        metadata: { motebit_id, tier },
-        success_url:
-          body.success_url ??
-          `${c.req.url.split("/api")[0]}/?checkout_session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: body.cancel_url ?? `${c.req.url.split("/api")[0]}/subscription/cancel`,
+      logger.info("proxy-token.issued", {
+        motebitId,
+        balance: fromMicro(balance),
       });
 
-      logger.info("checkout.created", {
-        motebitId: motebit_id,
-        sessionId: session.id,
-        uiMode: "hosted",
-        tier,
+      return c.json({
+        token,
+        balance,
+        balance_usd: fromMicro(balance),
+        models: balance > 0 ? [...DEPOSIT_MODELS] : [],
+        expires_at: Date.now() + PROXY_TOKEN_TTL_MS,
       });
-      return c.json({ checkout_url: session.url, session_id: session.id });
     } catch (err) {
-      logger.error("checkout.failed", {
-        motebitId: motebit_id,
+      logger.error("proxy-token.failed", {
+        motebitId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return c.json({ error: "failed to create checkout session" }, 500);
+      return c.json({ error: "failed to issue proxy token" }, 500);
     }
   });
 
-  // ── GET /api/v1/subscriptions/session-status ──────────────────────────
-  // Verify a Stripe Checkout session's payment status. Used by the web app
-  // immediately after redirect to activate the subscription without waiting
-  // for the webhook (which remains the reliable production path).
+  // ── POST /api/v1/agents/:motebitId/debit ──────────────────────────────
+  // Called by the proxy after each message to deduct actual compute cost.
+  // Authenticated via shared secret (x-relay-secret header), not user auth.
+  app.post("/api/v1/agents/:motebitId/debit", async (c) => {
+    const secret = c.req.header("x-relay-secret");
+    const expectedSecret = process.env.RELAY_PROXY_SECRET;
+    if (!expectedSecret || secret !== expectedSecret) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+
+    const motebitId = c.req.param("motebitId");
+    const body = await c.req.json<{
+      amount: number;
+      reference_id: string;
+      description?: string;
+    }>();
+
+    if (typeof body.amount !== "number" || body.amount <= 0) {
+      return c.json({ error: "amount must be a positive number (micro-units)" }, 400);
+    }
+
+    const newBalance = debitAccount(
+      db,
+      motebitId,
+      body.amount,
+      "fee",
+      body.reference_id,
+      body.description ?? "Cloud AI usage",
+    );
+
+    if (newBalance === null) {
+      // Insufficient balance — the message was already served (fire-and-forget)
+      // Log but don't error — the 20% margin absorbs occasional overruns
+      logger.warn("proxy-debit.insufficient", {
+        motebitId,
+        amount: body.amount,
+      });
+      return c.json({ success: false, balance: 0 });
+    }
+
+    logger.info("proxy-debit.success", {
+      motebitId,
+      amount: body.amount,
+      balanceAfter: newBalance,
+    });
+
+    return c.json({ success: true, balance: newBalance });
+  });
+
+  // ── GET /api/v1/subscriptions/session-status ────────────────────────────
+  // Verify a checkout session and activate subscription + credits if paid.
+  // Called by the web app on return from Stripe (no webhook needed for activation).
   app.get("/api/v1/subscriptions/session-status", async (c) => {
     const sessionId = c.req.query("session_id");
-    if (!sessionId || typeof sessionId !== "string") {
-      return c.json({ error: "session_id query parameter required" }, 400);
-    }
+    if (!sessionId) return c.json({ error: "session_id required" }, 400);
 
     try {
       const stripe = getStripe();
@@ -347,30 +208,65 @@ export function registerSubscriptionRoutes(
 
       if (session.status === "complete" && session.payment_status === "paid") {
         const motebitId = session.metadata?.motebit_id;
-        const tier = session.metadata?.tier === "ultra" ? "ultra" : "pro";
+        if (!motebitId) return c.json({ status: "complete", error: "no motebit_id" });
 
-        if (motebitId) {
-          const subscriptionId =
-            typeof session.subscription === "string"
-              ? session.subscription
-              : session.subscription?.id;
-          const customerId =
-            typeof session.customer === "string" ? session.customer : session.customer?.id;
+        const subscriptionId =
+          typeof session.subscription === "string"
+            ? session.subscription
+            : session.subscription?.id;
+        const customerId =
+          typeof session.customer === "string" ? session.customer : session.customer?.id;
 
-          if (subscriptionId && customerId) {
-            upsertSubscriptionFromCheckout(db, motebitId, tier, customerId, subscriptionId);
-            logger.info("session-status.activated", { motebitId, sessionId, tier });
+        if (subscriptionId && customerId) {
+          // Upsert subscription
+          const now = Date.now();
+          const existingRow = db
+            .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
+            .get(motebitId);
+
+          if (existingRow) {
+            db.prepare(
+              `UPDATE relay_subscriptions
+               SET stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
+               WHERE motebit_id = ?`,
+            ).run(customerId, subscriptionId, now, motebitId);
+          } else {
+            db.prepare(
+              `INSERT INTO relay_subscriptions (motebit_id, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+               VALUES (?, ?, ?, 'active', ?, ?)`,
+            ).run(motebitId, customerId, subscriptionId, now, now);
           }
+
+          // Credit account (idempotent via reference_id)
+          const refId = `sub:${subscriptionId}:initial`;
+          const existingTxn = db
+            .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
+            .get(refId);
+          if (!existingTxn) {
+            getOrCreateAccount(db, motebitId);
+            creditAccount(
+              db,
+              motebitId,
+              toMicro(MONTHLY_CREDIT_USD),
+              "deposit",
+              refId,
+              `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`,
+            );
+          }
+
+          const account = getAccountBalance(db, motebitId);
+          logger.info("session-status.activated", { motebitId, subscriptionId });
+
+          return c.json({
+            status: "complete",
+            motebit_id: motebitId,
+            balance: account?.balance ?? 0,
+            balance_usd: fromMicro(account?.balance ?? 0),
+          });
         }
-
-        return c.json({ status: "complete", tier, motebit_id: motebitId ?? null });
       }
 
-      if (session.status === "expired") {
-        return c.json({ status: "expired" });
-      }
-
-      // open or incomplete
+      if (session.status === "expired") return c.json({ status: "expired" });
       return c.json({ status: "open" });
     } catch (err) {
       logger.error("session-status.failed", {
@@ -381,18 +277,87 @@ export function registerSubscriptionRoutes(
     }
   });
 
+  // ── POST /api/v1/subscriptions/checkout ─────────────────────────────────
+  // Create a Stripe subscription checkout ($20/mo → $20 credits/month).
+  app.post("/api/v1/subscriptions/checkout", async (c) => {
+    const body = await c.req.json<{
+      motebit_id: string;
+      return_url?: string;
+    }>();
+
+    if (!body.motebit_id || typeof body.motebit_id !== "string") {
+      return c.json({ error: "motebit_id required" }, 400);
+    }
+
+    const priceId = process.env.STRIPE_CLOUD_PRICE_ID;
+    if (!priceId) {
+      logger.error("checkout.missing_price_id", {});
+      return c.json({ error: "subscription checkout not configured" }, 500);
+    }
+
+    // Check if already subscribed
+    const existing = db
+      .prepare("SELECT status FROM relay_subscriptions WHERE motebit_id = ? AND status = 'active'")
+      .get(body.motebit_id) as { status: string } | undefined;
+    if (existing) {
+      return c.json({ error: "already subscribed" }, 409);
+    }
+
+    try {
+      const stripe = getStripe();
+
+      // Reuse Stripe customer if we have one
+      const subRow = db
+        .prepare(
+          "SELECT stripe_customer_id FROM relay_subscriptions WHERE motebit_id = ? AND stripe_customer_id IS NOT NULL",
+        )
+        .get(body.motebit_id) as { stripe_customer_id: string } | undefined;
+
+      let customerId = subRow?.stripe_customer_id;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          metadata: { motebit_id: body.motebit_id },
+        });
+        customerId = customer.id;
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        mode: "subscription",
+        line_items: [{ price: priceId, quantity: 1 }],
+        metadata: { motebit_id: body.motebit_id },
+        success_url:
+          body.return_url ??
+          `${c.req.url.split("/api")[0]}/?checkout_session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: body.return_url ?? `${c.req.url.split("/api")[0]}/`,
+      });
+
+      logger.info("subscription.checkout.created", {
+        motebitId: body.motebit_id,
+        sessionId: session.id,
+      });
+
+      return c.json({ checkout_url: session.url, session_id: session.id });
+    } catch (err) {
+      logger.error("subscription.checkout.failed", {
+        motebitId: body.motebit_id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return c.json({ error: "failed to create checkout" }, 500);
+    }
+  });
+
   // ── POST /api/v1/subscriptions/webhook ────────────────────────────────
-  // Stripe webhook handler. Verifies signature and processes billing events.
+  // Stripe webhook: credits account on new subscription + each renewal.
   app.post("/api/v1/subscriptions/webhook", async (c) => {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!webhookSecret) {
-      logger.error("webhook.missing_secret", {});
       return c.json({ error: "webhook not configured" }, 500);
     }
 
     const signature = c.req.header("stripe-signature");
     if (!signature) {
-      return c.json({ error: "missing stripe-signature header" }, 400);
+      return c.json({ error: "missing stripe-signature" }, 400);
     }
 
     let event: Stripe.Event;
@@ -414,86 +379,90 @@ export function registerSubscriptionRoutes(
           if (session.mode !== "subscription") break;
 
           const motebitId = session.metadata?.motebit_id;
-          if (!motebitId) {
-            logger.warn("webhook.checkout.missing_motebit_id", { sessionId: session.id });
-            break;
-          }
+          if (!motebitId) break;
 
           const subscriptionId =
             typeof session.subscription === "string"
               ? session.subscription
               : session.subscription?.id;
-
           const customerId =
             typeof session.customer === "string" ? session.customer : session.customer?.id;
 
-          if (!subscriptionId || !customerId) {
-            logger.warn("webhook.checkout.missing_ids", { sessionId: session.id });
-            break;
+          if (!subscriptionId || !customerId) break;
+
+          // Upsert subscription record
+          const now = Date.now();
+          const existingRow = db
+            .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
+            .get(motebitId);
+
+          if (existingRow) {
+            db.prepare(
+              `UPDATE relay_subscriptions
+               SET stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
+               WHERE motebit_id = ?`,
+            ).run(customerId, subscriptionId, now, motebitId);
+          } else {
+            db.prepare(
+              `INSERT INTO relay_subscriptions (motebit_id, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+               VALUES (?, ?, ?, 'active', ?, ?)`,
+            ).run(motebitId, customerId, subscriptionId, now, now);
           }
 
-          const checkoutTier = session.metadata?.tier === "ultra" ? "ultra" : "pro";
-          upsertSubscriptionFromCheckout(db, motebitId, checkoutTier, customerId, subscriptionId);
+          // Credit the account with monthly credits
+          getOrCreateAccount(db, motebitId);
+          creditAccount(
+            db,
+            motebitId,
+            toMicro(MONTHLY_CREDIT_USD),
+            "deposit",
+            `sub:${subscriptionId}:initial`,
+            `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`,
+          );
 
-          logger.info("webhook.subscription.activated", {
+          logger.info("subscription.activated", {
             motebitId,
             subscriptionId,
-            customerId,
+            creditUsd: MONTHLY_CREDIT_USD,
           });
           break;
         }
 
-        case "customer.subscription.updated": {
-          const subscription = event.data.object;
-          const subId = subscription.id;
+        case "invoice.paid": {
+          // Monthly renewal — credit the account again
+          const invoice = event.data.object as Stripe.Invoice;
+          const subscriptionId =
+            typeof invoice.subscription === "string"
+              ? invoice.subscription
+              : invoice.subscription?.id;
+          if (!subscriptionId) break;
 
           const row = db
             .prepare("SELECT motebit_id FROM relay_subscriptions WHERE stripe_subscription_id = ?")
-            .get(subId) as { motebit_id: string } | undefined;
+            .get(subscriptionId) as { motebit_id: string } | undefined;
+          if (!row) break;
 
-          if (!row) {
-            logger.warn("webhook.subscription.updated.unknown", { subscriptionId: subId });
-            break;
-          }
+          // Idempotency: use invoice ID as reference
+          const refId = `sub:${subscriptionId}:${invoice.id}`;
+          const existingTxn = db
+            .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
+            .get(refId);
+          if (existingTxn) break; // Already credited for this invoice
 
-          const now = Date.now();
-          const status = subscription.status;
-          const isActive = status === "active" || status === "trialing";
-
-          // Detect tier from price ID (don't hardcode "pro")
-          const ultraPriceId = process.env.STRIPE_ULTRA_PRICE_ID;
-          const priceId = subscription.items?.data?.[0]?.price?.id;
-          const detectedTier = isActive
-            ? ultraPriceId && priceId === ultraPriceId
-              ? "ultra"
-              : "pro"
-            : "free";
-
-          // If cancel_at_period_end is set, mark as cancelling (not active)
-          const dbStatus = !isActive
-            ? "past_due"
-            : subscription.cancel_at_period_end
-              ? "cancelling"
-              : "active";
-
-          db.prepare(
-            `UPDATE relay_subscriptions
-             SET tier = ?, status = ?, current_period_start = ?, current_period_end = ?, updated_at = ?
-             WHERE stripe_subscription_id = ?`,
-          ).run(
-            detectedTier,
-            dbStatus,
-            subscription.current_period_start * 1000,
-            subscription.current_period_end * 1000,
-            now,
-            subId,
+          creditAccount(
+            db,
+            row.motebit_id,
+            toMicro(MONTHLY_CREDIT_USD),
+            "deposit",
+            refId,
+            `Motebit Cloud renewal — $${MONTHLY_CREDIT_USD} credits`,
           );
 
-          logger.info("webhook.subscription.updated", {
+          logger.info("subscription.renewed", {
             motebitId: row.motebit_id,
-            subscriptionId: subId,
-            stripeStatus: status,
-            tier: detectedTier,
+            subscriptionId,
+            invoiceId: invoice.id,
+            creditUsd: MONTHLY_CREDIT_USD,
           });
           break;
         }
@@ -505,20 +474,14 @@ export function registerSubscriptionRoutes(
           const row = db
             .prepare("SELECT motebit_id FROM relay_subscriptions WHERE stripe_subscription_id = ?")
             .get(subId) as { motebit_id: string } | undefined;
+          if (!row) break;
 
-          if (!row) {
-            logger.warn("webhook.subscription.deleted.unknown", { subscriptionId: subId });
-            break;
-          }
-
-          const now = Date.now();
           db.prepare(
-            `UPDATE relay_subscriptions
-             SET tier = 'free', status = 'cancelled', updated_at = ?
-             WHERE stripe_subscription_id = ?`,
-          ).run(now, subId);
+            "UPDATE relay_subscriptions SET status = 'cancelled', updated_at = ? WHERE stripe_subscription_id = ?",
+          ).run(Date.now(), subId);
 
-          logger.info("webhook.subscription.cancelled", {
+          // Don't claw back credits — user keeps what they have until it runs out
+          logger.info("subscription.cancelled", {
             motebitId: row.motebit_id,
             subscriptionId: subId,
           });
@@ -533,33 +496,24 @@ export function registerSubscriptionRoutes(
         type: event.type,
         error: err instanceof Error ? err.message : String(err),
       });
-      // Return 200 to Stripe so it doesn't retry — we logged the error
-      return c.json({ received: true, error: "processing failed" });
     }
 
     return c.json({ received: true });
   });
 
   // ── POST /api/v1/subscriptions/:motebitId/cancel ──────────────────────
-  // Cancel a subscription at period end. The user keeps access until the
-  // billing period expires, then the webhook sets tier to "free".
+  // Cancel subscription at period end. User keeps remaining credits.
   app.post("/api/v1/subscriptions/:motebitId/cancel", async (c) => {
     const motebitId = c.req.param("motebitId");
 
     const row = db
       .prepare(
-        "SELECT stripe_subscription_id, status, current_period_end FROM relay_subscriptions WHERE motebit_id = ?",
+        "SELECT stripe_subscription_id, status FROM relay_subscriptions WHERE motebit_id = ?",
       )
-      .get(motebitId) as
-      | { stripe_subscription_id: string | null; status: string; current_period_end: number | null }
-      | undefined;
+      .get(motebitId) as { stripe_subscription_id: string | null; status: string } | undefined;
 
-    if (!row?.stripe_subscription_id) {
+    if (!row?.stripe_subscription_id || row.status !== "active") {
       return c.json({ error: "no active subscription" }, 404);
-    }
-
-    if (row.status === "cancelled" || row.status === "cancelling") {
-      return c.json({ error: "subscription already cancelled" }, 409);
     }
 
     try {
@@ -568,113 +522,45 @@ export function registerSubscriptionRoutes(
         cancel_at_period_end: true,
       });
 
-      const periodEnd = updated.current_period_end * 1000;
-      const now = Date.now();
+      const periodEndSec = updated.current_period_end;
+      const periodEnd = typeof periodEndSec === "number" ? periodEndSec * 1000 : null;
       db.prepare(
-        `UPDATE relay_subscriptions
-         SET status = 'cancelling', current_period_end = ?, updated_at = ?
-         WHERE motebit_id = ?`,
-      ).run(periodEnd, now, motebitId);
+        "UPDATE relay_subscriptions SET status = 'cancelling', current_period_end = ?, updated_at = ? WHERE motebit_id = ?",
+      ).run(periodEnd, Date.now(), motebitId);
 
-      logger.info("subscription.cancel_scheduled", {
-        motebitId,
-        subscriptionId: row.stripe_subscription_id,
-        activeUntil: new Date(periodEnd).toISOString(),
-      });
+      logger.info("subscription.cancel_scheduled", { motebitId, activeUntil: periodEnd });
 
-      return c.json({
-        status: "cancelling",
-        active_until: periodEnd,
-      });
+      return c.json({ status: "cancelling", active_until: periodEnd });
     } catch (err) {
       logger.error("subscription.cancel_failed", {
         motebitId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return c.json({ error: "failed to cancel subscription" }, 500);
+      return c.json({ error: "failed to cancel" }, 500);
     }
   });
 
   // ── GET /api/v1/subscriptions/:motebitId/status ───────────────────────
-  // Returns subscription tier, usage, and limits.
-  // Usage is read from the proxy's KV counter (single source of truth).
-  app.get("/api/v1/subscriptions/:motebitId/status", async (c) => {
+  // Returns subscription status + credit balance.
+  app.get("/api/v1/subscriptions/:motebitId/status", (c) => {
     const motebitId = c.req.param("motebitId");
 
-    const tier = getOrCreateSubscription(db, motebitId);
-    const config = TIER_CONFIG[tier];
-    const usage = await getProxyDailyUsage(motebitId);
-
-    // Include cancellation status if applicable
-    const row = db
+    const sub = db
       .prepare("SELECT status, current_period_end FROM relay_subscriptions WHERE motebit_id = ?")
       .get(motebitId) as { status: string; current_period_end: number | null } | undefined;
 
+    const account = getOrCreateAccount(db, motebitId);
+
     return c.json({
       motebit_id: motebitId,
-      tier,
-      status: row?.status ?? "active",
-      ...(row?.status === "cancelling" && row.current_period_end
-        ? { active_until: row.current_period_end }
+      subscribed: sub?.status === "active" || sub?.status === "cancelling",
+      subscription_status: sub?.status ?? "none",
+      ...(sub?.status === "cancelling" && sub.current_period_end != null
+        ? { active_until: sub.current_period_end }
         : {}),
-      daily_limit: config.daily_limit === Infinity ? null : config.daily_limit,
-      daily_used: usage,
-      daily_remaining:
-        config.daily_limit === Infinity ? null : Math.max(0, config.daily_limit - usage),
-      models: [...config.models],
-      max_tokens: config.max_tokens,
+      balance: account.balance,
+      balance_usd: fromMicro(account.balance),
+      models: account.balance > 0 ? [...DEPOSIT_MODELS] : [],
     });
-  });
-
-  // ── POST /api/v1/subscriptions/:motebitId/proxy-token ─────────────────
-  // Issue a signed proxy token for the edge proxy.
-  app.post("/api/v1/subscriptions/:motebitId/proxy-token", async (c) => {
-    const motebitId = c.req.param("motebitId");
-
-    const tier = getOrCreateSubscription(db, motebitId);
-
-    if (tier === "byok") {
-      return c.json({ error: "byok agents use their own API key" }, 400);
-    }
-
-    // Check usage from proxy KV (single source of truth) before issuing token
-    const config = TIER_CONFIG[tier];
-    const usage = await getProxyDailyUsage(motebitId);
-
-    if (usage >= config.daily_limit) {
-      return c.json(
-        {
-          error: "daily limit reached",
-          tier,
-          daily_limit: config.daily_limit,
-          daily_used: usage,
-        },
-        429,
-      );
-    }
-
-    try {
-      const token = await issueProxyToken(motebitId, tier, relayIdentity);
-
-      logger.info("proxy-token.issued", {
-        motebitId,
-        tier,
-        dailyUsage: usage,
-      });
-
-      return c.json({
-        token,
-        tier,
-        expires_at: Date.now() + PROXY_TOKEN_TTL_MS,
-        daily_used: usage,
-        daily_remaining: Math.max(0, config.daily_limit - usage),
-      });
-    } catch (err) {
-      logger.error("proxy-token.failed", {
-        motebitId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return c.json({ error: "failed to issue proxy token" }, 500);
-    }
   });
 }

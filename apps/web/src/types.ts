@@ -7,4 +7,6 @@ export interface WebContext {
   setConfig(config: ProviderConfig): void;
   addMessage(role: "user" | "assistant" | "system", text: string): void;
   showToast(text: string, duration?: number): void;
+  /** Bootstrap the proxy session — switches from local to cloud AI. */
+  bootstrapProxy(): Promise<boolean>;
 }

@@ -103,7 +103,7 @@ These are not suggestions. They are the architectural invariants that make the m
 
 ## Security Boundaries
 
-**Sybil defense (four layers).** Self-delegation must not farm trust. Layer 1: skip credential issuance when delegator === worker. Layer 2: aggregation ignores self-issued credentials. Layer 3: relay skips trust record update on self-delegation. Layer 4: relay skips credential issuance on self-delegation receipts. Self-delegation executes and settles budget — it just produces no trust signal.
+**Sybil defense (five layers).** Self-delegation must not farm trust. Layer 1: skip trust record update when delegator === worker. Layer 2: aggregation ignores self-issued credentials. Layer 3: minimum issuer trust threshold (0.05) excludes new sybil identities. Layer 4: credential revocation check excludes compromised issuers. Layer 5: reject self-issued credentials at submission endpoint. Self-delegation executes and settles budget — it just produces no trust signal.
 
 **Memory injection defense (two layers).** Layer 1 — formation gate: `ContentSanitizer` scans candidates, injection-flagged get confidence capped to 0.3 (fast decay, not rejected outright). Layer 2 — context boundary: `[MEMORY_DATA]...[/MEMORY_DATA]` wrapping with escape prevention. System prompt treats memory data identically to external data.
 

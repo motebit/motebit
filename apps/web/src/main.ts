@@ -9,7 +9,7 @@ import {
   loadProxyToken,
   saveProxyToken,
   clearProxyToken,
-  saveSubscriptionTier,
+  saveBalance,
 } from "./storage";
 import { ProxySession } from "@motebit/runtime";
 import type { ProxyProviderConfig } from "@motebit/runtime";
@@ -54,6 +54,7 @@ const ctx: WebContext = {
   },
   addMessage,
   showToast,
+  bootstrapProxy: () => proxySession.bootstrap(),
 };
 
 // === Module Init ===
@@ -189,9 +190,11 @@ const proxySession = new ProxySession(
     getSyncUrl: () => loadSyncUrl(),
     getMotebitId: () => localStorage.getItem("motebit:motebit_id"),
     loadToken: () => loadProxyToken(),
-    saveToken: (data) => saveProxyToken(data),
+    saveToken: (data) => {
+      saveProxyToken(data);
+      saveBalance(data.balanceUsd);
+    },
     clearToken: () => clearProxyToken(),
-    saveTier: (tier) => saveSubscriptionTier(tier),
     onProviderReady: (proxyConfig: ProxyProviderConfig) => {
       const config: ProviderConfig = {
         type: "proxy",
@@ -203,7 +206,7 @@ const proxySession = new ProxySession(
       saveProviderConfig(config);
       settings.updateModelIndicator();
       settings.updateConnectPrompt();
-      subscription.updateTierDisplay();
+      subscription.updateBalanceDisplay();
     },
   },
   PROXY_BASE_URL,
@@ -406,27 +409,8 @@ async function bootstrap(): Promise<void> {
   // For returning users with saved config, update prompt immediately
   if (savedConfig != null) settings.updateConnectPrompt();
 
-  // Check for checkout return — verify payment and activate subscription
-  const checkoutSessionId = new URLSearchParams(window.location.search).get("checkout_session_id");
-  if (checkoutSessionId) {
-    // Clean URL immediately so refreshes don't re-trigger
-    const cleanUrl = new URL(window.location.href);
-    cleanUrl.searchParams.delete("checkout_session_id");
-    window.history.replaceState({}, "", cleanUrl.toString());
-
-    // Verify with relay, then bootstrap proxy to switch to cloud provider
-    subscription
-      .verifyCheckoutAndActivate(checkoutSessionId)
-      .then(() => {
-        void autoInitProxy().then((ok) => {
-          if (ok) {
-            settings.updateModelIndicator();
-            settings.updateConnectPrompt();
-          }
-        });
-      })
-      .catch(() => {});
-  }
+  // Deposit checkout returns are handled by the poll loop in the subscription UI.
+  // No checkout_session_id handling needed — deposits use hosted mode (new tab).
 
   // Auto-connect sync if a relay URL was previously saved
   const syncUrl = loadSyncUrl();

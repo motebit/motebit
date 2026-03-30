@@ -182,14 +182,15 @@ export function markCeilingShown(): void {
   }
 }
 
-// === Subscription / Proxy Token ===
+// === Proxy Token / Balance ===
 
 const PROXY_TOKEN_KEY = "motebit-proxy-token";
-const SUBSCRIPTION_TIER_KEY = "motebit-subscription-tier";
+const BALANCE_KEY = "motebit-balance";
 
 export interface ProxyTokenData {
   token: string; // The full signed token string
-  tier: string; // "free" | "pro"
+  balance: number; // micro-units
+  balanceUsd: number; // dollars for display
   expiresAt: number; // epoch ms
   motebitId: string; // for display
 }
@@ -222,19 +223,20 @@ export function clearProxyToken(): void {
   }
 }
 
-export function saveSubscriptionTier(tier: string): void {
+export function saveBalance(balanceUsd: number): void {
   try {
-    localStorage.setItem(SUBSCRIPTION_TIER_KEY, tier);
+    localStorage.setItem(BALANCE_KEY, String(balanceUsd));
   } catch {
     // localStorage unavailable
   }
 }
 
-export function loadSubscriptionTier(): string {
+export function loadBalance(): number {
   try {
-    return localStorage.getItem(SUBSCRIPTION_TIER_KEY) ?? "free";
+    const raw = localStorage.getItem(BALANCE_KEY);
+    return raw != null ? parseFloat(raw) : 0;
   } catch {
-    return "free";
+    return 0;
   }
 }
 

@@ -15,47 +15,60 @@ export const FETCH_TIMEOUT_MS = 15_000;
 /** Anonymous model allowlist — only used if anonymous proxy access is ever re-enabled */
 export const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
 
-/** Tier-aware limits for all authentication modes */
-export const TIER_LIMITS = {
-  free: { maxBody: 0, maxMsgLen: 0, maxMsgs: 0, maxTokens: 0, dailyLimit: 0 }, // no proxy access
-  pro: { maxBody: 500_000, maxMsgLen: 50_000, maxMsgs: 100, maxTokens: 8192, dailyLimit: 500 },
-  ultra: {
-    maxBody: 1_000_000,
-    maxMsgLen: 100_000,
-    maxMsgs: 200,
-    maxTokens: 16384,
-    dailyLimit: 1000,
-  },
-  byok: {
-    maxBody: 1_000_000,
-    maxMsgLen: 200_000,
-    maxMsgs: 200,
-    maxTokens: 0,
-    dailyLimit: Infinity,
-  },
-  anonymous: { maxBody: 100_000, maxMsgLen: 10_000, maxMsgs: 50, maxTokens: 4096, dailyLimit: 5 },
+/** Request limits for deposit users (generous — they pay per-token) */
+export const DEPOSIT_LIMITS = {
+  maxBody: 1_000_000,
+  maxMsgLen: 100_000,
+  maxMsgs: 200,
+  maxTokens: 16384,
 } as const;
 
-export type TierName = keyof typeof TIER_LIMITS;
+/** Request limits for BYOK users (their own API key, their own limits) */
+export const BYOK_LIMITS = {
+  maxBody: 1_000_000,
+  maxMsgLen: 200_000,
+  maxMsgs: 200,
+  maxTokens: 0, // no cap — user's key
+} as const;
 
 /** Payload embedded in relay-signed proxy tokens */
 export interface ProxyTokenPayload {
   /** Motebit ID */
   mid: string;
-  /** Tier name */
-  tier: string;
-  /** Daily request limit */
-  lim: number;
+  /** Balance in micro-units (1 USD = 1,000,000) */
+  bal: number;
   /** Allowed model identifiers */
   models: string[];
-  /** Max tokens per request */
-  mtk: number;
   /** Unique token ID (nonce) */
   jti: string;
   /** Issued-at timestamp (ms) */
   iat: number;
   /** Expiry timestamp (ms) */
   exp: number;
+}
+
+// ── Cost calculation ────────────────────────────────────────────────────
+
+/** Anthropic model pricing (USD per million tokens) */
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  "claude-sonnet-4-20250514": { input: 3.0, output: 15.0 },
+  "claude-opus-4-20250115": { input: 15.0, output: 75.0 },
+};
+
+const MARGIN = 0.2; // 20% markup
+const MICRO = 1_000_000;
+
+/** Calculate cost in micro-units for a completed request. */
+export function calculateCostMicro(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+): number {
+  const pricing = MODEL_PRICING[model];
+  if (!pricing) return 0;
+  const rawCost =
+    (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
+  return Math.ceil(rawCost * (1 + MARGIN) * MICRO);
 }
 
 const PROD_ORIGINS = ["https://motebit.com", "https://www.motebit.com"];
