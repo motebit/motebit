@@ -87,9 +87,10 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
                 data.active_until != null
                   ? ` on ${new Date(data.active_until).toLocaleDateString()}`
                   : "";
+              cancelArea.style.textAlign = "center";
               cancelArea.innerHTML =
-                `<div style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">Plan cancels${until}. Credits remain until used.</div>` +
-                '<button id="resubscribe-btn" style="font-size:12px; padding:4px 12px; border:1px solid var(--border-light); border-radius:4px; background:transparent; color:var(--text-heading); cursor:pointer;">Resubscribe</button>';
+                `<div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">Plan cancels${until}. Credits remain until used.</div>` +
+                '<button id="resubscribe-btn" style="font-size:13px; padding:6px 20px; border:1px solid var(--text-heading); border-radius:6px; background:transparent; color:var(--text-heading); cursor:pointer;">Resubscribe</button>';
               document.getElementById("resubscribe-btn")?.addEventListener("click", () => {
                 const relayUrl = loadSyncUrl() ?? DEFAULT_RELAY_URL;
                 const mid = localStorage.getItem("motebit:motebit_id");
