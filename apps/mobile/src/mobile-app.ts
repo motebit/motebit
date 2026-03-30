@@ -57,6 +57,7 @@ import {
   decryptEventPayload,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
+  EncryptedConversationSyncAdapter,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
@@ -1736,8 +1737,8 @@ export class MobileApp {
     tempEventSync.connectRemote(eventAdapter);
     const eventResult = await tempEventSync.sync();
 
-    // Conversation sync
-    const convAdapter = new HttpConversationSyncAdapter({
+    // Conversation sync (encrypted — relay stores opaque ciphertext)
+    const convHttpAdapter = new HttpConversationSyncAdapter({
       baseUrl: url,
       motebitId: this.motebitId,
       authToken: token,
@@ -1746,7 +1747,11 @@ export class MobileApp {
       this.storage.conversationSyncStore,
       this.motebitId,
     );
-    tempConvSync.connectRemote(convAdapter);
+    tempConvSync.connectRemote(
+      this._syncEncKey
+        ? new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: this._syncEncKey })
+        : convHttpAdapter,
+    );
     const convResult = await tempConvSync.sync();
 
     this._lastSyncTime = Date.now();
@@ -1940,13 +1945,16 @@ export class MobileApp {
         this.syncEngine.connectRemote(httpAdapter);
       }
 
-      // Conversation sync stays HTTP
+      // Conversation sync (encrypted at relay boundary)
+      const convHttpAdapter = new HttpConversationSyncAdapter({
+        baseUrl: syncUrl,
+        motebitId: this.motebitId,
+        authToken: token,
+      });
       this.conversationSyncEngine.connectRemote(
-        new HttpConversationSyncAdapter({
-          baseUrl: syncUrl,
-          motebitId: this.motebitId,
-          authToken: token,
-        }),
+        encKey
+          ? new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: encKey })
+          : convHttpAdapter,
       );
 
       await this.syncEngine.sync();

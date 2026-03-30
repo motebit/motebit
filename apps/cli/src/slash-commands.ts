@@ -25,9 +25,11 @@ import {
 import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
+  EncryptedConversationSyncAdapter,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
+import { deriveSyncEncryptionKey } from "@motebit/crypto";
 import { parseInterval } from "./intervals.js";
 
 export interface ReplContext {
@@ -544,12 +546,19 @@ export async function handleSlashCommand(
             );
             const convSyncEngine = new ConversationSyncEngine(convStoreAdapter, repl.motebitId);
             const syncToken = await getRelayToken(config, repl, "sync");
+            const httpConvAdapter = new HttpConversationSyncAdapter({
+              baseUrl: syncUrl,
+              motebitId: repl.motebitId,
+              authToken: syncToken,
+            });
+            // Encrypt conversations — relay stores opaque ciphertext
+            const encKey = repl.privateKeyBytes
+              ? await deriveSyncEncryptionKey(repl.privateKeyBytes)
+              : null;
             convSyncEngine.connectRemote(
-              new HttpConversationSyncAdapter({
-                baseUrl: syncUrl,
-                motebitId: repl.motebitId,
-                authToken: syncToken,
-              }),
+              encKey
+                ? new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encKey })
+                : httpConvAdapter,
             );
             const convResult = await convSyncEngine.sync();
             console.log(

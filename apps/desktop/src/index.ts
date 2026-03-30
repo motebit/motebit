@@ -72,6 +72,7 @@ import {
   PairingClient,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
+  EncryptedConversationSyncAdapter,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
   HttpEventStoreAdapter,
@@ -2894,6 +2895,7 @@ export class DesktopApp {
   async syncConversations(
     syncUrl: string,
     authToken?: string,
+    encryptionKey?: Uint8Array,
   ): Promise<{
     conversations_pushed: number;
     conversations_pulled: number;
@@ -2919,12 +2921,16 @@ export class DesktopApp {
     await storeAdapter.prefetch(0);
 
     const syncEngine = new ConversationSyncEngine(storeAdapter, this.motebitId);
+    const httpConvAdapter = new HttpConversationSyncAdapter({
+      baseUrl: syncUrl,
+      motebitId: this.motebitId,
+      authToken,
+    });
+    // Encrypt conversations at the sync boundary — relay stores opaque ciphertext
     syncEngine.connectRemote(
-      new HttpConversationSyncAdapter({
-        baseUrl: syncUrl,
-        motebitId: this.motebitId,
-        authToken,
-      }),
+      encryptionKey
+        ? new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encryptionKey })
+        : httpConvAdapter,
     );
 
     try {
@@ -3195,8 +3201,8 @@ export class DesktopApp {
       })();
     }, 4.5 * 60_000);
 
-    // One-shot conversation sync (stays HTTP — no WS needed for conversations)
-    void this.syncConversations(syncUrl, token)
+    // One-shot conversation sync (encrypted, stays HTTP — no WS needed for conversations)
+    void this.syncConversations(syncUrl, token, encKey)
       .then((result) => {
         this.emitSyncStatus({
           lastSyncAt: Date.now(),

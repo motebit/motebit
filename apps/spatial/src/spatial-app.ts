@@ -67,6 +67,7 @@ import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
   EncryptedEventStoreAdapter,
+  EncryptedConversationSyncAdapter,
   decryptEventPayload,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
@@ -1130,19 +1131,20 @@ export class SpatialApp {
           this._planSyncEngine.start();
         }
 
-        // 5. Conversation sync — push/pull conversations for cross-device visibility
+        // 5. Conversation sync — encrypted, push/pull for cross-device visibility
         if (this.storage?.conversationStore) {
           const convSyncStore = new IdbConversationSyncStore(
             this.storage.conversationStore as IdbConversationStore,
             this.motebitId,
           );
           this._convSyncEngine = new ConversationSyncEngine(convSyncStore, this.motebitId);
+          const httpConvAdapter = new HttpConversationSyncAdapter({
+            baseUrl: relayUrl,
+            motebitId: this.motebitId,
+            authToken: authToken ?? undefined,
+          });
           this._convSyncEngine.connectRemote(
-            new HttpConversationSyncAdapter({
-              baseUrl: relayUrl,
-              motebitId: this.motebitId,
-              authToken: authToken ?? undefined,
-            }),
+            new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encKey }),
           );
           void this._convSyncEngine.sync();
           this._convSyncEngine.start();

@@ -33,6 +33,7 @@ import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
   EncryptedEventStoreAdapter,
+  EncryptedConversationSyncAdapter,
   decryptEventPayload,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
@@ -1013,17 +1014,19 @@ export class WebApp {
     }
 
     // Wire conversation sync — push/pull conversations to relay for cross-device visibility
+    // Encrypted: relay stores opaque ciphertext, same key as event encryption
     if (this._convStore) {
       // Preload all conversation messages so sync push includes locally-modified data
       await this._convStore.preloadAllMessages();
       const convSyncStore = new IdbConversationSyncStore(this._convStore, this._motebitId);
       this._conversationSyncEngine = new ConversationSyncEngine(convSyncStore, this._motebitId);
+      const httpConvAdapter = new HttpConversationSyncAdapter({
+        baseUrl: relayUrl,
+        motebitId: this._motebitId,
+        authToken: token ?? undefined,
+      });
       this._conversationSyncEngine.connectRemote(
-        new HttpConversationSyncAdapter({
-          baseUrl: relayUrl,
-          motebitId: this._motebitId,
-          authToken: token ?? undefined,
-        }),
+        new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encKey }),
       );
       void this._conversationSyncEngine.sync();
       this._conversationSyncEngine.start();
