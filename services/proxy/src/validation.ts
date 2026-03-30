@@ -47,13 +47,33 @@ export interface ProxyTokenPayload {
   exp: number;
 }
 
-// ── Cost calculation ────────────────────────────────────────────────────
+// ── Provider routing ────────────────────────────────────────────────────
 
-/** Anthropic model pricing (USD per million tokens) */
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-4-20250514": { input: 3.0, output: 15.0 },
-  "claude-opus-4-20250115": { input: 15.0, output: 75.0 },
+export type Provider = "anthropic" | "openai" | "google";
+
+/** Model → provider mapping + pricing (USD per million tokens) */
+const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: number }> = {
+  // Anthropic
+  "claude-sonnet-4-20250514": { provider: "anthropic", input: 3.0, output: 15.0 },
+  "claude-opus-4-20250115": { provider: "anthropic", input: 15.0, output: 75.0 },
+  "claude-haiku-4-5-20251001": { provider: "anthropic", input: 1.0, output: 5.0 },
+  // OpenAI
+  "gpt-4o": { provider: "openai", input: 2.5, output: 10.0 },
+  "gpt-4o-mini": { provider: "openai", input: 0.15, output: 0.6 },
+  // Google
+  "gemini-2.5-pro": { provider: "google", input: 1.25, output: 10.0 },
+  "gemini-2.5-flash": { provider: "google", input: 0.15, output: 0.6 },
 };
+
+/** Get the provider for a model. */
+export function getModelProvider(model: string): Provider | null {
+  return MODEL_CONFIG[model]?.provider ?? null;
+}
+
+/** Get all supported model IDs. */
+export function getSupportedModels(): string[] {
+  return Object.keys(MODEL_CONFIG);
+}
 
 const MARGIN = 0.2; // 20% markup
 const MICRO = 1_000_000;
@@ -64,10 +84,10 @@ export function calculateCostMicro(
   inputTokens: number,
   outputTokens: number,
 ): number {
-  const pricing = MODEL_PRICING[model];
-  if (!pricing) return 0;
+  const config = MODEL_CONFIG[model];
+  if (!config) return 0;
   const rawCost =
-    (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
+    (inputTokens / 1_000_000) * config.input + (outputTokens / 1_000_000) * config.output;
   return Math.ceil(rawCost * (1 + MARGIN) * MICRO);
 }
 

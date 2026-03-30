@@ -27,7 +27,15 @@ import {
 const logger = createLogger({ service: "relay", module: "proxy-tokens" });
 
 /** All subscribers can access these models. The proxy enforces per-request cost. */
-const DEPOSIT_MODELS = ["claude-sonnet-4-20250514", "claude-opus-4-20250115"];
+const DEPOSIT_MODELS = [
+  "claude-sonnet-4-20250514",
+  "claude-opus-4-20250115",
+  "claude-haiku-4-5-20251001",
+  "gpt-4o",
+  "gpt-4o-mini",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+];
 
 const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -430,7 +438,7 @@ export function registerProxyTokenRoutes(
 
         case "invoice.paid": {
           // Monthly renewal — credit the account again
-          const invoice = event.data.object as Stripe.Invoice;
+          const invoice = event.data.object;
           const subscriptionId =
             typeof invoice.subscription === "string"
               ? invoice.subscription

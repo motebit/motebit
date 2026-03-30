@@ -2,10 +2,12 @@ export const runtime = "edge";
 
 import {
   type ProxyTokenPayload,
+  type Provider,
   DEPOSIT_LIMITS,
   BYOK_LIMITS,
   parseProxyToken,
   calculateCostMicro,
+  getModelProvider,
 } from "../../../validation";
 
 const ALLOWED_ORIGINS = new Set([
@@ -26,16 +28,13 @@ function corsHeaders(origin: string): Record<string, string> {
   };
 }
 
-// OPTIONS — CORS preflight
 export function OPTIONS(request: Request): Response {
   const origin = request.headers.get("origin") ?? "";
-  if (!ALLOWED_ORIGINS.has(origin)) {
-    return new Response(null, { status: 403 });
-  }
+  if (!ALLOWED_ORIGINS.has(origin)) return new Response(null, { status: 403 });
   return new Response(null, { status: 204, headers: corsHeaders(origin) });
 }
 
-/** Fire-and-forget debit call to the relay after serving a response. */
+/** Fire-and-forget debit call to the relay. */
 function debitRelay(motebitId: string, amountMicro: number, referenceId: string): void {
   const relayUrl = process.env.RELAY_API_URL ?? "https://motebit-sync.fly.dev";
   const secret = process.env.RELAY_PROXY_SECRET;
@@ -49,12 +48,136 @@ function debitRelay(motebitId: string, amountMicro: number, referenceId: string)
       reference_id: referenceId,
       description: "Cloud AI usage",
     }),
-  }).catch(() => {
-    // Best-effort — the 20% margin absorbs occasional failures
-  });
+  }).catch(() => {});
 }
 
-// POST — proxy to Anthropic Messages API
+// ── Provider API adapters ───────────────────────────────────────────────
+
+function getProviderApiKey(provider: Provider): string | null {
+  switch (provider) {
+    case "anthropic":
+      return process.env.ANTHROPIC_API_KEY ?? null;
+    case "openai":
+      return process.env.OPENAI_API_KEY ?? null;
+    case "google":
+      return process.env.GOOGLE_AI_API_KEY ?? null;
+  }
+}
+
+interface ProviderRequest {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+/** Build the provider-specific request. All providers receive the same logical input. */
+function buildProviderRequest(
+  provider: Provider,
+  apiKey: string,
+  model: string,
+  body: Record<string, unknown>,
+  maxTokensCap: number,
+): ProviderRequest {
+  const messages = body.messages as Array<{ role: string; content: string }>;
+  const system = body.system as string | undefined;
+  const maxTokens =
+    maxTokensCap > 0
+      ? Math.min((body.max_tokens as number) || maxTokensCap, maxTokensCap)
+      : (body.max_tokens as number) || 4096;
+
+  switch (provider) {
+    case "anthropic":
+      return {
+        url: "https://api.anthropic.com/v1/messages",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          system,
+          max_tokens: maxTokens,
+          temperature: body.temperature,
+          stream: true,
+          ...(body.tools != null ? { tools: body.tools } : {}),
+        }),
+      };
+
+    case "openai": {
+      // OpenAI format: system is a message, not a separate field
+      const openaiMessages = system ? [{ role: "system", content: system }, ...messages] : messages;
+      return {
+        url: "https://api.openai.com/v1/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: openaiMessages,
+          max_tokens: maxTokens,
+          temperature: body.temperature,
+          stream: true,
+          stream_options: { include_usage: true },
+          ...(body.tools != null ? { tools: body.tools } : {}),
+        }),
+      };
+    }
+
+    case "google": {
+      // Google AI uses OpenAI-compatible endpoint
+      const geminiMessages = system ? [{ role: "system", content: system }, ...messages] : messages;
+      return {
+        url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: geminiMessages,
+          max_tokens: maxTokens,
+          temperature: body.temperature,
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+      };
+    }
+  }
+}
+
+/** Extract token usage from a streaming SSE chunk. Handles both Anthropic and OpenAI formats. */
+function extractUsage(
+  provider: Provider,
+  line: string,
+  usage: { input: number; output: number },
+): void {
+  if (!line.startsWith("data: ")) return;
+  const json = line.slice(6);
+  if (json === "[DONE]") return;
+  try {
+    const evt = JSON.parse(json) as Record<string, unknown>;
+
+    if (provider === "anthropic") {
+      // Anthropic: initial message has usage.input_tokens, message_delta has usage.output_tokens
+      const u = evt.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+      if (u?.input_tokens != null) usage.input = u.input_tokens;
+      if (u?.output_tokens != null) usage.output = u.output_tokens;
+    } else {
+      // OpenAI / Google: final chunk has usage object
+      const u = evt.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+      if (u?.prompt_tokens != null) usage.input = u.prompt_tokens;
+      if (u?.completion_tokens != null) usage.output = u.completion_tokens;
+    }
+  } catch {
+    // Not valid JSON — ignore
+  }
+}
+
+// ── Main handler ────────────────────────────────────────────────────────
+
 export async function POST(request: Request): Promise<Response> {
   const origin = request.headers.get("origin") ?? "";
   if (!ALLOWED_ORIGINS.has(origin)) {
@@ -66,10 +189,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const cors = corsHeaders(origin);
 
-  // --- Authentication: two modes ---
-  // 1. Proxy token (relay-signed, contains balance)
-  // 2. BYOK (user's own API key)
-
+  // --- Authentication ---
   const proxyTokenStr = request.headers.get("x-proxy-token");
   const clientApiKey = request.headers.get("x-api-key");
 
@@ -98,12 +218,11 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    // Balance check — if zero, the client should fall back to local inference
     if (tokenPayload.bal <= 0) {
       return new Response(
         JSON.stringify({
           error: "insufficient_balance",
-          message: "Deposit funds to use cloud AI, or switch to local inference.",
+          message: "Deposit funds to use cloud AI.",
           balance: 0,
         }),
         { status: 402, headers: { ...cors, "Content-Type": "application/json" } },
@@ -112,7 +231,6 @@ export async function POST(request: Request): Promise<Response> {
 
     authMode = "proxy-token";
   } else {
-    // No token, no API key — denied
     return new Response(
       JSON.stringify({ error: "unauthorized", message: "Provide a proxy token or API key." }),
       { status: 401, headers: { ...cors, "Content-Type": "application/json" } },
@@ -122,16 +240,7 @@ export async function POST(request: Request): Promise<Response> {
   const isBYOK = authMode === "byok";
   const limits = isBYOK ? BYOK_LIMITS : DEPOSIT_LIMITS;
 
-  // Resolve API key
-  const apiKey = isBYOK ? clientApiKey! : process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return new Response(
-      JSON.stringify({ error: "server_error", message: "Proxy not configured" }),
-      { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
-    );
-  }
-
-  // --- Parse and validate body ---
+  // --- Parse body ---
   const raw = await request.text();
   if (raw.length > limits.maxBody) {
     return new Response(JSON.stringify({ error: "request_too_large" }), {
@@ -164,11 +273,47 @@ export async function POST(request: Request): Promise<Response> {
       return new Response(
         JSON.stringify({
           error: "invalid_model",
-          message: `Allowed models: ${tokenPayload.models.join(", ")}`,
+          message: `Allowed: ${tokenPayload.models.join(", ")}`,
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
       );
     }
+  }
+
+  // --- Resolve provider and API key ---
+  const provider = getModelProvider(requestedModel);
+
+  let apiKey: string | null;
+  if (isBYOK) {
+    // BYOK: user's key goes to Anthropic (default) or detected provider
+    apiKey = clientApiKey;
+  } else {
+    if (!provider) {
+      return new Response(
+        JSON.stringify({
+          error: "invalid_model",
+          message: `Model not supported: ${requestedModel}`,
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+    apiKey = getProviderApiKey(provider);
+    if (!apiKey) {
+      return new Response(
+        JSON.stringify({
+          error: "provider_not_configured",
+          message: `${provider} is not configured on this proxy`,
+        }),
+        { status: 501, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+  }
+
+  if (!apiKey) {
+    return new Response(
+      JSON.stringify({ error: "server_error", message: "No API key available" }),
+      { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
+    );
   }
 
   // --- Validate messages ---
@@ -185,130 +330,74 @@ export async function POST(request: Request): Promise<Response> {
       { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }
-  let totalChars = 0;
-  for (const msg of messages) {
-    if (typeof msg.content === "string") {
-      if (msg.content.length > limits.maxMsgLen) {
-        return new Response(JSON.stringify({ error: "message_too_long" }), {
-          status: 400,
-          headers: { ...cors, "Content-Type": "application/json" },
-        });
-      }
-      totalChars += msg.content.length;
-    }
-  }
-  if (totalChars > limits.maxBody) {
-    return new Response(JSON.stringify({ error: "payload_too_large" }), {
-      status: 413,
-      headers: { ...cors, "Content-Type": "application/json" },
-    });
-  }
 
-  // --- Build proxied request ---
-  const maxTokensCap = limits.maxTokens;
-
-  const proxiedBody: Record<string, unknown> = {
-    model: requestedModel,
-    messages: body.messages,
-    system: body.system,
-    max_tokens: isBYOK
-      ? (body.max_tokens as number) || 4096
-      : maxTokensCap > 0
-        ? Math.min((body.max_tokens as number) || maxTokensCap, maxTokensCap)
-        : (body.max_tokens as number) || 4096,
-    temperature: body.temperature,
-    stream: body.stream ?? true,
-  };
-
-  // BYOK users get tool support; deposit users get tools too (they're paying)
-  if (body.tools != null) {
-    proxiedBody.tools = body.tools;
-  }
-
-  // --- Forward to Anthropic ---
+  // --- Build and send provider request ---
+  const resolvedProvider = provider ?? "anthropic"; // BYOK defaults to Anthropic
+  const providerReq = buildProviderRequest(
+    resolvedProvider,
+    apiKey,
+    requestedModel,
+    body,
+    limits.maxTokens,
+  );
   const requestId = crypto.randomUUID();
-  const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+
+  const providerRes = await fetch(providerReq.url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify(proxiedBody),
+    headers: providerReq.headers,
+    body: providerReq.body,
   });
 
   // --- Stream response and extract usage for debit ---
-  if (authMode === "proxy-token" && tokenPayload && anthropicRes.ok && anthropicRes.body) {
-    // Tee the stream: pass through to client while extracting the final usage event
-    const model = requestedModel;
+  if (authMode === "proxy-token" && tokenPayload && providerRes.ok && providerRes.body) {
     const mid = tokenPayload.mid;
-    let inputTokens = 0;
-    let outputTokens = 0;
+    const model = requestedModel;
+    const prov = resolvedProvider;
+    const usage = { input: 0, output: 0 };
 
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
-    const reader = anthropicRes.body.getReader();
+    const reader = providerRes.body.getReader();
     const decoder = new TextDecoder();
 
-    // Process stream in background — zero latency to client
     void (async () => {
       try {
         let buffer = "";
-        while (true) {
+        for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
           await writer.write(value);
 
-          // Accumulate SSE text to find usage in final events
           buffer += decoder.decode(value, { stream: true });
-
-          // Parse usage from message_delta or message_stop events
-          // Anthropic sends: data: {"type":"message_delta","usage":{"output_tokens":N}}
-          // and the initial message has: "usage":{"input_tokens":N}
           const lines = buffer.split("\n");
-          buffer = lines.pop() ?? ""; // keep incomplete line
+          buffer = lines.pop() ?? "";
           for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const json = line.slice(6);
-            if (json === "[DONE]") continue;
-            try {
-              const evt = JSON.parse(json) as {
-                type?: string;
-                usage?: { input_tokens?: number; output_tokens?: number };
-              };
-              if (evt.usage?.input_tokens != null) inputTokens = evt.usage.input_tokens;
-              if (evt.usage?.output_tokens != null) outputTokens = evt.usage.output_tokens;
-            } catch {
-              // Not valid JSON — ignore
-            }
+            extractUsage(prov, line, usage);
           }
         }
       } finally {
         await writer.close();
-        // Debit after stream completes — fire and forget
-        const cost = calculateCostMicro(model, inputTokens, outputTokens);
-        if (cost > 0) {
-          debitRelay(mid, cost, requestId);
-        }
+        const cost = calculateCostMicro(model, usage.input, usage.output);
+        if (cost > 0) debitRelay(mid, cost, requestId);
       }
     })();
 
     return new Response(readable, {
-      status: anthropicRes.status,
+      status: providerRes.status,
       headers: {
         ...cors,
-        "Content-Type": anthropicRes.headers.get("Content-Type") ?? "text/event-stream",
+        "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
         "Cache-Control": "no-cache",
       },
     });
   }
 
   // BYOK or non-streaming: pipe directly
-  return new Response(anthropicRes.body, {
-    status: anthropicRes.status,
+  return new Response(providerRes.body, {
+    status: providerRes.status,
     headers: {
       ...cors,
-      "Content-Type": anthropicRes.headers.get("Content-Type") ?? "text/event-stream",
+      "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
       "Cache-Control": "no-cache",
     },
   });
