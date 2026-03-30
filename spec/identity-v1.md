@@ -63,7 +63,28 @@ Cryptographic identity. The public half of the keypair that signs this file.
 | `algorithm`  | string | yes      | Signing algorithm. MUST be `"Ed25519"` for this version.       |
 | `public_key` | string | yes      | Hex-encoded Ed25519 public key (64 hex characters = 32 bytes). |
 
-### 3.3 — `governance`
+### 3.3 — `guardian` (optional)
+
+Organizational custody and key recovery. When present, the guardian key can perform succession on behalf of the primary key — enabling identity recovery after key compromise without centralized revocation.
+
+| Field             | Type   | Required | Description                                                                               |
+| ----------------- | ------ | -------- | ----------------------------------------------------------------------------------------- |
+| `public_key`      | string | yes      | Hex-encoded Ed25519 public key of the guardian (64 hex characters = 32 bytes).            |
+| `organization`    | string | no       | Human-readable organization name (e.g., `"Acme Corp"`).                                   |
+| `organization_id` | string | no       | Machine-readable organization identifier (opaque string — format is application-defined). |
+| `established_at`  | string | yes      | ISO 8601 timestamp when guardianship was established.                                     |
+
+**Sovereign agents** (individuals) omit the `guardian` field. Their identity has no recovery path beyond key succession — this is the deliberate tradeoff for full sovereignty.
+
+**Enterprise agents** include a `guardian` whose private key is held by the organization. This enables:
+
+- **Key compromise recovery:** The guardian signs a succession record (§3.8.3) to rotate to a new key without the compromised key.
+- **Employee departure:** The organization uses the guardian key to rotate the agent's primary key to a new operator, preserving the agent's `motebit_id`, trust history, and credentials.
+- **Organizational audit:** The guardian's `organization_id` links the agent to an organizational entity. Relying parties can verify that an agent is organizationally governed.
+
+The guardian key MUST NOT be the same as the identity key. The guardian key is NOT used for day-to-day signing — it is a cold recovery key, stored securely by the organization (e.g., HSM, vault).
+
+### 3.4 — `governance`
 
 Declares the agent's operational boundaries — what it may do autonomously, what requires approval, and what is forbidden.
 
@@ -221,7 +242,29 @@ A verifier MUST apply the following rules when a `succession` array is present:
 4. **Terminal match.** The last record's `new_public_key` MUST match `identity.public_key`. The chain must end at the current identity.
 5. **Identity continuity.** The `motebit_id` does NOT change across rotations. A key rotation is a change of cryptographic authority, not a change of identity.
 
-#### 3.8.3 — Backward Compatibility
+#### 3.8.3 — Guardian Recovery Succession
+
+When a succession record has `recovery: true`, the `old_key_signature` is replaced by `guardian_signature` — signed by the guardian key instead of the compromised key. This allows identity recovery when the primary key is lost or compromised.
+
+Guardian recovery succession records have this structure:
+
+| Field                | Type    | Required | Description                                                                   |
+| -------------------- | ------- | -------- | ----------------------------------------------------------------------------- |
+| `old_public_key`     | string  | yes      | Hex-encoded Ed25519 public key being retired.                                 |
+| `new_public_key`     | string  | yes      | Hex-encoded Ed25519 public key taking over.                                   |
+| `timestamp`          | number  | yes      | Epoch milliseconds when the recovery occurred.                                |
+| `reason`             | string  | yes      | MUST include `"guardian_recovery"` to distinguish from normal rotation.       |
+| `guardian_signature` | string  | yes      | Hex-encoded Ed25519 signature by the guardian key over the canonical payload. |
+| `new_key_signature`  | string  | yes      | Hex-encoded Ed25519 signature by the new key over the canonical payload.      |
+| `recovery`           | boolean | yes      | MUST be `true`.                                                               |
+
+The canonical payload for guardian recovery is the same as §3.8.1 with the addition of `"recovery":true` in the sorted JSON.
+
+A verifier MUST verify `guardian_signature` against the `guardian.public_key` from the identity (not the `old_public_key`). The `new_key_signature` is verified against `new_public_key` as normal. The old key is not required — this is the recovery path.
+
+Trust implications: Guardian recovery preserves `motebit_id` and accumulated trust, but the succession record's `recovery: true` flag is visible to any verifier. Relying parties MAY apply different trust policies to guardian-recovered identities (e.g., requiring re-verification of the new key holder).
+
+#### 3.8.4 — Backward Compatibility
 
 The `succession` field is optional. Identity files without it are valid and represent identities that have never rotated keys. Verifiers MUST NOT reject files that lack a `succession` array.
 

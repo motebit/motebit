@@ -626,14 +626,37 @@ export interface DelegatedStepResult {
  * A key succession record proving that one Ed25519 key has been replaced by another.
  * Both the old and new keys sign the record, creating a cryptographic chain of custody.
  * Structurally compatible with @motebit/crypto KeySuccessionRecord.
+ *
+ * Guardian recovery records have `recovery: true` and `guardian_signature` instead of
+ * `old_key_signature`. This allows identity recovery when the primary key is compromised.
  */
 export interface KeySuccessionRecord {
   old_public_key: string; // hex
   new_public_key: string; // hex
   timestamp: number;
   reason?: string;
-  old_key_signature: string; // hex, old key signs the canonical payload
+  old_key_signature?: string; // hex — present in normal rotation, absent in guardian recovery
   new_key_signature: string; // hex, new key signs the canonical payload
+  /** Guardian recovery: true when succession was authorized by guardian, not old key. */
+  recovery?: boolean;
+  /** Guardian signature — present only when recovery is true. */
+  guardian_signature?: string; // hex
+}
+
+/**
+ * Organizational guardian — enables key recovery and organizational custody.
+ * The guardian's private key is held by the organization (cold storage).
+ * When present, the guardian can sign succession records on behalf of a compromised key.
+ */
+export interface IdentityGuardian {
+  /** Ed25519 public key of the guardian (hex). */
+  public_key: string;
+  /** Human-readable organization name. */
+  organization?: string;
+  /** Machine-readable organization identifier. */
+  organization_id?: string;
+  /** ISO 8601 timestamp when guardianship was established. */
+  established_at: string;
 }
 
 /** Result of verifying a key succession chain. */
