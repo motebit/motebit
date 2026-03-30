@@ -138,7 +138,11 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
           }
         },
       )
-      .catch(() => {});
+      .catch(() => {
+        // Relay unreachable — show unsubscribed state (safe default)
+        if (subscribedSection) subscribedSection.style.display = "none";
+        if (unsubscribedSection) unsubscribedSection.style.display = "";
+      });
   }
 
   async function openTopup(amount: number): Promise<void> {
@@ -186,7 +190,9 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
       attempts++;
       if (attempts > 30) {
         clearInterval(interval);
-        if (topupStatus) topupStatus.textContent = "";
+        if (topupStatus)
+          topupStatus.textContent =
+            "Payment may still be processing — balance will update shortly.";
         return;
       }
 
@@ -204,7 +210,9 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
             }
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          // Individual poll failure — keep trying until attempts exhausted
+        });
     }, 2000);
   }
 
@@ -343,6 +351,9 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
         break;
       }
     }
+
+    // All attempts exhausted without confirmation — let user know
+    ctx.showToast("Checkout verification pending — your balance will update shortly");
   }
 
   updateBalanceDisplay();
