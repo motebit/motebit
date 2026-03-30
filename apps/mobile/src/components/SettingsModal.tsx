@@ -23,6 +23,7 @@ import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 import type { Goal, GoalMode } from "../adapters/expo-sqlite";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { BillingPanel } from "./BillingPanel";
 
 // === Pure Color Math (copied from desktop color-picker.ts) ===
 
@@ -68,9 +69,18 @@ export function deriveInteriorColor(hue: number, saturation: number): InteriorCo
   return { tint, glow };
 }
 
-type Tab = "appearance" | "intelligence" | "governance" | "goals" | "sync" | "tools" | "identity";
+type Tab =
+  | "billing"
+  | "appearance"
+  | "intelligence"
+  | "governance"
+  | "goals"
+  | "sync"
+  | "tools"
+  | "identity";
 
 const TABS: { key: Tab; label: string }[] = [
+  { key: "billing", label: "Billing" },
   { key: "appearance", label: "Appearance" },
   { key: "intelligence", label: "Intelligence" },
   { key: "governance", label: "Governance" },
@@ -170,6 +180,12 @@ export function SettingsModal({
   const [draft, setDraft] = useState<MobileSettings>(settings);
   const [apiKey, setApiKey] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
+  const [billingRelayUrl, setBillingRelayUrl] = useState<string | null>(null);
+
+  // Fetch relay URL for billing panel
+  useEffect(() => {
+    void app.getSyncUrl().then(setBillingRelayUrl);
+  }, [app, visible]);
 
   // Sync draft when settings change or modal opens
   useEffect(() => {
@@ -280,6 +296,13 @@ export function SettingsModal({
         </View>
 
         <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+          {tab === "billing" && (
+            <BillingPanel
+              motebitId={identity.motebitId}
+              relayUrl={billingRelayUrl}
+              balanceUsd={0}
+            />
+          )}
           {tab === "appearance" && (
             <AppearanceTab
               selected={draft.colorPreset}

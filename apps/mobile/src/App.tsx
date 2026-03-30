@@ -1075,6 +1075,64 @@ export function App(): React.ReactElement {
             }
           })();
           break;
+        case "serve":
+          void (async () => {
+            if (a.isServing()) {
+              a.stopServing();
+              addSystemMessage("Stopped serving");
+            } else {
+              const result = await a.startServing();
+              if (result.ok) {
+                addSystemMessage("Serving — accepting delegations");
+              } else {
+                addSystemMessage(`Could not start serving: ${result.error}`);
+              }
+            }
+          })();
+          break;
+        case "goals":
+          setShowGoalsPanel(true);
+          break;
+        case "plan":
+          if (!args.trim()) {
+            addSystemMessage("Usage: /plan <goal description>");
+            break;
+          }
+          void (async () => {
+            try {
+              const goalId = crypto.randomUUID();
+              addSystemMessage(`Planning: ${args.trim()}`);
+              const runtime = a.getRuntime();
+              if (!runtime) {
+                addSystemMessage("Runtime not initialized");
+                return;
+              }
+              for await (const chunk of runtime.executePlan(goalId, args.trim())) {
+                switch (chunk.type) {
+                  case "plan_created":
+                    addSystemMessage(`Plan: ${chunk.plan.title} (${chunk.steps.length} steps)`);
+                    break;
+                  case "step_started":
+                    addSystemMessage(`Step ${chunk.step.ordinal + 1}: ${chunk.step.description}`);
+                    break;
+                  case "step_completed":
+                    break;
+                  case "step_failed":
+                    addSystemMessage(`Step failed: ${chunk.error}`);
+                    break;
+                  case "plan_completed":
+                    addSystemMessage("Plan completed");
+                    break;
+                  case "plan_failed":
+                    addSystemMessage(`Plan failed: ${chunk.reason}`);
+                    break;
+                }
+              }
+            } catch (err: unknown) {
+              addSystemMessage(`Plan error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          })();
+          break;
         case "balance":
           void (async () => {
             try {
@@ -1180,6 +1238,9 @@ export function App(): React.ReactElement {
               "/gradient — intelligence gradient\n" +
               "/agents — list known agents\n" +
               "/discover — discover agents on relay\n" +
+              "/serve — toggle accepting delegations\n" +
+              "/goals — browse goals\n" +
+              "/plan <goal> — decompose into steps\n" +
               "/balance — show account balance\n" +
               "/deposits — show deposit history\n" +
               "/approvals — pending approvals\n" +
