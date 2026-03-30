@@ -57,6 +57,7 @@ export function createSubscriptionTables(db: DatabaseDriver): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS relay_subscriptions (
       motebit_id TEXT PRIMARY KEY,
+      email TEXT,
       stripe_customer_id TEXT,
       stripe_subscription_id TEXT,
       status TEXT NOT NULL DEFAULT 'inactive',
@@ -66,7 +67,15 @@ export function createSubscriptionTables(db: DatabaseDriver): void {
     );
     CREATE INDEX IF NOT EXISTS idx_relay_subs_stripe_sub
       ON relay_subscriptions (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_relay_subs_email
+      ON relay_subscriptions (email) WHERE email IS NOT NULL;
   `);
+  // Migration: add email column if table already exists without it
+  try {
+    db.exec("ALTER TABLE relay_subscriptions ADD COLUMN email TEXT");
+  } catch {
+    // Column already exists — expected on subsequent boots
+  }
 }
 
 // ── Proxy token types ───────────────────────────────────────────────────
@@ -226,6 +235,10 @@ export function registerProxyTokenRoutes(
           typeof session.customer === "string" ? session.customer : session.customer?.id;
 
         if (subscriptionId && customerId) {
+          // Extract email from Stripe session
+          const email =
+            (session.customer_details?.email ?? session.customer_email ?? "").toLowerCase() || null;
+
           // Upsert subscription
           const now = Date.now();
           const existingRow = db
@@ -235,14 +248,14 @@ export function registerProxyTokenRoutes(
           if (existingRow) {
             db.prepare(
               `UPDATE relay_subscriptions
-               SET stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
+               SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
                WHERE motebit_id = ?`,
-            ).run(customerId, subscriptionId, now, motebitId);
+            ).run(email, customerId, subscriptionId, now, motebitId);
           } else {
             db.prepare(
-              `INSERT INTO relay_subscriptions (motebit_id, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
-               VALUES (?, ?, ?, 'active', ?, ?)`,
-            ).run(motebitId, customerId, subscriptionId, now, now);
+              `INSERT INTO relay_subscriptions (motebit_id, email, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+            ).run(motebitId, email, customerId, subscriptionId, now, now);
           }
 
           // Credit account (idempotent via reference_id)
@@ -398,6 +411,9 @@ export function registerProxyTokenRoutes(
 
           if (!subscriptionId || !customerId) break;
 
+          const email =
+            (session.customer_details?.email ?? session.customer_email ?? "").toLowerCase() || null;
+
           // Upsert subscription record
           const now = Date.now();
           const existingRow = db
@@ -407,14 +423,14 @@ export function registerProxyTokenRoutes(
           if (existingRow) {
             db.prepare(
               `UPDATE relay_subscriptions
-               SET stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
+               SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
                WHERE motebit_id = ?`,
-            ).run(customerId, subscriptionId, now, motebitId);
+            ).run(email, customerId, subscriptionId, now, motebitId);
           } else {
             db.prepare(
-              `INSERT INTO relay_subscriptions (motebit_id, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
-               VALUES (?, ?, ?, 'active', ?, ?)`,
-            ).run(motebitId, customerId, subscriptionId, now, now);
+              `INSERT INTO relay_subscriptions (motebit_id, email, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+            ).run(motebitId, email, customerId, subscriptionId, now, now);
           }
 
           // Credit the account with monthly credits
@@ -569,6 +585,41 @@ export function registerProxyTokenRoutes(
       balance: account.balance,
       balance_usd: fromMicro(account.balance),
       models: account.balance > 0 ? [...DEPOSIT_MODELS] : [],
+    });
+  });
+
+  // ── POST /api/v1/subscriptions/recover ────────────────────────────────
+  // Account recovery: user provides the email they subscribed with,
+  // receives their motebit_id so they can restore their identity.
+  app.post("/api/v1/subscriptions/recover", async (c) => {
+    const body = await c.req.json<{ email: string }>();
+    const email = body.email?.trim()?.toLowerCase();
+
+    if (!email || !email.includes("@")) {
+      return c.json({ error: "valid email required" }, 400);
+    }
+
+    const row = db
+      .prepare(
+        "SELECT motebit_id, status FROM relay_subscriptions WHERE LOWER(email) = ? AND status IN ('active', 'cancelling')",
+      )
+      .get(email) as { motebit_id: string; status: string } | undefined;
+
+    if (!row) {
+      // Don't reveal whether the email exists — return generic message
+      return c.json({
+        message: "If an account exists with that email, recovery info has been sent.",
+      });
+    }
+
+    // For now, return the motebit_id directly. In production, this should
+    // send an email with a recovery link instead of exposing the ID.
+    // TODO: integrate email sending (SendGrid/Resend) for secure recovery
+    logger.info("subscription.recovery", { email, motebitId: row.motebit_id });
+
+    return c.json({
+      message: "Account found",
+      motebit_id: row.motebit_id,
     });
   });
 }
