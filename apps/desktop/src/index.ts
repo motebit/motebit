@@ -1849,6 +1849,11 @@ export class DesktopApp {
     return { ...this._lastSyncStatus };
   }
 
+  /** Current relay sync URL, or null if not configured. */
+  getSyncUrl(): string | null {
+    return this._proxySyncUrlCache;
+  }
+
   /** Emit a sync status event and update internal state. */
   private emitSyncStatus(partial: Partial<SyncStatusEvent>): void {
     this._lastSyncStatus = { ...this._lastSyncStatus, ...partial };

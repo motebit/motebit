@@ -160,6 +160,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     });
     if (tabName === "identity") populateIdentityTab();
     if (tabName === "governance") populateGovernanceTab();
+    if (tabName === "billing") populateBillingTab();
   }
 
   document.querySelectorAll(".settings-tab").forEach((tab) => {
@@ -839,6 +840,188 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       row.classList.toggle("expanded");
     });
     return row;
+  }
+
+  // === Billing Tab ===
+
+  const LOW_BALANCE_THRESHOLD = 5;
+  const TOPUP_AMOUNTS = [5, 10, 25];
+
+  function populateBillingTab(): void {
+    const balanceEl = document.getElementById("billing-balance");
+    const statusEl = document.getElementById("billing-status");
+    const topupEl = document.getElementById("billing-topup");
+    const topupBtnsEl = document.getElementById("billing-topup-buttons");
+    const actionsEl = document.getElementById("billing-actions");
+    const messageEl = document.getElementById("billing-message");
+    if (!balanceEl || !actionsEl) return;
+
+    const syncUrl = ctx.app.getSyncUrl();
+    const motebitId = ctx.app.motebitId;
+    if (!syncUrl || !motebitId) {
+      balanceEl.textContent = "";
+      if (statusEl)
+        statusEl.textContent = "Connect to a relay in Identity settings to manage billing.";
+      return;
+    }
+
+    balanceEl.textContent = "Loading…";
+
+    void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/status`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then(
+        (
+          data: {
+            subscribed?: boolean;
+            subscription_status?: string;
+            balance_usd?: number;
+            active_until?: number;
+          } | null,
+        ) => {
+          if (!data) {
+            balanceEl.textContent = "";
+            if (statusEl) statusEl.textContent = "Could not reach relay";
+            return;
+          }
+
+          const balanceUsd = data.balance_usd ?? 0;
+          balanceEl.textContent = `$${balanceUsd.toFixed(2)} remaining`;
+
+          const isSubscribed = data.subscribed === true;
+
+          if (isSubscribed) {
+            // Show top-up when balance is low
+            if (topupEl && topupBtnsEl && balanceUsd < LOW_BALANCE_THRESHOLD) {
+              topupEl.style.display = "";
+              topupBtnsEl.innerHTML = "";
+              for (const amt of TOPUP_AMOUNTS) {
+                const btn = document.createElement("button");
+                btn.style.cssText =
+                  "padding:5px 14px;border:1px solid var(--border-light);border-radius:6px;background:transparent;color:var(--text-heading);font-size:12px;cursor:pointer;font-family:inherit;";
+                btn.textContent = `+$${amt}`;
+                btn.addEventListener("click", () => void openDesktopTopup(syncUrl, motebitId, amt));
+                topupBtnsEl.appendChild(btn);
+              }
+            } else if (topupEl) {
+              topupEl.style.display = "none";
+            }
+
+            if (data.subscription_status === "cancelling") {
+              const until =
+                data.active_until != null
+                  ? ` on ${new Date(data.active_until).toLocaleDateString()}`
+                  : "";
+              if (statusEl)
+                statusEl.textContent = `Plan cancels${until}. Credits remain until used.`;
+              actionsEl.innerHTML =
+                '<button id="billing-resubscribe" style="padding:6px 20px;border:1px solid var(--text-heading);border-radius:6px;background:transparent;color:var(--text-heading);cursor:pointer;font-size:13px;font-family:inherit;">Resubscribe</button>';
+              document.getElementById("billing-resubscribe")?.addEventListener("click", () => {
+                void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/resubscribe`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                }).then((res) => {
+                  if (res.ok) {
+                    addMessage("system", "Plan resumed");
+                    populateBillingTab();
+                  } else {
+                    if (messageEl) messageEl.textContent = "Failed to resume";
+                  }
+                });
+              });
+            } else {
+              if (statusEl) statusEl.textContent = "Motebit Cloud active";
+              actionsEl.innerHTML =
+                '<a href="#" id="billing-cancel" style="font-size:11px;color:var(--text-muted);opacity:0.5;text-decoration:none;cursor:pointer;">Cancel plan</a>';
+              document.getElementById("billing-cancel")?.addEventListener("click", (e) => {
+                e.preventDefault();
+                void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                }).then((res) => {
+                  if (res.ok) {
+                    addMessage("system", "Plan cancelled — credits remain until used");
+                    populateBillingTab();
+                  } else {
+                    if (messageEl) messageEl.textContent = "Cancel failed";
+                  }
+                });
+              });
+            }
+          } else {
+            // Not subscribed
+            if (statusEl) statusEl.textContent = "";
+            if (topupEl) topupEl.style.display = "none";
+            actionsEl.innerHTML =
+              '<button id="billing-subscribe" style="padding:10px 24px;border:1px solid var(--accent-border,rgba(120,100,255,0.3));border-radius:10px;background:var(--accent-bg,rgba(120,100,255,0.08));color:var(--text-heading);font-size:14px;cursor:pointer;font-family:inherit;">Subscribe — $20/mo</button>';
+            document.getElementById("billing-subscribe")?.addEventListener("click", () => {
+              void openDesktopCheckout(syncUrl, motebitId);
+            });
+          }
+        },
+      )
+      .catch(() => {
+        balanceEl.textContent = "";
+        if (statusEl) statusEl.textContent = "Could not reach relay";
+      });
+  }
+
+  async function openDesktopCheckout(syncUrl: string, motebitId: string): Promise<void> {
+    const messageEl = document.getElementById("billing-message");
+    const btn = document.getElementById("billing-subscribe") as HTMLButtonElement | null;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Opening checkout…";
+    }
+    try {
+      const res = await fetch(`${syncUrl}/api/v1/subscriptions/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ motebit_id: motebitId }),
+      });
+      const data = (await res.json()) as { checkout_url?: string; error?: string };
+      if (data.checkout_url) {
+        window.open(data.checkout_url, "_blank");
+        if (messageEl)
+          messageEl.textContent = "Complete payment in browser — balance updates automatically";
+      } else {
+        if (messageEl) messageEl.textContent = data.error ?? "Checkout failed";
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Subscribe — $20/mo";
+        }
+      }
+    } catch {
+      if (messageEl) messageEl.textContent = "Network error — try again";
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Subscribe — $20/mo";
+      }
+    }
+  }
+
+  async function openDesktopTopup(
+    syncUrl: string,
+    motebitId: string,
+    amount: number,
+  ): Promise<void> {
+    const messageEl = document.getElementById("billing-message");
+    if (messageEl) messageEl.textContent = "Opening checkout…";
+    try {
+      const res = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      const data = (await res.json()) as { checkout_url?: string; error?: string };
+      if (data.checkout_url) {
+        window.open(data.checkout_url, "_blank");
+        if (messageEl) messageEl.textContent = "Complete payment in browser";
+      } else {
+        if (messageEl) messageEl.textContent = data.error ?? "Checkout failed";
+      }
+    } catch {
+      if (messageEl) messageEl.textContent = "Network error";
+    }
   }
 
   function populateGovernanceTab(): void {

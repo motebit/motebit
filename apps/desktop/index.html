@@ -4100,6 +4100,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
         Identity
       </button>
+      <button class="settings-tab" data-tab="billing" role="tab" aria-selected="false" aria-controls="pane-billing" id="tab-billing">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+        Billing
+      </button>
     </div>
     <div class="settings-content">
       <!-- Appearance pane -->
@@ -4417,6 +4421,20 @@
           <div style="font-size:11px;"><span style="color:var(--text-muted);">Settled:</span> <span id="budget-settled">-</span></div>
         </div>
         <div id="budget-list" style="max-height:120px;overflow-y:auto;"></div>
+      </div>
+      <!-- Billing pane -->
+      <div class="settings-pane" id="pane-billing" role="tabpanel" aria-labelledby="tab-billing">
+        <div class="settings-card">
+          <div class="card-title">Motebit Cloud</div>
+          <div id="billing-balance" style="font-size:18px;font-weight:600;text-align:center;margin:12px 0;"></div>
+          <div id="billing-status" style="font-size:12px;color:var(--text-muted);text-align:center;margin-bottom:12px;"></div>
+          <div id="billing-topup" style="display:none;text-align:center;margin-bottom:12px;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Low balance — top up:</div>
+            <div id="billing-topup-buttons" style="display:flex;gap:8px;justify-content:center;"></div>
+          </div>
+          <div id="billing-actions" style="text-align:center;"></div>
+          <div id="billing-message" style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:8px;"></div>
+        </div>
       </div>
     </div>
     <div class="settings-footer">
