@@ -563,6 +563,43 @@ export function registerProxyTokenRoutes(
     }
   });
 
+  // ── POST /api/v1/subscriptions/:motebitId/resubscribe ──────────────────
+  // Undo cancellation — resume the existing subscription.
+  app.post("/api/v1/subscriptions/:motebitId/resubscribe", async (c) => {
+    const motebitId = c.req.param("motebitId");
+
+    const row = db
+      .prepare(
+        "SELECT stripe_subscription_id, status FROM relay_subscriptions WHERE motebit_id = ?",
+      )
+      .get(motebitId) as { stripe_subscription_id: string | null; status: string } | undefined;
+
+    if (!row?.stripe_subscription_id || row.status !== "cancelling") {
+      return c.json({ error: "no cancelling subscription to resume" }, 404);
+    }
+
+    try {
+      const stripe = getStripe();
+      await stripe.subscriptions.update(row.stripe_subscription_id, {
+        cancel_at_period_end: false,
+      });
+
+      db.prepare(
+        "UPDATE relay_subscriptions SET status = 'active', updated_at = ? WHERE motebit_id = ?",
+      ).run(Date.now(), motebitId);
+
+      logger.info("subscription.resubscribed", { motebitId });
+
+      return c.json({ status: "active" });
+    } catch (err) {
+      logger.error("subscription.resubscribe_failed", {
+        motebitId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return c.json({ error: "failed to resubscribe" }, 500);
+    }
+  });
+
   // ── GET /api/v1/subscriptions/:motebitId/status ───────────────────────
   // Returns subscription status + credit balance.
   app.get("/api/v1/subscriptions/:motebitId/status", (c) => {
