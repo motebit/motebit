@@ -89,6 +89,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "approvals", description: "Show pending approvals" },
   { name: "deposits", description: "Show deposit history" },
   { name: "withdraw", description: "Request withdrawal" },
+  { name: "plan", description: "Break down a complex goal into steps" },
   { name: "propose", description: "Propose collaborative plan" },
   { name: "proposals", description: "List active proposals" },
   { name: "serve", description: "Toggle accepting delegations" },
@@ -267,6 +268,14 @@ export function initSlashCommands(
         }
         return;
       }
+    }
+
+    // /plan — decompose goal into steps and execute with auto-routing
+    if (cmd.name === "plan") {
+      // Leave the command in the input — user types the goal after it
+      chatInput.value = "/plan ";
+      chatInput.focus();
+      return;
     }
 
     // Shared commands — same data extraction and formatting as all surfaces

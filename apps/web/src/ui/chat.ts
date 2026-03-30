@@ -274,10 +274,19 @@ export function dismissBanner(): void {
   errorBanner.classList.remove("visible");
 }
 
+/** Human-readable tool names for chat display. */
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  delegate_to_agent: "Delegating to agent",
+  recall_memories: "Searching memory",
+  web_search: "Searching the web",
+  read_url: "Reading page",
+  self_reflect: "Reflecting",
+};
+
 export function showToolStatus(name: string): void {
   const el = document.createElement("div");
   el.className = "tool-status";
-  el.textContent = `${name}...`;
+  el.textContent = `${TOOL_DISPLAY_NAMES[name] ?? name}...`;
   chatLog.appendChild(el);
   chatLog.scrollTop = chatLog.scrollHeight;
   toolStatusElements.set(name, el);
@@ -286,7 +295,7 @@ export function showToolStatus(name: string): void {
 export function completeToolStatus(name: string): void {
   const el = toolStatusElements.get(name);
   if (!el) return;
-  el.textContent = `${name} done`;
+  el.textContent = `${TOOL_DISPLAY_NAMES[name] ?? name} ✓`;
   el.classList.add("done");
   setTimeout(() => {
     el.classList.add("fade-out");
@@ -494,6 +503,17 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     const text = (textOverride ?? chatInput.value).trim();
     if (!text || ctx.app.isProcessing) return;
 
+    // /plan <goal> — decompose and execute multi-step plan
+    if (text.startsWith("/plan ")) {
+      const goal = text.slice(6).trim();
+      if (goal) {
+        chatInput.value = "";
+        updateSendButton();
+        void executePlanInChat(goal);
+        return;
+      }
+    }
+
     // Delegate slash commands to the registered handler
     if (text.startsWith("/") && slashHandle?.tryExecute(text)) {
       return;
@@ -640,6 +660,75 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       // Map errors to actionable messages
       const systemMsg = formatErrorMessage(msg);
       addMessage("system", systemMsg);
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  /** Execute a multi-step plan and stream progress into chat. */
+  async function executePlanInChat(goal: string): Promise<void> {
+    if (!ctx.app.isProviderConnected) {
+      addMessage("system", "No provider connected. Open settings to configure one.");
+      return;
+    }
+
+    addMessage("user", `/plan ${goal}`);
+    setProcessing(true);
+
+    const goalId = crypto.randomUUID();
+    let currentBubble: HTMLDivElement | null = null;
+    let currentTextEl: HTMLSpanElement | null = null;
+    let accumulated = "";
+
+    try {
+      for await (const chunk of ctx.app.executeGoal(goalId, goal)) {
+        switch (chunk.type) {
+          case "plan_created": {
+            const stepList = chunk.steps.map((s, i) => `${i + 1}. ${s.description}`).join("\n");
+            addMessage("system", `Plan: ${chunk.plan.title}\n${stepList}`);
+            break;
+          }
+          case "step_started":
+            accumulated = "";
+            currentBubble = document.createElement("div");
+            currentBubble.className = "chat-bubble assistant";
+            currentTextEl = document.createElement("span");
+            currentTextEl.className = "bubble-text";
+            currentTextEl.textContent = `Step: ${chunk.step.description}\n`;
+            currentBubble.appendChild(currentTextEl);
+            chatLog.appendChild(currentBubble);
+            void currentBubble.offsetWidth;
+            currentBubble.classList.add("visible");
+            break;
+          case "step_chunk":
+            if (chunk.chunk.type === "text" && currentTextEl) {
+              accumulated += chunk.chunk.text;
+              currentTextEl.textContent = accumulated;
+              chatLog.scrollTop = chatLog.scrollHeight;
+            }
+            break;
+          case "step_completed":
+            // Step done — bubble stays
+            currentBubble = null;
+            currentTextEl = null;
+            break;
+          case "step_failed":
+            addMessage("system", `Step failed: ${chunk.error}`);
+            break;
+          case "plan_completed":
+            addMessage("system", "Plan complete.");
+            break;
+          case "plan_failed":
+            addMessage("system", `Plan failed: ${chunk.reason}`);
+            break;
+          case "plan_retrying":
+            addMessage("system", "Retrying with adjusted plan…");
+            break;
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addMessage("system", `Plan error: ${msg}`);
     } finally {
       setProcessing(false);
     }
