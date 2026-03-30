@@ -67,10 +67,8 @@ export function createSubscriptionTables(db: DatabaseDriver): void {
     );
     CREATE INDEX IF NOT EXISTS idx_relay_subs_stripe_sub
       ON relay_subscriptions (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_relay_subs_email
-      ON relay_subscriptions (email) WHERE email IS NOT NULL;
   `);
-  // Migration: add email column if table already exists without it
+  // Migration: add billing_email column if table already exists without it
   try {
     db.exec("ALTER TABLE relay_subscriptions ADD COLUMN email TEXT");
   } catch {
@@ -585,41 +583,6 @@ export function registerProxyTokenRoutes(
       balance: account.balance,
       balance_usd: fromMicro(account.balance),
       models: account.balance > 0 ? [...DEPOSIT_MODELS] : [],
-    });
-  });
-
-  // ── POST /api/v1/subscriptions/recover ────────────────────────────────
-  // Account recovery: user provides the email they subscribed with,
-  // receives their motebit_id so they can restore their identity.
-  app.post("/api/v1/subscriptions/recover", async (c) => {
-    const body = await c.req.json<{ email: string }>();
-    const email = body.email?.trim()?.toLowerCase();
-
-    if (!email || !email.includes("@")) {
-      return c.json({ error: "valid email required" }, 400);
-    }
-
-    const row = db
-      .prepare(
-        "SELECT motebit_id, status FROM relay_subscriptions WHERE LOWER(email) = ? AND status IN ('active', 'cancelling')",
-      )
-      .get(email) as { motebit_id: string; status: string } | undefined;
-
-    if (!row) {
-      // Don't reveal whether the email exists — return generic message
-      return c.json({
-        message: "If an account exists with that email, recovery info has been sent.",
-      });
-    }
-
-    // For now, return the motebit_id directly. In production, this should
-    // send an email with a recovery link instead of exposing the ID.
-    // TODO: integrate email sending (SendGrid/Resend) for secure recovery
-    logger.info("subscription.recovery", { email, motebitId: row.motebit_id });
-
-    return c.json({
-      message: "Account found",
-      motebit_id: row.motebit_id,
     });
   });
 }
