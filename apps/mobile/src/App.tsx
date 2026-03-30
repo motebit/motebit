@@ -1117,6 +1117,24 @@ export function App(): React.ReactElement {
                     break;
                   case "step_completed":
                     break;
+                  case "step_delegated": {
+                    const rc = chunk.routing_choice;
+                    const agentId = rc?.selected_agent ?? chunk.task_id?.slice(0, 8) ?? "network";
+                    const agentShort = agentId.length > 12 ? agentId.slice(0, 8) + "…" : agentId;
+                    let detail = `Step ${chunk.step.ordinal + 1} → agent ${agentShort}`;
+                    if (rc) {
+                      const parts: string[] = [];
+                      if (rc.sub_scores.trust != null)
+                        parts.push(`trust ${(rc.sub_scores.trust * 100).toFixed(0)}%`);
+                      if (rc.sub_scores.latency != null)
+                        parts.push(`${rc.sub_scores.latency.toFixed(0)}ms`);
+                      if (parts.length > 0) detail += ` (${parts.join(", ")})`;
+                      if (rc.alternatives_considered > 0)
+                        detail += ` · ${rc.alternatives_considered + 1} agents evaluated`;
+                    }
+                    addSystemMessage(detail);
+                    break;
+                  }
                   case "step_failed":
                     addSystemMessage(`Step failed: ${chunk.error}`);
                     break;

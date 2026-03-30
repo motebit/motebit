@@ -2412,6 +2412,23 @@ export class DesktopApp {
           });
           break;
 
+        case "step_delegated": {
+          const rc = chunk.routing_choice;
+          const agentId = rc?.selected_agent ?? chunk.task_id?.slice(0, 8) ?? "network";
+          const agentShort = agentId.length > 12 ? agentId.slice(0, 8) + "…" : agentId;
+          let desc = `→ agent ${agentShort}: ${chunk.step.description}`;
+          if (rc?.alternatives_considered) desc += ` (${rc.alternatives_considered + 1} evaluated)`;
+          this._goalPlanProgressCallback?.({
+            goalId: goal.goal_id,
+            planTitle: planTitle ?? "",
+            stepIndex: chunk.step.ordinal + 1,
+            totalSteps,
+            stepDescription: desc,
+            type: "step_started",
+          });
+          break;
+        }
+
         case "step_failed":
           this._goalPlanProgressCallback?.({
             goalId: goal.goal_id,

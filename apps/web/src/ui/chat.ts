@@ -712,6 +712,24 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             currentBubble = null;
             currentTextEl = null;
             break;
+          case "step_delegated": {
+            const rc = chunk.routing_choice;
+            const agentId = rc?.selected_agent ?? chunk.task_id?.slice(0, 8) ?? "network";
+            const agentShort = agentId.length > 12 ? agentId.slice(0, 8) + "…" : agentId;
+            let detail = `Step ${chunk.step.ordinal + 1} → agent ${agentShort}`;
+            if (rc) {
+              const parts: string[] = [];
+              if (rc.sub_scores.trust != null)
+                parts.push(`trust ${(rc.sub_scores.trust * 100).toFixed(0)}%`);
+              if (rc.sub_scores.latency != null)
+                parts.push(`${rc.sub_scores.latency.toFixed(0)}ms`);
+              if (parts.length > 0) detail += ` (${parts.join(", ")})`;
+              if (rc.alternatives_considered > 0)
+                detail += `\n${rc.alternatives_considered + 1} agents evaluated`;
+            }
+            addMessage("system", detail);
+            break;
+          }
           case "step_failed":
             addMessage("system", `Step failed: ${chunk.error}`);
             break;
