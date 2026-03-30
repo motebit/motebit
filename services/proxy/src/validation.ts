@@ -65,6 +65,28 @@ const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: 
   "gemini-2.5-flash": { provider: "google", input: 0.15, output: 0.6 },
 };
 
+/** The classifier model used for auto-routing. Cheapest available. */
+export const CLASSIFIER_MODEL = "claude-haiku-4-5-20251001";
+
+/** Model recommendations by task type. */
+const TASK_MODEL_MAP: Record<string, string> = {
+  quick: "claude-haiku-4-5-20251001",
+  chat: "claude-sonnet-4-20250514",
+  reasoning: "claude-opus-4-20250115",
+  code: "gpt-4o",
+  research: "gemini-2.5-pro",
+  creative: "claude-sonnet-4-20250514",
+  math: "claude-opus-4-20250115",
+};
+
+/** Default model when classifier fails or returns unknown type. */
+export const AUTO_DEFAULT_MODEL = "claude-sonnet-4-20250514";
+
+/** Get the recommended model for a task type. */
+export function getModelForTaskType(taskType: string): string {
+  return TASK_MODEL_MAP[taskType] ?? AUTO_DEFAULT_MODEL;
+}
+
 /** Get the provider for a model. */
 export function getModelProvider(model: string): Provider | null {
   return MODEL_CONFIG[model]?.provider ?? null;

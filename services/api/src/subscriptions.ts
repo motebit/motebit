@@ -28,6 +28,7 @@ const logger = createLogger({ service: "relay", module: "proxy-tokens" });
 
 /** All subscribers can access these models. The proxy enforces per-request cost. */
 const DEPOSIT_MODELS = [
+  "auto",
   "claude-sonnet-4-20250514",
   "claude-opus-4-20250115",
   "claude-haiku-4-5-20251001",

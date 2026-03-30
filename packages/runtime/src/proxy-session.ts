@@ -52,7 +52,7 @@ export interface ProxyProviderConfig {
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+const DEFAULT_MODEL = "auto";
 
 /** Default proxy base URL — surfaces can override. */
 export const DEFAULT_PROXY_BASE_URL = "https://api.motebit.com";

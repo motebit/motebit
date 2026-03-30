@@ -112,7 +112,7 @@ describe("ProxySession.bootstrap", () => {
     expect(result).toBe(true);
     expect(adapter.onProviderReady).toHaveBeenCalledWith({
       type: "proxy",
-      model: "claude-sonnet-4-20250514",
+      model: "auto",
       proxyToken: "signed-token-abc",
       baseUrl: "https://proxy.test",
     });

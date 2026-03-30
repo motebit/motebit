@@ -8,6 +8,9 @@ import {
   parseProxyToken,
   calculateCostMicro,
   getModelProvider,
+  getModelForTaskType,
+  CLASSIFIER_MODEL,
+  AUTO_DEFAULT_MODEL,
 } from "../../../validation";
 
 const ALLOWED_ORIGINS = new Set([
@@ -32,6 +35,40 @@ export function OPTIONS(request: Request): Response {
   const origin = request.headers.get("origin") ?? "";
   if (!ALLOWED_ORIGINS.has(origin)) return new Response(null, { status: 403 });
   return new Response(null, { status: 204, headers: corsHeaders(origin) });
+}
+
+/** Classify a user message to pick the best model. Returns a task type string. */
+async function classifyTask(apiKey: string, message: string): Promise<string> {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: CLASSIFIER_MODEL,
+        max_tokens: 30,
+        messages: [
+          {
+            role: "user",
+            content: `Classify this message into exactly one category. Reply with ONLY the category word, nothing else.
+
+Categories: quick (greeting, simple question), chat (conversation, opinion), reasoning (complex analysis, logic), code (programming, debugging), research (find information, compare), creative (writing, brainstorming), math (calculation, proof)
+
+Message: ${message.slice(0, 500)}`,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) return "chat";
+    const data = (await res.json()) as { content?: Array<{ text?: string }> };
+    const reply = data.content?.[0]?.text?.trim().toLowerCase() ?? "chat";
+    return reply;
+  } catch {
+    return "chat"; // default to Sonnet on failure
+  }
 }
 
 /** Fire-and-forget debit call to the relay. */
@@ -259,17 +296,44 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // --- Validate model ---
-  const requestedModel = body.model as string | undefined;
-  if (!requestedModel) {
+  // --- Validate and resolve model ---
+  let resolvedModel = body.model as string | undefined;
+  if (!resolvedModel) {
     return new Response(JSON.stringify({ error: "invalid_model", message: "Model is required" }), {
       status: 400,
       headers: { ...cors, "Content-Type": "application/json" },
     });
   }
 
+  // Auto-routing: classify with Haiku, pick the best model
+  let classifierCost = 0;
+  if (resolvedModel === "auto" && !isBYOK) {
+    const classifierKey = process.env.ANTHROPIC_API_KEY;
+    if (classifierKey) {
+      const lastMsg = (body.messages as Array<{ content: string }>)?.at(-1)?.content ?? "";
+      const taskType = await classifyTask(classifierKey, lastMsg);
+      const picked = getModelForTaskType(taskType);
+      // Check if the picked model's provider is configured
+      const pickedProvider = getModelProvider(picked);
+      if (pickedProvider && getProviderApiKey(pickedProvider)) {
+        resolvedModel = picked;
+      } else {
+        resolvedModel = AUTO_DEFAULT_MODEL; // fallback to Sonnet
+      }
+      // Estimate classifier cost (~200 tokens in + ~20 tokens out on Haiku)
+      classifierCost = calculateCostMicro(CLASSIFIER_MODEL, 200, 20);
+    } else {
+      resolvedModel = AUTO_DEFAULT_MODEL;
+    }
+  }
+
   if (authMode === "proxy-token" && tokenPayload) {
-    if (tokenPayload.models.length > 0 && !tokenPayload.models.includes(requestedModel)) {
+    // "auto" is always allowed; for specific models check the allowlist
+    if (
+      body.model !== "auto" &&
+      tokenPayload.models.length > 0 &&
+      !tokenPayload.models.includes(resolvedModel)
+    ) {
       return new Response(
         JSON.stringify({
           error: "invalid_model",
@@ -281,7 +345,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // --- Resolve provider and API key ---
-  const provider = getModelProvider(requestedModel);
+  const provider = getModelProvider(resolvedModel);
 
   let apiKey: string | null;
   if (isBYOK) {
@@ -292,7 +356,7 @@ export async function POST(request: Request): Promise<Response> {
       return new Response(
         JSON.stringify({
           error: "invalid_model",
-          message: `Model not supported: ${requestedModel}`,
+          message: `Model not supported: ${resolvedModel}`,
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
       );
@@ -336,7 +400,7 @@ export async function POST(request: Request): Promise<Response> {
   const providerReq = buildProviderRequest(
     resolvedProvider,
     apiKey,
-    requestedModel,
+    resolvedModel,
     body,
     limits.maxTokens,
   );
@@ -351,7 +415,7 @@ export async function POST(request: Request): Promise<Response> {
   // --- Stream response and extract usage for debit ---
   if (authMode === "proxy-token" && tokenPayload && providerRes.ok && providerRes.body) {
     const mid = tokenPayload.mid;
-    const model = requestedModel;
+    const model = resolvedModel;
     const prov = resolvedProvider;
     const usage = { input: 0, output: 0 };
 
@@ -377,7 +441,7 @@ export async function POST(request: Request): Promise<Response> {
         }
       } finally {
         await writer.close();
-        const cost = calculateCostMicro(model, usage.input, usage.output);
+        const cost = calculateCostMicro(model, usage.input, usage.output) + classifierCost;
         if (cost > 0) debitRelay(mid, cost, requestId);
       }
     })();
