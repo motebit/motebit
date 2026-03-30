@@ -2,7 +2,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
+import { MotebitRuntime, NullRenderer, PLANNING_TASK_ROUTER } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
 import type { StorageAdapters } from "@motebit/runtime";
 import { CloudProvider, OllamaProvider, HybridProvider } from "@motebit/ai-core";
@@ -434,6 +434,7 @@ export async function createRuntime(
         operatorMode: config.operator,
         pathAllowList: config.allowedPaths,
       },
+      taskRouter: PLANNING_TASK_ROUTER,
     },
     {
       storage,

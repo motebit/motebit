@@ -28,6 +28,7 @@ import {
   executeCommand,
   PlanExecutionVM,
   ProxySession,
+  PLANNING_TASK_ROUTER,
   cmdSelfTest,
 } from "@motebit/runtime";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
@@ -587,6 +588,7 @@ export class SpatialApp {
               rejectSecrets: gov.rejectSecrets,
             }
           : undefined,
+        taskRouter: PLANNING_TASK_ROUTER,
       },
       { storage, renderer: this.adapter, ai: provider, keyring: this.keyring },
     );

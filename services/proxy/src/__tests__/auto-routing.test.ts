@@ -5,6 +5,7 @@ import {
   getModelProvider,
   getSupportedModels,
   calculateCostMicro,
+  resolveModelAlias,
   CLASSIFIER_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../validation.js";
@@ -221,6 +222,63 @@ describe("getAffordableModelForTask — balance-aware routing", () => {
         const model = getAffordableModelForTask(task, bal);
         expect(getModelProvider(model)).not.toBeNull();
       }
+    }
+  });
+});
+
+describe("resolveModelAlias", () => {
+  it("resolves class alias to current canonical model", () => {
+    expect(resolveModelAlias("claude-sonnet")).toBe("claude-sonnet-4-20250514");
+    expect(resolveModelAlias("claude-opus")).toBe("claude-opus-4-20250115");
+    expect(resolveModelAlias("claude-haiku")).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("resolves legacy dated Anthropic models", () => {
+    expect(resolveModelAlias("claude-3-5-sonnet-20241022")).toBe("claude-sonnet-4-20250514");
+    expect(resolveModelAlias("claude-3-5-haiku-20241022")).toBe("claude-haiku-4-5-20251001");
+    expect(resolveModelAlias("claude-3-opus-20240229")).toBe("claude-opus-4-20250115");
+  });
+
+  it("resolves legacy OpenAI models", () => {
+    expect(resolveModelAlias("gpt-4o-2024-11-20")).toBe("gpt-4o");
+    expect(resolveModelAlias("gpt-4o-mini-2024-07-18")).toBe("gpt-4o-mini");
+  });
+
+  it("resolves Google model aliases", () => {
+    expect(resolveModelAlias("gemini-pro")).toBe("gemini-2.5-pro");
+    expect(resolveModelAlias("gemini-flash")).toBe("gemini-2.5-flash");
+    expect(resolveModelAlias("gemini-1.5-pro")).toBe("gemini-2.5-pro");
+    expect(resolveModelAlias("gemini-1.5-flash")).toBe("gemini-2.5-flash");
+  });
+
+  it("passes through canonical model IDs unchanged", () => {
+    expect(resolveModelAlias("claude-sonnet-4-20250514")).toBe("claude-sonnet-4-20250514");
+    expect(resolveModelAlias("gpt-4o")).toBe("gpt-4o");
+    expect(resolveModelAlias("gemini-2.5-pro")).toBe("gemini-2.5-pro");
+  });
+
+  it("passes through unknown models unchanged", () => {
+    expect(resolveModelAlias("some-future-model")).toBe("some-future-model");
+  });
+
+  it("every alias resolves to a model with a configured provider", () => {
+    const aliases = [
+      "claude-sonnet",
+      "claude-opus",
+      "claude-haiku",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022",
+      "claude-3-opus-20240229",
+      "gpt-4o-2024-11-20",
+      "gpt-4o-mini-2024-07-18",
+      "gemini-pro",
+      "gemini-flash",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash",
+    ];
+    for (const alias of aliases) {
+      const resolved = resolveModelAlias(alias);
+      expect(getModelProvider(resolved)).not.toBeNull();
     }
   });
 });

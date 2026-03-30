@@ -11,6 +11,7 @@ import {
   executeCommand,
   ProxySession,
   cmdSelfTest,
+  PLANNING_TASK_ROUTER,
 } from "@motebit/runtime";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import type {
@@ -893,6 +894,7 @@ export class DesktopApp {
         tickRateHz: 2,
         policy: policyConfig,
         memoryGovernance: config.memoryGovernance,
+        taskRouter: PLANNING_TASK_ROUTER,
       },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );

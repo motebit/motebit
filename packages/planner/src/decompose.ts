@@ -1,4 +1,5 @@
-import type { StreamingProvider } from "@motebit/ai-core";
+import type { StreamingProvider, ResolvedTaskConfig } from "@motebit/ai-core";
+import { withTaskConfig } from "@motebit/ai-core";
 
 export interface DecompositionContext {
   goalPrompt: string;
@@ -131,11 +132,12 @@ export function parseDecompositionResponse(text: string): RawPlan {
 export async function decomposePlan(
   ctx: DecompositionContext,
   provider: StreamingProvider,
+  planningConfig?: ResolvedTaskConfig,
 ): Promise<RawPlan> {
   const userMessage = buildDecompositionPrompt(ctx);
 
-  try {
-    const response = await provider.generate({
+  const doGenerate = async (p: StreamingProvider): Promise<RawPlan> => {
+    const response = await p.generate({
       recent_events: [],
       relevant_memories: [],
       current_state: {
@@ -160,6 +162,16 @@ export async function decomposePlan(
     });
 
     return parseDecompositionResponse(response.text);
+  };
+
+  try {
+    // Use the strongest available model for decomposition — bad plans cascade
+    if (planningConfig) {
+      return await withTaskConfig(provider, planningConfig, (p) =>
+        doGenerate(p as StreamingProvider),
+      );
+    }
+    return await doGenerate(provider);
   } catch {
     // Fallback: single-step plan equivalent to current behavior
     return {

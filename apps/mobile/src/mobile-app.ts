@@ -17,6 +17,7 @@ import {
   executeCommand,
   ProxySession,
   cmdSelfTest,
+  PLANNING_TASK_ROUTER,
 } from "@motebit/runtime";
 import type {
   StreamChunk,
@@ -597,7 +598,12 @@ export class MobileApp {
     }
 
     this.runtime = new MotebitRuntime(
-      { motebitId: this.motebitId, tickRateHz: 2, policy: policyConfig },
+      {
+        motebitId: this.motebitId,
+        tickRateHz: 2,
+        policy: policyConfig,
+        taskRouter: PLANNING_TASK_ROUTER,
+      },
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );
 

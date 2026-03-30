@@ -22,15 +22,15 @@ export function WelcomeOverlay({
         <View style={styles.card}>
           <Text style={styles.title}>Your Motebit</Text>
           <Text style={styles.body}>
-            A motebit is a sovereign AI companion. It generates a cryptographic identity that
-            belongs to you — stored in your device's secure keychain, never on a server.
+            A motebit is a personal AI that belongs to you. It generates a cryptographic identity
+            stored in your device's secure keychain — never on a server.
           </Text>
           <Text style={styles.body}>
-            Your private key stays on this device. Your intelligence provider is pluggable. The body
-            is yours.
+            Memory, trust, and identity persist across sessions. Intelligence is pluggable — swap
+            providers without losing who your motebit is.
           </Text>
           <TouchableOpacity style={styles.button} onPress={onAccept} activeOpacity={0.8}>
-            <Text style={styles.buttonText}>Create My Mote</Text>
+            <Text style={styles.buttonText}>Create My Motebit</Text>
           </TouchableOpacity>
           {onLinkExisting && (
             <TouchableOpacity

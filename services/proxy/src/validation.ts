@@ -65,6 +65,40 @@ const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: 
   "gemini-2.5-flash": { provider: "google", input: 0.15, output: 0.6 },
 };
 
+/**
+ * Legacy and class-level model aliases → current canonical model ID.
+ *
+ * Frontends send whatever model string they were built with. The proxy
+ * resolves it here. When a new model version ships, update the right-hand
+ * side — every deployed client gets the upgrade without a redeploy.
+ */
+const MODEL_ALIASES: Record<string, string> = {
+  // Class aliases — "give me the best Sonnet" without caring about the date suffix
+  "claude-sonnet": "claude-sonnet-4-20250514",
+  "claude-opus": "claude-opus-4-20250115",
+  "claude-haiku": "claude-haiku-4-5-20251001",
+
+  // Legacy dated versions → current
+  "claude-3-5-sonnet-20241022": "claude-sonnet-4-20250514",
+  "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
+  "claude-3-opus-20240229": "claude-opus-4-20250115",
+
+  // OpenAI aliases
+  "gpt-4o-2024-11-20": "gpt-4o",
+  "gpt-4o-mini-2024-07-18": "gpt-4o-mini",
+
+  // Google aliases
+  "gemini-pro": "gemini-2.5-pro",
+  "gemini-flash": "gemini-2.5-flash",
+  "gemini-1.5-pro": "gemini-2.5-pro",
+  "gemini-1.5-flash": "gemini-2.5-flash",
+};
+
+/** Resolve a model string to its canonical ID. Passthrough if already canonical or unknown. */
+export function resolveModelAlias(model: string): string {
+  return MODEL_ALIASES[model] ?? model;
+}
+
 /** The classifier model used for auto-routing. Cheapest available. */
 export const CLASSIFIER_MODEL = "claude-haiku-4-5-20251001";
 

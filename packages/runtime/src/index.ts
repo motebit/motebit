@@ -129,6 +129,23 @@ export type {
 } from "@motebit/ai-core";
 export type { StreamingProvider } from "@motebit/ai-core";
 export type { TaskRouterConfig, TaskType, ResolvedTaskConfig } from "@motebit/ai-core";
+
+/**
+ * Default task router config for planning operations.
+ * Uses the strongest model for decomposition + reflection — bad plans cascade.
+ * Step execution stays on the user's current model (auto-routed per message).
+ *
+ * Class aliases ("claude-opus") are resolved to current dated versions by the
+ * proxy's resolveModelAlias(). When Anthropic ships a new Opus, update the
+ * alias table in proxy/validation.ts — every surface gets the upgrade.
+ */
+export const PLANNING_TASK_ROUTER: TaskRouterConfig = {
+  default: { model: "claude-sonnet" },
+  overrides: {
+    planning: { model: "claude-opus", temperature: 0.3 },
+    plan_reflection: { model: "claude-opus", temperature: 0.5 },
+  },
+};
 export type {
   MotebitState,
   BehaviorCues,
@@ -640,6 +657,7 @@ export class MotebitRuntime {
       logger: this._logger,
       getLoopDeps: () => this.loopDeps,
       getLocalCapabilities: () => this._localCapabilities,
+      getTaskRouter: () => this.taskRouter,
     });
 
     // Interactive delegation — delegate_to_agent tool + receipt stash

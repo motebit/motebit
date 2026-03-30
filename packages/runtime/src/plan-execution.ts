@@ -14,6 +14,7 @@ import type {
 } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import type { TaskRouter } from "@motebit/ai-core";
 import type { PlanEngine, PlanChunk, PlanStoreAdapter } from "@motebit/planner";
 import type { AuditLogSink } from "@motebit/policy";
 import type { DeviceCapability } from "@motebit/sdk";
@@ -31,6 +32,8 @@ export interface PlanExecutionDeps {
   getLoopDeps(): MotebitLoopDependencies | null;
   /** Resolve current local capabilities. */
   getLocalCapabilities(): DeviceCapability[];
+  /** Resolve task router for model selection (may be null). */
+  getTaskRouter?(): TaskRouter | null;
 }
 
 export class PlanExecutionManager {
@@ -59,6 +62,11 @@ export class PlanExecutionManager {
 
     const localCapabilities = this.deps.getLocalCapabilities();
 
+    // Resolve planning model — use strongest available for decomposition + reflection
+    const taskRouter = this.deps.getTaskRouter?.();
+    const planningConfig = taskRouter?.resolve("planning") ?? undefined;
+    const reflectionConfig = taskRouter?.resolve("plan_reflection") ?? undefined;
+
     const { plan } = await this.deps.planEngine.createPlan(
       goalId,
       this.deps.motebitId,
@@ -68,6 +76,7 @@ export class PlanExecutionManager {
         localCapabilities: localCapabilities.length > 0 ? localCapabilities : undefined,
       },
       loopDeps,
+      planningConfig,
     );
 
     const executionStartedAt = Date.now();
@@ -78,6 +87,7 @@ export class PlanExecutionManager {
       loopDeps,
       undefined,
       runId,
+      reflectionConfig,
     )) {
       this._logPlanChunkEvent(chunk, goalId);
       if (chunk.type === "plan_completed") finalStatus = "completed";

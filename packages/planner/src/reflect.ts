@@ -1,6 +1,7 @@
 import { TrustMode, BatteryMode, StepStatus } from "@motebit/sdk";
 import type { Plan, PlanStep } from "@motebit/sdk";
-import type { StreamingProvider } from "@motebit/ai-core";
+import type { StreamingProvider, ResolvedTaskConfig } from "@motebit/ai-core";
+import { withTaskConfig } from "@motebit/ai-core";
 
 // === Plan Reflection Result ===
 
@@ -129,11 +130,12 @@ export async function reflectOnPlan(
   plan: Plan,
   steps: PlanStep[],
   provider: StreamingProvider,
+  reflectionConfig?: ResolvedTaskConfig,
 ): Promise<ReflectionResult> {
   const userMessage = buildReflectionPrompt(plan, steps);
 
-  try {
-    const response = await provider.generate({
+  const doReflect = async (p: StreamingProvider): Promise<ReflectionResult> => {
+    const response = await p.generate({
       recent_events: [],
       relevant_memories: [],
       current_state: minimalState(),
@@ -148,6 +150,15 @@ export async function reflectOnPlan(
     });
 
     return parseReflectionResponse(response.text);
+  };
+
+  try {
+    if (reflectionConfig) {
+      return await withTaskConfig(provider, reflectionConfig, (p) =>
+        doReflect(p as StreamingProvider),
+      );
+    }
+    return await doReflect(provider);
   } catch {
     // Graceful fallback — reflection failure should never break the plan flow
     return {

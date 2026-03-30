@@ -2,7 +2,13 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { MotebitRuntime, NullRenderer, executeCommand, cmdSelfTest } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  executeCommand,
+  cmdSelfTest,
+  PLANNING_TASK_ROUTER,
+} from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
 
@@ -187,6 +193,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
         denyAbove: policyConfig.denyAbove,
         pathAllowList: config.allowedPaths,
       },
+      taskRouter: PLANNING_TASK_ROUTER,
     },
     {
       storage: buildStorageAdapters(moteDb),
@@ -731,6 +738,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         pathAllowList: config.allowedPaths,
         ...policyOverrides,
       },
+      taskRouter: PLANNING_TASK_ROUTER,
     },
     {
       storage: buildStorageAdapters(moteDb),

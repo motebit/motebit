@@ -6,7 +6,7 @@ import type {
   DelegatedStepResult,
   ExecutionTimelineEntry,
 } from "@motebit/sdk";
-import type { MotebitLoopDependencies, AgenticChunk } from "@motebit/ai-core";
+import type { MotebitLoopDependencies, AgenticChunk, ResolvedTaskConfig } from "@motebit/ai-core";
 import { runTurnStreaming } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
 import type { CollaborativeDelegationAdapter } from "./delegation-adapter.js";
@@ -103,8 +103,9 @@ export class PlanEngine {
     motebitId: string,
     ctx: DecompositionContext,
     deps: MotebitLoopDependencies,
+    planningConfig?: ResolvedTaskConfig,
   ): Promise<{ plan: Plan; truncatedFrom?: number }> {
-    const rawPlan = await decomposePlan(ctx, deps.provider);
+    const rawPlan = await decomposePlan(ctx, deps.provider, planningConfig);
     const maxSteps = this.config.maxStepsPerPlan ?? 10;
     let truncatedFrom: number | undefined;
     if (rawPlan.steps.length > maxSteps) {
@@ -159,6 +160,7 @@ export class PlanEngine {
     deps: MotebitLoopDependencies,
     ctx?: DecompositionContext,
     runId?: string,
+    reflectionConfig?: ResolvedTaskConfig,
   ): AsyncGenerator<PlanChunk> {
     // Reset timeline for this execution
     this._timeline = [];
@@ -176,7 +178,7 @@ export class PlanEngine {
 
     yield { type: "plan_created", plan, steps };
 
-    yield* this.runSteps(plan, steps, deps, ctx, 0, runId);
+    yield* this.runSteps(plan, steps, deps, ctx, 0, runId, reflectionConfig);
   }
 
   async *resumePlan(
@@ -184,6 +186,7 @@ export class PlanEngine {
     deps: MotebitLoopDependencies,
     ctx?: DecompositionContext,
     runId?: string,
+    reflectionConfig?: ResolvedTaskConfig,
   ): AsyncGenerator<PlanChunk> {
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
@@ -192,7 +195,7 @@ export class PlanEngine {
     }
 
     const steps = this.store.getStepsForPlan(planId);
-    yield* this.runSteps(plan, steps, deps, ctx, 0, runId);
+    yield* this.runSteps(plan, steps, deps, ctx, 0, runId, reflectionConfig);
   }
 
   private async *runSteps(
@@ -202,6 +205,7 @@ export class PlanEngine {
     ctx?: DecompositionContext,
     planRetryCount: number = 0,
     runId?: string,
+    reflectionConfig?: ResolvedTaskConfig,
   ): AsyncGenerator<PlanChunk> {
     this._isExecuting = true;
     const maxRetries = this.config.maxStepRetries ?? 2;
@@ -567,7 +571,12 @@ export class PlanEngine {
       if (enableReflection) {
         try {
           const allSteps = this.store.getStepsForPlan(plan.plan_id);
-          const result = await reflectOnPlan(completedPlan, allSteps, deps.provider);
+          const result = await reflectOnPlan(
+            completedPlan,
+            allSteps,
+            deps.provider,
+            reflectionConfig,
+          );
           yield { type: "reflection", result };
         } catch {
           // Reflection failure should never break the plan flow

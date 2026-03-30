@@ -3,6 +3,7 @@ import {
   RelayDelegationAdapter,
   executeCommand,
   cmdSelfTest,
+  PLANNING_TASK_ROUTER,
 } from "@motebit/runtime";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import type {
@@ -226,6 +227,7 @@ export class WebApp {
               rejectSecrets: govConfig.rejectSecrets,
             }
           : undefined,
+        taskRouter: PLANNING_TASK_ROUTER,
       },
       { storage, renderer: this.renderer, ai: undefined, keyring },
     );

@@ -9,6 +9,7 @@ import {
   calculateCostMicro,
   getModelProvider,
   getAffordableModelForTask,
+  resolveModelAlias,
   CLASSIFIER_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../../../validation";
@@ -303,6 +304,13 @@ export async function POST(request: Request): Promise<Response> {
       status: 400,
       headers: { ...cors, "Content-Type": "application/json" },
     });
+  }
+
+  // Resolve legacy/class aliases → current canonical model ID.
+  // "claude-sonnet" → "claude-sonnet-4-20250514", old dated versions → current, etc.
+  // Keeps deployed clients working when models are upgraded server-side.
+  if (resolvedModel !== "auto") {
+    resolvedModel = resolveModelAlias(resolvedModel);
   }
 
   // Auto-routing: classify with Haiku, pick the best model the balance can afford

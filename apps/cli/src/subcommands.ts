@@ -2278,7 +2278,7 @@ async function handleDelegatePlan(
   // Initialize runtime with AI provider for plan decomposition
   const { createProvider, buildToolRegistry, buildStorageAdapters } =
     await import("./runtime-factory.js");
-  const { MotebitRuntime, NullRenderer } = await import("@motebit/runtime");
+  const { MotebitRuntime, NullRenderer, PLANNING_TASK_ROUTER } = await import("@motebit/runtime");
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -2289,7 +2289,7 @@ async function handleDelegatePlan(
   const storage = buildStorageAdapters(moteDb);
 
   const runtime = new MotebitRuntime(
-    { motebitId, policy: {} },
+    { motebitId, policy: {}, taskRouter: PLANNING_TASK_ROUTER },
     { storage, renderer: new NullRenderer(), tools: registry },
   );
   runtimeRef.current = runtime;

@@ -14,7 +14,9 @@ export type TaskType =
   | "summarization"
   | "reflection"
   | "title_generation"
-  | "memory_extraction";
+  | "memory_extraction"
+  | "planning"
+  | "plan_reflection";
 
 // === Task Profile ===
 
