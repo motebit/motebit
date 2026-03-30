@@ -82,7 +82,37 @@ const TASK_MODEL_MAP: Record<string, string> = {
 /** Default model when classifier fails or returns unknown type. */
 export const AUTO_DEFAULT_MODEL = "claude-sonnet-4-20250514";
 
-/** Get the recommended model for a task type. */
+/** Estimated output tokens for a typical response — used for pre-flight cost checks. */
+const ESTIMATED_OUTPUT_TOKENS = 1000;
+/** Estimated input tokens for a typical message context. */
+const ESTIMATED_INPUT_TOKENS = 500;
+
+/**
+ * Pick the best model the balance can afford for a task type.
+ * Tries the recommended model first; if estimated cost exceeds balance,
+ * walks down a cheaper fallback chain.
+ */
+export function getAffordableModelForTask(taskType: string, balanceMicro: number): string {
+  const preferred = TASK_MODEL_MAP[taskType] ?? AUTO_DEFAULT_MODEL;
+  if (balanceMicro <= 0) return FALLBACK_CHAIN[FALLBACK_CHAIN.length - 1]!;
+
+  const cost = calculateCostMicro(preferred, ESTIMATED_INPUT_TOKENS, ESTIMATED_OUTPUT_TOKENS);
+  if (cost <= balanceMicro) return preferred;
+
+  // Walk down the fallback chain: Sonnet → Haiku
+  for (const fallback of FALLBACK_CHAIN) {
+    const fbCost = calculateCostMicro(fallback, ESTIMATED_INPUT_TOKENS, ESTIMATED_OUTPUT_TOKENS);
+    if (fbCost <= balanceMicro) return fallback;
+  }
+
+  // Even Haiku is too expensive — return Haiku anyway (debit will absorb the small overrun)
+  return FALLBACK_CHAIN[FALLBACK_CHAIN.length - 1]!;
+}
+
+/** Cheapest-first fallback chain for auto-routing when balance is low. */
+const FALLBACK_CHAIN = [AUTO_DEFAULT_MODEL, CLASSIFIER_MODEL];
+
+/** Get the recommended model for a task type (no balance check). */
 export function getModelForTaskType(taskType: string): string {
   return TASK_MODEL_MAP[taskType] ?? AUTO_DEFAULT_MODEL;
 }

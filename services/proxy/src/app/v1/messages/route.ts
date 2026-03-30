@@ -8,7 +8,7 @@ import {
   parseProxyToken,
   calculateCostMicro,
   getModelProvider,
-  getModelForTaskType,
+  getAffordableModelForTask,
   CLASSIFIER_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../../../validation";
@@ -305,14 +305,16 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // Auto-routing: classify with Haiku, pick the best model
+  // Auto-routing: classify with Haiku, pick the best model the balance can afford
   let classifierCost = 0;
   if (resolvedModel === "auto" && !isBYOK) {
     const classifierKey = process.env.ANTHROPIC_API_KEY;
     if (classifierKey) {
       const lastMsg = (body.messages as Array<{ content: string }>)?.at(-1)?.content ?? "";
       const taskType = await classifyTask(classifierKey, lastMsg);
-      const picked = getModelForTaskType(taskType);
+      // Pick best model within balance — downgrades Opus → Sonnet → Haiku if needed
+      const balance = tokenPayload?.bal ?? 0;
+      const picked = getAffordableModelForTask(taskType, balance);
       // Check if the picked model's provider is configured
       const pickedProvider = getModelProvider(picked);
       if (pickedProvider && getProviderApiKey(pickedProvider)) {
