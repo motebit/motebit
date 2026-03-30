@@ -84,6 +84,31 @@ Organizational custody and key recovery. When present, the guardian key can perf
 
 The guardian key MUST NOT be the same as the identity key. The guardian key is NOT used for day-to-day signing — it is a cold recovery key, stored securely by the organization (e.g., HSM, vault).
 
+#### 3.3.1 — Guardian Rotation
+
+Changing the guardian key is an identity file update: the `guardian.public_key` field is changed and the identity file is re-signed by the **identity key**. The identity key holder must cooperate — the organization cannot unilaterally change the guardian without the operator's device.
+
+This is intentional: guardian rotation is a coordinated organizational operation, not an emergency procedure. If the guardian key is compromised, the org should immediately use the (still-valid) guardian to perform recovery succession (§3.8.3) on all affected agents, then coordinate guardian rotation on each re-secured identity.
+
+#### 3.3.2 — Guardian Revocation
+
+Removing the `guardian` field requires **dual authorization**: both the identity key and the guardian key must sign the revocation payload (`{"action":"guardian_revoked","timestamp":...}`). This prevents either party from unilaterally dissolving the custody relationship.
+
+- The **identity holder** cannot strip the organizational guardian without the org's consent.
+- The **organization** cannot prevent the identity holder from requesting revocation — but must co-sign it.
+
+After revocation, the identity returns to sovereign mode. If the employee wants to leave with their agent, the org must agree. If the org refuses, the employee can create a new sovereign agent — but accumulated trust, credentials, and memory remain with the organizational identity. This is the correct enterprise custody model: the org owns the value built on company resources.
+
+#### 3.3.3 — Unrecoverable Scenarios
+
+If both the identity key AND the guardian key are compromised simultaneously, the identity is unrecoverable. This is by design — the same limitation applies to all PKI systems. Operational mitigations include:
+
+- Storing the guardian key in an HSM or hardware vault
+- Implementing M-of-N quorum policies at the organizational level (outside the identity spec)
+- Monitoring succession chain events for unauthorized recovery attempts
+
+A future version of this spec MAY introduce quorum guardians (multiple keys with M-of-N threshold signing). The current single-guardian model is forward-compatible with quorum — the `guardian` field can be extended without breaking existing identities.
+
 ### 3.4 — `governance`
 
 Declares the agent's operational boundaries — what it may do autonomously, what requires approval, and what is forbidden.

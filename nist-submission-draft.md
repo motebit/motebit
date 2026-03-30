@@ -2,7 +2,7 @@
 
 **To:** AI-Identity@nist.gov
 **From:** Daniel Hakim, Motebit, Inc.
-**Date:** March 2026
+**Date:** March 30, 2026
 **Re:** Comment on NCCoE Concept Paper — Accelerating the Adoption of Software and AI Agent Identity and Authorization
 
 ---
@@ -13,7 +13,7 @@ MCP defines what an agent can do. It says nothing about who the agent is, whethe
 
 Agents carry persistent Ed25519 identities (`did:key` URIs), accumulate verifiable trust through signed execution receipts, and enforce zero-trust policy at every tool boundary. Receipts embed the signer's public key — self-verifiable offline, without contacting any authority. Key rotation uses dual-signed succession chains verifiable end-to-end from genesis key to current key. Cross-agent delegation produces nested receipts with cryptographic chain-of-custody.
 
-This is a working implementation (45 workspaces, 183,000 lines of TypeScript (101,000 production, 82,000 tests), 4,200+ tests, four open specifications), not a proposal. Four MIT packages are published on npm (`@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The protocol layer is MIT licensed with zero dependencies — any system can verify a Motebit agent's identity, receipts, and credentials without running Motebit software.
+This is a working implementation (45 workspaces, 185,000 lines of TypeScript (101,000 production, 84,000 tests), 4,300+ tests, four open specifications), not a proposal. Four MIT packages are published on npm (`@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The protocol layer is MIT licensed with zero dependencies — any system can verify a Motebit agent's identity, receipts, and credentials without running Motebit software.
 
 The system implements a complete two-sided agent economy: agents deposit funds, delegate tasks to specialized agents on the network, and settle payments through cryptographically verified receipts. All monetary amounts are stored as integer micro-units (1 USD = 1,000,000 units) with zero floating-point arithmetic. Multi-agent orchestration decomposes complex tasks into capability-tagged steps and delegates each to the best available agent via trust-weighted semiring routing — each hop settles independently with a configurable relay fee (default 5% in the reference deployment; the protocol supports any fee structure via `MOTEBIT_PLATFORM_FEE_RATE`). All settlement arithmetic uses integer micro-units with the invariant `net + fee = gross` verified across 63 fee-rate × amount combinations. This has been verified in reference deployments, integration tests, and end-to-end settlement tests across independent services.
 
@@ -43,7 +43,7 @@ Motebit implements the agentic architecture depicted in Figure 1 of the concept 
 
 - **User Prompt** → runtime message handler
 - **Agent** (agentic loop) → `MotebitRuntime` orchestrator with streaming, tool calls, and reflection
-- **Reasoning Model** → pluggable AI providers (Anthropic, Ollama, Hybrid fallback). The intelligence is a commodity; the identity, authorization, and audit infrastructure is the constant.
+- **Reasoning Model** → pluggable AI providers (Anthropic, OpenAI, Google, Ollama, in-browser WebLLM — 7 models across 3 cloud providers plus local inference). The intelligence is a commodity; the identity, authorization, and audit infrastructure is the constant. Switching providers does not change the agent's identity, trust history, or governance policy.
 - **Tools and Resources** → MCP client/server with PolicyGate enforcement at every tool boundary
 - **Output / Response / Action** → signed execution receipt with delegation chain
 - **Trust Domain** → PolicyGate + MemoryGovernor + privacy layer + injection defense
@@ -100,7 +100,7 @@ Fixed and persistent. Agent identities in Motebit survive across sessions, devic
 
 **Should agent identities be tied to specific hardware, software, or organizational boundaries?**
 
-Motebit supports multi-device registration. Each device has its own Ed25519 keypair registered in the identity file. The agent identity is not tied to a single device — it is portable across hardware — but each device binding is cryptographically anchored and auditable.
+Motebit supports multi-device registration. Each device has its own Ed25519 keypair registered in the identity file. The agent identity is not tied to a single device — it is portable across hardware — but each device binding is cryptographically anchored and auditable. Multi-device sync uses AES-256-GCM field-level encryption — the relay stores opaque ciphertext for events, conversations, and plans. The relay is a blind relay: it can index by ID and timestamp but cannot read content.
 
 **Relationship to SPIFFE:** Motebit's identity model is complementary to SPIFFE. SPIFFE provides workload identity within a trust domain (e.g., a Kubernetes cluster). Motebit provides agent identity that persists across trust domains, providers, and time. In an enterprise deployment, a SPIFFE SVID could attest the workload running the Motebit agent, while the Motebit identity attests the agent itself. The two layers compose.
 
@@ -127,7 +127,9 @@ This is analogous to mutual TLS but at the agent identity layer rather than the 
 - **Storage:** Private keys stored in the OS secure keychain (macOS Keychain via Tauri, expo-secure-store on mobile) or encrypted at rest with PBKDF2 (600,000 iterations for identity files, 100,000 for relay keys). Private keys never appear in configuration files or identity files.
 - **Per-device keys:** Each registered device has its own Ed25519 keypair. Device compromise does not compromise the agent identity — only the device key needs rotation.
 - **Rotation:** Key rotation uses signed succession records (identity specification §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload, providing non-repudiation and acknowledgment. The `motebit_id` persists across rotations. Succession chains are verifiable end-to-end: any party can prove identity continuity from genesis key to current key without trusting any intermediary. No centralized revocation authority.
-- **Revocation:** No centralized revocation authority required by default. This is a deliberate tradeoff. **When rotation is possible** (the owner has access to the old key): the succession record cryptographically transfers identity continuity to the new key. The old key is tombstoned. Relays re-register the new public key. **When rotation is not possible** (the old key is lost or compromised without access): the identity is abandoned. A new identity is generated. Trust records, credentials, and memory from the old identity do not transfer — the new identity starts from zero. **Enterprise CRL compatibility:** While Motebit does not require a central revocation authority, the architecture is explicitly compatible with enterprise revocation infrastructure. Credential verification accepts `checkRevoked` callbacks (`packages/market/src/credential-weight.ts`), and the relay's credential routes support revocation lists. Organizations can layer OCSP, CRL, or custom revocation policies on top of the agent identity layer — the two compose without conflict.
+- **Revocation:** No centralized revocation authority required by default. This is a deliberate tradeoff. **When rotation is possible** (the owner has access to the old key): the succession record cryptographically transfers identity continuity to the new key. The old key is tombstoned. Relays re-register the new public key. **When rotation is not possible** (the old key is lost or compromised without access) and no guardian is configured: the identity is abandoned. A new identity is generated. Trust records, credentials, and memory from the old identity do not transfer — the new identity starts from zero.
+
+**Guardian recovery** (enterprise path): Identities may optionally declare a `guardian` — an organizational Ed25519 key held in cold storage (HSM, vault). When the primary key is compromised, the guardian signs a recovery succession record (`recovery: true`, `guardian_signature`) that rotates to a new key without the compromised key. The `motebit_id`, accumulated trust, and credentials are preserved. The recovery flag is visible to verifiers — relying parties MAY apply different trust policies to guardian-recovered identities. This enables enterprise custody: the organization holds the guardian key, employees operate the agent, and key rotation can be performed organizationally when employees depart. Specified in `identity-v1.md` §3.3 and §3.8.3. **Enterprise CRL compatibility:** While Motebit does not require a central revocation authority, the architecture is explicitly compatible with enterprise revocation infrastructure. Credential verification accepts `checkRevoked` callbacks (`packages/market/src/credential-weight.ts`), and the relay's credential routes support revocation lists. Organizations can layer OCSP, CRL, or custom revocation policies on top of the agent identity layer — the two compose without conflict.
 
 **Relationship to OAuth 2.0 / OIDC:** Motebit's Ed25519 signed tokens serve a similar role to OAuth 2.0 access tokens but are self-verifiable without a token introspection endpoint. The MCP server's HTTP bearer auth is compatible with OAuth flows — an enterprise could layer OIDC on top for user-to-agent identity binding while the agent-to-agent layer uses Ed25519 signatures directly.
 
@@ -266,7 +268,7 @@ All tool results from external sources are wrapped in `[EXTERNAL_DATA]` boundary
 
 A triple-layer injection defense operates at this boundary:
 
-1. **Pattern matching.** 15 regex signatures for known attack vectors (role injection, system prompt override, instruction delimiters, base64-encoded payloads)
+1. **Pattern matching.** 16 regex signatures for known attack vectors (role injection, system prompt override, instruction delimiters, base64-encoded payloads)
 2. **Directive density analysis.** Detects anomalous instruction-like language ratio in tool results — a web search result containing imperative directives triggers a warning
 3. **Structural anomaly detection.** Identifies chat template markers, role injection (`<|system|>`, `### System:`), and conversation format manipulation in external data
 
