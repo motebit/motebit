@@ -60,6 +60,34 @@ export interface AudioReactivity {
   high: number;
 }
 
+// === Spatial Canvas — Artifact Types ===
+
+export type ArtifactKind = "text" | "code" | "plan" | "memory";
+
+/** Lifecycle phase for entrance/exit animations. */
+export type ArtifactPhase = "emerging" | "present" | "receding" | "gone";
+
+/** Specification for placing an HTML artifact in 3D space. */
+export interface ArtifactSpec {
+  /** Unique ID for lifecycle management. */
+  id: string;
+  /** Determines default positioning slot. */
+  kind: ArtifactKind;
+  /** The HTML element to position in 3D space. Owned by the caller. */
+  element: HTMLElement;
+  /** Optional preferred angle in radians around the creature (0 = front-right). */
+  preferredAngle?: number;
+}
+
+/** Handle returned after placing an artifact — controls its lifecycle. */
+export interface ArtifactHandle {
+  id: string;
+  /** Update the artifact's angular position around the creature. */
+  setAngle(radians: number): void;
+  /** Signal the artifact to begin its exit animation and remove from scene. */
+  dismiss(): Promise<void>;
+}
+
 export interface RenderAdapter {
   init(target: unknown): Promise<void>;
   render(frame: RenderFrame): void;
@@ -73,6 +101,13 @@ export interface RenderAdapter {
   setTrustMode(mode: TrustMode): void;
   setListeningIndicator(active: boolean): void;
   dispose(): void;
+
+  /** Place an HTML artifact in 3D space relative to the creature. */
+  addArtifact?(spec: ArtifactSpec): ArtifactHandle | undefined;
+  /** Remove an artifact by ID (triggers exit animation). */
+  removeArtifact?(id: string): Promise<void>;
+  /** Remove all artifacts immediately. */
+  clearArtifacts?(): void;
 }
 
 // === Frame-Independent Delta Smoothing ===

@@ -398,6 +398,14 @@ export type StreamChunk =
       server: string;
       tool: string;
       receipt?: { task_id: string; status: string; tools_used: string[] };
+    }
+  | {
+      type: "artifact";
+      action: "add" | "remove";
+      artifact_id: string;
+      kind: "text" | "code" | "plan" | "memory";
+      content?: string;
+      title?: string;
     };
 
 // === Operator Mode ===

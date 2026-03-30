@@ -2,7 +2,15 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TrustMode, type RenderSpec } from "@motebit/sdk";
 import { CANONICAL_SPEC } from "./spec.js";
-import type { RenderAdapter, RenderFrame, InteriorColor, AudioReactivity } from "./spec.js";
+import type {
+  RenderAdapter,
+  RenderFrame,
+  InteriorColor,
+  AudioReactivity,
+  ArtifactSpec,
+  ArtifactHandle,
+} from "./spec.js";
+import { ArtifactManager } from "./artifacts.js";
 import {
   createCreature,
   createCreatureState,
@@ -68,6 +76,7 @@ export class ThreeJSAdapter implements RenderAdapter {
   private camera: THREE.PerspectiveCamera | null = null;
 
   private controls: OrbitControls | null = null;
+  private artifactManager: ArtifactManager | null = null;
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -100,6 +109,12 @@ export class ThreeJSAdapter implements RenderAdapter {
     // === Creature ===
     this.creatureRefs = createCreature(this.scene);
 
+    // === Spatial Canvas — artifact positioning in creature's world ===
+    const container = canvas.parentElement ?? document.body;
+    if (this.creatureRefs) {
+      this.artifactManager = new ArtifactManager(this.creatureRefs.group, container);
+    }
+
     // === Lighting ===
     this.scene.add(new THREE.AmbientLight(0x8090b0, 0.6));
 
@@ -127,6 +142,12 @@ export class ThreeJSAdapter implements RenderAdapter {
 
     if (this.controls) this.controls.update();
     this.renderer.render(this.scene, this.camera);
+
+    // Spatial canvas: update artifact animations and sync CSS overlay
+    if (this.artifactManager) {
+      this.artifactManager.update(frame.delta_time);
+      this.artifactManager.render(this.scene, this.camera);
+    }
   }
 
   getSpec(): RenderSpec {
@@ -141,6 +162,22 @@ export class ThreeJSAdapter implements RenderAdapter {
     if (this.renderer) {
       this.renderer.setSize(width, height, false);
     }
+    this.artifactManager?.resize(width, height);
+  }
+
+  // === Spatial Canvas ===
+
+  addArtifact(spec: ArtifactSpec): ArtifactHandle | undefined {
+    return this.artifactManager?.add(spec);
+  }
+
+  removeArtifact(id: string): Promise<void> {
+    if (!this.artifactManager) return Promise.resolve();
+    return this.artifactManager.remove(id);
+  }
+
+  clearArtifacts(): void {
+    this.artifactManager?.clear();
   }
 
   setBackground(color: number | null): void {
@@ -207,6 +244,9 @@ export class ThreeJSAdapter implements RenderAdapter {
       disposeCreature(this.creatureRefs);
       this.creatureRefs = null;
     }
+
+    this.artifactManager?.dispose();
+    this.artifactManager = null;
 
     if (this.scene?.environment) this.scene.environment.dispose();
     if (this.scene) {

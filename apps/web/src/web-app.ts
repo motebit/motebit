@@ -480,6 +480,7 @@ export class WebApp {
 
   resetConversation(): void {
     this.runtime?.resetConversation();
+    this.clearArtifacts();
   }
 
   async loadConversationById(id: string): Promise<ConversationMessage[]> {
@@ -754,6 +755,22 @@ export class WebApp {
 
   private persistMcpServers(): void {
     localStorage.setItem("motebit:mcp_servers", JSON.stringify(this._mcpServers));
+  }
+
+  // === Spatial Canvas ===
+
+  addArtifact(
+    spec: import("@motebit/render-engine").ArtifactSpec,
+  ): import("@motebit/render-engine").ArtifactHandle | undefined {
+    return this.renderer.addArtifact?.(spec);
+  }
+
+  removeArtifact(id: string): void {
+    void this.renderer.removeArtifact?.(id);
+  }
+
+  clearArtifacts(): void {
+    this.renderer.clearArtifacts?.();
   }
 
   // === Goals (one-shot, user-triggered) ===

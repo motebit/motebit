@@ -2,6 +2,53 @@ import type { WebContext } from "../types";
 import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 import { StreamingTTSQueue } from "@motebit/voice";
 
+// === Lightweight Markdown Renderer ===
+
+/** Strip internal tags (state, thinking, memory) including incomplete streaming fragments. */
+function stripInternalTags(text: string): string {
+  return text
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<(?:state|thinking|memory)[^>]*$/g, "");
+}
+
+/** Convert markdown to safe HTML. No external dependencies. */
+export function renderMarkdown(raw: string): string {
+  const cleaned = stripInternalTags(raw).trim();
+  // Escape HTML entities first (prevent XSS)
+  const escaped = cleaned.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  return (
+    escaped
+      // Code blocks (``` ... ```)
+      .replace(/```(\w*)\n([\s\S]*?)```/g, "<pre><code>$2</code></pre>")
+      // Inline code
+      .replace(
+        /`([^`]+)`/g,
+        '<code style="background:rgba(0,0,0,0.06);padding:1px 4px;border-radius:3px;font-size:0.9em;">$1</code>',
+      )
+      // Bold
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      // Italic
+      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+      // Headers (keep them subtle — just bold + slightly larger)
+      .replace(/^#{3,6}\s+(.+)$/gm, '<div style="font-weight:600;margin:8px 0 4px;">$1</div>')
+      .replace(
+        /^#{1,2}\s+(.+)$/gm,
+        '<div style="font-weight:600;font-size:1.05em;margin:8px 0 4px;">$1</div>',
+      )
+      // Unordered lists
+      .replace(/^[*-]\s+(.+)$/gm, '<div style="padding-left:12px;">• $1</div>')
+      // Ordered lists (simple — just indent)
+      .replace(/^(\d+)\.\s+(.+)$/gm, '<div style="padding-left:12px;">$1. $2</div>')
+      // Line breaks (double newline → paragraph break)
+      .replace(/\n\n/g, '<div style="height:8px;"></div>')
+      // Single newlines → <br>
+      .replace(/\n/g, "<br>")
+  );
+}
+
 // === Streaming TTS ===
 
 /**
@@ -134,11 +181,12 @@ export function addMessage(
   if (!text) return; // Skip empty messages (e.g. suppressed errors)
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble ${role}`;
-  // System messages may contain safe HTML (action links); user/assistant use textContent
   if (role === "system") {
     bubble.innerHTML = text;
+  } else if (role === "assistant") {
+    bubble.innerHTML = renderMarkdown(text);
   } else {
-    bubble.textContent = text;
+    bubble.textContent = text; // User messages stay plain
   }
 
   if (immediate) {
@@ -194,7 +242,7 @@ export function addExpandableCard(summary: string, detail: string): void {
   detailEl.className = "system-card-detail";
   const detailInner = document.createElement("div");
   detailInner.className = "system-card-detail-inner";
-  detailInner.textContent = detail;
+  detailInner.innerHTML = renderMarkdown(detail);
   detailEl.appendChild(detailInner);
   card.appendChild(detailEl);
 
@@ -580,7 +628,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             }
 
             accumulated += chunk.text;
-            textEl!.textContent = accumulated;
+            textEl!.innerHTML = renderMarkdown(accumulated);
             chatLog.scrollTop = chatLog.scrollHeight;
             streamingTTS.push(chunk.text);
             break;
@@ -623,7 +671,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
                   bubble.classList.add("visible");
                 }
                 accumulated += resumeChunk.text;
-                textEl!.textContent = accumulated;
+                textEl!.innerHTML = renderMarkdown(accumulated);
                 chatLog.scrollTop = chatLog.scrollHeight;
                 streamingTTS.push(resumeChunk.text);
               } else if (resumeChunk.type === "tool_status") {
@@ -648,6 +696,27 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
           case "approval_expired": {
             addMessage("system", `Tool "${chunk.tool_name}" approval expired — auto-denied.`);
+            break;
+          }
+
+          case "artifact": {
+            if (chunk.action === "add" && chunk.content) {
+              const el = document.createElement("div");
+              el.className = `spatial-artifact artifact-${chunk.kind}`;
+              if (chunk.title) {
+                const titleEl = document.createElement("div");
+                titleEl.className = "spatial-artifact-title";
+                titleEl.textContent = chunk.title;
+                el.appendChild(titleEl);
+              }
+              const bodyEl = document.createElement("div");
+              bodyEl.className = "spatial-artifact-body";
+              bodyEl.textContent = chunk.content;
+              el.appendChild(bodyEl);
+              ctx.app.addArtifact({ id: chunk.artifact_id, kind: chunk.kind, element: el });
+            } else if (chunk.action === "remove") {
+              ctx.app.removeArtifact(chunk.artifact_id);
+            }
             break;
           }
 
@@ -703,8 +772,38 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       for await (const chunk of ctx.app.executeGoal(goalId, goal)) {
         switch (chunk.type) {
           case "plan_created": {
-            const stepList = chunk.steps.map((s, i) => `${i + 1}. ${s.description}`).join("\n");
-            addMessage("system", `Plan: ${chunk.plan.title}\n${stepList}`);
+            addMessage("system", `Plan: ${chunk.plan.title}`);
+
+            // Materialize plan steps as a spatial artifact beside the creature
+            const planEl = document.createElement("div");
+            planEl.className = "spatial-artifact artifact-plan";
+            const titleEl = document.createElement("div");
+            titleEl.className = "spatial-artifact-title";
+            titleEl.textContent = chunk.plan.title;
+            planEl.appendChild(titleEl);
+            const bodyEl = document.createElement("div");
+            bodyEl.className = "spatial-artifact-body";
+            for (let i = 0; i < chunk.steps.length; i++) {
+              const stepLine = document.createElement("div");
+              stepLine.className = "plan-step-line";
+              stepLine.id = `plan-step-${i}`;
+              stepLine.textContent = `${i + 1}. ${chunk.steps[i]!.description}`;
+              bodyEl.appendChild(stepLine);
+            }
+            planEl.appendChild(bodyEl);
+
+            // Dismiss button — user controls when artifact leaves
+            const closeBtn = document.createElement("button");
+            closeBtn.className = "spatial-artifact-close";
+            closeBtn.textContent = "×";
+            closeBtn.addEventListener("click", () => ctx.app.removeArtifact(`plan-${goalId}`));
+            planEl.appendChild(closeBtn);
+
+            ctx.app.addArtifact({
+              id: `plan-${goalId}`,
+              kind: "plan",
+              element: planEl,
+            });
             break;
           }
           case "step_started":
@@ -722,15 +821,19 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           case "step_chunk":
             if (chunk.chunk.type === "text" && currentTextEl) {
               accumulated += chunk.chunk.text;
-              currentTextEl.textContent = accumulated;
+              currentTextEl.innerHTML = renderMarkdown(accumulated);
               chatLog.scrollTop = chatLog.scrollHeight;
             }
             break;
-          case "step_completed":
+          case "step_completed": {
+            // Update the spatial artifact — mark this step done
+            const planArtifact = document.querySelector(`#plan-step-${chunk.step.ordinal}`);
+            if (planArtifact) planArtifact.classList.add("step-done");
             // Step done — bubble stays
             currentBubble = null;
             currentTextEl = null;
             break;
+          }
           case "step_delegated": {
             const rc = chunk.routing_choice;
             const agentId = rc?.selected_agent ?? chunk.task_id?.slice(0, 8) ?? "network";
@@ -754,9 +857,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             break;
           case "plan_completed":
             addMessage("system", "Plan complete.");
+            // Artifact stays — user dismisses with X button
             break;
           case "plan_failed":
             addMessage("system", `Plan failed: ${chunk.reason}`);
+            // Artifact stays so user can see which steps failed
             break;
           case "plan_retrying":
             addMessage("system", "Retrying with adjusted plan…");

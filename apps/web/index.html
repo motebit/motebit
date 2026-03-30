@@ -1214,6 +1214,64 @@
       margin-top: 4px;
       opacity: 0.5;
     }
+    /* Spatial canvas artifacts — glass cards in 3D space */
+    .spatial-artifact {
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 12px;
+      padding: 12px 16px;
+      max-width: 280px;
+      font-size: 12px;
+      color: var(--text-primary);
+      line-height: 1.5;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    }
+    .spatial-artifact-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+      letter-spacing: 0.02em;
+    }
+    .spatial-artifact-body {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .artifact-code .spatial-artifact-body {
+      font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+      font-size: 11px;
+      background: rgba(0, 0, 0, 0.06);
+      border-radius: 6px;
+      padding: 8px;
+    }
+    .spatial-artifact-close {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      background: none;
+      border: none;
+      color: var(--text-ghost);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      opacity: 0.4;
+      transition: opacity 0.15s;
+    }
+    .spatial-artifact-close:hover { opacity: 1; }
+    .spatial-artifact { position: relative; }
+    .plan-step-line {
+      padding: 2px 0;
+      opacity: 0.7;
+      transition: opacity 0.3s ease;
+    }
+    .plan-step-line.step-done {
+      opacity: 1;
+      text-decoration: line-through;
+      text-decoration-color: rgba(120, 200, 120, 0.6);
+    }
     @keyframes pulse {
       0%, 100% { opacity: 0.4; }
       50% { opacity: 0.8; }

@@ -7,6 +7,7 @@ import type { WebContext } from "../types";
 import type { WebSyncStatus } from "../web-app";
 import { saveSyncUrl, loadSyncUrl, clearSyncUrl } from "../storage";
 import type { PlanChunk } from "@motebit/runtime";
+import { renderMarkdown } from "./chat";
 
 export interface GatedPanelsAPI {
   openMemory(auditNodeIds?: Map<string, string>): void;
@@ -120,7 +121,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
       const content = document.createElement("div");
       content.className = "memory-item-content";
-      content.textContent = node.content;
+      content.innerHTML = renderMarkdown(node.content);
       item.appendChild(content);
 
       const meta = document.createElement("div");
