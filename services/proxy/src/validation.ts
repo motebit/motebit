@@ -94,7 +94,7 @@ const ESTIMATED_INPUT_TOKENS = 500;
  */
 export function getAffordableModelForTask(taskType: string, balanceMicro: number): string {
   const preferred = TASK_MODEL_MAP[taskType] ?? AUTO_DEFAULT_MODEL;
-  if (balanceMicro <= 0) return FALLBACK_CHAIN[FALLBACK_CHAIN.length - 1]!;
+  if (balanceMicro <= 0) return CLASSIFIER_MODEL;
 
   const cost = calculateCostMicro(preferred, ESTIMATED_INPUT_TOKENS, ESTIMATED_OUTPUT_TOKENS);
   if (cost <= balanceMicro) return preferred;
@@ -106,7 +106,7 @@ export function getAffordableModelForTask(taskType: string, balanceMicro: number
   }
 
   // Even Haiku is too expensive — return Haiku anyway (debit will absorb the small overrun)
-  return FALLBACK_CHAIN[FALLBACK_CHAIN.length - 1]!;
+  return CLASSIFIER_MODEL;
 }
 
 /** Cheapest-first fallback chain for auto-routing when balance is low. */
