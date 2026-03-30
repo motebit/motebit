@@ -281,12 +281,21 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   web_search: "Searching the web",
   read_url: "Reading page",
   self_reflect: "Reflecting",
+  write_file: "Writing file",
+  read_file: "Reading file",
+  shell_exec: "Running command",
 };
 
-export function showToolStatus(name: string): void {
+function formatToolLabel(name: string, context?: string): string {
+  const label = TOOL_DISPLAY_NAMES[name] ?? name;
+  if (!context) return label;
+  return `${label} — ${context}`;
+}
+
+export function showToolStatus(name: string, context?: string): void {
   const el = document.createElement("div");
   el.className = "tool-status";
-  el.textContent = `${TOOL_DISPLAY_NAMES[name] ?? name}...`;
+  el.textContent = `${formatToolLabel(name, context)}...`;
   chatLog.appendChild(el);
   chatLog.scrollTop = chatLog.scrollHeight;
   toolStatusElements.set(name, el);
@@ -295,7 +304,9 @@ export function showToolStatus(name: string): void {
 export function completeToolStatus(name: string): void {
   const el = toolStatusElements.get(name);
   if (!el) return;
-  el.textContent = `${TOOL_DISPLAY_NAMES[name] ?? name} ✓`;
+  // Keep the context in the completed text — just add checkmark
+  const current = el.textContent ?? "";
+  el.textContent = current.replace(/\.{3}$/, "") + " ✓";
   el.classList.add("done");
   setTimeout(() => {
     el.classList.add("fade-out");
@@ -577,7 +588,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
           case "tool_status": {
             if (chunk.status === "calling") {
-              showToolStatus(chunk.name);
+              showToolStatus(chunk.name, chunk.context);
             } else if (chunk.status === "done") {
               completeToolStatus(chunk.name);
             }
@@ -616,7 +627,8 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
                 chatLog.scrollTop = chatLog.scrollHeight;
                 streamingTTS.push(resumeChunk.text);
               } else if (resumeChunk.type === "tool_status") {
-                if (resumeChunk.status === "calling") showToolStatus(resumeChunk.name);
+                if (resumeChunk.status === "calling")
+                  showToolStatus(resumeChunk.name, resumeChunk.context);
                 else if (resumeChunk.status === "done") completeToolStatus(resumeChunk.name);
               } else if (resumeChunk.type === "result") {
                 streamingTTS.flush();
@@ -641,6 +653,13 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
           case "result": {
             streamingTTS.flush();
+            // Show per-message cost for cloud users (calm — subtle, not distracting)
+            if (chunk.result.totalTokens != null && chunk.result.totalTokens > 0 && bubble) {
+              const costEl = document.createElement("div");
+              costEl.className = "message-cost";
+              costEl.textContent = `${chunk.result.totalTokens.toLocaleString()} tokens`;
+              bubble.appendChild(costEl);
+            }
             // Trigger auto-titling in background (best-effort, don't surface errors)
             void ctx.app.autoTitle().catch(() => {});
             break;

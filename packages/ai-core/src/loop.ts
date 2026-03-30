@@ -196,7 +196,13 @@ export interface TurnOptions {
 
 export type AgenticChunk =
   | { type: "text"; text: string }
-  | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
+  | {
+      type: "tool_status";
+      name: string;
+      status: "calling" | "done";
+      result?: unknown;
+      context?: string;
+    }
   | {
       type: "approval_request";
       tool_call_id: string;
@@ -239,6 +245,30 @@ export async function runTurn(
   }
 
   return result;
+}
+
+/** Extract a short human-readable context string from tool name + args. */
+function toolContext(name: string, args: Record<string, unknown>): string | undefined {
+  switch (name) {
+    case "recall_memories":
+    case "search_memories":
+      return typeof args.query === "string" ? `"${args.query.slice(0, 60)}"` : undefined;
+    case "web_search":
+      return typeof args.query === "string" ? `"${args.query.slice(0, 60)}"` : undefined;
+    case "read_url":
+    case "fetch_url":
+      return typeof args.url === "string" ? args.url.slice(0, 80) : undefined;
+    case "read_file":
+      return typeof args.path === "string" ? args.path : undefined;
+    case "write_file":
+      return typeof args.path === "string" ? args.path : undefined;
+    case "shell_exec":
+      return typeof args.command === "string" ? args.command.slice(0, 60) : undefined;
+    case "delegate_to_agent":
+      return typeof args.prompt === "string" ? `"${args.prompt.slice(0, 60)}"` : undefined;
+    default:
+      return undefined;
+  }
 }
 
 export async function* runTurnStreaming(
@@ -432,7 +462,12 @@ export async function* runTurnStreaming(
 
         // Allowed — execute and record
         allBlocked = false;
-        yield { type: "tool_status", name: toolCall.name, status: "calling" };
+        yield {
+          type: "tool_status",
+          name: toolCall.name,
+          status: "calling",
+          context: toolContext(toolCall.name, toolCall.args),
+        };
 
         let result: ToolResult;
         try {
@@ -554,7 +589,12 @@ export async function* runTurnStreaming(
       }
 
       allBlocked = false;
-      yield { type: "tool_status", name: toolCall.name, status: "calling" };
+      yield {
+        type: "tool_status",
+        name: toolCall.name,
+        status: "calling",
+        context: toolContext(toolCall.name, toolCall.args),
+      };
       let result: ToolResult;
       try {
         result = await deps.tools.execute(toolCall.name, toolCall.args);

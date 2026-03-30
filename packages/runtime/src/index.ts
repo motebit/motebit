@@ -373,7 +373,13 @@ export interface RuntimeConfig {
 
 export type StreamChunk =
   | { type: "text"; text: string }
-  | { type: "tool_status"; name: string; status: "calling" | "done"; result?: unknown }
+  | {
+      type: "tool_status";
+      name: string;
+      status: "calling" | "done";
+      result?: unknown;
+      context?: string;
+    }
   | {
       type: "approval_request";
       tool_call_id: string;
