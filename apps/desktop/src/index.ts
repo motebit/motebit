@@ -74,6 +74,7 @@ import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
   EncryptedConversationSyncAdapter,
+  EncryptedPlanSyncAdapter,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
   HttpEventStoreAdapter,
@@ -2943,8 +2944,15 @@ export class DesktopApp {
         const planSyncAdapter = new TauriPlanSyncStoreAdapter(this.planStoreRef, this.motebitId);
         await planSyncAdapter.prefetch(0);
         const planSync = new PlanSyncEngine(planSyncAdapter, this.motebitId);
+        const httpPlanAdapter = new HttpPlanSyncAdapter({
+          baseUrl: syncUrl,
+          motebitId: this.motebitId,
+          authToken,
+        });
         planSync.connectRemote(
-          new HttpPlanSyncAdapter({ baseUrl: syncUrl, motebitId: this.motebitId, authToken }),
+          encryptionKey
+            ? new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encryptionKey })
+            : httpPlanAdapter,
         );
         await planSync.sync();
       }

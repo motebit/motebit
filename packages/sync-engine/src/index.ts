@@ -39,6 +39,8 @@ export type {
   PlanSyncRemoteAdapter,
   HttpPlanSyncConfig,
 } from "./plan-sync.js";
+export { EncryptedPlanSyncAdapter } from "./encrypted-plan-adapter.js";
+export type { EncryptedPlanAdapterConfig } from "./encrypted-plan-adapter.js";
 
 // === Sync Configuration ===
 

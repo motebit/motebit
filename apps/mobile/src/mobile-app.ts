@@ -59,6 +59,7 @@ import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
   EncryptedConversationSyncAdapter,
+  EncryptedPlanSyncAdapter,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
@@ -1974,12 +1975,15 @@ export class MobileApp {
             this.motebitId,
           );
           const planSync = new PlanSyncEngine(planSyncStore, this.motebitId);
+          const httpPlanAdapter = new HttpPlanSyncAdapter({
+            baseUrl: syncUrl,
+            motebitId: this.motebitId,
+            authToken: token ?? undefined,
+          });
           planSync.connectRemote(
-            new HttpPlanSyncAdapter({
-              baseUrl: syncUrl,
-              motebitId: this.motebitId,
-              authToken: token ?? undefined,
-            }),
+            encKey
+              ? new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encKey })
+              : httpPlanAdapter,
           );
           await planSync.sync();
         } catch {

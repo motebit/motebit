@@ -88,7 +88,7 @@ let pendingSettingsSave: PendingSave | null = null;
 const ANTHROPIC_MODELS = [
   "claude-sonnet-4-20250514",
   "claude-haiku-4-5-20251001",
-  "claude-opus-4-20250514",
+  "claude-opus-4-20250115",
 ];
 
 const OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"];

@@ -35,6 +35,7 @@ import {
   WebSocketEventStoreAdapter,
   EncryptedEventStoreAdapter,
   EncryptedConversationSyncAdapter,
+  EncryptedPlanSyncAdapter,
   decryptEventPayload,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
@@ -1003,12 +1004,13 @@ export class WebApp {
     if (this._planStore) {
       const planSyncStore = new IdbPlanSyncStore(this._planStore, this._motebitId);
       this._planSyncEngine = new PlanSyncEngine(planSyncStore, this._motebitId);
+      const httpPlanAdapter = new HttpPlanSyncAdapter({
+        baseUrl: relayUrl,
+        motebitId: this._motebitId,
+        authToken: token ?? undefined,
+      });
       this._planSyncEngine.connectRemote(
-        new HttpPlanSyncAdapter({
-          baseUrl: relayUrl,
-          motebitId: this._motebitId,
-          authToken: token ?? undefined,
-        }),
+        new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encKey }),
       );
       // Initial plan sync, then background every 30s
       void this._planSyncEngine.sync();
