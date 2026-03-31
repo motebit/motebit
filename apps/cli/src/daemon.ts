@@ -500,15 +500,19 @@ export async function handleRun(config: CliConfig): Promise<void> {
       const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
       if (syncToken) regHeaders["Authorization"] = `Bearer ${syncToken}`;
 
+      const regBody: Record<string, unknown> = {
+        motebit_id: motebitId,
+        endpoint_url: syncUrl,
+        capabilities: toolNames,
+        metadata: { name: `daemon-${motebitId.slice(0, 8)}`, transport: "ws" },
+      };
+      if (identity.guardian?.public_key) {
+        regBody.guardian_public_key = identity.guardian.public_key;
+      }
       const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
         method: "POST",
         headers: regHeaders,
-        body: JSON.stringify({
-          motebit_id: motebitId,
-          endpoint_url: syncUrl,
-          capabilities: toolNames,
-          metadata: { name: `daemon-${motebitId.slice(0, 8)}`, transport: "ws" },
-        }),
+        body: JSON.stringify(regBody),
       });
 
       if (regResp.ok) {
@@ -616,6 +620,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // Load identity file if provided, otherwise use ambient config
   let motebitId: string;
   let publicKeyHex: string | undefined;
+  let guardianPublicKey: string | undefined;
   let policyOverrides: {
     operatorMode?: boolean;
     maxRiskLevel?: RiskLevel;
@@ -658,6 +663,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
     motebitId = identity.motebit_id;
     publicKeyHex = identity.identity.public_key;
+    guardianPublicKey = identity.guardian?.public_key;
 
     log(`Identity: ${motebitId.slice(0, 8)}... (from ${identityPath})`);
   } else {
@@ -1123,15 +1129,19 @@ export async function handleServe(config: CliConfig): Promise<void> {
       if (masterToken) regHeaders["Authorization"] = `Bearer ${masterToken}`;
 
       const endpointUrl = `http://localhost:${port}`;
+      const serveRegBody: Record<string, unknown> = {
+        motebit_id: motebitId,
+        endpoint_url: endpointUrl,
+        capabilities: toolNames,
+        metadata: { name: serverConfig.name },
+      };
+      if (guardianPublicKey) {
+        serveRegBody.guardian_public_key = guardianPublicKey;
+      }
       const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
         method: "POST",
         headers: regHeaders,
-        body: JSON.stringify({
-          motebit_id: motebitId,
-          endpoint_url: endpointUrl,
-          capabilities: toolNames,
-          metadata: { name: serverConfig.name },
-        }),
+        body: JSON.stringify(serveRegBody),
       });
       if (regResp.ok) {
         log(`Registered with relay: ${syncUrl}`);

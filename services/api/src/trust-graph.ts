@@ -85,8 +85,12 @@ export function registerTrustGraphRoutes(deps: TrustGraphDeps): void {
       motebitId,
     );
     const peerEdges = taskRouter.fetchPeerEdges();
+    const guardianRow = moteDb.db
+      .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { guardian_public_key: string | null } | undefined;
     const ranked = explainedRankCandidates(asMotebitId(motebitId), profiles, requirements, {
       peerEdges,
+      callerGuardianPublicKey: guardianRow?.guardian_public_key ?? undefined,
     });
     return c.json({ motebit_id: motebitId, scores: ranked });
   });
