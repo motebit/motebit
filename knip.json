@@ -1,6 +1,8 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreWorkspaces": ["apps/admin", "apps/desktop", "apps/mobile", "apps/spatial", "apps/docs"],
+  "ignoreDependencies": ["@motebit/*", "@changesets/changelog-github"],
+  "ignoreBinaries": ["tauri"],
   "workspaces": {
     ".": {
       "entry": ["scripts/*.{ts,mjs}"]
@@ -10,17 +12,20 @@
       "project": ["src/**/*.ts"]
     },
     "apps/cli": {
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["@modelcontextprotocol/sdk", "sql.js", "ws"]
     },
     "apps/web": {
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["three", "@types/three"]
     },
     "apps/identity": {
       "project": ["src/**/*.{ts,tsx}"]
     },
     "services/*": {
       "entry": ["src/index.ts"],
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["@modelcontextprotocol/sdk", "tsx"]
     },
     "services/proxy": {
       "entry": ["src/app/**/*.{ts,tsx}", "src/validation.ts"],
