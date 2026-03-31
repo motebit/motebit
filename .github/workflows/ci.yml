@@ -106,8 +106,8 @@ jobs:
       - name: Install Playwright (Chromium only)
         run: pnpm --filter @motebit/web exec playwright install --with-deps chromium
 
-      - name: Build web app
-        run: pnpm --filter @motebit/web build
+      - name: Build web app (with dependencies)
+        run: pnpm run build --filter=@motebit/web...
 
       - name: Run E2E smoke tests
         run: pnpm --filter @motebit/web test:e2e --project=chromium
