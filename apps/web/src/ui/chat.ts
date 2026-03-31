@@ -155,7 +155,6 @@ const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 const chatInputRow = document.getElementById("chat-input-row") as HTMLDivElement;
 const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
 const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
-const errorBanner = document.getElementById("error-banner") as HTMLDivElement;
 
 // === Toast State ===
 
@@ -273,53 +272,6 @@ export function showToast(text: string, duration = 3000): void {
     setTimeout(() => el.remove(), 300);
     if (activeToast === el) activeToast = null;
   }, duration);
-}
-
-export function showBanner(text: string, action?: { label: string; onClick: () => void }): void {
-  const item = document.createElement("div");
-  item.className = "error-banner-item";
-
-  const textEl = document.createElement("span");
-  textEl.className = "error-banner-text";
-  textEl.textContent = text;
-  item.appendChild(textEl);
-
-  if (action) {
-    const actionBtn = document.createElement("button");
-    actionBtn.className = "error-banner-action";
-    actionBtn.textContent = action.label;
-    actionBtn.addEventListener("click", () => {
-      action.onClick();
-      removeBannerItem(item);
-    });
-    item.appendChild(actionBtn);
-  }
-
-  const dismissBtn = document.createElement("button");
-  dismissBtn.className = "error-banner-dismiss";
-  dismissBtn.textContent = "\u00d7";
-  dismissBtn.addEventListener("click", () => removeBannerItem(item));
-  item.appendChild(dismissBtn);
-
-  errorBanner.appendChild(item);
-  errorBanner.classList.add("visible");
-  void item.offsetWidth;
-  item.classList.add("visible");
-}
-
-function removeBannerItem(item: HTMLElement): void {
-  item.classList.remove("visible");
-  setTimeout(() => {
-    item.remove();
-    if (errorBanner.children.length === 0) {
-      errorBanner.classList.remove("visible");
-    }
-  }, 250);
-}
-
-export function dismissBanner(): void {
-  errorBanner.innerHTML = "";
-  errorBanner.classList.remove("visible");
 }
 
 /** Human-readable tool names for chat display. */

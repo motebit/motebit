@@ -4258,75 +4258,6 @@
       color: var(--text-ghost);
     }
 
-    /* Persistent error banner */
-    .error-banner {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 55;
-      display: flex;
-      flex-direction: column;
-      pointer-events: none;
-      transform: translateY(-100%);
-      transition: transform 0.3s ease;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-    .error-banner.visible {
-      transform: translateY(0);
-      pointer-events: auto;
-    }
-    .error-banner-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 6px 16px;
-      background: rgba(217, 165, 78, 0.12);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border-bottom: 1px solid rgba(217, 165, 78, 0.15);
-      opacity: 0;
-      transform: translateY(-4px);
-      transition: opacity 0.25s ease, transform 0.25s ease;
-    }
-    .error-banner-item.visible {
-      opacity: 1;
-      transform: translateY(0);
-    }
-    .error-banner-text {
-      flex: 1;
-      font-size: 12px;
-      color: rgba(0, 0, 0, 0.55);
-    }
-    .error-banner-action {
-      padding: 2px 10px;
-      border: 1px solid rgba(217, 165, 78, 0.35);
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.5);
-      color: rgba(180, 120, 30, 0.85);
-      font-size: 11px;
-      cursor: pointer;
-      font-family: inherit;
-      transition: background 0.15s, border-color 0.15s;
-    }
-    .error-banner-action:hover {
-      background: rgba(255, 255, 255, 0.75);
-      border-color: rgba(217, 165, 78, 0.55);
-    }
-    .error-banner-dismiss {
-      background: none;
-      border: none;
-      color: rgba(0, 0, 0, 0.25);
-      font-size: 16px;
-      cursor: pointer;
-      padding: 0 4px;
-      line-height: 1;
-      transition: color 0.15s;
-    }
-    .error-banner-dismiss:hover {
-      color: rgba(0, 0, 0, 0.5);
-    }
-
     /* Focus-visible — outline only on keyboard navigation, not mouse click */
     :focus { outline: none; }
     :focus-visible {
@@ -4604,63 +4535,11 @@
     .system-action-btn.primary:hover { background: var(--accent-bg-strong); }
     .system-action-btn:disabled { opacity: 0.4; cursor: default; }
 
-    /* Error banner */
-    .error-banner {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 50;
-      display: flex;
-      flex-direction: column;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.25s;
-    }
-    .error-banner.visible { opacity: 1; pointer-events: auto; }
-    .error-banner-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      background: rgba(239, 68, 68, 0.12);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border-bottom: 1px solid rgba(239, 68, 68, 0.15);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 12px;
-      color: var(--text-primary);
-      opacity: 0;
-      transition: opacity 0.25s;
-    }
-    .error-banner-item.visible { opacity: 1; }
-    .error-banner-text { flex: 1; }
-    .error-banner-action {
-      background: none;
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      border-radius: 4px;
-      padding: 2px 8px;
-      font-size: 11px;
-      color: #ef4444;
-      cursor: pointer;
-      font-family: inherit;
-    }
-    .error-banner-action:hover { background: rgba(239, 68, 68, 0.08); }
-    .error-banner-dismiss {
-      background: none;
-      border: none;
-      color: var(--text-faint);
-      cursor: pointer;
-      font-size: 16px;
-      padding: 0 4px;
-    }
-    .error-banner-dismiss:hover { color: var(--text-secondary); }
   </style>
 </head>
 <body>
   <canvas id="motebit-canvas"></canvas>
   <div id="toast-container"></div>
-  <div class="error-banner" id="error-banner"></div>
   
   <!-- Connect prompt overlay (shown when no provider) -->
   <div id="connect-prompt" class="connect-prompt hidden">
