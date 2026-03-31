@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { generateKeypair, signKeySuccession, bytesToHex } from "@motebit/crypto";
+import {
+  generateKeypair,
+  signKeySuccession,
+  signGuardianRecoverySuccession,
+  bytesToHex,
+} from "@motebit/crypto";
 import { verifyIdentityFile as standaloneVerify } from "@motebit/verify";
 import {
   generate,
@@ -1013,5 +1018,185 @@ describe("serializeYaml branch coverage via generate()", () => {
     expect(content).toContain('spec: "motebit/identity@1.0"');
     expect(content).toContain(`motebit_id: "${DEFAULTS.motebitId}"`);
     expect(content).toContain(`owner_id: "${DEFAULTS.ownerId}"`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guardian identity generation, parsing, and recovery rotation
+// ---------------------------------------------------------------------------
+
+describe("guardian identity", () => {
+  it("generates identity file with guardian field", async () => {
+    const kp = await makeKeypairHex();
+    const guardianKp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+        guardian: {
+          public_key: guardianKp.publicKeyHex,
+          organization: "Test Corp",
+          organization_id: "org-123",
+          established_at: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      kp.privateKey,
+    );
+
+    expect(content).toContain("guardian:");
+    expect(content).toContain(`public_key: "${guardianKp.publicKeyHex}"`);
+    expect(content).toContain('organization: "Test Corp"');
+    expect(content).toContain('organization_id: "org-123"');
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+  });
+
+  it("parses guardian field from identity file", async () => {
+    const kp = await makeKeypairHex();
+    const guardianKp = await makeKeypairHex();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+        guardian: {
+          public_key: guardianKp.publicKeyHex,
+          organization: "Test Corp",
+          established_at: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      kp.privateKey,
+    );
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.guardian).toBeDefined();
+    expect(parsed.frontmatter.guardian!.public_key).toBe(guardianKp.publicKeyHex);
+    expect(parsed.frontmatter.guardian!.organization).toBe("Test Corp");
+  });
+
+  it("roundtrip: generate with guardian → rotate via guardian recovery → verify", async () => {
+    const guardianKp = await generateKeypair();
+    const kp1 = await generateKeypair(); // genesis (will be "compromised")
+    const kp2 = await generateKeypair(); // recovery target
+
+    // Generate initial identity with guardian
+    const initialContent = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: bytesToHex(kp1.publicKey),
+        guardian: {
+          public_key: bytesToHex(guardianKp.publicKey),
+          organization: "Test Corp",
+          established_at: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      kp1.privateKey,
+    );
+
+    // Verify initial
+    const initialResult = await verify(initialContent);
+    expect(initialResult.valid).toBe(true);
+
+    // Guardian recovery: kp1 compromised, guardian + kp2 sign succession
+    const recoveryRecord = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      kp2.privateKey,
+      kp1.publicKey,
+      kp2.publicKey,
+    );
+
+    // Rotate via guardian recovery
+    const rotatedContent = await rotate({
+      existingContent: initialContent,
+      newPublicKey: kp2.publicKey,
+      newPrivateKey: kp2.privateKey,
+      successionRecord: recoveryRecord,
+    });
+
+    // Verify the rotated identity
+    const rotatedResult = await verify(rotatedContent);
+    expect(rotatedResult.valid).toBe(true);
+    expect(rotatedResult.succession).toBeDefined();
+    expect(rotatedResult.succession!.valid).toBe(true);
+    expect(rotatedResult.succession!.genesis_public_key).toBe(bytesToHex(kp1.publicKey));
+    expect(rotatedResult.succession!.rotations).toBe(1);
+  });
+
+  it("roundtrip: normal rotation → guardian recovery (mixed chain)", async () => {
+    const guardianKp = await generateKeypair();
+    const kp1 = await generateKeypair(); // genesis
+    const kp2 = await generateKeypair(); // normal rotation target
+    const kp3 = await generateKeypair(); // guardian recovery target
+
+    // Generate initial identity with guardian
+    const initialContent = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: bytesToHex(kp1.publicKey),
+        guardian: {
+          public_key: bytesToHex(guardianKp.publicKey),
+          organization: "Test Corp",
+          established_at: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      kp1.privateKey,
+    );
+
+    // Normal rotation: kp1 → kp2
+    const normalRecord = await signKeySuccession(
+      kp1.privateKey,
+      kp2.privateKey,
+      kp2.publicKey,
+      kp1.publicKey,
+      "routine rotation",
+    );
+
+    const afterNormalRotation = await rotate({
+      existingContent: initialContent,
+      newPublicKey: kp2.publicKey,
+      newPrivateKey: kp2.privateKey,
+      successionRecord: normalRecord,
+    });
+
+    const normalResult = await verify(afterNormalRotation);
+    expect(normalResult.valid).toBe(true);
+    expect(normalResult.succession!.valid).toBe(true);
+
+    // Guardian recovery: kp2 compromised → kp3
+    const recoveryRecord = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      kp3.privateKey,
+      kp2.publicKey,
+      kp3.publicKey,
+    );
+
+    const afterRecovery = await rotate({
+      existingContent: afterNormalRotation,
+      newPublicKey: kp3.publicKey,
+      newPrivateKey: kp3.privateKey,
+      successionRecord: recoveryRecord,
+    });
+
+    const recoveryResult = await verify(afterRecovery);
+    expect(recoveryResult.valid).toBe(true);
+    expect(recoveryResult.succession!.valid).toBe(true);
+    expect(recoveryResult.succession!.genesis_public_key).toBe(bytesToHex(kp1.publicKey));
+    expect(recoveryResult.succession!.rotations).toBe(2);
+
+    // Verify the parsed content has both records
+    const parsed = parse(afterRecovery);
+    expect(parsed.frontmatter.succession).toHaveLength(2);
+    expect(parsed.frontmatter.succession![0]!.recovery).toBeUndefined();
+    expect(parsed.frontmatter.succession![1]!.recovery).toBe(true);
   });
 });

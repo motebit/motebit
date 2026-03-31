@@ -209,8 +209,10 @@ export function createRelaySchema(db: DatabaseDriver): {
         new_public_key TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
         reason TEXT,
-        old_key_signature TEXT NOT NULL,
+        old_key_signature TEXT,
         new_key_signature TEXT NOT NULL,
+        recovery INTEGER DEFAULT 0,
+        guardian_signature TEXT,
         created_at TEXT DEFAULT (datetime('now'))
       );
       CREATE INDEX IF NOT EXISTS idx_relay_key_successions_motebit ON relay_key_successions(motebit_id);
@@ -247,6 +249,13 @@ export function createRelaySchema(db: DatabaseDriver): {
   // Add revoked column to agent_registry (column-exists check pattern)
   try {
     db.exec("ALTER TABLE agent_registry ADD COLUMN revoked INTEGER DEFAULT 0");
+  } catch {
+    /* column may already exist */
+  }
+
+  // Add guardian_public_key column for enterprise custody (§3.3)
+  try {
+    db.exec("ALTER TABLE agent_registry ADD COLUMN guardian_public_key TEXT");
   } catch {
     /* column may already exist */
   }

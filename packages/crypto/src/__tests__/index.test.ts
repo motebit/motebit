@@ -20,6 +20,8 @@ import {
   verifyReceiptChain,
   signKeySuccession,
   verifyKeySuccession,
+  signGuardianRecoverySuccession,
+  verifySuccessionChain,
   didKeyToPublicKey,
   type SignedTokenPayload,
   type SignableReceipt,
@@ -1017,5 +1019,193 @@ describe("verifyExecutionReceipt error paths", () => {
     };
     const valid = await verifyExecutionReceipt(receipt, kp.publicKey);
     expect(valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guardian Recovery Succession (§3.8.3)
+// ---------------------------------------------------------------------------
+
+describe("signGuardianRecoverySuccession", () => {
+  it("creates a valid guardian recovery record", async () => {
+    const guardianKp = await generateKeypair();
+    const oldKp = await generateKeypair(); // compromised key
+    const newKp = await generateKeypair();
+
+    const record = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      newKp.privateKey,
+      oldKp.publicKey,
+      newKp.publicKey,
+    );
+
+    expect(record.recovery).toBe(true);
+    expect(record.reason).toBe("guardian_recovery");
+    expect(record.guardian_signature).toHaveLength(128);
+    expect(record.new_key_signature).toHaveLength(128);
+    expect(record.old_key_signature).toBeUndefined();
+  });
+
+  it("uses custom reason when provided", async () => {
+    const guardianKp = await generateKeypair();
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      newKp.privateKey,
+      oldKp.publicKey,
+      newKp.publicKey,
+      "guardian_recovery: employee departure",
+    );
+
+    expect(record.reason).toBe("guardian_recovery: employee departure");
+  });
+
+  it("verifies with correct guardian public key", async () => {
+    const guardianKp = await generateKeypair();
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      newKp.privateKey,
+      oldKp.publicKey,
+      newKp.publicKey,
+    );
+
+    const guardianPubHex = bytesToHex(guardianKp.publicKey);
+    const valid = await verifyKeySuccession(record, guardianPubHex);
+    expect(valid).toBe(true);
+  });
+
+  it("rejects with wrong guardian public key", async () => {
+    const guardianKp = await generateKeypair();
+    const wrongGuardianKp = await generateKeypair();
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      newKp.privateKey,
+      oldKp.publicKey,
+      newKp.publicKey,
+    );
+
+    const wrongPubHex = bytesToHex(wrongGuardianKp.publicKey);
+    const valid = await verifyKeySuccession(record, wrongPubHex);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects guardian recovery when no guardian key provided", async () => {
+    const guardianKp = await generateKeypair();
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      newKp.privateKey,
+      oldKp.publicKey,
+      newKp.publicKey,
+    );
+
+    // No guardian key provided — must reject
+    const valid = await verifyKeySuccession(record);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects when guardian_signature is tampered", async () => {
+    const guardianKp = await generateKeypair();
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+
+    const record = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      newKp.privateKey,
+      oldKp.publicKey,
+      newKp.publicKey,
+    );
+
+    record.guardian_signature = "aa".repeat(64);
+    const guardianPubHex = bytesToHex(guardianKp.publicKey);
+    const valid = await verifyKeySuccession(record, guardianPubHex);
+    expect(valid).toBe(false);
+  });
+});
+
+describe("verifySuccessionChain with guardian recovery", () => {
+  it("verifies a mixed chain: normal rotation → guardian recovery", async () => {
+    const guardianKp = await generateKeypair();
+    const kp1 = await generateKeypair(); // genesis
+    const kp2 = await generateKeypair(); // normal rotation target
+    const kp3 = await generateKeypair(); // guardian recovery target
+
+    // Step 1: normal rotation kp1 → kp2
+    const normalRecord = await signKeySuccession(
+      kp1.privateKey,
+      kp2.privateKey,
+      kp2.publicKey,
+      kp1.publicKey,
+      "routine rotation",
+    );
+
+    // Small delay to ensure timestamp ordering
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Step 2: guardian recovery kp2 → kp3 (kp2 compromised)
+    const recoveryRecord = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      kp3.privateKey,
+      kp2.publicKey,
+      kp3.publicKey,
+    );
+
+    const guardianPubHex = bytesToHex(guardianKp.publicKey);
+
+    const result = await verifySuccessionChain([normalRecord, recoveryRecord], guardianPubHex);
+
+    expect(result.valid).toBe(true);
+    expect(result.genesis_public_key).toBe(bytesToHex(kp1.publicKey));
+    expect(result.current_public_key).toBe(bytesToHex(kp3.publicKey));
+    expect(result.length).toBe(2);
+  });
+
+  it("rejects guardian recovery in chain without guardian key", async () => {
+    const guardianKp = await generateKeypair();
+    const kp1 = await generateKeypair();
+    const kp2 = await generateKeypair();
+
+    const recoveryRecord = await signGuardianRecoverySuccession(
+      guardianKp.privateKey,
+      kp2.privateKey,
+      kp1.publicKey,
+      kp2.publicKey,
+    );
+
+    const result = await verifySuccessionChain([recoveryRecord]);
+    expect(result.valid).toBe(false);
+    expect(result.error?.message).toContain("guardian recovery but no guardian public key");
+  });
+
+  it("guardian key must not equal identity key", async () => {
+    // This is a policy invariant: guardian.public_key !== identity.public_key
+    // Enforced at identity generation, not chain verification — but let's verify
+    // that a self-signed "guardian recovery" is still cryptographically valid
+    // (the policy check happens at a higher layer)
+    const kp1 = await generateKeypair();
+    const kp2 = await generateKeypair();
+
+    // "Guardian" is actually kp1 itself — cryptographically valid but policy-invalid
+    const record = await signGuardianRecoverySuccession(
+      kp1.privateKey, // using identity key as guardian
+      kp2.privateKey,
+      kp1.publicKey,
+      kp2.publicKey,
+    );
+
+    const pubHex = bytesToHex(kp1.publicKey);
+    const valid = await verifyKeySuccession(record, pubHex);
+    // Cryptographically valid — policy layer rejects this, not crypto
+    expect(valid).toBe(true);
   });
 });

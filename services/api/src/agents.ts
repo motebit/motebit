@@ -511,7 +511,19 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
 
       // Verify the succession record signatures
-      const successionValid = await verifyKeySuccession(succession);
+      let guardianPubKeyForVerify: string | undefined;
+      if (succession.recovery) {
+        const agentGuardian = moteDb.db
+          .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
+          .get(motebitId) as { guardian_public_key: string | null } | undefined;
+        guardianPubKeyForVerify = agentGuardian?.guardian_public_key ?? undefined;
+        if (!guardianPubKeyForVerify) {
+          throw new HTTPException(400, {
+            message: "Agent has no guardian registered — cannot use guardian recovery",
+          });
+        }
+      }
+      const successionValid = await verifyKeySuccession(succession, guardianPubKeyForVerify);
       if (!successionValid) {
         throw new HTTPException(400, { message: "Invalid key succession signatures" });
       }
@@ -533,8 +545,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // Store the succession record for chain auditability
       moteDb.db
         .prepare(
-          `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           motebitId,
@@ -542,8 +554,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           succession.new_public_key,
           succession.timestamp,
           succession.reason ?? null,
-          succession.old_key_signature,
+          succession.old_key_signature ?? null,
           succession.new_key_signature,
+          succession.recovery ? 1 : 0,
+          succession.guardian_signature ?? null,
         );
 
       logger.info("agent.key.succession_on_register", {
@@ -565,18 +579,23 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const now = Date.now();
     const expiresAt = now + 15 * 60 * 1000; // 15 minutes
 
+    const guardianPublicKey = (body as Record<string, unknown>).guardian_public_key as
+      | string
+      | undefined;
+
     moteDb.db
       .prepare(
         `
-      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
         public_key = excluded.public_key,
         endpoint_url = excluded.endpoint_url,
         capabilities = excluded.capabilities,
         metadata = excluded.metadata,
         last_heartbeat = excluded.last_heartbeat,
-        expires_at = excluded.expires_at
+        expires_at = excluded.expires_at,
+        guardian_public_key = COALESCE(excluded.guardian_public_key, agent_registry.guardian_public_key)
     `,
       )
       .run(
@@ -588,6 +607,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         now,
         now,
         expiresAt,
+        guardianPublicKey ?? null,
       );
 
     // Auto-create a default service listing if one doesn't exist.

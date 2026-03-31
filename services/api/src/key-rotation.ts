@@ -80,14 +80,36 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       !body.old_public_key ||
       !body.new_public_key ||
       !body.timestamp ||
-      !body.old_key_signature ||
       !body.new_key_signature
     ) {
       throw new HTTPException(400, { message: "Missing required fields in key succession record" });
     }
 
-    const valid = await verifyKeySuccession(body);
-    if (!valid) throw new HTTPException(400, { message: "Invalid key succession signatures" });
+    if (body.recovery) {
+      // Guardian recovery: need guardian_signature, not old_key_signature
+      if (!body.guardian_signature) {
+        throw new HTTPException(400, { message: "Guardian recovery requires guardian_signature" });
+      }
+      // Look up the guardian public key from agent's identity
+      const agentGuardian = moteDb.db
+        .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
+        .get(motebitId) as { guardian_public_key: string | null } | undefined;
+      const guardianPubKey = agentGuardian?.guardian_public_key;
+      if (!guardianPubKey) {
+        throw new HTTPException(400, {
+          message: "Agent has no guardian registered — cannot use guardian recovery",
+        });
+      }
+      const valid = await verifyKeySuccession(body, guardianPubKey);
+      if (!valid) throw new HTTPException(400, { message: "Invalid guardian recovery signatures" });
+    } else {
+      // Normal rotation: need old_key_signature
+      if (!body.old_key_signature) {
+        throw new HTTPException(400, { message: "Normal rotation requires old_key_signature" });
+      }
+      const valid = await verifyKeySuccession(body);
+      if (!valid) throw new HTTPException(400, { message: "Invalid key succession signatures" });
+    }
 
     const storedAgent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
@@ -100,7 +122,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
 
     moteDb.db
       .prepare(
-        `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         motebitId,
@@ -108,8 +130,10 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         body.new_public_key,
         body.timestamp,
         body.reason ?? null,
-        body.old_key_signature,
+        body.old_key_signature ?? null,
         body.new_key_signature,
+        body.recovery ? 1 : 0,
+        body.guardian_signature ?? null,
       );
 
     moteDb.db
@@ -126,15 +150,17 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
 
     const chain = moteDb.db
       .prepare(
-        `SELECT old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature FROM relay_key_successions WHERE motebit_id = ? ORDER BY timestamp ASC`,
+        `SELECT old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature FROM relay_key_successions WHERE motebit_id = ? ORDER BY timestamp ASC`,
       )
       .all(motebitId) as Array<{
       old_public_key: string;
       new_public_key: string;
       timestamp: number;
       reason: string | null;
-      old_key_signature: string;
+      old_key_signature: string | null;
       new_key_signature: string;
+      recovery: number;
+      guardian_signature: string | null;
     }>;
 
     const agent = moteDb.db
@@ -150,8 +176,9 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         new_public_key: r.new_public_key,
         timestamp: r.timestamp,
         reason: r.reason,
-        old_key_signature: r.old_key_signature,
+        ...(r.old_key_signature ? { old_key_signature: r.old_key_signature } : {}),
         new_key_signature: r.new_key_signature,
+        ...(r.recovery ? { recovery: true, guardian_signature: r.guardian_signature } : {}),
       })),
       current_public_key: agent?.public_key ?? null,
     });

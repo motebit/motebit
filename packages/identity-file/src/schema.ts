@@ -45,6 +45,14 @@ export interface MotebitIdentityFile {
     per_turn_limit: number;
   };
 
+  /** Organizational guardian for key recovery and enterprise custody (§3.3). */
+  guardian?: {
+    public_key: string;
+    organization?: string;
+    organization_id?: string;
+    established_at: string;
+  };
+
   devices: Array<{
     device_id: string;
     name: string;
@@ -57,7 +65,9 @@ export interface MotebitIdentityFile {
     new_public_key: string;
     timestamp: number;
     reason?: string;
-    old_key_signature: string;
+    old_key_signature?: string;
     new_key_signature: string;
+    recovery?: boolean;
+    guardian_signature?: string;
   }>;
 }

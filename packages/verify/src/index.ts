@@ -73,6 +73,14 @@ export interface MotebitIdentityFile {
     per_turn_limit: number;
   };
 
+  /** Organizational guardian for key recovery and enterprise custody (§3.3). */
+  guardian?: {
+    public_key: string;
+    organization?: string;
+    organization_id?: string;
+    established_at: string;
+  };
+
   devices: Array<{
     device_id: string;
     name: string;
@@ -88,8 +96,12 @@ export interface SuccessionRecord {
   new_public_key: string;
   timestamp: number;
   reason?: string;
-  old_key_signature: string;
+  old_key_signature?: string;
   new_key_signature: string;
+  /** True when succession was authorized by guardian, not old key. */
+  recovery?: boolean;
+  /** Guardian signature — present only when recovery is true. */
+  guardian_signature?: string;
 }
 
 // ===========================================================================
@@ -626,7 +638,8 @@ async function verifyIdentity(content: string): Promise<IdentityVerifyResult> {
   let successionResult: IdentityVerifyResult["succession"];
 
   if (chain && chain.length > 0) {
-    successionResult = await verifySuccessionChain(chain, pubKeyHex);
+    const guardianPubKeyHex = parsed.frontmatter.guardian?.public_key;
+    successionResult = await verifySuccessionChain(chain, pubKeyHex, guardianPubKeyHex);
   }
 
   return {
@@ -645,6 +658,7 @@ async function verifyIdentity(content: string): Promise<IdentityVerifyResult> {
 async function verifySuccessionChain(
   chain: SuccessionRecord[],
   currentPublicKeyHex: string,
+  guardianPublicKeyHex?: string,
 ): Promise<NonNullable<IdentityVerifyResult["succession"]>> {
   try {
     for (let i = 0; i < chain.length; i++) {
@@ -658,20 +672,13 @@ async function verifySuccessionChain(
       if (record.reason !== undefined) {
         payloadObj.reason = record.reason;
       }
+      if (record.recovery) {
+        payloadObj.recovery = true;
+      }
       const payload = canonicalJson(payloadObj);
       const message = new TextEncoder().encode(payload);
 
-      const oldPubKey = hexToBytes(record.old_public_key);
-      const oldSig = hexToBytes(record.old_key_signature);
-      const oldValid = await ed.verifyAsync(oldSig, message, oldPubKey);
-      if (!oldValid) {
-        return {
-          valid: false,
-          rotations: chain.length,
-          error: `Succession record ${i}: old_key_signature verification failed`,
-        };
-      }
-
+      // Verify new_key_signature (always required)
       const newPubKey = hexToBytes(record.new_public_key);
       const newSig = hexToBytes(record.new_key_signature);
       const newValid = await ed.verifyAsync(newSig, message, newPubKey);
@@ -681,6 +688,53 @@ async function verifySuccessionChain(
           rotations: chain.length,
           error: `Succession record ${i}: new_key_signature verification failed`,
         };
+      }
+
+      if (record.recovery) {
+        // Guardian recovery: verify guardian_signature against guardian.public_key
+        if (!guardianPublicKeyHex) {
+          return {
+            valid: false,
+            rotations: chain.length,
+            error: `Succession record ${i}: guardian recovery but no guardian public key in identity`,
+          };
+        }
+        if (!record.guardian_signature) {
+          return {
+            valid: false,
+            rotations: chain.length,
+            error: `Succession record ${i}: guardian recovery but no guardian_signature`,
+          };
+        }
+        const guardianPubKey = hexToBytes(guardianPublicKeyHex);
+        const guardianSig = hexToBytes(record.guardian_signature);
+        const guardianValid = await ed.verifyAsync(guardianSig, message, guardianPubKey);
+        if (!guardianValid) {
+          return {
+            valid: false,
+            rotations: chain.length,
+            error: `Succession record ${i}: guardian_signature verification failed`,
+          };
+        }
+      } else {
+        // Normal rotation: verify old_key_signature
+        if (!record.old_key_signature) {
+          return {
+            valid: false,
+            rotations: chain.length,
+            error: `Succession record ${i}: normal rotation but no old_key_signature`,
+          };
+        }
+        const oldPubKey = hexToBytes(record.old_public_key);
+        const oldSig = hexToBytes(record.old_key_signature);
+        const oldValid = await ed.verifyAsync(oldSig, message, oldPubKey);
+        if (!oldValid) {
+          return {
+            valid: false,
+            rotations: chain.length,
+            error: `Succession record ${i}: old_key_signature verification failed`,
+          };
+        }
       }
 
       if (i < chain.length - 1) {

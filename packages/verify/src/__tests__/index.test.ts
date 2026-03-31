@@ -1047,6 +1047,265 @@ describe("parse — YAML edge cases", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Helpers for guardian recovery tests
+// ---------------------------------------------------------------------------
+
+async function createGuardianRecoveryRecord(
+  guardianKp: Awaited<ReturnType<typeof makeKeypair>>,
+  newKp: Awaited<ReturnType<typeof makeKeypair>>,
+  oldPublicKeyHex: string,
+  timestamp: number,
+  reason?: string,
+) {
+  const effectiveReason = reason ?? "guardian_recovery";
+  const payloadObj: Record<string, unknown> = {
+    old_public_key: oldPublicKeyHex,
+    new_public_key: newKp.publicKeyHex,
+    timestamp,
+  };
+  payloadObj.reason = effectiveReason;
+  payloadObj.recovery = true;
+  const payload = canonicalJson(payloadObj);
+  const message = new TextEncoder().encode(payload);
+
+  const guardianSig = await ed.signAsync(message, guardianKp.privateKey);
+  const newSig = await ed.signAsync(message, newKp.privateKey);
+
+  return {
+    old_public_key: oldPublicKeyHex,
+    new_public_key: newKp.publicKeyHex,
+    timestamp,
+    reason: effectiveReason,
+    new_key_signature: toHex(newSig),
+    recovery: true as const,
+    guardian_signature: toHex(guardianSig),
+  };
+}
+
+function buildYamlWithGuardian(
+  publicKeyHex: string,
+  guardianPublicKeyHex: string,
+  successionRecords: Array<{
+    old_public_key: string;
+    new_public_key: string;
+    timestamp: number;
+    reason?: string;
+    old_key_signature?: string;
+    new_key_signature: string;
+    recovery?: boolean;
+    guardian_signature?: string;
+  }>,
+): string {
+  const lines = [
+    `spec: "motebit/identity@1.0"`,
+    `motebit_id: "01234567-89ab-cdef-0123-456789abcdef"`,
+    `created_at: "2026-01-15T00:00:00.000Z"`,
+    `owner_id: "owner-test"`,
+    `identity:`,
+    `  algorithm: "Ed25519"`,
+    `  public_key: "${publicKeyHex}"`,
+    `governance:`,
+    `  trust_mode: "guarded"`,
+    `  max_risk_auto: "R1_DRAFT"`,
+    `  require_approval_above: "R1_DRAFT"`,
+    `  deny_above: "R4_MONEY"`,
+    `  operator_mode: false`,
+    `privacy:`,
+    `  default_sensitivity: "personal"`,
+    `  retention_days:`,
+    `    none: 365`,
+    `  fail_closed: true`,
+    `memory:`,
+    `  half_life_days: 7`,
+    `  confidence_threshold: 0.3`,
+    `  per_turn_limit: 5`,
+    `guardian:`,
+    `  public_key: "${guardianPublicKeyHex}"`,
+    `  organization: "Test Corp"`,
+    `  established_at: "2026-01-01T00:00:00.000Z"`,
+    `devices: []`,
+    `succession:`,
+  ];
+
+  for (const rec of successionRecords) {
+    lines.push(`  - old_public_key: "${rec.old_public_key}"`);
+    lines.push(`    new_public_key: "${rec.new_public_key}"`);
+    lines.push(`    timestamp: ${rec.timestamp}`);
+    if (rec.reason !== undefined) {
+      lines.push(`    reason: "${rec.reason}"`);
+    }
+    if (rec.old_key_signature) {
+      lines.push(`    old_key_signature: "${rec.old_key_signature}"`);
+    }
+    lines.push(`    new_key_signature: "${rec.new_key_signature}"`);
+    if (rec.recovery) {
+      lines.push(`    recovery: true`);
+    }
+    if (rec.guardian_signature) {
+      lines.push(`    guardian_signature: "${rec.guardian_signature}"`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// verify() — guardian recovery succession chain
+// ---------------------------------------------------------------------------
+
+describe("verify — guardian recovery succession", () => {
+  it("verifies identity file with guardian recovery succession", async () => {
+    const guardianKp = await makeKeypair();
+    const kp1 = await makeKeypair(); // genesis (compromised)
+    const kp2 = await makeKeypair(); // recovery target (current)
+
+    const recoveryRecord = await createGuardianRecoveryRecord(
+      guardianKp,
+      kp2,
+      kp1.publicKeyHex,
+      1000,
+    );
+
+    const yaml = buildYamlWithGuardian(kp2.publicKeyHex, guardianKp.publicKeyHex, [recoveryRecord]);
+    const yamlBytes = new TextEncoder().encode(yaml);
+    const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
+    expect(result.succession!.rotations).toBe(1);
+  });
+
+  it("verifies mixed chain: normal rotation → guardian recovery", async () => {
+    const guardianKp = await makeKeypair();
+    const kp1 = await makeKeypair(); // genesis
+    const kp2 = await makeKeypair(); // normal rotation target
+    const kp3 = await makeKeypair(); // guardian recovery target (current)
+
+    const normalRecord = await createSuccessionRecord(kp1, kp2, 1000, "routine");
+    const recoveryRecord = await createGuardianRecoveryRecord(
+      guardianKp,
+      kp3,
+      kp2.publicKeyHex,
+      2000,
+    );
+
+    const yaml = buildYamlWithGuardian(kp3.publicKeyHex, guardianKp.publicKeyHex, [
+      normalRecord,
+      recoveryRecord,
+    ]);
+    const yamlBytes = new TextEncoder().encode(yaml);
+    const sig = await ed.signAsync(yamlBytes, kp3.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
+    expect(result.succession!.rotations).toBe(2);
+  });
+
+  it("rejects guardian recovery without guardian field in identity", async () => {
+    const guardianKp = await makeKeypair();
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    const recoveryRecord = await createGuardianRecoveryRecord(
+      guardianKp,
+      kp2,
+      kp1.publicKeyHex,
+      1000,
+    );
+
+    // Use buildYamlWithSuccession (no guardian field)
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [
+      {
+        ...recoveryRecord,
+        old_key_signature: "", // not present in recovery, but buildYaml needs it
+      },
+    ]);
+
+    // Actually, we need to hand-build YAML with recovery fields but no guardian
+    const lines = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "01234567-89ab-cdef-0123-456789abcdef"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp2.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R1_DRAFT"`,
+      `  require_approval_above: "R1_DRAFT"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+      `succession:`,
+      `  - old_public_key: "${recoveryRecord.old_public_key}"`,
+      `    new_public_key: "${recoveryRecord.new_public_key}"`,
+      `    timestamp: ${recoveryRecord.timestamp}`,
+      `    reason: "${recoveryRecord.reason}"`,
+      `    new_key_signature: "${recoveryRecord.new_key_signature}"`,
+      `    recovery: true`,
+      `    guardian_signature: "${recoveryRecord.guardian_signature}"`,
+    ].join("\n");
+
+    const yamlBytes = new TextEncoder().encode(lines);
+    const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const content = `---\n${lines}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // signature is valid
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("no guardian public key");
+  });
+
+  it("rejects guardian recovery with wrong guardian key", async () => {
+    const guardianKp = await makeKeypair();
+    const wrongGuardianKp = await makeKeypair();
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    // Sign with guardianKp but put wrongGuardianKp in the identity file
+    const recoveryRecord = await createGuardianRecoveryRecord(
+      guardianKp,
+      kp2,
+      kp1.publicKeyHex,
+      1000,
+    );
+
+    const yaml = buildYamlWithGuardian(kp2.publicKeyHex, wrongGuardianKp.publicKeyHex, [
+      recoveryRecord,
+    ]);
+    const yamlBytes = new TextEncoder().encode(yaml);
+    const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature valid
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("guardian_signature verification failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-compatibility with @motebit/identity-file
 // ---------------------------------------------------------------------------
 // NOTE: Cross-compat is now tested in @motebit/identity-file's test suite,

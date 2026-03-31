@@ -930,26 +930,32 @@ export function isScopeNarrowed(parentScope: string, childScope: string): boolea
 
 /**
  * A key succession record proving that one Ed25519 key has been replaced by another.
- * Both the old and new keys sign the record, creating a cryptographic chain of custody.
+ * Normal rotation: both old and new keys sign. Guardian recovery: guardian + new key sign.
  */
 export interface KeySuccessionRecord {
   old_public_key: string; // hex
   new_public_key: string; // hex
   timestamp: number;
   reason?: string;
-  old_key_signature: string; // hex, old key signs the canonical payload
+  old_key_signature?: string; // hex — present in normal rotation, absent in guardian recovery
   new_key_signature: string; // hex, new key signs the canonical payload
+  /** True when succession was authorized by guardian, not old key. */
+  recovery?: boolean;
+  /** Guardian signature — present only when recovery is true. */
+  guardian_signature?: string; // hex
 }
 
 /**
  * Build the canonical payload for key succession signing.
- * Includes old_public_key, new_public_key, timestamp, and reason (if present).
+ * Includes old_public_key, new_public_key, timestamp, reason (if present),
+ * and recovery (if true — per §3.8.3).
  */
 function keySuccessionPayload(
   oldPublicKeyHex: string,
   newPublicKeyHex: string,
   timestamp: number,
   reason?: string,
+  recovery?: boolean,
 ): string {
   const obj: Record<string, unknown> = {
     old_public_key: oldPublicKeyHex,
@@ -958,6 +964,9 @@ function keySuccessionPayload(
   };
   if (reason !== undefined) {
     obj.reason = reason;
+  }
+  if (recovery) {
+    obj.recovery = true;
   }
   return canonicalJson(obj);
 }
@@ -1006,27 +1015,90 @@ export async function signKeySuccession(
 }
 
 /**
- * Verify a key succession record by checking both signatures against the canonical payload.
+ * Sign a guardian recovery succession record (§3.8.3).
+ * The guardian key signs instead of the compromised old key.
+ * Reason MUST include "guardian_recovery".
  */
-export async function verifyKeySuccession(record: KeySuccessionRecord): Promise<boolean> {
+export async function signGuardianRecoverySuccession(
+  guardianPrivateKey: Uint8Array,
+  newPrivateKey: Uint8Array,
+  oldPublicKey: Uint8Array,
+  newPublicKey: Uint8Array,
+  reason?: string,
+): Promise<KeySuccessionRecord> {
+  const timestamp = Date.now();
+  const oldPublicKeyHex = Array.from(oldPublicKey)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const newPublicKeyHex = Array.from(newPublicKey)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  const effectiveReason = reason ?? "guardian_recovery";
+  const payload = keySuccessionPayload(
+    oldPublicKeyHex,
+    newPublicKeyHex,
+    timestamp,
+    effectiveReason,
+    true,
+  );
+  const message = new TextEncoder().encode(payload);
+
+  const guardianSig = await sign(message, guardianPrivateKey);
+  const newSig = await sign(message, newPrivateKey);
+
+  return {
+    old_public_key: oldPublicKeyHex,
+    new_public_key: newPublicKeyHex,
+    timestamp,
+    reason: effectiveReason,
+    new_key_signature: Array.from(newSig)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(""),
+    recovery: true,
+    guardian_signature: Array.from(guardianSig)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(""),
+  };
+}
+
+/**
+ * Verify a key succession record. For normal rotation, checks old_key_signature + new_key_signature.
+ * For guardian recovery (recovery: true), checks guardian_signature + new_key_signature.
+ * Guardian recovery requires guardianPublicKeyHex to verify against.
+ */
+export async function verifyKeySuccession(
+  record: KeySuccessionRecord,
+  guardianPublicKeyHex?: string,
+): Promise<boolean> {
   const payload = keySuccessionPayload(
     record.old_public_key,
     record.new_public_key,
     record.timestamp,
     record.reason,
+    record.recovery,
   );
   const message = new TextEncoder().encode(payload);
 
   try {
-    const oldPubKey = hexToBytes(record.old_public_key);
     const newPubKey = hexToBytes(record.new_public_key);
-    const oldSig = hexToBytes(record.old_key_signature);
     const newSig = hexToBytes(record.new_key_signature);
-
-    const oldValid = await verify(oldSig, message, oldPubKey);
     const newValid = await verify(newSig, message, newPubKey);
+    if (!newValid) return false;
 
-    return oldValid && newValid;
+    if (record.recovery) {
+      // Guardian recovery: verify guardian_signature against guardian public key
+      if (!record.guardian_signature || !guardianPublicKeyHex) return false;
+      const guardianPubKey = hexToBytes(guardianPublicKeyHex);
+      const guardianSig = hexToBytes(record.guardian_signature);
+      return await verify(guardianSig, message, guardianPubKey);
+    } else {
+      // Normal rotation: verify old_key_signature against old public key
+      if (!record.old_key_signature) return false;
+      const oldPubKey = hexToBytes(record.old_public_key);
+      const oldSig = hexToBytes(record.old_key_signature);
+      return await verify(oldSig, message, oldPubKey);
+    }
   } catch {
     /* v8 ignore next */
     return false;
@@ -1043,14 +1115,16 @@ export type { SuccessionChainResult } from "@motebit/protocol";
  * representing a sequence of key rotations from a genesis key to the current active key.
  *
  * Validates:
- * 1. Each record's dual signatures (old key + new key) via verifyKeySuccession().
+ * 1. Each record's signatures via verifyKeySuccession() (handles both normal and guardian recovery).
  * 2. Chain linkage: chain[i].new_public_key === chain[i+1].old_public_key.
  * 3. Temporal ordering: chain[i].timestamp < chain[i+1].timestamp.
  *
  * An empty chain returns invalid (no genesis key).
+ * Pass guardianPublicKeyHex to verify guardian recovery records in the chain.
  */
 export async function verifySuccessionChain(
   chain: KeySuccessionRecord[],
+  guardianPublicKeyHex?: string,
 ): Promise<SuccessionChainResult> {
   if (chain.length === 0) {
     return {
@@ -1068,8 +1142,20 @@ export async function verifySuccessionChain(
   for (let i = 0; i < chain.length; i++) {
     const record = chain[i]!;
 
-    // Verify dual signatures
-    const sigValid = await verifyKeySuccession(record);
+    // Verify signatures (dual for normal, guardian+new for recovery)
+    if (record.recovery && !guardianPublicKeyHex) {
+      return {
+        valid: false,
+        genesis_public_key: genesisKey,
+        current_public_key: currentKey,
+        length: chain.length,
+        error: {
+          index: i,
+          message: `Record ${i} is a guardian recovery but no guardian public key provided`,
+        },
+      };
+    }
+    const sigValid = await verifyKeySuccession(record, guardianPublicKeyHex);
     if (!sigValid) {
       return {
         valid: false,

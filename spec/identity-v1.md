@@ -586,7 +586,7 @@ Implementations SHOULD use a restricted YAML parser that handles only the data t
 | **Frontmatter tampering**            | Ed25519 signature covers exact YAML bytes; any modification invalidates    | None — cryptographic guarantee               |
 | **Private key theft**                | Key stored in OS keychain or encrypted at rest; never in the identity file | Physical/OS-level compromise                 |
 | **Identity impersonation**           | Public key is self-certifying; verification requires matching keypair      | No PKI — trust is application-defined        |
-| **Key compromise**                   | Generate new keypair + new `motebit_id`; old identity is abandoned         | No revocation broadcast mechanism            |
+| **Key compromise (no succession)**   | Generate new keypair + new `motebit_id`; old identity is abandoned         | No revocation broadcast mechanism            |
 | **Replay of old identity file**      | `created_at` timestamp allows freshness checks; applications define policy | Verifier must enforce freshness              |
 | **YAML injection**                   | Restricted parser; no anchors/aliases/tags; only spec-defined types        | Full YAML parsers may be vulnerable          |
 | **Signature stripping**              | Verifiers MUST reject files without a valid signature comment              | Applications that skip verification          |

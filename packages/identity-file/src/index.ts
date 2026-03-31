@@ -129,6 +129,7 @@ export interface GenerateOptions {
   memory?: Partial<MotebitIdentityFile["memory"]>;
   devices?: MotebitIdentityFile["devices"];
   service?: ServiceIdentityOptions;
+  guardian?: MotebitIdentityFile["guardian"];
 }
 
 export async function generate(opts: GenerateOptions, privateKey: Uint8Array): Promise<string> {
@@ -186,6 +187,10 @@ export async function generate(opts: GenerateOptions, privateKey: Uint8Array): P
     devices: opts.devices ?? [],
   };
 
+  if (opts.guardian) {
+    data.guardian = opts.guardian;
+  }
+
   const yaml = serializeYaml(data);
   const frontmatter = `---\n${yaml}\n---`;
   const frontmatterBytes = new TextEncoder().encode(yaml);
@@ -227,8 +232,10 @@ export interface RotateOptions {
     new_public_key: string;
     timestamp: number;
     reason?: string;
-    old_key_signature: string;
+    old_key_signature?: string;
     new_key_signature: string;
+    recovery?: boolean;
+    guardian_signature?: string;
   };
 }
 
