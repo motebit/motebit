@@ -2,11 +2,23 @@ import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import { encrypt, decrypt, type EncryptedPayload } from "@motebit/crypto";
 
+/**
+ * Provides versioned encryption keys for key rotation.
+ * getCurrentKey() returns the active key for encryption.
+ * getKey(version) retrieves any historical key for decryption.
+ */
+export interface KeyProvider {
+  getCurrentKey(): { key: Uint8Array; version: number };
+  getKey(version: number): Uint8Array | null;
+}
+
 export interface EncryptedAdapterConfig {
   /** The underlying adapter to wrap */
   inner: EventStoreAdapter;
-  /** 256-bit symmetric key for this motebit */
-  key: Uint8Array;
+  /** 256-bit symmetric key for this motebit (sugar for single-key provider at version 1) */
+  key?: Uint8Array;
+  /** Versioned key provider for key rotation support */
+  keyProvider?: KeyProvider;
 }
 
 // Portable base64 helpers that work in both Node.js and React Native
@@ -34,18 +46,38 @@ function fromBase64(str: string): Uint8Array {
 }
 
 /**
+ * Creates a KeyProvider from a single static key (backward-compatible sugar).
+ */
+function singleKeyProvider(key: Uint8Array): KeyProvider {
+  return {
+    getCurrentKey: () => ({ key, version: 1 }),
+    getKey: (version: number) => (version === 1 ? key : null),
+  };
+}
+
+/**
  * Wraps an EventStoreAdapter with event-level encryption.
  * Encrypts the `payload` field before writing, decrypts after reading.
  * All other fields (event_id, motebit_id, timestamp, version_clock, event_type) remain in cleartext
  * so the relay can index/filter without decryption.
+ *
+ * Supports key versioning: each encrypted payload embeds the key version used.
+ * On decrypt, the correct key is resolved via the KeyProvider. Legacy data without
+ * a version field is treated as version 1.
  */
 export class EncryptedEventStoreAdapter implements EventStoreAdapter {
   private inner: EventStoreAdapter;
-  private key: Uint8Array;
+  private keyProvider: KeyProvider;
 
   constructor(config: EncryptedAdapterConfig) {
     this.inner = config.inner;
-    this.key = config.key;
+    if (config.keyProvider) {
+      this.keyProvider = config.keyProvider;
+    } else if (config.key) {
+      this.keyProvider = singleKeyProvider(config.key);
+    } else {
+      throw new Error("EncryptedAdapterConfig requires either 'key' or 'keyProvider'");
+    }
   }
 
   async append(entry: EventLogEntry): Promise<void> {
@@ -87,12 +119,14 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
   }
 
   private async encryptPayload(payload: Record<string, unknown>): Promise<string> {
+    const { key, version } = this.keyProvider.getCurrentKey();
     const plaintext = new TextEncoder().encode(JSON.stringify(payload));
-    const encrypted = await encrypt(plaintext, this.key);
+    const encrypted = await encrypt(plaintext, key);
     return JSON.stringify({
       c: toBase64(encrypted.ciphertext),
       n: toBase64(encrypted.nonce),
       t: toBase64(encrypted.tag),
+      v: version,
     });
   }
 
@@ -100,13 +134,24 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     const payload = entry.payload;
     if (payload._encrypted == null || payload._encrypted === false) return entry;
 
-    const data = JSON.parse(payload._data as string) as { c: string; n: string; t: string };
+    const data = JSON.parse(payload._data as string) as {
+      c: string;
+      n: string;
+      t: string;
+      v?: number;
+    };
+    // Legacy data has no version field — treat as version 1
+    const version = data.v ?? 1;
+    const key = this.keyProvider.getKey(version);
+    if (key == null) {
+      throw new Error(`Encryption key not found for version ${version}`);
+    }
     const encrypted: EncryptedPayload = {
       ciphertext: fromBase64(data.c),
       nonce: fromBase64(data.n),
       tag: fromBase64(data.t),
     };
-    const plaintext = await decrypt(encrypted, this.key);
+    const plaintext = await decrypt(encrypted, key);
     const decrypted = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
     return { ...entry, payload: decrypted };
   }
@@ -115,15 +160,29 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
 /**
  * Standalone decryption for individual events received via WebSocket onEvent callback.
  * Decrypts the payload in-place if it was encrypted; passes through unencrypted events.
+ * Accepts either a plain key (backward-compatible, treated as version 1) or a KeyProvider.
  */
 export async function decryptEventPayload(
   event: EventLogEntry,
-  key: Uint8Array,
+  keyOrProvider: Uint8Array | KeyProvider,
 ): Promise<EventLogEntry> {
   const payload = event.payload;
   if (payload._encrypted == null || payload._encrypted === false) return event;
 
-  const data = JSON.parse(payload._data as string) as { c: string; n: string; t: string };
+  const provider: KeyProvider =
+    keyOrProvider instanceof Uint8Array ? singleKeyProvider(keyOrProvider) : keyOrProvider;
+
+  const data = JSON.parse(payload._data as string) as {
+    c: string;
+    n: string;
+    t: string;
+    v?: number;
+  };
+  const version = data.v ?? 1;
+  const key = provider.getKey(version);
+  if (key == null) {
+    throw new Error(`Encryption key not found for version ${version}`);
+  }
   const encrypted: EncryptedPayload = {
     ciphertext: fromBase64(data.c),
     nonce: fromBase64(data.n),

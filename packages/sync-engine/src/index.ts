@@ -10,7 +10,7 @@ export type {
   CustomMessageCallback,
 } from "./ws-adapter.js";
 export { EncryptedEventStoreAdapter, decryptEventPayload } from "./encrypted-adapter.js";
-export type { EncryptedAdapterConfig } from "./encrypted-adapter.js";
+export type { EncryptedAdapterConfig, KeyProvider } from "./encrypted-adapter.js";
 export {
   EncryptedConversationSyncAdapter,
   decryptConversationMessage,

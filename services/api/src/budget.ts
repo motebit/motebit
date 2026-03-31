@@ -8,6 +8,7 @@ import type { MotebitDatabase } from "@motebit/persistence";
 import { bytesToHex, hash as sha256Hash } from "@motebit/crypto";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { persistFreeze } from "./freeze.js";
 import {
   getOrCreateAccount,
   getAccountBalance,
@@ -310,8 +311,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
     if (!reason) throw new HTTPException(400, { message: "reason is required" });
 
-    freezeState.frozen = true;
-    freezeState.reason = reason;
+    // Persist to DB first, then update in-memory cache
+    persistFreeze(moteDb.db, freezeState, true, reason);
 
     const authHeader = c.req.header("authorization") ?? "";
     const tokenHash = (await sha256Hash(new TextEncoder().encode(authHeader))).slice(0, 12);
@@ -325,8 +326,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
   app.post("/api/v1/admin/unfreeze", async (c) => {
     const previousReason = freezeState.reason;
-    freezeState.frozen = false;
-    freezeState.reason = null;
+    // Persist to DB first, then update in-memory cache
+    persistFreeze(moteDb.db, freezeState, false, null);
 
     const authHeader = c.req.header("authorization") ?? "";
     const tokenHash = (await sha256Hash(new TextEncoder().encode(authHeader))).slice(0, 12);

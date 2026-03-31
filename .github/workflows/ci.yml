@@ -43,6 +43,11 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Dead code detection
+        if: always()
+        continue-on-error: true
+        run: pnpm run check-unused
+
       - name: Test with coverage
         run: pnpm run test:coverage
 

@@ -98,6 +98,7 @@ import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import { createAccountTables, createWithdrawalTables, creditAccount } from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import { registerStateExportRoutes } from "./state-export.js";
+import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { registerTrustGraphRoutes } from "./trust-graph.js";
 import { registerListingsRoutes } from "./listings.js";
 import { registerProposalRoutes } from "./proposals.js";
@@ -200,15 +201,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     platformFeeRate = parseFloat(process.env.MOTEBIT_PLATFORM_FEE_RATE ?? "0.05"),
   } = config;
 
-  // Emergency freeze: runtime toggle for kill switch. When true, all state-mutating
-  // operations (POST/PUT/PATCH/DELETE) return 503. Reads remain available.
+  // Emergency freeze: persistent kill switch backed by SQLite.
+  // On startup, load persisted state from DB. Config override (emergencyFreeze=true)
+  // takes precedence and is persisted immediately so it survives further restarts.
   // Shared mutable object so budget.ts freeze/unfreeze routes can toggle the same state.
-  const freezeState = {
-    frozen: config.emergencyFreeze ?? false,
-    reason: config.emergencyFreeze ? ("startup" as string | null) : null,
-  };
-  const getEmergencyFreeze = () => freezeState.frozen;
-  const getFreezeReason = () => freezeState.reason;
+  // DB write happens first, then in-memory cache update (read-through cache pattern).
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
 
@@ -223,6 +220,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   createAccountTables(moteDb.db);
   createWithdrawalTables(moteDb.db);
   createSubscriptionTables(moteDb.db);
+  createRelayConfigTable(moteDb.db);
+
+  // --- Freeze state: load from DB, apply config override if set ---
+  const persistedFreeze = loadFreezeState(moteDb.db);
+  const freezeState = {
+    frozen: persistedFreeze.frozen,
+    reason: persistedFreeze.reason,
+  };
+  // Config override: emergencyFreeze=true forces freeze and persists it
+  if (config.emergencyFreeze && !freezeState.frozen) {
+    persistFreeze(moteDb.db, freezeState, true, "startup");
+  }
+  const getEmergencyFreeze = () => freezeState.frozen;
+  const getFreezeReason = () => freezeState.reason;
 
   // --- Schema: relay-owned tables, migrations, startup cleanup ---
   const { isTokenBlacklisted, isAgentRevoked } = createRelaySchema(moteDb.db);

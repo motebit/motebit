@@ -31,7 +31,12 @@ const thresholds = {
   // Ring 3 — I/O adapters (5pt gap)
   "packages/persistence": 80,
   "packages/mcp-server": 73,
+  "packages/browser-persistence": 70,
+  // Ring 3 — apps & services (floor thresholds)
+  "apps/web": 70,
+  "apps/identity": 70,
   "services/api": 74,
+  "services/proxy": 70,
 };
 
 /** @type {Array<{name: string, statements: number, branches: number, functions: number, lines: number}>} */

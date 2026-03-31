@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { EncryptedEventStoreAdapter, decryptEventPayload } from "../encrypted-adapter.js";
+import {
+  EncryptedEventStoreAdapter,
+  decryptEventPayload,
+  type KeyProvider,
+} from "../encrypted-adapter.js";
 import { InMemoryEventStore } from "@motebit/event-log";
-import { generateKey } from "@motebit/crypto";
+import { generateKey, encrypt } from "@motebit/crypto";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
 
@@ -24,6 +28,17 @@ function makeEvent(
     payload,
     version_clock: clock,
     tombstoned: false,
+  };
+}
+
+function makeKeyProvider(keys: Map<number, Uint8Array>, current: number): KeyProvider {
+  return {
+    getCurrentKey: () => {
+      const key = keys.get(current);
+      if (!key) throw new Error(`Current key version ${current} not in map`);
+      return { key, version: current };
+    },
+    getKey: (version: number) => keys.get(version) ?? null,
   };
 }
 
@@ -211,5 +226,264 @@ describe("decryptEventPayload", () => {
     const raw = await store.query({ motebit_id: MOTEBIT_ID });
 
     await expect(decryptEventPayload(raw[0]!, key2)).rejects.toThrow();
+  });
+
+  it("decrypts with KeyProvider", async () => {
+    const store = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const keyV2 = generateKey();
+    const keys = new Map([
+      [1, keyV1],
+      [2, keyV2],
+    ]);
+    const adapter = new EncryptedEventStoreAdapter({
+      inner: store,
+      keyProvider: makeKeyProvider(keys, 2),
+    });
+
+    await adapter.append(makeEvent(1, { secret: "v2-data" }));
+    const raw = await store.query({ motebit_id: MOTEBIT_ID });
+    const decrypted = await decryptEventPayload(raw[0]!, makeKeyProvider(keys, 2));
+    expect(decrypted.payload).toEqual({ secret: "v2-data" });
+  });
+
+  it("errors when key version not found via KeyProvider", async () => {
+    const store = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const keyV2 = generateKey();
+    const allKeys = new Map([
+      [1, keyV1],
+      [2, keyV2],
+    ]);
+    const adapter = new EncryptedEventStoreAdapter({
+      inner: store,
+      keyProvider: makeKeyProvider(allKeys, 2),
+    });
+    await adapter.append(makeEvent(1, { data: "test" }));
+
+    const raw = await store.query({ motebit_id: MOTEBIT_ID });
+    const v1Only = makeKeyProvider(new Map([[1, keyV1]]), 1);
+    await expect(decryptEventPayload(raw[0]!, v1Only)).rejects.toThrow(
+      "Encryption key not found for version 2",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Key versioning / rotation
+// ---------------------------------------------------------------------------
+
+describe("EncryptedEventStoreAdapter key versioning", () => {
+  it("encrypts and decrypts with KeyProvider v1", async () => {
+    const inner = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const adapter = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(new Map([[1, keyV1]]), 1),
+    });
+
+    const event = makeEvent(1, { greeting: "hello" });
+    await adapter.append(event);
+
+    const results = await adapter.query({ motebit_id: MOTEBIT_ID });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.payload).toEqual({ greeting: "hello" });
+  });
+
+  it("encrypts with v2, decrypts with v2", async () => {
+    const inner = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const keyV2 = generateKey();
+    const keys = new Map([
+      [1, keyV1],
+      [2, keyV2],
+    ]);
+    const adapter = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(keys, 2),
+    });
+
+    const event = makeEvent(1, { data: "v2-encrypted" });
+    await adapter.append(event);
+
+    const results = await adapter.query({ motebit_id: MOTEBIT_ID });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.payload).toEqual({ data: "v2-encrypted" });
+  });
+
+  it("encrypt with v2, attempt decrypt with only v1 → error", async () => {
+    const inner = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const keyV2 = generateKey();
+
+    // Write with v2
+    const allKeys = new Map([
+      [1, keyV1],
+      [2, keyV2],
+    ]);
+    const writer = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(allKeys, 2),
+    });
+    await writer.append(makeEvent(1, { secret: "data" }));
+
+    // Read with only v1
+    const reader = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(new Map([[1, keyV1]]), 1),
+    });
+    await expect(reader.query({ motebit_id: MOTEBIT_ID })).rejects.toThrow(
+      "Encryption key not found for version 2",
+    );
+  });
+
+  it("legacy data (no version field) decrypts with v1", async () => {
+    const inner = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const keyV2 = generateKey();
+
+    // Build a legacy encrypted payload (no 'v' field)
+    const event = makeEvent(1, { legacy: true });
+    const plaintext = new TextEncoder().encode(JSON.stringify(event.payload));
+    const encrypted = await encrypt(plaintext, keyV1);
+
+    const toBase64 = (arr: Uint8Array) => Buffer.from(arr).toString("base64");
+    const legacyData = JSON.stringify({
+      c: toBase64(encrypted.ciphertext),
+      n: toBase64(encrypted.nonce),
+      t: toBase64(encrypted.tag),
+      // no 'v' field — legacy format
+    });
+
+    await inner.append({
+      ...event,
+      payload: { _encrypted: true, _data: legacyData } as unknown as Record<string, unknown>,
+    });
+
+    // Decrypt with a provider that has both keys, current = v2
+    const adapter = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(
+        new Map([
+          [1, keyV1],
+          [2, keyV2],
+        ]),
+        2,
+      ),
+    });
+
+    const results = await adapter.query({ motebit_id: MOTEBIT_ID });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.payload).toEqual({ legacy: true });
+  });
+
+  it("key rotation: new data uses v2, old data still decrypts with v1", async () => {
+    const inner = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const keyV2 = generateKey();
+
+    // Phase 1: encrypt with v1
+    const adapterV1 = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(new Map([[1, keyV1]]), 1),
+    });
+    await adapterV1.append(makeEvent(1, { phase: "old" }));
+
+    // Phase 2: encrypt new data with v2 (has both keys)
+    const allKeys = new Map([
+      [1, keyV1],
+      [2, keyV2],
+    ]);
+    const adapterV2 = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(allKeys, 2),
+    });
+    await adapterV2.append(makeEvent(2, { phase: "new" }));
+
+    // Read all with v2 adapter
+    const results = await adapterV2.query({ motebit_id: MOTEBIT_ID });
+    expect(results).toHaveLength(2);
+    const old = results.find((e) => e.event_id === "event-1");
+    const newer = results.find((e) => e.event_id === "event-2");
+    expect(old!.payload).toEqual({ phase: "old" });
+    expect(newer!.payload).toEqual({ phase: "new" });
+  });
+
+  it("round-trip with three key versions", async () => {
+    const inner = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const keyV2 = generateKey();
+    const keyV3 = generateKey();
+    const allKeys = new Map([
+      [1, keyV1],
+      [2, keyV2],
+      [3, keyV3],
+    ]);
+
+    // Write events with different current key versions
+    for (const currentVersion of [1, 2, 3]) {
+      const adapter = new EncryptedEventStoreAdapter({
+        inner,
+        keyProvider: makeKeyProvider(allKeys, currentVersion),
+      });
+      await adapter.append(makeEvent(currentVersion, { version: currentVersion }));
+    }
+
+    // Read all with provider that has all keys
+    const reader = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(allKeys, 3),
+    });
+    const results = await reader.query({ motebit_id: MOTEBIT_ID });
+    expect(results).toHaveLength(3);
+
+    for (const v of [1, 2, 3]) {
+      const entry = results.find((e) => e.event_id === `event-${v}`);
+      expect(entry!.payload).toEqual({ version: v });
+    }
+  });
+
+  it("appendWithClock works with key versioning", async () => {
+    const inner = new InMemoryEventStore();
+    const keyV1 = generateKey();
+    const keyV2 = generateKey();
+    const keys = new Map([
+      [1, keyV1],
+      [2, keyV2],
+    ]);
+    const adapter = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(keys, 2),
+    });
+
+    const event = makeEvent(1, { via: "appendWithClock" });
+    const clock = await adapter.appendWithClock(event);
+    expect(clock).toBeGreaterThan(0);
+
+    const results = await adapter.query({ motebit_id: MOTEBIT_ID });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.payload).toEqual({ via: "appendWithClock" });
+  });
+
+  it("constructor throws without key or keyProvider", () => {
+    const inner = new InMemoryEventStore();
+    expect(() => new EncryptedEventStoreAdapter({ inner } as any)).toThrow(
+      "requires either 'key' or 'keyProvider'",
+    );
+  });
+
+  it("encrypted payload includes version tag in inner store", async () => {
+    const inner = new InMemoryEventStore();
+    const keyV2 = generateKey();
+    const adapter = new EncryptedEventStoreAdapter({
+      inner,
+      keyProvider: makeKeyProvider(new Map([[2, keyV2]]), 2),
+    });
+
+    await adapter.append(makeEvent(1, { check: "version" }));
+
+    const raw = await inner.query({ motebit_id: MOTEBIT_ID });
+    const data = JSON.parse(raw[0]!.payload._data as string);
+    expect(data.v).toBe(2);
   });
 });

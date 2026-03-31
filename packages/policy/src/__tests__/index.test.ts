@@ -221,6 +221,7 @@ describe("BudgetEnforcer", () => {
     expect(config.maxCallsPerTurn).toBe(10);
     expect(config.maxTurnDurationMs).toBe(120_000);
     expect(config.maxCostPerTurn).toBe(0);
+    expect(config.resetAfterSeconds).toBe(3600);
   });
 
   it("treats maxCostPerTurn 0 as unlimited (returns -1 sentinel)", () => {
@@ -245,6 +246,61 @@ describe("BudgetEnforcer", () => {
     });
     expect(result.remaining.calls).toBe(0);
     expect(result.remaining.timeMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("budgetReset is false when interval has not elapsed", () => {
+    const budget = new BudgetEnforcer({ resetAfterSeconds: 3600 });
+    const result = budget.check({
+      turnId: "t1",
+      toolCallCount: 0,
+      turnStartMs: Date.now(),
+      costAccumulated: 0,
+    });
+    expect(result.budgetReset).toBe(false);
+  });
+
+  it("budgetReset is true and allows when interval has elapsed", () => {
+    const budget = new BudgetEnforcer({ maxCallsPerTurn: 5, resetAfterSeconds: 1 });
+    // Simulate elapsed time by backdating lastResetAt
+    (budget as unknown as { lastResetAt: number }).lastResetAt = Date.now() - 2000;
+    const result = budget.check({
+      turnId: "t1",
+      toolCallCount: 10, // over budget — but reset should allow
+      turnStartMs: Date.now(),
+      costAccumulated: 0,
+    });
+    expect(result.budgetReset).toBe(true);
+    expect(result.allowed).toBe(true);
+    expect(result.remaining.calls).toBe(5); // full budget restored
+  });
+
+  it("budgetReset does not trigger again immediately after reset", () => {
+    const budget = new BudgetEnforcer({ maxCallsPerTurn: 5, resetAfterSeconds: 1 });
+    (budget as unknown as { lastResetAt: number }).lastResetAt = Date.now() - 2000;
+    // First check triggers reset
+    budget.check({ turnId: "t1", toolCallCount: 0, turnStartMs: Date.now(), costAccumulated: 0 });
+    // Second check should not reset
+    const result = budget.check({
+      turnId: "t2",
+      toolCallCount: 3,
+      turnStartMs: Date.now(),
+      costAccumulated: 0,
+    });
+    expect(result.budgetReset).toBe(false);
+    expect(result.remaining.calls).toBe(2);
+  });
+
+  it("resetAfterSeconds 0 disables periodic reset", () => {
+    const budget = new BudgetEnforcer({ maxCallsPerTurn: 5, resetAfterSeconds: 0 });
+    (budget as unknown as { lastResetAt: number }).lastResetAt = Date.now() - 999_999_000;
+    const result = budget.check({
+      turnId: "t1",
+      toolCallCount: 10,
+      turnStartMs: Date.now(),
+      costAccumulated: 0,
+    });
+    expect(result.budgetReset).toBe(false);
+    expect(result.allowed).toBe(false);
   });
 });
 

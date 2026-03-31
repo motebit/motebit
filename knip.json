@@ -1,0 +1,32 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreWorkspaces": ["apps/admin", "apps/desktop", "apps/mobile", "apps/spatial", "apps/docs"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.{ts,mjs}"]
+    },
+    "packages/*": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "apps/cli": {
+      "project": ["src/**/*.ts"]
+    },
+    "apps/web": {
+      "project": ["src/**/*.ts"]
+    },
+    "apps/identity": {
+      "project": ["src/**/*.{ts,tsx}"]
+    },
+    "services/*": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "services/proxy": {
+      "entry": ["src/app/**/*.{ts,tsx}", "src/validation.ts"],
+      "project": ["src/**/*.{ts,tsx}"]
+    }
+  },
+  "ignoreExportsUsedInFile": true,
+  "exclude": ["types", "enumMembers"]
+}

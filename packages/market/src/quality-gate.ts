@@ -15,7 +15,7 @@ export interface QualityScore {
   length_score: number;
   /** Tool usage score ∈ [0,1]. min(tools_used, 3) / 3. */
   tool_score: number;
-  /** Latency score ∈ [0,1]. Inverted: faster = higher. min(max(ms, 500), 5000) / 5000. */
+  /** Latency score ∈ [0,1]. Inverted: faster = higher. 1 - (clamp(ms,500,5000) - 500) / 4500. */
   latency_score: number;
   /** Composite quality ∈ [0,1]. Weighted sum of sub-scores. */
   quality: number;
@@ -59,8 +59,9 @@ export function scoreQuality(
 
   const length_score = Math.min(resultLength, 500) / 500;
   const tool_score = Math.min(toolsUsedCount, 3) / 3;
-  // Latency: clamp to [500, 5000], normalize. Higher latency_score = used more time (not penalized).
-  const latency_score = Math.min(Math.max(latencyMs, 500), 5000) / 5000;
+  // Latency: clamp to [500, 5000], invert so faster = higher score.
+  const clamped = Math.min(Math.max(latencyMs, 500), 5000);
+  const latency_score = 1 - (clamped - 500) / 4500;
 
   const quality =
     cfg.weight_length * length_score +

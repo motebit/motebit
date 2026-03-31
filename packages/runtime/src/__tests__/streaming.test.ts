@@ -1326,3 +1326,115 @@ describe("Delegation streaming events", () => {
     expect(startIdx).toBeLessThan(completeIdx);
   });
 });
+
+// === Streaming boundary sanitization (defense-in-depth) ===
+
+describe("streaming boundary sanitization", () => {
+  let runtime: MotebitRuntime;
+  let provider: StreamingProvider;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    provider = createMockProvider();
+    runtime = new MotebitRuntime(
+      { motebitId: "sanitize-stream-test", tickRateHz: 0 },
+      createAdapters(provider),
+    );
+  });
+
+  it("redacts secrets from tool results before they reach the stream", async () => {
+    const apiKey = "sk_abcdefghijklmnopqrstuvwxyz";
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "fetch_config", status: "calling" },
+        {
+          type: "tool_status",
+          name: "fetch_config",
+          status: "done",
+          result: `Config loaded. API key: ${apiKey}`,
+        },
+        { type: "result", result },
+      ),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("get config"));
+    const toolDone = chunks.find(
+      (c) => c.type === "tool_status" && "status" in c && c.status === "done",
+    ) as Extract<StreamChunk, { type: "tool_status" }>;
+
+    expect(toolDone).toBeDefined();
+    // The raw API key must not appear in the streamed result
+    expect(String(toolDone.result)).not.toContain(apiKey);
+    expect(String(toolDone.result)).toContain("[REDACTED:");
+  });
+
+  it("redacts password patterns from tool results before streaming", async () => {
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "read_env", status: "calling" },
+        {
+          type: "tool_status",
+          name: "read_env",
+          status: "done",
+          result: "password: hunter2_secret_value",
+        },
+        { type: "result", result },
+      ),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("read env"));
+    const toolDone = chunks.find(
+      (c) => c.type === "tool_status" && "status" in c && c.status === "done",
+    ) as Extract<StreamChunk, { type: "tool_status" }>;
+
+    expect(toolDone).toBeDefined();
+    expect(String(toolDone.result)).not.toContain("hunter2_secret_value");
+    expect(String(toolDone.result)).toContain("[REDACTED:");
+  });
+
+  it("redacts secrets from AI text chunks before streaming", async () => {
+    const apiKey = "sk_abcdefghijklmnopqrstuvwxyz";
+    const result = makeTurnResult(`Here is the key: ${apiKey}`);
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: `Here is the key: ${apiKey}` }, { type: "result", result }),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("show key"));
+    const textChunks = chunks.filter((c) => c.type === "text") as Array<
+      Extract<StreamChunk, { type: "text" }>
+    >;
+    const allText = textChunks.map((c) => c.text).join("");
+
+    // The raw API key must not appear in the streamed text
+    expect(allText).not.toContain(apiKey);
+    expect(allText).toContain("[REDACTED:");
+  });
+
+  it("passes clean content through without modification", async () => {
+    const cleanResult = "Search returned 42 results for weather in LA";
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "web_search", status: "calling" },
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "done",
+          result: cleanResult,
+        },
+        { type: "result", result },
+      ),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("search weather"));
+    const toolDone = chunks.find(
+      (c) => c.type === "tool_status" && "status" in c && c.status === "done",
+    ) as Extract<StreamChunk, { type: "tool_status" }>;
+
+    expect(toolDone).toBeDefined();
+    // Clean content passes through unchanged
+    expect(toolDone.result).toBe(cleanResult);
+  });
+});

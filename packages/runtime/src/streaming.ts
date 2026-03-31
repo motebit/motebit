@@ -86,6 +86,8 @@ export interface StreamingDeps {
   getApprovalStore(): ApprovalStoreAdapter | null;
   /** Approval timeout in ms. */
   approvalTimeoutMs: number;
+  /** Redact secrets from arbitrary text (defense-in-depth at the streaming boundary). */
+  redactText(text: string): string;
   /** Motebit ID. */
   motebitId: string;
 }
@@ -156,7 +158,7 @@ export class StreamingManager {
 
     const motebitToolServers = this.deps.getMotebitToolServers();
 
-    for await (const chunk of stream) {
+    for await (let chunk of stream) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
 
@@ -178,6 +180,18 @@ export class StreamingManager {
             yield { type: "delegation_start", server: motebitServer, tool: chunk.name };
           }
         } else if (chunk.status === "done") {
+          // Defense-in-depth: redact secrets from tool results at the streaming
+          // boundary BEFORE they reach the client. ai-core sanitizes upstream,
+          // but the streaming boundary is the last checkpoint before bits leave
+          // the droplet. A gap in ai-core must not leak secrets to the UI.
+          if (chunk.result != null) {
+            const resultText =
+              typeof chunk.result === "string" ? chunk.result : JSON.stringify(chunk.result);
+            const redacted = this.deps.redactText(resultText);
+            if (redacted !== resultText) {
+              chunk = { ...chunk, result: redacted };
+            }
+          }
           this.deps.pushStateUpdate({ processing: 0.6 });
           this.deps.logToolUsed(chunk.name, chunk.result);
           // Emit delegation_complete for motebit MCP tools
@@ -245,9 +259,12 @@ export class StreamingManager {
       if (chunk.type === "text") {
         // trimStart: tags before text leave orphaned newlines
         const clean = stripDisplayTags(accumulated).clean.trimStart();
-        const delta = clean.slice(yieldedCleanLength);
+        let delta = clean.slice(yieldedCleanLength);
         if (delta) {
-          yieldedCleanLength += delta.length;
+          // Defense-in-depth: redact secrets from AI text at the streaming
+          // boundary. Pattern-based redaction works on partial text fragments.
+          delta = this.deps.redactText(delta);
+          yieldedCleanLength += clean.slice(yieldedCleanLength).length;
           yield { type: "text" as const, text: delta };
         }
       } else {

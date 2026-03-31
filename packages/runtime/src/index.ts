@@ -717,6 +717,12 @@ export class MotebitRuntime {
       getLoopDeps: () => this.loopDeps,
       getLatestCues: () => this.latestCues,
       getApprovalStore: () => this.approvalStore,
+      redactText: (text) => {
+        if (typeof this.policy.redact === "function") {
+          return this.policy.redact(text);
+        }
+        return text;
+      },
       approvalTimeoutMs: config.approvalTimeoutMs ?? 600_000,
       motebitId: this.motebitId,
     });
