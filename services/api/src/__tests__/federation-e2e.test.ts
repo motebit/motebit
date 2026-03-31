@@ -298,10 +298,9 @@ describe("Federation E2E", () => {
     installFetchInterceptor(relayA, relayB);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
-    relayA.close();
-    relayB.close();
+    await Promise.all([relayA.close(), relayB.close()]);
   });
 
   // --- Phase 1: Relay Identity ---

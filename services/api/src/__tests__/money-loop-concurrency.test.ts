@@ -96,8 +96,8 @@ describe("Money Loop Concurrency", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("10 concurrent deposits to same agent — final balance is exactly $10", async () => {

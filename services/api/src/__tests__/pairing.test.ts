@@ -67,8 +67,8 @@ describe("Pairing Protocol", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   // --- Initiate ---

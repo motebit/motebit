@@ -48,8 +48,8 @@ describe("A2A Protocol Bridge", () => {
     await registerAgent(relay, MOTEBIT_ID, agentPublicKeyHex);
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   // --- /.well-known/agent.json ---

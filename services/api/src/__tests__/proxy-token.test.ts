@@ -17,8 +17,8 @@ beforeEach(async () => {
   relay = await createTestRelay();
 });
 
-afterEach(() => {
-  relay.close();
+afterEach(async () => {
+  await relay.close();
 });
 
 async function createIdentity(): Promise<string> {

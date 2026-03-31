@@ -87,8 +87,8 @@ describe("Trust Flywheel E2E", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("settlement compounds into trust: delegate → settle → trust + credential → repeat", async () => {

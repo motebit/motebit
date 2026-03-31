@@ -46,7 +46,7 @@ describe("processStripeCheckout", () => {
     `);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     moteDb.db.close();
   });
 
@@ -131,8 +131,8 @@ describe("Stripe Checkout routes", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("POST /checkout returns 501 when Stripe is not configured", async () => {

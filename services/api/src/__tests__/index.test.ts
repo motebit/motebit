@@ -37,8 +37,8 @@ describe("Sync Relay", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   // --- Health ---
@@ -415,8 +415,8 @@ describe("Sync Relay — device auth", () => {
     });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   async function getIdentityMotebitId(): Promise<string> {
@@ -484,8 +484,8 @@ describe("Sync Relay — signed token auth", () => {
     relay = await createTestRelay({ enableDeviceAuth: true });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   async function createIdentityAndDevice(
@@ -712,8 +712,8 @@ describe("Sync Relay — admin API endpoints", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   // --- State ---
@@ -927,8 +927,8 @@ describe("Sync Relay — agent protocol", () => {
     relay = await createTestRelay({ enableDeviceAuth: false, issueCredentials: true });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("POST /agent/:id/task returns 429 when per-submitter limit exceeded", async () => {
@@ -970,7 +970,7 @@ describe("Sync Relay — agent protocol", () => {
     const body = (await blocked.json()) as { error: string };
     expect(body.error).toContain("Too many pending tasks");
 
-    tinyRelay.close();
+    await tinyRelay.close();
   });
 
   it("POST /agent/:id/task submits a task and returns 201", async () => {
@@ -1921,8 +1921,8 @@ describe("Sync Relay — agent discovery registry", () => {
     relay = await createTestRelay({ enableDeviceAuth: true });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   async function setupIdentityAndToken(): Promise<{
@@ -2207,8 +2207,8 @@ describe("Sync Relay — execution ledger", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("POST ledger → GET ledger round-trip", async () => {
@@ -2308,8 +2308,8 @@ describe("Sync Relay — credential presentation", () => {
     relay = await createTestRelay({ enableDeviceAuth: false, issueCredentials: true });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("GET presentation bundles credentials from verified receipts", async () => {
@@ -2416,8 +2416,8 @@ describe("Rate Limiting", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("requests within limit succeed with rate limit headers", async () => {
@@ -2607,8 +2607,8 @@ describe("Sync Relay — bootstrap endpoint", () => {
     relay = await createTestRelay({ issueCredentials: true });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("POST /api/v1/agents/bootstrap registers a new agent without master token", async () => {
@@ -2765,8 +2765,8 @@ describe("POST /api/v1/agents/:motebitId/rotate-key", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("accepts a valid key succession record", async () => {

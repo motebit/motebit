@@ -27,8 +27,8 @@ describe("Collaborative Plan Proposals E2E", () => {
     });
   });
 
-  afterAll(() => {
-    relay.close();
+  afterAll(async () => {
+    await relay.close();
   });
 
   function authHeaders() {

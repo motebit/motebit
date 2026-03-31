@@ -132,9 +132,9 @@ describe("Delegation E2E", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
-    relay.close();
+    await relay.close();
   });
 
   it("full delegation: PlanEngine → Relay → Worker → Receipt → Plan completion", async () => {

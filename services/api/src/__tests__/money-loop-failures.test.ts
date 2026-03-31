@@ -131,8 +131,8 @@ describe("Money Loop Failure Injection", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("worker disappears mid-task (no receipt) — allocation stays locked, stale cleanup returns funds", async () => {

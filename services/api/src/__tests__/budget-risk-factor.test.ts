@@ -157,8 +157,8 @@ describe("Budget Pre-Allocation with Risk Factor", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("locks 1.2× the gross price when balance is sufficient", async () => {

@@ -23,8 +23,8 @@ describe("Rate limit headers", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("includes X-RateLimit-Limit, Remaining, and Reset on normal responses", async () => {

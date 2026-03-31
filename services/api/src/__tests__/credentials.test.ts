@@ -37,8 +37,8 @@ async function createIdentityAndDevice(
 describe("Credentials — Reputation Issuance", () => {
   let relay: SyncRelay;
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("returns 403 when relay credential issuance is disabled", async () => {
@@ -75,8 +75,8 @@ describe("Credentials — Verify", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("verifies a valid credential", async () => {
@@ -124,8 +124,8 @@ describe("Credentials — List", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("returns empty array when no credentials exist", async () => {
@@ -151,8 +151,8 @@ describe("Credentials — Presentation", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("returns 404 when no credentials exist for agent", async () => {

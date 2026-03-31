@@ -51,8 +51,8 @@ describe("Conversation Sync Endpoints", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   // --- Push Conversations ---

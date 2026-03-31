@@ -170,7 +170,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
     }
 
     c.set("callerMotebitId" as never, claims.mid as never);
-    enrichRequestContext({ motebitId: claims.mid as string });
+    enrichRequestContext({ motebitId: claims.mid });
     await next();
   };
 }

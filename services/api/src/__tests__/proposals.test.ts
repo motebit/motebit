@@ -38,8 +38,8 @@ describe("Proposals — CRUD", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("POST creates a proposal and GET retrieves it", async () => {
@@ -146,8 +146,8 @@ describe("Proposals — Respond", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("accept from all participants → proposal accepted", async () => {
@@ -289,8 +289,8 @@ describe("Proposals — Withdraw", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("initiator can withdraw a pending proposal", async () => {
@@ -373,8 +373,8 @@ describe("Proposals — Step Results", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("participant can post step result", async () => {

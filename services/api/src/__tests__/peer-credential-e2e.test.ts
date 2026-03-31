@@ -137,7 +137,7 @@ describe("Peer Credential E2E — Delegation Loop", () => {
     relayDeviceIdB = ((await resB.json()) as { device_id: string }).device_id;
   });
 
-  afterAll(() => relay.close());
+  afterAll(async () => await relay.close());
 
   it("relay does NOT issue credential when issueCredentials=false", async () => {
     // Submit task with task:submit audience token
@@ -384,9 +384,8 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
     keypairBob = await generateKeypair();
   });
 
-  afterAll(() => {
-    relayA.close();
-    relayB.close();
+  afterAll(async () => {
+    await Promise.all([relayA.close(), relayB.close()]);
   });
 
   it("credential earned via relay A verifies on relay B", async () => {
@@ -656,6 +655,6 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
       }
     }
 
-    routingRelay.close();
+    await routingRelay.close();
   });
 });

@@ -52,9 +52,9 @@ describe("POST /api/v1/agents/:motebitId/debit", () => {
     motebitId = await createIdentity(relay);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     delete process.env.RELAY_PROXY_SECRET;
-    relay.close();
+    await relay.close();
   });
 
   // ── Auth ────────────────────────────────────────────────────────────────

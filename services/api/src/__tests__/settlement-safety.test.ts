@@ -140,7 +140,7 @@ describe("Settlement Retry Exhaustion Refund", () => {
     db = moteDb.db;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
   });
 
@@ -242,8 +242,8 @@ describe("Recursive Multi-Hop Settlement", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("settles three-level delegation chain (A delegates to B, B delegates to C, C delegates to D)", async () => {

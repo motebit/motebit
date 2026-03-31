@@ -18,8 +18,8 @@ function freezeBody(reason = "test freeze") {
 describe("Emergency Freeze", () => {
   let relay: SyncRelay;
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("freeze blocks write operations with 503", async () => {

@@ -35,8 +35,8 @@ describe("Admin — Audit", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("GET /api/v1/audit/:motebitId returns empty entries", async () => {
@@ -69,8 +69,8 @@ describe("Admin — Gradient", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("GET /api/v1/gradient/:motebitId returns null current when no snapshots", async () => {
@@ -109,8 +109,8 @@ describe("Admin — Memory Delete", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("DELETE /api/v1/memory/:motebitId/:nodeId returns 404 for nonexistent node", async () => {
@@ -134,8 +134,8 @@ describe("Admin — Plans", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("GET /api/v1/plans/:motebitId returns empty when no plans", async () => {
@@ -170,8 +170,8 @@ describe("Admin — Succession", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("GET /api/v1/agents/:motebitId/succession returns empty chain", async () => {

@@ -243,7 +243,7 @@ export function registerProxyTokenRoutes(
             .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
             .get(motebitId);
 
-          if (existingRow) {
+          if (existingRow != null) {
             db.prepare(
               `UPDATE relay_subscriptions
                SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
@@ -261,7 +261,7 @@ export function registerProxyTokenRoutes(
           const existingTxn = db
             .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
             .get(refId);
-          if (!existingTxn) {
+          if (existingTxn == null) {
             getOrCreateAccount(db, motebitId);
             creditAccount(
               db,
@@ -418,7 +418,7 @@ export function registerProxyTokenRoutes(
             .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
             .get(motebitId);
 
-          if (existingRow) {
+          if (existingRow != null) {
             db.prepare(
               `UPDATE relay_subscriptions
                SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
@@ -469,7 +469,7 @@ export function registerProxyTokenRoutes(
           const existingTxn = db
             .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
             .get(refId);
-          if (existingTxn) break; // Already credited for this invoice
+          if (existingTxn != null) break; // Already credited for this invoice
 
           creditAccount(
             db,

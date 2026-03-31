@@ -803,7 +803,7 @@ if (process.env.VITEST != null) {
   const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 30_000);
   let forceOnNextSignal = false;
 
-  function gracefulShutdown(signal: string): void {
+  const gracefulShutdown = (signal: string): void => {
     if (forceOnNextSignal) {
       bootLogger.warn("relay.shutdown.forced", { signal });
       process.exit(1);
@@ -819,17 +819,18 @@ if (process.env.VITEST != null) {
     }, SHUTDOWN_TIMEOUT_MS);
     // Unref so this timer alone doesn't keep the process alive
     if (typeof forceTimer === "object" && "unref" in forceTimer) {
-      (forceTimer as NodeJS.Timeout).unref();
+      forceTimer.unref();
     }
 
     // Stop accepting new connections, wait for in-flight requests to finish
     server.close(() => {
       bootLogger.info("relay.shutdown.server_closed");
-      relay.close();
-      bootLogger.info("relay.shutdown.complete");
-      process.exit(0);
+      void relay.close().then(() => {
+        bootLogger.info("relay.shutdown.complete");
+        process.exit(0);
+      });
     });
-  }
+  };
 
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   process.on("SIGINT", () => gracefulShutdown("SIGINT"));

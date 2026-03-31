@@ -397,12 +397,12 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     for (const vc of body.credentials) {
       // Basic shape check
       if (
-        !vc ||
+        vc == null ||
         !Array.isArray(vc["@context"]) ||
         !Array.isArray(vc.type) ||
-        !vc.issuer ||
-        !vc.credentialSubject ||
-        !vc.proof
+        vc.issuer == null ||
+        vc.credentialSubject == null ||
+        vc.proof == null
       ) {
         rejected++;
         errors.push("invalid credential shape");
@@ -434,7 +434,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       const revokedRow = db
         .prepare("SELECT 1 FROM relay_revoked_credentials WHERE credential_id = ?")
         .get(credId);
-      if (revokedRow) {
+      if (revokedRow != null) {
         rejected++;
         errors.push("credential is revoked");
         continue;

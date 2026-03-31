@@ -144,8 +144,8 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     pubKeyHexB = bytesToHex(keypairB.publicKey);
   });
 
-  afterAll(() => {
-    relay.close();
+  afterAll(async () => {
+    await relay.close();
   });
 
   // =========================================================================
@@ -963,8 +963,8 @@ describe("x402 Payment Gate", () => {
     relayDeviceIdB = bodyB.device_id;
   });
 
-  afterAll(() => {
-    relay.close();
+  afterAll(async () => {
+    await relay.close();
   });
 
   it("priced agent with pay_to_address returns 402 to unpaid caller", async () => {

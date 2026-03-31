@@ -309,7 +309,7 @@ describe("Federation Chaos: Re-Registration Cooldown", () => {
     });
     expect(res2.status).toBe(409);
 
-    relay.close();
+    await relay.close();
   });
 
   it("removed peer with recent heartbeat is blocked by cooldown at DB level", async () => {

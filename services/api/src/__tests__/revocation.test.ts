@@ -58,8 +58,8 @@ describe("Token Blacklist", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("rejects a token whose jti is blacklisted", async () => {
@@ -138,8 +138,8 @@ describe("Credential Revocation", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("revokes a credential and returns revoked status", async () => {
@@ -211,8 +211,8 @@ describe("Identity Revocation", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("revoked agent has all tokens rejected", async () => {
@@ -265,8 +265,8 @@ describe("Blacklist Cleanup", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("expired blacklist entries are cleaned up at startup", async () => {

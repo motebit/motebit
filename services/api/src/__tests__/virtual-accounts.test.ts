@@ -123,8 +123,8 @@ describe("Virtual Accounts", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("deposit creates account and credits balance", async () => {

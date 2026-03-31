@@ -105,8 +105,8 @@ describe("Execution Ledger Reconstruction — GET /api/v1/execution/:motebitId/:
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   // --- 1. Full lifecycle reconstruction ---

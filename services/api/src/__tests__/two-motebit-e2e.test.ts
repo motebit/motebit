@@ -181,9 +181,9 @@ describe("Two-Motebit Delegation E2E", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
-    relay.close();
+    await relay.close();
   });
 
   it("Alice delegates to Bob, Bob signs receipt, relay verifies and issues credential", async () => {

@@ -60,8 +60,8 @@ describe("idempotency (unit)", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("first request returns proceed", () => {
@@ -158,8 +158,8 @@ describe("idempotency (HTTP endpoints)", () => {
     motebitId = await createAgent(relay);
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("deposit: missing Idempotency-Key returns 400", async () => {

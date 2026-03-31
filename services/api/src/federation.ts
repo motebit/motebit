@@ -989,7 +989,12 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     }
     // Cooldown: removed peers must wait 5 minutes before re-peering.
     // Prevents rapid removed→pending oscillation when the root cause persists.
-    if (existing && existing.state === "removed" && existing.last_heartbeat_at) {
+    if (
+      existing &&
+      existing.state === "removed" &&
+      existing.last_heartbeat_at != null &&
+      existing.last_heartbeat_at !== 0
+    ) {
       const cooldownMs = 5 * 60 * 1000;
       const elapsed = Date.now() - existing.last_heartbeat_at;
       if (elapsed < cooldownMs) {

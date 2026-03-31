@@ -48,8 +48,8 @@ describe("Graph Queries — Trust Closure", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("returns empty closure for agent with no trust relationships", async () => {
@@ -76,8 +76,8 @@ describe("Graph Queries — Path To", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("returns 404 when no trusted path exists", async () => {
@@ -100,8 +100,8 @@ describe("Graph Queries — Full Graph", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("returns graph structure with nodes and edges", async () => {
@@ -134,8 +134,8 @@ describe("Graph Queries — Routing Explanation", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("returns scores structure", async () => {

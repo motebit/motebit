@@ -36,8 +36,8 @@ describe("Money Loop E2E", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("complete money loop: deposit → delegate → receipt → settle → earn → withdraw → reconcile", async () => {

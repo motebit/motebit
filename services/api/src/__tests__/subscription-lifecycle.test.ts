@@ -16,8 +16,8 @@ beforeEach(async () => {
   relay = await createTestRelay();
 });
 
-afterEach(() => {
-  relay.close();
+afterEach(async () => {
+  await relay.close();
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────

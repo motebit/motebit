@@ -141,10 +141,9 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
       .prepare(
         `UPDATE relay_proposal_participants SET response = ?, counter_steps = ?, responded_at = ?, signature = ? WHERE proposal_id = ? AND motebit_id = ?`,
       )
-      // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
       .run(
         body.response,
-        body.counter_steps ? JSON.stringify(body.counter_steps) : null,
+        body.counter_steps != null ? JSON.stringify(body.counter_steps) : null,
         now,
         body.signature ?? null,
         proposalId,
@@ -291,14 +290,13 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
       .prepare(
         `INSERT OR REPLACE INTO relay_collaborative_step_results (proposal_id, step_id, motebit_id, status, result_summary, receipt, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
       .run(
         proposalId,
         body.step_id,
         motebitId,
         body.status,
         body.result_summary ?? null,
-        body.receipt ? JSON.stringify(body.receipt) : null,
+        body.receipt != null ? JSON.stringify(body.receipt) : null,
         now,
       );
 

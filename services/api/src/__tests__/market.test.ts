@@ -53,8 +53,8 @@ describe("Market — Service Listings", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("POST listing + GET listing round-trip", async () => {
@@ -145,8 +145,8 @@ describe("Market — Revenue", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("GET /api/v1/market/revenue returns zeroes when no settlements", async () => {
@@ -187,8 +187,8 @@ describe("Market — Candidates", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("GET /api/v1/market/candidates returns empty when no agents registered", async () => {
@@ -235,8 +235,8 @@ describe("Market — Settlements", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("GET /agent/:id/settlements returns empty when no settlements", async () => {
@@ -268,8 +268,8 @@ describe("Market — Verify Receipt", () => {
     relay = await createTestRelay();
   });
 
-  afterEach(() => {
-    relay.close();
+  afterEach(async () => {
+    await relay.close();
   });
 
   it("POST /agent/:id/verify-receipt validates a correctly signed receipt", async () => {
