@@ -1222,15 +1222,7 @@ describe("verify — guardian recovery succession", () => {
       1000,
     );
 
-    // Use buildYamlWithSuccession (no guardian field)
-    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [
-      {
-        ...recoveryRecord,
-        old_key_signature: "", // not present in recovery, but buildYaml needs it
-      },
-    ]);
-
-    // Actually, we need to hand-build YAML with recovery fields but no guardian
+    // Hand-build YAML with recovery fields but no guardian
     const lines = [
       `spec: "motebit/identity@1.0"`,
       `motebit_id: "01234567-89ab-cdef-0123-456789abcdef"`,
