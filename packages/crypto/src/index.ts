@@ -1105,6 +1105,72 @@ export async function verifyKeySuccession(
   }
 }
 
+// === Guardian Revocation (§3.3.2) ===
+
+/**
+ * Sign a guardian revocation payload — requires BOTH identity and guardian keys.
+ * Neither party can unilaterally dissolve the custody relationship.
+ * Returns the dual-signed revocation proof.
+ */
+export async function signGuardianRevocation(
+  identityPrivateKey: Uint8Array,
+  guardianPrivateKey: Uint8Array,
+  timestamp?: number,
+): Promise<{
+  payload: string;
+  identity_signature: string;
+  guardian_signature: string;
+  timestamp: number;
+}> {
+  const ts = timestamp ?? Date.now();
+  const payload = canonicalJson({ action: "guardian_revoked", timestamp: ts });
+  const message = new TextEncoder().encode(payload);
+
+  const identitySig = await sign(message, identityPrivateKey);
+  const guardianSig = await sign(message, guardianPrivateKey);
+
+  return {
+    payload,
+    identity_signature: Array.from(identitySig)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(""),
+    guardian_signature: Array.from(guardianSig)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(""),
+    timestamp: ts,
+  };
+}
+
+/**
+ * Verify a guardian revocation proof — both signatures must be valid.
+ */
+export async function verifyGuardianRevocation(
+  revocation: {
+    identity_signature: string;
+    guardian_signature: string;
+    timestamp: number;
+  },
+  identityPublicKeyHex: string,
+  guardianPublicKeyHex: string,
+): Promise<boolean> {
+  const payload = canonicalJson({ action: "guardian_revoked", timestamp: revocation.timestamp });
+  const message = new TextEncoder().encode(payload);
+
+  try {
+    const identityPub = hexToBytes(identityPublicKeyHex);
+    const guardianPub = hexToBytes(guardianPublicKeyHex);
+    const identitySig = hexToBytes(revocation.identity_signature);
+    const guardianSig = hexToBytes(revocation.guardian_signature);
+
+    const identityValid = await verify(identitySig, message, identityPub);
+    const guardianValid = await verify(guardianSig, message, guardianPub);
+
+    return identityValid && guardianValid;
+  } catch {
+    return false;
+  }
+}
+
 // === Succession Chain Verification ===
 
 import type { SuccessionChainResult } from "@motebit/protocol";

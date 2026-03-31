@@ -21,6 +21,8 @@ import {
   signKeySuccession,
   verifyKeySuccession,
   signGuardianRecoverySuccession,
+  signGuardianRevocation,
+  verifyGuardianRevocation,
   verifySuccessionChain,
   didKeyToPublicKey,
   type SignedTokenPayload,
@@ -1206,6 +1208,96 @@ describe("verifySuccessionChain with guardian recovery", () => {
     const pubHex = bytesToHex(kp1.publicKey);
     const valid = await verifyKeySuccession(record, pubHex);
     // Cryptographically valid — policy layer rejects this, not crypto
+    expect(valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guardian Revocation (§3.3.2) — dual authorization
+// ---------------------------------------------------------------------------
+
+describe("signGuardianRevocation + verifyGuardianRevocation", () => {
+  it("creates and verifies a dual-signed revocation", async () => {
+    const identityKp = await generateKeypair();
+    const guardianKp = await generateKeypair();
+
+    const revocation = await signGuardianRevocation(identityKp.privateKey, guardianKp.privateKey);
+
+    expect(revocation.identity_signature).toHaveLength(128);
+    expect(revocation.guardian_signature).toHaveLength(128);
+    expect(revocation.timestamp).toBeTypeOf("number");
+
+    const valid = await verifyGuardianRevocation(
+      revocation,
+      bytesToHex(identityKp.publicKey),
+      bytesToHex(guardianKp.publicKey),
+    );
+    expect(valid).toBe(true);
+  });
+
+  it("rejects with wrong identity key", async () => {
+    const identityKp = await generateKeypair();
+    const guardianKp = await generateKeypair();
+    const wrongKp = await generateKeypair();
+
+    const revocation = await signGuardianRevocation(identityKp.privateKey, guardianKp.privateKey);
+
+    const valid = await verifyGuardianRevocation(
+      revocation,
+      bytesToHex(wrongKp.publicKey), // wrong identity key
+      bytesToHex(guardianKp.publicKey),
+    );
+    expect(valid).toBe(false);
+  });
+
+  it("rejects with wrong guardian key", async () => {
+    const identityKp = await generateKeypair();
+    const guardianKp = await generateKeypair();
+    const wrongKp = await generateKeypair();
+
+    const revocation = await signGuardianRevocation(identityKp.privateKey, guardianKp.privateKey);
+
+    const valid = await verifyGuardianRevocation(
+      revocation,
+      bytesToHex(identityKp.publicKey),
+      bytesToHex(wrongKp.publicKey), // wrong guardian key
+    );
+    expect(valid).toBe(false);
+  });
+
+  it("rejects tampered timestamp", async () => {
+    const identityKp = await generateKeypair();
+    const guardianKp = await generateKeypair();
+
+    const revocation = await signGuardianRevocation(identityKp.privateKey, guardianKp.privateKey);
+
+    const tampered = { ...revocation, timestamp: revocation.timestamp + 1 };
+    const valid = await verifyGuardianRevocation(
+      tampered,
+      bytesToHex(identityKp.publicKey),
+      bytesToHex(guardianKp.publicKey),
+    );
+    expect(valid).toBe(false);
+  });
+
+  it("uses provided timestamp", async () => {
+    const identityKp = await generateKeypair();
+    const guardianKp = await generateKeypair();
+    const ts = 1700000000000;
+
+    const revocation = await signGuardianRevocation(
+      identityKp.privateKey,
+      guardianKp.privateKey,
+      ts,
+    );
+
+    expect(revocation.timestamp).toBe(ts);
+
+    const valid = await verifyGuardianRevocation(
+      revocation,
+      bytesToHex(identityKp.publicKey),
+      bytesToHex(guardianKp.publicKey),
+    );
     expect(valid).toBe(true);
   });
 });
