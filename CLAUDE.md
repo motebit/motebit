@@ -30,6 +30,8 @@ apps/
   web/         Browser entry point. IndexedDB identity, free proxy, zero install
   admin/       React + Vite dashboard. 14-tab real-time monitoring
   spatial/     AR/VR. 6DOF orbital dynamics, WebXR, gesture recognition
+  docs/        Next.js documentation portal (docs.motebit.com)
+  identity/    Identity management app. Vite, TypeScript
 
 packages/
   protocol/           Network protocol types (Layer 0, MIT, 0 deps)
@@ -59,6 +61,7 @@ packages/
   planner/            PlanEngine: goal decomposition, plan-level reflection
   reflection/         Adaptive intelligence: "What should I change?" LLM reflection engine (Layer 4, BSL)
   voice/              VAD, STT, TTS adapters
+  runtime/            Agent orchestrator: agentic turn loop, delegation, execution ledger (BSL)
   market/             Budget, settlement, graph-based routing, credential weighting
   github-action/      GitHub Action for identity verification
 
@@ -117,7 +120,9 @@ These are not suggestions. They are the architectural invariants that make the m
 
 **PBKDF2 iterations.** 600K for user-provided passphrases (CLI identity, relay key encryption). 100K for operator PIN (rate-limiting is primary defense, PIN entry is frequent).
 
-**Signed succession.** Key rotation without centralized revocation. Old keypair signs tombstone declaring new keypair. Both keys sign canonical payload. Chains verify end-to-end.
+**Signed succession.** Key rotation without centralized revocation. Old keypair signs tombstone declaring new keypair. Both keys sign canonical payload. Chains verify end-to-end. Succession records must be within 15-minute freshness window (±1 min clock skew) at the relay.
+
+**Guardian attestation.** Organizational custody via Ed25519 guardian key. Guardian key MUST NOT equal identity key (enforced at generation and registration). Registration with `guardian_public_key` requires `guardian_attestation` — a signature by the guardian's private key over `{action:"guardian_attestation",guardian_public_key,motebit_id}`. Prevents fake organizational claims. Same guardian key = organizational trust baseline (0.5) in semiring routing.
 
 **Federation circuit breaker.** Per-peer forward tracking with automatic suspension at 50% failure rate over 6+ samples. Heartbeat handles liveness (3 missed → suspend, 5 → remove). Circuit breaker handles forward-path health.
 
@@ -149,7 +154,7 @@ motebit withdraw <amount>              # Request withdrawal
 
 # Earn side
 motebit run --price 0.50               # Accept tasks at $0.50/task (daemon mode)
-motebit serve --price 0.50             # Accept tasks at $0.50/task (MCP server mode)
+motebit serve                          # Accept tasks (MCP server mode)
 ```
 
 **Money model.** All amounts stored as integer micro-units (1 USD = 1,000,000 units). API boundary converts: `toMicro(dollars)` on ingest, `fromMicro(micro)` on egress. Zero floating-point arithmetic in the money path.

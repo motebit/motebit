@@ -67,12 +67,13 @@ Cryptographic identity. The public half of the keypair that signs this file.
 
 Organizational custody and key recovery. When present, the guardian key can perform succession on behalf of the primary key — enabling identity recovery after key compromise without centralized revocation.
 
-| Field             | Type   | Required | Description                                                                               |
-| ----------------- | ------ | -------- | ----------------------------------------------------------------------------------------- |
-| `public_key`      | string | yes      | Hex-encoded Ed25519 public key of the guardian (64 hex characters = 32 bytes).            |
-| `organization`    | string | no       | Human-readable organization name (e.g., `"Acme Corp"`).                                   |
-| `organization_id` | string | no       | Machine-readable organization identifier (opaque string — format is application-defined). |
-| `established_at`  | string | yes      | ISO 8601 timestamp when guardianship was established.                                     |
+| Field             | Type   | Required | Description                                                                                                                                                                                                                                                              |
+| ----------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `public_key`      | string | yes      | Hex-encoded Ed25519 public key of the guardian (64 hex characters = 32 bytes).                                                                                                                                                                                           |
+| `organization`    | string | no       | Human-readable organization name (e.g., `"Acme Corp"`).                                                                                                                                                                                                                  |
+| `organization_id` | string | no       | Machine-readable organization identifier (opaque string — format is application-defined).                                                                                                                                                                                |
+| `established_at`  | string | yes      | ISO 8601 timestamp when guardianship was established.                                                                                                                                                                                                                    |
+| `attestation`     | string | no       | Hex-encoded Ed25519 signature by the guardian key over canonical JSON of `{"action":"guardian_attestation","guardian_public_key":"...","motebit_id":"..."}`. Proves the guardian authorized custody of this agent. Required by relays for organizational trust baseline. |
 
 **Sovereign agents** (individuals) omit the `guardian` field. Their identity has no recovery path beyond key succession — this is the deliberate tradeoff for full sovereignty.
 
