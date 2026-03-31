@@ -145,7 +145,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     if (capabilityFilter) {
       listingRows = db
         .prepare(
-          `SELECT l.*, r.public_key, r.expires_at
+          `SELECT l.*, r.public_key, r.expires_at, r.guardian_public_key
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
            WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
@@ -155,7 +155,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     } else {
       listingRows = db
         .prepare(
-          `SELECT l.*, r.public_key, r.expires_at
+          `SELECT l.*, r.public_key, r.expires_at, r.guardian_public_key
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
            LIMIT ?`,
@@ -291,6 +291,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         latency_stats: latencyStats,
         is_online: isOnline,
         credential_reputation,
+        guardian_public_key: (row.guardian_public_key as string | null) ?? undefined,
       } satisfies CandidateProfile;
     });
 

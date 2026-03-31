@@ -1516,6 +1516,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   ? weightedSumComposite
                   : undefined;
 
+          // Look up caller's guardian key for organizational trust baseline
+          const callerGuardianRow = moteDb.db
+            .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
+            .get(callerMotebitId ?? motebitId) as
+            | { guardian_public_key: string | null }
+            | undefined;
+
           const ranked = explainedRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),
             allProfiles,
@@ -1528,6 +1535,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               explorationWeight,
               peerEdges: allPeerEdges,
               compositeFunction,
+              callerGuardianPublicKey: callerGuardianRow?.guardian_public_key ?? undefined,
             },
           );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);

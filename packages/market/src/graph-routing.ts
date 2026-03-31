@@ -117,9 +117,18 @@ export interface RoutingConfig {
   peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>;
   maxCandidates?: number;
   explorationWeight?: number;
+  /** Caller's guardian public key (hex). Same guardian = organizational trust baseline. */
+  callerGuardianPublicKey?: string;
 }
 
 // ── Graph Construction ──────────────────────────────────────────────
+
+/**
+ * Organizational trust baseline when two agents share the same guardian key.
+ * Same guardian = same organizational custody = moderate baseline trust.
+ * This is a floor, not an override — earned trust above this is preserved.
+ */
+const ORGANIZATIONAL_TRUST_BASELINE = 0.5;
 
 /**
  * Build a semiring computation graph from candidate profiles.
@@ -130,11 +139,15 @@ export interface RoutingConfig {
  * This is the bridge between the existing market scoring model and
  * the semiring algebra. The graph enables multi-hop trust composition,
  * multi-objective optimization, and provenance tracking.
+ *
+ * When callerGuardianPublicKey is provided, candidates with the same guardian
+ * key receive an organizational trust baseline (same org = higher starting trust).
  */
 export function buildRoutingGraph(
   selfId: MotebitId,
   candidates: CandidateProfile[],
   peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>,
+  callerGuardianPublicKey?: string,
 ): WeightedDigraph<RouteWeight> {
   const graph = new WeightedDigraph(RouteWeightSemiring);
   graph.addNode(selfId);
@@ -145,9 +158,20 @@ export function buildRoutingGraph(
     // Skip offline agents
     if (!candidate.is_online) continue;
 
-    const staticTrust =
+    let staticTrust =
       candidate.chain_trust ??
       (candidate.trust_record ? trustLevelToScore(candidate.trust_record.trust_level) : 0.1);
+
+    // Organizational attestation: same guardian key = same org custody.
+    // Use org baseline as a floor — don't downgrade earned trust.
+    if (
+      callerGuardianPublicKey &&
+      candidate.guardian_public_key &&
+      callerGuardianPublicKey === candidate.guardian_public_key
+    ) {
+      staticTrust = Math.max(staticTrust, ORGANIZATIONAL_TRUST_BASELINE);
+    }
+
     const trust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
 
     const cost = estimateCandidateCost(candidate);
@@ -309,7 +333,12 @@ export function graphRankCandidates(
   const explorationWeight = config?.explorationWeight ?? 0;
   const compositeFn = config?.compositeFunction;
 
-  const graph = buildRoutingGraph(selfId, candidates, config?.peerEdges);
+  const graph = buildRoutingGraph(
+    selfId,
+    candidates,
+    config?.peerEdges,
+    config?.callerGuardianPublicKey,
+  );
   const paths = optimalPaths(graph, selfId);
 
   const candidateMap = new Map<string, CandidateProfile>();
@@ -421,7 +450,12 @@ export function explainedRankCandidates(
   const compositeFn = config?.compositeFunction;
 
   // 1. Build the plain routing graph
-  const plainGraph = buildRoutingGraph(selfId, candidates, config?.peerEdges);
+  const plainGraph = buildRoutingGraph(
+    selfId,
+    candidates,
+    config?.peerEdges,
+    config?.callerGuardianPublicKey,
+  );
 
   // 2. Build an annotated graph: wrap each edge weight with provenance.
   //    The provenance label for each edge is the target node ID — this records

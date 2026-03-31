@@ -832,3 +832,82 @@ describe("graphRankCandidates exploration (epsilon-greedy)", () => {
     expect(highScore.composite).toBeGreaterThan(lowScore.composite);
   });
 });
+
+// ── Organizational Trust Baseline (Guardian Attestation) ───────────
+
+describe("organizational trust baseline via guardian", () => {
+  it("same guardian key raises trust baseline for unknown agents", () => {
+    const guardianKey = "aa".repeat(32);
+    const candidate = makeCandidate({
+      motebit_id: asMotebitId("org-agent"),
+      trust_record: null, // no prior interaction → default 0.1
+      guardian_public_key: guardianKey,
+    });
+
+    // Without guardian: trust = 0.1 (default for unknown)
+    const graphWithout = buildRoutingGraph(SELF_ID, [candidate]);
+    const edgeWithout = graphWithout.getEdge(SELF_ID, "org-agent")!;
+    expect(edgeWithout.trust).toBeCloseTo(0.1, 1);
+
+    // With same guardian: trust = 0.5 (organizational baseline)
+    const graphWith = buildRoutingGraph(SELF_ID, [candidate], undefined, guardianKey);
+    const edgeWith = graphWith.getEdge(SELF_ID, "org-agent")!;
+    expect(edgeWith.trust).toBeCloseTo(0.5, 1);
+  });
+
+  it("does not downgrade earned trust above organizational baseline", () => {
+    const guardianKey = "bb".repeat(32);
+    const candidate = makeCandidate({
+      motebit_id: asMotebitId("trusted-org-agent"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }), // score 0.9
+      guardian_public_key: guardianKey,
+    });
+
+    const graph = buildRoutingGraph(SELF_ID, [candidate], undefined, guardianKey);
+    const edge = graph.getEdge(SELF_ID, "trusted-org-agent")!;
+    // Earned trust (0.9) > org baseline (0.5), should keep 0.9
+    expect(edge.trust).toBeGreaterThan(0.5);
+  });
+
+  it("different guardian keys do not boost trust", () => {
+    const candidate = makeCandidate({
+      motebit_id: asMotebitId("other-org-agent"),
+      trust_record: null,
+      guardian_public_key: "cc".repeat(32),
+    });
+
+    const graph = buildRoutingGraph(SELF_ID, [candidate], undefined, "dd".repeat(32));
+    const edge = graph.getEdge(SELF_ID, "other-org-agent")!;
+    // Different orgs: stays at default 0.1
+    expect(edge.trust).toBeCloseTo(0.1, 1);
+  });
+
+  it("no guardian on caller means no boost even if candidate has guardian", () => {
+    const candidate = makeCandidate({
+      motebit_id: asMotebitId("guarded-agent"),
+      trust_record: null,
+      guardian_public_key: "ee".repeat(32),
+    });
+
+    const graph = buildRoutingGraph(SELF_ID, [candidate]); // no callerGuardianPublicKey
+    const edge = graph.getEdge(SELF_ID, "guarded-agent")!;
+    expect(edge.trust).toBeCloseTo(0.1, 1);
+  });
+
+  it("guardian trust flows through graphRankCandidates via config", () => {
+    const guardianKey = "ff".repeat(32);
+    const candidate = makeCandidate({
+      motebit_id: asMotebitId("org-peer"),
+      trust_record: null,
+      guardian_public_key: guardianKey,
+    });
+
+    const withoutGuardian = graphRankCandidates(SELF_ID, [candidate], defaultReqs);
+    const withGuardian = graphRankCandidates(SELF_ID, [candidate], defaultReqs, {
+      callerGuardianPublicKey: guardianKey,
+    });
+
+    // Same-org agent should rank higher
+    expect(withGuardian[0]!.composite).toBeGreaterThan(withoutGuardian[0]!.composite);
+  });
+});

@@ -18,6 +18,8 @@ export interface CandidateProfile {
   chain_trust?: number;
   /** Aggregated reputation from peer-issued credentials. When set, blended into trust edge weight. */
   credential_reputation?: import("./credential-weight.js").CredentialReputation;
+  /** Guardian public key (hex) if agent is under organizational custody. Same guardian = same org. */
+  guardian_public_key?: string;
 }
 
 export interface TaskRequirements {
