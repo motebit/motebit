@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
+import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 function decodeTokenPayload(token: string) {
   const payloadB64 = token.split(".")[0]!;
@@ -17,15 +14,7 @@ function decodeTokenPayload(token: string) {
 let relay: SyncRelay;
 
 beforeEach(async () => {
-  relay = await createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: true,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-  });
+  relay = await createTestRelay();
 });
 
 afterEach(() => {

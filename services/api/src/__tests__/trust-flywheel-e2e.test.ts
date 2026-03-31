@@ -18,50 +18,20 @@
  *   - Ledger reconciles throughout
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { reconcileLedger } from "../accounts.js";
+import {
+  AUTH_HEADER as AUTH,
+  JSON_AUTH,
+  jsonAuthWithIdempotency,
+  createTestRelay as _createTestRelay,
+  createAgent,
+} from "./test-helpers.js";
 
-const API_TOKEN = "test-token";
-const AUTH = { Authorization: `Bearer ${API_TOKEN}` };
-const JSON_AUTH = { "Content-Type": "application/json", ...AUTH };
-
-async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: true,
-    issueCredentials: true,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-  });
-}
-
-async function createAgent(
-  relay: SyncRelay,
-  pubKeyHex: string,
-): Promise<{ motebitId: string; deviceId: string }> {
-  const identityRes = await relay.app.request("/identity", {
-    method: "POST",
-    headers: JSON_AUTH,
-    body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
-  });
-  const { motebit_id } = (await identityRes.json()) as { motebit_id: string };
-
-  const deviceRes = await relay.app.request("/device/register", {
-    method: "POST",
-    headers: JSON_AUTH,
-    body: JSON.stringify({ motebit_id, device_name: "Test", public_key: pubKeyHex }),
-  });
-  const { device_id } = (await deviceRes.json()) as { device_id: string };
-
-  return { motebitId: motebit_id, deviceId: device_id };
-}
+const createTestRelay = () => _createTestRelay({ issueCredentials: true });
 
 async function delegateAndSettle(
   relay: SyncRelay,
@@ -72,7 +42,7 @@ async function delegateAndSettle(
 ): Promise<{ taskId: string }> {
   const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {
     method: "POST",
-    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+    headers: jsonAuthWithIdempotency(),
     body: JSON.stringify({
       prompt,
       submitted_by: delegator.motebitId,
@@ -154,7 +124,7 @@ describe("Trust Flywheel E2E", () => {
     // Fund delegator
     const depositRes = await relay.app.request(`/api/v1/agents/${delegator.motebitId}/deposit`, {
       method: "POST",
-      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         amount: 20.0,
         reference: "flywheel-fund",
@@ -341,7 +311,7 @@ describe("Trust Flywheel E2E", () => {
     // Fund and self-delegate
     await relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
       method: "POST",
-      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         amount: 10.0,
         reference: "self-fund",
@@ -352,7 +322,7 @@ describe("Trust Flywheel E2E", () => {
     // Submit task to self (submitted_by === worker)
     const taskRes = await relay.app.request(`/agent/${agent.motebitId}/task`, {
       method: "POST",
-      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "self-search",
         submitted_by: agent.motebitId,

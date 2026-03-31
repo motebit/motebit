@@ -1,4 +1,4 @@
-import type { DesktopAIConfig, InvokeFn, McpServerConfig } from "../index";
+import type { DesktopAIConfig, InvokeFn, McpServerConfig, PolicyConfig } from "../index";
 import type { NameCollision } from "../mcp-discovery";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
@@ -8,7 +8,12 @@ import type { ColorPickerAPI } from "./color-picker";
 import type { VoiceAPI } from "./voice";
 import type { PairingAPI } from "./pairing";
 import { saveFocus, restoreFocus, focusFirst } from "./focus";
-import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
+import {
+  ANTHROPIC_MODELS,
+  OPENAI_MODELS,
+  OLLAMA_SUGGESTED_MODELS,
+  PROXY_MODELS,
+} from "@motebit/sdk";
 
 // === DOM Refs ===
 
@@ -84,28 +89,17 @@ interface PendingSave {
 }
 let pendingSettingsSave: PendingSave | null = null;
 
-// === Model Lists ===
+// Model lists imported from @motebit/sdk (single source of truth).
+// Desktop uses OLLAMA_SUGGESTED_MODELS as its local Ollama dropdown list.
+const OLLAMA_MODELS = OLLAMA_SUGGESTED_MODELS as readonly string[];
 
-const ANTHROPIC_MODELS = [
-  "claude-sonnet-4-20250514",
-  "claude-haiku-4-5-20251001",
-  "claude-opus-4-20250115",
-];
+// === Approval Presets ===
 
-const OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"];
-
-const OLLAMA_MODELS = [
-  "llama3.2",
-  "llama3.1",
-  "llama3",
-  "mistral",
-  "codellama",
-  "gemma2",
-  "phi3",
-  "qwen2",
-];
-
-const PROXY_MODELS = ["claude-sonnet-4-20250514"];
+const APPROVAL_PRESET_CONFIGS: Record<string, Partial<PolicyConfig>> = {
+  cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
+  balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
+  autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
+};
 
 // === Settings API ===
 
@@ -167,7 +161,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   function populateModelSelect(provider: string, currentModel?: string): void {
     settingsModelSelect.innerHTML = "";
-    const models =
+    const models: readonly string[] =
       provider === "openai"
         ? OPENAI_MODELS
         : provider === "ollama"
@@ -1521,13 +1515,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       voice.rebuildTtsProvider(invoke as InvokeFn);
     }
 
-    const approvalConfig =
-      APPROVAL_PRESET_CONFIGS[selectedApprovalPreset as keyof typeof APPROVAL_PRESET_CONFIGS];
+    const approvalConfig = APPROVAL_PRESET_CONFIGS[selectedApprovalPreset];
     if (approvalConfig) {
       ctx.app.updatePolicyConfig({
-        maxRiskLevel: approvalConfig.maxRiskLevel,
-        requireApprovalAbove: approvalConfig.requireApprovalAbove,
-        denyAbove: approvalConfig.denyAbove,
+        ...approvalConfig,
         operatorMode: settingsOperatorMode.checked,
         budget: { maxCallsPerTurn: parseInt(maxCalls.value, 10) || 10 },
       });

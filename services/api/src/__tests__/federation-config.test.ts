@@ -6,26 +6,17 @@
  * forwarding endpoints.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { bytesToHex } from "@motebit/crypto";
-
-const API_TOKEN = "test-token";
-const X402_CONFIG = {
-  payToAddress: "0x0000000000000000000000000000000000000000",
-  network: "eip155:84532",
-  testnet: true,
-};
+import { createTestRelay } from "./test-helpers.js";
 
 /** Helper: create a relay with specific federation config. */
 async function createRelay(federation?: Record<string, unknown>): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    x402: X402_CONFIG,
+  return createTestRelay({
     enableDeviceAuth: false,
-    federation: federation as SyncRelay extends { app: infer _ } ? typeof federation : never,
-  } as Parameters<typeof createSyncRelay>[0]);
+    federation,
+  } as Parameters<typeof createTestRelay>[0]);
 }
 
 /** Helper: propose peering from a fake relay. */

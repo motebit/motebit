@@ -13,28 +13,19 @@
  * relay-to-relay HTTP calls to the correct Hono app.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/crypto";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
+import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 
 const RELAY_A_URL = "http://relay-a.test:3000";
 const RELAY_B_URL = "http://relay-b.test:3001";
 
 async function createFederatedRelay(endpointUrl: string, displayName: string): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
+  return createTestRelay({
     enableDeviceAuth: false,
     federation: { endpointUrl, displayName },
   });
@@ -699,11 +690,7 @@ describe("Federation E2E", () => {
       const alice = await registerAgent(relayA, "alice-dedup", ["web-search"]);
       const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...AUTH_HEADER,
-          "Idempotency-Key": crypto.randomUUID(),
-        },
+        headers: jsonAuthWithIdempotency(),
         body: JSON.stringify({
           prompt: "Dedup test",
           required_capabilities: ["dedup-cap"],
@@ -717,11 +704,7 @@ describe("Federation E2E", () => {
       // Submit a SECOND task with different task_id — should work
       const taskRes2 = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...AUTH_HEADER,
-          "Idempotency-Key": crypto.randomUUID(),
-        },
+        headers: jsonAuthWithIdempotency(),
         body: JSON.stringify({
           prompt: "Dedup test 2",
           required_capabilities: ["dedup-cap"],
@@ -781,11 +764,7 @@ describe("Federation E2E", () => {
       for (let i = 0; i < 7; i++) {
         await relayA.app.request(`/agent/${alice.motebitId}/task`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...AUTH_HEADER,
-            "Idempotency-Key": crypto.randomUUID(),
-          },
+          headers: jsonAuthWithIdempotency(),
           body: JSON.stringify({
             prompt: `Circuit breaker test ${i}`,
             required_capabilities: ["circuit-cap"],
@@ -802,6 +781,9 @@ describe("Federation E2E", () => {
         .prepare("SELECT state, failed_forwards FROM relay_peers WHERE endpoint_url = ?")
         .get(RELAY_B_URL) as { state: string; failed_forwards: number };
       expect(peerAfter.state).toBe("suspended");
+      // Once the peer is suspended (after enough samples), subsequent tasks
+      // skip forwarding entirely, so failed_forwards may be 5 (suspension
+      // threshold reached at 6th sample with 5/5 failures > 50%).
       expect(peerAfter.failed_forwards).toBeGreaterThanOrEqual(5);
     });
 
@@ -815,11 +797,7 @@ describe("Federation E2E", () => {
       // Submit a task directly on Relay B to put it in the queue
       const taskRes = await relayB.app.request(`/agent/${bob.motebitId}/task`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...AUTH_HEADER,
-          "Idempotency-Key": crypto.randomUUID(),
-        },
+        headers: jsonAuthWithIdempotency(),
         body: JSON.stringify({ prompt: "Direct task" }),
       });
       expect(taskRes.status).toBe(201);
@@ -918,11 +896,7 @@ describe("Federation E2E", () => {
       // 4. Submit a task on Relay A requiring "quantum-computing" (only Bob on Relay B has it)
       const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...AUTH_HEADER,
-          "Idempotency-Key": crypto.randomUUID(),
-        },
+        headers: jsonAuthWithIdempotency(),
         body: JSON.stringify({
           prompt: "Factor a large semiprime using Shor's algorithm",
           required_capabilities: ["quantum-computing"],
@@ -1015,11 +989,7 @@ describe("Federation E2E", () => {
       // Submit task requiring exotic-timeout-cap — routing should select bob (remote only)
       const taskRes = await relayA.app.request(`/agent/${submitter.motebitId}/task`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...AUTH_HEADER,
-          "Idempotency-Key": crypto.randomUUID(),
-        },
+        headers: jsonAuthWithIdempotency(),
         body: JSON.stringify({
           prompt: "Timeout test",
           required_capabilities: ["exotic-timeout-cap"],

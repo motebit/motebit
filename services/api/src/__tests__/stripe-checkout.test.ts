@@ -5,7 +5,6 @@
  * and the webhook/checkout route wiring via the relay app.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import {
   processStripeCheckout,
@@ -15,9 +14,7 @@ import {
 } from "../accounts.js";
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
+import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 // === Direct unit tests for processStripeCheckout ===
 
@@ -130,16 +127,8 @@ describe("Stripe Checkout routes", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
-    relay = await createSyncRelay({
-      apiToken: API_TOKEN,
-      enableDeviceAuth: true,
-      x402: {
-        payToAddress: "0x0000000000000000000000000000000000000000",
-        network: "eip155:84532",
-        testnet: true,
-      },
-      // No stripe config — endpoints should return 501
-    });
+    // No stripe config — endpoints should return 501
+    relay = await createTestRelay();
   });
 
   afterEach(() => {

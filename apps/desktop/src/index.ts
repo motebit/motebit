@@ -44,7 +44,15 @@ import type {
   AgentTask,
   ExecutionReceipt,
 } from "@motebit/sdk";
-import { EventType, SensitivityLevel, DeviceCapability } from "@motebit/sdk";
+import {
+  EventType,
+  SensitivityLevel,
+  DeviceCapability,
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_PROXY_MODEL,
+} from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage, computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import {
@@ -321,10 +329,17 @@ function createDesktopStorage(
   };
 }
 
-// === Color Presets (canonical source: @motebit/sdk) ===
+// === Color Presets ===
 
-import { COLOR_PRESETS } from "@motebit/sdk";
-export { COLOR_PRESETS };
+export const COLOR_PRESETS: Record<string, InteriorColor> = {
+  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
+  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
+  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
+  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
+  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
+  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
+};
 
 // === MCP Server Status ===
 
@@ -756,13 +771,15 @@ export class DesktopApp {
 
     let provider;
     if (config.provider === "ollama") {
-      const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
+      const model =
+        config.model != null && config.model !== "" ? config.model : DEFAULT_OLLAMA_MODEL;
       const base_url = config.isTauri ? DEFAULT_OLLAMA_URL : "/api/ollama";
       provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens, temperature });
       this._activeProvider = "ollama";
     } else if (config.provider === "openai") {
       if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model != null && config.model !== "" ? config.model : "gpt-4o";
+      const model =
+        config.model != null && config.model !== "" ? config.model : DEFAULT_OPENAI_MODEL;
       const base_url = config.isTauri ? "https://api.openai.com/v1" : "/api/openai";
       provider = new CloudProvider({
         provider: "openai",
@@ -776,7 +793,7 @@ export class DesktopApp {
     } else if (config.provider === "hybrid") {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model =
-        config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
+        config.model != null && config.model !== "" ? config.model : DEFAULT_ANTHROPIC_MODEL;
       const base_url = config.isTauri ? "https://api.anthropic.com" : "/api/anthropic";
       provider = new HybridProvider({
         cloud: {
@@ -788,7 +805,7 @@ export class DesktopApp {
           temperature,
         },
         ollama: {
-          model: "llama3.2",
+          model: DEFAULT_OLLAMA_MODEL,
           base_url: config.isTauri ? DEFAULT_OLLAMA_URL : "/api/ollama",
           max_tokens: config.maxTokens,
           temperature,
@@ -798,7 +815,7 @@ export class DesktopApp {
       this._activeProvider = "hybrid";
     } else if (config.provider === "proxy") {
       const pc = this._proxyConfig;
-      const model = pc?.model ?? "claude-sonnet-4-20250514";
+      const model = pc?.model ?? DEFAULT_PROXY_MODEL;
       const proxyUrl =
         pc?.baseUrl ?? (import.meta.env?.VITE_PROXY_URL as string) ?? "https://api.motebit.com";
       const extraHeaders: Record<string, string> = {};
@@ -816,7 +833,7 @@ export class DesktopApp {
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model =
-        config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
+        config.model != null && config.model !== "" ? config.model : DEFAULT_ANTHROPIC_MODEL;
       const base_url = config.isTauri ? "https://api.anthropic.com" : "/api/anthropic";
       provider = new CloudProvider({
         provider: "anthropic",

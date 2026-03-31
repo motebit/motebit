@@ -1,25 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
+import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
 
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote";
-
-async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: false,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-  });
-}
 
 function makeConversation(
   motebitId: string,
@@ -62,7 +48,7 @@ describe("Conversation Sync Endpoints", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
-    relay = await createTestRelay();
+    relay = await createTestRelay({ enableDeviceAuth: false });
   });
 
   afterEach(() => {

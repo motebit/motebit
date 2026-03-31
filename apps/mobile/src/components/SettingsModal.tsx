@@ -23,6 +23,7 @@ import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 import type { Goal, GoalMode } from "../adapters/expo-sqlite";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OLLAMA_MODEL } from "@motebit/sdk";
 import { BillingPanel } from "./BillingPanel";
 
 // === Pure Color Math (copied from desktop color-picker.ts) ===
@@ -354,10 +355,10 @@ export function SettingsModal({
                   provider: p,
                   model:
                     p === "ollama"
-                      ? "llama3.2"
+                      ? DEFAULT_OLLAMA_MODEL
                       : p === "openai"
-                        ? "gpt-4o"
-                        : "claude-sonnet-4-20250514",
+                        ? DEFAULT_OPENAI_MODEL
+                        : DEFAULT_ANTHROPIC_MODEL,
                 })
               }
               onChangeModel={(m) => updateDraft({ model: m })}

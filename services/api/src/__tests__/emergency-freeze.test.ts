@@ -1,26 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+import { AUTH_HEADER, JSON_AUTH, createTestRelay as _createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
 
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
-const JSON_AUTH = { ...AUTH_HEADER, "Content-Type": "application/json" };
 const MOTEBIT_ID = "test-mote";
 
-async function createTestRelay(overrides?: { emergencyFreeze?: boolean }): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: false,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-    ...overrides,
-  });
-}
+const createTestRelay = (overrides?: { emergencyFreeze?: boolean }) =>
+  _createTestRelay({ enableDeviceAuth: false, ...overrides });
 
 function freezeBody(reason = "test freeze") {
   return JSON.stringify({ reason });

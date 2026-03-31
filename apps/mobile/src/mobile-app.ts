@@ -71,7 +71,14 @@ export type { MemoryNode } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import { PlanEngine } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
-import { PlanStatus, DeviceCapability } from "@motebit/sdk";
+import {
+  PlanStatus,
+  DeviceCapability,
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_PROXY_MODEL,
+} from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type {
@@ -113,11 +120,47 @@ import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
 import { SecureStoreAdapter } from "./adapters/secure-store";
 
-// === Shared presets (canonical source: @motebit/sdk) ===
+// === Color Presets (same 7 as desktop) ===
 
-import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
-export { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS };
-export type { ApprovalPresetConfig } from "@motebit/sdk";
+export const COLOR_PRESETS: Record<string, InteriorColor> = {
+  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
+  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
+  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
+  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
+  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
+  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
+};
+
+// === Approval Presets ===
+
+export interface ApprovalPresetConfig {
+  label: string;
+  description: string;
+  requireApprovalAbove: number;
+  denyAbove: number;
+}
+
+export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
+  cautious: {
+    label: "Cautious",
+    description: "Approve everything above read-only",
+    requireApprovalAbove: 0,
+    denyAbove: 3,
+  },
+  balanced: {
+    label: "Balanced",
+    description: "Auto-allow low risk, approve medium",
+    requireApprovalAbove: 1,
+    denyAbove: 4,
+  },
+  autonomous: {
+    label: "Autonomous",
+    description: "Auto-allow most, deny only dangerous",
+    requireApprovalAbove: 2,
+    denyAbove: 4,
+  },
+};
 
 // === Settings ===
 
@@ -144,7 +187,7 @@ export interface MobileSettings {
 
 const DEFAULT_SETTINGS: MobileSettings = {
   provider: "ollama",
-  model: "llama3.2",
+  model: DEFAULT_OLLAMA_MODEL,
   ollamaEndpoint: DEFAULT_OLLAMA_URL,
   colorPreset: "moonlight",
   customHue: 220,
@@ -464,12 +507,12 @@ export class MobileApp {
   async initAI(config: MobileAIConfig): Promise<boolean> {
     let provider;
     if (config.provider === "ollama") {
-      const model = config.model ?? "llama3.2";
+      const model = config.model ?? DEFAULT_OLLAMA_MODEL;
       const base_url = config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL;
       provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens });
     } else if (config.provider === "openai") {
       if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model ?? "gpt-4o";
+      const model = config.model ?? DEFAULT_OPENAI_MODEL;
       provider = new CloudProvider({
         provider: "openai",
         api_key: config.apiKey,
@@ -479,7 +522,7 @@ export class MobileApp {
       });
     } else if (config.provider === "proxy") {
       const pc = this._proxyConfig;
-      const model = pc?.model ?? "claude-sonnet-4-20250514";
+      const model = pc?.model ?? DEFAULT_PROXY_MODEL;
       const proxyUrl =
         pc?.baseUrl ??
         (await AsyncStorage.getItem("@motebit/proxy_url")) ??
@@ -496,7 +539,7 @@ export class MobileApp {
       });
     } else if (config.provider === "hybrid") {
       if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model ?? "claude-sonnet-4-20250514";
+      const model = config.model ?? DEFAULT_ANTHROPIC_MODEL;
       provider = new HybridProvider({
         cloud: {
           provider: "anthropic",
@@ -506,7 +549,7 @@ export class MobileApp {
           max_tokens: config.maxTokens,
         },
         ollama: {
-          model: "llama3.2",
+          model: DEFAULT_OLLAMA_MODEL,
           base_url: config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL,
           max_tokens: config.maxTokens,
         },
@@ -514,7 +557,7 @@ export class MobileApp {
       });
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model ?? "claude-sonnet-4-20250514";
+      const model = config.model ?? DEFAULT_ANTHROPIC_MODEL;
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: config.apiKey,

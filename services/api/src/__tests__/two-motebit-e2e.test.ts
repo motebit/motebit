@@ -14,7 +14,6 @@
  * accumulated trust + governance at the boundary.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { PlanEngine, InMemoryPlanStore, RelayDelegationAdapter } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
@@ -29,11 +28,12 @@ import {
   bytesToHex,
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
-
-// === Constants ===
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
+import {
+  API_TOKEN,
+  AUTH_HEADER,
+  jsonAuthWithIdempotency,
+  createTestRelay,
+} from "./test-helpers.js";
 
 // === Agent identity ===
 
@@ -165,16 +165,7 @@ describe("Two-Motebit Delegation E2E", () => {
   let originalFetch: typeof globalThis.fetch;
 
   beforeEach(async () => {
-    relay = await createSyncRelay({
-      apiToken: API_TOKEN,
-      enableDeviceAuth: false,
-      issueCredentials: true,
-      x402: {
-        payToAddress: "0x0000000000000000000000000000000000000000",
-        network: "eip155:84532",
-        testnet: true,
-      },
-    });
+    relay = await createTestRelay({ enableDeviceAuth: false, issueCredentials: true });
 
     // Two independent sovereign agents with their own keypairs
     alice = await registerAgent(relay, "alice", ["http_mcp"]);
@@ -440,11 +431,7 @@ describe("Two-Motebit Delegation E2E", () => {
     // Submit a task
     const taskRes = await relay.app.request(`/agent/${alice.motebitId}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "Test forgery",
         required_capabilities: ["web_search"],
@@ -641,11 +628,7 @@ describe("Two-Motebit Delegation E2E", () => {
     // Complete a delegation so Bob gets a credential
     const taskRes = await relay.app.request(`/agent/${alice.motebitId}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "VP test task",
         required_capabilities: ["web_search"],

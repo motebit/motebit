@@ -6,7 +6,6 @@
  * with mocked WebSocket connections bridged to the RelayDelegationAdapter's event bus.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { PlanEngine, InMemoryPlanStore, RelayDelegationAdapter } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
@@ -16,11 +15,13 @@ import type { MotebitLoopDependencies } from "@motebit/ai-core";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
+import {
+  API_TOKEN,
+  AUTH_HEADER,
+  jsonAuthWithIdempotency,
+  createTestRelay,
+} from "./test-helpers.js";
 
-// === Constants ===
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote";
 
 // Worker agent identity — generated per test, registered in beforeEach
@@ -95,16 +96,7 @@ describe("Delegation E2E", () => {
   let originalFetch: typeof globalThis.fetch;
 
   beforeEach(async () => {
-    relay = await createSyncRelay({
-      apiToken: API_TOKEN,
-      enableDeviceAuth: false,
-      issueCredentials: true,
-      x402: {
-        payToAddress: "0x0000000000000000000000000000000000000000",
-        network: "eip155:84532",
-        testnet: true,
-      },
-    });
+    relay = await createTestRelay({ enableDeviceAuth: false, issueCredentials: true });
 
     // Generate a real Ed25519 keypair for the worker agent
     workerKeypair = await generateKeypair();
@@ -261,11 +253,7 @@ describe("Delegation E2E", () => {
     // Submit a task requiring stdio_mcp
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "Run a shell command",
         required_capabilities: ["stdio_mcp"],
@@ -324,11 +312,7 @@ describe("Delegation E2E", () => {
     // Submit a task to the relay (as if delegation had started before crash)
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "do remote thing",
         required_capabilities: ["file_system"],
@@ -600,11 +584,7 @@ describe("Delegation E2E", () => {
 
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "Run credential test",
         required_capabilities: ["stdio_mcp"],
@@ -669,11 +649,7 @@ describe("Delegation E2E", () => {
 
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({ prompt: "VP test", required_capabilities: ["stdio_mcp"] }),
     });
     const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
@@ -732,11 +708,7 @@ describe("Delegation E2E", () => {
 
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({ prompt: "Verify test", required_capabilities: ["stdio_mcp"] }),
     });
     const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
@@ -855,11 +827,7 @@ describe("Delegation E2E", () => {
     // POST ledger
     const postRes = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify(ledger),
     });
     expect(postRes.status).toBe(201);
@@ -890,11 +858,7 @@ describe("Delegation E2E", () => {
   it("execution ledger: rejects invalid spec version", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         spec: "motebit/execution-ledger@2.0",
         motebit_id: MOTEBIT_ID,
@@ -910,11 +874,7 @@ describe("Delegation E2E", () => {
   it("execution ledger: rejects motebit_id mismatch", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         spec: "motebit/execution-ledger@1.0",
         motebit_id: "wrong-motebit",
@@ -962,11 +922,7 @@ describe("Delegation E2E", () => {
     // Submit task — x402 handles payment at HTTP layer
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "Settlement test task",
         required_capabilities: ["stdio_mcp"],
@@ -1036,11 +992,7 @@ describe("Delegation E2E", () => {
     // Submit task
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "Idempotency test task",
         required_capabilities: ["stdio_mcp"],
@@ -1104,11 +1056,7 @@ describe("Delegation E2E", () => {
     // Submit task with submitted_by === workerMotebitId (self-delegation)
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "Self-delegation test",
         submitted_by: workerMotebitId,
@@ -1149,11 +1097,7 @@ describe("Delegation E2E", () => {
 
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({ prompt: "Recovery test task" }),
     });
     expect(taskRes.status).toBe(201);
@@ -1188,11 +1132,7 @@ describe("Delegation E2E", () => {
     // Submit task
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "Stale receipt test task",
         required_capabilities: ["stdio_mcp"],

@@ -53,7 +53,13 @@ import {
 import { createSignedToken, deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
-import { DeviceCapability } from "@motebit/sdk";
+import {
+  DeviceCapability,
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_PROXY_MODEL,
+} from "@motebit/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
@@ -138,10 +144,17 @@ const PRESENCE_MAP: Record<PresenceState, PresenceMapping> = {
 const DEFAULT_RELAY_URL = "https://motebit-sync.fly.dev";
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
-// === Interior Color (canonical source: @motebit/sdk) ===
+// === Interior Color ===
 
-import { COLOR_PRESETS } from "@motebit/sdk";
-export { COLOR_PRESETS };
+export const COLOR_PRESETS: Record<string, InteriorColor> = {
+  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
+  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
+  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
+  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
+  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
+  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
+  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
+};
 
 export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   const c = (1 - Math.abs(2 * l - 1)) * s;
@@ -504,7 +517,7 @@ export class SpatialApp {
       const model =
         config.model != null && config.model !== ""
           ? config.model
-          : (pc?.model ?? "claude-sonnet-4-20250514");
+          : (pc?.model ?? DEFAULT_PROXY_MODEL);
       const proxyUrl = pc?.baseUrl ?? config.baseUrl ?? "https://api.motebit.com";
       const extraHeaders: Record<string, string> = {};
       if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
@@ -518,7 +531,8 @@ export class SpatialApp {
         extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
       });
     } else if (config.provider === "ollama") {
-      const model = config.model != null && config.model !== "" ? config.model : "llama3.2";
+      const model =
+        config.model != null && config.model !== "" ? config.model : DEFAULT_OLLAMA_MODEL;
       provider = new OllamaProvider({
         model,
         base_url: DEFAULT_OLLAMA_URL,
@@ -527,7 +541,8 @@ export class SpatialApp {
       });
     } else if (config.provider === "openai") {
       if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model != null && config.model !== "" ? config.model : "gpt-4o";
+      const model =
+        config.model != null && config.model !== "" ? config.model : DEFAULT_OPENAI_MODEL;
       provider = new CloudProvider({
         provider: "openai",
         api_key: config.apiKey,
@@ -539,7 +554,7 @@ export class SpatialApp {
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model =
-        config.model != null && config.model !== "" ? config.model : "claude-sonnet-4-20250514";
+        config.model != null && config.model !== "" ? config.model : DEFAULT_ANTHROPIC_MODEL;
       provider = new CloudProvider({
         provider: "anthropic",
         api_key: config.apiKey,

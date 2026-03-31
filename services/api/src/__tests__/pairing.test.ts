@@ -1,25 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, createSignedToken, bytesToHex } from "@motebit/crypto";
-
-// === Helpers ===
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
-
-async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: true,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-  });
-}
+import { API_TOKEN, AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 async function setupIdentityAndDevice(relay: SyncRelay): Promise<{
   motebitId: string;

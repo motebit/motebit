@@ -6,25 +6,14 @@
  * endpoints registered via registerProxyTokenRoutes in subscriptions.ts.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
+import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 let relay: SyncRelay;
 
 beforeEach(async () => {
-  relay = await createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: true,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-    // No stripe config — Stripe calls will fail
-  });
+  // No stripe config — Stripe calls will fail
+  relay = await createTestRelay();
 });
 
 afterEach(() => {

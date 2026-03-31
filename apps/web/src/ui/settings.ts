@@ -12,7 +12,7 @@ import { detectOllamaModels, checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } f
 import { setTTSVoice } from "./chat";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import type { ColorPickerAPI } from "./color-picker";
-import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL } from "@motebit/sdk";
 
 // === DOM Refs ===
 
@@ -86,6 +86,15 @@ export interface SettingsAPI {
 export interface SettingsDeps {
   colorPicker: ColorPickerAPI;
 }
+
+const APPROVAL_PRESET_CONFIGS: Record<
+  string,
+  { maxRiskLevel: number; requireApprovalAbove: number; denyAbove: number }
+> = {
+  cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
+  balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
+  autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
+};
 
 function applyGovernanceToRuntime(ctx: WebContext, gov: GovernanceConfig): void {
   const runtime = ctx.app.getRuntime();
@@ -481,7 +490,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           // Proxy tab — read model from the cloud model selector
           const cloudModel =
             (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ??
-            "claude-sonnet-4-20250514";
+            DEFAULT_ANTHROPIC_MODEL;
           config = { type: "proxy", model: cloudModel, maxTokens };
         }
         break;
@@ -493,7 +502,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           config = {
             type: "openai", // Google uses OpenAI-compatible API format
             apiKey: googleApiKey?.value.trim() ?? "",
-            model: googleModel?.value ?? "gemini-2.5-pro",
+            model: googleModel?.value ?? DEFAULT_GOOGLE_MODEL,
             baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
             maxTokens,
           };
@@ -533,7 +542,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         config = { type: "webllm", model: webllmModel.value, maxTokens };
         break;
       default:
-        config = { type: "anthropic", model: "claude-sonnet-4-20250514" };
+        config = { type: "anthropic", model: DEFAULT_ANTHROPIC_MODEL };
     }
 
     // Save soul color

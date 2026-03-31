@@ -1,28 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { EventType, PlanStatus, StepStatus, asMotebitId, asGoalId, asPlanId } from "@motebit/sdk";
 import type { EventLogEntry, Plan, PlanStep } from "@motebit/sdk";
+import { AUTH_HEADER, createTestRelay as _createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
 
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const MOTEBIT_ID = "test-mote-ledger";
 const GOAL_ID = "goal-ledger-1";
 const PLAN_ID = "plan-ledger-1";
 
-async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-    enableDeviceAuth: false,
-  });
-}
+const createTestRelay = () => _createTestRelay({ enableDeviceAuth: false });
 
 function makeEvent(
   motebitId: string,

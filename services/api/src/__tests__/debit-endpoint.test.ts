@@ -3,27 +3,13 @@
  * Authenticated via x-relay-secret header (shared secret, not user auth).
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
 
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 const RELAY_SECRET = "test-relay-secret";
 
 let relay: SyncRelay;
 let motebitId: string;
-
-async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: true,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-  });
-}
 
 async function createIdentity(r: SyncRelay): Promise<string> {
   const res = await r.app.request("/identity", {
@@ -38,11 +24,7 @@ async function createIdentity(r: SyncRelay): Promise<string> {
 async function deposit(r: SyncRelay, id: string, amount: number): Promise<void> {
   const res = await r.app.request(`/api/v1/agents/${id}/deposit`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...AUTH_HEADER,
-      "Idempotency-Key": crypto.randomUUID(),
-    },
+    headers: jsonAuthWithIdempotency(),
     body: JSON.stringify({ amount }),
   });
   expect(res.status).toBe(200);

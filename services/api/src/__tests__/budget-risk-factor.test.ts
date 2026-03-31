@@ -5,14 +5,11 @@
  * back to the delegator.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex, signExecutionReceipt } from "@motebit/crypto";
 import { PLATFORM_FEE_RATE } from "@motebit/sdk";
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
+import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
 
 /** Compute the gross price snapshot from a unit cost (same formula as relay). */
 function grossPrice(unitCost: number): number {
@@ -23,18 +20,6 @@ function grossPrice(unitCost: number): number {
 function riskLock(unitCost: number, available: number, riskFactor = 1.0): number {
   const gross = grossPrice(unitCost);
   return Math.min(gross * (1 + riskFactor * 0.2), available);
-}
-
-async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: true,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-  });
 }
 
 async function createIdentityAndDevice(
@@ -85,11 +70,7 @@ async function deposit(
 ): Promise<{ motebit_id: string; balance: number; transaction_id: string | null }> {
   const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...AUTH_HEADER,
-      "Idempotency-Key": crypto.randomUUID(),
-    },
+    headers: jsonAuthWithIdempotency(),
     body: JSON.stringify({ amount }),
   });
   expect(res.status).toBe(200);
@@ -158,11 +139,7 @@ async function submitTask(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await relay.app.request(`/agent/${workerId}/task`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...AUTH_HEADER,
-      "Idempotency-Key": crypto.randomUUID(),
-    },
+    headers: jsonAuthWithIdempotency(),
     body: JSON.stringify({
       prompt: "Do something",
       submitted_by: delegatorId,

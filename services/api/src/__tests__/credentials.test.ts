@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import {
@@ -8,22 +7,7 @@ import {
   issueReputationCredential,
   publicKeyToDidKey,
 } from "@motebit/crypto";
-
-const API_TOKEN = "test-token";
-const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
-
-async function createTestRelay(overrides: { issueCredentials?: boolean } = {}): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: true,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-    ...overrides,
-  });
-}
+import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 async function createIdentityAndDevice(
   relay: SyncRelay,

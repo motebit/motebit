@@ -10,12 +10,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { processSettlementRetries, createFederationTables } from "../federation.js";
 import type { RelayIdentity } from "../federation.js";
-import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
+import {
+  AUTH_HEADER as AUTH,
+  JSON_AUTH,
+  jsonAuthWithIdempotency,
+  createTestRelay,
+  createAgent,
+} from "./test-helpers.js";
 
 // === Part A helpers ===
 
@@ -73,43 +79,6 @@ function insertRetry(
 
 // === Part B helpers ===
 
-const API_TOKEN = "test-token";
-const AUTH = { Authorization: `Bearer ${API_TOKEN}` };
-const JSON_AUTH = { "Content-Type": "application/json", ...AUTH };
-
-async function createTestRelay(): Promise<SyncRelay> {
-  return createSyncRelay({
-    apiToken: API_TOKEN,
-    enableDeviceAuth: true,
-    x402: {
-      payToAddress: "0x0000000000000000000000000000000000000000",
-      network: "eip155:84532",
-      testnet: true,
-    },
-  });
-}
-
-async function createAgent(
-  relay: SyncRelay,
-  pubKeyHex: string,
-): Promise<{ motebitId: string; deviceId: string }> {
-  const identityRes = await relay.app.request("/identity", {
-    method: "POST",
-    headers: JSON_AUTH,
-    body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
-  });
-  const { motebit_id } = (await identityRes.json()) as { motebit_id: string };
-
-  const deviceRes = await relay.app.request("/device/register", {
-    method: "POST",
-    headers: JSON_AUTH,
-    body: JSON.stringify({ motebit_id, device_name: "Test", public_key: pubKeyHex }),
-  });
-  const { device_id } = (await deviceRes.json()) as { device_id: string };
-
-  return { motebitId: motebit_id, deviceId: device_id };
-}
-
 async function registerWorker(relay: SyncRelay, motebitId: string, unitCost = 1.0): Promise<void> {
   await relay.app.request("/api/v1/agents/register", {
     method: "POST",
@@ -136,7 +105,7 @@ async function registerWorker(relay: SyncRelay, motebitId: string, unitCost = 1.
 async function deposit(relay: SyncRelay, motebitId: string, amount: number): Promise<number> {
   const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
     method: "POST",
-    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+    headers: jsonAuthWithIdempotency(),
     body: JSON.stringify({
       amount,
       reference: `deposit-${crypto.randomUUID()}`,
@@ -300,7 +269,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     // A submits task to B
     const taskResAB = await relay.app.request(`/agent/${agentB.motebitId}/task`, {
       method: "POST",
-      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "search for motebit",
         submitted_by: agentA.motebitId,
@@ -314,7 +283,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     await deposit(relay, agentB.motebitId, 50.0);
     const taskResBC = await relay.app.request(`/agent/${agentC.motebitId}/task`, {
       method: "POST",
-      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "read url content",
         submitted_by: agentB.motebitId,
@@ -328,7 +297,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     await deposit(relay, agentC.motebitId, 50.0);
     const taskResCD = await relay.app.request(`/agent/${agentD.motebitId}/task`, {
       method: "POST",
-      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+      headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "fetch page",
         submitted_by: agentC.motebitId,
@@ -460,7 +429,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     for (let i = 0; i < agentCount - 1; i++) {
       const taskRes = await relay.app.request(`/agent/${agents[i + 1]!.motebitId}/task`, {
         method: "POST",
-        headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+        headers: jsonAuthWithIdempotency(),
         body: JSON.stringify({
           prompt: `task-${i}`,
           submitted_by: agents[i]!.motebitId,
