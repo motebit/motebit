@@ -44,6 +44,8 @@ export interface McpServerConfig {
   callerPrivateKey?: Uint8Array;
   /** Static Bearer token for non-motebit MCP servers that require auth. */
   authToken?: string;
+  /** Guardian public key (hex) for verifying guardian recovery succession records. */
+  guardianPublicKey?: string;
 }
 
 export interface MotebitIdentityResult {
@@ -471,7 +473,7 @@ export class McpClientAdapter {
    */
   async acceptKeyRotation(successionRecord: KeySuccessionRecord): Promise<boolean> {
     const { verifyKeySuccession } = await import("@motebit/crypto");
-    const valid = await verifyKeySuccession(successionRecord);
+    const valid = await verifyKeySuccession(successionRecord, this.config.guardianPublicKey);
     if (!valid) return false;
 
     // Verify the old key in the succession matches our currently pinned key

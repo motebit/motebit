@@ -771,15 +771,30 @@ export async function handleSlashCommand(
         if (syncUrl && pubHex) {
           try {
             const headers = await makeRelayHeaders(config, repl, { json: true });
+            // Try to extract guardian key from identity file for org trust baseline
+            let guardianPubKey: string | undefined;
+            try {
+              const { parse } = await import("@motebit/identity-file");
+              const fs = await import("node:fs");
+              const idPath = config.identity ?? "motebit.md";
+              const content = fs.readFileSync(idPath, "utf-8");
+              guardianPubKey = parse(content).frontmatter.guardian?.public_key;
+            } catch {
+              // Identity file unavailable — no guardian key, acceptable
+            }
+            const serveRegBody: Record<string, unknown> = {
+              motebit_id: mid,
+              endpoint_url: `http://localhost:${port}`,
+              public_key: pubHex,
+              capabilities: exposedTools.map((t) => t.name),
+            };
+            if (guardianPubKey) {
+              serveRegBody.guardian_public_key = guardianPubKey;
+            }
             await fetch(`${syncUrl}/api/v1/agents/register`, {
               method: "POST",
               headers,
-              body: JSON.stringify({
-                motebit_id: mid,
-                endpoint_url: `http://localhost:${port}`,
-                public_key: pubHex,
-                capabilities: exposedTools.map((t) => t.name),
-              }),
+              body: JSON.stringify(serveRegBody),
             });
             console.log(success("  Registered as service agent on relay."));
           } catch {
