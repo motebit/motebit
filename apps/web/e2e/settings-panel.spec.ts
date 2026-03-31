@@ -21,8 +21,10 @@ test.describe("Settings panel", () => {
   });
 
   test("theme toggle persists across reload", async ({ page }) => {
-    await page.addInitScript(() => localStorage.removeItem("motebit-theme"));
+    // Clear theme before first load only (addInitScript runs on every navigation)
     await page.goto("/");
+    await page.evaluate(() => localStorage.removeItem("motebit-theme"));
+    await page.reload();
 
     // Open settings
     await page.locator("#settings-btn").click();
@@ -33,6 +35,10 @@ test.describe("Settings panel", () => {
 
     // Theme applies immediately on click (no save needed)
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    // Verify localStorage was written
+    const stored = await page.evaluate(() => localStorage.getItem("motebit-theme"));
+    expect(stored).toBe("dark");
 
     // Close settings
     await page.locator("#settings-save").click();

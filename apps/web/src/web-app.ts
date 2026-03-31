@@ -128,9 +128,14 @@ export class WebApp {
   };
 
   async init(canvas: HTMLCanvasElement): Promise<void> {
-    await this.renderer.init(canvas);
-    this.renderer.setLightEnvironment();
-    this.renderer.enableOrbitControls();
+    try {
+      await this.renderer.init(canvas);
+      this.renderer.setLightEnvironment();
+      this.renderer.enableOrbitControls();
+    } catch {
+      // WebGL unavailable (headless browser, low-end device).
+      // Chat, identity, and all non-3D features still work.
+    }
   }
 
   async bootstrap(): Promise<void> {

@@ -1,6 +1,13 @@
 import type { WebApp } from "./web-app";
 import type { ProviderConfig } from "./storage";
 
+declare global {
+  interface Window {
+    __motebitApp?: WebApp;
+    __motebitReady?: boolean;
+  }
+}
+
 export interface WebContext {
   app: WebApp;
   getConfig(): ProviderConfig | null;

@@ -384,7 +384,17 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-bootstrap().catch((err: unknown) => {
-  // eslint-disable-next-line no-console
-  console.error("Motebit bootstrap failed:", err);
-});
+// Expose app for E2E test injection (setProviderDirect, isProviderConnected).
+// No security cost — devtools already has full access to the running app.
+window.__motebitApp = app;
+
+bootstrap()
+  .catch((err: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error("Motebit bootstrap failed:", err);
+  })
+  .finally(() => {
+    // Signal E2E tests that bootstrap attempt completed (success or failure).
+    // The runtime may or may not have a provider — tests inject their own.
+    window.__motebitReady = true;
+  });
