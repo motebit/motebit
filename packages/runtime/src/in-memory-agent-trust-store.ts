@@ -16,26 +16,24 @@ export class InMemoryAgentTrustStore implements AgentTrustStoreAdapter {
     return `${motebitId}::${remoteMotebitId}`;
   }
 
-  async getAgentTrust(
-    motebitId: string,
-    remoteMotebitId: string,
-  ): Promise<AgentTrustRecord | null> {
-    return this.records.get(this.key(motebitId, remoteMotebitId)) ?? null;
+  getAgentTrust(motebitId: string, remoteMotebitId: string): Promise<AgentTrustRecord | null> {
+    return Promise.resolve(this.records.get(this.key(motebitId, remoteMotebitId)) ?? null);
   }
 
-  async setAgentTrust(record: AgentTrustRecord): Promise<void> {
+  setAgentTrust(record: AgentTrustRecord): Promise<void> {
     this.records.set(this.key(record.motebit_id, record.remote_motebit_id), { ...record });
+    return Promise.resolve();
   }
 
-  async listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]> {
+  listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]> {
     const result: AgentTrustRecord[] = [];
     for (const r of this.records.values()) {
       if (r.motebit_id === motebitId) result.push({ ...r });
     }
-    return result.sort((a, b) => b.last_seen_at - a.last_seen_at);
+    return Promise.resolve(result.sort((a, b) => b.last_seen_at - a.last_seen_at));
   }
 
-  async updateTrustLevel(
+  updateTrustLevel(
     motebitId: string,
     remoteMotebitId: string,
     level: AgentTrustLevel,
@@ -45,5 +43,6 @@ export class InMemoryAgentTrustStore implements AgentTrustStoreAdapter {
       existing.trust_level = level;
       existing.last_seen_at = Date.now();
     }
+    return Promise.resolve();
   }
 }

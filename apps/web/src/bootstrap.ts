@@ -232,7 +232,7 @@ export function cleanConversationHistory(
       .replace(/ {2,}/g, " ")
       .trim();
     if (clean) {
-      result.push({ role: msg.role as "user" | "assistant", content: clean });
+      result.push({ role: msg.role, content: clean });
     }
   }
   return result;

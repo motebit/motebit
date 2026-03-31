@@ -73,23 +73,24 @@ export interface AuditChainStore {
 export class InMemoryAuditChainStore implements AuditChainStore {
   private entries: AuditEntry[] = [];
 
-  async append(entry: AuditEntry): Promise<void> {
+  append(entry: AuditEntry): Promise<void> {
     this.entries.push({ ...entry });
+    return Promise.resolve();
   }
 
-  async getEntries(from?: number, to?: number): Promise<AuditEntry[]> {
+  getEntries(from?: number, to?: number): Promise<AuditEntry[]> {
     const start = from ?? 0;
     const end = to ?? this.entries.length;
-    return this.entries.slice(start, end).map((e) => ({ ...e }));
+    return Promise.resolve(this.entries.slice(start, end).map((e) => ({ ...e })));
   }
 
-  async getHead(): Promise<AuditEntry | undefined> {
-    if (this.entries.length === 0) return undefined;
-    return { ...this.entries[this.entries.length - 1]! };
+  getHead(): Promise<AuditEntry | undefined> {
+    if (this.entries.length === 0) return Promise.resolve(undefined);
+    return Promise.resolve({ ...this.entries[this.entries.length - 1]! });
   }
 
-  async count(): Promise<number> {
-    return this.entries.length;
+  count(): Promise<number> {
+    return Promise.resolve(this.entries.length);
   }
 }
 
