@@ -798,7 +798,12 @@ export interface FederationDeps {
   federationQueryCache: Map<string, number>;
 
   /** Return local agents matching a query. Used by federated discovery. */
-  queryLocalAgents(capability?: string, motebitId?: string, limit?: number): AgentInfo[];
+  queryLocalAgents(
+    capability?: string,
+    motebitId?: string,
+    limit?: number,
+    federatedOnly?: boolean,
+  ): AgentInfo[];
 
   /** Called when a verified forwarded task arrives from a peer. */
   onTaskForwarded(task: VerifiedForwardedTask):
@@ -1195,11 +1200,12 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const visitedSet = new Set(body.visited);
     if (visitedSet.has(relayIdentity.relayMotebitId)) return c.json({ agents: [] });
 
-    // Local results
+    // Local results — exclude agents that opted out of federation visibility
     const localAgents = deps.queryLocalAgents(
       body.query.capability,
       body.query.motebit_id,
       body.query.limit ?? 20,
+      true, // federatedOnly: respect federation_visible opt-out
     );
     const results = localAgents.map((a) => ({
       ...a,

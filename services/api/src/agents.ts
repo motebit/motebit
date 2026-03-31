@@ -624,11 +624,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       guardianPublicKey = claimedGuardianKey;
     }
 
+    const federationVisible = (body as Record<string, unknown>).federation_visible;
+    const fedVisibleVal = federationVisible === false ? 0 : 1;
+
     moteDb.db
       .prepare(
         `
-      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key, federation_visible)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
         public_key = excluded.public_key,
         endpoint_url = excluded.endpoint_url,
@@ -636,7 +639,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         metadata = excluded.metadata,
         last_heartbeat = excluded.last_heartbeat,
         expires_at = excluded.expires_at,
-        guardian_public_key = COALESCE(excluded.guardian_public_key, agent_registry.guardian_public_key)
+        guardian_public_key = COALESCE(excluded.guardian_public_key, agent_registry.guardian_public_key),
+        federation_visible = excluded.federation_visible
     `,
       )
       .run(
@@ -649,6 +653,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         now,
         expiresAt,
         guardianPublicKey ?? null,
+        fedVisibleVal,
       );
 
     // Auto-create a default service listing if one doesn't exist.

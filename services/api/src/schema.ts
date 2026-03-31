@@ -260,6 +260,13 @@ export function createRelaySchema(db: DatabaseDriver): {
     /* column may already exist */
   }
 
+  // Add federation_visible column — agents can opt out of cross-relay discovery (spec §13.4)
+  try {
+    db.exec("ALTER TABLE agent_registry ADD COLUMN federation_visible INTEGER DEFAULT 1");
+  } catch {
+    /* column may already exist */
+  }
+
   // Startup cleanup: purge expired blacklist entries
   db.prepare("DELETE FROM relay_token_blacklist WHERE expires_at < ?").run(Date.now());
 

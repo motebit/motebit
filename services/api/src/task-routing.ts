@@ -68,6 +68,7 @@ export interface TaskRouter {
     capability?: string,
     motebitId?: string,
     limit?: number,
+    federatedOnly?: boolean,
   ): Array<{
     motebit_id: string;
     public_key: string;
@@ -478,6 +479,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     capability?: string,
     motebitId?: string,
     limit = 20,
+    /** When true, exclude agents with federation_visible = 0 (cross-relay privacy opt-out). */
+    federatedOnly = false,
   ): Array<{
     motebit_id: string;
     public_key: string;
@@ -487,6 +490,9 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     metadata: Record<string, unknown> | null;
   }> {
     const now = Date.now();
+    const fedFilter = federatedOnly
+      ? " AND (federation_visible IS NULL OR federation_visible != 0)"
+      : "";
 
     let rows: Array<Record<string, unknown>>;
 
@@ -496,7 +502,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           `
         SELECT * FROM agent_registry
         WHERE expires_at > ? AND motebit_id = ?
-          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)
+          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)${fedFilter}
         LIMIT ?
       `,
         )
@@ -507,7 +513,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           `
         SELECT * FROM agent_registry
         WHERE expires_at > ?
-          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)
+          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)${fedFilter}
         LIMIT ?
       `,
         )
@@ -516,7 +522,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       rows = db
         .prepare(
           `
-        SELECT * FROM agent_registry WHERE expires_at > ? AND motebit_id = ? LIMIT ?
+        SELECT * FROM agent_registry WHERE expires_at > ? AND motebit_id = ?${fedFilter} LIMIT ?
       `,
         )
         .all(now, motebitId, limit) as Array<Record<string, unknown>>;
@@ -524,7 +530,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       rows = db
         .prepare(
           `
-        SELECT * FROM agent_registry WHERE expires_at > ? LIMIT ?
+        SELECT * FROM agent_registry WHERE expires_at > ?${fedFilter} LIMIT ?
       `,
         )
         .all(now, limit) as Array<Record<string, unknown>>;
