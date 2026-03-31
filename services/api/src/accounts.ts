@@ -80,6 +80,12 @@ export function createAccountTables(db: DatabaseDriver): void {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_relay_txn_motebit ON relay_transactions (motebit_id, created_at DESC);
+
+    -- Settlement lookups + idempotency checks by allocation/session reference
+    CREATE INDEX IF NOT EXISTS idx_relay_txn_reference ON relay_transactions (reference_id) WHERE reference_id IS NOT NULL;
+
+    -- Analytics queries filtering by transaction type over time
+    CREATE INDEX IF NOT EXISTS idx_relay_txn_type_time ON relay_transactions (type, created_at);
   `);
 }
 

@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
-import type { PlatformAdapters, AgentTrustStoreAdapter } from "../index";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  createInMemoryStorage,
+  InMemoryAgentTrustStore,
+} from "../index";
+import type { PlatformAdapters } from "../index";
 import { AgentTrustLevel } from "@motebit/sdk";
 import type {
-  AgentTrustRecord,
   GradientCredentialSubject,
   TrustCredentialSubject,
   ReputationCredentialSubject,
@@ -26,47 +30,6 @@ async function generateEd25519Keypair(): Promise<{
 }> {
   const { generateKeypair } = await import("@motebit/crypto");
   return generateKeypair();
-}
-
-// === In-Memory Agent Trust Store ===
-
-class InMemoryAgentTrustStore implements AgentTrustStoreAdapter {
-  private records = new Map<string, AgentTrustRecord>();
-
-  private key(motebitId: string, remoteMotebitId: string): string {
-    return `${motebitId}::${remoteMotebitId}`;
-  }
-
-  async getAgentTrust(
-    motebitId: string,
-    remoteMotebitId: string,
-  ): Promise<AgentTrustRecord | null> {
-    return this.records.get(this.key(motebitId, remoteMotebitId)) ?? null;
-  }
-
-  async setAgentTrust(record: AgentTrustRecord): Promise<void> {
-    this.records.set(this.key(record.motebit_id, record.remote_motebit_id), { ...record });
-  }
-
-  async listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]> {
-    const result: AgentTrustRecord[] = [];
-    for (const r of this.records.values()) {
-      if (r.motebit_id === motebitId) result.push({ ...r });
-    }
-    return result.sort((a, b) => b.last_seen_at - a.last_seen_at);
-  }
-
-  async updateTrustLevel(
-    motebitId: string,
-    remoteMotebitId: string,
-    level: AgentTrustLevel,
-  ): Promise<void> {
-    const existing = this.records.get(this.key(motebitId, remoteMotebitId));
-    if (existing) {
-      existing.trust_level = level;
-      existing.last_seen_at = Date.now();
-    }
-  }
 }
 
 // === Helpers ===

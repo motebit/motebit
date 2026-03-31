@@ -724,6 +724,7 @@ export async function forwardTaskViaMcp(
           if (qEntry) {
             qEntry.task.status = "completed";
             qEntry.receipt = receiptData;
+            taskQueue.set(taskId, qEntry); // Persist to durable queue
             logger.info("task.mcp_forward_completed", {
               correlationId: taskId,
               agent: agentId,

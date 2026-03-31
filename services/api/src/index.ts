@@ -75,6 +75,7 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
 import { createRelaySchema } from "./schema.js";
+import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import { registerWebSocketRoutes } from "./websocket.js";
@@ -98,7 +99,6 @@ import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import { createAccountTables, createWithdrawalTables, creditAccount } from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import { registerStateExportRoutes } from "./state-export.js";
-import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { registerTrustGraphRoutes } from "./trust-graph.js";
 import { registerListingsRoutes } from "./listings.js";
 import { registerProposalRoutes } from "./proposals.js";
@@ -106,7 +106,8 @@ import { registerKeyRotationRoutes } from "./key-rotation.js";
 import { registerBudgetRoutes } from "./budget.js";
 import { registerAgentRoutes } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
-import { registerTaskRoutes, type TaskQueueEntry } from "./tasks.js";
+import { registerTaskRoutes } from "./tasks.js";
+import { TaskQueue } from "./task-queue.js";
 import { registerCommandRoutes, handleCommandResponse } from "./command-route.js";
 import Stripe from "stripe";
 
@@ -129,6 +130,9 @@ export interface X402Config {
   testnet?: boolean;
 }
 
+/** Callback to query shutdown state. Injected by standalone boot, unused in tests. */
+export type ShutdownStateGetter = () => boolean;
+
 export interface SyncRelayConfig {
   dbPath?: string;
   apiToken?: string; // Legacy single token (still supported as admin/master token)
@@ -140,6 +144,8 @@ export interface SyncRelayConfig {
   issueCredentials?: boolean;
   /** When true, relay starts in emergency freeze mode — all write operations are suspended. */
   emergencyFreeze?: boolean;
+  /** Shutdown state getter — health check returns 503 when true. Injected by standalone boot. */
+  getShuttingDown?: ShutdownStateGetter;
   /** Max pending tasks per submitter. Default: 1000. */
   maxTasksPerSubmitter?: number;
   /** Federation configuration. Omit to disable federation. */
@@ -201,12 +207,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     platformFeeRate = parseFloat(process.env.MOTEBIT_PLATFORM_FEE_RATE ?? "0.05"),
   } = config;
 
-  // Emergency freeze: persistent kill switch backed by SQLite.
-  // On startup, load persisted state from DB. Config override (emergencyFreeze=true)
-  // takes precedence and is persisted immediately so it survives further restarts.
-  // Shared mutable object so budget.ts freeze/unfreeze routes can toggle the same state.
-  // DB write happens first, then in-memory cache update (read-through cache pattern).
-
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
@@ -220,9 +220,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   createAccountTables(moteDb.db);
   createWithdrawalTables(moteDb.db);
   createSubscriptionTables(moteDb.db);
+
+  // --- Schema: relay-owned tables, migrations, startup cleanup ---
+  const { isTokenBlacklisted, isAgentRevoked } = createRelaySchema(moteDb.db);
   createRelayConfigTable(moteDb.db);
 
-  // --- Freeze state: load from DB, apply config override if set ---
+  // Emergency freeze: persistent kill switch. When true, all state-mutating
+  // operations (POST/PUT/PATCH/DELETE) return 503. Reads remain available.
+  // State persisted to SQLite — survives relay restart.
   const persistedFreeze = loadFreezeState(moteDb.db);
   const freezeState = {
     frozen: persistedFreeze.frozen,
@@ -235,16 +240,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const getEmergencyFreeze = () => freezeState.frozen;
   const getFreezeReason = () => freezeState.reason;
 
-  // --- Schema: relay-owned tables, migrations, startup cleanup ---
-  const { isTokenBlacklisted, isAgentRevoked } = createRelaySchema(moteDb.db);
-
   // --- Shared state ---
   const connections = new Map<string, ConnectedDevice[]>();
 
   const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const MAX_TASK_QUEUE_SIZE = 100_000;
   const MAX_TASKS_PER_SUBMITTER = config.maxTasksPerSubmitter ?? 1_000;
-  const taskQueue = new Map<string, TaskQueueEntry>();
+  const taskQueue = new TaskQueue(moteDb.db);
 
   // --- Relay Identity: persistent Ed25519 keypair ---
   const relayIdentity: RelayIdentity = await initRelayIdentity(
@@ -277,25 +279,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isAgentRevoked,
     verifySignedTokenForDevice,
     parseTokenPayloadUnsafe,
+    getShuttingDown: config.getShuttingDown,
   });
 
   // --- Cleanup interval (task expiry, limiter cleanup, stale allocations) ---
   // Stays in index.ts because it touches the local taskQueue map and allLimiters array.
   const taskCleanupInterval = setInterval(() => {
     const now = Date.now();
-    for (const [id, entry] of taskQueue) {
-      if (entry.expiresAt < now) {
-        taskQueue.delete(id);
-      }
-    }
+    // Expire completed/failed tasks and tasks past their TTL
+    taskQueue.cleanup(now);
     // Evict oldest entries if queue exceeds hard cap (defensive against flooding)
-    if (taskQueue.size > MAX_TASK_QUEUE_SIZE) {
-      const entries = [...taskQueue.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
-      const toEvict = entries.slice(0, taskQueue.size - MAX_TASK_QUEUE_SIZE);
-      for (const [id] of toEvict) {
-        taskQueue.delete(id);
-      }
-      logger.warn("task_queue.eviction", { evicted: toEvict.length, remaining: taskQueue.size });
+    const evicted = taskQueue.evict(MAX_TASK_QUEUE_SIZE);
+    if (evicted > 0) {
+      logger.warn("task_queue.eviction", { evicted, remaining: taskQueue.size });
     }
     // Clean expired agent registrations
     const stmtClean = moteDb.db.prepare("DELETE FROM agent_registry WHERE expires_at < ?");
@@ -654,12 +650,16 @@ if (process.env.VITEST != null) {
     testnet: process.env.X402_TESTNET !== "false",
   };
 
+  // --- Shutdown state (shared with health check via config) ---
+  let shuttingDown = false;
+
   const relay = await createSyncRelay({
     dbPath: process.env.MOTEBIT_DB_PATH,
     apiToken: process.env.MOTEBIT_API_TOKEN,
     corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
     enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
     emergencyFreeze: process.env.MOTEBIT_EMERGENCY_FREEZE === "true",
+    getShuttingDown: () => shuttingDown,
     x402: x402Env,
     federation: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL
       ? {
@@ -703,6 +703,41 @@ if (process.env.VITEST != null) {
   // Inject WebSocket support
   const injectWs = (app as Hono & { injectWebSocket?: (server: unknown) => void }).injectWebSocket;
   if (injectWs) injectWs(server);
+
+  // --- Graceful shutdown ---
+  const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 30_000);
+  let forceOnNextSignal = false;
+
+  function gracefulShutdown(signal: string): void {
+    if (forceOnNextSignal) {
+      bootLogger.warn("relay.shutdown.forced", { signal });
+      process.exit(1);
+    }
+    forceOnNextSignal = true;
+    shuttingDown = true;
+    bootLogger.info("relay.shutdown.draining", { signal, timeoutMs: SHUTDOWN_TIMEOUT_MS });
+
+    // Hard deadline: force exit if drain exceeds timeout
+    const forceTimer = setTimeout(() => {
+      bootLogger.error("relay.shutdown.timeout", { timeoutMs: SHUTDOWN_TIMEOUT_MS });
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    // Unref so this timer alone doesn't keep the process alive
+    if (typeof forceTimer === "object" && "unref" in forceTimer) {
+      (forceTimer as NodeJS.Timeout).unref();
+    }
+
+    // Stop accepting new connections, wait for in-flight requests to finish
+    server.close(() => {
+      bootLogger.info("relay.shutdown.server_closed");
+      relay.close();
+      bootLogger.info("relay.shutdown.complete");
+      process.exit(0);
+    });
+  }
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 }
 
 export default app;

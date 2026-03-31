@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { settleOnReceipt } from "../settlement.js";
+import { settleOnReceipt, validateAllocation } from "../settlement.js";
 import {
   asAllocationId,
   asGoalId,
@@ -250,5 +250,119 @@ describe("settleOnReceipt", () => {
         expect(sum).toBe(gross);
       }
     }
+  });
+});
+
+describe("settlement validation guards", () => {
+  it("throws on negative allocation", () => {
+    expect(() =>
+      settleOnReceipt(makeAllocation({ amount_locked: -100 }), makeReceipt(), null, SID),
+    ).toThrow("settlement invariant: negative allocation");
+  });
+
+  it("validateAllocation throws on negative amount", () => {
+    expect(() => validateAllocation(makeAllocation({ amount_locked: -1 }))).toThrow(
+      "settlement invariant: negative allocation",
+    );
+  });
+
+  it("validateAllocation passes for zero allocation", () => {
+    expect(() => validateAllocation(makeAllocation({ amount_locked: 0 }))).not.toThrow();
+  });
+
+  it("validateAllocation passes for normal positive allocation", () => {
+    expect(() => validateAllocation(makeAllocation({ amount_locked: 1000000 }))).not.toThrow();
+  });
+
+  it("completed === 0, total > 0 — full settlement (no partial reduction)", () => {
+    // When all steps failed but receipt says completed, the partial branch
+    // requires completed > 0, so full settlement applies.
+    const ledger = makeLedger([{ status: "failed" }, { status: "failed" }]);
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
+    expect(result.status).toBe("completed");
+    expect(result.amount_settled).toBe(0.95);
+  });
+
+  it("completed === total — full settlement, not partial", () => {
+    const ledger = makeLedger([
+      { status: "completed" },
+      { status: "completed" },
+      { status: "completed" },
+    ]);
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
+    expect(result.status).toBe("completed");
+    expect(result.amount_settled).toBe(0.95);
+    expect(result.platform_fee).toBe(0.05);
+  });
+
+  it("normal partial — proportional payment", () => {
+    const ledger = makeLedger([
+      { status: "completed" },
+      { status: "completed" },
+      { status: "completed" },
+      { status: "failed" },
+    ]);
+    const alloc = makeAllocation({ amount_locked: 100 });
+    const result = settleOnReceipt(alloc, makeReceipt(), ledger, SID);
+    expect(result.status).toBe("partial");
+    // Gross = 100 * 3/4 = 75
+    // Fee = 75 * 0.05 = 3.75
+    // Net = 75 - 3.75 = 71.25
+    expect(result.platform_fee).toBe(3.75);
+    expect(result.amount_settled).toBe(71.25);
+  });
+
+  it("total === 0 in ledger — full settlement (division by zero avoided)", () => {
+    const ledger = makeLedger([]);
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), ledger, SID);
+    expect(result.status).toBe("completed");
+    expect(result.amount_settled).toBe(0.95);
+  });
+
+  it("large values near MAX_SAFE_INTEGER — handled correctly", () => {
+    // Use a value just under MAX_SAFE_INTEGER that works with micro-rounding
+    const largeAmount = 9_000_000_000_000; // 9 trillion micro-units (~$9M)
+    const alloc = makeAllocation({ amount_locked: largeAmount });
+    const result = settleOnReceipt(alloc, makeReceipt(), null, SID);
+    expect(result.status).toBe("completed");
+    expect(result.platform_fee + result.amount_settled).toBeCloseTo(largeAmount, 0);
+    expect(result.amount_settled).toBeGreaterThan(0);
+  });
+
+  it("overflow guard — amount_locked * completed near MAX_SAFE_INTEGER in partial", () => {
+    // amount_locked just under MAX_SAFE_INTEGER, 1 of 2 steps completed
+    // The product amount_locked * completed could overflow
+    const hugeAmount = Number.MAX_SAFE_INTEGER - 1;
+    const alloc = makeAllocation({ amount_locked: hugeAmount });
+    const ledger = makeLedger([{ status: "completed" }, { status: "failed" }]);
+    // completed=1, so product = hugeAmount * 1, which is safe
+    // This should still work because completed=1 doesn't cause overflow
+    const result = settleOnReceipt(alloc, makeReceipt(), ledger, SID);
+    expect(result.status).toBe("partial");
+    expect(result.amount_settled).toBeGreaterThanOrEqual(0);
+  });
+
+  it("feeRate boundary: exactly 0 is valid", () => {
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), null, SID, 0);
+    expect(result.platform_fee).toBe(0);
+    expect(result.amount_settled).toBe(1.0);
+  });
+
+  it("feeRate boundary: exactly 1 is valid", () => {
+    const result = settleOnReceipt(makeAllocation(), makeReceipt(), null, SID, 1);
+    expect(result.platform_fee).toBe(1.0);
+    expect(result.amount_settled).toBe(0);
+  });
+
+  it("negative allocation throws even for refund path", () => {
+    // validateAllocation runs before the refund branch
+    expect(() =>
+      settleOnReceipt(
+        makeAllocation({ amount_locked: -50 }),
+        makeReceipt({ status: "failed" }),
+        null,
+        SID,
+      ),
+    ).toThrow("settlement invariant: negative allocation");
   });
 });

@@ -1,12 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  createInMemoryStorage,
+  InMemoryAgentTrustStore,
+} from "../index";
 import type { PlatformAdapters, StreamChunk } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ExecutionReceipt, AgentTask } from "@motebit/sdk";
 import { TrustMode, BatteryMode, AgentTaskStatus, AgentTrustLevel } from "@motebit/sdk";
-import type { AgentTrustRecord, AgentServiceListing } from "@motebit/sdk";
+import type { AgentServiceListing } from "@motebit/sdk";
 import { generateKeypair } from "@motebit/crypto";
-import type { AgentTrustStoreAdapter, ServiceListingStoreAdapter } from "../index";
+import type { ServiceListingStoreAdapter } from "../index";
 
 // === Mock ai-core: intercept runTurnStreaming to simulate AI calling delegate_to_agent ===
 
@@ -49,26 +54,6 @@ function createMockProvider(): StreamingProvider {
       yield { type: "done" as const, response };
     },
   };
-}
-
-class InMemoryAgentTrustStore implements AgentTrustStoreAdapter {
-  private records = new Map<string, AgentTrustRecord>();
-  private key(a: string, b: string): string {
-    return `${a}::${b}`;
-  }
-  async getAgentTrust(mid: string, rid: string): Promise<AgentTrustRecord | null> {
-    return this.records.get(this.key(mid, rid)) ?? null;
-  }
-  async setAgentTrust(r: AgentTrustRecord): Promise<void> {
-    this.records.set(this.key(r.motebit_id, r.remote_motebit_id), { ...r });
-  }
-  async listAgentTrust(mid: string): Promise<AgentTrustRecord[]> {
-    return [...this.records.values()].filter((r) => r.motebit_id === mid);
-  }
-  async updateTrustLevel(mid: string, rid: string, level: AgentTrustLevel): Promise<void> {
-    const r = this.records.get(this.key(mid, rid));
-    if (r) r.trust_level = level;
-  }
 }
 
 class InMemoryServiceListingStore implements ServiceListingStoreAdapter {

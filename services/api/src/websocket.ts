@@ -226,6 +226,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 // worker threads or multi-instance.
                 entry.task.status = AgentTaskStatus.Claimed;
                 entry.task.claimed_by = deviceId;
+                taskQueue.set(taskId, entry); // Persist claim to durable queue
 
                 // Verify claiming device has required capabilities
                 const requiredCaps = entry.task.required_capabilities ?? [];
@@ -240,6 +241,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                       // Roll back claim — device lacks capabilities
                       entry.task.status = AgentTaskStatus.Pending;
                       entry.task.claimed_by = undefined;
+                      taskQueue.set(taskId, entry); // Persist rollback
                       ws.send(
                         JSON.stringify({
                           type: "task_claim_rejected",

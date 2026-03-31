@@ -27,6 +27,9 @@ export function createRelaySchema(db: DatabaseDriver): {
         last_heartbeat INTEGER NOT NULL,
         expires_at    INTEGER NOT NULL
       );
+
+      -- Discovery, cleanup, and federation queries all filter on expires_at
+      CREATE INDEX IF NOT EXISTS idx_agent_registry_expires ON agent_registry(expires_at);
   `);
 
   // Migration: add x402 payment proof columns to relay_federation_settlements
@@ -133,6 +136,9 @@ export function createRelaySchema(db: DatabaseDriver): {
       );
       CREATE INDEX IF NOT EXISTS idx_allocations_task ON relay_allocations(task_id);
       CREATE INDEX IF NOT EXISTS idx_allocations_status ON relay_allocations(status) WHERE status = 'locked';
+
+      -- Balance detail query: SUM(amount_locked) WHERE motebit_id = ? AND status = 'locked'
+      CREATE INDEX IF NOT EXISTS idx_allocations_motebit_status ON relay_allocations(motebit_id, status);
   `);
 
   // Collaborative plan proposal tables
@@ -183,6 +189,9 @@ export function createRelaySchema(db: DatabaseDriver): {
         issued_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_relay_creds_subject ON relay_credentials(subject_motebit_id);
+
+      -- Credential queries filter by subject + type together, ordered by issued_at DESC
+      CREATE INDEX IF NOT EXISTS idx_relay_creds_subject_type ON relay_credentials(subject_motebit_id, credential_type, issued_at DESC);
   `);
 
   // Signed execution ledger storage (agents submit signed manifests)
@@ -226,6 +235,9 @@ export function createRelaySchema(db: DatabaseDriver): {
         revoked_at TEXT DEFAULT (datetime('now')),
         expires_at INTEGER NOT NULL
       );
+
+      -- Startup cleanup purges expired blacklist entries by expires_at
+      CREATE INDEX IF NOT EXISTS idx_relay_token_blacklist_expires ON relay_token_blacklist(expires_at);
   `);
 
   // Revoked credentials
@@ -237,6 +249,9 @@ export function createRelaySchema(db: DatabaseDriver): {
         reason TEXT,
         revoked_by TEXT
       );
+
+      -- Federation revocation propagation queries by motebit_id
+      CREATE INDEX IF NOT EXISTS idx_relay_revoked_creds_motebit ON relay_revoked_credentials(motebit_id);
   `);
 
   // Migration: add revoked_by column if missing

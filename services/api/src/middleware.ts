@@ -28,6 +28,7 @@ export interface MiddlewareDeps {
   identityManager: IdentityManager;
   getEmergencyFreeze: () => boolean;
   getFreezeReason: () => string | null;
+  getShuttingDown?: () => boolean;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
   verifySignedTokenForDevice: typeof verifySignedTokenForDevice;
@@ -384,16 +385,20 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   });
 
   // --- Health (public, no auth) ---
-  app.get("/health", (c) =>
-    c.json({
+  app.get("/health", (c) => {
+    const shuttingDown = deps.getShuttingDown?.() ?? false;
+    if (shuttingDown) {
+      return c.json({ status: "draining", timestamp: Date.now() }, 503);
+    }
+    return c.json({
       status: deps.getEmergencyFreeze() ? "frozen" : "ok",
       frozen: deps.getEmergencyFreeze(),
       ...(deps.getEmergencyFreeze() && deps.getFreezeReason()
         ? { freeze_reason: deps.getFreezeReason() }
         : {}),
       timestamp: Date.now(),
-    }),
-  );
+    });
+  });
 
   return { allLimiters, wsLimiter };
 }

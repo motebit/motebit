@@ -215,9 +215,9 @@ export async function handleReceiptIngestion(
     issueCredentials,
   } = deps;
 
-  // --- Idempotency: in-memory flag ---
+  // --- Idempotency: settled flag (persisted in durable queue) ---
   if (entry.settled) {
-    logger.info("settlement.already_settled_memory", { correlationId: taskId });
+    logger.info("settlement.already_settled", { correlationId: taskId });
     return { verified: true, credential_id: null, already_settled: true };
   }
 
@@ -291,6 +291,7 @@ export async function handleReceiptIngestion(
     .get(taskId, motebitId) as { settlement_id: string } | undefined;
   if (existingSettlement) {
     entry.settled = true;
+    taskQueue.set(taskId, entry); // Persist settled flag to durable queue
     logger.info("settlement.duplicate", { correlationId: taskId });
     return { verified: true, credential_id: null, already_settled: true };
   }
@@ -886,8 +887,9 @@ export async function handleReceiptIngestion(
     }
   }
 
-  // Mark settled in memory
+  // Mark settled and persist to durable queue
   entry.settled = true;
+  taskQueue.set(taskId, entry);
 
   // --- WebSocket fan-out ---
   const peers = connections.get(motebitId);
@@ -1886,6 +1888,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         : receipt.status === "denied"
           ? AgentTaskStatus.Denied
           : AgentTaskStatus.Failed;
+    taskQueue.set(taskId, entry); // Persist to durable queue
 
     // Unified receipt ingestion: Ed25519 verification → settlement → trust → credentials
     const ingestionResult = await handleReceiptIngestion(

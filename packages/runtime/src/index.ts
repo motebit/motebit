@@ -70,6 +70,7 @@ import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { InMemoryGradientStore } from "./gradient.js";
+import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { PlanExecutionManager } from "./plan-execution.js";
@@ -200,6 +201,7 @@ export {
   buildPrecisionContext,
 } from "./gradient.js";
 export { AgentGraphManager } from "./agent-graph.js";
+export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
@@ -421,6 +423,7 @@ export function createInMemoryStorage(): StorageAdapters {
     memoryStorage: new InMemoryMemoryStorage(),
     identityStorage: new InMemoryIdentityStorage(),
     auditLog: new InMemoryAuditLog(),
+    agentTrustStore: new InMemoryAgentTrustStore(),
   };
 }
 
@@ -565,7 +568,7 @@ export class MotebitRuntime {
     this.gradientStore = adapters.storage.gradientStore ?? new InMemoryGradientStore();
 
     // Agent trust
-    this.agentTrustStore = adapters.storage.agentTrustStore ?? null;
+    this.agentTrustStore = adapters.storage.agentTrustStore ?? new InMemoryAgentTrustStore();
 
     // Market stores
     this.serviceListingStore = adapters.storage.serviceListingStore ?? null;

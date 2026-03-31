@@ -198,6 +198,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           : verified.receipt.status === "denied"
             ? AgentTaskStatus.Denied
             : AgentTaskStatus.Failed;
+      taskQueue.set(verified.taskId, entry); // Persist to durable queue
 
       // Fan out to submitter
       const submittedBy = entry.submitted_by ?? entry.task.submitted_by;

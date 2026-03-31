@@ -18,6 +18,22 @@ function microRound(n: number): number {
 }
 
 /**
+ * Validate allocation invariants before settlement begins.
+ * Throws on negative amount or unsafe integer range.
+ */
+export function validateAllocation(allocation: BudgetAllocation): void {
+  if (allocation.amount_locked < 0) {
+    throw new Error("settlement invariant: negative allocation");
+  }
+  if (
+    !Number.isSafeInteger(allocation.amount_locked) &&
+    allocation.amount_locked > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new Error("settlement invariant: allocation exceeds safe integer range");
+  }
+}
+
+/**
  * Pure: allocation + verified receipt + ledger → SettlementRecord
  *
  * The relay extracts a platform fee (PLATFORM_FEE_RATE) from every
@@ -40,6 +56,9 @@ export function settleOnReceipt(
   if (feeRate < 0 || feeRate > 1) {
     throw new Error(`feeRate must be in [0, 1], got ${feeRate}`);
   }
+
+  validateAllocation(allocation);
+
   const receiptHash = receipt.result_hash ?? "";
 
   if (receipt.status === "failed" || receipt.status === "denied") {
@@ -64,10 +83,25 @@ export function settleOnReceipt(
   if (ledger && ledger.steps.length > 0) {
     const total = ledger.steps.length;
     const completed = ledger.steps.filter((s) => s.status === "completed").length;
+
+    if (completed > total) {
+      throw new Error("settlement invariant: completed steps exceed total");
+    }
+
     if (completed < total && completed > 0) {
+      // Guard against integer overflow in the multiplication
+      const product = allocation.amount_locked * completed;
+      if (!Number.isSafeInteger(product) && product > Number.MAX_SAFE_INTEGER) {
+        throw new Error(
+          "settlement invariant: amount_locked * completed overflows safe integer range",
+        );
+      }
       gross = microRound(allocation.amount_locked * (completed / total));
       status = "partial";
     }
+  } else if (ledger && ledger.steps.length === 0) {
+    // Zero steps with a ledger present — not partial, treated as full settlement.
+    // The partial path must never execute with total === 0 (division by zero).
   }
 
   const fee = microRound(gross * feeRate);
@@ -75,6 +109,10 @@ export function settleOnReceipt(
   // Both operands are already at micro-unit precision, but IEEE 754 subtraction
   // can introduce noise (e.g. 9.99 - 0.70 = 9.289999...98). microRound cleans it.
   const net = microRound(gross - fee);
+
+  if (net < 0) {
+    throw new Error("settlement invariant: net amount after fee is negative");
+  }
 
   return {
     settlement_id: settlementId,

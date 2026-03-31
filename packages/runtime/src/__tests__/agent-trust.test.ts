@@ -1,49 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
-import type { PlatformAdapters, AgentTrustStoreAdapter } from "../index";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  createInMemoryStorage,
+  InMemoryAgentTrustStore,
+} from "../index";
+import type { PlatformAdapters } from "../index";
 import { AgentTrustLevel } from "@motebit/sdk";
-import type { AgentTrustRecord } from "@motebit/sdk";
-
-// === In-Memory Agent Trust Store ===
-
-class InMemoryAgentTrustStore implements AgentTrustStoreAdapter {
-  private records = new Map<string, AgentTrustRecord>();
-
-  private key(motebitId: string, remoteMotebitId: string): string {
-    return `${motebitId}::${remoteMotebitId}`;
-  }
-
-  async getAgentTrust(
-    motebitId: string,
-    remoteMotebitId: string,
-  ): Promise<AgentTrustRecord | null> {
-    return this.records.get(this.key(motebitId, remoteMotebitId)) ?? null;
-  }
-
-  async setAgentTrust(record: AgentTrustRecord): Promise<void> {
-    this.records.set(this.key(record.motebit_id, record.remote_motebit_id), { ...record });
-  }
-
-  async listAgentTrust(motebitId: string): Promise<AgentTrustRecord[]> {
-    const result: AgentTrustRecord[] = [];
-    for (const r of this.records.values()) {
-      if (r.motebit_id === motebitId) result.push({ ...r });
-    }
-    return result.sort((a, b) => b.last_seen_at - a.last_seen_at);
-  }
-
-  async updateTrustLevel(
-    motebitId: string,
-    remoteMotebitId: string,
-    level: AgentTrustLevel,
-  ): Promise<void> {
-    const existing = this.records.get(this.key(motebitId, remoteMotebitId));
-    if (existing) {
-      existing.trust_level = level;
-      existing.last_seen_at = Date.now();
-    }
-  }
-}
 
 function createAdaptersWithTrust(): {
   adapters: PlatformAdapters;
@@ -127,17 +90,18 @@ describe("MotebitRuntime Agent Trust", () => {
     expect(found!.trust_level).toBe(AgentTrustLevel.Verified);
   });
 
-  it("returns null when no trust store is configured", async () => {
-    const noTrustRuntime = new MotebitRuntime(
+  it("uses default in-memory trust store when none explicitly provided", async () => {
+    const defaultRuntime = new MotebitRuntime(
       { motebitId: "test-mote", tickRateHz: 0 },
       { storage: createInMemoryStorage(), renderer: new NullRenderer() },
     );
 
-    const result = await noTrustRuntime.recordAgentInteraction("remote-1");
-    expect(result).toBeNull();
+    const result = await defaultRuntime.recordAgentInteraction("remote-1");
+    expect(result).not.toBeNull();
+    expect(result!.trust_level).toBe(AgentTrustLevel.FirstContact);
 
-    const list = await noTrustRuntime.listTrustedAgents();
-    expect(list).toHaveLength(0);
+    const list = await defaultRuntime.listTrustedAgents();
+    expect(list).toHaveLength(1);
   });
 });
 
@@ -211,13 +175,16 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
     expect(record).toBeNull();
   });
 
-  it("does nothing without trust store", async () => {
-    const noTrustRuntime = new MotebitRuntime(
+  it("accumulates trust with default in-memory store", async () => {
+    const defaultRuntime = new MotebitRuntime(
       { motebitId: "test-mote", tickRateHz: 0 },
       { storage: createInMemoryStorage(), renderer: new NullRenderer() },
     );
-    // Should not throw
-    await noTrustRuntime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    await defaultRuntime.bumpTrustFromReceipt(fakeReceipt("remote-1"), true);
+    const record = await defaultRuntime.getAgentTrust("remote-1");
+    expect(record).not.toBeNull();
+    expect(record!.trust_level).toBe(AgentTrustLevel.FirstContact);
+    expect(record!.interaction_count).toBe(1);
   });
 
   it("credential-blended trust affects graph edge weight", async () => {
