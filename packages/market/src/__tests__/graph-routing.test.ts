@@ -849,10 +849,10 @@ describe("organizational trust baseline via guardian", () => {
     const edgeWithout = graphWithout.getEdge(SELF_ID, "org-agent")!;
     expect(edgeWithout.trust).toBeCloseTo(0.1, 1);
 
-    // With same guardian: trust = 0.5 (organizational baseline)
+    // With same guardian: trust = 0.35 (organizational baseline — identity, not capability)
     const graphWith = buildRoutingGraph(SELF_ID, [candidate], undefined, guardianKey);
     const edgeWith = graphWith.getEdge(SELF_ID, "org-agent")!;
-    expect(edgeWith.trust).toBeCloseTo(0.5, 1);
+    expect(edgeWith.trust).toBeCloseTo(0.35, 1);
   });
 
   it("does not downgrade earned trust above organizational baseline", () => {
@@ -865,8 +865,8 @@ describe("organizational trust baseline via guardian", () => {
 
     const graph = buildRoutingGraph(SELF_ID, [candidate], undefined, guardianKey);
     const edge = graph.getEdge(SELF_ID, "trusted-org-agent")!;
-    // Earned trust (0.9) > org baseline (0.5), should keep 0.9
-    expect(edge.trust).toBeGreaterThan(0.5);
+    // Earned trust (0.9) > org baseline (0.35), should keep 0.9
+    expect(edge.trust).toBeGreaterThan(0.35);
   });
 
   it("different guardian keys do not boost trust", () => {

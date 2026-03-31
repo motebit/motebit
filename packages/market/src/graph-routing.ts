@@ -125,10 +125,15 @@ export interface RoutingConfig {
 
 /**
  * Organizational trust baseline when two agents share the same guardian key.
- * Same guardian = same organizational custody = moderate baseline trust.
+ * Same guardian = same organizational custody = verified identity, unproven capability.
+ * Sits just above FirstContact (0.3): org attestation proves WHO, not WHAT.
  * This is a floor, not an override — earned trust above this is preserved.
+ *
+ * 0.35 chosen per zero-trust principle: identity is necessary, not sufficient.
+ * Orgs can sign unlimited attestations, so baseline must be conservative.
+ * Agents that perform will quickly reach Verified (0.6) through earned trust.
  */
-const ORGANIZATIONAL_TRUST_BASELINE = 0.5;
+const ORGANIZATIONAL_TRUST_BASELINE = 0.35;
 
 /**
  * Build a semiring computation graph from candidate profiles.
