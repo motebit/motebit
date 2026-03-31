@@ -68,7 +68,7 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 
 A motebit is a droplet of intelligence under surface tension. [Read the thesis.](https://docs.motebit.com/docs/introduction)
 
-**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. Keys rotate via dual-signed succession records. The `motebit_id` persists across rotations, devices, and providers.
+**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. Keys rotate via dual-signed succession records. The `motebit_id` persists across rotations, devices, and providers. Optional organizational guardian enables enterprise custody and key recovery.
 
 **Memory** — Semantic graph that compounds with use. Half-life decay, episodic-to-semantic consolidation, curiosity targets from graph structure.
 
@@ -134,8 +134,10 @@ apps/
   cli/         Node.js — REPL, daemon, goal scheduling, operator console
   desktop/     Tauri — OS keyring, stdio MCP, full operator mode
   mobile/      React Native — Expo, secure keychain, triple providers
-  admin/       React — 13-tab real-time monitoring dashboard
+  admin/       React — 14-tab real-time monitoring dashboard
   spatial/     WebXR — 6DOF anchoring, spatial audio reactivity
+  docs/        Next.js — docs.motebit.com
+  identity/    Vite — identity management
 
 packages/
   protocol/        Network protocol types — zero deps, MIT licensed
@@ -167,6 +169,10 @@ services/
                 credential issuance, federation, 5-tier rate limiting
   code-review/  Code review agent — Claude-powered, $0.50/review, signed receipts
   web-search/   Web search service — Brave/DuckDuckGo, $0.05/request
+  proxy/        Vercel edge CORS proxy for web app
+  read-url/     URL reader service (multi-hop delegation proof)
+  summarize/    Conversation summarization
+  embed/        ONNX embedding service
 
 spec/
   identity-v1.md          motebit/identity@1.0
@@ -175,7 +181,7 @@ spec/
   market-v1.md            motebit/market@1.0 — budget, settlement, routing
 ```
 
-44 pnpm workspaces across packages, apps, services, and the repo root.
+45 pnpm workspaces across packages, apps, services, and the repo root.
 
 ## Verify & integrate
 
@@ -201,7 +207,7 @@ if (result.type === "receipt" && result.valid) {
 import type { ExecutionReceipt, MotebitState, AgentTrustRecord } from "@motebit/sdk";
 ```
 
-Four npm packages, all zero monorepo dependencies:
+Five npm packages, all zero monorepo dependencies:
 
 | Package                                                                | Description                                                                | License |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
@@ -216,7 +222,7 @@ Four npm packages, all zero monorepo dependencies:
 > [!NOTE]
 > **Motebit is a protocol first.** The `motebit.md` identity file is an [open standard](spec/identity-v1.md) (MIT) that can be verified by any tool, with or without the motebit runtime. The [verification library](https://www.npmjs.com/package/@motebit/verify) is zero-dependency and MIT licensed.
 
-A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), registered devices, and key succession history ([spec](spec/identity-v1.md) §3.8).
+A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), registered devices, optional organizational guardian ([spec](spec/identity-v1.md) §3.3), and key succession history ([spec](spec/identity-v1.md) §3.8).
 
 ## Development
 
