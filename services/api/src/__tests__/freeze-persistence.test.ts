@@ -54,9 +54,10 @@ describe("freeze persistence (unit)", () => {
   });
 
   it("loadFreezeState survives corrupt JSON gracefully", () => {
-    db.prepare("INSERT INTO relay_config (key, value) VALUES (?, ?)").run(
+    db.prepare("INSERT INTO relay_config (key, value, updated_at) VALUES (?, ?, ?)").run(
       "freeze_state",
       "not valid json{{{",
+      Date.now(),
     );
 
     // Should not throw, returns default unfrozen
@@ -75,8 +76,8 @@ describe("freeze persistence (integration)", () => {
 
   let relay: SyncRelay;
 
-  afterEach(() => {
-    relay?.close();
+  afterEach(async () => {
+    await relay?.close();
   });
 
   it("freeze state persists across relay restart (same DB)", async () => {
@@ -106,7 +107,7 @@ describe("freeze persistence (integration)", () => {
     });
     expect(freezeRes.status).toBe(200);
     expect(relay.emergencyFreeze).toBe(true);
-    relay.close();
+    await relay.close();
 
     // Second relay: same DB, freeze should be restored from DB
     relay = await createSyncRelay({
@@ -141,7 +142,7 @@ describe("freeze persistence (integration)", () => {
 
     // Clean up temp dir
     const { rmSync } = await import("node:fs");
-    relay.close();
+    await relay.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -174,7 +175,7 @@ describe("freeze persistence (integration)", () => {
       headers: AUTH_HEADER,
     });
     expect(relay.emergencyFreeze).toBe(false);
-    relay.close();
+    await relay.close();
 
     // Second relay: should start unfrozen
     relay = await createSyncRelay({
@@ -191,7 +192,7 @@ describe("freeze persistence (integration)", () => {
     expect(relay.emergencyFreeze).toBe(false);
 
     const { rmSync } = await import("node:fs");
-    relay.close();
+    await relay.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -216,7 +217,7 @@ describe("freeze persistence (integration)", () => {
     });
 
     expect(relay.emergencyFreeze).toBe(true);
-    relay.close();
+    await relay.close();
 
     // Second relay: no config override, but DB should have persisted freeze
     relay = await createSyncRelay({
@@ -234,7 +235,7 @@ describe("freeze persistence (integration)", () => {
     expect(relay.emergencyFreeze).toBe(true);
 
     const { rmSync } = await import("node:fs");
-    relay.close();
+    await relay.close();
     rmSync(dir, { recursive: true, force: true });
   });
 });

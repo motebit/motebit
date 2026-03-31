@@ -136,7 +136,7 @@ async function registerWorker(relay: SyncRelay, motebitId: string, unitCost = 1.
 async function deposit(relay: SyncRelay, motebitId: string, amount: number): Promise<number> {
   const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
     method: "POST",
-    headers: JSON_AUTH,
+    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({
       amount,
       reference: `deposit-${crypto.randomUUID()}`,
@@ -300,7 +300,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     // A submits task to B
     const taskResAB = await relay.app.request(`/agent/${agentB.motebitId}/task`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         prompt: "search for motebit",
         submitted_by: agentA.motebitId,
@@ -314,7 +314,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     await deposit(relay, agentB.motebitId, 50.0);
     const taskResBC = await relay.app.request(`/agent/${agentC.motebitId}/task`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         prompt: "read url content",
         submitted_by: agentB.motebitId,
@@ -328,7 +328,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     await deposit(relay, agentC.motebitId, 50.0);
     const taskResCD = await relay.app.request(`/agent/${agentD.motebitId}/task`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         prompt: "fetch page",
         submitted_by: agentC.motebitId,
@@ -460,7 +460,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     for (let i = 0; i < agentCount - 1; i++) {
       const taskRes = await relay.app.request(`/agent/${agents[i + 1]!.motebitId}/task`, {
         method: "POST",
-        headers: JSON_AUTH,
+        headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           prompt: `task-${i}`,
           submitted_by: agents[i]!.motebitId,

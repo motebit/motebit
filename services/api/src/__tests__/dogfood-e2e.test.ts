@@ -362,6 +362,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       headers: {
         Authorization: `Bearer ${tokenA}`,
         "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "Summarize the agent delegation architecture",
@@ -474,6 +475,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       headers: {
         Authorization: `Bearer ${tokenA}`,
         "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "Count the results",
@@ -617,6 +619,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       headers: {
         Authorization: `Bearer ${tokenA}`,
         "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "Search the web for motebit architecture",
@@ -687,6 +690,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       headers: {
         Authorization: `Bearer ${tokenASubmit}`,
         "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "What is the capital of France?",
@@ -829,6 +833,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       headers: {
         Authorization: `Bearer ${tokenA}`,
         "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "Signature forgery test",
@@ -994,6 +999,7 @@ describe("x402 Payment Gate", () => {
       headers: {
         Authorization: `Bearer ${tokenA}`,
         "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "This should require payment",
@@ -1051,6 +1057,7 @@ describe("x402 Payment Gate", () => {
       headers: {
         Authorization: `Bearer ${tokenA}`,
         "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "This should be free",
@@ -1102,6 +1109,7 @@ describe("x402 Payment Gate", () => {
       headers: {
         Authorization: `Bearer ${tokenA}`,
         "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "Price snapshot test",

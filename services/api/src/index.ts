@@ -81,6 +81,7 @@ import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import { registerWebSocketRoutes } from "./websocket.js";
 import type { ConnectedDevice } from "./websocket.js";
 import { registerSyncRoutes, redactSensitiveEvents } from "./sync-routes.js";
+import { createIdempotencyTable, cleanupIdempotencyKeys } from "./idempotency.js";
 import {
   createFederationTables,
   initRelayIdentity,
@@ -178,7 +179,7 @@ export interface SyncRelayConfig {
 
 export interface SyncRelay {
   app: Hono;
-  close(): void;
+  close(): Promise<void>;
   /** Connected WebSocket clients per motebitId. Exposed for testing. */
   connections: Map<string, ConnectedDevice[]>;
   /** Persistent relay identity. Stable across restarts. */
@@ -191,6 +192,10 @@ export interface SyncRelay {
   moteDb: MotebitDatabase;
   /** Whether the relay is in emergency freeze mode (all writes suspended). */
   emergencyFreeze: boolean;
+  /** Total number of connected WebSocket clients across all identities. */
+  getConnectionCount(): number;
+  /** Whether the relay is currently draining WebSocket connections. */
+  isDraining: boolean;
 }
 
 // === Factory ===
@@ -220,6 +225,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   createDataSyncTables(moteDb.db);
   createAccountTables(moteDb.db);
   createWithdrawalTables(moteDb.db);
+  createIdempotencyTable(moteDb.db);
   createSubscriptionTables(moteDb.db);
 
   // --- Schema: relay-owned tables, migrations, startup cleanup ---
@@ -243,6 +249,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Graceful shutdown state — readiness probe reports not_ready while draining.
   let draining = false;
+  const DRAIN_GRACE_MS = 5_000;
 
   // --- Shared state ---
   const connections = new Map<string, ConnectedDevice[]>();
@@ -284,6 +291,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice,
     parseTokenPayloadUnsafe,
     getShuttingDown: config.getShuttingDown,
+    getConnectionCount: () => getConnectionCount(),
+    isDraining: () => draining,
     healthCheckDeps: {
       dbProbe: () => {
         const start = performance.now();
@@ -330,6 +339,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       moteDb.db
         .prepare("DELETE FROM relay_service_listings WHERE updated_at < ?")
         .run(listingCutoff);
+    } catch {
+      // Best-effort cleanup
+    }
+    // Clean expired idempotency keys (older than 24 hours)
+    try {
+      cleanupIdempotencyKeys(moteDb.db);
     } catch {
       // Best-effort cleanup
     }
@@ -395,6 +410,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     parseTokenPayloadUnsafe,
     logger,
     onCommandResponse: handleCommandResponse,
+    isDraining: () => draining,
   });
 
   // --- Sync routes (HTTP fallback, device registration, identity CRUD) ---
@@ -605,15 +621,74 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     platformFeeRate,
   });
 
-  // --- Close / cleanup ---
-  function close(): void {
+  // --- Helper: count all connected WebSocket clients ---
+  function getConnectionCount(): number {
+    let count = 0;
+    for (const peers of connections.values()) {
+      count += peers.length;
+    }
+    return count;
+  }
+
+  // --- Close / cleanup with ordered WebSocket drain ---
+  async function close(): Promise<void> {
+    // Phase 1: Signal draining — reject new upgrades and notify connected clients
     draining = true;
+    const totalBefore = getConnectionCount();
+    logger.info("ws.drain.start", { connections: totalBefore });
+
+    const drainingMsg = JSON.stringify({
+      type: "server_draining",
+      reconnect_after_ms: DRAIN_GRACE_MS,
+    });
     for (const peers of connections.values()) {
       for (const peer of peers) {
-        peer.ws.close();
+        try {
+          if (peer.ws.readyState === 1) {
+            peer.ws.send(drainingMsg);
+          }
+        } catch {
+          // Best-effort — client may already be disconnected
+        }
+      }
+    }
+
+    // Phase 2: Grace period — wait for clients to disconnect voluntarily
+    if (totalBefore > 0) {
+      await new Promise<void>((resolve) => {
+        const deadline = setTimeout(() => resolve(), DRAIN_GRACE_MS);
+        // Check periodically if all clients left early
+        const check = setInterval(() => {
+          if (getConnectionCount() === 0) {
+            clearTimeout(deadline);
+            clearInterval(check);
+            resolve();
+          }
+        }, 250);
+      });
+    }
+
+    const remainingAfterGrace = getConnectionCount();
+    logger.info("ws.drain.grace_complete", {
+      disconnected: totalBefore - remainingAfterGrace,
+      remaining: remainingAfterGrace,
+    });
+
+    // Phase 3: Force close — terminate remaining connections with 1001 (Going Away)
+    for (const peers of connections.values()) {
+      for (const peer of peers) {
+        try {
+          peer.ws.close(1001, "server shutting down");
+        } catch {
+          // Best-effort — already closed
+        }
       }
     }
     connections.clear();
+
+    logger.info("ws.drain.complete", { force_closed: remainingAfterGrace });
+
+    // Clean up intervals and database
     clearInterval(taskCleanupInterval);
     clearInterval(federationQueryPruneInterval);
     clearInterval(heartbeatInterval);
@@ -638,6 +713,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     moteDb,
     get emergencyFreeze() {
       return getEmergencyFreeze();
+    },
+    getConnectionCount,
+    get isDraining() {
+      return draining;
     },
   };
 }

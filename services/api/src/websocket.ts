@@ -50,6 +50,8 @@ export interface WebSocketDeps {
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   logger: ReturnType<typeof createLogger>;
   onCommandResponse?: (commandId: string, result: unknown) => void;
+  /** When true, new WebSocket upgrades are rejected with close code 1001. */
+  isDraining?: () => boolean;
 }
 
 export function registerWebSocketRoutes(deps: WebSocketDeps): void {
@@ -85,6 +87,12 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       return {
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onOpen(_event, ws) {
+          // Reject new connections during graceful drain
+          if (deps.isDraining?.()) {
+            ws.close(1001, "Server is draining");
+            return;
+          }
+
           if (motebitId == null) {
             ws.close(4000, "Missing motebitId");
             return;

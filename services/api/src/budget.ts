@@ -26,6 +26,7 @@ import {
   toMicro,
   fromMicro,
 } from "./accounts.js";
+import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import Stripe from "stripe";
 
 const logger = createLogger({ service: "budget" });
@@ -47,6 +48,29 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   app.post("/api/v1/agents/:motebitId/deposit", async (c) => {
     const motebitId = c.req.param("motebitId");
     const correlationId = c.get("correlationId" as never) as string;
+
+    // Idempotency key required for financial operations
+    const idempotencyKey = c.req.header("Idempotency-Key");
+    if (!idempotencyKey) {
+      throw new HTTPException(400, {
+        message: "Idempotency-Key header is required for financial operations",
+      });
+    }
+
+    // Check idempotency before parsing body — replays skip all side effects
+    const idempCheck = checkIdempotency(moteDb.db, idempotencyKey, motebitId);
+    if (idempCheck.action === "replay") {
+      return c.json(
+        JSON.parse(idempCheck.body) as Record<string, unknown>,
+        idempCheck.status as 200,
+      );
+    }
+    if (idempCheck.action === "conflict") {
+      throw new HTTPException(409, {
+        message: "A request with this idempotency key is already being processed",
+      });
+    }
+
     const body = await c.req.json<{
       amount: number;
       currency?: string;
@@ -54,8 +78,12 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       description?: string;
     }>();
 
-    if (typeof body.amount !== "number" || body.amount <= 0)
+    if (typeof body.amount !== "number" || body.amount <= 0) {
+      // Complete idempotency with error so retries don't re-process
+      const errBody = JSON.stringify({ error: "amount must be a positive number", status: 400 });
+      completeIdempotency(moteDb.db, idempotencyKey, motebitId, 400, errBody);
       throw new HTTPException(400, { message: "amount must be a positive number" });
+    }
 
     const amountMicro = toMicro(body.amount);
 
@@ -67,12 +95,20 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           motebitId,
           reference: body.reference,
         });
-        return c.json({
+        const responseBody = {
           motebit_id: motebitId,
           balance: fromMicro(account.balance),
           transaction_id: null,
           idempotent: true,
-        });
+        };
+        completeIdempotency(
+          moteDb.db,
+          idempotencyKey,
+          motebitId,
+          200,
+          JSON.stringify(responseBody),
+        );
+        return c.json(responseBody);
       }
     }
 
@@ -113,7 +149,13 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       balanceAfter: newBalance,
       reference: body.reference ?? null,
     });
-    return c.json({ motebit_id: motebitId, balance: fromMicro(newBalance), transaction_id: txnId });
+    const responseBody = {
+      motebit_id: motebitId,
+      balance: fromMicro(newBalance),
+      transaction_id: txnId,
+    };
+    completeIdempotency(moteDb.db, idempotencyKey, motebitId, 200, JSON.stringify(responseBody));
+    return c.json(responseBody);
   });
 
   // --- Balance ---
@@ -149,16 +191,43 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   app.post("/api/v1/agents/:motebitId/withdraw", async (c) => {
     const motebitId = c.req.param("motebitId");
     const correlationId = c.get("correlationId" as never) as string;
+
+    // Idempotency key required for financial operations
+    const idempotencyKeyHeader = c.req.header("Idempotency-Key");
+    if (!idempotencyKeyHeader) {
+      throw new HTTPException(400, {
+        message: "Idempotency-Key header is required for financial operations",
+      });
+    }
+
+    // Check idempotency before parsing body — replays skip all side effects
+    const idempCheck = checkIdempotency(moteDb.db, idempotencyKeyHeader, motebitId);
+    if (idempCheck.action === "replay") {
+      return c.json(
+        JSON.parse(idempCheck.body) as Record<string, unknown>,
+        idempCheck.status as 200,
+      );
+    }
+    if (idempCheck.action === "conflict") {
+      throw new HTTPException(409, {
+        message: "A request with this idempotency key is already being processed",
+      });
+    }
+
     const body = await c.req.json<{
       amount: number;
       destination?: string;
       idempotency_key?: string;
     }>();
-    if (typeof body.amount !== "number" || body.amount <= 0)
+    if (typeof body.amount !== "number" || body.amount <= 0) {
+      const errBody = JSON.stringify({ error: "amount must be a positive number", status: 400 });
+      completeIdempotency(moteDb.db, idempotencyKeyHeader, motebitId, 400, errBody);
       throw new HTTPException(400, { message: "amount must be a positive number" });
+    }
 
     const amountMicro = toMicro(body.amount);
-    const idempotencyKey = body.idempotency_key ?? c.req.header("Idempotency-Key") ?? undefined;
+    // Pass the header key as the withdrawal-level idempotency key too (backward compat)
+    const idempotencyKey = body.idempotency_key ?? idempotencyKeyHeader;
     const result = requestWithdrawal(
       moteDb.db,
       motebitId,
@@ -166,8 +235,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       body.destination ?? "pending",
       idempotencyKey,
     );
-    if (result === null)
+    if (result === null) {
+      const errBody = JSON.stringify({ error: "Insufficient balance for withdrawal", status: 402 });
+      completeIdempotency(moteDb.db, idempotencyKeyHeader, motebitId, 402, errBody);
       throw new HTTPException(402, { message: "Insufficient balance for withdrawal" });
+    }
 
     const toWithdrawalResponse = <T extends { amount: number }>(w: T) => ({
       ...w,
@@ -181,11 +253,19 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         withdrawalId: result.existing.withdrawal_id,
         idempotencyKey,
       });
-      return c.json({
+      const responseBody = {
         motebit_id: motebitId,
         withdrawal: toWithdrawalResponse(result.existing),
         idempotent: true,
-      });
+      };
+      completeIdempotency(
+        moteDb.db,
+        idempotencyKeyHeader,
+        motebitId,
+        200,
+        JSON.stringify(responseBody),
+      );
+      return c.json(responseBody);
     }
 
     logger.info("withdrawal.endpoint.requested", {
@@ -196,7 +276,15 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       destination: result.destination,
       idempotencyKey: idempotencyKey ?? null,
     });
-    return c.json({ motebit_id: motebitId, withdrawal: toWithdrawalResponse(result) });
+    const responseBody = { motebit_id: motebitId, withdrawal: toWithdrawalResponse(result) };
+    completeIdempotency(
+      moteDb.db,
+      idempotencyKeyHeader,
+      motebitId,
+      200,
+      JSON.stringify(responseBody),
+    );
+    return c.json(responseBody);
   });
 
   // --- Withdrawal history ---
@@ -311,7 +399,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
     if (!reason) throw new HTTPException(400, { message: "reason is required" });
 
-    // Persist to DB first, then update in-memory cache
     persistFreeze(moteDb.db, freezeState, true, reason);
 
     const authHeader = c.req.header("authorization") ?? "";
@@ -326,7 +413,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
   app.post("/api/v1/admin/unfreeze", async (c) => {
     const previousReason = freezeState.reason;
-    // Persist to DB first, then update in-memory cache
     persistFreeze(moteDb.db, freezeState, false, null);
 
     const authHeader = c.req.header("authorization") ?? "";

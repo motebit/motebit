@@ -77,7 +77,7 @@ async function registerWorker(relay: SyncRelay, motebitId: string): Promise<void
 async function deposit(relay: SyncRelay, motebitId: string, amount: number): Promise<number> {
   const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
     method: "POST",
-    headers: JSON_AUTH,
+    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({ amount, reference: `deposit-${crypto.randomUUID()}` }),
   });
   const body = (await res.json()) as { balance: number };
@@ -140,7 +140,7 @@ describe("Money Loop Concurrency", () => {
       Array.from({ length: 10 }, async (_, i) =>
         relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
           method: "POST",
-          headers: JSON_AUTH,
+          headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
           body: JSON.stringify({ amount: 1.0, reference: `concurrent-deposit-${i}` }),
         }),
       ),
@@ -182,7 +182,7 @@ describe("Money Loop Concurrency", () => {
       Array.from({ length: 10 }, async () =>
         relay.app.request(`/agent/${worker.motebitId}/task`, {
           method: "POST",
-          headers: JSON_AUTH,
+          headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
           body: JSON.stringify({
             prompt: "search for motebit sovereign agents",
             submitted_by: delegator.motebitId,
@@ -227,12 +227,12 @@ describe("Money Loop Concurrency", () => {
     const [depositRes, withdrawRes] = await Promise.all([
       relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
         method: "POST",
-        headers: JSON_AUTH,
+        headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({ amount: 30.0, reference: "race-deposit" }),
       }),
       relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
         method: "POST",
-        headers: JSON_AUTH,
+        headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           amount: 50.0,
           destination: "0xMyWallet",
@@ -281,7 +281,7 @@ describe("Money Loop Concurrency", () => {
     for (let i = 0; i < 5; i++) {
       const res = await relay.app.request(`/agent/${worker.motebitId}/task`, {
         method: "POST",
-        headers: JSON_AUTH,
+        headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           prompt: "search for motebit sovereign agents",
           submitted_by: delegator.motebitId,
@@ -352,14 +352,14 @@ describe("Money Loop Concurrency", () => {
         // Deposit $10
         return relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
           method: "POST",
-          headers: JSON_AUTH,
+          headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
           body: JSON.stringify({ amount: 10.0, reference: `rapid-deposit-${i}` }),
         });
       } else {
         // Withdraw $5
         return relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
           method: "POST",
-          headers: JSON_AUTH,
+          headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
           body: JSON.stringify({
             amount: 5.0,
             destination: "0xMyWallet",

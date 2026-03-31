@@ -125,9 +125,11 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       body.exclude_agents = excludeAgents;
     }
 
+    const headers = await this.buildHeaders("task:submit");
+    headers["Idempotency-Key"] = crypto.randomUUID();
     const resp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
       method: "POST",
-      headers: await this.buildHeaders("task:submit"),
+      headers,
       body: JSON.stringify(body),
     });
 

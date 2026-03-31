@@ -76,7 +76,7 @@ async function registerWorker(relay: SyncRelay, motebitId: string): Promise<void
 async function deposit(relay: SyncRelay, motebitId: string, amount: number): Promise<number> {
   const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
     method: "POST",
-    headers: JSON_AUTH,
+    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({ amount, reference: `deposit-${crypto.randomUUID()}` }),
   });
   const body = (await res.json()) as { balance: number };
@@ -98,7 +98,7 @@ async function submitTask(
 ): Promise<{ taskId: string; status: number }> {
   const res = await relay.app.request(`/agent/${workerMotebitId}/task`, {
     method: "POST",
-    headers: JSON_AUTH,
+    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({
       prompt: "search for motebit sovereign agents",
       submitted_by: delegatorMotebitId,
@@ -380,7 +380,7 @@ describe("Money Loop Failure Injection", () => {
     // Try to withdraw $50 — should fail (402) because available < $50
     const bigWithdrawRes = await relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": "big-withdraw" },
       body: JSON.stringify({
         amount: 50.0,
         destination: "0xMyWallet",
@@ -400,7 +400,7 @@ describe("Money Loop Failure Injection", () => {
         `/api/v1/agents/${agent.motebitId}/withdraw`,
         {
           method: "POST",
-          headers: JSON_AUTH,
+          headers: { ...JSON_AUTH, "Idempotency-Key": "small-withdraw" },
           body: JSON.stringify({
             amount: smallAmount,
             destination: "0xMyWallet",
@@ -429,7 +429,7 @@ describe("Money Loop Failure Injection", () => {
     // First withdrawal
     const first = await relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({
         amount: 20.0,
         destination: "0xMyWallet",
@@ -442,7 +442,7 @@ describe("Money Loop Failure Injection", () => {
     // Second withdrawal with same key
     const second = await relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({
         amount: 20.0,
         destination: "0xMyWallet",
@@ -479,7 +479,7 @@ describe("Money Loop Failure Injection", () => {
     // Request withdrawal
     const withdrawRes = await relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": "complete-test" },
       body: JSON.stringify({
         amount: 25.0,
         destination: "0xMyWallet",
@@ -525,7 +525,7 @@ describe("Money Loop Failure Injection", () => {
     // Request withdrawal
     const withdrawRes = await relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": "fail-after-complete-test" },
       body: JSON.stringify({
         amount: 25.0,
         destination: "0xMyWallet",

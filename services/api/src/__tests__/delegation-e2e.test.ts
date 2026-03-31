@@ -261,7 +261,11 @@ describe("Delegation E2E", () => {
     // Submit a task requiring stdio_mcp
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Run a shell command",
         required_capabilities: ["stdio_mcp"],
@@ -320,7 +324,11 @@ describe("Delegation E2E", () => {
     // Submit a task to the relay (as if delegation had started before crash)
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "do remote thing",
         required_capabilities: ["file_system"],
@@ -592,7 +600,11 @@ describe("Delegation E2E", () => {
 
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Run credential test",
         required_capabilities: ["stdio_mcp"],
@@ -657,7 +669,11 @@ describe("Delegation E2E", () => {
 
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "VP test", required_capabilities: ["stdio_mcp"] }),
     });
     const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
@@ -716,7 +732,11 @@ describe("Delegation E2E", () => {
 
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Verify test", required_capabilities: ["stdio_mcp"] }),
     });
     const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
@@ -835,7 +855,11 @@ describe("Delegation E2E", () => {
     // POST ledger
     const postRes = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify(ledger),
     });
     expect(postRes.status).toBe(201);
@@ -866,7 +890,11 @@ describe("Delegation E2E", () => {
   it("execution ledger: rejects invalid spec version", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         spec: "motebit/execution-ledger@2.0",
         motebit_id: MOTEBIT_ID,
@@ -882,7 +910,11 @@ describe("Delegation E2E", () => {
   it("execution ledger: rejects motebit_id mismatch", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         spec: "motebit/execution-ledger@1.0",
         motebit_id: "wrong-motebit",
@@ -930,7 +962,11 @@ describe("Delegation E2E", () => {
     // Submit task — x402 handles payment at HTTP layer
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Settlement test task",
         required_capabilities: ["stdio_mcp"],
@@ -1000,7 +1036,11 @@ describe("Delegation E2E", () => {
     // Submit task
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Idempotency test task",
         required_capabilities: ["stdio_mcp"],
@@ -1064,7 +1104,11 @@ describe("Delegation E2E", () => {
     // Submit task with submitted_by === workerMotebitId (self-delegation)
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Self-delegation test",
         submitted_by: workerMotebitId,
@@ -1105,7 +1149,11 @@ describe("Delegation E2E", () => {
 
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Recovery test task" }),
     });
     expect(taskRes.status).toBe(201);
@@ -1140,7 +1188,11 @@ describe("Delegation E2E", () => {
     // Submit task
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Stale receipt test task",
         required_capabilities: ["stdio_mcp"],

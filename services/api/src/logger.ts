@@ -1,3 +1,5 @@
+import { getRequestContext } from "./request-context.js";
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 interface LogEntry {
@@ -23,6 +25,19 @@ function emit(entry: LogEntry): void {
   else process.stdout.write(line + "\n");
 }
 
+/**
+ * Build context fields from AsyncLocalStorage.
+ * Returns an object with correlationId (and optionally motebitId) if a
+ * request context is active. Explicit fields in `data` take precedence.
+ */
+function contextFields(): Record<string, unknown> {
+  const ctx = getRequestContext();
+  if (ctx == null) return {};
+  const fields: Record<string, unknown> = { correlationId: ctx.correlationId };
+  if (ctx.motebitId != null) fields.motebitId = ctx.motebitId;
+  return fields;
+}
+
 export function createLogger(context: Record<string, unknown> = {}): {
   debug(msg: string, data?: Record<string, unknown>): void;
   info(msg: string, data?: Record<string, unknown>): void;
@@ -31,7 +46,7 @@ export function createLogger(context: Record<string, unknown> = {}): {
   child(extra: Record<string, unknown>): ReturnType<typeof createLogger>;
 } {
   const log = (level: LogLevel, msg: string, data?: Record<string, unknown>) =>
-    emit({ level, msg, ...context, ...data });
+    emit({ level, msg, ...contextFields(), ...context, ...data });
   return {
     debug: (msg, data) => log("debug", msg, data),
     info: (msg, data) => log("info", msg, data),

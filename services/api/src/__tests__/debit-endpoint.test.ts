@@ -38,7 +38,11 @@ async function createIdentity(r: SyncRelay): Promise<string> {
 async function deposit(r: SyncRelay, id: string, amount: number): Promise<void> {
   const res = await r.app.request(`/api/v1/agents/${id}/deposit`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    headers: {
+      "Content-Type": "application/json",
+      ...AUTH_HEADER,
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({ amount }),
   });
   expect(res.status).toBe(200);

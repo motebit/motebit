@@ -131,7 +131,8 @@ export class TaskError extends RelayError {
       | "TASK_ALREADY_CLAIMED"
       | "TASK_INVALID_INPUT"
       | "TASK_QUEUE_FULL"
-      | "TASK_PER_SUBMITTER_LIMIT",
+      | "TASK_PER_SUBMITTER_LIMIT"
+      | "TASK_CONFLICT",
     message: string,
     statusCode: number = 400,
     options?: ErrorOptions,

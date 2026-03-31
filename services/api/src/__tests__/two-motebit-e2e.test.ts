@@ -440,7 +440,11 @@ describe("Two-Motebit Delegation E2E", () => {
     // Submit a task
     const taskRes = await relay.app.request(`/agent/${alice.motebitId}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Test forgery",
         required_capabilities: ["web_search"],
@@ -637,7 +641,11 @@ describe("Two-Motebit Delegation E2E", () => {
     // Complete a delegation so Bob gets a credential
     const taskRes = await relay.app.request(`/agent/${alice.motebitId}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "VP test task",
         required_capabilities: ["web_search"],

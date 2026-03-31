@@ -13,6 +13,8 @@ import type { IdentityManager } from "@motebit/core-identity";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import type { verifySignedTokenForDevice, parseTokenPayloadUnsafe } from "./auth.js";
 import { createLogger } from "./logger.js";
+import { requestContext, enrichRequestContext } from "./request-context.js";
+import type { RequestContext } from "./request-context.js";
 import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
 
 const logger = createLogger({ service: "middleware" });
@@ -42,6 +44,8 @@ export interface MiddlewareDeps {
   getEmergencyFreeze: () => boolean;
   getFreezeReason: () => string | null;
   getShuttingDown?: () => boolean;
+  getConnectionCount?: () => number;
+  isDraining?: () => boolean;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
   verifySignedTokenForDevice: typeof verifySignedTokenForDevice;
@@ -101,6 +105,7 @@ export function rateLimitMiddleware(limiter: FixedWindowLimiter, apiToken: strin
     const { allowed, remaining, resetAt } = limiter.check(ip);
     const retryAfterSeconds = Math.ceil((resetAt - Date.now()) / 1000);
 
+    c.header("X-RateLimit-Limit", String(limiter.limit));
     c.header("X-RateLimit-Remaining", String(remaining));
     c.header("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
 
@@ -165,6 +170,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
     }
 
     c.set("callerMotebitId" as never, claims.mid as never);
+    enrichRequestContext({ motebitId: claims.mid as string });
     await next();
   };
 }
@@ -205,12 +211,18 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
     });
   });
 
-  // --- Correlation ID middleware ---
+  // --- Request context (AsyncLocalStorage) + Correlation ID middleware ---
   app.use("*", async (c, next) => {
     const correlationId = c.req.header("x-correlation-id") ?? crypto.randomUUID();
     c.set("correlationId" as never, correlationId as never);
     c.header("X-Correlation-ID", correlationId);
-    await next();
+    const ctx: RequestContext = {
+      correlationId,
+      startedAt: Date.now(),
+      method: c.req.method,
+      path: c.req.path,
+    };
+    return requestContext.run(ctx, () => next());
   });
 
   // --- Rate Limiter Instances ---
@@ -417,15 +429,21 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
   // GET /health — backward compatible
   app.get("/health", (c) => {
-    const draining = deps.healthCheckDeps?.isDraining() ?? deps.getShuttingDown?.() ?? false;
-    const status = draining ? 503 : 200;
+    const isDraining =
+      deps.healthCheckDeps?.isDraining() ??
+      deps.isDraining?.() ??
+      deps.getShuttingDown?.() ??
+      false;
+    const status = isDraining ? 503 : 200;
     return c.json(
       {
-        status: deps.getEmergencyFreeze() ? "frozen" : draining ? "draining" : "ok",
+        status: deps.getEmergencyFreeze() ? "frozen" : isDraining ? "draining" : "ok",
         frozen: deps.getEmergencyFreeze(),
         ...(deps.getEmergencyFreeze() && deps.getFreezeReason()
           ? { freeze_reason: deps.getFreezeReason() }
           : {}),
+        ...(isDraining ? { draining: true } : {}),
+        ...(deps.getConnectionCount != null ? { ws_connections: deps.getConnectionCount() } : {}),
         timestamp: Date.now(),
       },
       status,

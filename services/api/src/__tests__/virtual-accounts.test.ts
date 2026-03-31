@@ -80,7 +80,11 @@ async function deposit(
 ): Promise<{ motebit_id: string; balance: number; transaction_id: string | null }> {
   const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    headers: {
+      "Content-Type": "application/json",
+      ...AUTH_HEADER,
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({ amount, reference }),
   });
   expect(res.status).toBe(200);
@@ -171,7 +175,11 @@ describe("Virtual Accounts", () => {
 
     const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: -5 }),
     });
     expect(res.status).toBe(400);
@@ -183,7 +191,11 @@ describe("Virtual Accounts", () => {
 
     const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 0 }),
     });
     expect(res.status).toBe(400);
@@ -237,7 +249,11 @@ describe("Virtual Accounts", () => {
     // Submit a task — should succeed with virtual balance (no x402)
     const taskRes = await relay.app.request(`/agent/${workerId}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Do something",
         submitted_by: delegatorId,
@@ -285,7 +301,11 @@ describe("Virtual Accounts", () => {
     // Submit task — should return 402
     const taskRes = await relay.app.request(`/agent/${workerId}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Do something expensive",
         submitted_by: delegatorId,
@@ -326,7 +346,11 @@ describe("Virtual Accounts", () => {
     // Submit task
     const taskRes = await relay.app.request(`/agent/${workerId}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Settle this",
         submitted_by: delegatorId,
@@ -405,7 +429,11 @@ describe("Virtual Accounts", () => {
     // Submit task
     const taskRes = await relay.app.request(`/agent/${workerId}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Fee test",
         submitted_by: delegatorId,
@@ -458,7 +486,7 @@ describe("Virtual Accounts", () => {
   it("deposit requires auth", async () => {
     const res = await relay.app.request(`/api/v1/agents/some-agent/deposit`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({ amount: 10 }),
     });
     expect(res.status).toBe(401);
@@ -481,7 +509,11 @@ describe("Virtual Accounts", () => {
 
     const res = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 30, destination: "0xMyWallet" }),
     });
     expect(res.status).toBe(200);
@@ -503,7 +535,11 @@ describe("Virtual Accounts", () => {
 
     const res = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 50 }),
     });
     expect(res.status).toBe(402);
@@ -518,12 +554,20 @@ describe("Virtual Accounts", () => {
     // Make two withdrawals
     await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 20 }),
     });
     await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 10 }),
     });
 
@@ -544,7 +588,11 @@ describe("Virtual Accounts", () => {
     // Request withdrawal
     const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 50 }),
     });
     const { withdrawal } = (await withdrawRes.json()) as {
@@ -623,7 +671,11 @@ describe("Virtual Accounts", () => {
     // Request withdrawal
     const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 40 }),
     });
     const { withdrawal } = (await withdrawRes.json()) as {
@@ -658,7 +710,11 @@ describe("Virtual Accounts", () => {
     await deposit(relay, motebitId, 100);
     await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 25 }),
     });
 
@@ -677,7 +733,7 @@ describe("Virtual Accounts", () => {
   it("withdraw requires auth", async () => {
     const res = await relay.app.request(`/api/v1/agents/some-agent/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({ amount: 10 }),
     });
     expect(res.status).toBe(401);
@@ -692,28 +748,35 @@ describe("Virtual Accounts", () => {
     await deposit(relay, motebitId, 100);
     const idempotencyKey = `withdraw-${crypto.randomUUID()}`;
 
-    // First withdrawal
+    // First withdrawal — use idempotencyKey for both header and body
     const res1 = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": idempotencyKey,
+      },
       body: JSON.stringify({ amount: 40, idempotency_key: idempotencyKey }),
     });
     expect(res1.status).toBe(200);
     const body1 = (await res1.json()) as { withdrawal: Record<string, unknown> };
     expect(body1.withdrawal.amount).toBe(40);
 
-    // Second withdrawal with same key — should be idempotent
+    // Second withdrawal with same key — should be idempotent (header-level replay)
     const res2 = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": idempotencyKey,
+      },
       body: JSON.stringify({ amount: 40, idempotency_key: idempotencyKey }),
     });
     expect(res2.status).toBe(200);
     const body2 = (await res2.json()) as {
       withdrawal: Record<string, unknown>;
-      idempotent?: boolean;
     };
-    expect(body2.idempotent).toBe(true);
+    // Header-level idempotency replays the exact cached response from the first call
     expect(body2.withdrawal.withdrawal_id).toBe(body1.withdrawal.withdrawal_id);
 
     // Balance should only be debited once
@@ -747,9 +810,12 @@ describe("Virtual Accounts", () => {
       },
       body: JSON.stringify({ amount: 25 }),
     });
-    const body = (await res2.json()) as { idempotent?: boolean };
-    expect(body.idempotent).toBe(true);
+    // Header-level idempotency replays the exact cached response from the first call
+    const body = (await res2.json()) as { withdrawal: { withdrawal_id: string } };
+    expect(body.withdrawal).toBeDefined();
+    expect(body.withdrawal.withdrawal_id).toBeTruthy();
 
+    // Balance should only be debited once (idempotent replay does not debit again)
     const balance = await getBalance(relay, motebitId);
     expect(balance.balance).toBe(75);
   });
@@ -765,7 +831,11 @@ describe("Virtual Accounts", () => {
     // Request a withdrawal (pending)
     await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 50 }),
     });
 
@@ -785,7 +855,11 @@ describe("Virtual Accounts", () => {
 
     const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 30 }),
     });
     const { withdrawal } = (await withdrawRes.json()) as {
@@ -827,7 +901,11 @@ describe("Virtual Accounts", () => {
 
     await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 20 }),
     });
 
@@ -867,7 +945,11 @@ describe("Virtual Accounts", () => {
     // Request and complete a withdrawal
     const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ amount: 80 }),
     });
     const { withdrawal } = (await withdrawRes.json()) as {

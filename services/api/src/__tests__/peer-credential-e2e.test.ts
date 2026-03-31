@@ -144,7 +144,7 @@ describe("Peer Credential E2E — Delegation Loop", () => {
     const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
     const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
       method: "POST",
-      headers: { ...JSON_HEADERS, ...AUTH(tokenA) },
+      headers: { ...JSON_HEADERS, ...AUTH(tokenA), "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         prompt: "test delegation",
         submitted_by: motebitIdA,
@@ -603,7 +603,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
       const tokenA = await makeSignedToken(aliceId, aliceDevId, kpAlice, "task:submit");
       const taskRes = await routingRelay.app.request(`/agent/${bobId}/task`, {
         method: "POST",
-        headers: { ...JSON_HEADERS, ...AUTH_R(tokenA) },
+        headers: { ...JSON_HEADERS, ...AUTH_R(tokenA), "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({ prompt: `task ${i}`, submitted_by: aliceId }),
       });
       const { task_id } = (await taskRes.json()) as { task_id: string };
@@ -635,7 +635,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
     const taskToken = await makeSignedToken(aliceId, aliceDevId, kpAlice, "task:submit");
     const routedRes = await routingRelay.app.request(`/agent/${bobId}/task`, {
       method: "POST",
-      headers: { ...JSON_HEADERS, ...AUTH_R(taskToken) },
+      headers: { ...JSON_HEADERS, ...AUTH_R(taskToken), "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         prompt: "search the web",
         submitted_by: aliceId,

@@ -75,7 +75,7 @@ async function subDelegate(
         };
         const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
           method: "POST",
-          headers: relayHeaders,
+          headers: { ...relayHeaders, "Idempotency-Key": crypto.randomUUID() },
           body: JSON.stringify({
             prompt,
             submitted_by: callerMotebitId,

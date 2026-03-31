@@ -22,6 +22,7 @@ import {
   canonicalJson,
 } from "@motebit/crypto";
 import type { KeySuccessionRecord } from "@motebit/crypto";
+import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "agents" });
@@ -38,7 +39,9 @@ export interface AgentsDeps {
   federationConfig?: { displayName?: string; endpointUrl?: string };
   federationQueryCache: Map<string, number>;
   /** Auth helpers from relay auth layer */
-  parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
+  parseTokenPayloadUnsafe: (
+    token: string,
+  ) => { mid: string; did: string; iat: number; exp: number; jti?: string } | null;
   verifySignedTokenForDevice: (
     token: string,
     motebitId: string,
@@ -177,6 +180,28 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   // POST /agent/:motebitId/ledger — submit a signed execution ledger
   app.post("/agent/:motebitId/ledger", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
+
+    // Idempotency key required for ledger submission (receipt settlement)
+    const idempotencyKey = c.req.header("Idempotency-Key");
+    if (!idempotencyKey) {
+      throw new HTTPException(400, {
+        message: "Idempotency-Key header is required for ledger submission",
+      });
+    }
+
+    const idempCheck = checkIdempotency(moteDb.db, idempotencyKey, motebitId);
+    if (idempCheck.action === "replay") {
+      return c.json(
+        JSON.parse(idempCheck.body) as Record<string, unknown>,
+        idempCheck.status as 201,
+      );
+    }
+    if (idempCheck.action === "conflict") {
+      throw new HTTPException(409, {
+        message: "A request with this idempotency key is already being processed",
+      });
+    }
+
     let body: Record<string, unknown>;
     try {
       body = await c.req.json<Record<string, unknown>>();
@@ -214,7 +239,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       )
       .run(ledgerId, motebitId, goalId, planId, JSON.stringify(body), contentHash, now);
 
-    return c.json({ ledger_id: ledgerId, content_hash: contentHash, created_at: now }, 201);
+    const responseBody = { ledger_id: ledgerId, content_hash: contentHash, created_at: now };
+    completeIdempotency(moteDb.db, idempotencyKey, motebitId, 201, JSON.stringify(responseBody));
+    return c.json(responseBody, 201);
   });
 
   // GET /agent/:motebitId/ledger/:goalId — retrieve signed execution ledger

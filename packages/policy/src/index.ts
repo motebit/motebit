@@ -17,6 +17,15 @@ export type { PolicyConfig } from "./policy-gate.js";
 export { MemoryGovernor, MemoryClass, DEFAULT_MEMORY_GOVERNANCE } from "./memory-governance.js";
 export type { MemoryGovernanceConfig, MemoryDecision } from "./memory-governance.js";
 export { computeReputationScore } from "./reputation.js";
+export {
+  appendAuditEntry,
+  verifyAuditChain,
+  getChainHead,
+  computeEntryHash,
+  InMemoryAuditChainStore,
+  GENESIS_HASH,
+} from "./audit-chain.js";
+export type { AuditEntry, AuditChainStore } from "./audit-chain.js";
 
 // Re-export SDK types used in the policy API
 export type {

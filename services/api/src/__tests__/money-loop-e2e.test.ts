@@ -107,7 +107,7 @@ describe("Money Loop E2E", () => {
     // === STEP 1: DEPOSIT — Delegator funds their account ===
     const depositRes = await relay.app.request(`/api/v1/agents/${delegator.motebitId}/deposit`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         amount: 10.0,
         reference: "initial-funding",
@@ -131,7 +131,7 @@ describe("Money Loop E2E", () => {
     // === STEP 3: DELEGATE — Submit a task (auto-debits delegator's balance) ===
     const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         prompt: "search for motebit sovereign agents",
         submitted_by: delegator.motebitId,
@@ -213,7 +213,7 @@ describe("Money Loop E2E", () => {
     // === STEP 7: WITHDRAW — Worker withdraws earnings ===
     const withdrawRes = await relay.app.request(`/api/v1/agents/${worker.motebitId}/withdraw`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         amount: workerB.balance,
         destination: "0xWorkerWallet",

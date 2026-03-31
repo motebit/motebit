@@ -55,6 +55,7 @@ import type { RelayIdentity } from "./federation.js";
 import { forwardTaskViaMcp, type ReceiptCandidate } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import type { ConnectedDevice } from "./index.js";
+import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
 import {
   RelayError,
@@ -1198,6 +1199,32 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
   // --- POST /agent/:motebitId/task — submit a task (master token or signed device token) ---
   app.post("/agent/:motebitId/task", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
+
+    // Idempotency key required for task submission (involves budget allocation)
+    const idempotencyKey = c.req.header("Idempotency-Key");
+    if (!idempotencyKey) {
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+        "Idempotency-Key header is required for task submission",
+        400,
+      );
+    }
+
+    const idempCheck = checkIdempotency(moteDb.db, idempotencyKey, motebitId);
+    if (idempCheck.action === "replay") {
+      return c.json(
+        JSON.parse(idempCheck.body) as Record<string, unknown>,
+        idempCheck.status as 201,
+      );
+    }
+    if (idempCheck.action === "conflict") {
+      throw new TaskError(
+        "TASK_CONFLICT",
+        "A request with this idempotency key is already being processed",
+        409,
+      );
+    }
+
     const body = await c.req.json<{
       prompt: string;
       submitted_by?: string;
@@ -1736,10 +1763,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       }
     }
 
-    return c.json(
-      { task_id: taskId, status: task.status, routing_choice: routingChoice ?? null },
-      201,
-    );
+    const responseBody = {
+      task_id: taskId,
+      status: task.status,
+      routing_choice: routingChoice ?? null,
+    };
+    completeIdempotency(moteDb.db, idempotencyKey, motebitId, 201, JSON.stringify(responseBody));
+    return c.json(responseBody, 201);
   });
 
   // --- GET /agent/:motebitId/task/:taskId — poll task status ---

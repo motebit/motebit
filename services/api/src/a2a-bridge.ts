@@ -481,7 +481,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
     try {
       const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
         method: "POST",
-        headers,
+        headers: { ...headers, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(taskBody),
       });
 

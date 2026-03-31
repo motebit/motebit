@@ -699,7 +699,11 @@ describe("Federation E2E", () => {
       const alice = await registerAgent(relayA, "alice-dedup", ["web-search"]);
       const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        headers: {
+          "Content-Type": "application/json",
+          ...AUTH_HEADER,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
         body: JSON.stringify({
           prompt: "Dedup test",
           required_capabilities: ["dedup-cap"],
@@ -713,7 +717,11 @@ describe("Federation E2E", () => {
       // Submit a SECOND task with different task_id — should work
       const taskRes2 = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        headers: {
+          "Content-Type": "application/json",
+          ...AUTH_HEADER,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
         body: JSON.stringify({
           prompt: "Dedup test 2",
           required_capabilities: ["dedup-cap"],
@@ -767,14 +775,17 @@ describe("Federation E2E", () => {
         return originalFetch(input, init);
       });
 
-      // Submit enough tasks to trigger circuit breaker.
-      // Three-state circuit breaker opens after 5 consecutive failures (default threshold).
-      // Once open, canForward() returns false so no more forwards are attempted.
+      // Submit enough tasks to trigger circuit breaker
+      // Thresholds: min 6 samples, >50% failure rate, 3+ consecutive failures
       const alice = await registerAgent(relayA, "alice-circuit", ["web-search"]);
       for (let i = 0; i < 7; i++) {
         await relayA.app.request(`/agent/${alice.motebitId}/task`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+          headers: {
+            "Content-Type": "application/json",
+            ...AUTH_HEADER,
+            "Idempotency-Key": crypto.randomUUID(),
+          },
           body: JSON.stringify({
             prompt: `Circuit breaker test ${i}`,
             required_capabilities: ["circuit-cap"],
@@ -786,8 +797,7 @@ describe("Federation E2E", () => {
       vi.stubGlobal("fetch", originalFetch);
       installFetchInterceptor(relayA, relayB);
 
-      // Peer should now be suspended due to repeated forward failures.
-      // Circuit opens at 5 failures; once open, forwards are blocked so DB counter stops at 5.
+      // Peer should now be suspended due to repeated forward failures
       const peerAfter = relayA.moteDb.db
         .prepare("SELECT state, failed_forwards FROM relay_peers WHERE endpoint_url = ?")
         .get(RELAY_B_URL) as { state: string; failed_forwards: number };
@@ -805,7 +815,11 @@ describe("Federation E2E", () => {
       // Submit a task directly on Relay B to put it in the queue
       const taskRes = await relayB.app.request(`/agent/${bob.motebitId}/task`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        headers: {
+          "Content-Type": "application/json",
+          ...AUTH_HEADER,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
         body: JSON.stringify({ prompt: "Direct task" }),
       });
       expect(taskRes.status).toBe(201);
@@ -904,7 +918,11 @@ describe("Federation E2E", () => {
       // 4. Submit a task on Relay A requiring "quantum-computing" (only Bob on Relay B has it)
       const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        headers: {
+          "Content-Type": "application/json",
+          ...AUTH_HEADER,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
         body: JSON.stringify({
           prompt: "Factor a large semiprime using Shor's algorithm",
           required_capabilities: ["quantum-computing"],
@@ -997,7 +1015,11 @@ describe("Federation E2E", () => {
       // Submit task requiring exotic-timeout-cap — routing should select bob (remote only)
       const taskRes = await relayA.app.request(`/agent/${submitter.motebitId}/task`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        headers: {
+          "Content-Type": "application/json",
+          ...AUTH_HEADER,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
         body: JSON.stringify({
           prompt: "Timeout test",
           required_capabilities: ["exotic-timeout-cap"],

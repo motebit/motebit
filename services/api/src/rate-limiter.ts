@@ -1,4 +1,17 @@
 /**
+ * Rate limit quota information for a given key.
+ * Exposed via `getInfo()` and returned (minus `limit`) from `check()`.
+ */
+export interface RateLimitInfo {
+  /** Max requests allowed in the current window. */
+  limit: number;
+  /** Requests remaining in the current window. */
+  remaining: number;
+  /** Unix timestamp in seconds when the current window resets. */
+  resetAt: number;
+}
+
+/**
  * Fixed-window rate limiter with per-key tracking.
  *
  * Each key gets an independent window that starts on first request and resets
@@ -15,6 +28,11 @@ export class FixedWindowLimiter {
     private windowMs: number,
   ) {}
 
+  /** The maximum number of requests allowed per window. */
+  get limit(): number {
+    return this.maxRequests;
+  }
+
   check(key: string): { allowed: boolean; remaining: number; resetAt: number } {
     const now = Date.now();
     const entry = this.windows.get(key);
@@ -29,6 +47,29 @@ export class FixedWindowLimiter {
     const allowed = entry.count <= this.maxRequests;
     const remaining = Math.max(0, this.maxRequests - entry.count);
     return { allowed, remaining, resetAt: entry.resetAt };
+  }
+
+  /**
+   * Get current quota information for a key without consuming a request.
+   * Returns the window limit even if the key has no active window yet.
+   */
+  getInfo(key: string): RateLimitInfo {
+    const now = Date.now();
+    const entry = this.windows.get(key);
+
+    if (!entry || entry.resetAt <= now) {
+      return {
+        limit: this.maxRequests,
+        remaining: this.maxRequests,
+        resetAt: Math.ceil((now + this.windowMs) / 1000),
+      };
+    }
+
+    return {
+      limit: this.maxRequests,
+      remaining: Math.max(0, this.maxRequests - entry.count),
+      resetAt: Math.ceil(entry.resetAt / 1000),
+    };
   }
 
   /** Remove expired entries to prevent memory growth. */

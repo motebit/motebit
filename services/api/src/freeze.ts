@@ -22,8 +22,9 @@ export interface FreezeState {
 export function createRelayConfigTable(db: DatabaseDriver): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS relay_config (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     );
   `);
 }
@@ -72,8 +73,8 @@ export function persistFreeze(
 
   try {
     db.prepare(
-      "INSERT INTO relay_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    ).run("freeze_state", value);
+      "INSERT INTO relay_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    ).run("freeze_state", value, Date.now());
   } catch (err) {
     throw new Error("Failed to persist freeze state", { cause: err });
   }

@@ -167,7 +167,11 @@ export class InteractiveDelegationManager {
 
           const resp = await fetch(`${config.syncUrl}/agent/${motebitId}/task`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: submitHeader },
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: submitHeader,
+              "Idempotency-Key": crypto.randomUUID(),
+            },
             body: JSON.stringify(body),
           });
 

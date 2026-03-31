@@ -977,7 +977,11 @@ describe("Sync Relay — agent protocol", () => {
     for (let i = 0; i < 2; i++) {
       const res = await tinyRelay.app.request(`/agent/${MOTEBIT_ID}/task`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        headers: {
+          "Content-Type": "application/json",
+          ...AUTH_HEADER,
+          "Idempotency-Key": crypto.randomUUID(),
+        },
         body: JSON.stringify({ prompt: `Task ${i}`, submitted_by: "flooding-agent" }),
       });
       expect(res.status).toBe(201);
@@ -986,7 +990,11 @@ describe("Sync Relay — agent protocol", () => {
     // 3rd task should be rejected
     const blocked = await tinyRelay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Overflow task", submitted_by: "flooding-agent" }),
     });
     expect(blocked.status).toBe(429);
@@ -999,7 +1007,11 @@ describe("Sync Relay — agent protocol", () => {
   it("POST /agent/:id/task submits a task and returns 201", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "What is 2+2?" }),
     });
 
@@ -1012,7 +1024,11 @@ describe("Sync Relay — agent protocol", () => {
   it("POST /agent/:id/task returns 400 for empty prompt", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "" }),
     });
 
@@ -1023,7 +1039,11 @@ describe("Sync Relay — agent protocol", () => {
     // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Test task" }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -1076,7 +1096,11 @@ describe("Sync Relay — agent protocol", () => {
     // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Task with receipt" }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -1144,7 +1168,11 @@ describe("Sync Relay — agent protocol", () => {
     // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Task with forged receipt" }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -1178,7 +1206,11 @@ describe("Sync Relay — agent protocol", () => {
     // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Task from unknown" }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -1211,7 +1243,11 @@ describe("Sync Relay — agent protocol", () => {
   it("POST /agent/:id/task accepts required_capabilities and step_id", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Run stdio tool",
         required_capabilities: ["stdio_mcp", "file_system"],
@@ -1235,7 +1271,11 @@ describe("Sync Relay — agent protocol", () => {
   it("POST /agent/:id/task rejects non-array required_capabilities", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Test validation",
         required_capabilities: "web_search",
@@ -1315,7 +1355,11 @@ describe("Sync Relay — agent protocol", () => {
     // Submit task — x402 handles payment at HTTP layer, no max_budget needed
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Search for something",
         required_capabilities: ["web_search"],
@@ -1436,7 +1480,11 @@ describe("Sync Relay — agent protocol", () => {
     // Submit without x402 payment header — should get 402
     const res = await relay.app.request(`/agent/${serviceMotebitId}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Run expensive code",
         required_capabilities: ["code_exec"],
@@ -1512,7 +1560,11 @@ describe("Sync Relay — agent protocol", () => {
     // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         prompt: "Search that fails",
         required_capabilities: ["web_search"],
@@ -1746,7 +1798,11 @@ describe("Sync Relay — agent protocol", () => {
     // Submit and complete a task with a signed receipt
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Credential test" }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -1803,7 +1859,11 @@ describe("Sync Relay — agent protocol", () => {
 
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "List creds test" }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -1878,7 +1938,11 @@ describe("Sync Relay — agent protocol", () => {
 
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "Verify cred test" }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -2261,7 +2325,11 @@ describe("Sync Relay — execution ledger", () => {
     // Submit
     const postRes = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify(manifest),
     });
     expect(postRes.status).toBe(201);
@@ -2296,7 +2364,11 @@ describe("Sync Relay — execution ledger", () => {
   it("POST ledger rejects invalid spec", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         spec: "wrong-spec",
         motebit_id: MOTEBIT_ID,
@@ -2310,7 +2382,11 @@ describe("Sync Relay — execution ledger", () => {
   it("POST ledger rejects motebit_id mismatch", async () => {
     const res = await relay.app.request(`/agent/${MOTEBIT_ID}/ledger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         spec: "motebit/execution-ledger@1.0",
         motebit_id: "wrong-id",
@@ -2360,7 +2436,11 @@ describe("Sync Relay — credential presentation", () => {
     // Submit and complete a task to trigger credential issuance
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ prompt: "VP test" }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
@@ -2773,6 +2853,7 @@ describe("Sync Relay — bootstrap endpoint", () => {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${tokenA}`,
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({ prompt: "Agent A delegates to Agent B" }),
     });

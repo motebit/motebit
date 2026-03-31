@@ -72,7 +72,7 @@ async function delegateAndSettle(
 ): Promise<{ taskId: string }> {
   const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {
     method: "POST",
-    headers: JSON_AUTH,
+    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({
       prompt,
       submitted_by: delegator.motebitId,
@@ -154,7 +154,7 @@ describe("Trust Flywheel E2E", () => {
     // Fund delegator
     const depositRes = await relay.app.request(`/api/v1/agents/${delegator.motebitId}/deposit`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         amount: 20.0,
         reference: "flywheel-fund",
@@ -341,7 +341,7 @@ describe("Trust Flywheel E2E", () => {
     // Fund and self-delegate
     await relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         amount: 10.0,
         reference: "self-fund",
@@ -352,7 +352,7 @@ describe("Trust Flywheel E2E", () => {
     // Submit task to self (submitted_by === worker)
     const taskRes = await relay.app.request(`/agent/${agent.motebitId}/task`, {
       method: "POST",
-      headers: JSON_AUTH,
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         prompt: "self-search",
         submitted_by: agent.motebitId,

@@ -2148,7 +2148,7 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
   try {
     const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
-      headers,
+      headers: { ...headers, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify(body),
     });
     if (res.status === 402) {
@@ -2360,7 +2360,7 @@ async function handleDelegatePlan(
 
     const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
       method: "POST",
-      headers: authHeaders,
+      headers: { ...authHeaders, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify(body),
     });
 
@@ -2547,7 +2547,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
     console.log(`Delegating to ${targetMotebitId.slice(0, 12)}...`);
     const submitRes = await fetch(`${relayUrl}/agent/${targetMotebitId}/task`, {
       method: "POST",
-      headers,
+      headers: { ...headers, "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         prompt,
         submitted_by: motebitId,

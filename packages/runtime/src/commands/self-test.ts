@@ -71,6 +71,7 @@ export async function cmdSelfTest(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${submitToken}`,
+        "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
         prompt: "self-test",

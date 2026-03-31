@@ -85,7 +85,11 @@ async function deposit(
 ): Promise<{ motebit_id: string; balance: number; transaction_id: string | null }> {
   const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    headers: {
+      "Content-Type": "application/json",
+      ...AUTH_HEADER,
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({ amount }),
   });
   expect(res.status).toBe(200);
@@ -154,7 +158,11 @@ async function submitTask(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await relay.app.request(`/agent/${workerId}/task`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    headers: {
+      "Content-Type": "application/json",
+      ...AUTH_HEADER,
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({
       prompt: "Do something",
       submitted_by: delegatorId,
