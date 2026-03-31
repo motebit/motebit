@@ -22,6 +22,7 @@ import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
+import { FederationError } from "./errors.js";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import {
   createAnchoringTables,
@@ -685,7 +686,10 @@ export async function processSettlementRetries(
           "UPDATE relay_settlement_retries SET status = 'completed' WHERE retry_id = ?",
         ).run(retry.retry_id);
       } else {
-        throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+        throw new FederationError(
+          "FEDERATION_FORWARD_FAILED",
+          `HTTP ${resp.status}: ${resp.statusText}`,
+        );
       }
     } catch (err: unknown) {
       const newAttempts = retry.attempts + 1;

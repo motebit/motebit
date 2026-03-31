@@ -62,6 +62,7 @@ import {
   AuthenticationError,
   AuthorizationError,
   InsufficientFundsError,
+  SettlementError,
   AllocationError,
   TaskError,
 } from "./errors.js";
@@ -1355,7 +1356,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             moteDb.db.exec("COMMIT");
           } catch (depositErr) {
             moteDb.db.exec("ROLLBACK");
-            throw new Error("x402 auto-deposit failed", { cause: depositErr });
+            throw new SettlementError("SETTLEMENT_FAILED", "x402 auto-deposit failed", {
+              cause: depositErr,
+            });
           }
         }
 

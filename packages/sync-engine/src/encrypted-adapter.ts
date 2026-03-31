@@ -12,6 +12,11 @@ export interface KeyProvider {
   getKey(version: number): Uint8Array | null;
 }
 
+/** Optional warn logger matching the runtime pluggable logger convention. */
+export interface EncryptedAdapterLogger {
+  warn(message: string): void;
+}
+
 export interface EncryptedAdapterConfig {
   /** The underlying adapter to wrap */
   inner: EventStoreAdapter;
@@ -19,6 +24,8 @@ export interface EncryptedAdapterConfig {
   key?: Uint8Array;
   /** Versioned key provider for key rotation support */
   keyProvider?: KeyProvider;
+  /** Optional logger for diagnostics (defaults to silent — no console output) */
+  logger?: EncryptedAdapterLogger;
 }
 
 // Portable base64 helpers that work in both Node.js and React Native
@@ -55,6 +62,8 @@ function singleKeyProvider(key: Uint8Array): KeyProvider {
   };
 }
 
+const noopLogger: EncryptedAdapterLogger = { warn: () => {} };
+
 /**
  * Wraps an EventStoreAdapter with event-level encryption.
  * Encrypts the `payload` field before writing, decrypts after reading.
@@ -68,9 +77,11 @@ function singleKeyProvider(key: Uint8Array): KeyProvider {
 export class EncryptedEventStoreAdapter implements EventStoreAdapter {
   private inner: EventStoreAdapter;
   private keyProvider: KeyProvider;
+  private logger: EncryptedAdapterLogger;
 
   constructor(config: EncryptedAdapterConfig) {
     this.inner = config.inner;
+    this.logger = config.logger ?? noopLogger;
     if (config.keyProvider) {
       this.keyProvider = config.keyProvider;
     } else if (config.key) {
@@ -143,7 +154,7 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     // Legacy data has no version field — treat as version 1
     const version = data.v ?? 1;
     if (data.v == null) {
-      console.warn("encrypted-adapter: decrypting unversioned payload, assuming key version 1");
+      this.logger.warn("encrypted-adapter: decrypting unversioned payload, assuming key version 1");
     }
     const key = this.keyProvider.getKey(version);
     if (key == null) {
@@ -168,6 +179,7 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
 export async function decryptEventPayload(
   event: EventLogEntry,
   keyOrProvider: Uint8Array | KeyProvider,
+  logger: EncryptedAdapterLogger = noopLogger,
 ): Promise<EventLogEntry> {
   const payload = event.payload;
   if (payload._encrypted == null || payload._encrypted === false) return event;
@@ -183,7 +195,7 @@ export async function decryptEventPayload(
   };
   const version = data.v ?? 1;
   if (data.v == null) {
-    console.warn("encrypted-adapter: decrypting unversioned event payload, assuming key version 1");
+    logger.warn("encrypted-adapter: decrypting unversioned event payload, assuming key version 1");
   }
   const key = provider.getKey(version);
   if (key == null) {
