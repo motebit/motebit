@@ -47,10 +47,27 @@ did:key:z6Mk...  ← derived from the same Ed25519 public key in motebit.md
 
 This means any system that understands W3C DIDs can verify a motebit agent's identity without knowing anything about the motebit protocol.
 
+## Key rotation
+
+Keys rotate via dual-signed succession records — both the old key and the new key sign the canonical payload, proving the old key authorized the rotation and the new key accepted it. The `motebit_id` stays the same. Any verifier can trace the chain from genesis key to current key without trusting any intermediary.
+
+## Organizational custody (guardian)
+
+Enterprise agents can declare a guardian — an organizational Ed25519 key held in cold storage (HSM, vault). The guardian enables:
+
+- **Key recovery** — If the primary key is compromised, the guardian signs a recovery succession record to rotate to a new key without the compromised key
+- **Employee departure** — The organization rotates the agent's key to a new operator, preserving the `motebit_id`, trust history, and credentials
+- **Organizational trust** — Agents under the same guardian receive an organizational trust baseline in routing — they're verified members of the same organization
+
+Guardian revocation requires dual authorization: both the identity key and the guardian key must sign. Neither party can unilaterally dissolve the custody relationship. This is the correct enterprise model: the org owns the value built on company resources.
+
+Sovereign agents (individuals) omit the guardian field entirely. Their identity has no recovery path beyond key succession — the deliberate tradeoff for full sovereignty.
+
 ## What this enables
 
 - **Proof of identity** — Any service can verify that a message came from your motebit by checking the signature against the registered public key
 - **Multi-device** — Your motebit exists across all your devices with the same identity and shared state
 - **Relay independence** — The identity doesn't depend on the relay server. Kill the relay, the motebit continues. Switch relays, the motebit follows.
 - **Audit trail** — Every event is tagged with the agent and device that produced it, creating a verifiable history
-- **Recovery** — Back up `~/.motebit/` to preserve your identity, memories, and audit history. If a key is compromised, generate a new identity — same model as SSH keys (see [Backup and Recovery](/docs/get-your-agent#backup-and-recovery))
+- **Key rotation** — Rotate keys without losing identity. Dual-signed succession chains prove continuity end-to-end
+- **Enterprise custody** — Optional guardian key enables organizational key recovery and employee departure workflows

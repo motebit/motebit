@@ -113,6 +113,23 @@ memory:
   per_turn_limit: 5
 
 devices: []
+
+# Optional: organizational custody (enterprise agents)
+guardian:
+  public_key: "e5f6a7b8..."
+  organization: "Acme Corp"
+  organization_id: "org-acme-123"
+  established_at: "2026-01-01T00:00:00.000Z"
+  attestation: "c3d4e5f6..."
+
+# Optional: key rotation history
+succession:
+  - old_public_key: "a1b2c3d4..."
+    new_public_key: "b2c3d4e5..."
+    timestamp: 1711929600000
+    reason: "routine rotation"
+    old_key_signature: "d4e5f6..."
+    new_key_signature: "e5f6a7..."
 ---
 <!-- motebit:sig:Ed25519:BASE64URL_SIGNATURE -->
 ```
@@ -126,6 +143,8 @@ devices: []
 | **privacy** | Sensitivity levels and retention rules (see [Governance](/docs/concepts/governance)) |
 | **memory** | Decay parameters for semantic memory (see [Memory](/docs/concepts/memory)) |
 | **devices** | Registered device public keys for multi-device identity |
+| **guardian** | Optional organizational custody key for enterprise recovery ([spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) §3.3) |
+| **succession** | Key rotation history — dual-signed chain from genesis to current key ([spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) §3.8) |
 
 ### Signature
 
@@ -140,7 +159,9 @@ The signature is stored as a base64url-encoded value in an HTML comment after th
 | Frontmatter tampering | Ed25519 signature — any change invalidates |
 | Private key theft | Encrypted at rest (PBKDF2 + AES-256-GCM) in config or OS keychain; never in the identity file |
 | Identity impersonation | Public key is self-certifying; verification requires the matching keypair |
-| Key compromise | Generate new keypair + new `motebit_id`; old identity is abandoned |
+| Key compromise (with succession) | Old key signs succession record delegating to new key; chain is verifiable end-to-end |
+| Key compromise (guardian recovery) | Guardian signs recovery succession; `motebit_id` and trust preserved |
+| Key compromise (no succession) | Generate new keypair + new `motebit_id`; old identity is abandoned |
 | YAML injection | Restricted parser; no anchors/aliases/tags |
 
 A valid signature proves the holder has the private key. It does **not** prove the holder is trustworthy. Trust is accumulated at the application layer through history, governance, and memory — not by the identity file alone.
