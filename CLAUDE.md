@@ -154,7 +154,7 @@ motebit withdraw <amount>              # Request withdrawal
 
 # Earn side
 motebit run --price 0.50               # Accept tasks at $0.50/task (daemon mode)
-motebit serve                          # Accept tasks (MCP server mode)
+motebit serve --price 0.50             # Accept tasks at $0.50/task (MCP server mode)
 ```
 
 **Money model.** All amounts stored as integer micro-units (1 USD = 1,000,000 units). API boundary converts: `toMicro(dollars)` on ingest, `fromMicro(micro)` on egress. Zero floating-point arithmetic in the money path.
