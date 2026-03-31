@@ -157,29 +157,31 @@ export function BillingPanel({
     if (!motebitId || !relayUrl) return;
     const startBalance = balance;
     let attempts = 0;
-    const interval = setInterval(async () => {
+    const interval = setInterval(() => {
       attempts++;
       if (attempts > 30) {
         clearInterval(interval);
         setTopupMessage("Balance will update shortly");
         return;
       }
-      try {
-        const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/balance`);
-        if (!res.ok) return;
-        const data = (await res.json()) as { balance?: number };
-        if (data.balance != null) {
-          const usd = data.balance / 1_000_000;
-          if (usd > startBalance) {
-            clearInterval(interval);
-            setBalance(usd);
-            onBalanceUpdate?.(usd);
-            setTopupMessage(null);
+      void (async () => {
+        try {
+          const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/balance`);
+          if (!res.ok) return;
+          const data = (await res.json()) as { balance?: number };
+          if (data.balance != null) {
+            const usd = data.balance / 1_000_000;
+            if (usd > startBalance) {
+              clearInterval(interval);
+              setBalance(usd);
+              onBalanceUpdate?.(usd);
+              setTopupMessage(null);
+            }
           }
+        } catch {
+          // Keep trying
         }
-      } catch {
-        // Keep trying
-      }
+      })();
     }, 2000);
   }, [motebitId, relayUrl, balance, onBalanceUpdate]);
 
