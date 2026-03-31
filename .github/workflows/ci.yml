@@ -86,6 +86,40 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright (Chromium only)
+        run: npx playwright install --with-deps chromium
+
+      - name: Build web app
+        run: pnpm --filter @motebit/web build
+
+      - name: Run E2E smoke tests
+        run: pnpm --filter @motebit/web test:e2e --project=chromium
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: e2e-screenshots
+          path: apps/web/test-results/
+          retention-days: 7
+
   sibling-audit:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

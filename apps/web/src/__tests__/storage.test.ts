@@ -1,6 +1,7 @@
 /**
  * Storage module tests — localStorage persistence for provider config,
- * soul color, sync URL, and legacy conversation migration.
+ * soul color, sync URL, governance, voice, proxy token, balance,
+ * and legacy conversation migration.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import {
@@ -12,11 +13,24 @@ import {
   saveSyncUrl,
   loadSyncUrl,
   clearSyncUrl,
+  saveGovernanceConfig,
+  loadGovernanceConfig,
+  saveVoiceConfig,
+  loadVoiceConfig,
   hasCeilingBeenShown,
   markCeilingShown,
+  saveProxyToken,
+  loadProxyToken,
+  clearProxyToken,
+  saveBalance,
+  loadBalance,
   needsMigration,
   loadLegacyConversations,
   markMigrationDone,
+  type ProviderConfig,
+  type GovernanceConfig,
+  type VoiceConfig,
+  type ProxyTokenData,
 } from "../storage.js";
 
 beforeEach(() => {
@@ -45,6 +59,56 @@ describe("ProviderConfig persistence", () => {
     clearProviderConfig();
     expect(loadProviderConfig()).toBeNull();
   });
+
+  it("returns null on corrupt JSON in localStorage", () => {
+    localStorage.setItem("motebit-provider", "{bad json!!!");
+    expect(loadProviderConfig()).toBeNull();
+  });
+
+  it("round-trips openai config", () => {
+    const config: ProviderConfig = { type: "openai", apiKey: "sk-openai", model: "gpt-4o" };
+    saveProviderConfig(config);
+    expect(loadProviderConfig()).toEqual(config);
+  });
+
+  it("round-trips ollama config with baseUrl", () => {
+    const config: ProviderConfig = {
+      type: "ollama",
+      model: "llama3",
+      baseUrl: "http://localhost:11434",
+    };
+    saveProviderConfig(config);
+    expect(loadProviderConfig()).toEqual(config);
+  });
+
+  it("round-trips webllm config", () => {
+    const config: ProviderConfig = { type: "webllm", model: "Llama-3-8B-Instruct-q4f16_1" };
+    saveProviderConfig(config);
+    expect(loadProviderConfig()).toEqual(config);
+  });
+
+  it("round-trips proxy config with proxyToken", () => {
+    const config: ProviderConfig = {
+      type: "proxy",
+      model: "claude-sonnet-4-20250514",
+      proxyToken: "tok_abc",
+    };
+    saveProviderConfig(config);
+    expect(loadProviderConfig()).toEqual(config);
+  });
+
+  it("preserves optional fields (maxTokens, temperature, baseUrl)", () => {
+    const config: ProviderConfig = {
+      type: "openai",
+      apiKey: "k",
+      model: "gpt-4o",
+      baseUrl: "https://custom.api",
+      maxTokens: 2048,
+      temperature: 0.5,
+    };
+    saveProviderConfig(config);
+    expect(loadProviderConfig()).toEqual(config);
+  });
 });
 
 describe("SoulColor persistence", () => {
@@ -55,6 +119,11 @@ describe("SoulColor persistence", () => {
   });
 
   it("returns null when no color saved", () => {
+    expect(loadSoulColor()).toBeNull();
+  });
+
+  it("returns null on corrupt JSON", () => {
+    localStorage.setItem("motebit-soul-color", "not-json");
     expect(loadSoulColor()).toBeNull();
   });
 });
@@ -69,6 +138,86 @@ describe("SyncUrl persistence", () => {
     saveSyncUrl("https://relay.motebit.com");
     clearSyncUrl();
     expect(loadSyncUrl()).toBeNull();
+  });
+});
+
+describe("GovernanceConfig persistence", () => {
+  it("round-trips governance config", () => {
+    const gov: GovernanceConfig = {
+      approvalPreset: "balanced",
+      persistenceThreshold: 0.7,
+      rejectSecrets: true,
+      maxCallsPerTurn: 10,
+    };
+    saveGovernanceConfig(gov);
+    expect(loadGovernanceConfig()).toEqual(gov);
+  });
+
+  it("returns null when nothing saved", () => {
+    expect(loadGovernanceConfig()).toBeNull();
+  });
+
+  it("returns null on corrupt JSON", () => {
+    localStorage.setItem("motebit-governance", "{{");
+    expect(loadGovernanceConfig()).toBeNull();
+  });
+});
+
+describe("VoiceConfig persistence", () => {
+  it("round-trips voice config", () => {
+    const voice: VoiceConfig = { ttsVoice: "Samantha", autoSend: true, voiceResponse: false };
+    saveVoiceConfig(voice);
+    expect(loadVoiceConfig()).toEqual(voice);
+  });
+
+  it("returns null when nothing saved", () => {
+    expect(loadVoiceConfig()).toBeNull();
+  });
+
+  it("returns null on corrupt JSON", () => {
+    localStorage.setItem("motebit-voice", "[broken");
+    expect(loadVoiceConfig()).toBeNull();
+  });
+});
+
+describe("ProxyToken persistence", () => {
+  const token: ProxyTokenData = {
+    token: "signed.jwt.token",
+    balance: 5_000_000,
+    balanceUsd: 5.0,
+    expiresAt: Date.now() + 86400000,
+    motebitId: "mb_test123",
+  };
+
+  it("round-trips proxy token", () => {
+    saveProxyToken(token);
+    expect(loadProxyToken()).toEqual(token);
+  });
+
+  it("returns null when nothing saved", () => {
+    expect(loadProxyToken()).toBeNull();
+  });
+
+  it("clearProxyToken removes saved token", () => {
+    saveProxyToken(token);
+    clearProxyToken();
+    expect(loadProxyToken()).toBeNull();
+  });
+
+  it("returns null on corrupt JSON", () => {
+    localStorage.setItem("motebit-proxy-token", "corrupt");
+    expect(loadProxyToken()).toBeNull();
+  });
+});
+
+describe("Balance persistence", () => {
+  it("round-trips balance", () => {
+    saveBalance(12.34);
+    expect(loadBalance()).toBe(12.34);
+  });
+
+  it("returns 0 when nothing saved", () => {
+    expect(loadBalance()).toBe(0);
   });
 });
 

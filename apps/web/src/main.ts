@@ -15,13 +15,13 @@ import { ProxySession } from "@motebit/runtime";
 import type { ProxyProviderConfig } from "@motebit/runtime";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
+import { checkWebGPU, WebLLMProvider, PROXY_BASE_URL } from "./providers";
 import {
-  checkWebGPU,
-  WebLLMProvider,
-  PROXY_BASE_URL,
-  detectOllamaModels,
-  DEFAULT_OLLAMA_URL,
-} from "./providers";
+  probeLocalModels,
+  pickBestModel,
+  cleanConversationHistory,
+  DEFAULT_LOCAL_ENDPOINTS,
+} from "./bootstrap";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initSubscription } from "./ui/subscription";
@@ -217,54 +217,9 @@ async function autoInitProxy(): Promise<boolean> {
   return proxySession.bootstrap();
 }
 
-/**
- * Detect any local inference server — Ollama, LM Studio, LocalAI, llama.cpp, Jan, vLLM.
- * Probes known ports in parallel. First to respond with a model list wins.
- * All speak OpenAI-compatible /v1/models (Ollama also probed via /api/tags).
- */
-const LOCAL_INFERENCE_ENDPOINTS = [
-  { url: DEFAULT_OLLAMA_URL, type: "ollama" as const }, // :11434
-  { url: "http://localhost:1234", type: "openai" as const }, // LM Studio
-  { url: "http://localhost:8080", type: "openai" as const }, // LocalAI / llama.cpp
-  { url: "http://localhost:1337", type: "openai" as const }, // Jan
-  { url: "http://localhost:8000", type: "openai" as const }, // vLLM
-] as const;
-
-async function probeLocalModels(
-  baseUrl: string,
-  type: "ollama" | "openai",
-): Promise<{ baseUrl: string; type: "ollama" | "openai"; models: string[] } | null> {
-  try {
-    // Try Ollama-native API first for Ollama, then OpenAI-compatible for all
-    if (type === "ollama") {
-      const models = await detectOllamaModels(baseUrl);
-      if (models.length > 0) return { baseUrl, type, models };
-    }
-    // OpenAI-compatible /v1/models
-    const res = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(2000) });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { data?: Array<{ id: string }> };
-    const models = (data.data ?? []).map((m) => m.id);
-    if (models.length > 0) return { baseUrl, type: "openai", models };
-  } catch {
-    // Not running on this port
-  }
-  return null;
-}
-
-/** Prefer the largest/best model from a list. */
-function pickBestModel(models: string[]): string {
-  return (
-    models.find((m) => m.includes("70b")) ??
-    models.find((m) => m.includes("32b")) ??
-    models.find((m) => m.includes("8b")) ??
-    models[0]!
-  );
-}
-
 async function autoInitLocalInference(): Promise<boolean> {
   // Race all probes — first to find models wins
-  const probes = LOCAL_INFERENCE_ENDPOINTS.map((ep) => probeLocalModels(ep.url, ep.type));
+  const probes = DEFAULT_LOCAL_ENDPOINTS.map((ep) => probeLocalModels(ep.url, ep.type));
   const results = await Promise.allSettled(probes);
 
   // Find the first successful probe
@@ -423,17 +378,9 @@ async function bootstrap(): Promise<void> {
 
   // Restore conversation history into chat log (immediate = skip entrance animation)
   const history = app.getConversationHistory();
-  for (const msg of history) {
-    if (msg.role === "user" || msg.role === "assistant") {
-      // Strip any tags that leaked into stored content (e.g. <thinking> from older sessions)
-      const clean = msg.content
-        .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-        .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-        .replace(/<state\s+[^>]*\/>/g, "")
-        .replace(/ {2,}/g, " ")
-        .trim();
-      if (clean) addMessage(msg.role, clean, true);
-    }
+  const cleaned = cleanConversationHistory(history);
+  for (const msg of cleaned) {
+    addMessage(msg.role, msg.content, true);
   }
 }
 
