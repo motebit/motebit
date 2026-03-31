@@ -142,6 +142,9 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     };
     // Legacy data has no version field — treat as version 1
     const version = data.v ?? 1;
+    if (data.v == null) {
+      console.warn("encrypted-adapter: decrypting unversioned payload, assuming key version 1");
+    }
     const key = this.keyProvider.getKey(version);
     if (key == null) {
       throw new Error(`Encryption key not found for version ${version}`);
@@ -179,6 +182,9 @@ export async function decryptEventPayload(
     v?: number;
   };
   const version = data.v ?? 1;
+  if (data.v == null) {
+    console.warn("encrypted-adapter: decrypting unversioned event payload, assuming key version 1");
+  }
   const key = provider.getKey(version);
   if (key == null) {
     throw new Error(`Encryption key not found for version ${version}`);

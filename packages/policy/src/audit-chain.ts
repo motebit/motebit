@@ -11,8 +11,11 @@
 // === Inline trivial utilities (layer boundary — no cross-layer import) ===
 
 /**
- * Deterministic JSON with sorted keys. Matches @motebit/crypto's canonicalJson.
- * undefined values are explicitly serialized as null to prevent silent field erasure.
+ * Deterministic JSON with sorted keys.
+ * Intentionally diverges from @motebit/crypto's canonicalJson: undefined values
+ * are serialized as null (not skipped) to prevent silent field erasure in
+ * arbitrary audit payloads. Crypto's version matches JSON.stringify semantics
+ * which is correct for structured signing inputs.
  */
 function canonicalJson(obj: unknown): string {
   if (obj === null || obj === undefined) return "null";

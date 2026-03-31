@@ -2453,6 +2453,10 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   driver.pragma("journal_mode = WAL");
   driver.pragma("wal_autocheckpoint = 1000");
   driver.pragma("foreign_keys = ON");
+  // Enable incremental auto-vacuum so deleted pages are reclaimable via
+  // PRAGMA incremental_vacuum without a full VACUUM. Only takes effect on
+  // new databases (no-op if tables already exist with a different mode).
+  driver.pragma("auto_vacuum = INCREMENTAL");
 
   const userVersion = (driver.pragma("user_version") as { user_version: number }[])[0]!
     .user_version;

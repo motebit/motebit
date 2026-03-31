@@ -348,6 +348,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       // Best-effort cleanup
     }
+    // Reclaim deleted pages (works with auto_vacuum = INCREMENTAL)
+    try {
+      moteDb.db.pragma("incremental_vacuum(100)");
+    } catch {
+      // Best-effort — no-op if auto_vacuum mode differs
+    }
     // Release stale budget allocations locked > 1 hour with no settlement.
     // Return held funds to the delegator's virtual account.
     try {
