@@ -28,20 +28,18 @@ test.describe("Settings panel", () => {
     await page.locator("#settings-btn").click();
     await expect(page.locator("#settings-modal")).toHaveClass(/open/);
 
-    // Click the "Dark" theme option
-    await page.locator('[data-theme="dark"]').click();
+    // Click the "Dark" theme option (scoped to toggle group)
+    await page.locator('#theme-toggle-group .theme-option[data-theme="dark"]').click();
 
-    // Save settings
+    // Theme applies immediately on click (no save needed)
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    // Close settings
     await page.locator("#settings-save").click();
     await expect(page.locator("#settings-modal")).not.toHaveClass(/open/);
 
-    // Dark theme should now be applied
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-
-    // Reload the page
+    // Reload the page — theme should persist via localStorage
     await page.reload();
-
-    // Theme should persist
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   });
 
