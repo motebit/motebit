@@ -143,6 +143,42 @@ describe("AuditChain", () => {
       expect(result).toEqual({ valid: false, brokenAt: 0 });
     });
 
+    it("detects reordered entries (structural tampering)", async () => {
+      const store = new InMemoryAuditChainStore();
+      await appendAuditEntry(store, makeEntry("e1"));
+      await appendAuditEntry(store, makeEntry("e2"));
+      await appendAuditEntry(store, makeEntry("e3"));
+
+      // Swap entries 1 and 2 — structural tampering that preserves data
+      const entries = await store.getEntries();
+      const swapped = [entries[0]!, entries[2]!, entries[1]!];
+      const tamperedStore = new InMemoryAuditChainStore();
+      for (const e of swapped) {
+        await tamperedStore.append(e);
+      }
+
+      const result = await verifyAuditChain(tamperedStore);
+      expect(result.valid).toBe(false);
+    });
+
+    it("detects removed entry (chain shortening)", async () => {
+      const store = new InMemoryAuditChainStore();
+      await appendAuditEntry(store, makeEntry("e1"));
+      await appendAuditEntry(store, makeEntry("e2"));
+      await appendAuditEntry(store, makeEntry("e3"));
+
+      // Remove the middle entry
+      const entries = await store.getEntries();
+      const shortened = [entries[0]!, entries[2]!];
+      const tamperedStore = new InMemoryAuditChainStore();
+      for (const e of shortened) {
+        await tamperedStore.append(e);
+      }
+
+      const result = await verifyAuditChain(tamperedStore);
+      expect(result.valid).toBe(false);
+    });
+
     it("detects broken chain linkage", async () => {
       const store = new InMemoryAuditChainStore();
       await appendAuditEntry(store, makeEntry("e1"));
@@ -192,6 +228,50 @@ describe("AuditChain", () => {
   });
 
   describe("canonical JSON determinism", () => {
+    it("undefined fields are not silently erased — they canonicalize as null", async () => {
+      const withField = {
+        entry_id: "e1",
+        timestamp: 1000,
+        event_type: "test",
+        actor_id: "a1",
+        data: { key: "value", extra: null } as Record<string, unknown>,
+      };
+      const withUndefined = {
+        entry_id: "e1",
+        timestamp: 1000,
+        event_type: "test",
+        actor_id: "a1",
+        data: { key: "value", extra: undefined } as Record<string, unknown>,
+      };
+
+      const hash1 = await computeEntryHash(GENESIS_HASH, withField);
+      const hash2 = await computeEntryHash(GENESIS_HASH, withUndefined);
+      // Both should produce identical hashes — undefined canonicalizes to null
+      expect(hash1).toBe(hash2);
+    });
+
+    it("missing field differs from explicit undefined/null field", async () => {
+      const withExtra = {
+        entry_id: "e1",
+        timestamp: 1000,
+        event_type: "test",
+        actor_id: "a1",
+        data: { key: "value", extra: undefined } as Record<string, unknown>,
+      };
+      const withoutExtra = {
+        entry_id: "e1",
+        timestamp: 1000,
+        event_type: "test",
+        actor_id: "a1",
+        data: { key: "value" },
+      };
+
+      const hash1 = await computeEntryHash(GENESIS_HASH, withExtra);
+      const hash2 = await computeEntryHash(GENESIS_HASH, withoutExtra);
+      // extra:null vs no extra field — these MUST produce different hashes
+      expect(hash1).not.toBe(hash2);
+    });
+
     it("produces same hash regardless of key insertion order", async () => {
       const data1 = { zebra: 1, alpha: 2, mid: 3 };
       const data2 = { alpha: 2, mid: 3, zebra: 1 };
@@ -239,6 +319,26 @@ describe("AuditChain", () => {
       // Verify original is unchanged
       const result = await verifyAuditChain(store);
       expect(result).toEqual({ valid: true });
+    });
+
+    it("deep-clones nested data — nested mutations don't affect stored entries", async () => {
+      const store = new InMemoryAuditChainStore();
+      await appendAuditEntry(store, {
+        entry_id: "deep",
+        timestamp: Date.now(),
+        event_type: "test",
+        actor_id: "a1",
+        data: { nested: { inner: "original" } },
+      });
+
+      const entries = await store.getEntries();
+      (entries[0]!.data.nested as Record<string, unknown>).inner = "TAMPERED";
+
+      // Verify original nested data is unchanged
+      const result = await verifyAuditChain(store);
+      expect(result).toEqual({ valid: true });
+      const fresh = await store.getEntries();
+      expect((fresh[0]!.data.nested as Record<string, unknown>).inner).toBe("original");
     });
   });
 });

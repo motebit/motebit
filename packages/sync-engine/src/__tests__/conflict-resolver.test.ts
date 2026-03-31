@@ -70,33 +70,43 @@ describe("LastWriterWinsResolver", () => {
     expect(result.resolved.value).toBe("same");
   });
 
-  it("higher version wins", () => {
+  it("higher version wins (not a conflict — normal catch-up)", () => {
     const local = versioned({ value: "local" }, { version: 2, timestamp: 1000, device_id: "d1" });
     const remote = versioned({ value: "remote" }, { version: 5, timestamp: 900, device_id: "d2" });
     const result = resolver.resolve(local, remote);
 
     expect(result.strategy).toBe("remote_wins");
-    expect(result.conflicted).toBe(true);
+    expect(result.conflicted).toBe(false); // different versions = one side ahead, not concurrent
     expect(result.resolved.value).toBe("remote");
   });
 
-  it("local higher version wins", () => {
+  it("local higher version wins (not a conflict — normal catch-up)", () => {
     const local = versioned({ value: "local" }, { version: 10, timestamp: 1000, device_id: "d1" });
     const remote = versioned({ value: "remote" }, { version: 3, timestamp: 2000, device_id: "d2" });
     const result = resolver.resolve(local, remote);
 
     expect(result.strategy).toBe("local_wins");
-    expect(result.conflicted).toBe(true);
+    expect(result.conflicted).toBe(false); // different versions = one side ahead, not concurrent
     expect(result.resolved.value).toBe("local");
   });
 
-  it("equal version, later timestamp wins", () => {
+  it("same version from different devices is a true conflict", () => {
+    const local = versioned({ value: "local" }, { version: 5, timestamp: 1000, device_id: "d1" });
+    const remote = versioned({ value: "remote" }, { version: 5, timestamp: 2000, device_id: "d2" });
+    const result = resolver.resolve(local, remote);
+
+    expect(result.strategy).toBe("remote_wins"); // later timestamp wins at same version
+    expect(result.conflicted).toBe(true); // same version, different devices = concurrent edit
+    expect(result.resolved.value).toBe("remote");
+  });
+
+  it("equal version, later timestamp wins (concurrent conflict)", () => {
     const local = versioned({ value: "local" }, { version: 5, timestamp: 2000, device_id: "d1" });
     const remote = versioned({ value: "remote" }, { version: 5, timestamp: 1000, device_id: "d2" });
     const result = resolver.resolve(local, remote);
 
     expect(result.strategy).toBe("local_wins");
-    expect(result.conflicted).toBe(false); // same version = no divergence
+    expect(result.conflicted).toBe(true); // same version, different devices = concurrent edit
     expect(result.resolved.value).toBe("local");
   });
 
@@ -157,7 +167,7 @@ describe("LastWriterWinsResolver", () => {
     const result = resolver.resolve(local, remote);
     expect(result.strategy).toBe("remote_wins");
     expect(result.resolved.title).toBe("Remote title");
-    expect(result.conflicted).toBe(true);
+    expect(result.conflicted).toBe(false); // version 3 vs 5 = catch-up, not concurrent
   });
 });
 

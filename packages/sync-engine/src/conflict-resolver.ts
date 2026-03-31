@@ -65,8 +65,9 @@ export interface ConflictEvent {
  * 2. If equal versions, later timestamp wins
  * 3. If equal timestamps, lexicographically greater device_id wins (deterministic)
  *
- * Marks conflicted=true when versions diverge (local.version !== remote.version
- * and neither is strictly greater), so the UI can show a notification.
+ * Marks conflicted=true only for true concurrent divergence: both sides
+ * modified the data independently (different versions from different devices).
+ * A clean version-clock ordering (v3 vs v5) is a normal catch-up, not a conflict.
  */
 export class LastWriterWinsResolver<T> implements ConflictResolver<T> {
   resolve(local: T & Versioned, remote: T & Versioned): ConflictResult<T> {
@@ -79,8 +80,9 @@ export class LastWriterWinsResolver<T> implements ConflictResolver<T> {
       return { resolved: local, strategy: "local_wins", conflicted: false };
     }
 
-    // Determine winner
-    const conflicted = local.version !== remote.version;
+    // True conflict: same version clock from different devices means concurrent edits.
+    // Different version clocks = one side is ahead (normal catch-up, not a conflict).
+    const conflicted = local.version === remote.version && local.device_id !== remote.device_id;
     const winner = this.pickWinner(local, remote);
     const strategy: ConflictStrategy = winner === local ? "local_wins" : "remote_wins";
 
