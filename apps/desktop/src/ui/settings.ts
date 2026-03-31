@@ -1,4 +1,4 @@
-import type { DesktopAIConfig, InvokeFn, McpServerConfig, PolicyConfig } from "../index";
+import type { DesktopAIConfig, InvokeFn, McpServerConfig } from "../index";
 import type { NameCollision } from "../mcp-discovery";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
@@ -8,6 +8,7 @@ import type { ColorPickerAPI } from "./color-picker";
 import type { VoiceAPI } from "./voice";
 import type { PairingAPI } from "./pairing";
 import { saveFocus, restoreFocus, focusFirst } from "./focus";
+import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
 
 // === DOM Refs ===
 
@@ -105,14 +106,6 @@ const OLLAMA_MODELS = [
 ];
 
 const PROXY_MODELS = ["claude-sonnet-4-20250514"];
-
-// === Approval Presets ===
-
-const APPROVAL_PRESET_CONFIGS: Record<string, Partial<PolicyConfig>> = {
-  cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
-  balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
-  autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
-};
 
 // === Settings API ===
 
@@ -1528,10 +1521,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       voice.rebuildTtsProvider(invoke as InvokeFn);
     }
 
-    const approvalConfig = APPROVAL_PRESET_CONFIGS[selectedApprovalPreset];
+    const approvalConfig =
+      APPROVAL_PRESET_CONFIGS[selectedApprovalPreset as keyof typeof APPROVAL_PRESET_CONFIGS];
     if (approvalConfig) {
       ctx.app.updatePolicyConfig({
-        ...approvalConfig,
+        maxRiskLevel: approvalConfig.maxRiskLevel,
+        requireApprovalAbove: approvalConfig.requireApprovalAbove,
+        denyAbove: approvalConfig.denyAbove,
         operatorMode: settingsOperatorMode.checked,
         budget: { maxCallsPerTurn: parseInt(maxCalls.value, 10) || 10 },
       });

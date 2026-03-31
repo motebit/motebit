@@ -70,12 +70,7 @@ let lastGazeHit = false;
 
 // === Settings persistence ===
 
-interface GovernanceConfig {
-  approvalPreset: "cautious" | "balanced" | "autonomous";
-  persistenceThreshold: number;
-  rejectSecrets: boolean;
-  maxCallsPerTurn: number;
-}
+import type { GovernanceConfig } from "@motebit/sdk";
 
 interface SpatialSettings {
   provider: "anthropic" | "ollama" | "openai" | "proxy";

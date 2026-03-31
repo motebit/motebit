@@ -103,12 +103,8 @@ export function clearSyncUrl(): void {
 
 // === Governance Config ===
 
-export interface GovernanceConfig {
-  approvalPreset: "cautious" | "balanced" | "autonomous";
-  persistenceThreshold: number;
-  rejectSecrets: boolean;
-  maxCallsPerTurn: number;
-}
+import type { GovernanceConfig } from "@motebit/sdk";
+export type { GovernanceConfig } from "@motebit/sdk";
 
 const GOVERNANCE_KEY = "motebit-governance";
 

@@ -113,47 +113,11 @@ import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { ExpoGLAdapter } from "./adapters/expo-gl";
 import { SecureStoreAdapter } from "./adapters/secure-store";
 
-// === Color Presets (same 7 as desktop) ===
+// === Shared presets (canonical source: @motebit/sdk) ===
 
-export const COLOR_PRESETS: Record<string, InteriorColor> = {
-  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
-  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
-  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
-  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
-  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
-  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
-  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
-};
-
-// === Approval Presets ===
-
-export interface ApprovalPresetConfig {
-  label: string;
-  description: string;
-  requireApprovalAbove: number;
-  denyAbove: number;
-}
-
-export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
-  cautious: {
-    label: "Cautious",
-    description: "Approve everything above read-only",
-    requireApprovalAbove: 0,
-    denyAbove: 3,
-  },
-  balanced: {
-    label: "Balanced",
-    description: "Auto-allow low risk, approve medium",
-    requireApprovalAbove: 1,
-    denyAbove: 4,
-  },
-  autonomous: {
-    label: "Autonomous",
-    description: "Auto-allow most, deny only dangerous",
-    requireApprovalAbove: 2,
-    denyAbove: 4,
-  },
-};
+import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
+export { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS };
+export type { ApprovalPresetConfig } from "@motebit/sdk";
 
 // === Settings ===
 
