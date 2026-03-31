@@ -911,3 +911,94 @@ describe("organizational trust baseline via guardian", () => {
     expect(withGuardian[0]!.composite).toBeGreaterThan(withoutGuardian[0]!.composite);
   });
 });
+
+// ── SLA Integration in Routing ─────────────────────────────────────
+
+describe("SLA fields in routing", () => {
+  it("uses SLA max_latency_ms as latency fallback when no measured stats", () => {
+    const candidate = makeCandidate({
+      motebit_id: asMotebitId("sla-agent"),
+      latency_stats: null, // no measurements
+      listing: makeListing({
+        sla: { max_latency_ms: 2000, availability_guarantee: 0.95 },
+      }),
+    });
+
+    const graph = buildRoutingGraph(SELF_ID, [candidate]);
+    const edge = graph.getEdge(SELF_ID, "sla-agent")!;
+    // SLA says 2000ms, so latency edge should be 2000 (not default 5000)
+    expect(edge.latency).toBe(2000);
+  });
+
+  it("prefers measured latency over SLA declaration", () => {
+    const candidate = makeCandidate({
+      motebit_id: asMotebitId("measured-agent"),
+      latency_stats: { avg_ms: 800, p95_ms: 1500, sample_count: 50 },
+      listing: makeListing({
+        sla: { max_latency_ms: 3000, availability_guarantee: 0.99 },
+      }),
+    });
+
+    const graph = buildRoutingGraph(SELF_ID, [candidate]);
+    const edge = graph.getEdge(SELF_ID, "measured-agent")!;
+    // Measured (800ms) beats SLA declaration (3000ms)
+    expect(edge.latency).toBe(800);
+  });
+
+  it("SLA availability_guarantee acts as reliability floor for agents without quality data", () => {
+    const newAgentWithSLA = makeCandidate({
+      motebit_id: asMotebitId("sla-reliable"),
+      trust_record: makeTrustRecord({
+        successful_tasks: 2,
+        failed_tasks: 1, // 67% success rate but < 3 quality samples
+        quality_sample_count: 0,
+      }),
+      listing: makeListing({
+        sla: { max_latency_ms: 5000, availability_guarantee: 0.95 },
+      }),
+    });
+
+    const graph = buildRoutingGraph(SELF_ID, [newAgentWithSLA]);
+    const edge = graph.getEdge(SELF_ID, "sla-reliable")!;
+    // Track record says 0.67, SLA says 0.95, insufficient quality data → SLA floor applies
+    expect(edge.reliability).toBeGreaterThanOrEqual(0.95);
+  });
+
+  it("evidence overrides SLA floor when quality samples sufficient", () => {
+    const provenLowQuality = makeCandidate({
+      motebit_id: asMotebitId("proven-low"),
+      trust_record: makeTrustRecord({
+        successful_tasks: 3,
+        failed_tasks: 7, // 30% success rate
+        avg_quality: 0.5,
+        quality_sample_count: 5, // enough data to override SLA
+      }),
+      listing: makeListing({
+        sla: { max_latency_ms: 5000, availability_guarantee: 0.95 },
+      }),
+    });
+
+    const graph = buildRoutingGraph(SELF_ID, [provenLowQuality]);
+    const edge = graph.getEdge(SELF_ID, "proven-low")!;
+    // Proven low quality → evidence overrides SLA declaration
+    expect(edge.reliability).toBeLessThan(0.5);
+  });
+
+  it("reliability above SLA floor is preserved", () => {
+    const highReliabilityCandidate = makeCandidate({
+      motebit_id: asMotebitId("reliable-agent"),
+      trust_record: makeTrustRecord({
+        successful_tasks: 99,
+        failed_tasks: 1, // 99% success rate
+      }),
+      listing: makeListing({
+        sla: { max_latency_ms: 5000, availability_guarantee: 0.9 },
+      }),
+    });
+
+    const graph = buildRoutingGraph(SELF_ID, [highReliabilityCandidate]);
+    const edge = graph.getEdge(SELF_ID, "reliable-agent")!;
+    // Track record (0.99) > SLA (0.90) — keep earned reliability
+    expect(edge.reliability).toBeGreaterThan(0.95);
+  });
+});

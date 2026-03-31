@@ -180,7 +180,10 @@ export function buildRoutingGraph(
     const trust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
 
     const cost = estimateCandidateCost(candidate);
-    const latency = candidate.latency_stats?.avg_ms ?? 5000;
+    // Latency: prefer measured stats, fall back to SLA declaration, then default
+    const measuredLatency = candidate.latency_stats?.avg_ms;
+    const slaLatency = candidate.listing?.sla?.max_latency_ms;
+    const latency = measuredLatency ?? slaLatency ?? 5000;
     const reliability = computeReliability(candidate);
 
     const regulatory_risk = candidate.listing?.regulatory_risk ?? 0;
@@ -521,11 +524,17 @@ function estimateCandidateCost(candidate: CandidateProfile): number {
 }
 
 function computeReliability(candidate: CandidateProfile): number {
-  if (!candidate.trust_record) return 0.5;
+  // SLA availability guarantee as a baseline for agents without track record
+  const slaFloor = candidate.listing?.sla?.availability_guarantee ?? 0;
+
+  if (!candidate.trust_record) {
+    // No interaction history: use SLA guarantee if declared, else 0.5
+    return Math.max(slaFloor, 0.5);
+  }
   const s = candidate.trust_record.successful_tasks ?? 0;
   const f = candidate.trust_record.failed_tasks ?? 0;
   const total = s + f;
-  if (total === 0) return 0.5;
+  if (total === 0) return Math.max(slaFloor, 0.5);
   let reliability = s / total;
   // Quality modulation: agents with enough samples and low avg_quality
   // get up to 30% reliability reduction. No new semiring dimension needed.
@@ -533,8 +542,12 @@ function computeReliability(candidate: CandidateProfile): number {
   const qualitySamples = candidate.trust_record.quality_sample_count ?? 0;
   if (qualitySamples >= 3) {
     reliability = reliability * (0.7 + 0.3 * quality);
+    // Quality-modulated: evidence overrides SLA declaration.
+    // The agent has enough data to prove its actual reliability.
+    return reliability;
   }
-  return reliability;
+  // Insufficient quality data: SLA floor applies as baseline
+  return Math.max(reliability, slaFloor);
 }
 
 function computeCapabilityMatch(
