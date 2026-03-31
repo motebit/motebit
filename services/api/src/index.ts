@@ -114,6 +114,7 @@ import Stripe from "stripe";
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
 export { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
+export type { TokenPayload } from "./auth.js";
 export type { ConnectedDevice } from "./websocket.js";
 
 // === Config ===
@@ -240,6 +241,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const getEmergencyFreeze = () => freezeState.frozen;
   const getFreezeReason = () => freezeState.reason;
 
+  // Graceful shutdown state — readiness probe reports not_ready while draining.
+  let draining = false;
+
   // --- Shared state ---
   const connections = new Map<string, ConnectedDevice[]>();
 
@@ -280,6 +284,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice,
     parseTokenPayloadUnsafe,
     getShuttingDown: config.getShuttingDown,
+    healthCheckDeps: {
+      dbProbe: () => {
+        const start = performance.now();
+        moteDb.db.prepare("SELECT 1").get();
+        return Math.round(performance.now() - start);
+      },
+      getTaskQueueSize: () => taskQueue.size,
+      taskQueueCapacity: MAX_TASK_QUEUE_SIZE,
+      isDraining: () => draining,
+    },
   });
 
   // --- Cleanup interval (task expiry, limiter cleanup, stale allocations) ---
@@ -423,6 +437,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     federationQueryCache,
     queryLocalAgents: (capability, motebitId, limit) =>
       taskRouter.queryLocalAgents(capability, motebitId, limit),
+    getCircuitBreakerState: (peerEndpoint) => taskRouter.getCircuitBreakerState(peerEndpoint),
     onTaskForwarded: (v) => federationCallbacks.onTaskForwarded(v),
     onTaskResultReceived: (v) => federationCallbacks.onTaskResultReceived(v),
     onSettlementReceived: (v) => federationCallbacks.onSettlementReceived(v),
@@ -592,6 +607,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Close / cleanup ---
   function close(): void {
+    draining = true;
     for (const peers of connections.values()) {
       for (const peer of peers) {
         peer.ws.close();

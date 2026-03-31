@@ -767,8 +767,9 @@ describe("Federation E2E", () => {
         return originalFetch(input, init);
       });
 
-      // Submit enough tasks to trigger circuit breaker
-      // Thresholds: min 6 samples, >50% failure rate, 3+ consecutive failures
+      // Submit enough tasks to trigger circuit breaker.
+      // Three-state circuit breaker opens after 5 consecutive failures (default threshold).
+      // Once open, canForward() returns false so no more forwards are attempted.
       const alice = await registerAgent(relayA, "alice-circuit", ["web-search"]);
       for (let i = 0; i < 7; i++) {
         await relayA.app.request(`/agent/${alice.motebitId}/task`, {
@@ -785,12 +786,13 @@ describe("Federation E2E", () => {
       vi.stubGlobal("fetch", originalFetch);
       installFetchInterceptor(relayA, relayB);
 
-      // Peer should now be suspended due to repeated forward failures
+      // Peer should now be suspended due to repeated forward failures.
+      // Circuit opens at 5 failures; once open, forwards are blocked so DB counter stops at 5.
       const peerAfter = relayA.moteDb.db
         .prepare("SELECT state, failed_forwards FROM relay_peers WHERE endpoint_url = ?")
         .get(RELAY_B_URL) as { state: string; failed_forwards: number };
       expect(peerAfter.state).toBe("suspended");
-      expect(peerAfter.failed_forwards).toBeGreaterThanOrEqual(6);
+      expect(peerAfter.failed_forwards).toBeGreaterThanOrEqual(5);
     });
 
     it("duplicate task_id in onTaskForwarded returns duplicate status", async () => {

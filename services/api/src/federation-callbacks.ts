@@ -198,7 +198,6 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           : verified.receipt.status === "denied"
             ? AgentTaskStatus.Denied
             : AgentTaskStatus.Failed;
-      taskQueue.set(verified.taskId, entry); // Persist to durable queue
 
       // Fan out to submitter
       const submittedBy = entry.submitted_by ?? entry.task.submitted_by;
@@ -359,10 +358,11 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               );
               if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             } catch {
-              // Settlement forward failed — queue for retry instead of dropping
+              // Settlement forward failed — queue for retry with exponential backoff.
+              // First retry at baseDelayMs (5s) per DEFAULT_RETRY_POLICY.
               moteDb.db
                 .prepare(
-                  `INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 5, ?, 'pending', ?)`,
+                  `INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 8, ?, 'pending', ?)`,
                 )
                 .run(
                   crypto.randomUUID(),
@@ -370,7 +370,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
                   verified.taskId,
                   verified.originRelay,
                   JSON.stringify(settlementBody),
-                  Date.now() + 30000,
+                  Date.now() + 5_000,
                   Date.now(),
                 );
             }

@@ -32,9 +32,7 @@ export interface PairingDeps {
   app: Hono;
   apiToken: string | undefined;
   identityManager: IdentityManager;
-  parseTokenPayloadUnsafe: (
-    token: string,
-  ) => { mid: string; did: string; iat: number; exp: number; jti?: string } | null;
+  parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   verifySignedTokenForDevice: (
     token: string,
     motebitId: string,

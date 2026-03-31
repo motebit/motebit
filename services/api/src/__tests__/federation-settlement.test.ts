@@ -149,9 +149,9 @@ describe("Settlement Retry Queue", () => {
     expect(retry).toBeDefined();
     expect(retry!.status).toBe("pending");
     expect(retry!.attempts).toBe(1);
-    // First backoff is 30s — next_retry_at should be ~30s from when the function ran
-    expect(retry!.next_retry_at).toBeGreaterThanOrEqual(before + 30_000 - 5_000);
-    expect(retry!.next_retry_at).toBeLessThanOrEqual(after + 30_000 + 5_000);
+    // First backoff is ~5s (base * 2^0) with ±20% jitter → 4s-6s
+    expect(retry!.next_retry_at).toBeGreaterThanOrEqual(before + 4_000 - 1_000);
+    expect(retry!.next_retry_at).toBeLessThanOrEqual(after + 6_000 + 1_000);
     expect(retry!.last_error).toBe("Connection refused");
   });
 
@@ -171,9 +171,9 @@ describe("Settlement Retry Queue", () => {
     expect(retry).toBeDefined();
     expect(retry!.status).toBe("pending");
     expect(retry!.attempts).toBe(2);
-    // Second backoff is 2min (120s) — next_retry_at should be ~120s from when the function ran
-    expect(retry!.next_retry_at).toBeGreaterThanOrEqual(before + 120_000 - 5_000);
-    expect(retry!.next_retry_at).toBeLessThanOrEqual(after + 120_000 + 5_000);
+    // Second backoff is ~10s (base * 2^1) with ±20% jitter → 8s-12s
+    expect(retry!.next_retry_at).toBeGreaterThanOrEqual(before + 8_000 - 1_000);
+    expect(retry!.next_retry_at).toBeLessThanOrEqual(after + 12_000 + 1_000);
   });
 
   it("marks as failed at max_attempts", async () => {

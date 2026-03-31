@@ -10,7 +10,7 @@ export type {
   CustomMessageCallback,
 } from "./ws-adapter.js";
 export { EncryptedEventStoreAdapter, decryptEventPayload } from "./encrypted-adapter.js";
-export type { EncryptedAdapterConfig, KeyProvider } from "./encrypted-adapter.js";
+export type { EncryptedAdapterConfig } from "./encrypted-adapter.js";
 export {
   EncryptedConversationSyncAdapter,
   decryptConversationMessage,
@@ -41,6 +41,20 @@ export type {
 } from "./plan-sync.js";
 export { EncryptedPlanSyncAdapter } from "./encrypted-plan-adapter.js";
 export type { EncryptedPlanAdapterConfig } from "./encrypted-plan-adapter.js";
+export {
+  LastWriterWinsResolver,
+  AppendOnlyMergeResolver,
+  ConflictTracker,
+} from "./conflict-resolver.js";
+export type {
+  ConflictStrategy,
+  ConflictResult,
+  Versioned,
+  ConflictResolver,
+  ConversationWithMessages,
+  ConflictEvent,
+  ConflictLogger,
+} from "./conflict-resolver.js";
 
 // === Sync Configuration ===
 

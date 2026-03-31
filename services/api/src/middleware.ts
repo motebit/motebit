@@ -13,12 +13,25 @@ import type { IdentityManager } from "@motebit/core-identity";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import type { verifySignedTokenForDevice, parseTokenPayloadUnsafe } from "./auth.js";
 import { createLogger } from "./logger.js";
+import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
 
 const logger = createLogger({ service: "middleware" });
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/** Dependencies for readiness health checks — passed through from createSyncRelay. */
+export interface HealthCheckDeps {
+  /** Run a lightweight DB probe (SELECT 1). Returns latency in ms, or throws on failure. */
+  dbProbe: () => number;
+  /** Current task queue size. */
+  getTaskQueueSize: () => number;
+  /** Hard cap on task queue. */
+  taskQueueCapacity: number;
+  /** Whether the relay is draining (graceful shutdown in progress). */
+  isDraining: () => boolean;
+}
 
 export interface MiddlewareDeps {
   app: Hono;
@@ -33,6 +46,7 @@ export interface MiddlewareDeps {
   isAgentRevoked: (motebitId: string) => boolean;
   verifySignedTokenForDevice: typeof verifySignedTokenForDevice;
   parseTokenPayloadUnsafe: typeof parseTokenPayloadUnsafe;
+  healthCheckDeps?: HealthCheckDeps;
 }
 
 export interface MiddlewareResult {
@@ -117,7 +131,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
   ): Promise<Response | void> {
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-      throw new HTTPException(401, { message: "Missing authorization" });
+      throw new AuthenticationError("AUTH_MISSING_TOKEN", "Missing authorization");
     }
     const token = authHeader.slice(7);
 
@@ -136,7 +150,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
     // Signed device token path
     const claims = deps.parseTokenPayloadUnsafe(token);
     if (!claims?.mid) {
-      throw new HTTPException(401, { message: "Invalid token" });
+      throw new AuthenticationError("AUTH_INVALID_TOKEN", "Invalid token");
     }
     const valid = await deps.verifySignedTokenForDevice(
       token,
@@ -147,7 +161,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
       deps.isAgentRevoked,
     );
     if (!valid) {
-      throw new HTTPException(401, { message: "Token verification failed" });
+      throw new AuthenticationError("AUTH_INVALID_TOKEN", "Token verification failed");
     }
 
     c.set("callerMotebitId" as never, claims.mid as never);
@@ -175,9 +189,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       return next();
     }
 
-    // Allow health check and admin freeze toggle (must be reachable while frozen)
+    // Allow health checks and admin freeze toggle (must be reachable while frozen)
     if (
       c.req.path === "/health" ||
+      c.req.path === "/health/live" ||
+      c.req.path === "/health/ready" ||
       c.req.path === "/api/v1/admin/freeze" ||
       c.req.path === "/api/v1/admin/unfreeze"
     ) {
@@ -311,7 +327,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
     app.use("/sync/*", async (c, next) => {
       const authHeader = c.req.header("authorization");
       if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-        throw new HTTPException(401, { message: "Missing device token" });
+        throw new AuthenticationError("AUTH_MISSING_TOKEN", "Missing device token");
       }
       const token = authHeader.slice(7);
 
@@ -330,9 +346,10 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
       if (!token.includes(".")) {
         // Legacy device tokens (plain UUIDs) are no longer accepted — signed JWTs only
-        throw new HTTPException(401, {
-          message: "Legacy device tokens are no longer accepted — use signed JWTs",
-        });
+        throw new AuthenticationError(
+          "AUTH_LEGACY_TOKEN",
+          "Legacy device tokens are no longer accepted — use signed JWTs",
+        );
       }
 
       // Signed token verification — O(1) lookup by device ID from token payload
@@ -345,7 +362,10 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         deps.isAgentRevoked,
       );
       if (!verified) {
-        throw new HTTPException(403, { message: "Device not authorized for this motebit" });
+        throw new AuthorizationError(
+          "AUTHZ_DEVICE_NOT_AUTHORIZED",
+          "Device not authorized for this motebit",
+        );
       }
       await next();
     });
@@ -377,6 +397,13 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
   // --- Error handler ---
   app.onError((err, c) => {
+    if (err instanceof RelayError) {
+      const status = err.statusCode as 400;
+      if (err instanceof RateLimitError) {
+        c.header("Retry-After", String(err.retryAfter));
+      }
+      return c.json({ error: err.message, code: err.code, status: err.statusCode }, status);
+    }
     if (err instanceof HTTPException) {
       return c.json({ error: err.message, status: err.status }, err.status);
     }
@@ -384,20 +411,95 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
     return c.json({ error: "Internal server error", status: 500 }, 500);
   });
 
-  // --- Health (public, no auth) ---
+  // --- Health (public, no auth, no rate limiting) ---
+  const startTime = Date.now();
+  const uptimeSeconds = () => Math.floor((Date.now() - startTime) / 1000);
+
+  // GET /health — backward compatible
   app.get("/health", (c) => {
-    const shuttingDown = deps.getShuttingDown?.() ?? false;
-    if (shuttingDown) {
-      return c.json({ status: "draining", timestamp: Date.now() }, 503);
+    const draining = deps.healthCheckDeps?.isDraining() ?? deps.getShuttingDown?.() ?? false;
+    const status = draining ? 503 : 200;
+    return c.json(
+      {
+        status: deps.getEmergencyFreeze() ? "frozen" : draining ? "draining" : "ok",
+        frozen: deps.getEmergencyFreeze(),
+        ...(deps.getEmergencyFreeze() && deps.getFreezeReason()
+          ? { freeze_reason: deps.getFreezeReason() }
+          : {}),
+        timestamp: Date.now(),
+      },
+      status,
+    );
+  });
+
+  // GET /health/live — liveness probe (always 200 if process is running)
+  app.get("/health/live", (c) => c.json({ status: "alive", uptime_s: uptimeSeconds() }));
+
+  // GET /health/ready — readiness probe with dependency checks
+  app.get("/health/ready", (c) => {
+    const hd = deps.healthCheckDeps;
+    if (!hd) {
+      return c.json({ status: "ready", uptime_s: uptimeSeconds(), checks: {} });
     }
-    return c.json({
-      status: deps.getEmergencyFreeze() ? "frozen" : "ok",
-      frozen: deps.getEmergencyFreeze(),
-      ...(deps.getEmergencyFreeze() && deps.getFreezeReason()
-        ? { freeze_reason: deps.getFreezeReason() }
-        : {}),
-      timestamp: Date.now(),
-    });
+
+    // Database check (SELECT 1 with implicit timeout from SQLite)
+    let dbStatus: "ok" | "degraded" | "fail" = "fail";
+    let dbLatencyMs = 0;
+    let dbError: string | undefined;
+    try {
+      dbLatencyMs = hd.dbProbe();
+      if (dbLatencyMs < 1000) dbStatus = "ok";
+      else if (dbLatencyMs < 5000) dbStatus = "degraded";
+      else dbStatus = "fail";
+    } catch (err) {
+      dbStatus = "fail";
+      dbError = err instanceof Error ? err.message : String(err);
+    }
+
+    // Emergency freeze (informational — always "ok")
+    const frozen = deps.getEmergencyFreeze();
+
+    // Shutdown / draining
+    const draining = hd.isDraining();
+    const shutdownStatus: "ok" | "fail" = draining ? "fail" : "ok";
+
+    // Task queue capacity
+    const queueSize = hd.getTaskQueueSize();
+    const queueCapacity = hd.taskQueueCapacity;
+    const queueUtilization = queueCapacity > 0 ? queueSize / queueCapacity : 0;
+    let taskQueueStatus: "ok" | "degraded" | "fail" = "ok";
+    if (queueUtilization >= 1) taskQueueStatus = "fail";
+    else if (queueUtilization >= 0.8) taskQueueStatus = "degraded";
+
+    // Overall status
+    const allStatuses = [dbStatus, shutdownStatus, taskQueueStatus];
+    let overallStatus: "ready" | "degraded" | "not_ready" = "ready";
+    if (allStatuses.includes("fail") || draining) overallStatus = "not_ready";
+    else if (allStatuses.includes("degraded")) overallStatus = "degraded";
+
+    const httpStatus = overallStatus === "ready" ? 200 : 503;
+
+    return c.json(
+      {
+        status: overallStatus,
+        uptime_s: uptimeSeconds(),
+        checks: {
+          database: {
+            status: dbStatus,
+            latency_ms: dbLatencyMs,
+            ...(dbError ? { error: dbError } : {}),
+          },
+          emergency_freeze: { status: "ok" as const, frozen },
+          shutdown: { status: shutdownStatus, draining },
+          task_queue: {
+            status: taskQueueStatus,
+            size: queueSize,
+            capacity: queueCapacity,
+          },
+        },
+      },
+      httpStatus,
+    );
   });
 
   return { allLimiters, wsLimiter };

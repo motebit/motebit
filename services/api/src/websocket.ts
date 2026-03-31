@@ -47,9 +47,7 @@ export interface WebSocketDeps {
     blacklistCheck?: (jti: string, motebitId: string) => boolean,
     agentRevokedCheck?: (motebitId: string) => boolean,
   ) => Promise<boolean>;
-  parseTokenPayloadUnsafe: (
-    token: string,
-  ) => { mid: string; did: string; iat: number; exp: number; jti?: string } | null;
+  parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   logger: ReturnType<typeof createLogger>;
   onCommandResponse?: (commandId: string, result: unknown) => void;
 }

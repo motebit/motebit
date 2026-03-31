@@ -38,9 +38,7 @@ export interface AgentsDeps {
   federationConfig?: { displayName?: string; endpointUrl?: string };
   federationQueryCache: Map<string, number>;
   /** Auth helpers from relay auth layer */
-  parseTokenPayloadUnsafe: (
-    token: string,
-  ) => { mid: string; did: string; iat: number; exp: number; jti?: string } | null;
+  parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   verifySignedTokenForDevice: (
     token: string,
     motebitId: string,

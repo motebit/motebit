@@ -16,11 +16,17 @@ import type { ListingId } from "@motebit/sdk";
 import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/crypto";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
+import { CircuitBreaker } from "./circuit-breaker.js";
+import type { CircuitBreakerConfig, CircuitBreakerState } from "./circuit-breaker.js";
+import { createLogger } from "./logger.js";
+
+const logger = createLogger({ service: "relay", module: "task-routing" });
 
 export interface TaskRouterDeps {
   db: DatabaseDriver;
   relayIdentity: RelayIdentity;
   federationConfig?: FederationConfig;
+  circuitBreakerConfig?: Partial<CircuitBreakerConfig>;
 }
 
 export interface TaskRouter {
@@ -83,10 +89,28 @@ export interface TaskRouter {
    * exceeds the threshold (3+ consecutive failures or >50% failure rate over last 10).
    */
   recordPeerForwardResult(peerEndpoint: string, success: boolean): void;
+  /**
+   * Check if forwarding to a peer is allowed by the circuit breaker.
+   * Returns false when the circuit is OPEN and the reset timeout hasn't elapsed.
+   */
+  canForward(peerEndpoint: string): boolean;
+  /**
+   * Get circuit breaker state for a specific peer (observability).
+   */
+  getCircuitBreakerState(peerEndpoint: string): CircuitBreakerState;
+  /**
+   * Get circuit breaker states for all tracked peers (observability).
+   */
+  getAllCircuitBreakerStates(): Map<string, CircuitBreakerState>;
+  /**
+   * Reset a peer's circuit breaker state (manual intervention).
+   */
+  resetCircuitBreaker(peerEndpoint: string): void;
 }
 
 export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   const { db, relayIdentity } = deps;
+  const circuitBreaker = new CircuitBreaker(deps.circuitBreakerConfig);
 
   // Helper: fetch recent delegation edges for multi-hop routing.
   function fetchPeerEdges(): Array<{
@@ -366,6 +390,15 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     }> = [];
 
     const promises = peers.map(async (peer) => {
+      // Skip peers whose circuit breaker is OPEN (not yet ready for probing)
+      if (!circuitBreaker.canForward(peer.endpoint_url)) {
+        logger.info("federation.discover.circuit_open", {
+          peerRelay: peer.endpoint_url,
+          peerId: peer.peer_relay_id,
+        });
+        return [];
+      }
+
       try {
         const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
@@ -556,10 +589,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     });
   }
 
-  // Circuit breaker: track per-peer forward results and suspend peers exceeding failure thresholds.
-  const CIRCUIT_BREAKER_CONSECUTIVE_FAILURES = 3;
-  const CIRCUIT_BREAKER_MIN_SAMPLE = 6;
-  const CIRCUIT_BREAKER_FAILURE_RATE = 0.5;
+  // Circuit breaker: delegates to the three-state CircuitBreaker class.
+  // Also updates DB counters for observability (admin dashboard).
 
   function recordPeerForwardResult(peerEndpoint: string, success: boolean): void {
     const col = success ? "successful_forwards" : "failed_forwards";
@@ -567,42 +598,55 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       peerEndpoint,
     );
 
-    if (!success) {
-      // Evaluate circuit breaker: suspend peer if failure rate exceeds threshold.
-      const peer = db
-        .prepare(
-          "SELECT peer_relay_id, state, successful_forwards, failed_forwards FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
-        )
-        .get(peerEndpoint) as
-        | {
-            peer_relay_id: string;
-            state: string;
-            successful_forwards: number;
-            failed_forwards: number;
-          }
-        | undefined;
-
-      if (peer) {
-        const total = peer.successful_forwards + peer.failed_forwards;
-        const shouldSuspend =
-          // Consecutive failures: if last N forwards all failed
-          peer.failed_forwards >= CIRCUIT_BREAKER_CONSECUTIVE_FAILURES &&
-          total >= CIRCUIT_BREAKER_MIN_SAMPLE &&
-          peer.failed_forwards / total > CIRCUIT_BREAKER_FAILURE_RATE;
-
-        if (shouldSuspend) {
-          db.prepare("UPDATE relay_peers SET state = 'suspended' WHERE peer_relay_id = ?").run(
-            peer.peer_relay_id,
-          );
-        }
-      }
-    } else {
-      // On success, reset failed_forwards to prevent stale failures from accumulating.
-      // This gives the peer a clean slate after recovering.
+    if (success) {
+      circuitBreaker.recordSuccess(peerEndpoint);
+      // Reset failed_forwards counter on success for DB-level observability.
       db.prepare(
         "UPDATE relay_peers SET failed_forwards = 0 WHERE endpoint_url = ? AND state = 'active'",
       ).run(peerEndpoint);
+    } else {
+      circuitBreaker.recordFailure(peerEndpoint);
+
+      // Sync DB state: when circuit opens, mark peer as suspended in DB
+      // so heartbeat and other DB-querying code sees the suspension.
+      const cbState = circuitBreaker.getState(peerEndpoint);
+      if (cbState.state === "open") {
+        const peer = db
+          .prepare(
+            "SELECT peer_relay_id FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
+          )
+          .get(peerEndpoint) as { peer_relay_id: string } | undefined;
+        if (peer) {
+          db.prepare("UPDATE relay_peers SET state = 'suspended' WHERE peer_relay_id = ?").run(
+            peer.peer_relay_id,
+          );
+          logger.warn("circuit_breaker.peer_suspended", {
+            peerId: peer.peer_relay_id,
+            peerEndpoint,
+          });
+        }
+      }
     }
+  }
+
+  function canForward(peerEndpoint: string): boolean {
+    return circuitBreaker.canForward(peerEndpoint);
+  }
+
+  function getCircuitBreakerState(peerEndpoint: string): CircuitBreakerState {
+    return circuitBreaker.getState(peerEndpoint);
+  }
+
+  function getAllCircuitBreakerStates(): Map<string, CircuitBreakerState> {
+    return circuitBreaker.getAllStates();
+  }
+
+  function resetCircuitBreaker(peerEndpoint: string): void {
+    circuitBreaker.reset(peerEndpoint);
+    // Re-activate the peer in DB if it was suspended by the circuit breaker.
+    db.prepare(
+      "UPDATE relay_peers SET state = 'active', failed_forwards = 0 WHERE endpoint_url = ? AND state = 'suspended'",
+    ).run(peerEndpoint);
   }
 
   return {
@@ -611,6 +655,10 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     fetchFederatedCandidates,
     queryLocalAgents,
     recordPeerForwardResult,
+    canForward,
+    getCircuitBreakerState,
+    getAllCircuitBreakerStates,
+    resetCircuitBreaker,
   };
 }
 

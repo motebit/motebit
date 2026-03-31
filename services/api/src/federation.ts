@@ -28,6 +28,8 @@ import {
   getSettlementProof,
   isSettlementPendingBatch,
 } from "./anchoring.js";
+import { nextRetryDelay, DEFAULT_RETRY_POLICY } from "./retry-policy.js";
+import type { RetryPolicy } from "./retry-policy.js";
 
 const logger = createLogger({ service: "relay", module: "federation" });
 
@@ -602,12 +604,21 @@ export async function sendHeartbeats(
 
 // === Settlement Retry Queue ===
 
-/** Exponential backoff intervals: 30s, 2min, 8min, 32min, 2h */
-const RETRY_BACKOFF_MS = [30_000, 120_000, 480_000, 1_920_000, 7_200_000];
-
 /**
  * Single tick: process pending settlement retries.
  * Exported for direct testing — the interval wrapper is `startSettlementRetryLoop`.
+ *
+ * Uses exponential backoff with jitter (see retry-policy.ts) to space retries:
+ *   Attempt 0:    5s  +/- 1s
+ *   Attempt 1:   10s  +/- 2s
+ *   Attempt 2:   20s  +/- 4s
+ *   Attempt 3:   40s  +/- 8s
+ *   Attempt 4:   80s  +/- 16s
+ *   Attempt 5:  160s  +/- 32s
+ *   Attempt 6:  320s  +/- 64s
+ *   Attempt 7:  640s  +/- 128s (capped at maxDelayMs=1h)
+ *
+ * After max retries (default 8): auto-refund via onRetryExhausted callback.
  */
 export async function processSettlementRetries(
   db: DatabaseDriver,
@@ -619,6 +630,7 @@ export async function processSettlementRetries(
     peer_relay_id: string;
     payload_json: string;
   }) => void,
+  retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY,
 ): Promise<void> {
   const now = Date.now();
   const pending = db
@@ -696,8 +708,16 @@ export async function processSettlementRetries(
           }
         }
       } else {
-        const backoffMs = RETRY_BACKOFF_MS[Math.min(newAttempts - 1, RETRY_BACKOFF_MS.length - 1)]!;
+        const backoffMs = nextRetryDelay(newAttempts - 1, retryPolicy);
         const nextRetry = Date.now() + backoffMs;
+        logger.info("settlement.retry.scheduled", {
+          retryId: retry.retry_id,
+          taskId: retry.task_id,
+          attempt: newAttempts,
+          maxAttempts: retry.max_attempts,
+          backoffMs,
+          nextRetryAt: nextRetry,
+        });
         db.prepare(
           "UPDATE relay_settlement_retries SET attempts = ?, next_retry_at = ?, last_error = ? WHERE retry_id = ?",
         ).run(newAttempts, nextRetry, errorMsg, retry.retry_id);
@@ -720,10 +740,12 @@ export function startSettlementRetryLoop(
   }) => void,
   /** Optional guard — when it returns true, the loop iteration is skipped. */
   isFrozen?: () => boolean,
+  /** Override default retry policy (backoff timing, max retries, jitter). */
+  retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY,
 ): ReturnType<typeof setInterval> {
   return setInterval(() => {
     if (isFrozen?.()) return;
-    void processSettlementRetries(db, relayIdentity, onRetryExhausted);
+    void processSettlementRetries(db, relayIdentity, onRetryExhausted, retryPolicy);
   }, intervalMs);
 }
 
@@ -796,6 +818,15 @@ export interface FederationDeps {
   relayIdentity: RelayIdentity;
   federationConfig?: FederationConfig;
   federationQueryCache: Map<string, number>;
+
+  /** Optional: returns circuit breaker state for a peer endpoint (observability). */
+  getCircuitBreakerState?: (peerEndpoint: string) => {
+    state: "closed" | "open" | "half_open";
+    failures: number;
+    successes: number;
+    lastFailureAt: number;
+    lastStateChangeAt: number;
+  };
 
   /** Return local agents matching a query. Used by federated discovery. */
   queryLocalAgents(
@@ -1162,11 +1193,23 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const rows = db
       .prepare(
         `SELECT peer_relay_id, public_key, endpoint_url, display_name, state,
-                peered_at, last_heartbeat_at, missed_heartbeats, agent_count, trust_score
+                peered_at, last_heartbeat_at, missed_heartbeats, agent_count, trust_score,
+                successful_forwards, failed_forwards
          FROM relay_peers`,
       )
-      .all();
-    return c.json({ peers: rows });
+      .all() as Array<Record<string, unknown>>;
+
+    // Enrich with circuit breaker state when available
+    const enriched = rows.map((row) => {
+      const endpoint = row.endpoint_url as string;
+      const cbState = deps.getCircuitBreakerState?.(endpoint);
+      return {
+        ...row,
+        circuit_breaker: cbState ?? null,
+      };
+    });
+
+    return c.json({ peers: enriched });
   });
 
   // ── Phase 3: Federated Discovery ──

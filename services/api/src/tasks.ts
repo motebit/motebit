@@ -56,6 +56,14 @@ import { forwardTaskViaMcp, type ReceiptCandidate } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import type { ConnectedDevice } from "./index.js";
 import { createLogger } from "./logger.js";
+import {
+  RelayError,
+  AuthenticationError,
+  AuthorizationError,
+  InsufficientFundsError,
+  AllocationError,
+  TaskError,
+} from "./errors.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -108,9 +116,7 @@ export interface TasksDeps {
     testnet?: boolean;
   };
   /** Auth helpers from relay auth layer */
-  parseTokenPayloadUnsafe: (
-    token: string,
-  ) => { mid: string; did: string; iat: number; exp: number; jti?: string } | null;
+  parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   verifySignedTokenForDevice: (
     token: string,
     motebitId: string,
@@ -1207,12 +1213,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     }>();
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
-      throw new HTTPException(400, { message: "Missing or empty 'prompt' field" });
+      throw new TaskError("TASK_INVALID_INPUT", "Missing or empty 'prompt' field", 400);
     }
     if (body.required_capabilities != null && !Array.isArray(body.required_capabilities)) {
-      throw new HTTPException(400, {
-        message: "required_capabilities must be an array of strings",
-      });
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+        "required_capabilities must be an array of strings",
+        400,
+      );
     }
 
     const taskId = crypto.randomUUID();
@@ -1257,7 +1265,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     // Reject if task queue is at capacity (prevents memory exhaustion from flooding)
     if (taskQueue.size >= MAX_TASK_QUEUE_SIZE) {
-      throw new HTTPException(503, { message: "Task queue at capacity — try again later" });
+      throw new TaskError("TASK_QUEUE_FULL", "Task queue at capacity — try again later", 503);
     }
 
     // Per-submitter fairness: prevent a single agent from monopolizing queue capacity
@@ -1271,9 +1279,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             submittedBy,
             limit: maxTasksPerSubmitter,
           });
-          throw new HTTPException(429, {
-            message: "Too many pending tasks for this agent",
-          });
+          throw new TaskError(
+            "TASK_PER_SUBMITTER_LIMIT",
+            "Too many pending tasks for this agent",
+            429,
+          );
         }
       }
     }
@@ -1361,13 +1371,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             moteDb.db.exec("COMMIT");
           } catch (holdErr) {
             moteDb.db.exec("ROLLBACK");
-            throw new Error("Allocation hold failed", { cause: holdErr });
+            throw new AllocationError("ALLOCATION_HOLD_FAILED", "Allocation hold failed", {
+              cause: holdErr,
+            });
           }
         } else if (requiresPayment && !x402TxHash) {
           // Paid agent, no virtual balance, no x402 payment — 402
-          throw new HTTPException(402, {
-            message: "Insufficient funds — deposit to virtual account or pay via x402",
-          });
+          throw new InsufficientFundsError(
+            "Insufficient funds — deposit to virtual account or pay via x402",
+          );
         } else {
           // Either free agent (best-effort allocation) or x402 deposited (balance should be sufficient).
           // Persist allocation record for settlement audit.
@@ -1378,8 +1390,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
         }
       } catch (err) {
-        // Re-throw intentional HTTP errors (402)
-        if (err instanceof HTTPException) throw err;
+        // Re-throw intentional errors (RelayError, HTTPException)
+        if (err instanceof RelayError || err instanceof HTTPException) throw err;
         // For paid agents, accounting errors must not be silently swallowed —
         // allowing the task through without a budget hold means unpaid work.
         if (requiresPayment) {
@@ -1389,9 +1401,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             motebitId,
             error: err instanceof Error ? err.message : String(err),
           });
-          throw new HTTPException(500, {
-            message: "Budget allocation failed — retry or contact support",
-          });
+          throw new AllocationError(
+            "ALLOCATION_HOLD_FAILED",
+            "Budget allocation failed — retry or contact support",
+          );
         }
         // Free agent — best-effort allocation, don't block task submission
       }
@@ -1559,6 +1572,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               if (remoteAgentRelay.has(selId)) {
                 // Remote agent: forward task to peer relay
                 const peerEndpoint = remoteAgentRelay.get(selId)!;
+
+                // Circuit breaker: skip forwarding if the peer's circuit is open
+                if (!taskRouter.canForward(peerEndpoint)) {
+                  logger.info("task.forward_circuit_open", {
+                    correlationId: taskId,
+                    peerRelay: peerEndpoint,
+                    targetAgent: selId,
+                  });
+                  continue;
+                }
+
                 federationAttempted = true;
                 try {
                   const forwardBody = {
@@ -1726,7 +1750,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Device auth: require signed token or master token
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-      throw new HTTPException(401, { message: "Authorization required" });
+      throw new AuthenticationError("AUTH_MISSING_TOKEN", "Authorization required");
     }
     const token = authHeader.slice(7);
     let callerMotebitId: string | undefined;
@@ -1738,7 +1762,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // tasks they submitted to another agent — their token carries their own mid.
       const claims = parseTokenPayloadUnsafe(token);
       if (!claims?.mid) {
-        throw new HTTPException(401, { message: "Invalid token" });
+        throw new AuthenticationError("AUTH_INVALID_TOKEN", "Invalid token");
       }
       const verified = await verifySignedTokenForDevice(
         token,
@@ -1749,34 +1773,38 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         isAgentRevoked,
       );
       if (!verified) {
-        throw new HTTPException(403, { message: "Device not authorized" });
+        throw new AuthorizationError("AUTHZ_DEVICE_NOT_AUTHORIZED", "Device not authorized");
       }
       callerMotebitId = claims.mid;
     } else {
-      throw new HTTPException(403, { message: "Invalid authorization" });
+      throw new AuthorizationError("AUTHZ_INVALID_CREDENTIALS", "Invalid authorization");
     }
 
     const entry = taskQueue.get(taskId);
 
     if (!entry) {
-      throw new HTTPException(404, {
-        message: `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min) or the task_id is invalid`,
-      });
+      throw new TaskError(
+        "TASK_NOT_FOUND",
+        `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min) or the task_id is invalid`,
+        404,
+      );
     }
     if (entry.task.motebit_id !== motebitId) {
-      throw new HTTPException(404, {
-        message: "Task not found — motebit_id in URL does not match the task's target agent",
-      });
+      throw new TaskError(
+        "TASK_NOT_FOUND",
+        "Task not found — motebit_id in URL does not match the task's target agent",
+        404,
+      );
     }
 
     // Authorization: caller must be the submitter or the target agent
     if (callerMotebitId) {
       const submitter = entry.submitted_by ?? entry.task.submitted_by;
       if (callerMotebitId !== motebitId && callerMotebitId !== submitter) {
-        throw new HTTPException(403, {
-          message:
-            "Not authorized to poll this task — caller is neither the submitter nor the target agent",
-        });
+        throw new AuthorizationError(
+          "AUTHZ_NOT_TASK_PARTICIPANT",
+          "Not authorized to poll this task — caller is neither the submitter nor the target agent",
+        );
       }
     }
 
@@ -1791,7 +1819,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Device auth: require signed token or master token
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-      throw new HTTPException(401, { message: "Authorization required" });
+      throw new AuthenticationError("AUTH_MISSING_TOKEN", "Authorization required");
     }
     const token = authHeader.slice(7);
     if (apiToken == null || token !== apiToken) {
@@ -1806,23 +1834,27 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           isAgentRevoked,
         );
         if (!verified) {
-          throw new HTTPException(403, { message: "Device not authorized" });
+          throw new AuthorizationError("AUTHZ_DEVICE_NOT_AUTHORIZED", "Device not authorized");
         }
       } else {
-        throw new HTTPException(403, { message: "Invalid authorization" });
+        throw new AuthorizationError("AUTHZ_INVALID_CREDENTIALS", "Invalid authorization");
       }
     }
 
     const entry = taskQueue.get(taskId);
     if (!entry) {
-      throw new HTTPException(404, {
-        message: `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min) or the task_id is invalid`,
-      });
+      throw new TaskError(
+        "TASK_NOT_FOUND",
+        `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min) or the task_id is invalid`,
+        404,
+      );
     }
     if (entry.task.motebit_id !== motebitId) {
-      throw new HTTPException(404, {
-        message: "Task not found — motebit_id in URL does not match the task's target agent",
-      });
+      throw new TaskError(
+        "TASK_NOT_FOUND",
+        "Task not found — motebit_id in URL does not match the task's target agent",
+        404,
+      );
     }
 
     const receipt = await c.req.json<ExecutionReceipt>();
@@ -1839,10 +1871,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       typeof receipt.status !== "string" ||
       !validStatuses.includes(receipt.status)
     ) {
-      throw new HTTPException(400, {
-        message:
-          "Invalid receipt: must include non-empty task_id, motebit_id, signature, and valid status",
-      });
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+        "Invalid receipt: must include non-empty task_id, motebit_id, signature, and valid status",
+        400,
+      );
     }
 
     // Reject stale receipts — completed_at must be within 1 hour of submitted_at
@@ -1850,9 +1883,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       const elapsed = receipt.completed_at - entry.task.submitted_at;
       if (elapsed > 3_600_000 || elapsed < -60_000) {
         // 1 hour max, 1 min clock skew tolerance
-        throw new HTTPException(400, {
-          message: `Receipt timestamp outside acceptable window (elapsed=${Math.round(elapsed / 1000)}s, allowed=-60s to +3600s) — check agent clock synchronization`,
-        });
+        throw new TaskError(
+          "TASK_INVALID_INPUT",
+          `Receipt timestamp outside acceptable window (elapsed=${Math.round(elapsed / 1000)}s, allowed=-60s to +3600s) — check agent clock synchronization`,
+          400,
+        );
       }
     }
 
@@ -1862,9 +1897,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     const receiptRelayTaskId = (receipt as unknown as Record<string, unknown>).relay_task_id;
     if (typeof receiptRelayTaskId === "string" && receiptRelayTaskId !== "") {
       if (receiptRelayTaskId !== taskId) {
-        throw new HTTPException(400, {
-          message: `Receipt relay_task_id "${receiptRelayTaskId}" does not match task "${taskId}" — receipt is bound to a different economic contract`,
-        });
+        throw new TaskError(
+          "TASK_INVALID_INPUT",
+          `Receipt relay_task_id "${receiptRelayTaskId}" does not match task "${taskId}" — receipt is bound to a different economic contract`,
+          400,
+        );
       }
     } else {
       // No relay_task_id — reject. This field is required for cryptographic binding.
@@ -1873,10 +1910,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         reason: "receipt does not include relay_task_id — required for economic binding",
         motebitId: receipt.motebit_id as string,
       });
-      throw new HTTPException(400, {
-        message:
-          "Receipt missing relay_task_id — cryptographic task binding is required. Ensure your motebit runtime is up to date.",
-      });
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+        "Receipt missing relay_task_id — cryptographic task binding is required. Ensure your motebit runtime is up to date.",
+        400,
+      );
     }
 
     // Update task status and store receipt before settlement
@@ -1899,9 +1937,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       ingestionDeps,
     );
     if (!ingestionResult.verified) {
-      throw new HTTPException(403, {
-        message: `Receipt verification failed: ${ingestionResult.reason}`,
-      });
+      throw new AuthorizationError(
+        "AUTHZ_INVALID_CREDENTIALS",
+        `Receipt verification failed: ${ingestionResult.reason}`,
+      );
     }
 
     if (ingestionResult.already_settled) {
