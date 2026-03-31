@@ -415,8 +415,10 @@ export interface KeySuccessionEntry {
   new_public_key: string;
   timestamp: number;
   reason?: string;
-  old_key_signature: string;
+  old_key_signature?: string;
   new_key_signature: string;
+  recovery?: boolean;
+  guardian_signature?: string;
 }
 
 export interface SuccessionResponse {
