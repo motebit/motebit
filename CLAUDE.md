@@ -182,6 +182,7 @@ Motebit is calm software. Do not confirm what the user can already see.
 - **Toast** — async outcomes the user can't observe (sync, pairing). Short-lived, never stacked.
 - **System message** — errors with next steps, security warnings. Rare (≤3-4/session), actionable.
 - **Anti-patterns** — "Settings saved" after modal close, "Loading…" when content is visibly populating.
+- **Audience-aware sequencing** — Features that serve a subset (enterprise, power users, advanced config) go at the end of the page/flow, marked as optional. The sovereign/consumer path is primary and uninterrupted. Don't weave enterprise content into the universal narrative.
 
 ## Published Packages
 
