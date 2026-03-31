@@ -18,6 +18,8 @@ import {
   verifyKeySuccession,
   verifyExecutionReceipt,
   hexToBytes,
+  verify as ed25519Verify,
+  canonicalJson,
 } from "@motebit/crypto";
 import type { KeySuccessionRecord } from "@motebit/crypto";
 import { createLogger } from "./logger.js";
@@ -579,9 +581,48 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const now = Date.now();
     const expiresAt = now + 15 * 60 * 1000; // 15 minutes
 
-    const guardianPublicKey = (body as Record<string, unknown>).guardian_public_key as
+    // Guardian registration requires cryptographic proof: the guardian must sign
+    // an attestation proving they govern this agent. Without the guardian's private
+    // key, an attacker cannot claim an organization's guardian key.
+    let guardianPublicKey: string | undefined;
+    const claimedGuardianKey = (body as Record<string, unknown>).guardian_public_key as
       | string
       | undefined;
+    const guardianAttestation = (body as Record<string, unknown>).guardian_attestation as
+      | string
+      | undefined;
+
+    if (claimedGuardianKey) {
+      if (!guardianAttestation) {
+        throw new HTTPException(400, {
+          message:
+            'guardian_public_key requires guardian_attestation — a signature by the guardian key over the canonical JSON of {action:"guardian_attestation",guardian_public_key,motebit_id}',
+        });
+      }
+      // Verify the attestation: guardian must have signed {action, guardian_public_key, motebit_id}
+      const attestPayload = canonicalJson({
+        action: "guardian_attestation",
+        guardian_public_key: claimedGuardianKey,
+        motebit_id: motebitId,
+      });
+      const attestMessage = new TextEncoder().encode(attestPayload);
+      try {
+        const guardianPubBytes = hexToBytes(claimedGuardianKey);
+        const attestSigBytes = hexToBytes(guardianAttestation);
+        const attestValid = await ed25519Verify(attestSigBytes, attestMessage, guardianPubBytes);
+        if (!attestValid) {
+          throw new HTTPException(400, { message: "Guardian attestation signature invalid" });
+        }
+      } catch (err) {
+        if (err instanceof HTTPException) throw err;
+        throw new HTTPException(400, { message: "Guardian attestation verification failed" });
+      }
+      // Guardian key ≠ identity key (§3.3)
+      if (claimedGuardianKey === publicKey) {
+        throw new HTTPException(400, { message: "Guardian key must not equal identity key" });
+      }
+      guardianPublicKey = claimedGuardianKey;
+    }
 
     moteDb.db
       .prepare(

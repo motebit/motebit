@@ -1199,4 +1199,50 @@ describe("guardian identity", () => {
     expect(parsed.frontmatter.succession![0]!.recovery).toBeUndefined();
     expect(parsed.frontmatter.succession![1]!.recovery).toBe(true);
   });
+
+  it("rejects guardian key equal to identity key", async () => {
+    const kp = await makeKeypairHex();
+
+    await expect(
+      generate(
+        {
+          motebitId: DEFAULTS.motebitId,
+          ownerId: DEFAULTS.ownerId,
+          publicKeyHex: kp.publicKeyHex,
+          guardian: {
+            public_key: kp.publicKeyHex, // same as identity key
+            established_at: "2026-01-01T00:00:00.000Z",
+          },
+        },
+        kp.privateKey,
+      ),
+    ).rejects.toThrow("Guardian public key must not equal identity public key");
+  });
+
+  it("generates guardian attestation when guardianPrivateKey provided", async () => {
+    const kp = await makeKeypairHex();
+    const guardianKp = await generateKeypair();
+
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+        guardian: {
+          public_key: bytesToHex(guardianKp.publicKey),
+          organization: "Test Corp",
+          established_at: "2026-01-01T00:00:00.000Z",
+        },
+        guardianPrivateKey: guardianKp.privateKey,
+      },
+      kp.privateKey,
+    );
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.guardian!.attestation).toBeDefined();
+    expect(parsed.frontmatter.guardian!.attestation).toHaveLength(128); // 64 bytes hex
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+  });
 });

@@ -51,6 +51,8 @@ export interface MotebitIdentityFile {
     organization?: string;
     organization_id?: string;
     established_at: string;
+    /** Ed25519 signature by guardian key over canonical JSON of {action,guardian_public_key,motebit_id}. Proves organizational custody. */
+    attestation?: string;
   };
 
   devices: Array<{

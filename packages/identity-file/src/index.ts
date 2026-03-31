@@ -10,7 +10,7 @@
  * YAML serialization, and risk-level bridging on top.
  */
 
-import { sign as ed25519Sign, toBase64Url, bytesToHex } from "@motebit/crypto";
+import { sign as ed25519Sign, toBase64Url, bytesToHex, canonicalJson } from "@motebit/crypto";
 export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/crypto";
 import { RiskLevel } from "@motebit/sdk";
 import { parse, verify, verifyIdentityFile } from "@motebit/verify";
@@ -130,6 +130,8 @@ export interface GenerateOptions {
   devices?: MotebitIdentityFile["devices"];
   service?: ServiceIdentityOptions;
   guardian?: MotebitIdentityFile["guardian"];
+  /** Guardian's Ed25519 private key — used to sign attestation, NOT stored. */
+  guardianPrivateKey?: Uint8Array;
 }
 
 export async function generate(opts: GenerateOptions, privateKey: Uint8Array): Promise<string> {
@@ -188,7 +190,25 @@ export async function generate(opts: GenerateOptions, privateKey: Uint8Array): P
   };
 
   if (opts.guardian) {
-    data.guardian = opts.guardian;
+    // §3.3: Guardian key MUST NOT equal identity key
+    if (opts.guardian.public_key === opts.publicKeyHex) {
+      throw new Error("Guardian public key must not equal identity public key");
+    }
+    const guardianField = { ...opts.guardian };
+    // Sign guardian attestation if private key provided
+    if (opts.guardianPrivateKey) {
+      const attestPayload = canonicalJson({
+        action: "guardian_attestation",
+        guardian_public_key: opts.guardian.public_key,
+        motebit_id: opts.motebitId,
+      });
+      const attestSig = await ed25519Sign(
+        new TextEncoder().encode(attestPayload),
+        opts.guardianPrivateKey,
+      );
+      guardianField.attestation = bytesToHex(attestSig);
+    }
+    data.guardian = guardianField;
   }
 
   const yaml = serializeYaml(data);

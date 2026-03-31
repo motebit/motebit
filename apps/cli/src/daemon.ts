@@ -508,6 +508,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
       };
       if (identity.guardian?.public_key) {
         regBody.guardian_public_key = identity.guardian.public_key;
+        if (identity.guardian.attestation) {
+          regBody.guardian_attestation = identity.guardian.attestation;
+        }
       }
       const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
         method: "POST",
@@ -621,6 +624,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
   let motebitId: string;
   let publicKeyHex: string | undefined;
   let guardianPublicKey: string | undefined;
+  let guardianAttestation: string | undefined;
   let policyOverrides: {
     operatorMode?: boolean;
     maxRiskLevel?: RiskLevel;
@@ -664,6 +668,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
     motebitId = identity.motebit_id;
     publicKeyHex = identity.identity.public_key;
     guardianPublicKey = identity.guardian?.public_key;
+    guardianAttestation = identity.guardian?.attestation;
 
     log(`Identity: ${motebitId.slice(0, 8)}... (from ${identityPath})`);
   } else {
@@ -1137,6 +1142,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
       };
       if (guardianPublicKey) {
         serveRegBody.guardian_public_key = guardianPublicKey;
+        if (guardianAttestation) {
+          serveRegBody.guardian_attestation = guardianAttestation;
+        }
       }
       const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
         method: "POST",

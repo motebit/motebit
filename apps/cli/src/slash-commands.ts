@@ -773,12 +773,15 @@ export async function handleSlashCommand(
             const headers = await makeRelayHeaders(config, repl, { json: true });
             // Try to extract guardian key from identity file for org trust baseline
             let guardianPubKey: string | undefined;
+            let guardianAttest: string | undefined;
             try {
               const { parse } = await import("@motebit/identity-file");
               const fs = await import("node:fs");
               const idPath = config.identity ?? "motebit.md";
               const content = fs.readFileSync(idPath, "utf-8");
-              guardianPubKey = parse(content).frontmatter.guardian?.public_key;
+              const guardian = parse(content).frontmatter.guardian;
+              guardianPubKey = guardian?.public_key;
+              guardianAttest = guardian?.attestation;
             } catch {
               // Identity file unavailable — no guardian key, acceptable
             }
@@ -790,6 +793,9 @@ export async function handleSlashCommand(
             };
             if (guardianPubKey) {
               serveRegBody.guardian_public_key = guardianPubKey;
+              if (guardianAttest) {
+                serveRegBody.guardian_attestation = guardianAttest;
+              }
             }
             await fetch(`${syncUrl}/api/v1/agents/register`, {
               method: "POST",

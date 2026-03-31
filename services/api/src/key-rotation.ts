@@ -85,6 +85,19 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       throw new HTTPException(400, { message: "Missing required fields in key succession record" });
     }
 
+    // Timestamp freshness: reject succession records older than 15 minutes or in the future
+    const MAX_ROTATION_AGE_MS = 15 * 60 * 1000;
+    const age = Date.now() - body.timestamp;
+    if (age < -60_000) {
+      // Allow 1 minute clock skew for future timestamps
+      throw new HTTPException(400, { message: "Succession record timestamp is in the future" });
+    }
+    if (age > MAX_ROTATION_AGE_MS) {
+      throw new HTTPException(400, {
+        message: "Succession record timestamp is too old (>15 minutes)",
+      });
+    }
+
     if (body.recovery) {
       // Guardian recovery: need guardian_signature, not old_key_signature
       if (!body.guardian_signature) {

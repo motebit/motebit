@@ -79,6 +79,8 @@ export interface MotebitIdentityFile {
     organization?: string;
     organization_id?: string;
     established_at: string;
+    /** Ed25519 signature proving guardian governs this agent. */
+    attestation?: string;
   };
 
   devices: Array<{
