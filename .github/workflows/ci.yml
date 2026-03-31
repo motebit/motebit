@@ -66,6 +66,13 @@ jobs:
             services/*/coverage/
           retention-days: 14
 
+      - name: Upload build artifacts for E2E
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: web-build
+          path: apps/web/dist/
+          retention-days: 1
+
   format:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -87,8 +94,9 @@ jobs:
         run: pnpm format:check
 
   e2e:
+    needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -106,8 +114,11 @@ jobs:
       - name: Install Playwright (Chromium only)
         run: pnpm --filter @motebit/web exec playwright install --with-deps chromium
 
-      - name: Build web app (with dependencies)
-        run: pnpm run build --filter=@motebit/web...
+      - name: Download build artifacts
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: web-build
+          path: apps/web/dist/
 
       - name: Run E2E smoke tests
         run: pnpm --filter @motebit/web test:e2e --project=chromium
