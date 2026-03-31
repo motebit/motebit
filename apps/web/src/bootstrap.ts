@@ -62,8 +62,12 @@ export async function probeLocalModels(
     const data = (await res.json()) as { data?: Array<{ id: string }> };
     const models = (data.data ?? []).map((m) => m.id);
     if (models.length > 0) return { baseUrl, type: "openai", models };
-  } catch {
-    // Not running on this port
+  } catch (err) {
+    // Expected: server not running, connection refused, DNS failure, timeout.
+    // Log unexpected errors (parse failures, TypeError) for debugging.
+    if (err instanceof TypeError || err instanceof SyntaxError) {
+      console.warn(`probe ${baseUrl}: unexpected error:`, err.message);
+    }
   }
   return null;
 }
@@ -193,7 +197,10 @@ export async function isConfigReachable(
         signal: AbortSignal.timeout(timeoutMs),
       });
       return res.ok;
-    } catch {
+    } catch (err) {
+      if (err instanceof TypeError || err instanceof SyntaxError) {
+        console.warn(`reachability check ${baseUrl}: unexpected error:`, err.message);
+      }
       return false;
     }
   }

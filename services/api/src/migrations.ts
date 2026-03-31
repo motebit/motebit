@@ -366,27 +366,29 @@ export const relayMigrations: Migration[] = [
       }
 
       // agent_registry column additions
-      try {
+      const agentCols = db.prepare("PRAGMA table_info(agent_registry)").all() as Array<{
+        name: string;
+      }>;
+      const agentColNames = new Set(agentCols.map((c) => c.name));
+      if (!agentColNames.has("revoked")) {
         db.exec("ALTER TABLE agent_registry ADD COLUMN revoked INTEGER DEFAULT 0");
-      } catch {
-        /* column may already exist */
       }
-      try {
+      if (!agentColNames.has("guardian_public_key")) {
         db.exec("ALTER TABLE agent_registry ADD COLUMN guardian_public_key TEXT");
-      } catch {
-        /* column may already exist */
       }
-      try {
+      if (!agentColNames.has("federation_visible")) {
         db.exec("ALTER TABLE agent_registry ADD COLUMN federation_visible INTEGER DEFAULT 1");
-      } catch {
-        /* column may already exist */
       }
 
       // revoked_by on revoked credentials
-      try {
+      const revokedCols = db
+        .prepare("PRAGMA table_info(relay_revoked_credentials)")
+        .all() as Array<{
+        name: string;
+      }>;
+      const revokedColNames = new Set(revokedCols.map((c) => c.name));
+      if (!revokedColNames.has("revoked_by")) {
         db.exec("ALTER TABLE relay_revoked_credentials ADD COLUMN revoked_by TEXT");
-      } catch {
-        /* column may already exist */
       }
     },
   },
