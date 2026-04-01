@@ -13,6 +13,43 @@ import { setTTSVoice } from "./chat";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import type { ColorPickerAPI } from "./color-picker";
 import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL } from "@motebit/sdk";
+import { PROXY_BASE_URL } from "../providers";
+
+// === Live Model Discovery ===
+
+let modelFetchTimer: ReturnType<typeof setTimeout> | undefined;
+
+function fetchModelsForProvider(
+  provider: "anthropic" | "openai" | "google",
+  apiKey: string,
+  datalistId: string,
+): void {
+  clearTimeout(modelFetchTimer);
+  modelFetchTimer = setTimeout(
+    () =>
+      void (async () => {
+        if (!apiKey || apiKey.length < 10) return;
+        try {
+          const res = await fetch(`${PROXY_BASE_URL}/v1/models?provider=${provider}`, {
+            headers: { "x-api-key": apiKey },
+          });
+          const json = (await res.json()) as {
+            ok?: boolean;
+            models?: Array<{ id: string; name: string }>;
+          };
+          if (!json.ok || !json.models) return;
+          const datalist = document.getElementById(datalistId);
+          if (!datalist) return;
+          datalist.innerHTML = json.models
+            .map((m) => `<option value="${m.id}">${m.name}</option>`)
+            .join("");
+        } catch {
+          // Silent — datalist stays with existing options
+        }
+      })(),
+    500,
+  );
+}
 
 // === DOM Refs ===
 
@@ -39,9 +76,9 @@ const providerConfigs = {
 
 // Input elements
 const anthropicApiKey = document.getElementById("anthropic-api-key") as HTMLInputElement;
-const anthropicModel = document.getElementById("anthropic-model") as HTMLSelectElement;
+const anthropicModel = document.getElementById("anthropic-model") as HTMLInputElement;
 const openaiApiKey = document.getElementById("openai-api-key") as HTMLInputElement;
-const openaiModel = document.getElementById("openai-model") as HTMLSelectElement;
+const openaiModel = document.getElementById("openai-model") as HTMLInputElement;
 const ollamaBaseUrl = document.getElementById("ollama-base-url") as HTMLInputElement;
 const ollamaModel = document.getElementById("ollama-model") as HTMLSelectElement;
 const ollamaStatus = document.getElementById("ollama-status") as HTMLDivElement;
@@ -131,6 +168,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       populateAuditTrail();
     }
   }
+
+  // === Live Model Discovery on API Key Input ===
+  anthropicApiKey.addEventListener("input", () => {
+    fetchModelsForProvider("anthropic", anthropicApiKey.value.trim(), "anthropic-models");
+  });
+  openaiApiKey.addEventListener("input", () => {
+    fetchModelsForProvider("openai", openaiApiKey.value.trim(), "openai-models");
+  });
+  const googleApiKeyEl = document.getElementById("google-api-key") as HTMLInputElement | null;
+  googleApiKeyEl?.addEventListener("input", () => {
+    fetchModelsForProvider("google", googleApiKeyEl.value.trim(), "google-models");
+  });
 
   function populateIdentityFields(): void {
     identityMotebitId.textContent = ctx.app.motebitId || "—";
@@ -431,10 +480,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         case "anthropic":
           anthropicApiKey.value = config.apiKey ?? "";
           anthropicModel.value = config.model;
+          if (config.apiKey) fetchModelsForProvider("anthropic", config.apiKey, "anthropic-models");
           break;
         case "openai":
           openaiApiKey.value = config.apiKey ?? "";
           openaiModel.value = config.model;
+          if (config.apiKey) fetchModelsForProvider("openai", config.apiKey, "openai-models");
           break;
         case "ollama":
           ollamaBaseUrl.value = config.baseUrl || DEFAULT_OLLAMA_URL;
@@ -500,7 +551,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         // API Key tab — check which BYOK sub-provider is active
         if (activeByokProvider === "google") {
           const googleApiKey = document.getElementById("google-api-key") as HTMLInputElement | null;
-          const googleModel = document.getElementById("google-model") as HTMLSelectElement | null;
+          const googleModel = document.getElementById("google-model") as HTMLInputElement | null;
           config = {
             type: "openai", // Google uses OpenAI-compatible API format
             apiKey: googleApiKey?.value.trim() ?? "",
