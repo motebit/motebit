@@ -177,7 +177,7 @@ describe("Provider management", () => {
     const spy = vi.spyOn(runtime, "setProvider");
     app.connectProvider({
       type: "anthropic",
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       apiKey: "sk-test",
     });
     expect(spy).toHaveBeenCalledOnce();

@@ -42,7 +42,7 @@ describe("ProviderConfig persistence", () => {
   it("saves and loads provider config", () => {
     const config = {
       type: "anthropic" as const,
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       apiKey: "sk-test",
     };
     saveProviderConfig(config);
@@ -55,7 +55,7 @@ describe("ProviderConfig persistence", () => {
   });
 
   it("clears provider config", () => {
-    saveProviderConfig({ type: "anthropic" as const, model: "claude-sonnet-4-20250514" });
+    saveProviderConfig({ type: "anthropic" as const, model: "claude-sonnet-4-6" });
     clearProviderConfig();
     expect(loadProviderConfig()).toBeNull();
   });
@@ -66,7 +66,7 @@ describe("ProviderConfig persistence", () => {
   });
 
   it("round-trips openai config", () => {
-    const config: ProviderConfig = { type: "openai", apiKey: "sk-openai", model: "gpt-4o" };
+    const config: ProviderConfig = { type: "openai", apiKey: "sk-openai", model: "gpt-5.4-mini" };
     saveProviderConfig(config);
     expect(loadProviderConfig()).toEqual(config);
   });
@@ -90,7 +90,7 @@ describe("ProviderConfig persistence", () => {
   it("round-trips proxy config with proxyToken", () => {
     const config: ProviderConfig = {
       type: "proxy",
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       proxyToken: "tok_abc",
     };
     saveProviderConfig(config);
@@ -101,7 +101,7 @@ describe("ProviderConfig persistence", () => {
     const config: ProviderConfig = {
       type: "openai",
       apiKey: "k",
-      model: "gpt-4o",
+      model: "gpt-5.4-mini",
       baseUrl: "https://custom.api",
       maxTokens: 2048,
       temperature: 0.5,

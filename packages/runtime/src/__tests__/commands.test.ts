@@ -9,7 +9,7 @@ import type { MotebitRuntime } from "../index";
 function mockRuntime(overrides: Partial<Record<string, unknown>> = {}): MotebitRuntime {
   return {
     getState: () => ({ attention: 0.7, confidence: 0.85, affect_valence: 0.3 }),
-    currentModel: "claude-sonnet-4-20250514",
+    currentModel: "claude-sonnet-4-6",
     getToolRegistry: () => ({ list: () => [{ name: "web_search" }, { name: "recall_memories" }] }),
     getCuriosityTargets: () => [],
     getGradient: () => null,
@@ -73,7 +73,7 @@ describe("executeCommand", () => {
     it("model: returns current model name", async () => {
       const result = await executeCommand(mockRuntime(), "model");
       expect(result).toMatchObject({
-        summary: "Current model: claude-sonnet-4-20250514",
+        summary: "Current model: claude-sonnet-4-6",
       });
     });
 

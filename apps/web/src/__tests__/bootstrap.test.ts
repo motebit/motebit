@@ -43,7 +43,7 @@ describe("resolveProviderFromSaved", () => {
   it("returns source proxy for proxy configs (needs fresh token)", () => {
     const config: ProviderConfig = {
       type: "proxy",
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       proxyToken: "tok",
     };
     const result = resolveProviderFromSaved(config);
@@ -59,14 +59,14 @@ describe("resolveProviderFromSaved", () => {
   it("returns saved for anthropic config with API key", () => {
     const config: ProviderConfig = {
       type: "anthropic",
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       apiKey: "sk-test",
     };
     expect(resolveProviderFromSaved(config).source).toBe("saved");
   });
 
   it("returns none for anthropic config without API key or baseUrl", () => {
-    const config: ProviderConfig = { type: "anthropic", model: "claude-sonnet-4-20250514" };
+    const config: ProviderConfig = { type: "anthropic", model: "claude-sonnet-4-6" };
     expect(resolveProviderFromSaved(config).source).toBe("none");
   });
 
@@ -95,12 +95,12 @@ describe("resolveProviderFromSaved", () => {
 describe("isConfigValid", () => {
   it("anthropic with API key is valid", () => {
     expect(
-      isConfigValid({ type: "anthropic", model: "claude-sonnet-4-20250514", apiKey: "sk-test" }),
+      isConfigValid({ type: "anthropic", model: "claude-sonnet-4-6", apiKey: "sk-test" }),
     ).toBe(true);
   });
 
   it("anthropic without API key is invalid", () => {
-    expect(isConfigValid({ type: "anthropic", model: "claude-sonnet-4-20250514" })).toBe(false);
+    expect(isConfigValid({ type: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
   });
 
   it("openai with API key is valid", () => {
@@ -126,13 +126,13 @@ describe("isConfigValid", () => {
   });
 
   it("proxy with token is valid", () => {
-    expect(
-      isConfigValid({ type: "proxy", model: "claude-sonnet-4-20250514", proxyToken: "tok" }),
-    ).toBe(true);
+    expect(isConfigValid({ type: "proxy", model: "claude-sonnet-4-6", proxyToken: "tok" })).toBe(
+      true,
+    );
   });
 
   it("proxy without token is invalid", () => {
-    expect(isConfigValid({ type: "proxy", model: "claude-sonnet-4-20250514" })).toBe(false);
+    expect(isConfigValid({ type: "proxy", model: "claude-sonnet-4-6" })).toBe(false);
   });
 
   it("any type with empty model is invalid", () => {
@@ -383,22 +383,22 @@ describe("isConfigReachable", () => {
   it("proxy with token is reachable", async () => {
     expect(
       await isConfigReachable(
-        { type: "proxy", model: "claude-sonnet-4-20250514", proxyToken: "tok" },
+        { type: "proxy", model: "claude-sonnet-4-6", proxyToken: "tok" },
         mockFetch,
       ),
     ).toBe(true);
   });
 
   it("proxy without token is not reachable", async () => {
-    expect(
-      await isConfigReachable({ type: "proxy", model: "claude-sonnet-4-20250514" }, mockFetch),
-    ).toBe(false);
+    expect(await isConfigReachable({ type: "proxy", model: "claude-sonnet-4-6" }, mockFetch)).toBe(
+      false,
+    );
   });
 
   it("anthropic with API key is reachable (no network probe)", async () => {
     expect(
       await isConfigReachable(
-        { type: "anthropic", model: "claude-sonnet-4-20250514", apiKey: "sk-test" },
+        { type: "anthropic", model: "claude-sonnet-4-6", apiKey: "sk-test" },
         mockFetch,
       ),
     ).toBe(true);

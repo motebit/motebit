@@ -339,7 +339,7 @@ describe("MobileApp.initAI", () => {
 
   it("defaults to claude-sonnet for anthropic", async () => {
     await app.initAI({ provider: "anthropic", apiKey: "sk-ant-test" });
-    expect(app.currentModel).toBe("claude-sonnet-4-20250514");
+    expect(app.currentModel).toBe("claude-sonnet-4-6");
   });
 });
 

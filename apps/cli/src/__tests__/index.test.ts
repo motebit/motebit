@@ -40,7 +40,7 @@ describe("parseCliArgs", () => {
   it("parses openai provider", () => {
     const config = parseCliArgs(["--provider", "openai"]);
     expect(config.provider).toBe("openai");
-    expect(config.model).toBe("gpt-4o-mini");
+    expect(config.model).toBe("gpt-5.4-mini");
   });
 
   it("throws on unknown provider", () => {
