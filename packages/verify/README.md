@@ -76,9 +76,9 @@ Verify any Motebit artifact. Detects the type automatically from the input.
 
 Returns a discriminated union — narrow on `result.type` to access type-specific fields.
 
-### `verifyIdentityFile(content): Promise<LegacyVerifyResult>`
+### `verifyIdentityFile(content): Promise<LegacyVerifyResult>` _(deprecated)_
 
-Verify a `motebit.md` identity file. Returns the legacy result shape with `.identity`, `.did`, `.error` fields directly (no type narrowing needed).
+Verify a `motebit.md` identity file. Returns the legacy result shape with `.identity`, `.did`, `.error` fields directly (no type narrowing needed). Use `verify(content)` instead — it handles all artifact types and returns a richer result.
 
 ### `parse(content): { frontmatter, signature, rawFrontmatter }`
 
