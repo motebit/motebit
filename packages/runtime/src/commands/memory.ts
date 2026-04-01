@@ -1,7 +1,7 @@
 /** Memory commands: memories, graph, curious, forget, audit. */
 
 import type { MotebitRuntime } from "../index";
-import type { CommandResult } from "./types";
+import type { CommandResult } from "./types.js";
 
 export async function cmdMemories(runtime: MotebitRuntime): Promise<CommandResult> {
   const { nodes, edges } = await runtime.memory.exportAll();

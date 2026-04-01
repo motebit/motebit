@@ -1,7 +1,7 @@
 /** Intelligence commands: gradient, reflect. */
 
 import type { MotebitRuntime } from "../index";
-import type { CommandResult } from "./types";
+import type { CommandResult } from "./types.js";
 import { narrateEconomicConsequences } from "@motebit/gradient";
 
 export function cmdGradient(runtime: MotebitRuntime): CommandResult {

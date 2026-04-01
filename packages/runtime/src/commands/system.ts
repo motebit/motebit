@@ -1,7 +1,7 @@
 /** System commands: state, model, tools, approvals, conversations, summarize. */
 
 import type { MotebitRuntime } from "../index";
-import type { CommandResult } from "./types";
+import type { CommandResult } from "./types.js";
 
 export function cmdState(runtime: MotebitRuntime): CommandResult {
   const state = runtime.getState();

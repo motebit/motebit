@@ -1,7 +1,7 @@
 /** Market commands: balance, deposits, discover, proposals. */
 
-import type { CommandResult, RelayConfig } from "./types";
-import { relayFetch } from "./types";
+import type { CommandResult, RelayConfig } from "./types.js";
+import { relayFetch } from "./types.js";
 
 export async function cmdBalance(relay: RelayConfig): Promise<CommandResult> {
   const data = (await relayFetch(relay, `/api/v1/agents/${relay.motebitId}/balance`)) as {

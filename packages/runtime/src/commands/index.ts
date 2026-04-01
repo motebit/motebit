@@ -7,7 +7,7 @@
  */
 
 import type { MotebitRuntime } from "../index";
-import type { CommandResult, RelayConfig } from "./types";
+import type { CommandResult, RelayConfig } from "./types.js";
 import {
   cmdState,
   cmdModel,
@@ -15,16 +15,16 @@ import {
   cmdApprovals,
   cmdConversations,
   cmdSummarize,
-} from "./system";
-import { cmdMemories, cmdGraph, cmdCurious, cmdForget, cmdAudit } from "./memory";
-import { cmdGradient, cmdReflect } from "./intelligence";
-import { cmdBalance, cmdDeposits, cmdDiscover, cmdProposals } from "./market";
+} from "./system.js";
+import { cmdMemories, cmdGraph, cmdCurious, cmdForget, cmdAudit } from "./memory.js";
+import { cmdGradient, cmdReflect } from "./intelligence.js";
+import { cmdBalance, cmdDeposits, cmdDiscover, cmdProposals } from "./market.js";
 
 // Re-export types and plan aggregator
-export type { CommandResult, RelayConfig } from "./types";
-export type { SelfTestConfig, MintToken } from "./self-test";
-export { cmdSelfTest } from "./self-test";
-export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans";
+export type { CommandResult, RelayConfig } from "./types.js";
+export type { SelfTestConfig, MintToken } from "./self-test.js";
+export { cmdSelfTest } from "./self-test.js";
+export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans.js";
 
 /**
  * All commands the shared layer can execute. Surface-specific commands
