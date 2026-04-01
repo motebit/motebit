@@ -791,4 +791,4 @@ These are governance knobs for production deployments. The protocol mechanics (h
 
 ---
 
-_motebit/relay-federation@1.0 — Draft Specification, 2026._
+_motebit/relay-federation@1.0 — Stable Specification, 2026._

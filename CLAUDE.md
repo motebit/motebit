@@ -70,6 +70,7 @@ spec/
   execution-ledger-v1.md   motebit/execution-ledger@1.0 — timeline, signed manifests
   relay-federation-v1.md   motebit/relay-federation@1.0 — peering, discovery, routing
   market-v1.md             motebit/market@1.0 — budget, settlement, fees, trust, routing
+  credential-v1.md         motebit/credential@1.0 — W3C VC 2.0, issuance, weighting, revocation
 
 services/
   api/          Relay server (modules: index, federation, task-routing,

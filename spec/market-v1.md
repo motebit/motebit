@@ -522,50 +522,123 @@ For on-chain payments, the relay integrates with the x402 protocol.
 
 ---
 
-## 12. Security Considerations
+## 12. Delegation Tokens
 
-### 12.1 — Receipt Replay
+A delegation token authorizes one agent to act on behalf of another within a declared scope. Tokens are signed by the delegator's Ed25519 keypair and verified by the receiving agent or relay.
 
-The `relay_task_id` field inside the Ed25519 signature prevents cross-task replay. An attacker who captures a valid receipt cannot replay it against a different task — the relay_task_id mismatch causes rejection.
+### 12.1 — Token Structure
 
-### 12.2 — Budget Exhaustion
+| Field                  | Type   | Required | Description                                        |
+| ---------------------- | ------ | -------- | -------------------------------------------------- |
+| `delegator_id`         | string | yes      | `motebit_id` of the agent granting delegation.     |
+| `delegator_public_key` | string | yes      | Delegator's Ed25519 public key (base64url).        |
+| `delegate_id`          | string | yes      | `motebit_id` of the agent receiving delegation.    |
+| `delegate_public_key`  | string | yes      | Delegate's Ed25519 public key (base64url).         |
+| `scope`                | string | yes      | Authorized capabilities (§12.3).                   |
+| `issued_at`            | number | yes      | Epoch milliseconds when the token was created.     |
+| `expires_at`           | number | yes      | Epoch milliseconds when the token becomes invalid. |
+| `signature`            | string | yes      | Base64url-encoded Ed25519 signature.               |
 
-Per-submitter task queue limits (default: 1000 pending tasks per agent) prevent a single agent from exhausting the relay's task queue capacity. HTTP 429 is returned when the limit is reached.
+### 12.2 — Signing and Verification
 
-### 12.3 — Price Manipulation
+**Signing:**
 
-The relay captures a price snapshot at task submission time. The settlement uses this snapshot, not the current listing price. This prevents a worker from raising prices between task submission and receipt delivery.
+1. Construct the token body: all fields **except** `signature`.
+2. Serialize to canonical JSON (keys sorted lexicographically, no whitespace, `undefined` values omitted).
+3. Encode the canonical JSON string as UTF-8 bytes.
+4. `signature = Ed25519_Sign(utf8_bytes, delegator_private_key)`
+5. Encode the 64-byte signature as base64url (RFC 4648 §5, no padding).
 
-### 12.4 — Stale Allocation Cleanup
+**Verification:**
 
-Locked allocations that exceed a timeout (default: 1 hour) without settlement SHOULD be automatically released, returning funds to the delegator.
+1. If `expires_at < current_time_ms`, the token is expired. Reject.
+2. Decode `delegator_public_key` from base64url to a 32-byte Ed25519 public key.
+3. Extract `signature` from the token. Decode from base64url to 64 bytes.
+4. Reconstruct canonical JSON from all fields except `signature`.
+5. `valid = Ed25519_Verify(signature_bytes, canonical_json_utf8, delegator_public_key)`
 
-### 12.5 — Multi-Hop Fee Evasion
+Implementations MAY disable expiry checking for historical verification (e.g., auditing delegation chains after the fact).
 
-A malicious agent could attempt to avoid platform fees by settling sub-delegations outside the relay. The relay mitigates this by only crediting accounts for settlements it processes — off-relay settlements produce no virtual account credit.
+### 12.3 — Scope Format
 
-### 12.6 — Credential Stuffing
+Scope is a comma-separated list of capability names, or `"*"` for wildcard:
 
-Credential aggregation (§9.2) applies multiple filters to prevent trust inflation: self-attestation exclusion, minimum issuer trust threshold, revocation checks, freshness decay, and sample saturation. An attacker would need to compromise multiple trusted issuers to meaningfully influence routing scores.
+| Scope Value             | Meaning                                         |
+| ----------------------- | ----------------------------------------------- |
+| `"web_search,read_url"` | Authorized for `web_search` and `read_url` only |
+| `"web_search"`          | Authorized for `web_search` only                |
+| `"*"`                   | Authorized for all capabilities                 |
+| `""`                    | Empty scope — no capabilities authorized        |
+
+**Parsing:** Split on `,`, trim whitespace, discard empty strings. If the result contains `"*"`, the scope is unrestricted.
+
+### 12.4 — Scope Narrowing
+
+Delegation chains MUST narrow scope — a delegate cannot grant broader scope than it received. The narrowing rule:
+
+1. If parent scope is `"*"`, any child scope is valid.
+2. If child scope is `"*"` and parent scope is not `"*"`, reject — scope widening.
+3. Otherwise, every capability in the child scope MUST exist in the parent scope.
+
+This ensures that multi-hop delegation chains monotonically restrict capabilities. An agent delegated `"web_search,read_url"` can sub-delegate `"web_search"` but cannot sub-delegate `"file_write"`.
+
+### 12.5 — Token Lifetime
+
+Delegation tokens are short-lived. The RECOMMENDED default is 1 hour (`expires_at = issued_at + 3,600,000`). Implementations SHOULD NOT issue tokens with lifetimes exceeding 24 hours.
+
+The `delegated_scope` field on execution receipts (see `motebit/execution-ledger@1.0` §11.1) records which scope was active during execution, providing an audit trail from token to receipt.
 
 ---
 
-## 13. Threat Model
+## 13. Security Considerations
+
+### 13.1 — Receipt Replay
+
+The `relay_task_id` field inside the Ed25519 signature prevents cross-task replay. An attacker who captures a valid receipt cannot replay it against a different task — the relay_task_id mismatch causes rejection.
+
+### 13.2 — Budget Exhaustion
+
+Per-submitter task queue limits (default: 1000 pending tasks per agent) prevent a single agent from exhausting the relay's task queue capacity. HTTP 429 is returned when the limit is reached.
+
+### 13.3 — Price Manipulation
+
+The relay captures a price snapshot at task submission time. The settlement uses this snapshot, not the current listing price. This prevents a worker from raising prices between task submission and receipt delivery.
+
+### 13.4 — Stale Allocation Cleanup
+
+Locked allocations that exceed a timeout (default: 1 hour) without settlement SHOULD be automatically released, returning funds to the delegator.
+
+### 13.5 — Multi-Hop Fee Evasion
+
+A malicious agent could attempt to avoid platform fees by settling sub-delegations outside the relay. The relay mitigates this by only crediting accounts for settlements it processes — off-relay settlements produce no virtual account credit.
+
+### 13.6 — Credential Stuffing
+
+Credential aggregation (§9.2) applies multiple filters to prevent trust inflation: self-attestation exclusion, minimum issuer trust threshold, revocation checks, freshness decay, and sample saturation. An attacker would need to compromise multiple trusted issuers to meaningfully influence routing scores.
+
+### 13.7 — Scope Escalation
+
+Delegation token scope narrowing (§12.4) prevents capability escalation in delegation chains. A compromised delegate cannot grant itself broader capabilities than the delegator authorized.
+
+---
+
+## 14. Threat Model
 
 | Threat                           | Mitigation                                                                          | Residual Risk                                                |
 | -------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | Self-delegation trust farming    | Sybil defense: no trust/credential on self-delegation (§8.3)                        | Colluding agents can still farm trust between each other     |
 | Receipt replay across tasks      | `relay_task_id` binding in Ed25519 signature (§6.1)                                 | None — signature verification is deterministic               |
 | Budget drain                     | Atomic debit with balance check; HTTP 402 on insufficient funds (§4.4)              | None — no overdraft is possible                              |
-| Stale allocations locking funds  | Automatic cleanup after timeout (§12.4)                                             | Brief window where funds are locked but unused               |
-| Price manipulation               | Price snapshot at submission time (§12.3)                                           | Price may be stale if task queues are long                   |
+| Stale allocations locking funds  | Automatic cleanup after timeout (§13.4)                                             | Brief window where funds are locked but unused               |
+| Price manipulation               | Price snapshot at submission time (§13.3)                                           | Price may be stale if task queues are long                   |
 | Credential inflation             | Self-attestation filter, issuer trust threshold, revocation, freshness decay (§9.2) | Coordinated issuer compromise                                |
-| Task queue exhaustion            | Per-submitter queue limit (§12.2)                                                   | Distributed attack from many identities                      |
-| Fee evasion via off-relay settle | Only relay-processed settlements credit accounts (§12.5)                            | Agents can transact off-relay (no relay fee, no relay trust) |
+| Task queue exhaustion            | Per-submitter queue limit (§13.2)                                                   | Distributed attack from many identities                      |
+| Fee evasion via off-relay settle | Only relay-processed settlements credit accounts (§13.5)                            | Agents can transact off-relay (no relay fee, no relay trust) |
+| Scope escalation in delegation   | Scope narrowing rule (§12.4) — child scope must be subset of parent                 | Delegator must correctly set scope at issuance               |
 
 ---
 
-## 14. Versioning
+## 15. Versioning
 
 This specification follows semantic versioning.
 

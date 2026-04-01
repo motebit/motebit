@@ -186,6 +186,7 @@ spec/
   execution-ledger-v1.md  motebit/execution-ledger@1.0
   relay-federation-v1.md  motebit/relay-federation@1.0
   market-v1.md            motebit/market@1.0 — budget, settlement, routing
+  credential-v1.md        motebit/credential@1.0 — W3C VC 2.0, weighting, revocation
 ```
 
 46 pnpm workspaces across packages, apps, services, and the repo root.

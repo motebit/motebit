@@ -268,11 +268,102 @@ The `args_hash` construction is one-way under SHA-256. However, tool arguments w
 
 ---
 
-## 11. Versioning
+## 11. Execution Receipt
 
-The `spec` field declares which version of this specification the ledger conforms to. Implementations SHOULD reject ledgers with unrecognized spec versions rather than attempting best-effort parsing.
+An execution receipt is the atomic proof of task execution. A single receipt proves one agent performed one task and signed the result. Receipts are the primitive that settlement, trust accumulation, and delegation chains build on.
 
-Future versions will use semantic versioning: `motebit/execution-ledger@{major}.{minor}`. Minor versions add optional fields and are backward-compatible. Major versions may change required fields, timeline event types, or signature mechanics and are not backward-compatible.
+Receipts are self-verifiable: the signer's Ed25519 public key MAY be embedded in the `public_key` field, allowing any party to verify the signature without contacting a relay or identity registry.
+
+### 11.1 — Receipt Structure
+
+| Field                 | Type               | Required | Description                                                                                                                                |
+| --------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `task_id`             | string             | yes      | Unique task identifier.                                                                                                                    |
+| `motebit_id`          | string             | yes      | Agent that executed the task.                                                                                                              |
+| `public_key`          | string             | no       | Signer's Ed25519 public key (hex, 64 characters). Enables portable verification without relay lookup.                                      |
+| `device_id`           | string             | yes      | Device that signed the receipt.                                                                                                            |
+| `submitted_at`        | number             | yes      | Epoch milliseconds when the task was submitted.                                                                                            |
+| `completed_at`        | number             | yes      | Epoch milliseconds when execution finished.                                                                                                |
+| `status`              | string             | yes      | One of: `"completed"`, `"failed"`, `"denied"`.                                                                                             |
+| `result`              | string             | yes      | Task output (completed) or error message (failed/denied).                                                                                  |
+| `tools_used`          | string[]           | yes      | Names of tools invoked during execution.                                                                                                   |
+| `memories_formed`     | number             | yes      | Count of memories created during execution.                                                                                                |
+| `prompt_hash`         | string             | yes      | SHA-256 hex digest of the UTF-8 encoded prompt (64 characters).                                                                            |
+| `result_hash`         | string             | yes      | SHA-256 hex digest of the UTF-8 encoded result (64 characters).                                                                            |
+| `delegation_receipts` | ExecutionReceipt[] | no       | Nested receipts from sub-delegations (§11.5).                                                                                              |
+| `relay_task_id`       | string             | no       | Relay's task identifier. Required for relay-mediated tasks. Included in the signature to bind the receipt to a specific economic contract. |
+| `delegated_scope`     | string             | no       | Scope from the delegation token that authorized this execution (§A.4).                                                                     |
+| `signature`           | string             | yes      | Base64url-encoded Ed25519 signature (§11.2).                                                                                               |
+
+### 11.2 — Signing Algorithm
+
+1. Construct the receipt body: all fields **except** `signature`.
+2. Serialize to canonical JSON (§5 — keys sorted lexicographically, no whitespace, `undefined` values omitted).
+3. Encode the canonical JSON string as UTF-8 bytes.
+4. `signature = Ed25519_Sign(utf8_bytes, private_key)`
+5. Encode the 64-byte signature as base64url (RFC 4648 §5, no padding).
+
+If the `publicKey` parameter is provided, the signer MUST set the `public_key` field (hex-encoded) before serialization. This embeds the verification key in the signed payload, making the receipt self-verifiable.
+
+### 11.3 — Verification Algorithm
+
+```
+function verifyReceipt(receipt, public_key?) → { valid: bool, signer?: did:key }
+
+  1. Resolve public key:
+     a. If receipt.public_key is present and is a valid 32-byte hex string,
+        use it as the verification key.
+     b. Otherwise, if public_key parameter is provided, use it.
+     c. Otherwise, return { valid: false }.
+
+  2. Extract receipt.signature. Decode from base64url to bytes.
+     If decoding fails or length ≠ 64, return { valid: false }.
+
+  3. Construct receipt body: all fields except "signature".
+     Serialize to canonical JSON (§5).
+
+  4. Let valid = Ed25519_Verify(signature_bytes, canonical_json_utf8, public_key).
+
+  5. If delegation_receipts is present:
+     For each sub_receipt in delegation_receipts:
+       Recursively verify sub_receipt.
+       If any sub_receipt is invalid, collect errors.
+
+  6. Return { valid, signer: did:key derived from public_key }.
+```
+
+### 11.4 — Content Hashing
+
+The `prompt_hash` and `result_hash` fields are SHA-256 digests of the original content, encoded as lowercase hexadecimal (64 characters):
+
+```
+prompt_hash = hex(SHA-256(UTF-8(prompt_string)))
+result_hash = hex(SHA-256(UTF-8(result_string)))
+```
+
+These hashes serve two purposes: (1) privacy — the prompt and result content are not in the receipt, only their hashes; (2) binding — a party who knows the original content can verify it matches.
+
+### 11.5 — Delegation Chains
+
+The `delegation_receipts` field is a recursive array. When an agent delegates sub-tasks, each sub-agent produces its own receipt signed with its own keypair. The parent receipt includes these as nested receipts, forming a verifiable tree.
+
+Each receipt in the tree is independently signed and independently verifiable. The tree structure proves chain-of-custody: the parent agent delegated to the child agent, the child agent executed and signed its result, and the parent agent included that signed result in its own receipt.
+
+**Depth limit:** Implementations SHOULD enforce a maximum nesting depth (RECOMMENDED: 10) to prevent stack overflow on malicious receipt chains.
+
+### 11.6 — Relay Task Binding
+
+For relay-mediated tasks, the `relay_task_id` field cryptographically binds the receipt to a specific task in the relay's economic ledger. Because this field is inside the Ed25519 signature, an attacker cannot replay a receipt from one task against another — the relay verifies that the receipt's `relay_task_id` matches the task being settled.
+
+Receipts submitted to a relay without `relay_task_id` MUST be rejected (HTTP 400). Receipts with a `relay_task_id` that does not match the settlement task MUST be rejected (HTTP 400).
+
+---
+
+## 12. Versioning
+
+The `spec` field declares which version of this specification the ledger and receipt conform to. Implementations SHOULD reject ledgers with unrecognized spec versions rather than attempting best-effort parsing.
+
+Future versions will use semantic versioning: `motebit/execution-ledger@{major}.{minor}`. Minor versions add optional fields and are backward-compatible. Major versions may change required fields, timeline event types, receipt schema, or signature mechanics and are not backward-compatible.
 
 ---
 
