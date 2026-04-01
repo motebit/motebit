@@ -2,7 +2,7 @@
 
 **To:** AI-Identity@nist.gov
 **From:** Daniel Hakim, Motebit, Inc.
-**Date:** March 31, 2026
+**Date:** April 1, 2026
 **Re:** Comment on NCCoE Concept Paper — Accelerating the Adoption of Software and AI Agent Identity and Authorization
 
 ---

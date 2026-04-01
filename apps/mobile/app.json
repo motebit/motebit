@@ -7,7 +7,7 @@
     "platforms": ["ios", "android"],
     "newArchEnabled": false,
     "ios": {
-      "bundleIdentifier": "com.tysm.motebit"
+      "bundleIdentifier": "com.motebit.app"
     },
     "plugins": ["expo-sqlite"]
   }
