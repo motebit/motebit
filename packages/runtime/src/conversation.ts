@@ -11,6 +11,15 @@ import type { StreamingProvider, ContextBudget, TaskType } from "@motebit/ai-cor
 import { trimConversation, summarizeConversation, shouldSummarize } from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";
 
+/** Strip internal tags (state, thinking, memory) before persisting — display-only, not content. */
+function stripInternalTags(text: string): string {
+  return text
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<(?:state|thinking|memory)[^>]*$/g, "");
+}
+
 /** Dependencies injected by the runtime. */
 export interface ConversationDeps {
   motebitId: string;
@@ -133,7 +142,8 @@ export class ConversationManager {
   /** Record only an assistant message (no user message). Used for system-triggered
    *  generation like first-contact activation where there is no user input. */
   pushActivation(assistantResponse: string): void {
-    this.history.push({ role: "assistant", content: assistantResponse });
+    const cleaned = stripInternalTags(assistantResponse).trim();
+    this.history.push({ role: "assistant", content: cleaned });
     if (this.history.length > this.deps.maxHistory) {
       this.history = this.history.slice(-this.deps.maxHistory);
     }
@@ -145,15 +155,16 @@ export class ConversationManager {
       }
       store.appendMessage(this.currentId, this.deps.motebitId, {
         role: "assistant",
-        content: assistantResponse,
+        content: cleaned,
       });
     }
   }
 
   pushExchange(userMessage: string, assistantResponse: string): void {
+    const cleaned = stripInternalTags(assistantResponse).trim();
     this.history.push(
       { role: "user", content: userMessage },
-      { role: "assistant", content: assistantResponse },
+      { role: "assistant", content: cleaned },
     );
     if (this.history.length > this.deps.maxHistory) {
       this.history = this.history.slice(-this.deps.maxHistory);
@@ -170,7 +181,7 @@ export class ConversationManager {
       });
       store.appendMessage(this.currentId, this.deps.motebitId, {
         role: "assistant",
-        content: assistantResponse,
+        content: cleaned,
       });
     }
 
