@@ -28,7 +28,7 @@ apps/
   desktop/     Tauri glass droplet. Three.js creature, identity, operator mode
   mobile/      React Native + Expo. Full-featured, tab-based UI
   web/         Browser entry point. IndexedDB identity, free proxy, zero install
-  admin/       React + Vite dashboard. 14-tab real-time monitoring
+  admin/       React + Vite dashboard. 15-tab real-time monitoring
   spatial/     AR/VR. 6DOF orbital dynamics, WebXR, gesture recognition
   docs/        Next.js documentation portal (docs.motebit.com)
   identity/    Identity management app. Vite, TypeScript

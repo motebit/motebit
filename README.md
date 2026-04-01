@@ -134,7 +134,7 @@ apps/
   cli/         Node.js — REPL, daemon, goal scheduling, operator console
   desktop/     Tauri — OS keyring, stdio MCP, full operator mode
   mobile/      React Native — Expo, secure keychain, triple providers
-  admin/       React — 14-tab real-time monitoring dashboard
+  admin/       React — 15-tab real-time monitoring dashboard
   spatial/     WebXR — 6DOF anchoring, spatial audio reactivity
   docs/        Next.js — docs.motebit.com
   identity/    Vite — identity management
@@ -162,7 +162,14 @@ packages/
   mcp-server/      Expose motebit as MCP server, bearer auth, synthetic tools
   mcp-client/      MCP client, tool discovery, manifest pinning
   render-engine/   Glass droplet: MeshPhysicalMaterial, breathing, sag, glow
-  ...
+  core-identity/   UUID v7, multi-device registration, Ed25519 binding
+  identity-file/   Generate, parse, verify motebit.md identity files
+  tools/           ToolRegistry, builtin tools, MCP tool merge
+  policy-invariants/ Clamping rules, state bounds validation
+  persistence/     SQLite (WAL mode), adapters for all storage types
+  browser-persistence/ IndexedDB adapters for web/spatial
+  voice/           VAD, STT, TTS adapters
+  github-action/   GitHub Action for identity verification
 
 services/
   api/          Sync relay — device auth, receipt verification, budget settlement,
@@ -181,7 +188,7 @@ spec/
   market-v1.md            motebit/market@1.0 — budget, settlement, routing
 ```
 
-45 pnpm workspaces across packages, apps, services, and the repo root.
+46 pnpm workspaces across packages, apps, services, and the repo root.
 
 ## Verify & integrate
 
@@ -207,7 +214,7 @@ if (result.type === "receipt" && result.valid) {
 import type { ExecutionReceipt, MotebitState, AgentTrustRecord } from "@motebit/sdk";
 ```
 
-Five npm packages, all zero monorepo dependencies:
+Five npm packages (four with zero dependencies, SDK re-exports protocol):
 
 | Package                                                                | Description                                                                | License |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
