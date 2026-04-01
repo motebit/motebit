@@ -5,7 +5,7 @@
  * memory edges, identities, devices, and audit log.
  */
 
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -116,6 +116,19 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains("latency_stats")) {
         const latency = db.createObjectStore("latency_stats", { autoIncrement: true });
         latency.createIndex("motebit_remote", ["motebit_id", "remote_motebit_id"]);
+      }
+
+      // Approvals
+      if (!db.objectStoreNames.contains("approvals")) {
+        db.createObjectStore("approvals", { keyPath: "approval_id" });
+      }
+
+      // Tool audit
+      if (!db.objectStoreNames.contains("tool_audit")) {
+        const toolAudit = db.createObjectStore("tool_audit", { autoIncrement: true });
+        toolAudit.createIndex("turnId", "turnId");
+        toolAudit.createIndex("runId", "runId");
+        toolAudit.createIndex("timestamp", "timestamp");
       }
 
       // Issued credentials

@@ -10,8 +10,28 @@ import type {
   Plan,
   PlanStep,
   AgentTrustRecord,
+  AgentServiceListing,
+  BudgetAllocation,
+  SettlementRecord,
+  StoredCredential,
+  CapabilityPrice,
+  ServiceListingStoreAdapter,
+  BudgetAllocationStoreAdapter,
+  SettlementStoreAdapter,
+  LatencyStatsStoreAdapter,
+  CredentialStoreAdapter,
+  ApprovalStoreAdapter,
 } from "@motebit/sdk";
-import { PlanStatus, StepStatus, AgentTrustLevel } from "@motebit/sdk";
+import {
+  PlanStatus,
+  StepStatus,
+  AgentTrustLevel,
+  asMotebitId,
+  asGoalId,
+  asAllocationId,
+  asSettlementId,
+  asListingId,
+} from "@motebit/sdk";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
@@ -1479,6 +1499,419 @@ export class TauriAgentTrustStore implements AgentTrustStoreAdapter {
       this.invoke,
       "UPDATE agent_trust SET trust_level = ?, last_seen_at = ? WHERE motebit_id = ? AND remote_motebit_id = ?",
       [level, Date.now(), motebitId, remoteMotebitId],
+    );
+  }
+}
+
+// === TauriServiceListingStore ===
+
+interface ServiceListingRow {
+  listing_id: string;
+  motebit_id: string;
+  capabilities: string;
+  pricing: string;
+  sla_max_latency_ms: number;
+  sla_availability: number;
+  description: string;
+  pay_to_address: string | null;
+  regulatory_risk: number | null;
+  updated_at: number;
+}
+
+function rowToServiceListing(row: ServiceListingRow): AgentServiceListing {
+  const listing: AgentServiceListing = {
+    listing_id: asListingId(row.listing_id),
+    motebit_id: asMotebitId(row.motebit_id),
+    capabilities: JSON.parse(row.capabilities) as string[],
+    pricing: JSON.parse(row.pricing) as CapabilityPrice[],
+    sla: {
+      max_latency_ms: row.sla_max_latency_ms,
+      availability_guarantee: row.sla_availability,
+    },
+    description: row.description,
+    updated_at: row.updated_at,
+  };
+  if (row.pay_to_address !== null) listing.pay_to_address = row.pay_to_address;
+  if (row.regulatory_risk !== null) listing.regulatory_risk = row.regulatory_risk;
+  return listing;
+}
+
+export class TauriServiceListingStore implements ServiceListingStoreAdapter {
+  constructor(private invoke: InvokeFn) {}
+
+  async get(motebitId: string): Promise<AgentServiceListing | null> {
+    const rows = await dbQuery<ServiceListingRow>(
+      this.invoke,
+      "SELECT * FROM service_listings WHERE motebit_id = ?",
+      [motebitId],
+    );
+    if (rows.length === 0) return null;
+    return rowToServiceListing(rows[0]!);
+  }
+
+  async set(listing: AgentServiceListing): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO service_listings (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, pay_to_address, regulatory_risk, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        listing.listing_id,
+        listing.motebit_id,
+        JSON.stringify(listing.capabilities),
+        JSON.stringify(listing.pricing),
+        listing.sla.max_latency_ms,
+        listing.sla.availability_guarantee,
+        listing.description,
+        listing.pay_to_address ?? null,
+        listing.regulatory_risk ?? null,
+        listing.updated_at,
+      ],
+    );
+  }
+
+  async list(): Promise<AgentServiceListing[]> {
+    const rows = await dbQuery<ServiceListingRow>(
+      this.invoke,
+      "SELECT * FROM service_listings ORDER BY updated_at DESC",
+    );
+    return rows.map(rowToServiceListing);
+  }
+
+  async delete(listingId: string): Promise<void> {
+    await dbExecute(this.invoke, "DELETE FROM service_listings WHERE listing_id = ?", [listingId]);
+  }
+}
+
+// === TauriBudgetAllocationStore ===
+
+interface BudgetAllocationRow {
+  allocation_id: string;
+  goal_id: string;
+  candidate_motebit_id: string;
+  amount_locked: number;
+  currency: string;
+  created_at: number;
+  status: string;
+}
+
+function rowToBudgetAllocation(row: BudgetAllocationRow): BudgetAllocation {
+  return {
+    allocation_id: asAllocationId(row.allocation_id),
+    goal_id: asGoalId(row.goal_id),
+    candidate_motebit_id: asMotebitId(row.candidate_motebit_id),
+    amount_locked: row.amount_locked,
+    currency: row.currency,
+    created_at: row.created_at,
+    status: row.status as BudgetAllocation["status"],
+  };
+}
+
+export class TauriBudgetAllocationStore implements BudgetAllocationStoreAdapter {
+  constructor(private invoke: InvokeFn) {}
+
+  async get(allocationId: string): Promise<BudgetAllocation | null> {
+    const rows = await dbQuery<BudgetAllocationRow>(
+      this.invoke,
+      "SELECT * FROM budget_allocations WHERE allocation_id = ?",
+      [allocationId],
+    );
+    if (rows.length === 0) return null;
+    return rowToBudgetAllocation(rows[0]!);
+  }
+
+  async create(allocation: BudgetAllocation): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO budget_allocations (allocation_id, goal_id, candidate_motebit_id, amount_locked, currency, created_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        allocation.allocation_id,
+        allocation.goal_id,
+        allocation.candidate_motebit_id,
+        allocation.amount_locked,
+        allocation.currency,
+        allocation.created_at,
+        allocation.status,
+      ],
+    );
+  }
+
+  async updateStatus(allocationId: string, status: string): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      "UPDATE budget_allocations SET status = ? WHERE allocation_id = ?",
+      [status, allocationId],
+    );
+  }
+
+  async listByGoal(goalId: string): Promise<BudgetAllocation[]> {
+    const rows = await dbQuery<BudgetAllocationRow>(
+      this.invoke,
+      "SELECT * FROM budget_allocations WHERE goal_id = ? ORDER BY created_at DESC",
+      [goalId],
+    );
+    return rows.map(rowToBudgetAllocation);
+  }
+}
+
+// === TauriSettlementStore ===
+
+interface SettlementRow {
+  settlement_id: string;
+  allocation_id: string;
+  receipt_hash: string;
+  ledger_hash: string | null;
+  amount_settled: number;
+  platform_fee: number;
+  platform_fee_rate: number;
+  x402_tx_hash: string | null;
+  x402_network: string | null;
+  status: string;
+  settled_at: number;
+}
+
+function rowToSettlement(row: SettlementRow): SettlementRecord {
+  const record: SettlementRecord = {
+    settlement_id: asSettlementId(row.settlement_id),
+    allocation_id: asAllocationId(row.allocation_id),
+    receipt_hash: row.receipt_hash,
+    ledger_hash: row.ledger_hash,
+    amount_settled: row.amount_settled,
+    platform_fee: row.platform_fee,
+    platform_fee_rate: row.platform_fee_rate,
+    status: row.status as SettlementRecord["status"],
+    settled_at: row.settled_at,
+  };
+  if (row.x402_tx_hash !== null) record.x402_tx_hash = row.x402_tx_hash;
+  if (row.x402_network !== null) record.x402_network = row.x402_network;
+  return record;
+}
+
+export class TauriSettlementStore implements SettlementStoreAdapter {
+  constructor(private invoke: InvokeFn) {}
+
+  async get(settlementId: string): Promise<SettlementRecord | null> {
+    const rows = await dbQuery<SettlementRow>(
+      this.invoke,
+      "SELECT * FROM settlements WHERE settlement_id = ?",
+      [settlementId],
+    );
+    if (rows.length === 0) return null;
+    return rowToSettlement(rows[0]!);
+  }
+
+  async create(settlement: SettlementRecord): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO settlements (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, x402_tx_hash, x402_network, status, settled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        settlement.settlement_id,
+        settlement.allocation_id,
+        settlement.receipt_hash,
+        settlement.ledger_hash,
+        settlement.amount_settled,
+        settlement.platform_fee,
+        settlement.platform_fee_rate,
+        settlement.x402_tx_hash ?? null,
+        settlement.x402_network ?? null,
+        settlement.status,
+        settlement.settled_at,
+      ],
+    );
+  }
+
+  async listByAllocation(allocationId: string): Promise<SettlementRecord[]> {
+    const rows = await dbQuery<SettlementRow>(
+      this.invoke,
+      "SELECT * FROM settlements WHERE allocation_id = ? ORDER BY settled_at DESC",
+      [allocationId],
+    );
+    return rows.map(rowToSettlement);
+  }
+}
+
+// === TauriLatencyStatsStore ===
+
+export class TauriLatencyStatsStore implements LatencyStatsStoreAdapter {
+  constructor(private invoke: InvokeFn) {}
+
+  async record(motebitId: string, remoteMotebitId: string, latencyMs: number): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT INTO latency_stats (motebit_id, remote_motebit_id, latency_ms, recorded_at)
+       VALUES (?, ?, ?, ?)`,
+      [motebitId, remoteMotebitId, latencyMs, Date.now()],
+    );
+  }
+
+  async getStats(
+    motebitId: string,
+    remoteMotebitId: string,
+    limit = 100,
+  ): Promise<{ avg_ms: number; p95_ms: number; sample_count: number }> {
+    const rows = await dbQuery<{ latency_ms: number }>(
+      this.invoke,
+      "SELECT latency_ms FROM latency_stats WHERE motebit_id = ? AND remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT ?",
+      [motebitId, remoteMotebitId, limit],
+    );
+
+    if (rows.length === 0) {
+      return { avg_ms: 0, p95_ms: 0, sample_count: 0 };
+    }
+
+    const latencies = rows.map((r) => r.latency_ms);
+    const sum = latencies.reduce((a, b) => a + b, 0);
+    const avg_ms = sum / latencies.length;
+
+    // p95: sort ascending, pick the value at the 95th percentile index
+    const sorted = [...latencies].sort((a, b) => a - b);
+    const p95Index = Math.min(Math.ceil(sorted.length * 0.95) - 1, sorted.length - 1);
+    const p95_ms = sorted[p95Index]!;
+
+    return { avg_ms, p95_ms, sample_count: latencies.length };
+  }
+}
+
+// === TauriCredentialStore ===
+// CredentialStoreAdapter is sync, but Tauri IPC is async.
+// Maintain an in-memory cache for sync reads; fire-and-forget async writes to DB.
+
+export class TauriCredentialStore implements CredentialStoreAdapter {
+  private _credentials: StoredCredential[] = []; // sorted by issued_at DESC
+
+  constructor(private invoke: InvokeFn) {}
+
+  /** Pre-load credentials from DB. Call before runtime construction. */
+  async preload(): Promise<void> {
+    try {
+      const rows = await dbQuery<{
+        credential_id: string;
+        subject_motebit_id: string;
+        issuer_did: string;
+        credential_type: string;
+        credential_json: string;
+        issued_at: number;
+      }>(this.invoke, "SELECT * FROM issued_credentials ORDER BY issued_at DESC LIMIT 1000");
+      this._credentials = rows.map((r) => ({
+        credential_id: r.credential_id,
+        subject_motebit_id: r.subject_motebit_id,
+        issuer_did: r.issuer_did,
+        credential_type: r.credential_type,
+        credential_json: r.credential_json,
+        issued_at: r.issued_at,
+      }));
+    } catch {
+      // Pre-migration database — table may not exist yet.
+    }
+  }
+
+  save(credential: StoredCredential): void {
+    // Update cache — insert at front (newest first)
+    this._credentials.unshift(credential);
+
+    void dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO issued_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        credential.credential_id,
+        credential.subject_motebit_id,
+        credential.issuer_did,
+        credential.credential_type,
+        credential.credential_json,
+        credential.issued_at,
+      ],
+    );
+  }
+
+  listBySubject(subjectMotebitId: string, limit = 100): StoredCredential[] {
+    return this._credentials
+      .filter((c) => c.subject_motebit_id === subjectMotebitId)
+      .slice(0, limit);
+  }
+
+  list(motebitId: string, type?: string, limit = 100): StoredCredential[] {
+    let matching = this._credentials.filter(
+      (c) => c.subject_motebit_id.includes(motebitId) || c.issuer_did.includes(motebitId),
+    );
+    if (type) {
+      matching = matching.filter((c) => c.credential_type === type);
+    }
+    return matching.slice(0, limit);
+  }
+}
+
+// === TauriApprovalStore ===
+// ApprovalStoreAdapter is sync, but Tauri IPC is async.
+// Maintain an in-memory cache for sync reads; fire-and-forget async writes to DB.
+
+interface ApprovalEntry {
+  required: number;
+  approvers: string[];
+  collected: Set<string>;
+}
+
+export class TauriApprovalStore implements ApprovalStoreAdapter {
+  private _approvals = new Map<string, ApprovalEntry>();
+
+  constructor(private invoke: InvokeFn) {}
+
+  /** Pre-load approvals from DB. Call before runtime construction. */
+  async preload(): Promise<void> {
+    try {
+      const rows = await dbQuery<{
+        approval_id: string;
+        required: number;
+        approvers: string;
+        collected: string;
+      }>(this.invoke, "SELECT * FROM approvals");
+      for (const row of rows) {
+        this._approvals.set(row.approval_id, {
+          required: row.required,
+          approvers: JSON.parse(row.approvers) as string[],
+          collected: new Set(JSON.parse(row.collected) as string[]),
+        });
+      }
+    } catch {
+      // Pre-migration database — table may not exist yet.
+    }
+  }
+
+  collectApproval(approvalId: string, approverId: string): { met: boolean; collected: string[] } {
+    const entry = this._approvals.get(approvalId);
+    if (!entry) {
+      return { met: false, collected: [] };
+    }
+
+    entry.collected.add(approverId);
+    const collected = [...entry.collected];
+    const met = collected.length >= entry.required;
+
+    // Fire-and-forget write
+    void dbExecute(this.invoke, "UPDATE approvals SET collected = ? WHERE approval_id = ?", [
+      JSON.stringify(collected),
+      approvalId,
+    ]);
+
+    return { met, collected };
+  }
+
+  setQuorum(approvalId: string, required: number, approvers: string[]): void {
+    const existing = this._approvals.get(approvalId);
+    this._approvals.set(approvalId, {
+      required,
+      approvers,
+      collected: existing?.collected ?? new Set(),
+    });
+
+    const collected = existing ? [...existing.collected] : [];
+    // Fire-and-forget upsert
+    void dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO approvals (approval_id, required, approvers, collected)
+       VALUES (?, ?, ?, ?)`,
+      [approvalId, required, JSON.stringify(approvers), JSON.stringify(collected)],
     );
   }
 }

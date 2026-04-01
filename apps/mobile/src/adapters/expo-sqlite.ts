@@ -31,6 +31,13 @@ import type {
   ListingId,
   GoalId,
   MotebitId,
+  StoredCredential,
+  ToolAuditEntry,
+  AuditStatsSince,
+  PolicyDecision,
+  CredentialStoreAdapter,
+  ApprovalStoreAdapter,
+  AuditLogSink,
 } from "@motebit/sdk";
 import { StepStatus, AgentTrustLevel } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
@@ -1832,6 +1839,214 @@ export class ExpoLatencyStatsStore {
   }
 }
 
+// === CredentialStore ===
+
+export class ExpoCredentialStore implements CredentialStoreAdapter {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  save(credential: StoredCredential): void {
+    this.db.runSync(
+      `INSERT OR REPLACE INTO issued_credentials
+       (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        credential.credential_id,
+        credential.subject_motebit_id,
+        credential.issuer_did,
+        credential.credential_type,
+        credential.credential_json,
+        credential.issued_at,
+      ],
+    );
+  }
+
+  listBySubject(subjectMotebitId: string, limit = 100): StoredCredential[] {
+    const rows = this.db.getAllSync<StoredCredential>(
+      "SELECT * FROM issued_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?",
+      [subjectMotebitId, limit],
+    );
+    return rows;
+  }
+
+  list(motebitId: string, type?: string, limit = 100): StoredCredential[] {
+    const pattern = `%${motebitId}%`;
+    if (type) {
+      return this.db.getAllSync<StoredCredential>(
+        "SELECT * FROM issued_credentials WHERE (issuer_did LIKE ? OR subject_motebit_id LIKE ?) AND credential_type = ? ORDER BY issued_at DESC LIMIT ?",
+        [pattern, pattern, type, limit],
+      );
+    }
+    return this.db.getAllSync<StoredCredential>(
+      "SELECT * FROM issued_credentials WHERE issuer_did LIKE ? OR subject_motebit_id LIKE ? ORDER BY issued_at DESC LIMIT ?",
+      [pattern, pattern, limit],
+    );
+  }
+}
+
+// === ApprovalStore ===
+
+export class ExpoApprovalStore implements ApprovalStoreAdapter {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  collectApproval(approvalId: string, approverId: string): { met: boolean; collected: string[] } {
+    const row = this.db.getFirstSync<{
+      required: number;
+      collected: string;
+    }>("SELECT required, collected FROM approvals WHERE approval_id = ?", [approvalId]);
+    if (!row) return { met: false, collected: [] };
+
+    let collected: string[];
+    try {
+      collected = JSON.parse(row.collected) as string[];
+    } catch {
+      collected = [];
+    }
+
+    // Deduplicate — only add if not already collected
+    if (!collected.includes(approverId)) {
+      collected.push(approverId);
+    }
+
+    const met = collected.length >= row.required;
+
+    this.db.runSync("UPDATE approvals SET collected = ? WHERE approval_id = ?", [
+      JSON.stringify(collected),
+      approvalId,
+    ]);
+
+    return { met, collected: [...collected] };
+  }
+
+  setQuorum(approvalId: string, required: number, approvers: string[]): void {
+    // Preserve collected from existing row if present
+    const existing = this.db.getFirstSync<{ collected: string }>(
+      "SELECT collected FROM approvals WHERE approval_id = ?",
+      [approvalId],
+    );
+    const collected = existing?.collected ?? "[]";
+
+    this.db.runSync(
+      "INSERT OR REPLACE INTO approvals (approval_id, required, approvers, collected) VALUES (?, ?, ?, ?)",
+      [approvalId, required, JSON.stringify(approvers), collected],
+    );
+  }
+}
+
+// === ToolAuditSink ===
+
+interface ToolAuditRow {
+  id: number;
+  turn_id: string;
+  run_id: string | null;
+  call_id: string;
+  tool: string;
+  args: string;
+  decision: string;
+  result: string | null;
+  injection: string | null;
+  cost_units: number | null;
+  timestamp: number;
+}
+
+function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
+  const entry: ToolAuditEntry = {
+    callId: row.call_id,
+    turnId: row.turn_id,
+    tool: row.tool,
+    args: JSON.parse(row.args) as Record<string, unknown>,
+    decision: JSON.parse(row.decision) as PolicyDecision,
+    result: row.result
+      ? (JSON.parse(row.result) as { ok: boolean; durationMs: number })
+      : undefined,
+    timestamp: row.timestamp,
+  };
+  if (row.run_id !== null) {
+    entry.runId = row.run_id;
+  }
+  if (row.injection !== null) {
+    entry.injection = JSON.parse(row.injection) as ToolAuditEntry["injection"];
+  }
+  if (row.cost_units != null && row.cost_units > 0) {
+    entry.costUnits = row.cost_units;
+  }
+  return entry;
+}
+
+export class ExpoToolAuditSink implements AuditLogSink {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  append(entry: ToolAuditEntry): void {
+    this.db.runSync(
+      `INSERT INTO tool_audit (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        entry.callId,
+        entry.turnId,
+        entry.runId ?? null,
+        entry.tool,
+        JSON.stringify(entry.args),
+        JSON.stringify(entry.decision),
+        entry.result ? JSON.stringify(entry.result) : null,
+        entry.injection ? JSON.stringify(entry.injection) : null,
+        entry.costUnits ?? 0,
+        entry.timestamp,
+      ],
+    );
+  }
+
+  query(turnId: string): ToolAuditEntry[] {
+    const rows = this.db.getAllSync<ToolAuditRow>(
+      "SELECT * FROM tool_audit WHERE turn_id = ? ORDER BY timestamp ASC",
+      [turnId],
+    );
+    return rows.map(rowToToolAudit);
+  }
+
+  getAll(): ToolAuditEntry[] {
+    const rows = this.db.getAllSync<ToolAuditRow>(
+      "SELECT * FROM tool_audit ORDER BY timestamp ASC",
+    );
+    return rows.map(rowToToolAudit);
+  }
+
+  queryStatsSince(afterTimestamp: number): AuditStatsSince {
+    const row = this.db.getFirstSync<{
+      distinct_turns: number;
+      total: number;
+      blocked: number;
+      succeeded: number;
+      failed: number;
+    }>(
+      `SELECT
+        COUNT(DISTINCT turn_id) as distinct_turns,
+        COUNT(*) as total,
+        SUM(CASE WHEN json_extract(decision, '$.allowed') = 0 THEN 1 ELSE 0 END) as blocked,
+        SUM(CASE WHEN json_extract(result, '$.ok') = 1 THEN 1 ELSE 0 END) as succeeded,
+        SUM(CASE WHEN json_extract(result, '$.ok') = 0 THEN 1 ELSE 0 END) as failed
+       FROM tool_audit WHERE timestamp > ?`,
+      [afterTimestamp],
+    );
+    if (!row) {
+      return { distinctTurns: 0, totalToolCalls: 0, succeeded: 0, blocked: 0, failed: 0 };
+    }
+    return {
+      distinctTurns: row.distinct_turns ?? 0,
+      totalToolCalls: row.total ?? 0,
+      succeeded: row.succeeded ?? 0,
+      blocked: row.blocked ?? 0,
+      failed: row.failed ?? 0,
+    };
+  }
+
+  queryByRunId(runId: string): ToolAuditEntry[] {
+    const rows = this.db.getAllSync<ToolAuditRow>(
+      "SELECT * FROM tool_audit WHERE run_id = ? ORDER BY timestamp ASC",
+      [runId],
+    );
+    return rows.map(rowToToolAudit);
+  }
+}
+
 // === Factory ===
 
 export interface ExpoStorageResult extends StorageAdapters {
@@ -1844,6 +2059,9 @@ export interface ExpoStorageResult extends StorageAdapters {
   budgetAllocationStore: ExpoBudgetAllocationStore;
   settlementStore: ExpoSettlementStore;
   latencyStatsStore: ExpoLatencyStatsStore;
+  credentialStore: ExpoCredentialStore;
+  approvalStore: ExpoApprovalStore;
+  toolAuditSink: ExpoToolAuditSink;
 }
 
 export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
@@ -2257,6 +2475,61 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     db.execSync("PRAGMA user_version = 17");
   }
 
+  // Migration 18: issued_credentials, approvals, tool_audit tables
+  if (userVersion < 18) {
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS issued_credentials (
+          credential_id TEXT PRIMARY KEY,
+          subject_motebit_id TEXT NOT NULL,
+          issuer_did TEXT NOT NULL,
+          credential_type TEXT NOT NULL,
+          credential_json TEXT NOT NULL,
+          issued_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_credentials_subject ON issued_credentials(subject_motebit_id);
+        CREATE INDEX IF NOT EXISTS idx_credentials_type ON issued_credentials(credential_type);
+      `);
+    } catch {
+      /* Table may already exist */
+    }
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS approvals (
+          approval_id TEXT PRIMARY KEY,
+          required INTEGER NOT NULL DEFAULT 1,
+          approvers TEXT NOT NULL DEFAULT '[]',
+          collected TEXT NOT NULL DEFAULT '[]'
+        );
+      `);
+    } catch {
+      /* Table may already exist */
+    }
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS tool_audit (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          turn_id TEXT NOT NULL,
+          run_id TEXT,
+          call_id TEXT NOT NULL,
+          tool TEXT NOT NULL,
+          args TEXT NOT NULL,
+          decision TEXT NOT NULL,
+          result TEXT,
+          injection TEXT,
+          cost_units REAL,
+          timestamp INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit(turn_id);
+        CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit(run_id);
+        CREATE INDEX IF NOT EXISTS idx_tool_audit_ts ON tool_audit(timestamp);
+      `);
+    } catch {
+      /* Table may already exist */
+    }
+    db.execSync("PRAGMA user_version = 18");
+  }
+
   return {
     eventStore: new ExpoSqliteEventStore(db),
     memoryStorage: new ExpoSqliteMemoryStorage(db),
@@ -2273,5 +2546,8 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     budgetAllocationStore: new ExpoBudgetAllocationStore(db),
     settlementStore: new ExpoSettlementStore(db),
     latencyStatsStore: new ExpoLatencyStatsStore(db),
+    credentialStore: new ExpoCredentialStore(db),
+    approvalStore: new ExpoApprovalStore(db),
+    toolAuditSink: new ExpoToolAuditSink(db),
   };
 }

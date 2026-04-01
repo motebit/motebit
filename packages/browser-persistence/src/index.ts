@@ -14,6 +14,8 @@ import { IdbBudgetAllocationStore } from "./budget-allocation-store.js";
 import { IdbSettlementStore } from "./settlement-store.js";
 import { IdbLatencyStatsStore } from "./latency-stats-store.js";
 import { IdbCredentialStore } from "./credential-store.js";
+import { IdbApprovalStore } from "./approval-store.js";
+import { IdbToolAuditSink } from "./tool-audit-store.js";
 
 export { openMotebitDB, idbRequest, idbTransaction } from "./idb.js";
 export { IdbEventStore } from "./event-store.js";
@@ -32,10 +34,19 @@ export { IdbBudgetAllocationStore } from "./budget-allocation-store.js";
 export { IdbSettlementStore } from "./settlement-store.js";
 export { IdbLatencyStatsStore } from "./latency-stats-store.js";
 export { IdbCredentialStore } from "./credential-store.js";
+export { IdbApprovalStore } from "./approval-store.js";
+export { IdbToolAuditSink } from "./tool-audit-store.js";
 export type { StateSnapshotAdapter } from "./state-snapshot.js";
 
 export async function createBrowserStorage(): Promise<StorageAdapters> {
   const db = await openMotebitDB();
+
+  const credentialStore = new IdbCredentialStore(db);
+  const approvalStore = new IdbApprovalStore(db);
+  const toolAuditSink = new IdbToolAuditSink(db);
+
+  await Promise.all([credentialStore.preload(), approvalStore.preload(), toolAuditSink.preload()]);
+
   return {
     eventStore: new IdbEventStore(db),
     memoryStorage: new IdbMemoryStorage(db),
@@ -50,6 +61,8 @@ export async function createBrowserStorage(): Promise<StorageAdapters> {
     budgetAllocationStore: new IdbBudgetAllocationStore(db),
     settlementStore: new IdbSettlementStore(db),
     latencyStatsStore: new IdbLatencyStatsStore(db),
-    credentialStore: new IdbCredentialStore(db),
+    credentialStore,
+    approvalStore,
+    toolAuditSink,
   };
 }

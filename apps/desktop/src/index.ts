@@ -118,6 +118,12 @@ import {
   TauriPlanStore,
   TauriGradientStore,
   TauriAgentTrustStore,
+  TauriServiceListingStore,
+  TauriBudgetAllocationStore,
+  TauriSettlementStore,
+  TauriLatencyStatsStore,
+  TauriCredentialStore,
+  TauriApprovalStore,
   type InvokeFn,
 } from "./tauri-storage.js";
 import { registerDesktopTools } from "./desktop-tools.js";
@@ -313,6 +319,12 @@ function createTauriStorage(
     agentTrustStore: new TauriAgentTrustStore(invoke),
     planStore: new TauriPlanStore(invoke),
     gradientStore: new TauriGradientStore(invoke),
+    serviceListingStore: new TauriServiceListingStore(invoke),
+    budgetAllocationStore: new TauriBudgetAllocationStore(invoke),
+    settlementStore: new TauriSettlementStore(invoke),
+    latencyStatsStore: new TauriLatencyStatsStore(invoke),
+    credentialStore: new TauriCredentialStore(invoke),
+    approvalStore: new TauriApprovalStore(invoke),
   };
 }
 
