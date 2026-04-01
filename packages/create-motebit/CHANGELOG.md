@@ -1,5 +1,11 @@
 # create-motebit Changelog
 
+## 0.7.1
+
+### Patch Changes
+
+- 2513fe7: auto-generated patch bump
+
 ## 0.7.0
 
 ### Minor Changes

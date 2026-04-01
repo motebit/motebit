@@ -1,5 +1,14 @@
 # @motebit/identity-file
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [2513fe7]
+  - @motebit/sdk@0.7.1
+  - @motebit/verify@0.7.1
+  - @motebit/crypto@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

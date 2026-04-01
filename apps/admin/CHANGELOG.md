@@ -1,5 +1,14 @@
 # @motebit/admin
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [2513fe7]
+  - @motebit/sdk@0.7.1
+  - @motebit/behavior-engine@0.1.17
+  - @motebit/gradient@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

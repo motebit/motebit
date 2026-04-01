@@ -1,5 +1,12 @@
 # @motebit/market
 
+## 0.1.17
+
+### Patch Changes
+
+- @motebit/protocol@0.7.1
+- @motebit/semiring@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

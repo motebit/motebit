@@ -1,5 +1,22 @@
 # @motebit/spatial
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [2513fe7]
+  - @motebit/sdk@0.7.1
+  - @motebit/ai-core@0.1.17
+  - @motebit/browser-persistence@0.1.17
+  - @motebit/identity-file@0.1.17
+  - @motebit/mcp-client@0.1.17
+  - @motebit/render-engine@0.1.17
+  - @motebit/runtime@0.1.17
+  - @motebit/sync-engine@0.1.17
+  - @motebit/tools@0.1.17
+  - @motebit/core-identity@0.1.17
+  - @motebit/crypto@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

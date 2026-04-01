@@ -1,5 +1,19 @@
 # @motebit/web-search
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [2513fe7]
+  - @motebit/sdk@0.7.1
+  - @motebit/identity-file@0.1.17
+  - @motebit/mcp-server@0.1.17
+  - @motebit/memory-graph@0.1.17
+  - @motebit/persistence@0.1.17
+  - @motebit/runtime@0.1.17
+  - @motebit/tools@0.1.17
+  - @motebit/crypto@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

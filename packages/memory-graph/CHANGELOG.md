@@ -1,5 +1,13 @@
 # @motebit/memory-graph
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [2513fe7]
+  - @motebit/sdk@0.7.1
+  - @motebit/event-log@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes
