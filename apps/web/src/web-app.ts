@@ -335,7 +335,12 @@ export class WebApp {
     if (!this.runtime) return;
     const registry = this.runtime.getToolRegistry();
 
-    registry.register(webSearchDefinition, createWebSearchHandler(new DuckDuckGoSearchProvider()));
+    registry.register(
+      webSearchDefinition,
+      createWebSearchHandler(
+        new DuckDuckGoSearchProvider({ proxyUrl: `${PROXY_BASE_URL}/v1/fetch` }),
+      ),
+    );
     registry.register(
       readUrlDefinition,
       createReadUrlHandler({ proxyUrl: `${PROXY_BASE_URL}/v1/fetch` }),

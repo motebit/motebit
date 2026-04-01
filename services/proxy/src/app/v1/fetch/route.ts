@@ -94,9 +94,9 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  let body: { url?: string };
+  let body: { url?: string; raw?: boolean };
   try {
-    body = (await request.json()) as { url?: string };
+    body = (await request.json()) as { url?: string; raw?: boolean };
   } catch {
     return new Response(JSON.stringify({ ok: false, error: "invalid_json" }), {
       status: 400,
@@ -136,7 +136,11 @@ export async function POST(request: Request): Promise<Response> {
     const contentType = res.headers.get("content-type") ?? "";
     let data: string;
 
-    if (contentType.includes("application/json")) {
+    if (body.raw) {
+      // Raw mode: return HTML as-is (used by search provider for HTML parsing)
+      const text = await res.text();
+      data = text.slice(0, MAX_RESPONSE_SIZE);
+    } else if (contentType.includes("application/json")) {
       const json: unknown = await res.json();
       data = JSON.stringify(json, null, 2).slice(0, MAX_RESPONSE_SIZE);
     } else {
