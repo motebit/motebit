@@ -6,7 +6,7 @@
  * Modality logic lives in the surfaces.
  */
 
-import type { MotebitRuntime } from "../index";
+import type { MotebitRuntime } from "../index.js";
 import type { CommandResult, RelayConfig } from "./types.js";
 import {
   cmdState,
