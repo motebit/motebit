@@ -415,16 +415,7 @@ export async function createRuntime(
     console.log("Operator mode: enabled");
   }
 
-  const storage: StorageAdapters = {
-    eventStore: moteDb.eventStore,
-    memoryStorage: moteDb.memoryStorage,
-    identityStorage: moteDb.identityStorage,
-    auditLog: moteDb.auditLog,
-    stateSnapshot: moteDb.stateSnapshot,
-    toolAuditSink: moteDb.toolAuditSink,
-    conversationStore: moteDb.conversationStore,
-    agentTrustStore: moteDb.agentTrustStore,
-  };
+  const storage = buildStorageAdapters(moteDb);
 
   const runtime = new MotebitRuntime(
     {

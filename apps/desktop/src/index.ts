@@ -116,6 +116,7 @@ import {
   TauriStateSnapshotStorage,
   TauriConversationStore,
   TauriPlanStore,
+  TauriGradientStore,
   TauriAgentTrustStore,
   type InvokeFn,
 } from "./tauri-storage.js";
@@ -310,6 +311,8 @@ function createTauriStorage(
     stateSnapshot,
     conversationStore,
     agentTrustStore: new TauriAgentTrustStore(invoke),
+    planStore: new TauriPlanStore(invoke),
+    gradientStore: new TauriGradientStore(invoke),
   };
 }
 
