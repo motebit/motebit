@@ -1,8 +1,8 @@
 export * from "@motebit/protocol";
-export * from "./models";
-export * from "./color-presets";
-export * from "./approval-presets";
-export * from "./governance-config";
+export * from "./models.js";
+export * from "./color-presets.js";
+export * from "./approval-presets.js";
+export * from "./governance-config.js";
 
 import type {
   SensitivityLevel,
