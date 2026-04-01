@@ -126,7 +126,7 @@ export function resolveModelTier(tier: ModelTier, currentModel: string): string 
       case "strongest":
         return "gpt-4o";
       case "default":
-        return "gpt-4o";
+        return "gpt-4o-mini";
       case "fast":
         return "gpt-4o-mini";
     }
@@ -137,7 +137,7 @@ export function resolveModelTier(tier: ModelTier, currentModel: string): string 
       case "strongest":
         return "gemini-2.5-pro";
       case "default":
-        return "gemini-2.5-pro";
+        return "gemini-2.5-flash";
       case "fast":
         return "gemini-2.5-flash";
     }
