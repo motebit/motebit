@@ -1,8 +1,8 @@
 /**
  * @motebit/crypto — Key handling, encryption, delete semantics.
  *
- * Uses @noble/hashes and @noble/ciphers for zero-dependency,
- * audited cryptographic operations. Ed25519 signing via @noble/ed25519.
+ * Uses @noble/hashes for SHA-256/SHA-512 and Web Crypto API for AES-256-GCM.
+ * Ed25519 signing via @noble/ed25519.
  */
 
 import * as ed from "@noble/ed25519";
