@@ -141,10 +141,10 @@ export type { TaskRouterConfig, TaskType, ResolvedTaskConfig } from "@motebit/ai
  * alias table in proxy/validation.ts — every surface gets the upgrade.
  */
 export const PLANNING_TASK_ROUTER: TaskRouterConfig = {
-  default: { model: "claude-sonnet" },
+  default: { model: "default" },
   overrides: {
-    planning: { model: "claude-opus", temperature: 0.3 },
-    plan_reflection: { model: "claude-opus", temperature: 0.5 },
+    planning: { model: "strongest", temperature: 0.3 },
+    plan_reflection: { model: "strongest", temperature: 0.5 },
   },
 };
 export type {

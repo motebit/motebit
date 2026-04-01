@@ -4,6 +4,10 @@
 // Different task types (conversation, summarization, reflection, etc.) have
 // different demands — some need creativity (higher temperature), some need
 // precision (lower temperature), some can use smaller/cheaper models.
+//
+// Model tiers express INTENT, not IDENTITY. "strongest" means "use the best
+// model this provider has" — not "use claude-opus." The intelligence is
+// pluggable; the planning engine must not bind to a specific provider.
 
 import type { IntelligenceProvider } from "@motebit/sdk";
 
@@ -76,6 +80,74 @@ export class TaskRouter {
   }
 }
 
+// === Model Tiers ===
+//
+// Tiers express intent: "strongest", "default", "fast". The task router uses
+// tiers instead of model names so planning works on any provider.
+
+/** Well-known tier names. Any other string is treated as a literal model ID. */
+export type ModelTier = "strongest" | "default" | "fast";
+
+const TIER_NAMES = new Set<string>(["strongest", "default", "fast"]);
+
+/** Returns true if the model string is a tier name rather than a literal model ID. */
+export function isModelTier(model: string): model is ModelTier {
+  return TIER_NAMES.has(model);
+}
+
+/**
+ * Resolve a model tier to a concrete model ID based on the provider's current model.
+ *
+ * The current model reveals which provider family is active (Anthropic, OpenAI,
+ * Google, Ollama, WebLLM). The tier resolves to the best available model in
+ * that family. If the current model doesn't match a known family, the tier
+ * resolves to the current model (no-op — use whatever's loaded).
+ */
+export function resolveModelTier(tier: ModelTier, currentModel: string): string {
+  // Detect provider family from current model
+  if (currentModel.includes("claude") || currentModel.includes("anthropic")) {
+    switch (tier) {
+      case "strongest":
+        return "claude-opus";
+      case "default":
+        return "claude-sonnet";
+      case "fast":
+        return "claude-haiku";
+    }
+  }
+
+  if (
+    currentModel.includes("gpt") ||
+    currentModel.includes("o1") ||
+    currentModel.includes("o3") ||
+    currentModel.includes("o4")
+  ) {
+    switch (tier) {
+      case "strongest":
+        return "gpt-4o";
+      case "default":
+        return "gpt-4o";
+      case "fast":
+        return "gpt-4o-mini";
+    }
+  }
+
+  if (currentModel.includes("gemini") || currentModel.includes("google")) {
+    switch (tier) {
+      case "strongest":
+        return "gemini-2.5-pro";
+      case "default":
+        return "gemini-2.5-pro";
+      case "fast":
+        return "gemini-2.5-flash";
+    }
+  }
+
+  // Ollama, WebLLM, or unknown provider — use current model for all tiers.
+  // The user loaded a specific model; it's all we have.
+  return currentModel;
+}
+
 // === Configurable Provider (duck-typed) ===
 
 /**
@@ -122,8 +194,13 @@ export async function withTaskConfig<T>(
   const savedMaxTokens = provider.maxTokens;
 
   try {
+    // Resolve model tier to concrete model ID for this provider
+    const resolvedModel = isModelTier(taskConfig.model)
+      ? resolveModelTier(taskConfig.model, savedModel)
+      : taskConfig.model;
+
     // Apply task config
-    provider.setModel(taskConfig.model);
+    provider.setModel(resolvedModel);
     if (typeof provider.setTemperature === "function") {
       provider.setTemperature(taskConfig.temperature);
     }
