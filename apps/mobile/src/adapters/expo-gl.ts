@@ -86,6 +86,9 @@ export class ExpoGLAdapter implements RenderAdapter {
     this.renderer.setSize(glContext.drawingBufferWidth, glContext.drawingBufferHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
+    // expo-gl's JS bridge doesn't expose renderbufferStorageMultisample —
+    // disable MSAA render targets so Three.js transmission pass doesn't crash.
+    this.renderer.samples = 0;
 
     this.width = glContext.drawingBufferWidth;
     this.height = glContext.drawingBufferHeight;
@@ -115,6 +118,14 @@ export class ExpoGLAdapter implements RenderAdapter {
 
     // === Creature — from shared module ===
     this.creatureRefs = createCreature(this.scene);
+
+    // expo-gl doesn't implement renderbufferStorageMultisample — Three.js
+    // renderTransmissionPass creates MSAA render targets internally for
+    // transmissive materials. Disable transmission to avoid the crash.
+    // The creature still renders with glass-like appearance via refraction/IOR.
+    if (this.creatureRefs) {
+      this.creatureRefs.bodyMaterial.transmission = 0;
+    }
 
     return Promise.resolve();
   }

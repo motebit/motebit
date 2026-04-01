@@ -25,50 +25,72 @@ config.resolver.nodeModulesPaths = [
 // Enable package exports resolution (handles subpath exports like ./client/index.js)
 config.resolver.unstable_enablePackageExports = true;
 
+// ---------------------------------------------------------------------------
+// Node.js built-in shimming
+//
+// Mobile never calls MCP stdio, shell-exec, DNS discovery, or Node HTTP.
+// Those imports exist in the bundle but are dead code paths on mobile.
+//
+// Strategy:
+//   - buffer, events, stream → real npm polyfill packages (needed by transitive deps)
+//   - everything else        → empty.js no-op stub
+// ---------------------------------------------------------------------------
+const emptyModule = path.resolve(projectRoot, "shims/empty.js");
+
+// Modules that have real npm polyfill packages installed.
+// Bare names resolve via extraNodeModules below; node: prefixed names need
+// explicit routing here because the node: prefix triggers the shim catch-all.
+const polyfilled = new Set(["node:buffer", "node:events", "node:stream"]);
+
+// Node built-ins that should be shimmed to empty (never called on mobile).
+// buffer, events, stream are NOT in this set — they have real polyfills.
+const emptyBuiltins = new Set([
+  "child_process",
+  "crypto",
+  "dns",
+  "http",
+  "https",
+  "net",
+  "tls",
+  "fs",
+  "os",
+  "path",
+  "zlib",
+  "util",
+  "url",
+  "assert",
+  "readline",
+  "worker_threads",
+  "async_hooks",
+  "string_decoder",
+  "tty",
+  "dgram",
+  "cluster",
+  "vm",
+  "v8",
+  "perf_hooks",
+  "querystring",
+  "punycode",
+]);
+
 // pnpm stores packages as symlinks into .pnpm store.
 // Watchman ignores node_modules, so we can't return .pnpm real paths.
 // Instead, verify the file exists via realpath but return the symlink path
 // that lives OUTSIDE node_modules (in watchFolders scope).
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  // Shim Node.js built-ins (node: protocol and bare names)
-  const nodeBuiltins = new Set([
-    "child_process",
-    "dns",
-    "stream",
-    "http",
-    "https",
-    "net",
-    "tls",
-    "fs",
-    "os",
-    "path",
-    "crypto",
-    "zlib",
-    "util",
-    "events",
-    "buffer",
-    "url",
-    "assert",
-    "readline",
-    "worker_threads",
-    "async_hooks",
-    "string_decoder",
-    "tty",
-    "dgram",
-    "cluster",
-    "vm",
-    "v8",
-    "perf_hooks",
-    "querystring",
-    "punycode",
-  ]);
-  if (moduleName.startsWith("node:") || nodeBuiltins.has(moduleName)) {
+  // Let polyfilled node: imports fall through to extraNodeModules
+  if (polyfilled.has(moduleName)) {
+    return context.resolveRequest(context, moduleName, platform);
+  }
+  // Shim all other node: imports and bare Node built-in names to empty
+  if (moduleName.startsWith("node:") || emptyBuiltins.has(moduleName)) {
     return { type: "sourceFile", filePath: emptyModule };
   }
 
   try {
     return context.resolveRequest(context, moduleName, platform);
   } catch (defaultError) {
+    // Fallback: manual resolution for pnpm symlink edge cases
     const parts = moduleName.split("/");
     let pkgName, subPath;
     if (moduleName.startsWith("@") && parts.length >= 2) {
@@ -123,7 +145,6 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       for (const ext of exts) {
         const candidate = targetPath + ext;
         try {
-          // Check if the real file exists behind the symlink
           const real = fs.realpathSync(candidate);
           if (fs.statSync(real).isFile()) {
             return { type: "sourceFile", filePath: candidate };
@@ -160,10 +181,21 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   }
 };
 
-// Shim Node.js built-ins that aren't available in React Native.
-// MCP SDK's stdio transport imports these but mobile only uses HTTP transport.
-const emptyModule = path.resolve(projectRoot, "shims/empty.js");
+// Map node:-prefixed polyfills and bare names for pnpm-isolated deps.
+// Shim files re-export the npm polyfill packages.
+const bufferShim = path.resolve(projectRoot, "shims/buffer-shim.js");
+const eventsShim = path.resolve(projectRoot, "shims/events-shim.js");
+const streamShim = path.resolve(projectRoot, "shims/stream-shim.js");
 config.resolver.extraNodeModules = {
+  // Real polyfills (node: prefix → shim file → npm package)
+  "node:buffer": bufferShim,
+  "node:events": eventsShim,
+  "node:stream": streamShim,
+  // Bare names for pnpm-isolated deps that can't find these packages
+  stream: path.resolve(projectRoot, "node_modules/readable-stream"),
+  buffer: path.resolve(projectRoot, "node_modules/buffer"),
+  events: path.resolve(projectRoot, "node_modules/events"),
+  // Empty stubs for node:-prefixed built-ins
   "node:process": emptyModule,
   "node:child_process": emptyModule,
   "node:fs": emptyModule,
@@ -173,10 +205,7 @@ config.resolver.extraNodeModules = {
   "node:tls": emptyModule,
   "node:http": emptyModule,
   "node:https": emptyModule,
-  "node:stream": emptyModule,
   "node:util": emptyModule,
-  "node:events": emptyModule,
-  "node:buffer": emptyModule,
   "node:url": emptyModule,
   "node:crypto": emptyModule,
   "node:zlib": emptyModule,
@@ -187,6 +216,7 @@ config.resolver.extraNodeModules = {
   "node:string_decoder": emptyModule,
   "node:assert": emptyModule,
   "node:readline": emptyModule,
+  // Bare names that need explicit routing
   child_process: emptyModule,
   dns: emptyModule,
 };

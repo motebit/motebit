@@ -96,7 +96,7 @@ function getApp(): MobileApp {
 
 // === Main App Component ===
 
-export function App(): React.ReactElement {
+export default function App(): React.ReactElement {
   const app = useRef<MobileApp>(getApp());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
@@ -243,47 +243,54 @@ export function App(): React.ReactElement {
   // === Initialization ===
   useEffect(() => {
     void (async () => {
-      const a = app.current;
+      try {
+        const a = app.current;
 
-      // 1. Load settings
-      const loaded = await a.loadSettings();
-      setSettings(loaded);
+        // 1. Load settings
+        const loaded = await a.loadSettings();
+        setSettings(loaded);
 
-      // 2. Bootstrap identity (silent — creature is already present)
-      await a.bootstrap();
+        // 2. Bootstrap identity (silent — creature is already present)
+        await a.bootstrap();
 
-      // 3. Init AI with saved settings
-      await initializeAI(a, loaded);
-      setCurrentModel(a.currentModel);
+        // 3. Init AI with saved settings
+        await initializeAI(a, loaded);
+        setCurrentModel(a.currentModel);
 
-      // 5. Init voice providers
-      await initVoice();
+        // 5. Init voice providers
+        await initVoice();
 
-      // 6. Start runtime
-      a.start();
-      subscribeToState(a);
+        // 6. Start runtime
+        a.start();
+        subscribeToState(a);
 
-      // 7. Start goal scheduler
-      startGoals(a);
+        // 7. Start goal scheduler
+        startGoals(a);
 
-      // 8. Wire MCP tool change callback and load initial state
-      a.onToolsChanged(refreshMcpServers);
-      refreshMcpServers();
+        // 8. Wire MCP tool change callback and load initial state
+        a.onToolsChanged(refreshMcpServers);
+        refreshMcpServers();
 
-      // 9. Auto-start sync if relay URL persisted
-      const syncUrl = await a.getSyncUrl();
-      if (syncUrl != null && syncUrl !== "") {
-        a.onSyncStatus((status, lastSync) => {
-          setSyncStatus(status);
-          setLastSyncTime(lastSync);
-        });
-        void a.startSync(syncUrl);
+        // 9. Auto-start sync if relay URL persisted
+        const syncUrl = await a.getSyncUrl();
+        if (syncUrl != null && syncUrl !== "") {
+          a.onSyncStatus((status, lastSync) => {
+            setSyncStatus(status);
+            setLastSyncTime(lastSync);
+          });
+          void a.startSync(syncUrl);
+        }
+
+        // 10. Restore persisted conversation history into chat UI
+        restoreConversation(a);
+
+        setInitialized(true);
+      } catch (err) {
+        console.error("[motebit] Init failed:", err instanceof Error ? err.message : String(err));
+        console.error("[motebit] Stack:", err instanceof Error ? err.stack : "");
+        // Still mark initialized so the user sees the UI and can report the error
+        setInitialized(true);
       }
-
-      // 10. Restore persisted conversation history into chat UI
-      restoreConversation(a);
-
-      setInitialized(true);
     })();
 
     return () => {
@@ -1810,7 +1817,7 @@ export function App(): React.ReactElement {
   if (!initialized) {
     return (
       <ThemeContext.Provider value={themeColors}>
-        <View style={ds.container}>
+        <View style={[ds.container, { justifyContent: "center", alignItems: "center" }]}>
           <ActivityIndicator size="large" color={themeColors.textMuted} />
           <Text style={ds.loadingText}>Initializing Motebit...</Text>
         </View>
