@@ -19,6 +19,7 @@ overrides:
   picomatch@>=4.0.0 <4.0.4: '>=4.0.4'
   node-forge: '>=1.4.0 <2.0.0'
   path-to-regexp: '>=8.4.0 <9.0.0'
+  '@xmldom/xmldom': '>=0.8.12 <0.9.0'
 
 importers:
 
@@ -5160,13 +5161,8 @@ packages:
   '@xenova/transformers@2.17.2':
     resolution: {integrity: sha512-lZmHqzrVIkSvZdKZEx7IYY51TK0WDrC8eR0c5IMnBsO8di8are1zzw8BlLhyO2TklZKLN5UffNGs1IJwT6oOqQ==}
 
-  '@xmldom/xmldom@0.7.13':
-    resolution: {integrity: sha512-lm2GW5PkosIzccsaZIz7tp8cPADSIlIHWDFTR1N0SzfinhhYgeIQjFMz4rYzanCScr3DqQLeomUDArp6MWKm+g==}
-    engines: {node: '>=10.0.0'}
-    deprecated: this version is no longer supported, please update to at least 0.8.*
-
-  '@xmldom/xmldom@0.8.11':
-    resolution: {integrity: sha512-cQzWCtO6C8TQiYl1ruKNn2U6Ao4o4WBBcbL61yJl84x+j5sOWWFU9X7DpND8XZG3daDppSsigMdfAIl2upQBRw==}
+  '@xmldom/xmldom@0.8.12':
+    resolution: {integrity: sha512-9k/gHF6n/pAi/9tqr3m3aqkuiNosYTurLLUtc7xQ9sxB/wm7WPygCv8GYa6mS0fLJEHhqMC1ATYhz++U/lRHqg==}
     engines: {node: '>=10.0.0'}
 
   abitype@1.2.3:
@@ -12107,7 +12103,7 @@ snapshots:
 
   '@expo/plist@0.2.2':
     dependencies:
-      '@xmldom/xmldom': 0.7.13
+      '@xmldom/xmldom': 0.8.12
       base64-js: 1.5.1
       xmlbuilder: 14.0.0
 
@@ -14315,9 +14311,7 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  '@xmldom/xmldom@0.7.13': {}
-
-  '@xmldom/xmldom@0.8.11': {}
+  '@xmldom/xmldom@0.8.12': {}
 
   abitype@1.2.3(typescript@5.9.3)(zod@3.25.76):
     optionalDependencies:
@@ -18628,7 +18622,7 @@ snapshots:
 
   plist@3.1.0:
     dependencies:
-      '@xmldom/xmldom': 0.8.11
+      '@xmldom/xmldom': 0.8.12
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
 
