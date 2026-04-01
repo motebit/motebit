@@ -337,7 +337,12 @@ export class WebApp {
 
     registry.register(
       webSearchDefinition,
-      createWebSearchHandler(new ProxySearchProvider(`${PROXY_BASE_URL}/v1/search`)),
+      createWebSearchHandler(
+        new ProxySearchProvider(
+          ((import.meta as unknown as Record<string, Record<string, string> | undefined>).env
+            ?.VITE_SEARCH_URL ?? "https://motebit-web-search.fly.dev") + "/search",
+        ),
+      ),
     );
     registry.register(
       readUrlDefinition,

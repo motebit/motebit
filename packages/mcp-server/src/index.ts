@@ -127,6 +127,13 @@ interface McpServerConfig {
   motebitType?: "personal" | "service" | "collaborative";
   /** Timeout in milliseconds for motebit_task generator iteration (default: 300000 = 5 minutes). */
   taskTimeoutMs?: number;
+  /** Custom REST routes handled before MCP auth (same level as /health).
+   *  Return true if handled, false to continue to MCP. */
+  customRoutes?: (
+    req: import("http").IncomingMessage,
+    res: import("http").ServerResponse,
+    url: URL,
+  ) => Promise<boolean> | boolean;
 }
 
 // === Risk → MCP annotation mapping ===
@@ -1054,10 +1061,16 @@ export class McpServerAdapter {
         return;
       }
 
+      // Custom REST routes (before auth — public endpoints like /search)
+      if (this.config.customRoutes) {
+        const handled = await this.config.customRoutes(req, res, url);
+        if (handled) return;
+      }
+
       // Reset caller identity for each request to prevent stale state
       this.lastVerifiedCaller = null;
 
-      // Bearer token auth (skip /health, already handled above)
+      // Bearer token auth (skip /health and custom routes, already handled above)
       const authHeader = req.headers["authorization"];
       const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
 

@@ -364,6 +364,14 @@ export interface ServiceServerConfig {
   onStart?: (port: number, toolCount: number) => void;
   /** Called on shutdown. */
   onStop?: () => void;
+
+  /** Custom REST routes handled before MCP auth (same level as /health).
+   *  Return true if the route was handled, false to continue to MCP. */
+  customRoutes?: (
+    req: import("http").IncomingMessage,
+    res: import("http").ServerResponse,
+    url: URL,
+  ) => Promise<boolean> | boolean;
   /** Optional logger — scaffold is silent when omitted. */
   log?: (msg: string) => void;
 }
@@ -388,6 +396,7 @@ export async function startServiceServer(
       port: config.port,
       authToken: config.authToken,
       motebitType: config.motebitType ?? "service",
+      customRoutes: config.customRoutes,
     },
     deps,
   );

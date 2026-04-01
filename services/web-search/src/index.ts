@@ -409,6 +409,17 @@ async function main(): Promise<void> {
       description: `motebit-web-search-${motebitId.slice(0, 8)}`,
     });
 
+  // REST search provider — same instance the MCP tool uses
+  const restSearchProvider = searchProvider ?? new DuckDuckGoSearchProvider();
+
+  const SEARCH_CORS_ORIGINS = new Set([
+    "https://motebit.com",
+    "https://www.motebit.com",
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:5173",
+  ]);
+
   await startServiceServer(deps, {
     name: `motebit-web-search-${motebitId.slice(0, 8)}`,
     port: config.port,
@@ -417,8 +428,57 @@ async function main(): Promise<void> {
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,
     publicEndpointUrl: config.publicUrl,
+    customRoutes: async (
+      req: import("http").IncomingMessage,
+      res: import("http").ServerResponse,
+      url: URL,
+    ) => {
+      const origin = req.headers.origin ?? "";
+      const cors: Record<string, string> = SEARCH_CORS_ORIGINS.has(origin)
+        ? {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+          }
+        : {};
+
+      // CORS preflight
+      if (url.pathname === "/search" && req.method === "OPTIONS") {
+        res.writeHead(204, cors);
+        res.end();
+        return true;
+      }
+
+      // POST /search — structured web search results
+      if (url.pathname === "/search" && req.method === "POST") {
+        let body = "";
+        for await (const chunk of req) body += chunk;
+        try {
+          const { query, maxResults } = JSON.parse(body) as {
+            query?: string;
+            maxResults?: number;
+          };
+          if (!query) {
+            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: "missing query" }));
+            return true;
+          }
+          const results = await restSearchProvider.search(query, Math.min(maxResults ?? 5, 10));
+          res.writeHead(200, { ...cors, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, results }));
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          res.writeHead(200, { ...cors, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: msg }));
+        }
+        return true;
+      }
+
+      return false;
+    },
     onStart: (port, toolCount) => {
       log(`MCP server running on http://localhost:${port} (SSE). ${toolCount} tools exposed.`);
+      log(`REST search: http://localhost:${port}/search`);
       log(`Health endpoint: http://localhost:${port}/health`);
     },
     onStop: () => {
