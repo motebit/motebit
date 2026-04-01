@@ -54,7 +54,7 @@ import {
   createListEventsHandler,
   selfReflectDefinition,
   createSelfReflectHandler,
-  DuckDuckGoSearchProvider,
+  ProxySearchProvider,
 } from "@motebit/tools/web-safe";
 import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
 import { CursorPresence } from "./cursor-presence";
@@ -337,9 +337,7 @@ export class WebApp {
 
     registry.register(
       webSearchDefinition,
-      createWebSearchHandler(
-        new DuckDuckGoSearchProvider({ proxyUrl: `${PROXY_BASE_URL}/v1/fetch` }),
-      ),
+      createWebSearchHandler(new ProxySearchProvider(`${PROXY_BASE_URL}/v1/search`)),
     );
     registry.register(
       readUrlDefinition,

@@ -14,7 +14,7 @@
       "cache": false
     },
     "typecheck": {
-      "dependsOn": [],
+      "dependsOn": ["build"],
       "outputs": []
     },
     "lint": {

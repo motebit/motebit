@@ -18,6 +18,7 @@ export type { SearchProvider, SearchResult } from "./search-provider.js";
 export { FallbackSearchProvider } from "./search-provider.js";
 export { BraveSearchProvider } from "./providers/brave-search.js";
 export { DuckDuckGoSearchProvider } from "./providers/duckduckgo.js";
+export { ProxySearchProvider } from "./providers/proxy-search.js";
 export {
   createSubGoalDefinition,
   completeGoalDefinition,

@@ -13,34 +13,14 @@ import type { SearchProvider, SearchResult } from "../search-provider.js";
 import { SearchProviderError } from "../search-provider.js";
 
 export class DuckDuckGoSearchProvider implements SearchProvider {
-  private proxyUrl?: string;
-
-  /** @param proxyUrl — CORS proxy base URL (e.g. "https://api.motebit.com/v1/fetch").
-   *  When set, search requests are routed through the proxy to avoid browser CORS blocks. */
-  constructor(opts?: { proxyUrl?: string }) {
-    this.proxyUrl = opts?.proxyUrl;
-  }
-
   async search(query: string, maxResults: number = 5): Promise<SearchResult[]> {
     // Use DuckDuckGo's HTML lite interface — returns real web results
-    const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-
-    let res: Response;
-    if (this.proxyUrl) {
-      // Browser: route through CORS proxy — returns { ok, data } with raw HTML
-      res = await fetch(this.proxyUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: ddgUrl, raw: true }),
-      });
-    } else {
-      // Node.js: fetch directly (no CORS)
-      res = await fetch(ddgUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; motebit/1.0; +https://motebit.com)",
-        },
-      });
-    }
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; motebit/1.0; +https://motebit.com)",
+      },
+    });
 
     if (!res.ok) {
       throw new SearchProviderError(
@@ -50,17 +30,7 @@ export class DuckDuckGoSearchProvider implements SearchProvider {
       );
     }
 
-    let html: string;
-    if (this.proxyUrl) {
-      // Proxy returns JSON { ok, data } where data is raw HTML
-      const json = (await res.json()) as { ok: boolean; data?: string; error?: string };
-      if (!json.ok || !json.data) {
-        throw new SearchProviderError(`Proxy error: ${json.error ?? "no data"}`, 500, "duckduckgo");
-      }
-      html = json.data;
-    } else {
-      html = await res.text();
-    }
+    const html = await res.text();
     const results: SearchResult[] = [];
 
     // Parse result blocks: each result is in a <div class="result">
