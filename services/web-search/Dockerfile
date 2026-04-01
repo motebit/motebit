@@ -47,4 +47,6 @@ EXPOSE 3200
 
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:3200/health || exit 1
 
-CMD ["node", "dist/index.js"]
+# Seed identity file to volume on first boot (CI builds have a placeholder;
+# local builds have the real file). Once on the volume it persists across deploys.
+CMD ["sh", "-c", "test -s /data/motebit.md || cp /app/motebit.md /data/motebit.md; node dist/index.js"]
