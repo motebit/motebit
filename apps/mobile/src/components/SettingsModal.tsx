@@ -370,8 +370,6 @@ export function SettingsModal({
               onChangeTtsVoice={(v) => updateDraft({ ttsVoice: v })}
               onChangeOpenaiKey={setOpenaiKey}
               onChangeNeuralVadEnabled={(v) => updateDraft({ neuralVadEnabled: v })}
-              maxTokens={draft.maxTokens}
-              onChangeMaxTokens={(v) => updateDraft({ maxTokens: v })}
             />
           )}
           {tab === "governance" && (
@@ -700,7 +698,6 @@ function IntelligenceTab({
   ttsVoice,
   openaiKey,
   neuralVadEnabled,
-  maxTokens,
   onChangeProvider,
   onChangeModel,
   onChangeApiKey,
@@ -711,7 +708,6 @@ function IntelligenceTab({
   onChangeTtsVoice,
   onChangeOpenaiKey,
   onChangeNeuralVadEnabled,
-  onChangeMaxTokens,
 }: {
   provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy";
   model: string;
@@ -723,7 +719,6 @@ function IntelligenceTab({
   ttsVoice: string;
   openaiKey: string;
   neuralVadEnabled: boolean;
-  maxTokens: number;
   onChangeProvider: (p: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy") => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
@@ -734,7 +729,6 @@ function IntelligenceTab({
   onChangeTtsVoice: (v: string) => void;
   onChangeOpenaiKey: (k: string) => void;
   onChangeNeuralVadEnabled: (v: boolean) => void;
-  onChangeMaxTokens: (v: number) => void;
 }) {
   const colors = useTheme();
   const styles = useMemo(() => createSettingsStyles(colors), [colors]);
@@ -846,28 +840,7 @@ function IntelligenceTab({
         </>
       )}
 
-      <Text style={styles.sectionTitle}>Response Length</Text>
-      <View style={styles.radioGroup}>
-        {(
-          [
-            { label: "Short (1k)", value: 1024 },
-            { label: "Normal (4k)", value: 4096 },
-            { label: "Long (8k)", value: 8192 },
-            { label: "Max (16k)", value: 16384 },
-          ] as const
-        ).map((opt) => (
-          <TouchableOpacity
-            key={opt.value}
-            style={[styles.radioItem, maxTokens === opt.value && styles.radioActive]}
-            onPress={() => onChangeMaxTokens(opt.value)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.radioText, maxTokens === opt.value && styles.radioTextActive]}>
-              {opt.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {/* Response length removed: the creature reads the room. */}
 
       <Text style={styles.sectionTitle}>Voice</Text>
       <View style={styles.switchRow}>

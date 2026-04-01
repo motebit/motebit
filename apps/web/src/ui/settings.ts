@@ -50,7 +50,7 @@ const webllmStatus = document.getElementById("webllm-status") as HTMLDivElement;
 const webllmProgress = document.getElementById("webllm-progress") as HTMLDivElement;
 const webllmProgressFill = document.getElementById("webllm-progress-fill") as HTMLDivElement;
 const webllmProgressText = document.getElementById("webllm-progress-text") as HTMLDivElement;
-const maxTokensSelect = document.getElementById("max-tokens-select") as HTMLSelectElement;
+const maxTokensSelect = document.getElementById("max-tokens-select") as HTMLSelectElement | null;
 
 // Governance elements
 const approvalPresets = document.querySelectorAll<HTMLInputElement>(
@@ -421,7 +421,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const config = ctx.getConfig();
     if (config) {
       switchProviderTab(config.type);
-      maxTokensSelect.value = String(config.maxTokens ?? 4096);
+      if (maxTokensSelect) maxTokensSelect.value = String(config.maxTokens ?? 4096);
       switch (config.type) {
         case "proxy": {
           const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
@@ -482,7 +482,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // Save button
   document.getElementById("settings-save")?.addEventListener("click", () => {
     // Build provider config from current tab
-    const maxTokens = parseInt(maxTokensSelect.value, 10) || undefined;
+    const maxTokens = maxTokensSelect
+      ? parseInt(maxTokensSelect.value, 10) || undefined
+      : undefined;
     let config: ProviderConfig;
     switch (activeProviderTab) {
       case "proxy":

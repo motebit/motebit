@@ -25,7 +25,9 @@ const settingsModelSelect = document.getElementById("settings-model-select") as 
 const settingsModelCustom = document.getElementById("settings-model-custom") as HTMLInputElement;
 const settingsApiKey = document.getElementById("settings-apikey") as HTMLInputElement;
 const settingsApiKeyToggle = document.getElementById("settings-apikey-toggle") as HTMLButtonElement;
-const settingsMaxTokens = document.getElementById("settings-max-tokens") as HTMLSelectElement;
+const settingsMaxTokens = document.getElementById(
+  "settings-max-tokens",
+) as HTMLSelectElement | null;
 const settingsOperatorMode = document.getElementById("settings-operator-mode") as HTMLInputElement;
 const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement;
 const persistenceThreshold = document.getElementById(
@@ -1398,7 +1400,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const config = ctx.getConfig();
     if (config) {
       settingsProvider.value = config.provider;
-      settingsMaxTokens.value = String(config.maxTokens ?? 4096);
+      if (settingsMaxTokens) settingsMaxTokens.value = String(config.maxTokens ?? 4096);
       const currentModel =
         (ctx.app.currentModel != null && ctx.app.currentModel !== ""
           ? ctx.app.currentModel
@@ -1554,7 +1556,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     isTauri = false,
   ): Promise<void> {
     const currentConfig = ctx.getConfig();
-    const maxTokens = parseInt(settingsMaxTokens.value, 10) || undefined;
+    const maxTokens = settingsMaxTokens
+      ? parseInt(settingsMaxTokens.value, 10) || undefined
+      : undefined;
     const newConfig: DesktopAIConfig = {
       provider,
       model,
