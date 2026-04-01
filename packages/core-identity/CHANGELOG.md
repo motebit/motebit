@@ -1,5 +1,14 @@
 # @motebit/core-identity
 
+## 0.1.16
+
+### Patch Changes
+
+- Updated dependencies [9b6a317]
+  - @motebit/protocol@0.7.0
+  - @motebit/crypto@0.1.16
+  - @motebit/event-log@0.1.16
+
 ## 0.1.15
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@motebit/sdk",
-  "version": "0.6.11",
+  "version": "0.7.0",
   "description": "Motebit types — protocol (re-exported) + product (state vectors, behavior, rendering, memory graph, AI provider). Zero-dep type vocabulary for the motebit ecosystem.",
   "type": "module",
   "main": "./dist/index.js",

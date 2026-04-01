@@ -1,5 +1,18 @@
 # @motebit/reflection
 
+## 0.1.16
+
+### Patch Changes
+
+- Updated dependencies [9b6a317]
+- Updated dependencies
+  - @motebit/sdk@0.7.0
+  - @motebit/event-log@0.1.16
+  - @motebit/policy@0.1.16
+  - @motebit/ai-core@0.1.16
+  - @motebit/memory-graph@0.1.16
+  - @motebit/state-vector@0.1.16
+
 ## 0.1.15
 
 ### Patch Changes

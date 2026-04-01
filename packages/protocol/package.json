@@ -1,6 +1,6 @@
 {
   "name": "@motebit/protocol",
-  "version": "0.6.11",
+  "version": "0.7.0",
   "description": "Motebit network protocol types — identity, receipts, credentials, settlement, trust algebra. MIT, zero dependencies.",
   "type": "module",
   "main": "./dist/index.js",

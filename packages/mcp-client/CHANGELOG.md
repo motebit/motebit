@@ -1,5 +1,15 @@
 # @motebit/mcp-client
 
+## 0.1.16
+
+### Patch Changes
+
+- Updated dependencies [9b6a317]
+- Updated dependencies
+  - @motebit/sdk@0.7.0
+  - @motebit/crypto@0.1.16
+  - @motebit/tools@0.1.16
+
 ## 0.1.15
 
 ### Patch Changes

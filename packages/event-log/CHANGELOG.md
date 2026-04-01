@@ -1,5 +1,12 @@
 # @motebit/event-log
 
+## 0.1.16
+
+### Patch Changes
+
+- Updated dependencies [9b6a317]
+  - @motebit/protocol@0.7.0
+
 ## 0.1.15
 
 ### Patch Changes

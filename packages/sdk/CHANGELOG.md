@@ -1,5 +1,36 @@
 # @motebit/sdk Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- 9b6a317: Move trust algebra from MIT sdk to BSL semiring — enforce IP boundary.
+
+  **Breaking:** The following exports have been removed from `@motebit/sdk`:
+  - `trustLevelToScore`, `trustAdd`, `trustMultiply`, `composeTrustChain`, `joinParallelRoutes`
+  - `evaluateTrustTransition`, `composeDelegationTrust`
+  - `TRUST_LEVEL_SCORES`, `DEFAULT_TRUST_THRESHOLDS`, `TRUST_ZERO`, `TRUST_ONE`
+
+  These are trust algebra algorithms that belong in the BSL-licensed runtime, not the MIT-licensed type vocabulary. Type definitions (`TrustTransitionThresholds`, `DelegationReceiptLike`, `AgentTrustLevel`, `AgentTrustRecord`) remain in the SDK unchanged.
+
+  Also adds CI enforcement (checks 9-10 in check-deps) preventing algorithm code from leaking into MIT packages in the future.
+
+### Patch Changes
+
+- Typed relay errors, storage parity, deletion policy, dead code cleanup.
+  - Wire `SettlementError` and `FederationError` into relay paths (previously generic `Error`)
+  - Pluggable logger in sync-engine encrypted adapter (replaces `console.warn`)
+  - Scope knip to external deps (`@motebit/*` excluded from dead-code analysis)
+  - Remove dead `@noble/ciphers` (Web Crypto API replaced it)
+  - Remove dead code: `termWidth`, web error banner cluster (JS + CSS + HTML)
+  - Encode deletion policy as architectural invariant in CLAUDE.md
+  - Full storage parity: all surfaces wire complete `StorageAdapters` interface
+  - Mark `verifyIdentityFile()` as deprecated in verify README
+  - Override `@xmldom/xmldom` to >=0.8.12 (GHSA-wh4c-j3r5-mjhp)
+
+- Updated dependencies [9b6a317]
+  - @motebit/protocol@0.7.0
+
 ## 0.6.11
 
 ### Patch Changes
