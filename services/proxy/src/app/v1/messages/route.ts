@@ -322,7 +322,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // Resolve legacy/class aliases → current canonical model ID.
-  // "claude-sonnet" → "claude-sonnet-4-20250514", old dated versions → current, etc.
+  // "claude-sonnet" → "claude-sonnet-4-6", old dated versions → current, etc.
   // Keeps deployed clients working when models are upgraded server-side.
   if (resolvedModel !== "auto") {
     resolvedModel = resolveModelAlias(resolvedModel);

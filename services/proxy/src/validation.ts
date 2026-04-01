@@ -13,7 +13,7 @@ export const MAX_RESPONSE_SIZE = 100_000; // 100KB
 export const FETCH_TIMEOUT_MS = 15_000;
 
 /** Anonymous model allowlist — only used if anonymous proxy access is ever re-enabled */
-export const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-20250514"];
+export const FREE_MODEL_ALLOWLIST = ["claude-sonnet-4-6"];
 
 /** Request limits for deposit users (generous — they pay per-token) */
 export const DEPOSIT_LIMITS = {
@@ -51,18 +51,20 @@ export interface ProxyTokenPayload {
 
 export type Provider = "anthropic" | "openai" | "google";
 
-/** Model → provider mapping + pricing (USD per million tokens) */
+/** Model → provider mapping + pricing (USD per million tokens).
+ *  3 tiers per provider: strongest, default, fast. */
 const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: number }> = {
-  // Anthropic
-  "claude-sonnet-4-20250514": { provider: "anthropic", input: 3.0, output: 15.0 },
-  "claude-opus-4-20250115": { provider: "anthropic", input: 15.0, output: 75.0 },
+  // Anthropic — opus (strongest), sonnet (default), haiku (fast)
+  "claude-opus-4-6": { provider: "anthropic", input: 5.0, output: 25.0 },
+  "claude-sonnet-4-6": { provider: "anthropic", input: 3.0, output: 15.0 },
   "claude-haiku-4-5-20251001": { provider: "anthropic", input: 1.0, output: 5.0 },
-  // OpenAI
+  // OpenAI — gpt-4o (strongest), gpt-4o-mini (default), gpt-4o-mini (fast)
   "gpt-4o": { provider: "openai", input: 2.5, output: 10.0 },
   "gpt-4o-mini": { provider: "openai", input: 0.15, output: 0.6 },
-  // Google
+  // Google — pro (strongest), flash (default), flash-lite (fast)
   "gemini-2.5-pro": { provider: "google", input: 1.25, output: 10.0 },
   "gemini-2.5-flash": { provider: "google", input: 0.15, output: 0.6 },
+  "gemini-2.5-flash-lite": { provider: "google", input: 0.075, output: 0.3 },
 };
 
 /**
@@ -73,15 +75,17 @@ const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: 
  * side — every deployed client gets the upgrade without a redeploy.
  */
 const MODEL_ALIASES: Record<string, string> = {
-  // Class aliases — "give me the best Sonnet" without caring about the date suffix
-  "claude-sonnet": "claude-sonnet-4-20250514",
-  "claude-opus": "claude-opus-4-20250115",
+  // Class aliases — "give me the best Sonnet" without caring about the version
+  "claude-sonnet": "claude-sonnet-4-6",
+  "claude-opus": "claude-opus-4-6",
   "claude-haiku": "claude-haiku-4-5-20251001",
 
   // Legacy dated versions → current
-  "claude-3-5-sonnet-20241022": "claude-sonnet-4-20250514",
+  "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+  "claude-opus-4-20250115": "claude-opus-4-6",
+  "claude-3-5-sonnet-20241022": "claude-sonnet-4-6",
   "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
-  "claude-3-opus-20240229": "claude-opus-4-20250115",
+  "claude-3-opus-20240229": "claude-opus-4-6",
 
   // OpenAI aliases
   "gpt-4o-2024-11-20": "gpt-4o",
@@ -90,6 +94,7 @@ const MODEL_ALIASES: Record<string, string> = {
   // Google aliases
   "gemini-pro": "gemini-2.5-pro",
   "gemini-flash": "gemini-2.5-flash",
+  "gemini-flash-lite": "gemini-2.5-flash-lite",
   "gemini-1.5-pro": "gemini-2.5-pro",
   "gemini-1.5-flash": "gemini-2.5-flash",
 };
@@ -105,16 +110,16 @@ export const CLASSIFIER_MODEL = "claude-haiku-4-5-20251001";
 /** Model recommendations by task type. */
 const TASK_MODEL_MAP: Record<string, string> = {
   quick: "claude-haiku-4-5-20251001",
-  chat: "claude-sonnet-4-20250514",
-  reasoning: "claude-opus-4-20250115",
+  chat: "claude-sonnet-4-6",
+  reasoning: "claude-opus-4-6",
   code: "gpt-4o",
   research: "gemini-2.5-pro",
-  creative: "claude-sonnet-4-20250514",
-  math: "claude-opus-4-20250115",
+  creative: "claude-sonnet-4-6",
+  math: "claude-opus-4-6",
 };
 
 /** Default model when classifier fails or returns unknown type. */
-export const AUTO_DEFAULT_MODEL = "claude-sonnet-4-20250514";
+export const AUTO_DEFAULT_MODEL = "claude-sonnet-4-6";
 
 /** Estimated output tokens for a typical response — used for pre-flight cost checks. */
 const ESTIMATED_OUTPUT_TOKENS = 1000;

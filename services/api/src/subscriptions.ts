@@ -28,13 +28,14 @@ const logger = createLogger({ service: "relay", module: "proxy-tokens" });
 
 /** All subscribers can access these models. The proxy enforces per-request cost. */
 const DEPOSIT_MODELS = [
-  "claude-sonnet-4-20250514",
-  "claude-opus-4-20250115",
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
   "gpt-4o",
   "gpt-4o-mini",
   "gemini-2.5-pro",
   "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
 ];
 
 const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour

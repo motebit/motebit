@@ -3,19 +3,26 @@
 // Single source of truth for model identifiers across all surfaces.
 // SDK is Layer 0 (MIT, no deps beyond protocol) — only string constants here.
 // Pricing, routing, and alias resolution live in their respective packages.
+//
+// 3 tiers per provider: strongest, default, fast.
+// When a new model ships, update the arrays — every surface picks it up.
 
-/** Anthropic Claude models available for direct API or proxy routing. */
+/** Anthropic Claude models: opus (strongest), sonnet (default), haiku (fast). */
 export const ANTHROPIC_MODELS = [
-  "claude-sonnet-4-20250514",
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
-  "claude-opus-4-20250115",
 ] as const;
 
-/** OpenAI models available for direct API. */
-export const OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"] as const;
+/** OpenAI models: gpt-4o (strongest), gpt-4o-mini (default/fast). */
+export const OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini"] as const;
 
-/** Google models available for direct API or proxy routing. */
-export const GOOGLE_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"] as const;
+/** Google models: pro (strongest), flash (default), flash-lite (fast). */
+export const GOOGLE_MODELS = [
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+] as const;
 
 /** Common Ollama models (user can pull any model; these are suggestions). */
 export const OLLAMA_SUGGESTED_MODELS = [
@@ -31,19 +38,20 @@ export const OLLAMA_SUGGESTED_MODELS = [
 
 /** Models available through the Motebit proxy (all cloud providers). */
 export const PROXY_MODELS = [
-  "claude-sonnet-4-20250514",
-  "claude-opus-4-20250115",
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
   "gpt-4o",
   "gpt-4o-mini",
   "gemini-2.5-pro",
   "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
 ] as const;
 
 // === Default Models ===
 
 /** Default Anthropic model. */
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
 
 /** Default OpenAI model. */
 export const DEFAULT_OPENAI_MODEL = "gpt-4o";
@@ -55,7 +63,7 @@ export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-pro";
 export const DEFAULT_OLLAMA_MODEL = "llama3.2";
 
 /** Default proxy model (used when no model is specified). */
-export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-20250514";
+export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";
 
 // === Type Helpers ===
 

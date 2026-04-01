@@ -139,7 +139,7 @@ export function resolveModelTier(tier: ModelTier, currentModel: string): string 
       case "default":
         return "gemini-2.5-flash";
       case "fast":
-        return "gemini-2.5-flash";
+        return "gemini-2.5-flash-lite";
     }
   }
 

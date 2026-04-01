@@ -11,12 +11,12 @@ import {
 } from "../validation.js";
 
 describe("provider routing", () => {
-  it("claude-sonnet-4-20250514 → anthropic", () => {
-    expect(getModelProvider("claude-sonnet-4-20250514")).toBe("anthropic");
+  it("claude-sonnet-4-6 → anthropic", () => {
+    expect(getModelProvider("claude-sonnet-4-6")).toBe("anthropic");
   });
 
-  it("claude-opus-4-20250115 → anthropic", () => {
-    expect(getModelProvider("claude-opus-4-20250115")).toBe("anthropic");
+  it("claude-opus-4-6 → anthropic", () => {
+    expect(getModelProvider("claude-opus-4-6")).toBe("anthropic");
   });
 
   it("claude-haiku-4-5-20251001 → anthropic", () => {
@@ -47,12 +47,12 @@ describe("provider routing", () => {
 describe("task-to-model mapping", () => {
   const expectedMappings: Record<string, string> = {
     quick: "claude-haiku-4-5-20251001",
-    chat: "claude-sonnet-4-20250514",
-    reasoning: "claude-opus-4-20250115",
+    chat: "claude-sonnet-4-6",
+    reasoning: "claude-opus-4-6",
     code: "gpt-4o",
     research: "gemini-2.5-pro",
-    creative: "claude-sonnet-4-20250514",
-    math: "claude-opus-4-20250115",
+    creative: "claude-sonnet-4-6",
+    math: "claude-opus-4-6",
   };
 
   for (const [taskType, expectedModel] of Object.entries(expectedMappings)) {
@@ -70,16 +70,16 @@ describe("cost calculation", () => {
   // Helper: rawCost * 1.2 * 1_000_000, ceil'd
   // All cases use 1000 input + 100 output tokens
 
-  it("claude-sonnet-4-20250514: 1000 in + 100 out = 5400 micro", () => {
+  it("claude-sonnet-4-6: 1000 in + 100 out = 5400 micro", () => {
     // raw = (1000/1M)*3.0 + (100/1M)*15.0 = 0.003 + 0.0015 = 0.0045
     // with margin = 0.0054, micro = ceil(5400) = 5400
-    expect(calculateCostMicro("claude-sonnet-4-20250514", 1000, 100)).toBe(5400);
+    expect(calculateCostMicro("claude-sonnet-4-6", 1000, 100)).toBe(5400);
   });
 
-  it("claude-opus-4-20250115: 1000 in + 100 out = 27000 micro", () => {
-    // raw = (1000/1M)*15.0 + (100/1M)*75.0 = 0.015 + 0.0075 = 0.0225
-    // with margin = 0.027, micro = ceil(27000) = 27000
-    expect(calculateCostMicro("claude-opus-4-20250115", 1000, 100)).toBe(27000);
+  it("claude-opus-4-6: 1000 in + 100 out = 9000 micro", () => {
+    // raw = (1000/1M)*5.0 + (100/1M)*25.0 = 0.005 + 0.0025 = 0.0075
+    // with margin = 0.009, micro = ceil(9000) = 9000
+    expect(calculateCostMicro("claude-opus-4-6", 1000, 100)).toBe(9000);
   });
 
   it("claude-haiku-4-5-20251001: 1000 in + 100 out = 1800 micro", () => {
@@ -117,13 +117,13 @@ describe("cost calculation", () => {
   });
 
   it("zero tokens returns 0", () => {
-    expect(calculateCostMicro("claude-sonnet-4-20250514", 0, 0)).toBe(0);
+    expect(calculateCostMicro("claude-sonnet-4-6", 0, 0)).toBe(0);
   });
 
   it("large token count (1M input) returns correct value", () => {
     // raw = (1_000_000/1M)*3.0 + (0/1M)*15.0 = 3.0
     // with margin = 3.6, micro = ceil(3_600_000) = 3_600_000
-    expect(calculateCostMicro("claude-sonnet-4-20250514", 1_000_000, 0)).toBe(3_600_000);
+    expect(calculateCostMicro("claude-sonnet-4-6", 1_000_000, 0)).toBe(3_600_000);
   });
 });
 

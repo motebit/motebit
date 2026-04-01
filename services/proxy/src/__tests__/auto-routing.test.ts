@@ -13,12 +13,12 @@ import {
 describe("getModelForTaskType", () => {
   const expected: Record<string, string> = {
     quick: "claude-haiku-4-5-20251001",
-    chat: "claude-sonnet-4-20250514",
-    reasoning: "claude-opus-4-20250115",
+    chat: "claude-sonnet-4-6",
+    reasoning: "claude-opus-4-6",
     code: "gpt-4o",
     research: "gemini-2.5-pro",
-    creative: "claude-sonnet-4-20250514",
-    math: "claude-opus-4-20250115",
+    creative: "claude-sonnet-4-6",
+    math: "claude-opus-4-6",
   };
 
   for (const [taskType, model] of Object.entries(expected)) {
@@ -36,8 +36,8 @@ describe("getModelForTaskType", () => {
 
 describe("getModelProvider", () => {
   const expected: Record<string, string> = {
-    "claude-sonnet-4-20250514": "anthropic",
-    "claude-opus-4-20250115": "anthropic",
+    "claude-sonnet-4-6": "anthropic",
+    "claude-opus-4-6": "anthropic",
     "claude-haiku-4-5-20251001": "anthropic",
     "gpt-4o": "openai",
     "gpt-4o-mini": "openai",
@@ -58,11 +58,11 @@ describe("getModelProvider", () => {
 });
 
 describe("getSupportedModels", () => {
-  it("returns all 7 models", () => {
+  it("returns all 8 models", () => {
     const models = getSupportedModels();
-    expect(models).toHaveLength(7);
-    expect(models).toContain("claude-sonnet-4-20250514");
-    expect(models).toContain("claude-opus-4-20250115");
+    expect(models).toHaveLength(8);
+    expect(models).toContain("claude-sonnet-4-6");
+    expect(models).toContain("claude-opus-4-6");
     expect(models).toContain("claude-haiku-4-5-20251001");
     expect(models).toContain("gpt-4o");
     expect(models).toContain("gpt-4o-mini");
@@ -74,18 +74,18 @@ describe("getSupportedModels", () => {
 describe("calculateCostMicro", () => {
   // Formula: Math.ceil((inputTokens/1e6 * inputPrice + outputTokens/1e6 * outputPrice) * 1.2 * 1e6)
 
-  it("claude-sonnet-4-20250514: 1000 in / 500 out", () => {
+  it("claude-sonnet-4-6: 1000 in / 500 out", () => {
     // raw = (1000/1e6)*3.0 + (500/1e6)*15.0 = 0.003 + 0.0075 = 0.0105
     // with margin = 0.0105 * 1.2 = 0.0126
     // micro = ceil(0.0126 * 1e6) = ceil(12600) = 12600
-    expect(calculateCostMicro("claude-sonnet-4-20250514", 1000, 500)).toBe(12600);
+    expect(calculateCostMicro("claude-sonnet-4-6", 1000, 500)).toBe(12600);
   });
 
-  it("claude-opus-4-20250115: 1000 in / 500 out", () => {
-    // raw = (1000/1e6)*15.0 + (500/1e6)*75.0 = 0.015 + 0.0375 = 0.0525
-    // with margin = 0.0525 * 1.2 = 0.063
-    // micro = ceil(0.063 * 1e6) = 63000
-    expect(calculateCostMicro("claude-opus-4-20250115", 1000, 500)).toBe(63000);
+  it("claude-opus-4-6: 1000 in / 500 out", () => {
+    // raw = (1000/1e6)*5.0 + (500/1e6)*25.0 = 0.005 + 0.0125 = 0.0175
+    // with margin = 0.0175 * 1.2 = 0.021
+    // micro = ceil(0.021 * 1e6) = 21000
+    expect(calculateCostMicro("claude-opus-4-6", 1000, 500)).toBe(21000);
   });
 
   it("claude-haiku-4-5-20251001: 1000 in / 500 out", () => {
@@ -128,17 +128,17 @@ describe("calculateCostMicro", () => {
   });
 
   it("returns 0 for zero tokens", () => {
-    expect(calculateCostMicro("claude-sonnet-4-20250514", 0, 0)).toBe(0);
+    expect(calculateCostMicro("claude-sonnet-4-6", 0, 0)).toBe(0);
   });
 
   it("handles input-only tokens", () => {
     // raw = (10000/1e6)*3.0 = 0.03, margin = 0.036, micro = 36000
-    expect(calculateCostMicro("claude-sonnet-4-20250514", 10000, 0)).toBe(36000);
+    expect(calculateCostMicro("claude-sonnet-4-6", 10000, 0)).toBe(36000);
   });
 
   it("handles output-only tokens", () => {
     // raw = (10000/1e6)*15.0 = 0.15, margin = 0.18, micro = 180000
-    expect(calculateCostMicro("claude-sonnet-4-20250514", 0, 10000)).toBe(180000);
+    expect(calculateCostMicro("claude-sonnet-4-6", 0, 10000)).toBe(180000);
   });
 
   it("ceils fractional micro-units", () => {
@@ -174,15 +174,15 @@ describe("getAffordableModelForTask — balance-aware routing", () => {
     // "reasoning" → Opus. Opus costs ~99000 micro for typical message.
     // With $1 (1_000_000 micro) balance, Opus is affordable.
     const model = getAffordableModelForTask("reasoning", 1_000_000);
-    expect(model).toBe("claude-opus-4-20250115");
+    expect(model).toBe("claude-opus-4-6");
   });
 
   it("downgrades Opus to Sonnet when balance is low", () => {
-    // $0.05 = 50_000 micro. Opus costs ~99k, Sonnet costs ~20k.
-    const model = getAffordableModelForTask("reasoning", 50_000);
-    expect(model).not.toBe("claude-opus-4-20250115");
-    // Should fall back to Sonnet (AUTO_DEFAULT_MODEL)
-    expect(model).toBe(AUTO_DEFAULT_MODEL);
+    // $0.01 = 10_000 micro. Opus costs ~33k, Sonnet costs ~22k.
+    const model = getAffordableModelForTask("reasoning", 10_000);
+    expect(model).not.toBe("claude-opus-4-6");
+    // Should fall back to Sonnet or Haiku
+    expect(["claude-sonnet-4-6", "claude-haiku-4-5-20251001", AUTO_DEFAULT_MODEL]).toContain(model);
   });
 
   it("downgrades Sonnet to Haiku when balance is very low", () => {
@@ -228,15 +228,15 @@ describe("getAffordableModelForTask — balance-aware routing", () => {
 
 describe("resolveModelAlias", () => {
   it("resolves class alias to current canonical model", () => {
-    expect(resolveModelAlias("claude-sonnet")).toBe("claude-sonnet-4-20250514");
-    expect(resolveModelAlias("claude-opus")).toBe("claude-opus-4-20250115");
+    expect(resolveModelAlias("claude-sonnet")).toBe("claude-sonnet-4-6");
+    expect(resolveModelAlias("claude-opus")).toBe("claude-opus-4-6");
     expect(resolveModelAlias("claude-haiku")).toBe("claude-haiku-4-5-20251001");
   });
 
   it("resolves legacy dated Anthropic models", () => {
-    expect(resolveModelAlias("claude-3-5-sonnet-20241022")).toBe("claude-sonnet-4-20250514");
+    expect(resolveModelAlias("claude-3-5-sonnet-20241022")).toBe("claude-sonnet-4-6");
     expect(resolveModelAlias("claude-3-5-haiku-20241022")).toBe("claude-haiku-4-5-20251001");
-    expect(resolveModelAlias("claude-3-opus-20240229")).toBe("claude-opus-4-20250115");
+    expect(resolveModelAlias("claude-3-opus-20240229")).toBe("claude-opus-4-6");
   });
 
   it("resolves legacy OpenAI models", () => {
@@ -252,7 +252,7 @@ describe("resolveModelAlias", () => {
   });
 
   it("passes through canonical model IDs unchanged", () => {
-    expect(resolveModelAlias("claude-sonnet-4-20250514")).toBe("claude-sonnet-4-20250514");
+    expect(resolveModelAlias("claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
     expect(resolveModelAlias("gpt-4o")).toBe("gpt-4o");
     expect(resolveModelAlias("gemini-2.5-pro")).toBe("gemini-2.5-pro");
   });

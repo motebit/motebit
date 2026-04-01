@@ -184,7 +184,7 @@ describe("validateFetchUrl", () => {
 
 describe("buildProxiedBody", () => {
   const baseBody = {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-6",
     messages: [{ role: "user", content: "hi" }],
     system: "You are helpful",
     max_tokens: 8192,
