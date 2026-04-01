@@ -27,6 +27,12 @@ import {
   Appearance,
 } from "react-native";
 import { GLView as _GLView } from "expo-gl";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Feather = require("@expo/vector-icons/Feather").default as React.ComponentType<{
+  name: string;
+  size: number;
+  color: string;
+}>;
 
 // expo-gl types lag behind React 19's stricter JSX component constraints
 const GLView = _GLView as unknown as typeof _GLView &
@@ -55,7 +61,7 @@ import { PinDialog } from "./components/PinDialog";
 import type { PinMode } from "./components/PinDialog";
 import { SettingsModal, deriveInteriorColor } from "./components/SettingsModal";
 import { MemoryPanel } from "./components/MemoryPanel";
-import { CredentialsPanel } from "./components/CredentialsPanel";
+import { SovereignPanel } from "./components/SovereignPanel";
 import { AgentsPanel } from "./components/AgentsPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
@@ -78,13 +84,6 @@ interface ChatMessage {
   toolArgs?: Record<string, unknown>;
   riskLevel?: number;
   approvalResolved?: boolean;
-}
-
-function formatSyncTime(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  return `${Math.floor(diff / 3_600_000)}h ago`;
 }
 
 // === App singleton ===
@@ -178,7 +177,7 @@ export function App(): React.ReactElement {
 
   // Sync state
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error" | "offline">("offline");
-  const [lastSyncTime, setLastSyncTime] = useState(0);
+  const [_lastSyncTime, setLastSyncTime] = useState(0);
   const pairingSyncUrlRef = useRef("");
 
   // MCP state
@@ -1846,76 +1845,77 @@ export function App(): React.ReactElement {
               </Text>
             </View>
           )}
-          {/* Top-left buttons: conversations + memories */}
+          {/* Left buttons: Conversations, Memory, Sovereign */}
           <View style={ds.topLeftButtons}>
             <TouchableOpacity
               style={ds.overlayButton}
               onPress={() => setShowConversationPanel(true)}
               activeOpacity={0.7}
             >
-              <Text style={ds.overlayButtonText}>{"\u2630"}</Text>
+              <Feather name="message-square" size={18} color={themeColors.textMuted} />
             </TouchableOpacity>
             <TouchableOpacity
               style={ds.overlayButton}
               onPress={() => setShowMemoryPanel(true)}
               activeOpacity={0.7}
             >
-              <Text style={ds.overlayButtonText}>{"\u25CF"}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={ds.overlayButton}
-              onPress={() => setShowGoalsPanel(true)}
-              activeOpacity={0.7}
-            >
-              <Text style={ds.overlayButtonText}>{"\u25C9"}</Text>
+              <Feather name="sun" size={18} color={themeColors.textMuted} />
             </TouchableOpacity>
             <TouchableOpacity
               style={ds.overlayButton}
               onPress={() => setShowCredentialsPanel(true)}
               activeOpacity={0.7}
             >
-              <Text style={ds.overlayButtonText}>{"\u2606"}</Text>
+              <Feather name="lock" size={18} color={themeColors.textMuted} />
+            </TouchableOpacity>
+          </View>
+          {/* Center: sync status */}
+          <TouchableOpacity
+            style={ds.syncButton}
+            onPress={() => {
+              /* TODO: sync popup */
+            }}
+            activeOpacity={0.7}
+          >
+            <Feather
+              name={syncStatus === "error" ? "cloud-off" : "cloud"}
+              size={16}
+              color={
+                syncStatus === "idle"
+                  ? "#4ade80"
+                  : syncStatus === "syncing"
+                    ? "#6366f1"
+                    : syncStatus === "error"
+                      ? "#f87171"
+                      : themeColors.textGhost
+              }
+            />
+          </TouchableOpacity>
+          {/* Right buttons: Goals, Agents, Settings */}
+          <View style={ds.topRightButtons}>
+            <TouchableOpacity
+              style={ds.overlayButton}
+              onPress={() => setShowGoalsPanel(true)}
+              activeOpacity={0.7}
+            >
+              <Feather name="target" size={18} color={themeColors.textMuted} />
             </TouchableOpacity>
             <TouchableOpacity
               style={ds.overlayButton}
               onPress={() => setShowAgentsPanel(true)}
               activeOpacity={0.7}
             >
-              <Text style={ds.overlayButtonText}>{"\u2302"}</Text>
+              <Feather name="users" size={18} color={themeColors.textMuted} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={ds.overlayButton}
+              onPress={() => setShowSettings(true)}
+              activeOpacity={0.7}
+            >
+              <Feather name="settings" size={18} color={themeColors.textMuted} />
             </TouchableOpacity>
           </View>
-          {/* Settings gear */}
-          <TouchableOpacity
-            style={ds.gearButton}
-            onPress={() => setShowSettings(true)}
-            activeOpacity={0.7}
-          >
-            <Text style={ds.gearText}>⚙</Text>
-          </TouchableOpacity>
         </View>
-
-        {/* Sync status indicator */}
-        {syncStatus !== "offline" && (
-          <View style={ds.syncIndicator}>
-            <View
-              style={[
-                ds.syncDot,
-                syncStatus === "idle" && ds.syncDotIdle,
-                syncStatus === "syncing" && ds.syncDotSyncing,
-                syncStatus === "error" && ds.syncDotError,
-              ]}
-            />
-            <Text style={ds.syncIndicatorText}>
-              {syncStatus === "syncing"
-                ? "Syncing..."
-                : syncStatus === "error"
-                  ? "Sync error"
-                  : lastSyncTime > 0
-                    ? `Synced ${formatSyncTime(lastSyncTime)}`
-                    : "Connected"}
-            </Text>
-          </View>
-        )}
 
         {/* Goal status indicator */}
         {goalRunning && (
@@ -2062,8 +2062,6 @@ export function App(): React.ReactElement {
             visible={showSettings}
             app={app.current}
             settings={settings}
-            syncStatus={syncStatus}
-            lastSyncTime={lastSyncTime}
             mcpServers={mcpServers}
             onAddMcpServer={handleAddMcpServer}
             onRemoveMcpServer={handleRemoveMcpServer}
@@ -2074,26 +2072,6 @@ export function App(): React.ReactElement {
             customSaturation={settings.customSaturation}
             onRequestPin={(mode) => void handleRequestPin(mode)}
             onLinkDevice={() => void handleInitiatePairing()}
-            onSyncNow={() => {
-              void app.current
-                .syncNow()
-                .then((result) => {
-                  addSystemMessage(
-                    `Sync: ${result.events_pushed} events pushed, ${result.events_pulled} pulled, ` +
-                      `${result.conversations_pushed} convs pushed, ${result.conversations_pulled} pulled`,
-                  );
-                })
-                .catch((err: unknown) => {
-                  const msg = err instanceof Error ? err.message : String(err);
-                  addSystemMessage(`Sync failed: ${msg}`);
-                });
-            }}
-            onDisconnectSync={() => {
-              void app.current.disconnectSync().then(() => {
-                setSyncStatus("offline");
-                addSystemMessage("Disconnected from sync relay");
-              });
-            }}
           />
         )}
 
@@ -2129,7 +2107,7 @@ export function App(): React.ReactElement {
           onClose={() => setShowGoalsPanel(false)}
         />
 
-        <CredentialsPanel
+        <SovereignPanel
           visible={showCredentialsPanel}
           app={app.current}
           onClose={() => setShowCredentialsPanel(false)}
@@ -2284,6 +2262,13 @@ function createDynamicStyles(c: ThemeColors) {
       flexDirection: "row",
       gap: 8,
     },
+    topRightButtons: {
+      position: "absolute",
+      top: Platform.OS === "ios" ? 50 : 12,
+      right: 12,
+      flexDirection: "row",
+      gap: 8,
+    },
     overlayButton: {
       width: 36,
       height: 36,
@@ -2292,54 +2277,17 @@ function createDynamicStyles(c: ThemeColors) {
       justifyContent: "center",
       alignItems: "center",
     },
-    overlayButtonText: {
-      fontSize: 16,
-      color: c.textMuted,
-    },
-    gearButton: {
+    syncButton: {
       position: "absolute",
-      top: Platform.OS === "ios" ? 50 : 12,
-      right: 12,
-      width: 36,
-      height: 36,
-      borderRadius: 18,
+      top: Platform.OS === "ios" ? 53 : 15,
+      left: "50%",
+      marginLeft: -14,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
       backgroundColor: c.overlayButtonBg,
       justifyContent: "center",
       alignItems: "center",
-    },
-    gearText: {
-      fontSize: 18,
-      color: c.textMuted,
-    },
-
-    // Sync indicator
-    syncIndicator: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "center",
-      paddingVertical: 4,
-      gap: 6,
-      backgroundColor: c.bgGlass,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: c.borderPrimary,
-    },
-    syncDot: {
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-    },
-    syncDotIdle: {
-      backgroundColor: c.statusSuccess,
-    },
-    syncDotSyncing: {
-      backgroundColor: c.accent,
-    },
-    syncDotError: {
-      backgroundColor: c.statusError,
-    },
-    syncIndicatorText: {
-      color: c.textMuted,
-      fontSize: 11,
     },
 
     // Goal indicator

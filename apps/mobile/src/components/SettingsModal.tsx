@@ -21,7 +21,6 @@ import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import type { InteriorColor } from "@motebit/runtime";
 import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
-import type { Goal, GoalMode } from "../adapters/expo-sqlite";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OLLAMA_MODEL } from "@motebit/sdk";
 import { BillingPanel } from "./BillingPanel";
@@ -70,47 +69,15 @@ export function deriveInteriorColor(hue: number, saturation: number): InteriorCo
   return { tint, glow };
 }
 
-type Tab =
-  | "billing"
-  | "appearance"
-  | "intelligence"
-  | "governance"
-  | "goals"
-  | "sync"
-  | "tools"
-  | "identity";
+type Tab = "appearance" | "intelligence" | "governance" | "identity" | "billing";
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: "billing", label: "Billing" },
   { key: "appearance", label: "Appearance" },
   { key: "intelligence", label: "Intelligence" },
   { key: "governance", label: "Governance" },
-  { key: "goals", label: "Goals" },
-  { key: "sync", label: "Sync" },
-  { key: "tools", label: "Tools" },
   { key: "identity", label: "Identity" },
+  { key: "billing", label: "Billing" },
 ];
-
-const INTERVAL_OPTIONS: { label: string; ms: number }[] = [
-  { label: "Hourly", ms: 3_600_000 },
-  { label: "Daily", ms: 86_400_000 },
-  { label: "Weekly", ms: 604_800_000 },
-];
-
-function formatInterval(ms: number): string {
-  if (ms <= 3_600_000) return "Hourly";
-  if (ms <= 86_400_000) return "Daily";
-  if (ms <= 604_800_000) return "Weekly";
-  return `${Math.round(ms / 86_400_000)}d`;
-}
-
-function formatTimeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
-}
 
 // Hex colors for preview circles (same 7 as desktop, moonlight first)
 const PRESET_COLORS: Record<string, string> = {
@@ -127,8 +94,6 @@ interface SettingsModalProps {
   visible: boolean;
   app: MobileApp;
   settings: MobileSettings;
-  syncStatus?: "idle" | "syncing" | "error" | "offline";
-  lastSyncTime?: number;
   mcpServers?: Array<{
     name: string;
     url: string;
@@ -150,8 +115,6 @@ interface SettingsModalProps {
   onClose: () => void;
   onRequestPin: (mode: "setup" | "verify" | "reset") => void;
   onLinkDevice?: () => void;
-  onSyncNow?: () => void;
-  onDisconnectSync?: () => void;
   customHue?: number;
   customSaturation?: number;
   onCustomColorChange?: (hue: number, saturation: number) => void;
@@ -161,8 +124,6 @@ export function SettingsModal({
   visible,
   app,
   settings,
-  syncStatus,
-  lastSyncTime,
   mcpServers,
   onAddMcpServer,
   onRemoveMcpServer,
@@ -171,8 +132,6 @@ export function SettingsModal({
   onClose,
   onRequestPin,
   onLinkDevice,
-  onSyncNow,
-  onDisconnectSync,
   onCustomColorChange,
 }: SettingsModalProps): React.ReactElement {
   const colors = useTheme();
@@ -339,38 +298,46 @@ export function SettingsModal({
             />
           )}
           {tab === "intelligence" && (
-            <IntelligenceTab
-              provider={draft.provider}
-              model={draft.model}
-              apiKey={apiKey}
-              ollamaEndpoint={draft.ollamaEndpoint}
-              voiceEnabled={draft.voiceEnabled}
-              voiceResponseEnabled={draft.voiceResponseEnabled}
-              voiceAutoSend={draft.voiceAutoSend}
-              ttsVoice={draft.ttsVoice}
-              openaiKey={openaiKey}
-              neuralVadEnabled={draft.neuralVadEnabled}
-              onChangeProvider={(p) =>
-                updateDraft({
-                  provider: p,
-                  model:
-                    p === "ollama"
-                      ? DEFAULT_OLLAMA_MODEL
-                      : p === "openai"
-                        ? DEFAULT_OPENAI_MODEL
-                        : DEFAULT_ANTHROPIC_MODEL,
-                })
-              }
-              onChangeModel={(m) => updateDraft({ model: m })}
-              onChangeApiKey={setApiKey}
-              onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
-              onChangeVoiceEnabled={(v) => updateDraft({ voiceEnabled: v })}
-              onChangeVoiceResponseEnabled={(v) => updateDraft({ voiceResponseEnabled: v })}
-              onChangeVoiceAutoSend={(v) => updateDraft({ voiceAutoSend: v })}
-              onChangeTtsVoice={(v) => updateDraft({ ttsVoice: v })}
-              onChangeOpenaiKey={setOpenaiKey}
-              onChangeNeuralVadEnabled={(v) => updateDraft({ neuralVadEnabled: v })}
-            />
+            <>
+              <IntelligenceTab
+                provider={draft.provider}
+                model={draft.model}
+                apiKey={apiKey}
+                ollamaEndpoint={draft.ollamaEndpoint}
+                voiceEnabled={draft.voiceEnabled}
+                voiceResponseEnabled={draft.voiceResponseEnabled}
+                voiceAutoSend={draft.voiceAutoSend}
+                ttsVoice={draft.ttsVoice}
+                openaiKey={openaiKey}
+                neuralVadEnabled={draft.neuralVadEnabled}
+                onChangeProvider={(p) =>
+                  updateDraft({
+                    provider: p,
+                    model:
+                      p === "ollama"
+                        ? DEFAULT_OLLAMA_MODEL
+                        : p === "openai"
+                          ? DEFAULT_OPENAI_MODEL
+                          : DEFAULT_ANTHROPIC_MODEL,
+                  })
+                }
+                onChangeModel={(m) => updateDraft({ model: m })}
+                onChangeApiKey={setApiKey}
+                onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
+                onChangeVoiceEnabled={(v) => updateDraft({ voiceEnabled: v })}
+                onChangeVoiceResponseEnabled={(v) => updateDraft({ voiceResponseEnabled: v })}
+                onChangeVoiceAutoSend={(v) => updateDraft({ voiceAutoSend: v })}
+                onChangeTtsVoice={(v) => updateDraft({ ttsVoice: v })}
+                onChangeOpenaiKey={setOpenaiKey}
+                onChangeNeuralVadEnabled={(v) => updateDraft({ neuralVadEnabled: v })}
+              />
+              <ToolsTab
+                servers={mcpServers ?? []}
+                onAdd={onAddMcpServer}
+                onRemove={onRemoveMcpServer}
+                onToggleTrust={onToggleMcpTrust}
+              />
+            </>
           )}
           {tab === "governance" && (
             <GovernanceTab
@@ -378,24 +345,6 @@ export function SettingsModal({
               isOperatorMode={app.isOperatorMode}
               onUpdate={updateDraft}
               onRequestPin={onRequestPin}
-            />
-          )}
-          {tab === "goals" && <GoalsTab app={app} />}
-          {tab === "sync" && (
-            <SyncTab
-              syncStatus={syncStatus ?? "offline"}
-              lastSyncTime={lastSyncTime ?? 0}
-              app={app}
-              onSyncNow={onSyncNow}
-              onDisconnect={onDisconnectSync}
-            />
-          )}
-          {tab === "tools" && (
-            <ToolsTab
-              servers={mcpServers ?? []}
-              onAdd={onAddMcpServer}
-              onRemove={onRemoveMcpServer}
-              onToggleTrust={onToggleMcpTrust}
             />
           )}
           {tab === "identity" && (
@@ -1029,107 +978,6 @@ function GovernanceTab({
   );
 }
 
-// === Sync Tab ===
-
-function SyncTab({
-  syncStatus,
-  lastSyncTime,
-  app,
-  onSyncNow,
-  onDisconnect,
-}: {
-  syncStatus: "idle" | "syncing" | "error" | "offline";
-  lastSyncTime: number;
-  app: MobileApp;
-  onSyncNow?: () => void;
-  onDisconnect?: () => void;
-}) {
-  const colors = useTheme();
-  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
-  const [syncUrl, setSyncUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    void app.getSyncUrl().then(setSyncUrl);
-  }, [app]);
-
-  const statusLabel =
-    syncStatus === "idle"
-      ? "Connected"
-      : syncStatus === "syncing"
-        ? "Syncing..."
-        : syncStatus === "error"
-          ? "Error"
-          : "Not connected";
-
-  const statusColor =
-    syncStatus === "idle"
-      ? colors.statusSuccess
-      : syncStatus === "syncing"
-        ? colors.accent
-        : syncStatus === "error"
-          ? colors.statusError
-          : colors.textMuted;
-
-  return (
-    <View>
-      <Text style={styles.sectionTitle}>Status</Text>
-      <View style={styles.syncStatusRow}>
-        <View style={[styles.syncStatusDot, { backgroundColor: statusColor }]} />
-        <Text style={[styles.syncStatusLabel, { color: statusColor }]}>{statusLabel}</Text>
-      </View>
-
-      {lastSyncTime > 0 && (
-        <Text style={styles.syncLastTime}>Last synced: {formatTimeAgo(lastSyncTime)}</Text>
-      )}
-
-      {syncUrl != null && syncUrl !== "" && (
-        <>
-          <Text style={styles.sectionTitle}>Relay</Text>
-          <Text style={styles.monoValue} numberOfLines={1}>
-            {syncUrl}
-          </Text>
-        </>
-      )}
-
-      {syncUrl != null && syncUrl !== "" && onSyncNow != null && (
-        <TouchableOpacity
-          style={[styles.syncActionButton, syncStatus === "syncing" && styles.syncActionDisabled]}
-          onPress={onSyncNow}
-          disabled={syncStatus === "syncing"}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.syncActionText}>Sync Now</Text>
-        </TouchableOpacity>
-      )}
-
-      {syncUrl != null && syncUrl !== "" && onDisconnect != null && (
-        <TouchableOpacity
-          style={styles.syncDisconnectButton}
-          onPress={() => {
-            Alert.alert(
-              "Disconnect Sync",
-              "Stop syncing and remove relay connection? Your local data will be preserved.",
-              [
-                { text: "Cancel", style: "cancel" },
-                { text: "Disconnect", style: "destructive", onPress: onDisconnect },
-              ],
-            );
-          }}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.syncDisconnectText}>Disconnect from Relay</Text>
-        </TouchableOpacity>
-      )}
-
-      {(syncUrl == null || syncUrl === "") && (
-        <Text style={styles.syncHint}>
-          Link another device from the Identity tab to set up sync, or pair from your desktop app.
-        </Text>
-      )}
-    </View>
-  );
-}
-
 // === Identity Tab ===
 
 function IdentityTab({
@@ -1270,190 +1118,6 @@ function IdentityTab({
 
       <TouchableOpacity style={styles.exportButton} onPress={onExport} activeOpacity={0.7}>
         <Text style={styles.exportText}>Export All Data</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-// === Goals Tab ===
-
-function GoalsTab({ app }: { app: MobileApp }) {
-  const colors = useTheme();
-  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [newPrompt, setNewPrompt] = useState("");
-  const [newIntervalIdx, setNewIntervalIdx] = useState(0);
-  const [newMode, setNewMode] = useState<GoalMode>("recurring");
-
-  const goalStore = app.getGoalStore();
-  const identity = app.getIdentityInfo();
-
-  const refreshGoals = useCallback(() => {
-    if (!goalStore) return;
-    setGoals(goalStore.listGoals(identity.motebitId));
-  }, [goalStore, identity.motebitId]);
-
-  useEffect(() => {
-    refreshGoals();
-  }, [refreshGoals]);
-
-  const handleAdd = useCallback(() => {
-    const prompt = newPrompt.trim();
-    if (!prompt || !goalStore) return;
-    const interval = INTERVAL_OPTIONS[newIntervalIdx];
-    if (!interval) return;
-    goalStore.addGoal(identity.motebitId, prompt, interval.ms, newMode);
-    setNewPrompt("");
-    refreshGoals();
-  }, [newPrompt, newIntervalIdx, newMode, goalStore, identity.motebitId, refreshGoals]);
-
-  const handleToggle = useCallback(
-    (goalId: string, enabled: boolean) => {
-      if (!goalStore) return;
-      goalStore.toggleGoal(goalId, enabled);
-      refreshGoals();
-    },
-    [goalStore, refreshGoals],
-  );
-
-  const handleRemove = useCallback(
-    (goalId: string) => {
-      Alert.alert("Remove Goal", "Are you sure you want to delete this goal?", [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            if (!goalStore) return;
-            goalStore.removeGoal(goalId);
-            refreshGoals();
-          },
-        },
-      ]);
-    },
-    [goalStore, refreshGoals],
-  );
-
-  if (!goalStore) {
-    return (
-      <View>
-        <Text style={styles.sectionTitle}>Goals</Text>
-        <Text style={styles.goalEmptyText}>
-          Goal store not available. Bootstrap identity first.
-        </Text>
-      </View>
-    );
-  }
-
-  return (
-    <View>
-      <Text style={styles.sectionTitle}>Active Goals</Text>
-      {goals.length === 0 ? (
-        <Text style={styles.goalEmptyText}>No goals yet. Add one below.</Text>
-      ) : (
-        goals.map((goal) => (
-          <View key={goal.goal_id} style={styles.goalRow}>
-            <View style={styles.goalInfo}>
-              <Text style={styles.goalPrompt} numberOfLines={2}>
-                {goal.prompt}
-              </Text>
-              <View style={styles.goalMeta}>
-                <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
-                <Text style={styles.goalMetaText}>{goal.mode}</Text>
-                <Text
-                  style={[
-                    styles.goalMetaText,
-                    goal.status === "paused" && styles.goalMetaWarning,
-                    goal.status === "failed" && styles.goalMetaWarning,
-                  ]}
-                >
-                  {goal.status}
-                </Text>
-                {goal.last_run_at != null ? (
-                  <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
-                ) : null}
-                {goal.consecutive_failures > 0 ? (
-                  <Text style={styles.goalMetaWarning}>
-                    {goal.consecutive_failures}/{goal.max_retries} failures
-                  </Text>
-                ) : null}
-              </View>
-            </View>
-            <View style={styles.goalActions}>
-              <Switch
-                value={goal.enabled}
-                onValueChange={(v) => handleToggle(goal.goal_id, v)}
-                trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
-                thumbColor={goal.enabled ? colors.textPrimary : colors.textMuted}
-              />
-              <TouchableOpacity
-                onPress={() => handleRemove(goal.goal_id)}
-                activeOpacity={0.7}
-                style={styles.goalDeleteBtn}
-              >
-                <Text style={styles.goalDeleteText}>X</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ))
-      )}
-
-      <Text style={styles.sectionTitle}>Add Goal</Text>
-      <TextInput
-        style={styles.textField}
-        value={newPrompt}
-        onChangeText={setNewPrompt}
-        placeholder="What should the goal do?"
-        placeholderTextColor={colors.inputPlaceholder}
-        multiline
-        numberOfLines={3}
-      />
-
-      <Text style={[styles.sectionTitle, { marginTop: 14 }]}>Interval</Text>
-      <View style={styles.radioGroup}>
-        {INTERVAL_OPTIONS.map((opt, idx) => (
-          <TouchableOpacity
-            key={opt.label}
-            style={[styles.radioItem, newIntervalIdx === idx && styles.radioActive]}
-            onPress={() => setNewIntervalIdx(idx)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.radioText, newIntervalIdx === idx && styles.radioTextActive]}>
-              {opt.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <Text style={[styles.sectionTitle, { marginTop: 14 }]}>Mode</Text>
-      <View style={styles.radioGroup}>
-        <TouchableOpacity
-          style={[styles.radioItem, newMode === "recurring" && styles.radioActive]}
-          onPress={() => setNewMode("recurring")}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.radioText, newMode === "recurring" && styles.radioTextActive]}>
-            Recurring
-          </Text>
-          <Text style={styles.radioDesc}>Runs on every interval</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.radioItem, newMode === "once" && styles.radioActive]}
-          onPress={() => setNewMode("once")}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.radioText, newMode === "once" && styles.radioTextActive]}>Once</Text>
-          <Text style={styles.radioDesc}>Runs once, then completes</Text>
-        </TouchableOpacity>
-      </View>
-
-      <TouchableOpacity
-        style={[styles.goalAddBtn, !newPrompt.trim() && styles.goalAddBtnDisabled]}
-        onPress={handleAdd}
-        disabled={!newPrompt.trim()}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.goalAddBtnText}>Add Goal</Text>
       </TouchableOpacity>
     </View>
   );

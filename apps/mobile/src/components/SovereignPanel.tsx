@@ -98,18 +98,17 @@ function resolveIssuer(cred: CredentialEntry["credential"]): string {
   return id.length > 28 ? id.slice(0, 28) + "..." : id;
 }
 
-interface CredentialsPanelProps {
+type SovereignTab = "credentials" | "ledger" | "budget" | "succession";
+
+interface SovereignPanelProps {
   visible: boolean;
   app: MobileApp;
   onClose: () => void;
 }
 
-export function CredentialsPanel({
-  visible,
-  app,
-  onClose,
-}: CredentialsPanelProps): React.ReactElement {
+export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): React.ReactElement {
   const colors = useTheme();
+  const [activeTab, setActiveTab] = useState<SovereignTab>("credentials");
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
   const [revokedIds, setRevokedIds] = useState<Set<string>>(new Set());
@@ -251,48 +250,173 @@ export function CredentialsPanel({
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <Text style={styles.headerTitle}>Credentials</Text>
-            <View style={styles.countBadge}>
-              <Text style={styles.countText}>{credentials.length}</Text>
-            </View>
+            <Text style={styles.headerTitle}>Sovereign</Text>
           </View>
           <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
             <Text style={styles.closeBtn}>Done</Text>
           </TouchableOpacity>
+        </View>
+        {/* Tab bar — matches desktop: Credentials, Ledger, Budget, Succession */}
+        <View style={styles.tabBar}>
+          {(["credentials", "ledger", "budget", "succession"] as SovereignTab[]).map((tab) => (
+            <TouchableOpacity
+              key={tab}
+              style={[styles.tab, activeTab === tab && styles.tabActive]}
+              onPress={() => setActiveTab(tab)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
         {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color={colors.accent} />
           </View>
-        ) : (
+        ) : activeTab === "credentials" ? (
           <FlatList
             data={credentials}
             keyExtractor={(item) => item.credential_id}
             style={styles.list}
             contentContainerStyle={styles.listContent}
             ListHeaderComponent={
-              <>
-                {/* Type badges */}
-                {Object.keys(typeCounts).length > 0 && (
-                  <View style={styles.badgeRow}>
-                    {Object.entries(typeCounts).map(([type, count]) => {
-                      const color = TYPE_COLORS[type] ?? "#616161";
-                      return (
-                        <View key={type} style={[styles.typeBadge, { borderColor: color }]}>
-                          <Text style={[styles.typeBadgeText, { color }]}>
-                            {type}: {count}
+              Object.keys(typeCounts).length > 0 ? (
+                <View style={styles.badgeRow}>
+                  {Object.entries(typeCounts).map(([type, count]) => {
+                    const color = TYPE_COLORS[type] ?? "#616161";
+                    return (
+                      <View key={type} style={[styles.typeBadge, { borderColor: color }]}>
+                        <Text style={[styles.typeBadgeText, { color }]}>
+                          {type}: {count}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null
+            }
+            renderItem={({ item }) => {
+              const color = TYPE_COLORS[item.credential_type] ?? "#616161";
+              const issuer = resolveIssuer(item.credential);
+              const isRevoked = revokedIds.has(item.credential_id);
+              return (
+                <View style={[styles.credentialItem, isRevoked ? { opacity: 0.5 } : undefined]}>
+                  <View style={styles.credentialHeader}>
+                    <Text style={styles.credentialId}>{item.credential_id.slice(0, 12)}...</Text>
+                    {isRevoked && (
+                      <View style={[styles.credentialTypeBadge, { borderColor: "#f44336" }]}>
+                        <Text style={[styles.credentialTypeText, { color: "#f44336" }]}>
+                          REVOKED
+                        </Text>
+                      </View>
+                    )}
+                    <View style={[styles.credentialTypeBadge, { borderColor: color }]}>
+                      <Text style={[styles.credentialTypeText, { color }]}>
+                        {item.credential_type}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.credentialMeta}>issuer: {issuer}</Text>
+                  <Text style={styles.credentialMeta}>{formatTimeAgo(item.issued_at)}</Text>
+                </View>
+              );
+            }}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>No credentials yet.</Text>
+              </View>
+            }
+          />
+        ) : activeTab === "ledger" ? (
+          <FlatList
+            data={ledgerEntries}
+            keyExtractor={(item) => item.goal_id}
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            renderItem={({ item: entry }) => {
+              const isExpanded = expandedGoalId === entry.goal_id;
+              return (
+                <View>
+                  <TouchableOpacity
+                    style={styles.ledgerItem}
+                    onPress={() => setExpandedGoalId(isExpanded ? null : entry.goal_id)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.ledgerHeader}>
+                      <Text style={styles.ledgerPrompt} numberOfLines={1}>
+                        {entry.goal_prompt}
+                      </Text>
+                      <View
+                        style={[
+                          styles.ledgerStatusBadge,
+                          {
+                            borderColor:
+                              entry.status === "completed"
+                                ? colors.statusSuccess
+                                : entry.status === "failed"
+                                  ? colors.statusError
+                                  : colors.statusWarning,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.ledgerStatusText,
+                            {
+                              color:
+                                entry.status === "completed"
+                                  ? colors.statusSuccess
+                                  : entry.status === "failed"
+                                    ? colors.statusError
+                                    : colors.statusWarning,
+                            },
+                          ]}
+                        >
+                          {entry.status}
+                        </Text>
+                      </View>
+                    </View>
+                    {entry.manifest_hash && (
+                      <Text style={styles.credentialMeta}>
+                        hash: {entry.manifest_hash.slice(0, 16)}...
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                  {isExpanded && entry.steps.length > 0 && (
+                    <View style={styles.ledgerSteps}>
+                      {entry.steps.map((step) => (
+                        <View key={step.step_id} style={styles.ledgerStep}>
+                          <Text style={styles.ledgerStepText}>{step.summary}</Text>
+                          <Text style={styles.credentialMeta}>
+                            {step.status}
+                            {step.completed_at ? ` — ${formatTimeAgo(step.completed_at)}` : ""}
                           </Text>
                         </View>
-                      );
-                    })}
-                  </View>
-                )}
-
-                {/* Account balance */}
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            }}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>No completed goals yet.</Text>
+              </View>
+            }
+          />
+        ) : activeTab === "budget" ? (
+          <FlatList
+            data={budgetAllocations}
+            keyExtractor={(item) => item.allocation_id}
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            ListHeaderComponent={
+              <>
                 {accountBalance != null && (
                   <View style={styles.budgetSection}>
-                    <Text style={styles.sectionTitle}>Account Balance</Text>
                     <View style={styles.balanceRow}>
                       <Text style={styles.balanceAmount}>{accountBalance.balance.toFixed(2)}</Text>
                       <Text style={styles.balanceCurrency}>{accountBalance.currency ?? "USD"}</Text>
@@ -328,11 +452,8 @@ export function CredentialsPanel({
                     )}
                   </View>
                 )}
-
-                {/* Budget summary */}
                 {budgetSummary != null && (
                   <View style={styles.budgetSection}>
-                    <Text style={styles.sectionTitle}>Budget</Text>
                     <View style={styles.budgetRow}>
                       <View style={styles.budgetCard}>
                         <Text style={styles.budgetLabel}>Locked</Text>
@@ -343,170 +464,64 @@ export function CredentialsPanel({
                         <Text style={styles.budgetValue}>{budgetSummary.total_settled}</Text>
                       </View>
                     </View>
-                    {budgetAllocations.length > 0 && (
-                      <>
-                        {budgetAllocations.slice(0, 10).map((a) => (
-                          <View key={a.allocation_id} style={styles.allocationItem}>
-                            <Text style={styles.allocationId}>
-                              {a.allocation_id.slice(0, 10)}...
-                            </Text>
-                            <Text
-                              style={[
-                                styles.allocationStatus,
-                                {
-                                  color:
-                                    a.settlement_status === "settled"
-                                      ? colors.statusSuccess
-                                      : colors.statusWarning,
-                                },
-                              ]}
-                            >
-                              {a.status} ({a.amount_locked})
-                            </Text>
-                          </View>
-                        ))}
-                      </>
-                    )}
                   </View>
                 )}
-
-                {/* Execution Ledger */}
-                {ledgerEntries.length > 0 && (
-                  <View style={styles.budgetSection}>
-                    <Text style={styles.sectionTitle}>Execution Ledger</Text>
-                    {ledgerEntries.map((entry) => {
-                      const isExpanded = expandedGoalId === entry.goal_id;
-                      return (
-                        <View key={entry.goal_id}>
-                          <TouchableOpacity
-                            style={styles.ledgerItem}
-                            onPress={() => setExpandedGoalId(isExpanded ? null : entry.goal_id)}
-                            activeOpacity={0.7}
-                          >
-                            <View style={styles.ledgerHeader}>
-                              <Text style={styles.ledgerPrompt} numberOfLines={1}>
-                                {entry.goal_prompt}
-                              </Text>
-                              <View
-                                style={[
-                                  styles.ledgerStatusBadge,
-                                  {
-                                    borderColor:
-                                      entry.status === "completed"
-                                        ? colors.statusSuccess
-                                        : entry.status === "failed"
-                                          ? colors.statusError
-                                          : colors.statusWarning,
-                                  },
-                                ]}
-                              >
-                                <Text
-                                  style={[
-                                    styles.ledgerStatusText,
-                                    {
-                                      color:
-                                        entry.status === "completed"
-                                          ? colors.statusSuccess
-                                          : entry.status === "failed"
-                                            ? colors.statusError
-                                            : colors.statusWarning,
-                                    },
-                                  ]}
-                                >
-                                  {entry.status}
-                                </Text>
-                              </View>
-                            </View>
-                            {entry.manifest_hash && (
-                              <Text style={styles.credentialMeta}>
-                                hash: {entry.manifest_hash.slice(0, 16)}...
-                              </Text>
-                            )}
-                          </TouchableOpacity>
-                          {isExpanded && entry.steps.length > 0 && (
-                            <View style={styles.ledgerSteps}>
-                              {entry.steps.map((step) => (
-                                <View key={step.step_id} style={styles.ledgerStep}>
-                                  <Text style={styles.ledgerStepText}>{step.summary}</Text>
-                                  <Text style={styles.credentialMeta}>
-                                    {step.status}
-                                    {step.completed_at
-                                      ? ` — ${formatTimeAgo(step.completed_at)}`
-                                      : ""}
-                                  </Text>
-                                </View>
-                              ))}
-                            </View>
-                          )}
-                        </View>
-                      );
-                    })}
-                  </View>
-                )}
-
-                {/* Key Succession */}
-                {successionChain.length > 0 && (
-                  <View style={styles.budgetSection}>
-                    <Text style={styles.sectionTitle}>Key Succession</Text>
-                    {successionChain.map((record, idx) => (
-                      <View key={idx} style={styles.successionItem}>
-                        <View style={styles.successionRow}>
-                          <Text style={styles.successionLabel}>from</Text>
-                          <Text style={styles.successionKey}>
-                            {record.old_public_key.slice(0, 16)}...
-                          </Text>
-                        </View>
-                        <View style={styles.successionRow}>
-                          <Text style={styles.successionLabel}>to</Text>
-                          <Text style={styles.successionKey}>
-                            {record.new_public_key.slice(0, 16)}...
-                          </Text>
-                        </View>
-                        {record.reason && (
-                          <Text style={styles.credentialMeta}>reason: {record.reason}</Text>
-                        )}
-                        <Text style={styles.credentialMeta}>
-                          {formatTimeAgo(record.rotated_at)}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-
-                {credentials.length > 0 && (
-                  <Text style={[styles.sectionTitle, { marginTop: 16 }]}>All Credentials</Text>
+                {budgetAllocations.length > 0 && (
+                  <Text style={styles.sectionTitle}>Allocations</Text>
                 )}
               </>
             }
-            renderItem={({ item }) => {
-              const color = TYPE_COLORS[item.credential_type] ?? "#616161";
-              const issuer = resolveIssuer(item.credential);
-              const isRevoked = revokedIds.has(item.credential_id);
-              return (
-                <View style={[styles.credentialItem, isRevoked ? { opacity: 0.5 } : undefined]}>
-                  <View style={styles.credentialHeader}>
-                    <Text style={styles.credentialId}>{item.credential_id.slice(0, 12)}...</Text>
-                    {isRevoked && (
-                      <View style={[styles.credentialTypeBadge, { borderColor: "#f44336" }]}>
-                        <Text style={[styles.credentialTypeText, { color: "#f44336" }]}>
-                          REVOKED
-                        </Text>
-                      </View>
-                    )}
-                    <View style={[styles.credentialTypeBadge, { borderColor: color }]}>
-                      <Text style={[styles.credentialTypeText, { color }]}>
-                        {item.credential_type}
-                      </Text>
-                    </View>
-                  </View>
-                  <Text style={styles.credentialMeta}>issuer: {issuer}</Text>
-                  <Text style={styles.credentialMeta}>{formatTimeAgo(item.issued_at)}</Text>
+            renderItem={({ item: a }) => (
+              <View style={styles.allocationItem}>
+                <Text style={styles.allocationId}>{a.allocation_id.slice(0, 10)}...</Text>
+                <Text
+                  style={[
+                    styles.allocationStatus,
+                    {
+                      color:
+                        a.settlement_status === "settled"
+                          ? colors.statusSuccess
+                          : colors.statusWarning,
+                    },
+                  ]}
+                >
+                  {a.status} ({a.amount_locked})
+                </Text>
+              </View>
+            )}
+            ListEmptyComponent={
+              accountBalance == null && budgetSummary == null ? (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyText}>No budget data yet.</Text>
                 </View>
-              );
-            }}
+              ) : null
+            }
+          />
+        ) : (
+          <FlatList
+            data={successionChain}
+            keyExtractor={(_, idx) => String(idx)}
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            renderItem={({ item: record }) => (
+              <View style={styles.successionItem}>
+                <View style={styles.successionRow}>
+                  <Text style={styles.successionLabel}>from</Text>
+                  <Text style={styles.successionKey}>{record.old_public_key.slice(0, 16)}...</Text>
+                </View>
+                <View style={styles.successionRow}>
+                  <Text style={styles.successionLabel}>to</Text>
+                  <Text style={styles.successionKey}>{record.new_public_key.slice(0, 16)}...</Text>
+                </View>
+                {record.reason && (
+                  <Text style={styles.credentialMeta}>reason: {record.reason}</Text>
+                )}
+                <Text style={styles.credentialMeta}>{formatTimeAgo(record.rotated_at)}</Text>
+              </View>
+            )}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>No credentials yet.</Text>
+                <Text style={styles.emptyText}>No key rotations.</Text>
               </View>
             }
           />
@@ -529,8 +544,28 @@ function createStyles(c: ThemeColors) {
       paddingHorizontal: 16,
       paddingTop: Platform.OS === "ios" ? 56 : 16,
       paddingBottom: 12,
+    },
+    tabBar: {
+      flexDirection: "row",
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.borderPrimary,
+      paddingHorizontal: 12,
+    },
+    tab: {
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderBottomWidth: 2,
+      borderBottomColor: "transparent",
+    },
+    tabActive: {
+      borderBottomColor: c.textSecondary,
+    },
+    tabText: {
+      fontSize: 12,
+      color: c.textGhost,
+    },
+    tabTextActive: {
+      color: c.textSecondary,
     },
     headerLeft: {
       flexDirection: "row",
