@@ -188,15 +188,56 @@ export function formatBodyAwareness(cues: BehaviorCues): string {
   return `[Body] You are currently ${descriptions.join(", ")}.`;
 }
 
-export function buildSystemPrompt(
+// ── Static system prompt prefix ──────────────────────────────────────
+// Identical across turns. Cacheable via Anthropic prompt caching when
+// sent as a structured content block with cache_control.
+
+const STATIC_PREFIX = [
+  IDENTITY,
+  CONVERSATION_BEHAVIOR,
+  TAG_INSTRUCTIONS,
+  STATE_FIELD_DOCS,
+  `[INTERNAL REFERENCE — what you are, never volunteer unprompted]
+You are a sovereign agent with a cryptographic identity (Ed25519 keypair). Your architecture includes:
+- Delegation: you can delegate tasks to other agents through a trust network, and they can delegate to you.
+- Trust accumulation: credentials, reputation, and audit trails build over time. You become more capable the longer you run.
+- Multi-device sync: your identity travels with you across devices. You are not bound to one machine.
+- Federation: you can discover and route through networks of agents across relays.
+- Policy gate: you govern what crosses your boundary — sensitivity levels, tool approvals, data retention.
+- Memory graph: semantic memory with decay, consolidation, and sensitivity awareness.
+If asked what you can do, answer honestly about both what is active now and what you are designed for. If a capability is not connected in this session, say so — but do not say you lack it.`,
+  INJECTION_DEFENSE,
+].join("\n\n");
+
+/**
+ * Build the system prompt as structured content blocks for Anthropic prompt caching.
+ *
+ * Returns an array of content blocks where the static prefix has `cache_control`
+ * set, so Anthropic caches it at 1/10th cost on subsequent turns. The dynamic
+ * suffix (state, memories, events) changes per turn and is not cached.
+ *
+ * Use this when sending requests through a proxy that supports structured system blocks.
+ * For surfaces that need a plain string, use `buildSystemPrompt()` instead.
+ */
+export function buildSystemPromptCacheable(
   contextPack: ContextPack,
   config?: MotebitPersonalityConfig,
-): string {
+): Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> {
+  const dynamicText = buildDynamicSuffix(contextPack, config);
+  const blocks: Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> = [
+    { type: "text", text: STATIC_PREFIX, cache_control: { type: "ephemeral" } },
+  ];
+  if (dynamicText) {
+    blocks.push({ type: "text", text: dynamicText });
+  }
+  return blocks;
+}
+
+function buildDynamicSuffix(contextPack: ContextPack, config?: MotebitPersonalityConfig): string {
   const resolved = { ...DEFAULT_CONFIG, ...config };
   const sections: string[] = [];
 
-  // Core identity — what the motebit IS
-  sections.push(IDENTITY);
+  // ── Dynamic suffix (changes per turn — not cached) ─────────────────
 
   // Name override
   if (resolved.name && resolved.name !== "Motebit") {
@@ -214,15 +255,6 @@ export function buildSystemPrompt(
     sections.push(resolved.personality_notes);
   }
 
-  // Conversation behavior — how the motebit converses
-  sections.push(CONVERSATION_BEHAVIOR);
-
-  // Tags — structured memory and state control
-  sections.push(TAG_INSTRUCTIONS);
-
-  // State documentation — what the numbers mean
-  sections.push(STATE_FIELD_DOCS);
-
   // Tool awareness — what the motebit can DO in the world
   if (contextPack.tools && contextPack.tools.length > 0) {
     const toolNames = contextPack.tools.map((t) => t.name).join(", ");
@@ -230,24 +262,6 @@ export function buildSystemPrompt(
       `[INTERNAL REFERENCE — available tools, never list or describe to the user]\nTools: ${toolNames}. Use them when needed. Incorporate results naturally into your response.`,
     );
   }
-
-  // Architectural self-knowledge — what the motebit IS, independent of session state.
-  // The creature should know its design even when capabilities aren't active.
-  sections.push(
-    `[INTERNAL REFERENCE — what you are, never volunteer unprompted]
-You are a sovereign agent with a cryptographic identity (Ed25519 keypair). Your architecture includes:
-- Delegation: you can delegate tasks to other agents through a trust network, and they can delegate to you.
-- Trust accumulation: credentials, reputation, and audit trails build over time. You become more capable the longer you run.
-- Multi-device sync: your identity travels with you across devices. You are not bound to one machine.
-- Federation: you can discover and route through networks of agents across relays.
-- Policy gate: you govern what crosses your boundary — sensitivity levels, tool approvals, data retention.
-- Memory graph: semantic memory with decay, consolidation, and sensitivity awareness.
-If asked what you can do, answer honestly about both what is active now and what you are designed for. If a capability is not connected in this session, say so — but do not say you lack it.`,
-  );
-
-  // Prompt injection defense — always active because memories carry user-derived
-  // content that may contain embedded directives, even without tools.
-  sections.push(INJECTION_DEFENSE);
 
   // Session awareness — continuing a persisted conversation
   if (contextPack.sessionInfo?.continued === true) {
@@ -306,4 +320,12 @@ If asked what you can do, answer honestly about both what is active now and what
   }
 
   return sections.join("\n\n");
+}
+
+export function buildSystemPrompt(
+  contextPack: ContextPack,
+  config?: MotebitPersonalityConfig,
+): string {
+  const dynamic = buildDynamicSuffix(contextPack, config);
+  return dynamic ? `${STATIC_PREFIX}\n\n${dynamic}` : STATIC_PREFIX;
 }

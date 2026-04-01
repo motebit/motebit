@@ -139,6 +139,11 @@ function buildProviderRequest(
           max_tokens: maxTokens,
           temperature: body.temperature,
           stream: true,
+          // Enable prompt caching — Anthropic caches the longest stable prefix
+          // of the system prompt at 1/10th input cost. The system prompt is
+          // structured static-first so the cache covers ~3K tokens of identity,
+          // behavior rules, and injection defense.
+          cache_control: { type: "ephemeral" },
           ...(body.tools != null ? { tools: body.tools } : {}),
         }),
       };
@@ -190,7 +195,7 @@ function buildProviderRequest(
 function extractUsage(
   provider: Provider,
   line: string,
-  usage: { input: number; output: number },
+  usage: { input: number; output: number; cacheRead: number; cacheCreation: number },
 ): void {
   if (!line.startsWith("data: ")) return;
   const json = line.slice(6);
@@ -200,9 +205,19 @@ function extractUsage(
 
     if (provider === "anthropic") {
       // Anthropic: initial message has usage.input_tokens, message_delta has usage.output_tokens
-      const u = evt.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+      const u = evt.usage as
+        | {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
+          }
+        | undefined;
       if (u?.input_tokens != null) usage.input = u.input_tokens;
       if (u?.output_tokens != null) usage.output = u.output_tokens;
+      if (u?.cache_read_input_tokens != null) usage.cacheRead = u.cache_read_input_tokens;
+      if (u?.cache_creation_input_tokens != null)
+        usage.cacheCreation = u.cache_creation_input_tokens;
     } else {
       // OpenAI / Google: final chunk has usage object
       const u = evt.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
@@ -427,7 +442,7 @@ export async function POST(request: Request): Promise<Response> {
     const mid = tokenPayload.mid;
     const model = resolvedModel;
     const prov = resolvedProvider;
-    const usage = { input: 0, output: 0 };
+    const usage = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
 
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
@@ -451,7 +466,31 @@ export async function POST(request: Request): Promise<Response> {
         }
       } finally {
         await writer.close();
-        const cost = calculateCostMicro(model, usage.input, usage.output) + classifierCost;
+        const cost =
+          calculateCostMicro(
+            model,
+            usage.input,
+            usage.output,
+            usage.cacheRead,
+            usage.cacheCreation,
+          ) + classifierCost;
+        // Log raw provider token fields for billing verification.
+        // Check: does input_tokens include cached tokens or not?
+        // If input = uncached + cacheRead + cacheCreation, our formula is correct.
+        // If input = uncached only, we're double-counting cached tokens (overcharging).
+        console.log(
+          JSON.stringify({
+            event: "proxy.usage",
+            requestId,
+            model,
+            input: usage.input,
+            output: usage.output,
+            cacheRead: usage.cacheRead,
+            cacheCreation: usage.cacheCreation,
+            costMicro: cost,
+            motebitId: mid,
+          }),
+        );
         if (cost > 0) debitRelay(mid, cost, requestId);
       }
     })();

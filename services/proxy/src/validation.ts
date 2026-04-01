@@ -164,16 +164,28 @@ export function getSupportedModels(): string[] {
 const MARGIN = 0.2; // 20% markup
 const MICRO = 1_000_000;
 
-/** Calculate cost in micro-units for a completed request. */
+/** Calculate cost in micro-units for a completed request.
+ *
+ *  Anthropic usage fields are disjoint buckets (not overlapping):
+ *    input_tokens          = non-cached tokens (after last cache breakpoint)
+ *    cache_read_input_tokens    = cached tokens read from cache (0.1x price)
+ *    cache_creation_input_tokens = tokens written to cache (1.25x price)
+ *    total_input = input_tokens + cache_read + cache_creation
+ */
 export function calculateCostMicro(
   model: string,
   inputTokens: number,
   outputTokens: number,
+  cacheReadTokens = 0,
+  cacheCreationTokens = 0,
 ): number {
   const config = MODEL_CONFIG[model];
   if (!config) return 0;
   const rawCost =
-    (inputTokens / 1_000_000) * config.input + (outputTokens / 1_000_000) * config.output;
+    (inputTokens / 1_000_000) * config.input +
+    (cacheReadTokens / 1_000_000) * config.input * 0.1 +
+    (cacheCreationTokens / 1_000_000) * config.input * 1.25 +
+    (outputTokens / 1_000_000) * config.output;
   return Math.ceil(rawCost * (1 + MARGIN) * MICRO);
 }
 
