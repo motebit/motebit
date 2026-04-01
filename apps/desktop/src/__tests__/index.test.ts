@@ -216,7 +216,7 @@ describe("DesktopApp.currentModel", () => {
   it("returns the model after anthropic initAI", async () => {
     app = new DesktopApp();
     await app.initAI({ provider: "anthropic", apiKey: "sk-test", isTauri: false });
-    expect(app.currentModel).toBe("claude-sonnet-4-20250514");
+    expect(app.currentModel).toBe("claude-sonnet-4-6");
   });
 });
 

@@ -23,12 +23,12 @@ describe("provider routing", () => {
     expect(getModelProvider("claude-haiku-4-5-20251001")).toBe("anthropic");
   });
 
-  it("gpt-4o → openai", () => {
-    expect(getModelProvider("gpt-4o")).toBe("openai");
+  it("gpt-5.4-mini → openai", () => {
+    expect(getModelProvider("gpt-5.4-mini")).toBe("openai");
   });
 
-  it("gpt-4o-mini → openai", () => {
-    expect(getModelProvider("gpt-4o-mini")).toBe("openai");
+  it("gpt-5.4-nano → openai", () => {
+    expect(getModelProvider("gpt-5.4-nano")).toBe("openai");
   });
 
   it("gemini-2.5-pro → google", () => {
@@ -49,7 +49,7 @@ describe("task-to-model mapping", () => {
     quick: "claude-haiku-4-5-20251001",
     chat: "claude-sonnet-4-6",
     reasoning: "claude-opus-4-6",
-    code: "gpt-4o",
+    code: "gpt-5.4",
     research: "gemini-2.5-pro",
     creative: "claude-sonnet-4-6",
     math: "claude-opus-4-6",
@@ -88,16 +88,16 @@ describe("cost calculation", () => {
     expect(calculateCostMicro("claude-haiku-4-5-20251001", 1000, 100)).toBe(1800);
   });
 
-  it("gpt-4o: 1000 in + 100 out = 4200 micro", () => {
-    // raw = (1000/1M)*2.5 + (100/1M)*10.0 = 0.0025 + 0.001 = 0.0035
-    // with margin = 0.0042, micro = ceil(4200) = 4200
-    expect(calculateCostMicro("gpt-4o", 1000, 100)).toBe(4200);
+  it("gpt-5.4-mini: 1000 in + 100 out = 2520 micro", () => {
+    // raw = (1000/1M)*1.5 + (100/1M)*6.0 = 0.0015 + 0.0006 = 0.0021
+    // with margin = 0.00252, micro = ceil(2520) = 2520
+    expect(calculateCostMicro("gpt-5.4-mini", 1000, 100)).toBe(2520);
   });
 
-  it("gpt-4o-mini: 1000 in + 100 out = 252 micro", () => {
+  it("gpt-5.4-nano: 1000 in + 100 out = 252 micro", () => {
     // raw = (1000/1M)*0.15 + (100/1M)*0.6 = 0.00015 + 0.00006 = 0.00021
     // with margin = 0.000252, micro = ceil(252) = 252
-    expect(calculateCostMicro("gpt-4o-mini", 1000, 100)).toBe(252);
+    expect(calculateCostMicro("gpt-5.4-nano", 1000, 100)).toBe(252);
   });
 
   it("gemini-2.5-pro: 1000 in + 100 out = 2700 micro", () => {

@@ -58,10 +58,11 @@ const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: 
   "claude-opus-4-6": { provider: "anthropic", input: 5.0, output: 25.0 },
   "claude-sonnet-4-6": { provider: "anthropic", input: 3.0, output: 15.0 },
   "claude-haiku-4-5-20251001": { provider: "anthropic", input: 1.0, output: 5.0 },
-  // OpenAI — gpt-4o (strongest), gpt-4o-mini (default), gpt-4o-mini (fast)
-  "gpt-4o": { provider: "openai", input: 2.5, output: 10.0 },
-  "gpt-4o-mini": { provider: "openai", input: 0.15, output: 0.6 },
-  // Google — pro (strongest), flash (default), flash-lite (fast)
+  // OpenAI — gpt-5.4 (strongest), gpt-5.4-mini (default), gpt-5.4-nano (fast)
+  "gpt-5.4": { provider: "openai", input: 10.0, output: 30.0 },
+  "gpt-5.4-mini": { provider: "openai", input: 1.5, output: 6.0 },
+  "gpt-5.4-nano": { provider: "openai", input: 0.15, output: 0.6 },
+  // Google — 2.5 pro (strongest), 2.5 flash (default), 2.5 flash-lite (fast)
   "gemini-2.5-pro": { provider: "google", input: 1.25, output: 10.0 },
   "gemini-2.5-flash": { provider: "google", input: 0.15, output: 0.6 },
   "gemini-2.5-flash-lite": { provider: "google", input: 0.075, output: 0.3 },
@@ -88,8 +89,11 @@ const MODEL_ALIASES: Record<string, string> = {
   "claude-3-opus-20240229": "claude-opus-4-6",
 
   // OpenAI aliases
-  "gpt-4o-2024-11-20": "gpt-4o",
-  "gpt-4o-mini-2024-07-18": "gpt-4o-mini",
+  "gpt-5": "gpt-5.4",
+  "gpt-4o": "gpt-5.4-mini",
+  "gpt-4o-mini": "gpt-5.4-nano",
+  "gpt-4o-2024-11-20": "gpt-5.4-mini",
+  "gpt-4o-mini-2024-07-18": "gpt-5.4-nano",
 
   // Google aliases
   "gemini-pro": "gemini-2.5-pro",
@@ -112,7 +116,7 @@ const TASK_MODEL_MAP: Record<string, string> = {
   quick: "claude-haiku-4-5-20251001",
   chat: "claude-sonnet-4-6",
   reasoning: "claude-opus-4-6",
-  code: "gpt-4o",
+  code: "gpt-5.4",
   research: "gemini-2.5-pro",
   creative: "claude-sonnet-4-6",
   math: "claude-opus-4-6",

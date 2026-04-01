@@ -14,10 +14,10 @@ export const ANTHROPIC_MODELS = [
   "claude-haiku-4-5-20251001",
 ] as const;
 
-/** OpenAI models: gpt-4o (strongest), gpt-4o-mini (default/fast). */
-export const OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini"] as const;
+/** OpenAI models: gpt-5.4 (strongest), gpt-5.4-mini (default), gpt-5.4-nano (fast). */
+export const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
 
-/** Google models: pro (strongest), flash (default), flash-lite (fast). */
+/** Google models: 2.5 pro (strongest), 2.5 flash (default), 2.5 flash-lite (fast). */
 export const GOOGLE_MODELS = [
   "gemini-2.5-pro",
   "gemini-2.5-flash",
@@ -41,8 +41,9 @@ export const PROXY_MODELS = [
   "claude-opus-4-6",
   "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
-  "gpt-4o",
-  "gpt-4o-mini",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
   "gemini-2.5-pro",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
@@ -54,10 +55,10 @@ export const PROXY_MODELS = [
 export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
 
 /** Default OpenAI model. */
-export const DEFAULT_OPENAI_MODEL = "gpt-4o";
+export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
 
 /** Default Google model. */
-export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-pro";
+export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";
 
 /** Default Ollama model. */
 export const DEFAULT_OLLAMA_MODEL = "llama3.2";

@@ -124,11 +124,11 @@ export function resolveModelTier(tier: ModelTier, currentModel: string): string 
   ) {
     switch (tier) {
       case "strongest":
-        return "gpt-4o";
+        return "gpt-5.4";
       case "default":
-        return "gpt-4o-mini";
+        return "gpt-5.4-mini";
       case "fast":
-        return "gpt-4o-mini";
+        return "gpt-5.4-nano";
     }
   }
 

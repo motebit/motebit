@@ -15,7 +15,7 @@ describe("getModelForTaskType", () => {
     quick: "claude-haiku-4-5-20251001",
     chat: "claude-sonnet-4-6",
     reasoning: "claude-opus-4-6",
-    code: "gpt-4o",
+    code: "gpt-5.4",
     research: "gemini-2.5-pro",
     creative: "claude-sonnet-4-6",
     math: "claude-opus-4-6",
@@ -39,8 +39,8 @@ describe("getModelProvider", () => {
     "claude-sonnet-4-6": "anthropic",
     "claude-opus-4-6": "anthropic",
     "claude-haiku-4-5-20251001": "anthropic",
-    "gpt-4o": "openai",
-    "gpt-4o-mini": "openai",
+    "gpt-5.4-mini": "openai",
+    "gpt-5.4-nano": "openai",
     "gemini-2.5-pro": "google",
     "gemini-2.5-flash": "google",
   };
@@ -58,14 +58,14 @@ describe("getModelProvider", () => {
 });
 
 describe("getSupportedModels", () => {
-  it("returns all 8 models", () => {
+  it("returns all 9 models", () => {
     const models = getSupportedModels();
-    expect(models).toHaveLength(8);
+    expect(models).toHaveLength(9);
     expect(models).toContain("claude-sonnet-4-6");
     expect(models).toContain("claude-opus-4-6");
     expect(models).toContain("claude-haiku-4-5-20251001");
-    expect(models).toContain("gpt-4o");
-    expect(models).toContain("gpt-4o-mini");
+    expect(models).toContain("gpt-5.4-mini");
+    expect(models).toContain("gpt-5.4-nano");
     expect(models).toContain("gemini-2.5-pro");
     expect(models).toContain("gemini-2.5-flash");
   });
@@ -95,18 +95,18 @@ describe("calculateCostMicro", () => {
     expect(calculateCostMicro("claude-haiku-4-5-20251001", 1000, 500)).toBe(4200);
   });
 
-  it("gpt-4o: 1000 in / 500 out", () => {
-    // raw = (1000/1e6)*2.5 + (500/1e6)*10.0 = 0.0025 + 0.005 = 0.0075
-    // with margin = 0.0075 * 1.2 = 0.009
-    // micro = ceil(0.009 * 1e6) = 9000
-    expect(calculateCostMicro("gpt-4o", 1000, 500)).toBe(9000);
+  it("gpt-5.4-mini: 1000 in / 500 out", () => {
+    // raw = (1000/1e6)*1.5 + (500/1e6)*6.0 = 0.0015 + 0.003 = 0.0045
+    // with margin = 0.0045 * 1.2 = 0.0054
+    // micro = ceil(0.0054 * 1e6) = 5400
+    expect(calculateCostMicro("gpt-5.4-mini", 1000, 500)).toBe(5400);
   });
 
-  it("gpt-4o-mini: 1000 in / 500 out", () => {
+  it("gpt-5.4-nano: 1000 in / 500 out", () => {
     // raw = (1000/1e6)*0.15 + (500/1e6)*0.6 = 0.00015 + 0.0003 = 0.00045
     // with margin = 0.00045 * 1.2 = 0.00054
     // micro = ceil(0.00054 * 1e6) = 540
-    expect(calculateCostMicro("gpt-4o-mini", 1000, 500)).toBe(540);
+    expect(calculateCostMicro("gpt-5.4-nano", 1000, 500)).toBe(540);
   });
 
   it("gemini-2.5-pro: 1000 in / 500 out", () => {
@@ -240,8 +240,10 @@ describe("resolveModelAlias", () => {
   });
 
   it("resolves legacy OpenAI models", () => {
-    expect(resolveModelAlias("gpt-4o-2024-11-20")).toBe("gpt-4o");
-    expect(resolveModelAlias("gpt-4o-mini-2024-07-18")).toBe("gpt-4o-mini");
+    expect(resolveModelAlias("gpt-4o")).toBe("gpt-5.4-mini");
+    expect(resolveModelAlias("gpt-4o-mini")).toBe("gpt-5.4-nano");
+    expect(resolveModelAlias("gpt-4o-2024-11-20")).toBe("gpt-5.4-mini");
+    expect(resolveModelAlias("gpt-4o-mini-2024-07-18")).toBe("gpt-5.4-nano");
   });
 
   it("resolves Google model aliases", () => {
@@ -253,7 +255,7 @@ describe("resolveModelAlias", () => {
 
   it("passes through canonical model IDs unchanged", () => {
     expect(resolveModelAlias("claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
-    expect(resolveModelAlias("gpt-4o")).toBe("gpt-4o");
+    expect(resolveModelAlias("gpt-5.4-mini")).toBe("gpt-5.4-mini");
     expect(resolveModelAlias("gemini-2.5-pro")).toBe("gemini-2.5-pro");
   });
 
@@ -269,6 +271,8 @@ describe("resolveModelAlias", () => {
       "claude-3-5-sonnet-20241022",
       "claude-3-5-haiku-20241022",
       "claude-3-opus-20240229",
+      "gpt-4o",
+      "gpt-4o-mini",
       "gpt-4o-2024-11-20",
       "gpt-4o-mini-2024-07-18",
       "gemini-pro",
