@@ -26,7 +26,7 @@ import {
   Modal,
   Appearance,
 } from "react-native";
-import { GLView as _GLView } from "expo-gl";
+import { WebView } from "react-native-webview";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Feather = require("@expo/vector-icons/Feather").default as React.ComponentType<{
   name: string;
@@ -34,10 +34,6 @@ const Feather = require("@expo/vector-icons/Feather").default as React.Component
   color: string;
 }>;
 
-// expo-gl types lag behind React 19's stricter JSX component constraints
-const GLView = _GLView as unknown as typeof _GLView &
-  (new (props: Record<string, unknown>) => React.Component<Record<string, unknown>>);
-import type { ExpoWebGLRenderingContext } from "expo-gl";
 import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { MemoryType } from "@motebit/sdk";
@@ -104,8 +100,11 @@ export default function App(): React.ReactElement {
   const [state, setState] = useState<MotebitState | null>(null);
   const [, setCues] = useState<BehaviorCues | null>(null);
   const [initialized, setInitialized] = useState(false);
+  const [glStage, setGlStage] = useState("webview");
   const [settings, setSettings] = useState<MobileSettings | null>(null);
   const animFrameRef = useRef<number>(0);
+  const renderLoopTokenRef = useRef(0);
+  const webViewRef = useRef<WebView>(null);
   const flatListRef = useRef<FlatList>(null);
 
   // Modal state
@@ -235,10 +234,13 @@ export default function App(): React.ReactElement {
   // Track whether a pending approval is from a goal (vs. chat)
   const pendingGoalApprovalRef = useRef<boolean>(false);
 
-  // Orbit control touch tracking
-  const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
-  const lastPinchDistRef = useRef<number>(0);
-  const lastTapTimeRef = useRef<number>(0);
+  const stopRenderLoop = useCallback(() => {
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = 0;
+    }
+    renderLoopTokenRef.current += 1;
+  }, []);
 
   // === Initialization ===
   useEffect(() => {
@@ -294,15 +296,17 @@ export default function App(): React.ReactElement {
     })();
 
     return () => {
-      cancelAnimationFrame(animFrameRef.current);
+      stopRenderLoop();
       app.current.stopGoalScheduler();
       app.current.stopSync();
+      app.current.stop();
+      app.current.disposeProxySession();
       if (audioMonitorRef.current) void audioMonitorRef.current.stop();
       if (ttsPulseRef.current) clearInterval(ttsPulseRef.current);
       ttsRef.current?.cancel();
       sttRef.current?.stop();
     };
-  }, []);
+  }, [stopRenderLoop]);
 
   // Initialize voice providers — TTS chain: OpenAI TTS → expo-speech fallback
   const initVoice = useCallback(
@@ -529,87 +533,54 @@ export default function App(): React.ReactElement {
     [refreshMcpServers, addSystemMessage],
   );
 
-  // === GL context ===
-  const onGLContextCreate = useCallback((gl: ExpoWebGLRenderingContext) => {
-    void (async () => {
-      const a = app.current;
-      await a.init(gl);
+  // === WebView creature renderer ===
+  const onWebViewMessage = useCallback(
+    (event: { nativeEvent: { data: string } }) => {
+      const data = event.nativeEvent.data;
+      const renderer = app.current.getRenderer();
+      renderer.onWebViewMessage(data);
 
-      let lastTime = 0;
-      const animate = (time: number): void => {
-        const dt = lastTime ? (time - lastTime) / 1000 : 0.016;
-        lastTime = time;
+      if (data === "ready") {
+        setGlStage("rendering");
+        // Start render loop — drives behavior engine, sends cues to WebView
+        stopRenderLoop();
+        const renderToken = renderLoopTokenRef.current;
+        const a = app.current;
+        void a.init(null); // No-op for WebView adapter
 
-        // Sync creature mouth + glow to actual TTS audio playback
-        const runtime = a.getRuntime();
-        const isSpeaking = ttsQueueRef.current?.draining ?? false;
-        if (runtime) {
-          runtime.behavior.setSpeaking(isSpeaking);
-        }
-        if (isSpeaking) {
-          const bands = computeSpeechEnergy(time / 1000);
-          a.setAudioReactivity(bands);
-        }
+        let lastTime = 0;
+        const animate = (time: number): void => {
+          if (renderToken !== renderLoopTokenRef.current) return;
+          const dt = lastTime ? (time - lastTime) / 1000 : 0.016;
+          lastTime = time;
 
-        a.renderFrame(dt, time / 1000);
+          const runtime = a.getRuntime();
+          const isSpeaking = ttsQueueRef.current?.draining ?? false;
+          if (runtime) {
+            runtime.behavior.setSpeaking(isSpeaking);
+          }
+          if (isSpeaking) {
+            const bands = computeSpeechEnergy(time / 1000);
+            a.setAudioReactivity(bands);
+          }
+
+          try {
+            a.renderFrame(dt, time / 1000);
+          } catch {
+            // Render errors handled inside adapter
+          }
+          animFrameRef.current = requestAnimationFrame(animate);
+        };
         animFrameRef.current = requestAnimationFrame(animate);
-      };
-      animFrameRef.current = requestAnimationFrame(animate);
-    })();
-  }, []);
-
-  // === Orbit gesture handlers ===
-
-  const handleGLResponderGrant = useCallback(
-    (e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
-      app.current.handleOrbitTouchStart();
-      const { touches } = e.nativeEvent;
-      const t0 = touches[0];
-      const t1 = touches[1];
-      if (touches.length === 1 && t0) {
-        lastTouchRef.current = { x: t0.pageX, y: t0.pageY };
-      } else if (touches.length === 2 && t0 && t1) {
-        const dx = t1.pageX - t0.pageX;
-        const dy = t1.pageY - t0.pageY;
-        lastPinchDistRef.current = Math.sqrt(dx * dx + dy * dy);
-        lastTouchRef.current = null;
       }
     },
-    [],
+    [stopRenderLoop],
   );
 
-  const handleGLResponderMove = useCallback(
-    (e: { nativeEvent: { touches: Array<{ pageX: number; pageY: number }> } }) => {
-      const { touches } = e.nativeEvent;
-      const t0 = touches[0];
-      const t1 = touches[1];
-      if (touches.length === 1 && t0 && lastTouchRef.current) {
-        const dx = t0.pageX - lastTouchRef.current.x;
-        const dy = t0.pageY - lastTouchRef.current.y;
-        app.current.handleOrbitPan(dx, dy);
-        lastTouchRef.current = { x: t0.pageX, y: t0.pageY };
-      } else if (touches.length === 2 && t0 && t1 && lastPinchDistRef.current > 0) {
-        const dx = t1.pageX - t0.pageX;
-        const dy = t1.pageY - t0.pageY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 0) {
-          app.current.handleOrbitPinch(dist / lastPinchDistRef.current);
-          lastPinchDistRef.current = dist;
-        }
-      }
-    },
-    [],
-  );
-
-  const handleGLResponderRelease = useCallback(() => {
-    app.current.handleOrbitTouchEnd();
-    const now = Date.now();
-    if (lastTouchRef.current && now - lastTapTimeRef.current < 300) {
-      app.current.handleOrbitDoubleTap();
-    }
-    lastTapTimeRef.current = now;
-    lastTouchRef.current = null;
-    lastPinchDistRef.current = 0;
+  // Wire WebView ref to adapter when it mounts
+  const handleWebViewRef = useCallback((ref: WebView | null) => {
+    (webViewRef as React.MutableRefObject<WebView | null>).current = ref;
+    app.current.getRenderer().setWebViewRef(ref);
   }, []);
 
   // === Audio monitor helpers ===
@@ -1832,16 +1803,20 @@ export default function App(): React.ReactElement {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
-        {/* 3D Rendering — touch responder for orbit controls */}
-        <View
-          style={ds.glContainer}
-          onStartShouldSetResponder={() => true}
-          onMoveShouldSetResponder={() => true}
-          onResponderGrant={handleGLResponderGrant}
-          onResponderMove={handleGLResponderMove}
-          onResponderRelease={handleGLResponderRelease}
-        >
-          <GLView style={ds.glView} onContextCreate={onGLContextCreate} />
+        {/* 3D Rendering — WebView with full WebGL2 (same engine as Safari) */}
+        <View style={ds.glContainer}>
+          <WebView
+            ref={handleWebViewRef}
+            source={{ html: app.current.getRenderer().getHTML() }}
+            style={ds.glView}
+            scrollEnabled={false}
+            bounces={false}
+            overScrollMode="never"
+            javaScriptEnabled={true}
+            originWhitelist={["*"]}
+            onMessage={onWebViewMessage}
+            allowsInlineMediaPlayback={true}
+          />
           {state && (
             <View style={ds.stateOverlay}>
               <Text style={ds.stateText}>
@@ -1849,6 +1824,7 @@ export default function App(): React.ReactElement {
                 {state.affect_valence.toFixed(2)}
                 {app.current.governanceStatus.governed ? " · gov" : ""}
                 {micState !== "off" ? ` · ${micState}` : ""}
+                {` · gl ${glStage}`}
               </Text>
             </View>
           )}
@@ -2245,7 +2221,7 @@ function createDynamicStyles(c: ThemeColors) {
 
     // GL View
     glContainer: {
-      height: 240,
+      flex: 3,
       position: "relative",
     },
     glView: {

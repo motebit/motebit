@@ -3,8 +3,8 @@
  *
  * Architecture:
  * - MobileApp wraps MotebitRuntime with Expo-specific adapters
- * - expo-gl for Three.js rendering via ExpoGLAdapter
- * - expo-sqlite for persistent storage via ExpoSqliteAdapter
+ * - WebView for Three.js rendering via WebViewGLAdapter (full WebGL2)
+ * - expo-sqlite for persistent storage
  * - expo-secure-store for keychain access via SecureStoreAdapter
  * - AsyncStorage for non-secret settings persistence
  */
@@ -20,6 +20,6 @@ export type {
 export {
   createExpoStorage,
   ExpoSqliteConversationStore,
-  ExpoGLAdapter,
+  WebViewGLAdapter,
   SecureStoreAdapter,
 } from "./adapters";

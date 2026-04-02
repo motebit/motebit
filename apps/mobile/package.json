@@ -46,23 +46,20 @@
     "expo-constants": "^55.0.9",
     "expo-file-system": "~17.0.0",
     "expo-font": "^55.0.4",
-    "expo-gl": "~15.0.0",
     "expo-router": "~4.0.0",
     "expo-secure-store": "~14.0.0",
     "expo-sharing": "~13.0.0",
     "expo-speech": "~13.0.0",
     "expo-sqlite": "~15.0.0",
-    "expo-three": "^8.0.0",
     "react": "^18.3.0",
     "react-native": "0.76.9",
     "react-native-get-random-values": "1.11.0",
     "react-native-quick-crypto": "0.7.7",
-    "readable-stream": "^4.7.0",
-    "three": "^0.170.0"
+    "react-native-webview": "^13.16.1",
+    "readable-stream": "^4.7.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",
-    "@types/three": "^0.170.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }

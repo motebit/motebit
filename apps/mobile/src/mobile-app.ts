@@ -4,7 +4,7 @@
  * Wraps MotebitRuntime with Expo-specific adapters:
  * - expo-secure-store for keyring (iOS Keychain / Android Keystore)
  * - expo-sqlite for persistent storage
- * - expo-gl for Three.js rendering
+ * - WebView for Three.js rendering (full WebGL2 via WKWebView)
  * - AsyncStorage for non-secret settings
  *
  * Modeled on DesktopApp / SpatialApp — same pattern, different adapters.
@@ -117,7 +117,7 @@ import {
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
-import { ExpoGLAdapter } from "./adapters/expo-gl";
+import { WebViewGLAdapter } from "./adapters/webview-gl";
 import { SecureStoreAdapter } from "./adapters/secure-store";
 
 // === Color Presets (same 7 as desktop) ===
@@ -278,7 +278,7 @@ function parseInterval(s: string): number {
 export class MobileApp {
   private runtime: MotebitRuntime | null = null;
   private storage: ExpoStorageResult | null = null;
-  private renderer: ExpoGLAdapter;
+  private renderer: WebViewGLAdapter;
   private keyring: SecureStoreAdapter;
 
   // Governance status
@@ -338,7 +338,7 @@ export class MobileApp {
   private _proxyConfig: ProxyProviderConfig | null = null;
 
   constructor() {
-    this.renderer = new ExpoGLAdapter();
+    this.renderer = new WebViewGLAdapter();
     this.keyring = new SecureStoreAdapter();
   }
 
@@ -796,6 +796,10 @@ export class MobileApp {
 
   getRuntime(): MotebitRuntime | null {
     return this.runtime;
+  }
+
+  getRenderer(): WebViewGLAdapter {
+    return this.renderer;
   }
 
   get currentModel(): string | null {
