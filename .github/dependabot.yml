@@ -15,19 +15,31 @@ updates:
         update-types:
           - "minor"
           - "patch"
+        exclude-patterns:
+          - "@noble/*"
+          - "@scure/*"
       dev-major:
         dependency-type: "development"
         update-types:
           - "major"
+        exclude-patterns:
+          - "@noble/*"
+          - "@scure/*"
       production-minor-patch:
         dependency-type: "production"
         update-types:
           - "minor"
           - "patch"
+        exclude-patterns:
+          - "@noble/*"
+          - "@scure/*"
       production-major:
         dependency-type: "production"
         update-types:
           - "major"
+        exclude-patterns:
+          - "@noble/*"
+          - "@scure/*"
     open-pull-requests-limit: 10
 
   - package-ecosystem: "github-actions"
