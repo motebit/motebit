@@ -52,7 +52,7 @@
     "expo-speech": "~13.0.0",
     "expo-sqlite": "~15.0.0",
     "react": "^18.3.0",
-    "react-native": "0.76.9",
+    "react-native": "0.84.1",
     "react-native-get-random-values": "1.11.0",
     "react-native-quick-crypto": "0.7.7",
     "react-native-webview": "^13.16.1",
