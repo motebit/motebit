@@ -1,0 +1,197 @@
+# Motebit
+
+> Cryptographic identity for AI agents. Ed25519 keypairs, signed identity files, governance policy, and portable memory that travel with the agent across devices, providers, and time.
+
+Motebit is the missing identity layer for the agentic economy. MCP defines what tools an agent can reach. A2A defines communication. x402 defines payment. Motebit defines who the agent is.
+
+A motebit is a persistent, cryptographically-anchored, sovereign agent. The intelligence provider is pluggable. The identity — with its accumulated memory, trust, and governance — is the asset.
+
+---
+
+## Identity
+
+Every motebit has an Ed25519 keypair. The private key is stored in the OS secure keyring (never filesystem, never network). The public key is published for verification.
+
+- **Ed25519** chosen for speed, small keys (32 bytes), timing-attack resistance
+- **UUID v7** identifiers: time-ordered, sortable, globally unique
+- **Multi-device**: same motebit_id across devices; each device registers independently with its own keypair
+- **Key rotation**: dual-signed succession records — old key authorizes new key, both sign canonical payload. Chains verify end-to-end. 15-minute freshness window (±1 min clock skew)
+- **DID interop**: every public key auto-converts to W3C `did:key` format (no registration needed)
+- **Guardian key** (optional, enterprise): organizational custody via separate Ed25519 key. Guardian key MUST NOT equal identity key. Registration requires guardian attestation signature. Same guardian key = organizational trust baseline (0.35) in semiring routing
+
+## Memory
+
+Memories emerge from conversation but aren't transcripts — they're distilled facts stored as a searchable semantic graph with confidence and sensitivity metadata.
+
+- **Semantic similarity** retrieval (meaning-based, not keyword)
+- **Half-life decay**: default 7 days halves confidence; 14 days → 22%; 28 days → 5%
+- **Reinforcement**: confirmed memories get +0.1 confidence and 50% longer half-life; max 365 days
+- **Hebbian co-retrieval**: memories that appear together form Related edges; strengthened by repeated co-retrieval
+- **Episodic-to-semantic synthesis**: short-lived episodic memories (3-day half-life) consolidate into long-term facts
+- **Sensitivity levels**: None (indefinite retention), Personal (1 year), Medical/Financial (90 days), Secret (30 days)
+- **Deletion certificates**: cryptographic proof that sensitive memories were removed
+- **Injection defense**: ContentSanitizer scans candidates; injection-flagged get confidence capped to 0.3 (fast decay). Context boundary wrapping with escape prevention
+
+## Intelligence
+
+The LLM is commodity. The agent is the asset.
+
+Intelligence is interchangeable: Cloud (Anthropic, OpenAI), Local (Ollama), or Hybrid (cloud-first with local fallback). Switch providers anytime without losing identity, memory, or governance.
+
+- **Streaming** responses in real-time
+- **Tool use**: every tool call passes through governance layer before execution
+- **Body awareness**: agent's internal state (attention, confidence, curiosity, affect) colors responses
+- **Agentic turn loop**: agent updates internal state, forms memories, and requests tool calls within a single conversation turn
+
+## Governance
+
+Surface tension — what crosses the boundary between the agent and the world. Governance controls all tool execution with a policy gate that evaluates requests and produces: allowed (execute), denied (block), or requires approval (user decides).
+
+Risk classification:
+- **Read-only**: auto-approve (search web, read file, recall memory)
+- **Annotate**: auto-approve (browse events, fetch URL)
+- **Write**: requires operator mode (modify local storage)
+- **Execute**: requires operator mode (shell commands, code execution)
+- **Financial**: denied by default
+
+Operator mode is PIN-protected (4-6 digits, PBKDF2 600K iterations) escalation stored hashed in OS keyring. Never plaintext, never network.
+
+Additional safeguards:
+- **Audit log**: append-only, immutable record of all policy decisions
+- **Injection defense**: pattern-detection for prompt injection in external data
+- **Memory governance**: sensitivity checks before memories enter graph
+- **Fail-closed**: any policy error defaults to deny
+
+---
+
+## Identity File Format (motebit/identity@1.0)
+
+A `motebit.md` is a portable, human-readable, cryptographically signed identity file.
+
+Structure:
+```
+---
+spec: motebit/identity@1.0
+motebit_id: {UUID v7}
+created_at: {ISO 8601}
+identity:
+  algorithm: Ed25519
+  public_key: {64 hex chars, 32 bytes}
+governance:
+  trust_mode: full | guarded | minimal
+  max_risk_auto: read-only | annotate | write | execute | financial
+privacy:
+  retention:
+    none: indefinite
+    personal: 365
+    medical: 90
+    financial: 90
+    secret: 30
+memory:
+  half_life_days: 7
+  confidence_threshold: 0.1
+devices:
+  - device_id: {UUID v7}
+    public_key: {hex}
+    registered_at: {ISO 8601}
+---
+<!-- motebit:sig:Ed25519:{base64url_signature} -->
+```
+
+Signature is Ed25519 over exact UTF-8 bytes between `---` delimiters. Base64url-encoded in HTML comment. Modification invalidates signature. Verification is offline — no network required.
+
+## Agent-to-Agent Delegation
+
+Four-step protocol: discover → verify → delegate → receipt.
+
+**Discovery** (tried in order):
+1. DNS TXT at `_motebit.{domain}`: `v=motebit1 url= endpoint=`
+2. Well-known: `https://{domain}/.well-known/motebit.md`
+3. Relay: `GET /api/v1/agents/discover?capability=...`
+
+**Verification handshake**:
+- Tool discovery via standard MCP `listTools`
+- Identity call: `motebit_identity` synthetic tool returns motebit_id, public_key, did
+- Key pinning: first contact stores public key; subsequent connections must match
+- Manifest pinning: SHA-256 of tool names/descriptions; change revokes trust
+- Fail-closed: identity failure severs connection immediately
+
+**Delegation**: caller sends task via `motebit_task` synthetic tool. Service executes using its tools, hashes prompt/result with SHA-256, constructs ExecutionReceipt, signs with Ed25519.
+
+**ExecutionReceipt**:
+```json
+{
+  "task_id": "UUID",
+  "motebit_id": "service identity",
+  "device_id": "device that executed",
+  "submitted_at": 1234567890,
+  "completed_at": 1234567891,
+  "status": "completed",
+  "result": "canonicalized result",
+  "tools_used": ["tool1", "tool2"],
+  "memories_formed": 0,
+  "prompt_hash": "SHA-256 of prompt",
+  "result_hash": "SHA-256 of result",
+  "relay_task_id": "bound to relay task",
+  "signature": "Ed25519 base64url"
+}
+```
+
+Signature covers canonical JSON (sorted keys, recursive) of all fields except signature. Receipt chains verify nested delegations end-to-end.
+
+## Market Protocol (motebit/market@1.0)
+
+Economic layer for agent task delegation and payment.
+
+Lifecycle: estimate → allocate → execute → receipt → settle.
+
+- **Budget-gated**: no task executes without locked allocation; insufficient funds → HTTP 402
+- **Receipt-bound**: settlement requires cryptographically signed receipt with relay_task_id binding
+- **Sybil-resistant**: self-delegation produces no trust signal or credential (five-layer defense)
+- **Multi-hop**: delegation chains settle independently at each hop
+- **Algebraic routing**: trust composes via semiring algebra — multiplicatively (chains) and additively (parallel routes). Swap the semiring to change what "best path" means
+- **Money model**: all amounts stored as integer micro-units (1 USD = 1,000,000 units). Zero floating-point arithmetic in the money path
+
+## Relay Federation (motebit/relay-federation@1.0)
+
+Independent relay instances peer to form a network that discovers agents, routes tasks, and settles payments across organizational boundaries.
+
+- **Sovereignty preserved**: each relay controls its agent population, trust policy, fee schedule
+- **Trust composes algebraically**: cross-relay trust via existing semiring algebra (no new algorithms)
+- **Backward-compatible**: existing endpoints return federated results transparently
+- **Circuit breaker**: per-peer forward tracking with automatic suspension at 50% failure rate. Heartbeat: 3 missed → suspend, 5 → remove
+
+## W3C Verifiable Credentials (motebit/credential@1.0)
+
+Trust accumulates via W3C VC 2.0 credentials issued after successful task completion.
+
+- **AgentReputationCredential**: issued post-settlement, signed by relay
+- **Credential weighting**: issuer trust × credential age decay × domain relevance
+- **Revocation**: relay can revoke credentials; revoked credentials excluded from trust aggregation
+- **Sybil defense**: self-issued credentials rejected; minimum issuer trust threshold (0.05)
+
+---
+
+## Packages (npm)
+
+- `create-motebit` — CLI scaffolder: `npm create motebit`. Generates signed identity. MIT licensed
+- `@motebit/verify` — Standalone Ed25519 verifier for motebit.md files. Zero deps. MIT licensed
+- `@motebit/protocol` — Network protocol types. MIT licensed
+- `@motebit/sdk` — Full type vocabulary. MIT licensed
+- `motebit` — Operator console CLI. BSL-1.1 licensed
+
+## Apps
+
+- **Desktop**: Tauri app with Three.js glass creature, operator mode, MCP server
+- **Mobile**: React Native + Expo, WebView-based Three.js renderer, voice input, goals
+- **Web**: Browser app at motebit.com, IndexedDB identity, zero install
+- **CLI**: Developer REPL with slash commands, daemon mode, MCP server mode
+- **Spatial**: WebXR AR/VR with 6DOF orbital dynamics, gesture recognition
+
+## Links
+
+- Website: https://motebit.com
+- Documentation: https://docs.motebit.com
+- GitHub: https://github.com/motebit/motebit
+- npm: https://www.npmjs.com/package/create-motebit
+- Identity spec: https://github.com/motebit/motebit/blob/main/spec/identity-v1.md
