@@ -18,7 +18,7 @@
     "@motebit/sdk": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/crypto": "workspace:*",
-    "ws": "^8.18.0"
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/ws": "^8.5.0",
