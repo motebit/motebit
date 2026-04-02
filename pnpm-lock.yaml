@@ -20,6 +20,7 @@ overrides:
   node-forge: '>=1.4.0 <2.0.0'
   path-to-regexp: '>=8.4.0 <9.0.0'
   '@xmldom/xmldom': '>=0.8.12 <0.9.0'
+  lodash: '>=4.18.0 <5.0.0'
 
 importers:
 
@@ -65,8 +66,8 @@ importers:
         specifier: ^4.19.0
         version: 4.21.0
       turbo:
-        specifier: ^2.8.20
-        version: 2.8.20
+        specifier: ^2.9.3
+        version: 2.9.3
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
@@ -129,14 +130,14 @@ importers:
   apps/cli:
     dependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.12.0
-        version: 1.26.0(zod@4.3.6)
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
       sql.js:
-        specifier: ^1.11.0
-        version: 1.14.0
+        specifier: ^1.14.1
+        version: 1.14.1
       ws:
-        specifier: ^8.18.0
-        version: 8.19.0
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       '@motebit/ai-core':
         specifier: workspace:*
@@ -751,11 +752,11 @@ importers:
         specifier: workspace:*
         version: link:../verify
       '@noble/ed25519':
-        specifier: ^3.0.0
-        version: 3.0.0
+        specifier: ~3.0.1
+        version: 3.0.1
       '@noble/hashes':
-        specifier: ^1.6.0
-        version: 1.8.0
+        specifier: ~1.6.0
+        version: 1.6.1
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -775,11 +776,11 @@ importers:
         specifier: workspace:*
         version: link:../protocol
       '@noble/ed25519':
-        specifier: ^3.0.0
-        version: 3.0.0
+        specifier: ~3.0.1
+        version: 3.0.1
       '@noble/hashes':
-        specifier: ^1.6.0
-        version: 1.8.0
+        specifier: ~1.6.0
+        version: 1.6.1
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -867,8 +868,8 @@ importers:
   packages/mcp-client:
     dependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.12.0
-        version: 1.26.0(zod@4.3.6)
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../crypto
@@ -892,8 +893,8 @@ importers:
   packages/mcp-server:
     dependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.12.0
-        version: 1.26.0(zod@3.25.76)
+        specifier: ^1.29.0
+        version: 1.29.0(zod@3.25.76)
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../crypto
@@ -963,8 +964,8 @@ importers:
         specifier: workspace:*
         version: link:../sdk
       sql.js:
-        specifier: ^1.11.0
-        version: 1.14.0
+        specifier: ^1.14.1
+        version: 1.14.1
     optionalDependencies:
       better-sqlite3:
         specifier: ^12.0.0
@@ -1260,8 +1261,8 @@ importers:
         specifier: workspace:*
         version: link:../sdk
       ws:
-        specifier: ^8.18.0
-        version: 8.19.0
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1295,11 +1296,11 @@ importers:
   packages/verify:
     devDependencies:
       '@noble/ed25519':
-        specifier: ^3.0.0
-        version: 3.0.0
+        specifier: ~3.0.1
+        version: 3.0.1
       '@noble/hashes':
-        specifier: ^1.6.0
-        version: 1.8.0
+        specifier: ~1.6.0
+        version: 1.6.1
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -1329,10 +1330,10 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
-        version: 1.19.11(hono@4.12.7)
+        version: 1.19.12(hono@4.12.9)
       '@hono/node-ws':
         specifier: ^1.3.0
-        version: 1.3.0(@hono/node-server@1.19.11(hono@4.12.7))(hono@4.12.7)
+        version: 1.3.0(@hono/node-server@1.19.12(hono@4.12.9))(hono@4.12.9)
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
@@ -1359,10 +1360,10 @@ importers:
         version: 2.6.0(ethers@6.16.0)(typescript@5.9.3)
       '@x402/hono':
         specifier: ^2.6.0
-        version: 2.6.0(ethers@6.16.0)(hono@4.12.7)(typescript@5.9.3)
+        version: 2.6.0(ethers@6.16.0)(hono@4.12.9)(typescript@5.9.3)
       hono:
         specifier: '>=4.12.4 <5.0.0'
-        version: 4.12.7
+        version: 4.12.9
       stripe:
         specifier: ^17.0.0
         version: 17.7.0
@@ -1417,8 +1418,8 @@ importers:
         version: link:../../packages/tools
     devDependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.12.0
-        version: 1.26.0(zod@4.3.6)
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -1454,8 +1455,8 @@ importers:
   services/proxy:
     dependencies:
       '@noble/ed25519':
-        specifier: ^3.0.0
-        version: 3.0.0
+        specifier: ~3.0.1
+        version: 3.0.1
       '@vercel/kv':
         specifier: ^2.0.0
         version: 2.0.0
@@ -1513,8 +1514,8 @@ importers:
         version: link:../../packages/tools
     devDependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.12.0
-        version: 1.26.0(zod@4.3.6)
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -1559,8 +1560,8 @@ importers:
         version: link:../../packages/tools
     devDependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.12.0
-        version: 1.26.0(zod@4.3.6)
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -1602,8 +1603,8 @@ importers:
         version: link:../../packages/tools
     devDependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.12.0
-        version: 1.26.0(zod@4.3.6)
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -3131,6 +3132,12 @@ packages:
     peerDependencies:
       hono: '>=4.12.4 <5.0.0'
 
+  '@hono/node-server@1.19.12':
+    resolution: {integrity: sha512-txsUW4SQ1iilgE0l9/e9VQWmELXifEFvmdA1j6WFh/aFPj99hIntrSsq/if0UWyGVkmrRPKA1wCeP+UCr1B9Uw==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: '>=4.12.4 <5.0.0'
+
   '@hono/node-ws@1.3.0':
     resolution: {integrity: sha512-ju25YbbvLuXdqBCmLZLqnNYu1nbHIQjoyUqA8ApZOeL1k4skuiTcw5SW77/5SUYo2Xi2NVBJoVlfQurnKEp03Q==}
     engines: {node: '>=18.14.1'}
@@ -3373,8 +3380,8 @@ packages:
   '@mdx-js/mdx@3.1.1':
     resolution: {integrity: sha512-f6ZO2ifpwAQIpzGWaBQT2TXxPv6z3RBzQKpVftEWN78Vl/YweF1uwussDx8ECAXVtr3Rs89fKyG9YlzUs9DyGQ==}
 
-  '@modelcontextprotocol/sdk@1.26.0':
-    resolution: {integrity: sha512-Y5RmPncpiDtTXDbLKswIJzTqu2hyBKxTNsgKqKclDbhIgg1wgtf1fRuvxgTnRfcnxtvvgbIEcqUOzZrJ6iSReg==}
+  '@modelcontextprotocol/sdk@1.29.0':
+    resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -3454,12 +3461,16 @@ packages:
     resolution: {integrity: sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@noble/ed25519@3.0.0':
-    resolution: {integrity: sha512-QyteqMNm0GLqfa5SoYbSC3+Pvykwpn95Zgth4MFVSMKBB75ELl9tX1LAVsN4c3HXOrakHsF2gL4zWDAYCcsnzg==}
+  '@noble/ed25519@3.0.1':
+    resolution: {integrity: sha512-t/T8LuK0ym8ALQudCCQCtrRdMSxBnRgHXw+wg+YsSlE6d+on7sX3flqlSJ2mOs9xEuchM36kj9SuX5MG7pXQMA==}
 
   '@noble/hashes@1.3.2':
     resolution: {integrity: sha512-MVC8EAQp7MvEcm30KWENFjgR+Mkmf+D189XJTkFIlwohU5hcBbn1ZkKq7KVTi2Hme3PMGF390DaL52beVrIihQ==}
     engines: {node: '>= 16'}
+
+  '@noble/hashes@1.6.1':
+    resolution: {integrity: sha512-pq5D8h10hHBjyqX+cfBm0i8JUXJ0UhczFc4r74zbuT9XgewFo2E3J1cOaGtdZynILNmQ685YWGzGE1Zv6io50w==}
+    engines: {node: ^14.21.3 || >=16}
 
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
@@ -4759,33 +4770,33 @@ packages:
       '@types/react-dom':
         optional: true
 
-  '@turbo/darwin-64@2.8.20':
-    resolution: {integrity: sha512-FQ9EX1xMU5nbwjxXxM3yU88AQQ6Sqc6S44exPRroMcx9XZHqqppl5ymJF0Ig/z3nvQNwDmz1Gsnvxubo+nXWjQ==}
+  '@turbo/darwin-64@2.9.3':
+    resolution: {integrity: sha512-P8foouaP+y/p+hhEGBoZpzMbpVvUMwPjDpcy6wN7EYfvvyISD1USuV27qWkczecihwuPJzQ1lDBuL8ERcavTyg==}
     cpu: [x64]
     os: [darwin]
 
-  '@turbo/darwin-arm64@2.8.20':
-    resolution: {integrity: sha512-Gpyh9ATFGThD6/s9L95YWY54cizg/VRWl2B67h0yofG8BpHf67DFAh9nuJVKG7bY0+SBJDAo5cMur+wOl9YOYw==}
+  '@turbo/darwin-arm64@2.9.3':
+    resolution: {integrity: sha512-SIzEkvtNdzdI50FJDaIQ6kQGqgSSdFPcdn0wqmmONN6iGKjy6hsT+EH99GP65FsfV7DLZTh2NmtTIRl2kdoz5Q==}
     cpu: [arm64]
     os: [darwin]
 
-  '@turbo/linux-64@2.8.20':
-    resolution: {integrity: sha512-p2QxWUYyYUgUFG0b0kR+pPi8t7c9uaVlRtjTTI1AbCvVqkpjUfCcReBn6DgG/Hu8xrWdKLuyQFaLYFzQskZbcA==}
+  '@turbo/linux-64@2.9.3':
+    resolution: {integrity: sha512-pLRwFmcHHNBvsCySLS6OFabr/07kDT2pxEt/k6eBf/3asiVQZKJ7Rk88AafQx2aYA641qek4RsXvYO3JYpiBug==}
     cpu: [x64]
     os: [linux]
 
-  '@turbo/linux-arm64@2.8.20':
-    resolution: {integrity: sha512-Gn5yjlZGLRZWarLWqdQzv0wMqyBNIdq1QLi48F1oY5Lo9kiohuf7BPQWtWxeNVS2NgJ1+nb/DzK1JduYC4AWOA==}
+  '@turbo/linux-arm64@2.9.3':
+    resolution: {integrity: sha512-gy6ApUroC2Nzv+qjGtE/uPNkhHAFU4c8God+zd5Aiv9L9uBgHlxVJpHT3XWl5xwlJZ2KWuMrlHTaS5kmNB+q1Q==}
     cpu: [arm64]
     os: [linux]
 
-  '@turbo/windows-64@2.8.20':
-    resolution: {integrity: sha512-vyaDpYk/8T6Qz5V/X+ihKvKFEZFUoC0oxYpC1sZanK6gaESJlmV3cMRT3Qhcg4D2VxvtC2Jjs9IRkrZGL+exLw==}
+  '@turbo/windows-64@2.9.3':
+    resolution: {integrity: sha512-d0YelTX6hAsB7kIEtGB3PzIzSfAg3yDoUlHwuwJc3adBXUsyUIs0YLG+1NNtuhcDOUGnWQeKUoJ2pGWvbpRj7w==}
     cpu: [x64]
     os: [win32]
 
-  '@turbo/windows-arm64@2.8.20':
-    resolution: {integrity: sha512-voicVULvUV5yaGXo0Iue13BcHGYW3u0VgqSbfQwBaHbpj1zLjYV4KIe+7fYIo6DO8FVUJzxFps3ODCQG/Wy2Qw==}
+  '@turbo/windows-arm64@2.9.3':
+    resolution: {integrity: sha512-/08CwpKJl3oRY8nOlh2YgilZVJDHsr60XTNxRhuDeuFXONpUZ5X+Nv65izbG/xBew9qxcJFbDX9/sAmAX+ITcQ==}
     cpu: [arm64]
     os: [win32]
 
@@ -7154,6 +7165,10 @@ packages:
     resolution: {integrity: sha512-jq9l1DM0zVIvsm3lv9Nw9nlJnMNPOcAtsbsgiUhWcFzPE99Gvo6yRTlszSLLYacMeQ6quHD6hMfId8crVHvexw==}
     engines: {node: '>=16.9.0'}
 
+  hono@4.12.9:
+    resolution: {integrity: sha512-wy3T8Zm2bsEvxKZM5w21VdHDDcwVS1yUFFY6i8UobSsKfFceT7TOwhbhfKsDyx7tYQlmRM5FLpIuYvNFyjctiA==}
+    engines: {node: '>=16.9.0'}
+
   hosted-git-info@7.0.2:
     resolution: {integrity: sha512-puUZAUKT5m8Zzvs72XWy3HtvVbTWljRE66cP60bxJzAqf2DgICo7lYTY2IHUmLnNpjYvw5bvmoHvPc0QO2a62w==}
     engines: {node: ^16.14.0 || >=18.0.0}
@@ -7839,8 +7854,8 @@ packages:
   lodash.throttle@4.1.1:
     resolution: {integrity: sha512-wIkUCfVKpVsWo3JSZlc+8MB5it+2AN5W8J7YVMST30UrvcQNZ1Okbj+rbVniijTWE6FGYy4XJq/rHkas8qJMLQ==}
 
-  lodash@4.17.23:
-    resolution: {integrity: sha512-LgVTMpQtIopCi79SJeDiP0TfWi5CNEc/L/aRdTh3yIvmZXTnheWpKjSZhnvMl8iXbC1tFg9gdHHDMLoV7CnG+w==}
+  lodash@4.18.1:
+    resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
 
   log-symbols@2.2.0:
     resolution: {integrity: sha512-VeIAFslyIerEJLXHziedo2basKbMKtTw3vfn5IzG0XTjhAVEJyNHnL2p7vc+wBDSdQuUpNw3M2u6xb9QsAY5Eg==}
@@ -9477,8 +9492,8 @@ packages:
   sprintf-js@1.0.3:
     resolution: {integrity: sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==}
 
-  sql.js@1.14.0:
-    resolution: {integrity: sha512-NXYh+kFqLiYRCNAaHD0PcbjFgXyjuolEKLMk5vRt2DgPENtF1kkNzzMlg42dUk5wIsH8MhUzsRhaUxIisoSlZQ==}
+  sql.js@1.14.1:
+    resolution: {integrity: sha512-gcj8zBWU5cFsi9WUP+4bFNXAyF1iRpA3LLyS/DP5xlrNzGmPIizUeBggKa8DbDwdqaKwUcTEnChtd2grWo/x/A==}
 
   ssri@10.0.6:
     resolution: {integrity: sha512-MGrFH9Z4NP9Iyhqn16sDtBpRRNJ0Y2hNa6D65h736fVSaPCHr4DM4sWUNvVaSuC+0OBGhwsrydQwmgfg5LncqQ==}
@@ -9852,8 +9867,8 @@ packages:
   tunnel-agent@0.6.0:
     resolution: {integrity: sha512-McnNiV1l8RYeY8tBgEpuodCC1mLUdbSN+CYBL7kJsJNInOP8UjDDEwdk6Mw60vdLLrr5NHKZhMAOSrR2NZuQ+w==}
 
-  turbo@2.8.20:
-    resolution: {integrity: sha512-Rb4qk5YT8RUwwdXtkLpkVhNEe/lor6+WV7S5tTlLpxSz6MjV5Qi8jGNn4gS6NAvrYGA/rNrE6YUQM85sCZUDbQ==}
+  turbo@2.9.3:
+    resolution: {integrity: sha512-J/VUvsGRykPb9R8Kh8dHVBOqioDexLk9BhLCU/ZybRR+HN9UR3cURdazFvNgMDt9zPP8TF6K73Z+tplfmi0PqQ==}
     hasBin: true
 
   tweetnacl@1.0.3:
@@ -10376,6 +10391,18 @@ packages:
 
   ws@8.19.0:
     resolution: {integrity: sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
+  ws@8.20.0:
+    resolution: {integrity: sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -11945,7 +11972,7 @@ snapshots:
       undici: 6.24.1
       unique-string: 2.0.0
       wrap-ansi: 7.0.0
-      ws: 8.19.0
+      ws: 8.20.0
     transitivePeerDependencies:
       - bufferutil
       - encoding
@@ -12276,11 +12303,15 @@ snapshots:
     dependencies:
       hono: 4.12.7
 
-  '@hono/node-ws@1.3.0(@hono/node-server@1.19.11(hono@4.12.7))(hono@4.12.7)':
+  '@hono/node-server@1.19.12(hono@4.12.9)':
     dependencies:
-      '@hono/node-server': 1.19.11(hono@4.12.7)
-      hono: 4.12.7
-      ws: 8.19.0
+      hono: 4.12.9
+
+  '@hono/node-ws@1.3.0(@hono/node-server@1.19.12(hono@4.12.9))(hono@4.12.9)':
+    dependencies:
+      '@hono/node-server': 1.19.12(hono@4.12.9)
+      hono: 4.12.9
+      ws: 8.20.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -12551,7 +12582,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.26.0(zod@3.25.76)':
+  '@modelcontextprotocol/sdk@1.29.0(zod@3.25.76)':
     dependencies:
       '@hono/node-server': 1.19.11(hono@4.12.7)
       ajv: 8.18.0
@@ -12573,7 +12604,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.26.0(zod@4.3.6)':
+  '@modelcontextprotocol/sdk@1.29.0(zod@4.3.6)':
     dependencies:
       '@hono/node-server': 1.19.11(hono@4.12.7)
       ajv: 8.18.0
@@ -12645,9 +12676,11 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
 
-  '@noble/ed25519@3.0.0': {}
+  '@noble/ed25519@3.0.1': {}
 
   '@noble/hashes@1.3.2': {}
+
+  '@noble/hashes@1.6.1': {}
 
   '@noble/hashes@1.8.0': {}
 
@@ -13653,7 +13686,7 @@ snapshots:
 
   '@spruceid/siwe-parser@2.1.2':
     dependencies:
-      '@noble/hashes': 1.8.0
+      '@noble/hashes': 1.6.1
       apg-js: 4.4.0
       uri-js: 4.4.1
       valid-url: 1.0.9
@@ -13816,22 +13849,22 @@ snapshots:
       '@types/react': 18.3.28
       '@types/react-dom': 18.3.7(@types/react@18.3.28)
 
-  '@turbo/darwin-64@2.8.20':
+  '@turbo/darwin-64@2.9.3':
     optional: true
 
-  '@turbo/darwin-arm64@2.8.20':
+  '@turbo/darwin-arm64@2.9.3':
     optional: true
 
-  '@turbo/linux-64@2.8.20':
+  '@turbo/linux-64@2.9.3':
     optional: true
 
-  '@turbo/linux-arm64@2.8.20':
+  '@turbo/linux-arm64@2.9.3':
     optional: true
 
-  '@turbo/windows-64@2.8.20':
+  '@turbo/windows-64@2.9.3':
     optional: true
 
-  '@turbo/windows-arm64@2.8.20':
+  '@turbo/windows-arm64@2.9.3':
     optional: true
 
   '@tweenjs/tween.js@23.1.3': {}
@@ -14273,11 +14306,11 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/hono@2.6.0(ethers@6.16.0)(hono@4.12.7)(typescript@5.9.3)':
+  '@x402/hono@2.6.0(ethers@6.16.0)(hono@4.12.9)(typescript@5.9.3)':
     dependencies:
       '@x402/core': 2.6.0
       '@x402/extensions': 2.6.0(ethers@6.16.0)(typescript@5.9.3)
-      hono: 4.12.7
+      hono: 4.12.9
       zod: 3.25.76
     transitivePeerDependencies:
       - bufferutil
@@ -16633,6 +16666,8 @@ snapshots:
 
   hono@4.12.7: {}
 
+  hono@4.12.9: {}
+
   hosted-git-info@7.0.2:
     dependencies:
       lru-cache: 10.4.3
@@ -17328,7 +17363,7 @@ snapshots:
 
   lodash.throttle@4.1.1: {}
 
-  lodash@4.17.23: {}
+  lodash@4.18.1: {}
 
   log-symbols@2.2.0:
     dependencies:
@@ -19016,7 +19051,7 @@ snapshots:
     dependencies:
       clsx: 2.1.1
       eventemitter3: 4.0.7
-      lodash: 4.17.23
+      lodash: 4.18.1
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
       react-is: 18.3.1
@@ -19634,7 +19669,7 @@ snapshots:
 
   sprintf-js@1.0.3: {}
 
-  sql.js@1.14.0: {}
+  sql.js@1.14.1: {}
 
   ssri@10.0.6:
     dependencies:
@@ -20027,14 +20062,14 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  turbo@2.8.20:
+  turbo@2.9.3:
     optionalDependencies:
-      '@turbo/darwin-64': 2.8.20
-      '@turbo/darwin-arm64': 2.8.20
-      '@turbo/linux-64': 2.8.20
-      '@turbo/linux-arm64': 2.8.20
-      '@turbo/windows-64': 2.8.20
-      '@turbo/windows-arm64': 2.8.20
+      '@turbo/darwin-64': 2.9.3
+      '@turbo/darwin-arm64': 2.9.3
+      '@turbo/linux-64': 2.9.3
+      '@turbo/linux-arm64': 2.9.3
+      '@turbo/windows-64': 2.9.3
+      '@turbo/windows-arm64': 2.9.3
 
   tweetnacl@1.0.3: {}
 
@@ -20559,6 +20594,8 @@ snapshots:
   ws@8.18.3: {}
 
   ws@8.19.0: {}
+
+  ws@8.20.0: {}
 
   xcode@3.0.1:
     dependencies:

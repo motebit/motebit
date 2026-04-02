@@ -15,13 +15,13 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@motebit/sdk": "workspace:*",
+    "@motebit/core-identity": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
-    "@motebit/core-identity": "workspace:*",
-    "@motebit/privacy-layer": "workspace:*",
     "@motebit/policy": "workspace:*",
-    "sql.js": "^1.11.0"
+    "@motebit/privacy-layer": "workspace:*",
+    "@motebit/sdk": "workspace:*",
+    "sql.js": "^1.14.1"
   },
   "optionalDependencies": {
     "better-sqlite3": "^12.0.0"

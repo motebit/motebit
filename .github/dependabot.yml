@@ -5,10 +5,29 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      dev-dependencies:
+      # Crypto deps are security-critical and bundled — isolate from batch updates
+      crypto:
+        patterns:
+          - "@noble/*"
+          - "@scure/*"
+      dev-minor-patch:
         dependency-type: "development"
-      production-dependencies:
+        update-types:
+          - "minor"
+          - "patch"
+      dev-major:
+        dependency-type: "development"
+        update-types:
+          - "major"
+      production-minor-patch:
         dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      production-major:
+        dependency-type: "production"
+        update-types:
+          - "major"
     open-pull-requests-limit: 10
 
   - package-ecosystem: "github-actions"
