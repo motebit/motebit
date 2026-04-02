@@ -18,7 +18,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@motebit/crypto": "workspace:*",
     "@motebit/sdk": "workspace:*",
-    "zod": "^3.25.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@motebit/mcp-client": "workspace:*",
