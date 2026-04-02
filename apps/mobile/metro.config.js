@@ -219,6 +219,9 @@ config.resolver.extraNodeModules = {
   // Bare names that need explicit routing
   child_process: emptyModule,
   dns: emptyModule,
+  // onnxruntime removed from native build (duplicate symbol with quick-crypto).
+  // Shim to empty so Metro doesn't bundle the JS that tries to init native bindings.
+  "onnxruntime-react-native": emptyModule,
 };
 
 // Block heavy directories from Metro's file crawler
