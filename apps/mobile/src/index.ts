@@ -9,7 +9,7 @@
  * - AsyncStorage for non-secret settings persistence
  */
 
-export { App } from "./App";
+export { default as App } from "./App";
 export { MobileApp, COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "./mobile-app";
 export type {
   MobileSettings,
