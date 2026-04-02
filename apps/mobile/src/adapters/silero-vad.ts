@@ -9,11 +9,22 @@
  * onset detection, then Silero confirms whether captured audio is actual speech.
  * This eliminates false triggers from ambient noise (AC, typing, traffic).
  *
- * iOS only — Android's MediaRecorder cannot output WAV/PCM natively.
+ * onnxruntime-react-native is loaded dynamically — it conflicts with
+ * react-native-quick-crypto (duplicate isTypedArray symbol). If the native
+ * module isn't installed, init() returns false and the audio-monitor falls
+ * back to energy-only VAD.
  */
 
-import { InferenceSession, Tensor } from "onnxruntime-react-native";
 import * as FileSystem from "expo-file-system";
+
+// Dynamic import types — resolved at runtime only if onnxruntime is installed
+type OnnxInferenceSession = {
+  run(feeds: Record<string, unknown>): Promise<Record<string, { data?: ArrayLike<number> }>>;
+};
+type OnnxModule = {
+  InferenceSession: { create(path: string): Promise<OnnxInferenceSession> };
+  Tensor: new (type: string, data: ArrayLike<number> | BigInt64Array, dims: number[]) => unknown;
+};
 
 const MODEL_URL =
   "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx";
@@ -44,7 +55,8 @@ async function ensureModel(): Promise<string> {
 }
 
 export class SileroVAD {
-  private session: InferenceSession | null = null;
+  private session: OnnxInferenceSession | null = null;
+  private onnx: OnnxModule | null = null;
 
   // LSTM carry state between chunks
   private h: Float32Array;
@@ -59,15 +71,17 @@ export class SileroVAD {
   /** Download model (if needed) and create inference session. Returns true on success. */
   async init(): Promise<boolean> {
     try {
+      // Dynamic import — onnxruntime-react-native may not be installed
+      this.onnx = (await import("onnxruntime-react-native")) as unknown as OnnxModule;
       const modelPath = await ensureModel();
-      this.session = await InferenceSession.create(modelPath);
+      this.session = await this.onnx.InferenceSession.create(modelPath);
       // eslint-disable-next-line no-console
       console.log("[SileroVAD] Initialized");
       return true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console
-      console.warn("[SileroVAD] Init failed:", msg);
+      console.warn("[SileroVAD] Init failed (energy-only VAD will be used):", msg);
       return false;
     }
   }
@@ -80,8 +94,9 @@ export class SileroVAD {
    * if any chunk has speech, the audio contains speech.
    */
   async processAudio(samples: Float32Array, sampleRate: number): Promise<number> {
-    if (!this.session) return 0;
+    if (!this.session || !this.onnx) return 0;
 
+    const { Tensor } = this.onnx;
     const chunkSize = 512;
     let maxProb = 0;
 
@@ -110,8 +125,8 @@ export class SileroVAD {
       // Update LSTM state for next chunk
       const hn = result["hn"];
       const cn = result["cn"];
-      if (hn?.data) this.h = new Float32Array(hn.data as ArrayBuffer);
-      if (cn?.data) this.c = new Float32Array(cn.data as ArrayBuffer);
+      if (hn?.data) this.h = new Float32Array(hn.data as unknown as ArrayBuffer);
+      if (cn?.data) this.c = new Float32Array(cn.data as unknown as ArrayBuffer);
     }
 
     return maxProb;
@@ -126,10 +141,9 @@ export class SileroVAD {
   /** Release the inference session. */
   dispose(): void {
     if (this.session) {
-      // InferenceSession doesn't have a synchronous close in RN,
-      // but nulling the reference allows GC to reclaim it
       this.session = null;
     }
+    this.onnx = null;
     this.h = new Float32Array(0);
     this.c = new Float32Array(0);
   }

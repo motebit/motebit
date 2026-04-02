@@ -53,7 +53,6 @@
     "expo-speech": "~13.0.0",
     "expo-sqlite": "~15.0.0",
     "expo-three": "^8.0.0",
-    "onnxruntime-react-native": "^1.20.0",
     "react": "^18.3.0",
     "react-native": "0.76.9",
     "react-native-get-random-values": "1.11.0",
