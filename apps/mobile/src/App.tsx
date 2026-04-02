@@ -27,7 +27,7 @@ import {
   Appearance,
 } from "react-native";
 import { WebView } from "react-native-webview";
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-member-access
 const Feather = require("@expo/vector-icons/Feather").default as React.ComponentType<{
   name: string;
   size: number;

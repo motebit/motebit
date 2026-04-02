@@ -4,10 +4,11 @@
     "slug": "motebit",
     "version": "1.0.0",
     "scheme": "motebit",
+    "icon": "./assets/icon.png",
     "platforms": ["ios", "android"],
     "newArchEnabled": false,
     "ios": {
-      "bundleIdentifier": "com.motebit.app"
+      "bundleIdentifier": "com.motebit.mobile"
     },
     "plugins": ["expo-sqlite"]
   }
