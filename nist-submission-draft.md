@@ -2,22 +2,22 @@
 
 **To:** AI-Identity@nist.gov
 **From:** Daniel Hakim, Motebit, Inc.
-**Date:** April 1, 2026
+**Date:** April 2, 2026
 **Re:** Comment on NCCoE Concept Paper — Accelerating the Adoption of Software and AI Agent Identity and Authorization
 
 ---
 
 ## Summary
 
-MCP defines what an agent can do. It says nothing about who the agent is, whether it should be trusted, or how to verify what it did. Motebit is the missing identity and authorization layer.
+Agent identity must be persistent, cryptographic, and portable across trust domains. Without it, agents cannot prove who authorized them, delegation has no chain of custody, and trust cannot accumulate over time. MCP defines what an agent can do; it says nothing about who the agent is. This is the gap.
 
-Agents carry persistent Ed25519 identities (`did:key` URIs), accumulate verifiable trust through signed execution receipts, and enforce zero-trust policy at every tool boundary. Receipts embed the signer's public key — self-verifiable offline, without contacting any authority. Key rotation uses dual-signed succession chains verifiable end-to-end from genesis key to current key. Cross-agent delegation produces nested receipts with cryptographic chain-of-custody.
+Motebit implements this missing layer. Agents carry persistent Ed25519 identities (`did:key` URIs), accumulate verifiable trust through signed execution receipts, and enforce zero-trust policy at every tool boundary. Receipts embed the signer's public key — self-verifiable offline, without contacting any authority. Key rotation uses dual-signed succession chains verifiable end-to-end from genesis key to current key. Cross-agent delegation produces nested receipts with cryptographic chain-of-custody. These are generalizable primitives — they do not require Motebit software to verify.
 
-This is a working implementation (45 workspaces, 208,000 lines of TypeScript (118,000 production, 90,000 tests), 4,600+ tests, five open specifications), not a proposal. Four MIT packages are published on npm (`@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The protocol layer is MIT licensed with zero dependencies — any system can verify a Motebit agent's identity, receipts, and credentials without running Motebit software.
+This is a working implementation (45 packages, ~200,000 lines of TypeScript including tests, 4,600+ test cases, five open specifications), not a proposal. The protocol layer is MIT licensed with zero dependencies (`@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The identity, receipt, and credential formats are designed to be adopted independently of the Motebit runtime — any system can implement them from the open specifications.
 
-The system implements a complete two-sided agent economy: agents deposit funds, delegate tasks to specialized agents on the network, and settle payments through cryptographically verified receipts. All monetary amounts are stored as integer micro-units (1 USD = 1,000,000 units) with zero floating-point arithmetic. Multi-agent orchestration decomposes complex tasks into capability-tagged steps and delegates each to the best available agent via trust-weighted semiring routing — each hop settles independently with a configurable relay fee (default 5% in the reference deployment; the protocol supports any fee structure via `MOTEBIT_PLATFORM_FEE_RATE`). All settlement arithmetic uses integer micro-units with the invariant `net + fee = gross` verified across 63 fee-rate × amount combinations. This has been verified in reference deployments, integration tests, and end-to-end settlement tests across independent services.
+The implementation includes an agent economy (budget-gated delegation, per-hop settlement, integer micro-unit arithmetic) that exercises these identity primitives under real economic constraints — delegation receipts, trust routing, and credential verification are not theoretical; they settle money.
 
-We offer Motebit as a reference implementation and potential NCCoE technology collaborator. This comment responds directly to the six question categories in the Note to Reviewers.
+This comment responds to the six question categories in the Note to Reviewers and addresses two additional areas of interest identified in the concept paper: data flow tracking and testing methodology.
 
 ---
 
@@ -29,13 +29,13 @@ Motebit is deployed across six surfaces (`apps/desktop/`, `apps/cli/`, `apps/mob
 
 **Which use-cases are in the near future?**
 
-Agent-to-agent delegation across organizational boundaries is implemented and operational. An agent on one relay can delegate tasks to agents on a peered relay — a procurement agent requesting quotes from a vendor's agent, a compliance agent querying a regulator's agent. This requires cryptographic identity that is portable across trust domains, delegation receipts that prove chain-of-custody, and budget-gated settlement between parties. Motebit's relay federation specification (`motebit/relay-federation@1.0`, stable) implements this: cross-relay task routing via semiring-algebraic graph traversal, settlement chains with receipt co-signing, and circuit breakers for forward-path health (`services/api/src/federation.ts`, `packages/market/src/graph-routing.ts`, `packages/market/src/settlement.ts`), with end-to-end federation tests.
+Agent-to-agent delegation across organizational boundaries is implemented and operational. An agent on one relay can delegate tasks to agents on a peered relay — a procurement agent requesting quotes from a vendor's agent, a compliance agent querying a regulator's agent. This requires cryptographic identity that is portable across trust domains, delegation receipts that prove chain-of-custody, and budget-gated settlement between parties. Motebit's relay federation specification (`motebit/relay-federation@1.0`, stable) defines cross-relay task routing via semiring-algebraic graph traversal and settlement chains with receipt co-signing. The reference implementation (`services/api/src/federation.ts`, `packages/market/src/graph-routing.ts`, `packages/market/src/settlement.ts`) adds circuit breakers for forward-path health monitoring, with end-to-end federation tests.
 
-The near-future extension is multi-agent orchestration from a single user command. The CLI's `--plan` flag decomposes a complex task into capability-tagged steps, discovers the best available agent for each step via trust-weighted routing, delegates each step independently, and composes the results — with per-hop budget settlement. This transforms the agent from a single-capability tool into an orchestrator that hires specialists from an open marketplace.
+The near-future extension is multi-agent orchestration from a single user command. The CLI's `--plan` flag decomposes a complex task into capability-tagged steps, discovers the best available agent for each step via trust-weighted routing, delegates each step independently, and composes the results — with per-hop budget settlement.
 
 **What opportunities do agents present?**
 
-The core opportunity is compounding capability. An agent with persistent identity, accumulated trust, and governed memory becomes more useful over time — it knows the user's context, has earned trust from other agents, and carries verifiable credentials proving its track record. This is fundamentally different from stateless automation. The economic opportunity follows: agents that can prove their identity and execution history to third parties can participate in marketplaces, receive delegated work, and settle payments — an agentic economy built on cryptographic trust rather than platform lock-in. Motebit implements this today: W3C VC 2.0 credential issuance (`packages/crypto/src/credentials.ts`), credential-weighted routing (`packages/market/src/credential-weight.ts`), and budget allocation with settlement (`packages/market/src/budget.ts`).
+Persistent identity enables compounding capability: an agent that carries verifiable credentials proving its execution history allows relying parties to make authorization decisions based on track record, not just configuration. Agents that can prove identity and history to third parties can participate in open networks — receiving delegated work and building reputation through peer-issued W3C VC 2.0 credentials.
 
 **What are the core characteristics of agentic architectures?**
 
@@ -43,11 +43,11 @@ Motebit implements the agentic architecture depicted in Figure 1 of the concept 
 
 - **User Prompt** → runtime message handler
 - **Agent** (agentic loop) → `MotebitRuntime` orchestrator with streaming, tool calls, and reflection
-- **Reasoning Model** → pluggable AI providers (Anthropic, OpenAI, Google, Ollama, in-browser WebLLM — 7 models across 3 cloud providers plus local inference). The intelligence is a commodity; the identity, authorization, and audit infrastructure is the constant. Switching providers does not change the agent's identity, trust history, or governance policy.
+- **Reasoning Model** → pluggable AI providers (Anthropic, OpenAI, Google, Ollama, in-browser WebLLM — 9 models across 3 cloud providers plus local inference). The intelligence is a commodity; the identity, authorization, and audit infrastructure is the constant. Switching providers does not change the agent's identity, trust history, or governance policy.
 - **Tools and Resources** → MCP client/server with PolicyGate enforcement at every tool boundary
 - **Output / Response / Action** → signed execution receipt with delegation chain
 - **Trust Domain** → PolicyGate + MemoryGovernor + privacy layer + injection defense
-- **Remote Queryability** → Every connected agent exposes a unified command interface (`POST /api/v1/agents/:motebitId/command`) through the relay. Agent-to-agent queries (state, memory audit, credentials, balance) use the same structured contract as local surfaces — no surface-specific code required. This makes agent introspection a protocol operation, not a UI feature.
+- **Remote Queryability** → Every connected agent is queryable via authenticated relay command interface — agent introspection is a protocol operation, not a UI feature.
 
 **What support are you seeing for MCP?**
 
@@ -86,7 +86,7 @@ As of March 2026, no widely adopted agent framework — commercial or open sourc
 
 Each Motebit agent has a persistent cryptographic identity: an Ed25519 keypair generating a `did:key` URI (W3C DID-Core) and a unique agent ID (UUID v7, time-ordered). Identity is declared in a human-readable, cryptographically signed file (`motebit.md`) that any system can verify without the Motebit runtime.
 
-The identity specification (`motebit/identity@1.0`) is an open standard (MIT licensed). A zero-dependency verification library (`@motebit/verify`) is published on npm. A scaffolder (`npm create motebit`) generates a signed identity in 30 seconds.
+The identity specification (`motebit/identity@1.0`) is an open standard (MIT licensed). A zero-dependency verification library (`@motebit/verify`) is published on npm. A scaffolder (`npm create motebit`) generates a signed identity in seconds.
 
 **What metadata is essential for an AI agent's identity?**
 
@@ -100,7 +100,7 @@ Fixed and persistent. Agent identities in Motebit survive across sessions, devic
 
 **Should agent identities be tied to specific hardware, software, or organizational boundaries?**
 
-Motebit supports multi-device registration. Each device has its own Ed25519 keypair registered in the identity file. The agent identity is not tied to a single device — it is portable across hardware — but each device binding is cryptographically anchored and auditable. Multi-device sync uses AES-256-GCM field-level encryption — the relay stores opaque ciphertext for events, conversations, and plans. The relay is a blind relay: it can index by ID and timestamp but cannot read content.
+Motebit supports multi-device registration. Each device has its own Ed25519 keypair registered in the identity file. The agent identity is not tied to a single device — it is portable across hardware — but each device binding is cryptographically anchored and auditable. Multi-device sync uses AES-256-GCM field-level encryption — the relay stores opaque ciphertext for events, conversations, and plans. The relay routes on public metadata (agent registrations, capability listings, trust scores) but cannot read synced content — it is a content-blind relay.
 
 **Relationship to SPIFFE:** Motebit's identity model is complementary to SPIFFE. SPIFFE provides workload identity within a trust domain (e.g., a Kubernetes cluster). Motebit provides agent identity that persists across trust domains, providers, and time. In an enterprise deployment, a SPIFFE SVID could attest the workload running the Motebit agent, while the Motebit identity attests the agent itself. The two layers compose.
 
@@ -117,7 +117,7 @@ Motebit supports multi-device registration. Each device has its own Ed25519 keyp
 
 **What constitutes strong authentication for an AI agent?**
 
-Motebit uses Ed25519 signed tokens for agent-to-service authentication. When an agent connects to a sync relay or delegates a task, it signs a JWT with its private key. Tokens carry explicit scope sets and a 5-minute expiry. The receiving service verifies the signature against the agent's pinned public key (established on first contact).
+Motebit uses Ed25519 signed tokens for agent-to-service authentication. When an agent connects to a sync relay or delegates a task, it signs a token containing identity claims, scope sets, and a 5-minute expiry. The token format is `base64url(JSON payload) . base64url(Ed25519 signature)` — a compact, self-verifiable bearer token without JOSE header overhead. The receiving service verifies the signature against the agent's pinned public key (established on first contact).
 
 This is analogous to mutual TLS but at the agent identity layer rather than the transport layer. The authentication proof is: "the entity presenting this token holds the private key corresponding to the public key declared in this agent's identity file."
 
@@ -127,9 +127,15 @@ This is analogous to mutual TLS but at the agent identity layer rather than the 
 - **Storage:** Private keys stored in the OS secure keychain (macOS Keychain via Tauri, expo-secure-store on mobile) or encrypted at rest with PBKDF2 (600,000 iterations for user-provided passphrases, 100,000 for operator PIN where rate-limiting is the primary defense). Private keys never appear in configuration files or identity files.
 - **Per-device keys:** Each registered device has its own Ed25519 keypair. Device compromise does not compromise the agent identity — only the device key needs rotation.
 - **Rotation:** Key rotation uses signed succession records (identity specification §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload, providing non-repudiation and acknowledgment. The `motebit_id` persists across rotations. Succession chains are verifiable end-to-end: any party can prove identity continuity from genesis key to current key without trusting any intermediary. No centralized revocation authority.
-- **Revocation:** No centralized revocation authority required by default. This is a deliberate tradeoff. **When rotation is possible** (the owner has access to the old key): the succession record cryptographically transfers identity continuity to the new key. The old key is tombstoned. Relays re-register the new public key. **When rotation is not possible** (the old key is lost or compromised without access) and no guardian is configured: the identity is abandoned. A new identity is generated. Trust records, credentials, and memory from the old identity do not transfer — the new identity starts from zero.
+- **Revocation:** No centralized revocation authority required by default. This is a deliberate tradeoff. **When rotation is possible** (the owner has access to the old key): the succession record cryptographically transfers identity continuity to the new key. The old key is tombstoned. Relays re-register the new public key. **When rotation is not possible** (the old key is lost or compromised without access) and no guardian is configured: the identity is abandoned. A new identity is generated. Trust records, credentials, and memory from the old identity do not transfer — the new identity starts from zero. **Compromise window:** between key compromise and detection, an attacker holding the private key can sign valid receipts and delegations. Succession tombstones the old key, but receipts signed during the compromise window remain cryptographically valid. Relying parties should evaluate receipt recency relative to the succession timestamp when trusting receipts from rotated identities. Guardian-recovered identities carry a `recovery: true` flag that signals this risk to verifiers.
 
-**Guardian recovery** (enterprise path): Identities may optionally declare a `guardian` — an organizational Ed25519 key held in cold storage (HSM, vault). When the primary key is compromised, the guardian signs a recovery succession record (`recovery: true`, `guardian_signature`) that rotates to a new key without the compromised key. The `motebit_id`, accumulated trust, and credentials are preserved. The recovery flag is visible to verifiers — relying parties MAY apply different trust policies to guardian-recovered identities. This enables enterprise custody: the organization holds the guardian key, employees operate the agent, and key rotation can be performed organizationally when employees depart. Specified in `identity-v1.md` §3.3 and §3.8.3, implemented in `packages/crypto/src/index.ts` (`signGuardianRecoverySuccession`, `verifyKeySuccession` with guardian context), `packages/verify/src/index.ts` (succession chain verification handles recovery records), and `services/api/src/key-rotation.ts` (relay accepts guardian recovery). Covered by 19 tests across crypto, verify, and identity-file packages. **Enterprise CRL compatibility:** While Motebit does not require a central revocation authority, the architecture is explicitly compatible with enterprise revocation infrastructure. Credential verification accepts `checkRevoked` callbacks (`packages/market/src/credential-weight.ts`), and the relay's credential routes support revocation lists. Organizations can layer OCSP, CRL, or custom revocation policies on top of the agent identity layer — the two compose without conflict.
+**Guardian recovery** (enterprise path): Identities may optionally declare a `guardian` — an organizational Ed25519 key held in cold storage (HSM, vault). When the primary key is compromised, the guardian signs a recovery succession record (`recovery: true`, `guardian_signature`) that rotates to a new key without the compromised key. The `motebit_id`, accumulated trust, and credentials are preserved. The recovery flag is visible to verifiers — relying parties MAY apply different trust policies to guardian-recovered identities.
+
+**Enterprise custody model:** The organization holds the guardian key; employees operate the agent. Key rotation can be performed organizationally when employees depart — the guardian signs a recovery succession without needing the departing employee's private key.
+
+**Enterprise CRL compatibility:** Motebit does not require a central revocation authority, but the architecture is explicitly compatible with enterprise revocation infrastructure. Credential verification accepts `checkRevoked` callbacks (`packages/market/src/credential-weight.ts`), and the relay's credential routes support revocation lists. Organizations can layer OCSP, CRL, or custom revocation policies on top of the agent identity layer without conflict.
+
+**Verification:** Specified in `identity-v1.md` §3.3 and §3.8.3. Implemented in `packages/crypto/src/index.ts` (`signGuardianRecoverySuccession`, `verifyKeySuccession`), `packages/verify/src/index.ts` (succession chain verification handles recovery records), and `services/api/src/key-rotation.ts` (relay accepts guardian recovery). Covered by 19 tests across crypto, verify, and identity-file packages.
 
 **Relationship to OAuth 2.0 / OIDC:** Motebit's Ed25519 signed tokens serve a similar role to OAuth 2.0 access tokens but are self-verifiable without a token introspection endpoint. The MCP server's HTTP bearer auth is compatible with OAuth flows — an enterprise could layer OIDC on top for user-to-agent identity binding while the agent-to-agent layer uses Ed25519 signatures directly.
 
@@ -171,29 +177,24 @@ This is the central design challenge. Motebit addresses it with the three-band g
 
 For dynamically discovered tools (MCP), each new tool is assigned a risk level before first use. Unknown tools default to the highest risk level (R4_MONEY) — fail-closed, not fail-open.
 
-For high-risk tools (R2_WRITE, R3_EXECUTE), additional hardening operates inside the tool handler:
-
-- **Shell execution** (`shell_exec`): fail-closed command allowlist (no allowlist = denied entirely), command blocklist (always denied, takes precedence over allowlist), destructive pattern detection (flag-aware matching for `rm -rf`, `git reset --hard`, `dd`, `mkfs`, etc.), and working directory sandboxing (cwd must be within allowed paths). These are defense-in-depth layers below the PolicyGate — even if a tool is approved by governance, the handler rejects destructive patterns independently.
-- **File writes** (`write_file`): pre-write backup (existing content saved before overwriting, with `undo_write` tool for restoration), path sandboxing with symlink resolution, and segment-boundary matching to prevent directory traversal.
+For high-risk tools (R2_WRITE, R3_EXECUTE), defense-in-depth hardening operates inside the tool handler, below the PolicyGate. Shell execution uses a fail-closed command allowlist, a blocklist that takes precedence, destructive pattern detection, and working directory sandboxing. File writes use pre-write backup, symlink-resolving path sandboxing, and segment-boundary matching to prevent directory traversal. Even if a tool passes governance, these handler-level checks reject destructive operations independently.
 
 **How might an agent convey the intent of its actions?**
 
-Motebit's execution ledger (`packages/runtime/src/execution-ledger.ts`) records not just _what_ the agent did, but _why_. Each step in a goal execution includes the agent's reasoning summary (generated by the reflection engine in `packages/planner/src/reflect.ts`), the tool arguments, and the delegation context. The signed execution manifest bundles this into a tamper-evident document per `spec/execution-ledger-v1.md`. Additionally, the precision feedback loop (`packages/runtime/src/gradient.ts`, `buildPrecisionContext`) modulates the system prompt based on the agent's self-assessed confidence — low confidence agents are instructed to be explicit about their uncertainty and reasoning, making intent more transparent in the output.
+Motebit's execution ledger (`packages/runtime/src/execution-ledger.ts`) records not just _what_ the agent did, but _why_. Each step in a goal execution includes the agent's reasoning summary (generated by the reflection engine in `packages/planner/src/reflect.ts`), the tool arguments, and the delegation context. The signed execution manifest bundles this into a tamper-evident document per `spec/execution-ledger-v1.md`.
 
 **What are the mechanisms for an agent to prove its authority to perform a specific action?**
 
-The agent's signed JWT (Ed25519, 5-minute expiry) carries explicit scope sets. The receiving service verifies: (1) the signature matches the agent's pinned public key, (2) the requested action falls within the token's scope, (3) the token has not expired. For delegation, the execution receipt proves the delegating agent authorized the action — the receipt is self-verifiable using only the embedded public key.
+The agent's signed token (Ed25519, 5-minute expiry) carries explicit scope sets. The receiving service verifies: (1) the signature matches the agent's pinned public key, (2) the requested action falls within the token's scope, (3) the token has not expired. For delegation, the execution receipt proves the delegating agent authorized the action — the receipt is self-verifiable using only the embedded public key.
 
 **How do we handle delegation of authority for "on behalf of" scenarios?**
 
-Agents delegate tasks to other agents through MCP. Delegation tokens carry explicit scope sets — the receiving agent cannot exceed the delegated scope. Each delegation produces a signed execution receipt containing:
+Delegation is a three-party interaction: the delegating agent submits a task to the relay via HTTP, the relay routes it to the best available worker based on trust-weighted semiring scoring, and the relay forwards the task to the worker's MCP endpoint (`tools/call` with `motebit_task`). The delegating agent never connects to the worker directly — the relay mediates routing, settlement, and receipt collection. Delegation tokens carry explicit scope sets — the receiving agent cannot exceed the delegated scope. Each delegation produces a signed execution receipt containing:
 
 - The delegating agent's identity and embedded public key (for portable verification)
 - SHA-256 hashes of the prompt and result (privacy-preserving — content is not disclosed)
 - Ed25519 signature over canonical JSON (deterministic serialization for tamper evidence)
 - Nested delegation receipts for chain-of-custody (multi-hop delegation produces a verifiable tree)
-
-Receipts are self-verifiable: any system can verify the signature using only the receipt data and the embedded public key, without contacting the issuing infrastructure.
 
 **How do we bind agent identity with human identity for human-in-the-loop?**
 
@@ -222,11 +223,11 @@ The identity file's `owner_id` field binds the agent to a human identity. The op
 
 Three layers of audit:
 
-1. **Event log.** An append-only, immutable event log with version clocks. Supports compaction, replay, and multi-device conflict detection via event sourcing. Every state change, tool call, memory operation, and policy decision is recorded.
+1. **Event log.** An append-only event log with version clocks. Events are never modified after write; individual events may be tombstoned (soft-deleted) for privacy compliance. Compaction removes events below a version clock threshold only after a state snapshot has been persisted at that clock — the compacted events are recoverable from the snapshot. Supports replay and multi-device conflict detection via event sourcing. Every state change, tool call, memory operation, and policy decision is recorded.
 
 2. **Tool audit trail.** Every tool call produces an audit entry recording: tool name, arguments (with sensitive values redacted per sensitivity classification), authorization decision (allowed / denied / requires_approval), execution result, duration, and timestamp. The audit trail is queryable by turn, by run, or globally.
 
-3. **Signed execution ledgers.** Goal executions produce signed manifests per the `motebit/execution-ledger@1.0` specification. A ledger contains: a complete timeline of typed execution events (tool calls, delegations, reflections, adjustments), per-step summaries, delegation receipt metadata, and a SHA-256 content hash of the canonical timeline — all signed with Ed25519 for non-repudiation. The content hash covers the timeline bytes; any modification invalidates the signature.
+3. **Signed execution ledgers.** Goal executions produce signed manifests per the `motebit/execution-ledger@1.0` specification. A ledger contains: a complete timeline of typed execution events (goal lifecycle, plan creation, step execution, tool invocations, tool results, step delegation, and completion/failure states), per-step summaries, delegation receipt metadata, and a SHA-256 content hash of the canonical timeline — all signed with Ed25519 for non-repudiation. The content hash covers the timeline bytes; any modification invalidates the signature.
 
 All three layers are externally verifiable in real time via the unified command interface — a compliance agent or auditor can query any connected agent's memory audit, state vector, or credential history through the same authenticated endpoint used by local surfaces, without requiring a custom dashboard or direct database access.
 
@@ -247,9 +248,9 @@ The system also issues W3C Verifiable Credentials (VC 2.0) with `eddsa-jcs-2022`
 | **AgentGradientCredential**   | Self (agent)            | Periodic housekeeping      |
 | **AgentTrustCredential**      | Peer (agent)            | Trust level transition     |
 
-Reputation credentials follow a peer attestation model: the agent that delegated the task attests to the result, not the relay. This aligns with the principle that trust should be grounded in direct interaction, not mediated by a central authority. The relay may optionally co-sign reputation credentials for additional assurance, but the primary attestation is peer-to-peer. This design avoids single-point-of-failure trust and enables credential portability across relays.
+Reputation credentials follow a peer attestation model: the agent that delegated the task attests to the result, not the relay. The primary attestation is peer-to-peer — avoiding single-point-of-failure trust and enabling credential portability across relays. Credentials bundle into signed Verifiable Presentations for third-party verification.
 
-Credentials bundle into signed Verifiable Presentations for third-party verification. The credential lifecycle creates a compounding trust history — agents accumulate verifiable records of successful execution over time.
+**Accountability and incident response.** When an agent causes harm, the delegation chain provides the accountability trace: the execution receipt identifies the executing agent, the delegation receipt identifies the authorizing agent, and the `owner_id` binding identifies the human principal. The signed execution ledger preserves the complete decision history (what tools were called, in what order, with what reasoning context) as a tamper-evident document for post-incident analysis. This is a technical accountability mechanism — it makes the facts of agent behavior verifiable. The legal and organizational accountability frameworks that consume this evidence (liability assignment, incident response procedures, regulatory reporting) are governance decisions that operate above the protocol layer.
 
 **Relevant artifacts:**
 
@@ -269,7 +270,7 @@ All tool results from external sources are wrapped in `[EXTERNAL_DATA]` boundary
 
 A triple-layer injection defense operates at this boundary:
 
-1. **Pattern matching.** 16 regex signatures for known attack vectors (role injection, system prompt override, instruction delimiters, base64-encoded payloads)
+1. **Pattern matching.** 17 regex signatures for known attack vectors (role injection, system prompt override, instruction delimiters, base64-encoded payloads)
 2. **Directive density analysis.** Detects anomalous instruction-like language ratio in tool results — a web search result containing imperative directives triggers a warning
 3. **Structural anomaly detection.** Identifies chat template markers, role injection (`<|system|>`, `### System:`), and conversation format manipulation in external data
 
@@ -288,21 +289,67 @@ A triple-layer injection defense operates at this boundary:
 
 ---
 
+## 7. Data Flow Tracking
+
+The concept paper identifies "Tracking Data Flows of an AI System" as an area of interest. Motebit tracks data provenance at three boundaries:
+
+1. **Input provenance.** All tool results from external MCP servers are wrapped in `[EXTERNAL_DATA]` boundary markers (described in Section 6) before entering the agent's context. The boundary is enforced at the MCP client layer regardless of server trust level. This allows any post-hoc reviewer to trace which data in the agent's context originated externally.
+
+2. **Sensitivity classification.** The MemoryGovernor (`packages/policy/src/memory-governance.ts`) classifies data by sensitivity level (none / personal / medical / financial / secret) at the point of storage. When an agent aggregates data across tools, the highest sensitivity level governs the aggregate — addressing the data aggregation concern raised in the concept paper. Medical, financial, and secret data never reach external AI providers; this is enforced at the context assembly boundary, not as a model-level filter.
+
+3. **Retention and deletion.** Each sensitivity level carries configurable retention periods. The privacy layer (`packages/privacy-layer/`) enforces time-based expiration with cryptographic deletion certificates — verifiable proof that data was destroyed per policy. Data export (GDPR-style portability) is supported through the identity file and privacy layer.
+
+All classification and retention decisions are recorded in the append-only event log.
+
+**Relevant artifacts:**
+
+- Memory governance: `packages/policy/src/memory-governance.ts`
+- Privacy layer: `packages/privacy-layer/`
+- External data boundary: `packages/mcp-client/`
+- Event log: `packages/event-log/`
+
+---
+
+## 8. Testing and Evaluation
+
+**How can third parties verify the security properties claimed in this submission?**
+
+The codebase includes 4,600+ automated tests across unit, integration, and end-to-end layers:
+
+- **Cryptographic correctness.** Ed25519 signing, verification, key succession chains, guardian recovery, `did:key` derivation, W3C VC issuance and verification — each with positive and negative test cases. Succession chain verification is tested across normal rotation, guardian recovery, and mixed chains.
+- **Policy enforcement.** PolicyGate tests verify that tools above the governance threshold are denied regardless of context. Sensitivity classification tests verify fail-closed behavior (deny on error). Injection defense tests run known attack vectors through the sanitizer and verify detection.
+- **Settlement integrity.** A parametric test verifies the `net + fee = gross` invariant across 9 fee rates × 7 gross amounts (63 combinations), covering floating-point edge cases at micro-unit precision. Budget allocation, partial settlement, and multi-hop settlement are tested independently.
+- **Adversarial self-test.** The CLI's `--self-test` flag submits a self-delegation task through the live relay — exercising the exact sybil attack vector in the happy path. If the security boundary (five-layer sybil defense) breaks, onboarding breaks. This embeds adversarial testing in the product's own verification flow.
+- **Federation tests.** End-to-end tests cover cross-relay task routing, settlement chain co-signing, and circuit breaker activation on forward-path failure.
+
+All tests run in CI on every commit. The test suite is designed to be runnable by third parties: `pnpm install && pnpm test` with no external service dependencies for unit and integration tests (in-memory adapters for all I/O).
+
+**Relevant artifacts:**
+
+- Test runner: `pnpm run test` (vitest, all packages)
+- Self-test: `motebit --self-test`
+- CI pipeline: Turborepo orchestration, typecheck + lint + test on all packages
+
+---
+
 ## Standards Alignment
 
-Motebit's architecture engages with several standards referenced in the concept paper:
+The current standards landscape addresses infrastructure identity (SPIFFE for workloads), user identity (OIDC), and tool interoperability (MCP) — but none define persistent agent-level identity, cryptographic delegation chains, or verifiable trust accumulation. This is not a gap that can be closed by adapting existing standards; it requires a new layer between MCP and infrastructure identity. Motebit's open specifications (`motebit/identity@1.0`, `motebit/execution-ledger@1.0`, `motebit/credential@1.0`) are an implementation of that layer, MIT licensed and designed for independent adoption.
 
-| Standard             | Alignment                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MCP**              | Native client + server implementation. MCP is the tool interop layer; Motebit adds the identity and authorization layer MCP does not define.                                                                                                                                                                                                                                                                                     |
-| **OAuth 2.0 / OIDC** | MCP server bearer auth is compatible with OAuth token flows. Ed25519 signed tokens serve a similar role but are self-verifiable without introspection endpoints. Enterprise deployments can layer OIDC for user authentication.                                                                                                                                                                                                  |
-| **SPIFFE / SPIRE**   | Complementary. SPIFFE attests workloads; Motebit attests agents. Both use cryptographic identity. In Kubernetes, a SPIFFE SVID attests the pod; the Motebit identity attests the agent running in the pod.                                                                                                                                                                                                                       |
-| **SCIM**             | Agent lifecycle (creation, device registration, governance updates) maps to SCIM provisioning patterns. The identity file serves as the canonical identity document.                                                                                                                                                                                                                                                             |
-| **NGAC**             | PolicyGate implements attribute-based access control (risk-level × sensitivity-level). NGAC's graph-based policy and delegation support are architecturally aligned for enterprise policy federation.                                                                                                                                                                                                                            |
-| **SP 800-207**       | Zero trust at every tool boundary. No ambient authority. Every call verified. All decisions logged.                                                                                                                                                                                                                                                                                                                              |
-| **SP 800-63-4**      | Agent authentication uses Ed25519 signature verification with short-lived signed tokens (5-minute expiry, explicit scope). Private keys are stored in hardware-backed OS keychain when available (macOS Keychain, iOS Keychain via expo-secure-store, Android Keystore). Key rotation preserves identity continuity via dual-signed succession records without centralized revocation. Formal AAL mapping has not been assessed. |
-| **NISTIR 8587**      | Ed25519 signed tokens use 5-minute expiry and explicit scope sets to limit theft window. Tokens are bound to a specific agent identity (public key pinning on first contact) — a stolen token cannot be replayed from a different agent. Scope binding ensures a token issued for task delegation cannot authorize identity operations.                                                                                          |
-| **W3C DID / VC**     | Native `did:key` derivation from Ed25519 public keys. W3C VC 2.0 credentials with `eddsa-jcs-2022` cryptosuite for reputation, gradient, and trust attestations.                                                                                                                                                                                                                                                                 |
+Motebit's architecture engages with the standards referenced in the concept paper:
+
+| Standard             | Alignment                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **MCP**              | Native client + server implementation. MCP is the tool interop layer; Motebit adds the identity and authorization layer MCP does not define.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **OAuth 2.0 / OIDC** | MCP server bearer auth is compatible with OAuth token flows. Ed25519 signed tokens serve a similar role but are self-verifiable without introspection endpoints. Enterprise deployments can layer OIDC for user authentication.                                                                                                                                                                                                                                                                                                                                                                                |
+| **SPIFFE / SPIRE**   | Complementary. SPIFFE attests workloads; Motebit attests agents. Both use cryptographic identity. In Kubernetes, a SPIFFE SVID attests the pod; the Motebit identity attests the agent running in the pod.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **SCIM**             | Agent lifecycle (creation, device registration, governance updates) maps to SCIM provisioning patterns. The identity file serves as the canonical identity document.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **NGAC**             | PolicyGate implements attribute-based access control (risk-level × sensitivity-level). NGAC's graph-based policy and delegation support are architecturally aligned for enterprise policy federation.                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **SP 800-207**       | Zero trust at every tool boundary. No ambient authority. Every call verified. All decisions logged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **SP 800-63-4**      | Agent authentication uses Ed25519 signature verification with short-lived signed tokens (5-minute expiry, explicit scope). Private keys are stored in hardware-backed OS keychain when available (macOS Keychain, iOS Keychain via expo-secure-store, Android Keystore). Key rotation preserves identity continuity via dual-signed succession records without centralized revocation. The architecture is consistent with AAL2 characteristics (cryptographic proof of key possession, hardware-backed key storage where available), though formal AAL assessment against SP 800-63-4 has not been completed. |
+| **NISTIR 8587**      | Ed25519 signed tokens use 5-minute expiry and explicit scope sets to limit theft window. Tokens are bound to a specific agent identity (public key pinning on first contact) — a stolen token cannot be replayed from a different agent. Scope binding ensures a token issued for task delegation cannot authorize identity operations.                                                                                                                                                                                                                                                                        |
+| **A2A**              | Google's Agent-to-Agent Protocol defines inter-agent communication but does not define persistent identity or trust accumulation. Motebit's relay federation protocol serves a similar role (cross-boundary agent interaction) with the addition of cryptographic identity binding, delegation receipts, and budget-gated settlement at each hop. The two protocols are complementary — A2A for discovery and messaging, Motebit for identity and economic settlement.                                                                                                                                         |
+| **W3C DID / VC**     | Native `did:key` derivation from Ed25519 public keys. W3C VC 2.0 credentials with `eddsa-jcs-2022` cryptosuite for reputation, gradient, and trust attestations.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 ---
 
@@ -312,7 +359,15 @@ The concept paper notes that "the challenge of identifying and managing access f
 
 The relay federation protocol (`motebit/relay-federation@1.0`) enables agents from different organizations — or sovereign individuals — to discover, delegate to, and settle payments with each other across trust boundaries. Trust is not assumed; it is accumulated through verified execution receipts and W3C Verifiable Credentials issued peer-to-peer. An agent that has never interacted with another agent starts at zero trust. An agent with a history of verified successful executions carries portable, cryptographically signed proof of its track record.
 
-This is the harder problem. Enterprise identity operates within a trust domain where a central authority can issue, rotate, and revoke credentials. Sovereign agent identity operates across trust domains where no single authority exists. Motebit's architecture handles both cases with the same primitives: the guardian provides organizational custody within a trust domain, while the relay federation protocol, semiring-algebraic trust routing, and peer-issued credentials provide trust accumulation across domains. The NCCoE's future iterations addressing external agents may find this architecture relevant as a starting point.
+The trust bootstrapping problem is central: how does an agent go from zero trust to useful trust? A new agent starts with no credentials. Each successful task execution — verified by the delegating agent through a signed receipt — produces a peer-issued `AgentReputationCredential` (W3C VC 2.0). These credentials are portable across relays and verifiable using only the issuer's public key. Credential-weighted semiring routing factors in credential count, issuer trust, recency, and revocation status when selecting agents for delegation.
+
+**Relay trust assumptions.** The relay is a significant trust point: it routes tasks, mediates settlement, and forwards commands. A compromised relay could drop tasks, misroute delegations, or delay settlements. The Merkle batch anchoring (§7.6 of `relay-federation-v1.md`) prevents a relay from denying settlement batches after the fact, and execution receipts are verifiable independently of the relay. However, the real-time routing path relies on the relay's honest participation — there is no verifiable routing correctness guarantee at the protocol level. Federation across multiple relays provides path diversity: if one relay is compromised, agents can route through alternative peers. Circuit breakers (in the reference implementation) detect and suspend unhealthy forward paths automatically.
+
+Enterprise identity operates within a trust domain where a central authority can issue, rotate, and revoke credentials. Cross-domain agent identity operates across trust boundaries where no single authority exists. Motebit's architecture handles both cases with the same primitives: the guardian provides organizational custody within a trust domain, while the relay federation protocol, semiring-algebraic trust routing, and peer-issued credentials provide trust accumulation across domains.
+
+**Composability with federal identity infrastructure.** Motebit's agent identity layer is designed to compose with — not replace — existing enterprise and federal identity systems. Existing infrastructure (SPIFFE for workloads, OIDC/PIV for human operators, NGAC for policy — each described in Sections 2 and 4) can compose with the agent identity layer, which adds what these systems do not provide: persistent agent-level identity, cross-domain trust accumulation, and cryptographic delegation chains. Organizations deploying within FedRAMP or FISMA boundaries can layer Motebit's agent identity on top of their existing infrastructure-level controls. The relay is content-blind: it stores agent registrations, trust records, and routing topology in a local database, but all synced agent data (events, conversations, plans) is AES-256-GCM encrypted client-side — the relay stores and forwards opaque ciphertext without access to plaintext. This separation simplifies compliance boundary analysis: the relay handles routing and settlement metadata, but never processes agent content.
+
+The NCCoE's future iterations addressing external agents may find this architecture relevant as a starting point.
 
 ---
 
@@ -321,11 +376,10 @@ This is the harder problem. Enterprise identity operates within a trust domain w
 - **Source code:** [github.com/motebit/motebit](https://github.com/motebit/motebit) (source-available, BSL 1.1)
 - **Type layer:** MIT licensed — protocol types (`@motebit/protocol`), full SDK (`@motebit/sdk`), verification library (`@motebit/verify`), scaffolder (`create-motebit`)
 - **Specifications:** `motebit/identity@1.0` (stable), `motebit/execution-ledger@1.0` (stable), `motebit/relay-federation@1.0` (stable), `motebit/market@1.0` (stable), `motebit/credential@1.0` (stable)
-- **npm packages:** `@motebit/sdk`, `@motebit/verify`, `create-motebit`, `motebit`
+- **npm packages:** `@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`, `create-motebit`, `motebit`
 - **Live demo:** [motebit.com](https://motebit.com)
-- **Remote command API:** Every connected agent is queryable via `POST /api/v1/agents/:motebitId/command` — the relay forwards commands to the agent's runtime via WebSocket, returning structured results through the same contract used by all local surfaces (web, desktop, mobile, spatial, CLI). Relay-side queries (balance, discovery) resolve from the relay database without requiring the agent to be online.
-
-The identity and receipt primitives compose with external proof anchoring. Inter-relay federation settlements are batched into Merkle trees and anchored on-chain (Base L2) for non-repudiability — the relay's Ed25519 signature provides immediate peer verification, and the on-chain anchor prevents the relay from later denying the batch. The anchoring is additive: verification works without the chain anchor, using only the relay's signature and the settlement records. This is specified in `relay-federation-v1.md` §7.6 and implemented in `packages/crypto/src/merkle.ts` and `services/api/src/anchoring.ts`.
+- **Remote command API:** `POST /api/v1/agents/:motebitId/command` — relay-mediated agent introspection
+- **Settlement anchoring:** Inter-relay settlements can be batched into Merkle trees and anchored on-chain (Base L2) for non-repudiability. The Merkle construction and anchoring code are implemented and tested; the on-chain contract is not yet deployed. Anchoring is additive — verification works without the chain anchor (`relay-federation-v1.md` §7.6, `packages/crypto/src/merkle.ts`).
 
 We welcome the opportunity to collaborate with the NCCoE as a technology partner in demonstrating these capabilities in laboratory environments.
 
