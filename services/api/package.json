@@ -25,9 +25,9 @@
     "@motebit/market": "workspace:*",
     "@motebit/persistence": "workspace:*",
     "@motebit/sdk": "workspace:*",
-    "@x402/core": "^2.6.0",
-    "@x402/evm": "^2.6.0",
-    "@x402/hono": "^2.6.0",
+    "@x402/core": "^2.8.0",
+    "@x402/evm": "^2.8.0",
+    "@x402/hono": "^2.8.0",
     "hono": "^4.12.9",
     "stripe": "^17.0.0"
   },
