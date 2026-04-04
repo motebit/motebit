@@ -1,5 +1,21 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { ToolDefinition, ToolResult, ExecutionReceipt, KeyringAdapter } from "@motebit/sdk";
+import type {
+  ToolDefinition,
+  ToolResult,
+  ExecutionReceipt,
+  KeyringAdapter,
+  CredentialRequest,
+  CredentialSource,
+  VerificationResult,
+  ServerVerifier,
+} from "@motebit/sdk";
+export type {
+  CredentialRequest,
+  CredentialSource,
+  VerifierConfigUpdates,
+  VerificationResult,
+  ServerVerifier,
+} from "@motebit/sdk";
 import { secureErase } from "@motebit/crypto";
 import type { KeySuccessionRecord } from "@motebit/crypto";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -17,28 +33,6 @@ export type {
   RelayDiscoveryResult,
   RelayDiscoveryOptions,
 } from "./discovery.js";
-
-/** Context passed to CredentialSource when requesting a credential. */
-export interface CredentialRequest {
-  /** URL of the MCP server being called. */
-  serverUrl: string;
-  /** Tool name being invoked, if known at credential-acquisition time. */
-  toolName?: string;
-  /** Requested scope or audience for scoped credentials. */
-  scope?: string;
-  /** Motebit ID of the calling agent, if available. */
-  agentId?: string;
-}
-
-/**
- * Adapter interface for obtaining credentials at tool-call time.
- * Replaces static bearer tokens with dynamic, potentially short-lived credentials.
- * Implementations may read from OS keyring, external vaults, or wrap static tokens.
- */
-export interface CredentialSource {
-  /** Returns a credential for the given request. May be short-lived. */
-  getCredential(request: CredentialRequest): Promise<string | null>;
-}
 
 /**
  * Wraps a static token string as a CredentialSource.
@@ -92,27 +86,6 @@ function extractServerName(url: string): string {
   } catch {
     return url;
   }
-}
-
-/** Result of server verification. */
-export interface VerificationResult {
-  /** Whether the server passed verification. */
-  ok: boolean;
-  /** Human-readable error when verification fails. */
-  error?: string;
-  /** Config updates to persist (e.g., new manifest hash on first pin, TLS cert fingerprint). */
-  configUpdates?: Partial<
-    Pick<McpServerConfig, "toolManifestHash" | "pinnedToolNames" | "trusted" | "tlsCertFingerprint">
-  >;
-}
-
-/**
- * Adapter interface for verifying a third-party MCP server's integrity after connect.
- * Runs after tool discovery, before tools are registered.
- * Fail-closed: if verify() returns ok:false or throws, the connection is torn down.
- */
-export interface ServerVerifier {
-  verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult>;
 }
 
 /** Compute a manifest hash from tool definitions (shared by verifiers). */
@@ -279,26 +252,6 @@ export interface MotebitIdentityResult {
   error?: string;
 }
 
-export interface ManifestDiff {
-  added: string[];
-  removed: string[];
-}
-
-export interface ManifestCheckResult {
-  /** Whether the manifest matches (or is being pinned for the first time). */
-  ok: boolean;
-  /** The computed hash of the current tool manifest. */
-  hash: string;
-  /** The previously pinned hash, if any. */
-  previousHash?: string;
-  /** Number of tools discovered. */
-  toolCount: number;
-  /** Current tool names (for persisting alongside the hash). */
-  toolNames: string[];
-  /** If manifest changed, what tools were added/removed. Only present when !ok. */
-  diff?: ManifestDiff;
-}
-
 // === Inline boundary wrapping for MCP results ===
 
 const EXTERNAL_DATA_START = "[EXTERNAL_DATA source=";
@@ -311,20 +264,6 @@ function wrapMcpResult(data: string, serverName: string, toolName: string): stri
   const safeServer = serverName.replace(/[[\]"\\]/g, "_").slice(0, 50);
   const safeTool = toolName.replace(/[[\]"\\]/g, "_").slice(0, 50);
   return `${EXTERNAL_DATA_START}"mcp:${safeServer}:${safeTool}"]\n${escaped}\n${EXTERNAL_DATA_END}`;
-}
-
-/** @deprecated Use computeVerifierHash() instead. Kept for checkManifest() backwards compat. */
-async function computeManifestHash(tools: ToolDefinition[]): Promise<string> {
-  const { hash } = await computeVerifierHash(tools);
-  return hash;
-}
-
-function computeManifestDiff(previous: string[], current: string[]): ManifestDiff {
-  const prevSet = new Set(previous);
-  const currSet = new Set(current);
-  const added = current.filter((n) => !prevSet.has(n));
-  const removed = previous.filter((n) => !currSet.has(n));
-  return { added, removed };
 }
 
 /** Strip the `[motebit:...]` identity tag line from formatResult() output. */
@@ -607,34 +546,6 @@ export class McpClientAdapter {
 
   getTools(): ToolDefinition[] {
     return [...this.discoveredTools];
-  }
-
-  /**
-   * Compare the current tool manifest against a pinned hash.
-   * Returns the check result with the current hash, tool names, and diff (if changed).
-   * @deprecated Use `serverVerifier` config with `ManifestPinningVerifier` or `AdvisoryManifestVerifier` instead.
-   */
-  async checkManifest(
-    pinnedHash?: string,
-    pinnedToolNames?: string[],
-  ): Promise<ManifestCheckResult> {
-    const hash = await computeManifestHash(this.discoveredTools);
-    const toolNames = this.discoveredTools.map((t) => t.name);
-    if (!pinnedHash) {
-      // First connection — no pin exists, accept and pin
-      return { ok: true, hash, toolCount: this.discoveredTools.length, toolNames };
-    }
-    const ok = hash === pinnedHash;
-    const diff =
-      !ok && pinnedToolNames ? computeManifestDiff(pinnedToolNames, toolNames) : undefined;
-    return {
-      ok,
-      hash,
-      previousHash: pinnedHash,
-      toolCount: this.discoveredTools.length,
-      toolNames,
-      diff,
-    };
   }
 
   async executeTool(qualifiedName: string, args: Record<string, unknown>): Promise<ToolResult> {

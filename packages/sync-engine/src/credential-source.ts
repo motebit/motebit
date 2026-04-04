@@ -1,19 +1,8 @@
-// ---------------------------------------------------------------------------
-// CredentialSource — inlined from @motebit/mcp-client to avoid cross-layer dep
-// ---------------------------------------------------------------------------
+// Re-export canonical types from @motebit/sdk.
+// StaticCredentialSource is a sync-engine-local implementation.
 
-/** Request context for credential resolution. */
-export interface CredentialRequest {
-  serverUrl: string;
-  toolName?: string;
-  scope?: string;
-  agentId?: string;
-}
-
-/** Pluggable credential provider — resolve tokens dynamically per-request. */
-export interface CredentialSource {
-  getCredential(request: CredentialRequest): Promise<string | null>;
-}
+import type { CredentialRequest, CredentialSource } from "@motebit/sdk";
+export type { CredentialRequest, CredentialSource } from "@motebit/sdk";
 
 /** Static credential source — wraps a fixed token string. */
 export class StaticCredentialSource implements CredentialSource {

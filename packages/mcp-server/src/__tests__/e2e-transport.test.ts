@@ -126,11 +126,8 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
       const echoTool = tools.find((t) => t.name === "test-server__echo");
       expect(echoTool?.description).toContain("[test-server]");
 
-      // Manifest check works (first time — no pinned hash)
-      const manifest = await client.checkManifest();
-      expect(manifest.ok).toBe(true);
-      expect(manifest.toolCount).toBeGreaterThan(0);
-      expect(manifest.hash).toBeTruthy();
+      // Tool count sanity check
+      expect(tools.length).toBeGreaterThanOrEqual(2);
     } finally {
       await client.disconnect();
     }
@@ -198,37 +195,45 @@ describe("E2E: McpClientAdapter ↔ McpServerAdapter (StreamableHTTP)", () => {
     }
   });
 
-  // --- Test (d): Manifest pinning ---
+  // --- Test (d): Manifest pinning via ManifestPinningVerifier ---
 
-  it("manifest hash is stable across reconnections", async () => {
-    // First connection — get the manifest hash
-    const client1 = new McpClientAdapter({
+  it("manifest hash is stable across reconnections (ManifestPinningVerifier)", async () => {
+    const { ManifestPinningVerifier } = await import("@motebit/mcp-client");
+
+    // First connection — verifier pins the manifest hash
+    const config1 = {
       name: "test-server",
-      transport: "http",
+      transport: "http" as const,
       url: `http://localhost:${port}/mcp`,
       authToken: TEST_AUTH_TOKEN,
-    });
-
+      serverVerifier: new ManifestPinningVerifier(),
+    };
+    const client1 = new McpClientAdapter(config1);
     await client1.connect();
-    const manifest1 = await client1.checkManifest();
-    expect(manifest1.ok).toBe(true);
-    const firstHash = manifest1.hash;
-    const firstToolNames = manifest1.toolNames;
+
+    const firstHash = client1.serverConfig.toolManifestHash;
+    const firstToolNames = client1.serverConfig.pinnedToolNames;
+    expect(firstHash).toBeTruthy();
+    expect(firstToolNames).toBeDefined();
+    expect(firstToolNames!.length).toBeGreaterThan(0);
+    const firstToolCount = client1.getTools().length;
     await client1.disconnect();
 
-    // Second connection — verify against pinned hash
-    const client2 = new McpClientAdapter({
+    // Second connection — verify against pinned hash (should pass)
+    const config2 = {
       name: "test-server",
-      transport: "http",
+      transport: "http" as const,
       url: `http://localhost:${port}/mcp`,
       authToken: TEST_AUTH_TOKEN,
-    });
-
+      toolManifestHash: firstHash,
+      pinnedToolNames: firstToolNames,
+      serverVerifier: new ManifestPinningVerifier(),
+    };
+    const client2 = new McpClientAdapter(config2);
     await client2.connect();
-    const manifest2 = await client2.checkManifest(firstHash, firstToolNames);
-    expect(manifest2.ok).toBe(true);
-    expect(manifest2.hash).toBe(firstHash);
-    expect(manifest2.toolCount).toBe(manifest1.toolCount);
+
+    expect(client2.serverConfig.toolManifestHash).toBe(firstHash);
+    expect(client2.getTools().length).toBe(firstToolCount);
     await client2.disconnect();
   });
 

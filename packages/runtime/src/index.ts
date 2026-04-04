@@ -205,33 +205,17 @@ export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
+// Credential/verifier interfaces imported from @motebit/sdk (canonical source).
 
-/** Context passed to CredentialSource. See @motebit/mcp-client for full documentation. */
-export interface CredentialRequest {
-  serverUrl: string;
-  toolName?: string;
-  scope?: string;
-  agentId?: string;
-}
+export type {
+  CredentialRequest,
+  CredentialSource,
+  VerifierConfigUpdates,
+  VerificationResult,
+  ServerVerifier,
+} from "@motebit/sdk";
 
-/** Adapter interface for obtaining credentials at tool-call time. See @motebit/mcp-client for implementations. */
-export interface CredentialSource {
-  getCredential(request: CredentialRequest): Promise<string | null>;
-}
-
-/** Result of server verification. See @motebit/mcp-client for implementations. */
-export interface VerificationResult {
-  ok: boolean;
-  error?: string;
-  configUpdates?: Partial<
-    Pick<McpServerConfig, "toolManifestHash" | "pinnedToolNames" | "trusted" | "tlsCertFingerprint">
-  >;
-}
-
-/** Adapter interface for verifying MCP server integrity after connect. See @motebit/mcp-client. */
-export interface ServerVerifier {
-  verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult>;
-}
+import type { CredentialSource, ServerVerifier } from "@motebit/sdk";
 
 export interface McpServerConfig {
   name: string;

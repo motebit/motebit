@@ -315,3 +315,60 @@ export interface StorageAdapters {
   credentialStore?: CredentialStoreAdapter;
   approvalStore?: ApprovalStoreAdapter;
 }
+
+// === Credential & Verification Boundaries ===
+// Canonical definitions — imported by mcp-client, runtime, sync-engine.
+// Do not duplicate these types in other packages.
+
+/** Context passed to CredentialSource when requesting a credential. */
+export interface CredentialRequest {
+  /** URL of the MCP server being called. */
+  serverUrl: string;
+  /** Tool name being invoked, if known at credential-acquisition time. */
+  toolName?: string;
+  /** Requested scope or audience for scoped credentials. */
+  scope?: string;
+  /** Motebit ID of the calling agent, if available. */
+  agentId?: string;
+}
+
+/**
+ * Adapter interface for obtaining credentials at tool-call time.
+ * Implementations may read from OS keyring, external vaults, or wrap static tokens.
+ */
+export interface CredentialSource {
+  getCredential(request: CredentialRequest): Promise<string | null>;
+}
+
+/** Config fields that server verifiers can update via VerificationResult. */
+export interface VerifierConfigUpdates {
+  toolManifestHash?: string;
+  pinnedToolNames?: string[];
+  trusted?: boolean;
+  tlsCertFingerprint?: string;
+}
+
+/** Result of server verification. */
+export interface VerificationResult {
+  ok: boolean;
+  error?: string;
+  configUpdates?: VerifierConfigUpdates;
+}
+
+/**
+ * Adapter interface for verifying an MCP server's integrity after connect.
+ * Fail-closed: ok:false or thrown errors should tear down the connection.
+ */
+export interface ServerVerifier {
+  verify(
+    config: {
+      name: string;
+      url?: string;
+      toolManifestHash?: string;
+      pinnedToolNames?: string[];
+      trusted?: boolean;
+      tlsCertFingerprint?: string;
+    },
+    tools: ToolDefinition[],
+  ): Promise<VerificationResult>;
+}
