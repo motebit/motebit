@@ -105,7 +105,7 @@ export class StripeSettlementRail implements SettlementRail {
    * Withdrawals are admin-completed (manual payout).
    * The rail records the intent and returns a pending result.
    */
-  async withdraw(
+  withdraw(
     motebitId: string,
     amount: number,
     currency: string,
@@ -121,7 +121,7 @@ export class StripeSettlementRail implements SettlementRail {
       destination,
     });
 
-    return {
+    return Promise.resolve({
       amount,
       currency,
       proof: {
@@ -130,14 +130,14 @@ export class StripeSettlementRail implements SettlementRail {
         network: "stripe",
         confirmedAt: 0, // Not confirmed yet — admin must complete
       },
-    };
+    });
   }
 
   /**
    * Attach a payment proof (e.g., Stripe charge/session ID) to a settlement record.
    * Called from the webhook handler after checkout.session.completed.
    */
-  async attachProof(settlementId: string, proof: PaymentProof): Promise<void> {
+  attachProof(settlementId: string, proof: PaymentProof): Promise<void> {
     logger.info("stripe.proof.attached", {
       settlementId,
       reference: proof.reference,
@@ -145,6 +145,7 @@ export class StripeSettlementRail implements SettlementRail {
     });
     // Storage is handled by the relay's ledger — this is the boundary notification.
     // Future: persist to a settlement_proofs table for audit.
+    return Promise.resolve();
   }
 
   /**
