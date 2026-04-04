@@ -224,7 +224,7 @@ export interface VerificationResult {
   ok: boolean;
   error?: string;
   configUpdates?: Partial<
-    Pick<McpServerConfig, "toolManifestHash" | "pinnedToolNames" | "trusted">
+    Pick<McpServerConfig, "toolManifestHash" | "pinnedToolNames" | "trusted" | "tlsCertFingerprint">
   >;
 }
 
@@ -260,6 +260,8 @@ export interface McpServerConfig {
   credentialSource?: CredentialSource;
   /** Server verifier run after connect. Fail-closed: verification failure disconnects. */
   serverVerifier?: ServerVerifier;
+  /** SHA-256 fingerprint of the server's TLS certificate, pinned on first connect. */
+  tlsCertFingerprint?: string;
 }
 
 // === Browser-safe Tool Registry ===

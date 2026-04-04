@@ -313,16 +313,10 @@ function wrapMcpResult(data: string, serverName: string, toolName: string): stri
   return `${EXTERNAL_DATA_START}"mcp:${safeServer}:${safeTool}"]\n${escaped}\n${EXTERNAL_DATA_END}`;
 }
 
-/** Compute a deterministic SHA-256 hash of a tool manifest for pinning. */
+/** @deprecated Use computeVerifierHash() instead. Kept for checkManifest() backwards compat. */
 async function computeManifestHash(tools: ToolDefinition[]): Promise<string> {
-  const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
-  const data = sorted
-    .map((t) => `${t.name}|${t.description}|${JSON.stringify(t.inputSchema)}`)
-    .join("\n");
-  const encoded = new TextEncoder().encode(data);
-  const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", encoded);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const { hash } = await computeVerifierHash(tools);
+  return hash;
 }
 
 function computeManifestDiff(previous: string[], current: string[]): ManifestDiff {
@@ -618,6 +612,7 @@ export class McpClientAdapter {
   /**
    * Compare the current tool manifest against a pinned hash.
    * Returns the check result with the current hash, tool names, and diff (if changed).
+   * @deprecated Use `serverVerifier` config with `ManifestPinningVerifier` or `AdvisoryManifestVerifier` instead.
    */
   async checkManifest(
     pinnedHash?: string,
