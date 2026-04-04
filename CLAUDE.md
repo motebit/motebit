@@ -139,6 +139,8 @@ These are not suggestions. They are the architectural invariants that make the m
 
 **Sync-engine credential source.** All 4 sync adapters (HTTP, WebSocket, PlanSync, ConversationSync) accept `credentialSource?: CredentialSource` alongside legacy `authToken`. HTTP adapters resolve per-request via async `headers()`. WebSocket resolves on each connect/reconnect. Interface inlined in sync-engine to avoid cross-layer dep on mcp-client.
 
+**Settlement rails boundary.** External money movement uses `SettlementRail` adapter interface in `@motebit/protocol` (Layer 0). Four rail types classify how money moves, not which vendor moves it: `fiat` (traditional processor — Stripe Checkout), `protocol` (HTTP-native agent payment protocols — MPP, x402), `direct_asset` (direct onchain stablecoin transfer — USDC on Tempo/Base/Solana), `orchestration` (fiat↔crypto bridging — Bridge). The relay's internal ledger (virtual accounts, micro-units) handles real-time balance tracking. The rail handles deposits, withdrawals, and payment proof. `PaymentProof` carries reference, railType, network, confirmedAt for audit. `DepositResult` may return a redirectUrl for interactive flows (Stripe Checkout). The relay picks the rail at routing time based on what the counterparty accepts — protocol, provider, and network are properties of the implementation, not the interface.
+
 ## Commands
 
 ```bash

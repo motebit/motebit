@@ -849,6 +849,96 @@ export interface SettlementRecord {
   settled_at: number;
 }
 
+// === Settlement Rails ===
+// Rail types classify how money moves, not which vendor moves it.
+// Protocol, provider, and network are properties of the implementation, not the interface.
+
+/** Proof of payment from a settlement rail. */
+export interface PaymentProof {
+  /** Transaction hash or reference ID from the rail. */
+  reference: string;
+  /** Rail type that produced this proof. */
+  railType: "fiat" | "protocol" | "direct_asset" | "orchestration";
+  /** Network identifier (CAIP-2 for onchain, "stripe" for fiat, etc.). */
+  network?: string;
+  /** ISO timestamp of when the payment was confirmed. */
+  confirmedAt: number;
+}
+
+/** Deposit result from a settlement rail. */
+export interface DepositResult {
+  /** Amount deposited in micro-units. */
+  amount: number;
+  /** Currency code (e.g., "USD", "USDC"). */
+  currency: string;
+  /** Payment proof for audit trail. */
+  proof: PaymentProof;
+}
+
+/** Withdrawal result from a settlement rail. */
+export interface WithdrawalResult {
+  /** Amount withdrawn in micro-units. */
+  amount: number;
+  /** Currency code. */
+  currency: string;
+  /** Payment proof for audit trail. */
+  proof: PaymentProof;
+}
+
+/**
+ * Settlement rail adapter — the external money movement boundary.
+ *
+ * The relay's internal ledger (virtual accounts, micro-units) handles real-time
+ * balance tracking. The rail handles how money enters and exits the system.
+ *
+ * Four rail types:
+ * - FiatRail — traditional payment processor (Stripe Checkout)
+ * - ProtocolRail — HTTP-native agent payment protocols (MPP, x402)
+ * - DirectAssetRail — direct onchain stablecoin transfer (USDC on Tempo/Base/Solana)
+ * - OrchestrationRail — fiat↔crypto bridging (Bridge)
+ *
+ * The relay picks the rail at routing time based on what the counterparty accepts.
+ */
+export interface SettlementRail {
+  /** Rail type for routing decisions. */
+  readonly railType: "fiat" | "protocol" | "direct_asset" | "orchestration";
+
+  /** Human-readable name for logging and config (e.g., "stripe", "x402-base", "bridge"). */
+  readonly name: string;
+
+  /** Whether this rail is currently available (provider reachable, config valid). */
+  isAvailable(): Promise<boolean>;
+
+  /**
+   * Initiate a deposit. Returns a deposit result or a redirect URL
+   * (for interactive flows like Stripe Checkout).
+   */
+  deposit(
+    motebitId: string,
+    amount: number,
+    currency: string,
+    idempotencyKey: string,
+  ): Promise<DepositResult | { redirectUrl: string }>;
+
+  /**
+   * Execute a withdrawal to an external destination.
+   * Fail-closed: throws on any error.
+   */
+  withdraw(
+    motebitId: string,
+    amount: number,
+    currency: string,
+    destination: string,
+    idempotencyKey: string,
+  ): Promise<WithdrawalResult>;
+
+  /**
+   * Record a payment proof with a settlement (e.g., x402 tx hash, Stripe charge ID).
+   * Called after settleOnReceipt() computes the settlement record.
+   */
+  attachProof(settlementId: string, proof: PaymentProof): Promise<void>;
+}
+
 // === Collaborative Plan Proposals ===
 
 export interface CollaborativePlanProposal {
