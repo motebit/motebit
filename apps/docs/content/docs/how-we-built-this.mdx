@@ -1,13 +1,17 @@
 ---
-title: How We Built This
-description: 200K lines of TypeScript in 47 days. One human architect, one AI pair programmer. 1,204 commits.
+title: How I Built This
+description: One founder, one AI pair programmer, 47 days. The full story of building Motebit from commit one.
+---
+
+*A snapshot of the first 47 days — February 15 to April 2, 2026. The numbers on this page are frozen at that date. The project continued after.*
+
 ---
 
 Motebit was built in 47 days.
 
 Not a prototype. Not a proof of concept. A 45-package monorepo — ~200,000 lines of TypeScript, 4,600+ tests, eight application surfaces, five open specifications, five published npm packages, and a NIST submission backed by working code.
 
-One human. One AI. 1,204 commits. 1,154 co-authored with [Claude](https://claude.ai).
+One person. One AI. 1,204 commits. 1,154 co-authored with [Claude](https://claude.ai).
 
 The git history is public. Every claim on this page is verifiable.
 
@@ -131,7 +135,7 @@ The project nearly doubled. From 39 packages to 45. From 133K lines to 200K. Fro
 
 The bottleneck in software development has shifted. With AI pair-programming, the constraint is no longer implementation speed — it's architectural coherence. How do you maintain a consistent vision across hundreds of AI-assisted commits?
 
-The answer, for us, was a single file.
+The answer was a single file.
 
 ### CLAUDE.md as control surface
 
@@ -156,9 +160,9 @@ The project includes documents that look like philosophy:
 
 These are not decoration. They are constraints. When the AI suggests a feature, the question is: can this be traced to surface tension? If it can't, it doesn't belong. The documents prevent scope creep and maintain coherence across a codebase too large for any single person to hold in their head.
 
-### What the human did vs. what the AI did
+### What I did vs. what Claude did
 
-**The human:**
+**I did:**
 - The thesis, the architecture, the design constraints
 - The CLAUDE.md control surface
 - Every strategic decision — what to build, what to cut, what patterns to use
@@ -166,7 +170,7 @@ These are not decoration. They are constraints. When the AI suggests a feature, 
 - The cryptographic primitives and security model
 - The 6-day gap where the economic thesis crystallized
 
-**The AI:**
+**Claude did:**
 - Implementation code following the architectural patterns
 - Test suites including formal axiom verification
 - Consistency across 45 packages
@@ -181,24 +185,24 @@ A single person with domain knowledge and a clear thesis can now build what prev
 
 The economics changed. The requirement for taste didn't.
 
-## What's proven and what's not
+## What was proven and what wasn't
 
-The infrastructure is built. The cryptography is correct — Ed25519 via audited `@noble` libraries, AES-256-GCM, PBKDF2 at 600k iterations. The tests verify mathematical axioms (all seven semiring properties), cryptographic roundtrips, and tamper detection.
+The infrastructure was built. The cryptography is correct — Ed25519 via audited `@noble` libraries, AES-256-GCM, PBKDF2 at 600k iterations. The tests verify mathematical axioms (all seven semiring properties), cryptographic roundtrips, and tamper detection.
 
-**Proven:**
+**Proven by April 2:**
 - Multi-hop delegation across the internet — CLI → web-search → read-url, with Ed25519 signed receipts at every hop, relay-verified independently, budget settled with platform fee
 - Real money through the system — Stripe deposits, task settlement, account balances
 - Federation between co-located test relays (all 5 phases, 14 adversarial scenarios)
 
-**Not yet proven:**
+**Not yet proven by April 2:**
 - External developers completing the full flow without guidance
 - Multi-device sync under real network conditions
 - The intelligence gradient trending upward over weeks of real usage
 - Multi-relay federation across independent operators in production
 
-We are honest about this because the gap between built and proven is where most projects die.
+I am honest about this because the gap between built and proven is where most projects die.
 
-## The final commit
+## The last commit of the first 47 days
 
 ```
 commit 77a94ea
@@ -206,8 +210,6 @@ Date:   Thu Apr 2 05:09:13 2026 -0700
 
     Rename NIST submission draft to final
 ```
-
-47 calendar days. 40 days with commits. A 6-day gap where the economic thesis crystallized. A 46-hour sprint where the semiring snapped into focus at hour 40. 1,204 commits. 1,154 co-authored with Claude.
 
 The architecture from commit one — February 15, 2026, 8:26 PM — is the architecture at commit 1,204. Nothing was restructured. The foundation never moved. Everything that came after was accumulation, not correction.
 
