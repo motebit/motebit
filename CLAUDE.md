@@ -129,6 +129,8 @@ These are not suggestions. They are the architectural invariants that make the m
 
 **Federation circuit breaker.** Per-peer forward tracking with automatic suspension at 50% failure rate over 6+ samples. Heartbeat handles liveness (3 missed → suspend, 5 → remove). Circuit breaker handles forward-path health.
 
+**Credential source boundary.** Third-party MCP server auth uses `CredentialSource` adapter (`getCredential(CredentialRequest) → string | null`), not static bearer tokens. `CredentialRequest` carries `serverUrl`, `toolName?`, `scope?`, `agentId?`. `StaticCredentialSource` wraps legacy `authToken` for backward compatibility. Fail-closed: thrown errors abort connection, null skips auth. Motebit-to-motebit auth (`createCallerToken`) is unaffected — highest precedence. Interface + static impl live in `mcp-client` (Layer 2). Keyring/vault implementations belong in higher-layer platform adapters. The MCP client does not persist, rotate, or cache credentials.
+
 ## Commands
 
 ```bash

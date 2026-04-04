@@ -33,8 +33,14 @@ vi.mock("@motebit/crypto", () => ({
 }));
 
 // Import after mocks are set up
-import { McpClientAdapter, connectMcpServers, StaticCredentialSource } from "../index.js";
+import {
+  McpClientAdapter,
+  connectMcpServers,
+  StaticCredentialSource,
+  KeyringCredentialSource,
+} from "../index.js";
 import type { CredentialSource, CredentialRequest } from "../index.js";
+import type { KeyringAdapter } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
 function stdioConfig(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
@@ -1753,5 +1759,97 @@ describe("McpClientAdapter — CredentialSource", () => {
     expect(transportOpts.requestInit.headers["Authorization"]).toBe(
       "Bearer motebit:mock-signed-token",
     );
+  });
+});
+
+// ============================================================
+// KeyringCredentialSource
+// ============================================================
+
+function createMockKeyring(store: Record<string, string> = {}): KeyringAdapter {
+  return {
+    async get(key: string) {
+      return store[key] ?? null;
+    },
+    async set(key: string, value: string) {
+      store[key] = value;
+    },
+    async delete(key: string) {
+      delete store[key];
+    },
+  };
+}
+
+describe("KeyringCredentialSource", () => {
+  it("reads credential from keyring using default key format", async () => {
+    const keyring = createMockKeyring({ "mcp_credential:example.com": "keyring-secret" });
+    const source = new KeyringCredentialSource(keyring);
+
+    const cred = await source.getCredential({ serverUrl: "https://example.com/mcp" });
+    expect(cred).toBe("keyring-secret");
+  });
+
+  it("returns null when keyring has no entry for the server", async () => {
+    const keyring = createMockKeyring({});
+    const source = new KeyringCredentialSource(keyring);
+
+    const cred = await source.getCredential({ serverUrl: "https://unknown.com/mcp" });
+    expect(cred).toBeNull();
+  });
+
+  it("uses custom key resolver when provided", async () => {
+    const keyring = createMockKeyring({ "custom:my-server.com": "custom-secret" });
+    const source = new KeyringCredentialSource(keyring, (name) => `custom:${name}`);
+
+    const cred = await source.getCredential({ serverUrl: "https://my-server.com/api" });
+    expect(cred).toBe("custom-secret");
+  });
+
+  it("extracts hostname from URL for key derivation", async () => {
+    const keyring = createMockKeyring({ "mcp_credential:api.github.com": "gh-token" });
+    const source = new KeyringCredentialSource(keyring);
+
+    // Different paths, same hostname → same key
+    expect(await source.getCredential({ serverUrl: "https://api.github.com/mcp" })).toBe(
+      "gh-token",
+    );
+    expect(await source.getCredential({ serverUrl: "https://api.github.com/v2/tools" })).toBe(
+      "gh-token",
+    );
+  });
+
+  it("falls back to raw string when URL is invalid", async () => {
+    const keyring = createMockKeyring({ "mcp_credential:not-a-url": "fallback" });
+    const source = new KeyringCredentialSource(keyring);
+
+    const cred = await source.getCredential({ serverUrl: "not-a-url" });
+    expect(cred).toBe("fallback");
+  });
+
+  it("propagates keyring errors (fail-closed)", async () => {
+    const keyring: KeyringAdapter = {
+      async get(_key: string) {
+        throw new Error("keyring locked");
+      },
+      async set() {},
+      async delete() {},
+    };
+    const source = new KeyringCredentialSource(keyring);
+
+    await expect(source.getCredential({ serverUrl: "https://example.com" })).rejects.toThrow(
+      "keyring locked",
+    );
+  });
+
+  it("works end-to-end with McpClientAdapter", async () => {
+    const keyring = createMockKeyring({ "mcp_credential:example.com": "e2e-token" });
+    const source = new KeyringCredentialSource(keyring);
+    const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
+    await adapter.connect();
+
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
+      | { requestInit?: { headers?: Record<string, string> } }
+      | undefined;
+    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer e2e-token");
   });
 });

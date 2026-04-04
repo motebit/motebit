@@ -1,5 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { ToolDefinition, ToolResult, ExecutionReceipt } from "@motebit/sdk";
+import type { ToolDefinition, ToolResult, ExecutionReceipt, KeyringAdapter } from "@motebit/sdk";
 import { secureErase } from "@motebit/crypto";
 import type { KeySuccessionRecord } from "@motebit/crypto";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -48,6 +48,46 @@ export class StaticCredentialSource implements CredentialSource {
 
   async getCredential(_request: CredentialRequest): Promise<string> {
     return this.token;
+  }
+}
+
+/** Default keyring key: `mcp_credential:{serverName}`. */
+function defaultKeyringKey(serverName: string): string {
+  return `mcp_credential:${serverName}`;
+}
+
+/**
+ * Reads credentials from OS keyring at call time.
+ * Secret is never held in memory beyond the getCredential call.
+ * Requires a KeyringAdapter (Tauri, Expo SecureStore, etc.) injected at construction.
+ */
+export class KeyringCredentialSource implements CredentialSource {
+  private keyring: KeyringAdapter;
+  private resolveKey: (serverName: string) => string;
+
+  constructor(
+    keyring: KeyringAdapter,
+    resolveKey: (serverName: string) => string = defaultKeyringKey,
+  ) {
+    this.keyring = keyring;
+    this.resolveKey = resolveKey;
+  }
+
+  async getCredential(request: CredentialRequest): Promise<string | null> {
+    // Extract server name from URL for key resolution
+    const serverName = extractServerName(request.serverUrl);
+    const key = this.resolveKey(serverName);
+    return this.keyring.get(key);
+  }
+}
+
+/** Extract a stable server name from a URL for keyring key derivation. */
+function extractServerName(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname;
+  } catch {
+    return url;
   }
 }
 
