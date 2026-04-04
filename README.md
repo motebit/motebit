@@ -189,7 +189,7 @@ spec/
   credential-v1.md        motebit/credential@1.0 — W3C VC 2.0, weighting, revocation
 ```
 
-45 pnpm workspaces across packages, apps, and services.
+45 packages across packages, apps, and services.
 
 ## Verify & integrate
 
