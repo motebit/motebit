@@ -111,6 +111,7 @@ import { registerTaskRoutes } from "./tasks.js";
 import { TaskQueue } from "./task-queue.js";
 import { registerCommandRoutes, handleCommandResponse } from "./command-route.js";
 import Stripe from "stripe";
+import { SettlementRailRegistry, StripeSettlementRail } from "./settlement-rails/index.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
@@ -214,6 +215,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   } = config;
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
+
+  // --- Settlement rail registry ---
+  const railRegistry = new SettlementRailRegistry();
+  if (stripeClient && stripeConfig) {
+    railRegistry.register(
+      new StripeSettlementRail({
+        stripeClient,
+        webhookSecret: stripeConfig.webhookSecret,
+        currency: stripeConfig.currency,
+      }),
+    );
+  }
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
   const eventStore = new EventStore(moteDb.eventStore);
@@ -523,6 +536,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     freezeState,
     stripeClient,
     stripeConfig: stripeConfig ?? null,
+    railRegistry,
   });
 
   // --- Agent routes (registration, discovery, capabilities, settlements, ledger) ---

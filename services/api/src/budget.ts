@@ -28,6 +28,8 @@ import {
 } from "./accounts.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import Stripe from "stripe";
+import type { StripeSettlementRail } from "./settlement-rails/index.js";
+import type { SettlementRailRegistry } from "./settlement-rails/index.js";
 
 const logger = createLogger({ service: "budget" });
 
@@ -39,10 +41,14 @@ export interface BudgetDeps {
   freezeState: { frozen: boolean; reason: string | null };
   stripeClient: Stripe | null;
   stripeConfig: { secretKey: string; webhookSecret: string; currency?: string } | null;
+  /** Settlement rail registry — holds configured rails by name. */
+  railRegistry?: SettlementRailRegistry;
 }
 
 export function registerBudgetRoutes(deps: BudgetDeps): void {
-  const { app, moteDb, relayIdentity, freezeState, stripeClient, stripeConfig } = deps;
+  const { app, moteDb, relayIdentity, freezeState, stripeClient, stripeConfig, railRegistry } =
+    deps;
+  const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
 
   // --- Deposit ---
   app.post("/api/v1/agents/:motebitId/deposit", async (c) => {
@@ -427,7 +433,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
   // --- Stripe checkout ---
   app.post("/api/v1/agents/:motebitId/checkout", async (c) => {
-    if (!stripeClient || !stripeConfig)
+    if (!stripeRail && (!stripeClient || !stripeConfig))
       throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
 
     const motebitId = c.req.param("motebitId");
@@ -438,14 +444,38 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     if (body.amount < 0.5)
       throw new HTTPException(400, { message: "Minimum deposit amount is $0.50" });
 
+    // Use StripeSettlementRail when available
+    if (stripeRail) {
+      const result = await stripeRail.deposit(
+        motebitId,
+        body.amount,
+        stripeConfig?.currency ?? "usd",
+        `checkout:${motebitId}:${Date.now()}`,
+      );
+
+      if ("redirectUrl" in result) {
+        logger.info("stripe.checkout.created", {
+          correlationId,
+          motebitId,
+          amount: body.amount,
+          via: "settlement-rail",
+        });
+        return c.json({ checkout_url: result.redirectUrl, session_id: null });
+      }
+
+      // Direct deposit result (not expected for Stripe, but handle for completeness)
+      return c.json({ deposit: result });
+    }
+
+    // Fallback: direct Stripe SDK (backward compatibility during migration)
     const baseUrl = new URL(c.req.url);
-    const session = await stripeClient.checkout.sessions.create({
+    const session = await stripeClient!.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
       line_items: [
         {
           price_data: {
-            currency: stripeConfig.currency ?? "usd",
+            currency: stripeConfig!.currency ?? "usd",
             product_data: { name: `Motebit Agent Deposit (${motebitId.slice(0, 8)}...)` },
             unit_amount: Math.round(body.amount * 100),
           },
@@ -468,7 +498,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
   // --- Stripe webhook ---
   app.post("/api/v1/stripe/webhook", async (c) => {
-    if (!stripeClient || !stripeConfig)
+    if (!stripeRail && (!stripeClient || !stripeConfig))
       throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
 
     const sig = c.req.header("stripe-signature");
@@ -477,7 +507,12 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     const rawBody = await c.req.text();
     let event: Stripe.Event;
     try {
-      event = stripeClient.webhooks.constructEvent(rawBody, sig, stripeConfig.webhookSecret);
+      // Use rail's webhook verification when available, fall back to direct SDK
+      if (stripeRail) {
+        event = stripeRail.constructWebhookEvent(rawBody, sig);
+      } else {
+        event = stripeClient!.webhooks.constructEvent(rawBody, sig, stripeConfig!.webhookSecret);
+      }
     } catch (err) {
       logger.info("stripe.webhook.signature_failed", {
         error: err instanceof Error ? err.message : String(err),
@@ -510,6 +545,17 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         amount,
         paymentIntent ?? undefined,
       );
+
+      // Attach proof via the rail for audit trail
+      if (applied && stripeRail) {
+        await stripeRail.attachProof(session.id, {
+          reference: paymentIntent ?? session.id,
+          railType: "fiat",
+          network: "stripe",
+          confirmedAt: Date.now(),
+        });
+      }
+
       logger.info("stripe.webhook.processed", {
         eventId: event.id,
         sessionId: session.id,
