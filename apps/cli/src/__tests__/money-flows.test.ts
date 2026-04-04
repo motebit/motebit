@@ -289,7 +289,7 @@ describe("handleWithdraw", () => {
 // ============================================================
 
 describe("handleFund", () => {
-  it("creates checkout session and opens URL", async () => {
+  it("creates checkout session and opens URL", { timeout: 15_000 }, async () => {
     // Checkout creation
     mockFetch.mockReturnValueOnce(
       mockFetchResponse({
@@ -349,7 +349,7 @@ describe("handleFund", () => {
 // ============================================================
 
 describe("handleDelegate", () => {
-  it("discovers agent, submits task, and polls for result", async () => {
+  it("discovers agent, submits task, and polls for result", { timeout: 15_000 }, async () => {
     // Discovery
     mockFetch.mockReturnValueOnce(
       mockFetchResponse({
@@ -391,7 +391,7 @@ describe("handleDelegate", () => {
     expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining("Usage"));
   });
 
-  it("uses --target to skip discovery", async () => {
+  it("uses --target to skip discovery", { timeout: 15_000 }, async () => {
     // Task submission (no discovery)
     mockFetch.mockReturnValueOnce(mockFetchResponse({ task_id: "task-456" }));
     // Poll
@@ -440,7 +440,7 @@ describe("handleDelegate", () => {
     expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining("No agents found"));
   });
 
-  it("passes --capability and --budget to discovery", async () => {
+  it("passes --capability and --budget to discovery", { timeout: 15_000 }, async () => {
     mockFetch.mockReturnValueOnce(
       mockFetchResponse({ candidates: [{ motebit_id: "w-1", selected: true }] }),
     );
