@@ -25,7 +25,7 @@ import {
   IdbPlanSyncStore,
   IdbGradientStore,
 } from "@motebit/browser-persistence";
-import { McpClientAdapter } from "@motebit/mcp-client";
+import { McpClientAdapter, AdvisoryManifestVerifier } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { bootstrapIdentity, type BootstrapConfigStore } from "@motebit/core-identity";
@@ -619,19 +619,17 @@ export class WebApp {
       throw new Error("HTTP MCP server requires a url");
     }
 
+    // Attach advisory verifier: always accepts, revokes trust on manifest change
+    config.serverVerifier = new AdvisoryManifestVerifier();
     const adapter = new McpClientAdapter(config);
     await adapter.connect();
 
-    // Manifest pinning: pin hash on first connect, revoke trust on mismatch
-    const manifestResult = await adapter.checkManifest(
-      config.toolManifestHash,
-      config.pinnedToolNames,
-    );
-    if (!manifestResult.ok) {
+    // Persist verifier-applied config updates
+    config.toolManifestHash = adapter.serverConfig.toolManifestHash;
+    config.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
+    if (adapter.serverConfig.trusted === false) {
       config.trusted = false;
     }
-    config.toolManifestHash = manifestResult.hash;
-    config.pinnedToolNames = manifestResult.toolNames;
 
     // Persist motebit public key if newly pinned during connect
     if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
@@ -724,18 +722,16 @@ export class WebApp {
       let changed = false;
       for (const config of configs) {
         try {
+          config.serverVerifier = new AdvisoryManifestVerifier();
           const adapter = new McpClientAdapter(config);
           await adapter.connect();
 
-          const manifestResult = await adapter.checkManifest(
-            config.toolManifestHash,
-            config.pinnedToolNames,
-          );
-          if (!manifestResult.ok) {
+          // Persist verifier-applied config updates
+          config.toolManifestHash = adapter.serverConfig.toolManifestHash;
+          config.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
+          if (adapter.serverConfig.trusted === false) {
             config.trusted = false;
           }
-          config.toolManifestHash = manifestResult.hash;
-          config.pinnedToolNames = manifestResult.toolNames;
 
           if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
             const pinnedKey = adapter.serverConfig.motebitPublicKey;

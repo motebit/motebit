@@ -5,7 +5,11 @@ import { executeCommand } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MotebitDatabase } from "@motebit/persistence";
-import { McpClientAdapter, type McpServerConfig } from "@motebit/mcp-client";
+import {
+  McpClientAdapter,
+  ManifestPinningVerifier,
+  type McpServerConfig,
+} from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import { AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
@@ -1219,6 +1223,8 @@ export async function handleSlashCommand(
                 callerPrivateKey: repl.privateKeyBytes,
               }
             : {}),
+          // First-connect pins manifest hash; fail-closed on subsequent mismatches
+          serverVerifier: new ManifestPinningVerifier(),
         };
         const adapter = new McpClientAdapter(serverCfg);
         try {
@@ -1231,15 +1237,17 @@ export async function handleSlashCommand(
               ? "DNS resolution failed. Check the hostname."
               : /ETIMEDOUT|timeout/i.test(message)
                 ? "Connection timed out. The server may be unreachable."
-                : "Check the URL and ensure the server accepts MCP connections.";
+                : /identity|signature|verification|public.?key/i.test(message)
+                  ? "The server's identity could not be verified. Use --motebit only with trusted servers."
+                  : /manifest|hash|tool/i.test(message)
+                    ? "Manifest validation failed."
+                    : "Check the URL and ensure the server accepts MCP connections.";
           console.log(`Failed to connect to "${addName}": ${message}`);
           console.log(`  ${hint}`);
           break;
         }
-        // Pin manifest hash, register tools -- cleanup adapter on failure
-        let manifest: Awaited<ReturnType<typeof adapter.checkManifest>>;
+        // Register tools -- cleanup adapter on failure
         try {
-          manifest = await adapter.checkManifest();
           const tmpRegistry = new InMemoryToolRegistry();
           adapter.registerInto(tmpRegistry);
           runtime.registerExternalTools(`mcp:${addName}`, tmpRegistry);
@@ -1250,17 +1258,7 @@ export async function handleSlashCommand(
           } catch {
             /* best effort */
           }
-          const phase = /identity|signature|verification|public.?key/i.test(message)
-            ? "Identity verification failed"
-            : /manifest|hash|tool/i.test(message)
-              ? "Manifest validation failed"
-              : "Tool registration failed";
-          console.log(`${phase} for "${addName}": ${message}`);
-          if (phase === "Identity verification failed") {
-            console.log(
-              "  The server's identity could not be verified. Use --motebit only with trusted servers.",
-            );
-          }
+          console.log(`Tool registration failed for "${addName}": ${message}`);
           break;
         }
         // Track adapter
@@ -1272,16 +1270,24 @@ export async function handleSlashCommand(
           url: addUrl,
           ...(motebitFlag ? { motebit: true } : {}),
         };
+        // Persist verifier-applied manifest pin
+        if (adapter.serverConfig.toolManifestHash) {
+          persistCfg.toolManifestHash = adapter.serverConfig.toolManifestHash;
+        }
+        if (adapter.serverConfig.pinnedToolNames) {
+          persistCfg.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
+        }
         if (adapter.verifiedIdentity?.verified && adapter.serverConfig.motebitPublicKey) {
           persistCfg.motebitPublicKey = adapter.serverConfig.motebitPublicKey;
         }
         fullConfig.mcp_servers = [...(fullConfig.mcp_servers ?? []), persistCfg];
         saveFullConfig(fullConfig);
         // Output
+        const toolCount = adapter.getTools().length;
         const verifiedStr = adapter.verifiedIdentity?.verified
           ? ` (motebit: ${adapter.verifiedIdentity.motebit_id?.slice(0, 12)}... verified)`
           : "";
-        console.log(`Added "${addName}" — ${manifest.toolCount} tool(s)${verifiedStr}`);
+        console.log(`Added "${addName}" — ${toolCount} tool(s)${verifiedStr}`);
       } else if (subCmd === "remove") {
         if (!repl) {
           console.log("REPL context not available.");

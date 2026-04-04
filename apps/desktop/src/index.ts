@@ -23,6 +23,7 @@ import type {
   AuditLogSink,
   InteriorColor,
   McpServerConfig,
+  ServerVerifier,
   PolicyConfig,
   MemoryGovernanceConfig,
 } from "@motebit/runtime";
@@ -1164,17 +1165,6 @@ export class DesktopApp {
         disconnect(): Promise<void>;
         getTools(): unknown[];
         registerInto(registry: unknown): void;
-        checkManifest(
-          pinnedHash?: string,
-          pinnedToolNames?: string[],
-        ): Promise<{
-          ok: boolean;
-          hash: string;
-          previousHash?: string;
-          toolCount: number;
-          toolNames: string[];
-          diff?: { added: string[]; removed: string[] };
-        }>;
         readonly isMotebit: boolean;
         readonly verifiedIdentity: {
           verified: boolean;
@@ -1183,26 +1173,29 @@ export class DesktopApp {
         } | null;
         readonly serverConfig: McpServerConfig;
       };
+      AdvisoryManifestVerifier: new () => ServerVerifier;
     }>);
+    // Attach advisory verifier: always accepts, revokes trust on manifest change
+    config.serverVerifier = new mcpModule.AdvisoryManifestVerifier();
     const adapter = new mcpModule.McpClientAdapter(config);
     await adapter.connect();
 
-    // Manifest pinning — verify tools haven't changed since last connection
-    const manifestCheck = await adapter.checkManifest(
-      config.toolManifestHash,
-      config.pinnedToolNames,
-    );
-    let manifestChanged = false;
+    // Read verifier-applied config updates
+    const manifestChanged = adapter.serverConfig.trusted === false && config.trusted !== false;
     let manifestDiff: { added: string[]; removed: string[] } | undefined;
-    if (!manifestCheck.ok) {
-      // Tools changed since last pin — revoke trust, require re-approval
-      manifestChanged = true;
-      manifestDiff = manifestCheck.diff;
-      config.trusted = false;
+    if (manifestChanged) {
+      const prevSet = new Set(config.pinnedToolNames ?? []);
+      const currNames = adapter.serverConfig.pinnedToolNames ?? [];
+      const added = currNames.filter((n: string) => !prevSet.has(n));
+      const removed = (config.pinnedToolNames ?? []).filter(
+        (n: string) => !new Set(currNames).has(n),
+      );
+      manifestDiff = { added, removed };
     }
-    // Pin the current manifest hash and tool names
-    config.toolManifestHash = manifestCheck.hash;
-    config.pinnedToolNames = manifestCheck.toolNames;
+    // Persist updated manifest hash and tool names from verifier
+    config.toolManifestHash = adapter.serverConfig.toolManifestHash;
+    config.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
+    config.trusted = adapter.serverConfig.trusted;
 
     // Pin motebit public key on first verified connect
     if (adapter.isMotebit && adapter.verifiedIdentity?.verified === true) {

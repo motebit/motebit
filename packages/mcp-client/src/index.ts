@@ -114,6 +114,22 @@ export interface ServerVerifier {
   verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult>;
 }
 
+/** Compute a manifest hash from tool definitions (shared by verifiers). */
+async function computeVerifierHash(
+  tools: ToolDefinition[],
+): Promise<{ hash: string; toolNames: string[] }> {
+  const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
+  const data = sorted
+    .map((t) => `${t.name}|${t.description}|${JSON.stringify(t.inputSchema)}`)
+    .join("\n");
+  const encoded = new TextEncoder().encode(data);
+  const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const toolNames = tools.map((t) => t.name);
+  return { hash, toolNames };
+}
+
 /**
  * Verifies server integrity by pinning the tool manifest hash.
  * On first connect (no pinned hash), accepts and pins. On subsequent connects,
@@ -121,15 +137,7 @@ export interface ServerVerifier {
  */
 export class ManifestPinningVerifier implements ServerVerifier {
   async verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult> {
-    const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
-    const data = sorted
-      .map((t) => `${t.name}|${t.description}|${JSON.stringify(t.inputSchema)}`)
-      .join("\n");
-    const encoded = new TextEncoder().encode(data);
-    const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", encoded);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-    const toolNames = tools.map((t) => t.name);
+    const { hash, toolNames } = await computeVerifierHash(tools);
 
     if (!config.toolManifestHash) {
       // First connect — pin the manifest
@@ -155,6 +163,39 @@ export class ManifestPinningVerifier implements ServerVerifier {
     return {
       ok: false,
       error: `Tool manifest changed (${diffParts.join(", ")}). Expected hash ${config.toolManifestHash.slice(0, 16)}..., got ${hash.slice(0, 16)}...`,
+    };
+  }
+}
+
+/**
+ * Advisory manifest verifier: always accepts, but revokes trust when the manifest changes.
+ * Use in apps that need to show a user prompt or notification on tool changes
+ * rather than hard-rejecting the connection.
+ *
+ * - First connect (no pinned hash): pins hash and tool names.
+ * - Hash matches: passes silently.
+ * - Hash mismatch: sets `trusted: false` in configUpdates, updates hash/toolNames.
+ */
+export class AdvisoryManifestVerifier implements ServerVerifier {
+  async verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult> {
+    const { hash, toolNames } = await computeVerifierHash(tools);
+
+    if (!config.toolManifestHash) {
+      // First connect — pin the manifest
+      return {
+        ok: true,
+        configUpdates: { toolManifestHash: hash, pinnedToolNames: toolNames },
+      };
+    }
+
+    if (config.toolManifestHash === hash) {
+      return { ok: true };
+    }
+
+    // Manifest changed — accept but revoke trust
+    return {
+      ok: true,
+      configUpdates: { toolManifestHash: hash, pinnedToolNames: toolNames, trusted: false },
     };
   }
 }
