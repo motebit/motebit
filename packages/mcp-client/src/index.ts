@@ -93,6 +93,72 @@ function extractServerName(url: string): string {
   }
 }
 
+/** Result of server verification. */
+export interface VerificationResult {
+  /** Whether the server passed verification. */
+  ok: boolean;
+  /** Human-readable error when verification fails. */
+  error?: string;
+  /** Config updates to persist (e.g., new manifest hash on first pin). */
+  configUpdates?: Partial<
+    Pick<McpServerConfig, "toolManifestHash" | "pinnedToolNames" | "trusted">
+  >;
+}
+
+/**
+ * Adapter interface for verifying a third-party MCP server's integrity after connect.
+ * Runs after tool discovery, before tools are registered.
+ * Fail-closed: if verify() returns ok:false or throws, the connection is torn down.
+ */
+export interface ServerVerifier {
+  verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult>;
+}
+
+/**
+ * Verifies server integrity by pinning the tool manifest hash.
+ * On first connect (no pinned hash), accepts and pins. On subsequent connects,
+ * rejects if the manifest changed. Callers should persist configUpdates.
+ */
+export class ManifestPinningVerifier implements ServerVerifier {
+  async verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult> {
+    const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
+    const data = sorted
+      .map((t) => `${t.name}|${t.description}|${JSON.stringify(t.inputSchema)}`)
+      .join("\n");
+    const encoded = new TextEncoder().encode(data);
+    const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", encoded);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    const toolNames = tools.map((t) => t.name);
+
+    if (!config.toolManifestHash) {
+      // First connect — pin the manifest
+      return {
+        ok: true,
+        configUpdates: { toolManifestHash: hash, pinnedToolNames: toolNames },
+      };
+    }
+
+    if (config.toolManifestHash === hash) {
+      return { ok: true };
+    }
+
+    // Manifest changed — compute diff for diagnostics
+    const prevSet = new Set(config.pinnedToolNames ?? []);
+    const currSet = new Set(toolNames);
+    const added = toolNames.filter((n) => !prevSet.has(n));
+    const removed = (config.pinnedToolNames ?? []).filter((n) => !currSet.has(n));
+    const diffParts: string[] = [];
+    if (added.length) diffParts.push(`+${String(added.length)} added`);
+    if (removed.length) diffParts.push(`-${String(removed.length)} removed`);
+
+    return {
+      ok: false,
+      error: `Tool manifest changed (${diffParts.join(", ")}). Expected hash ${config.toolManifestHash.slice(0, 16)}..., got ${hash.slice(0, 16)}...`,
+    };
+  }
+}
+
 export interface McpServerConfig {
   name: string;
   transport: "stdio" | "http";
@@ -128,6 +194,8 @@ export interface McpServerConfig {
   credentialSource?: CredentialSource;
   /** Guardian public key (hex) for verifying guardian recovery succession records. */
   guardianPublicKey?: string;
+  /** Server verifier run after connect. Fail-closed: verification failure disconnects. */
+  serverVerifier?: ServerVerifier;
 }
 
 export interface MotebitIdentityResult {
@@ -301,6 +369,11 @@ export class McpClientAdapter {
     this.connected = true;
     await this.discoverTools();
 
+    // Run server verifier if configured (fail-closed)
+    if (this.config.serverVerifier) {
+      await this.runServerVerifier();
+    }
+
     // Verify motebit identity if configured
     if (this.config.motebit || this.config.motebitType) {
       await this.verifyMotebitIdentity();
@@ -315,6 +388,28 @@ export class McpClientAdapter {
     // Erase caller private key bytes if present
     if (this.config.callerPrivateKey) {
       secureErase(this.config.callerPrivateKey);
+    }
+  }
+
+  /** Run the configured server verifier. Fail-closed: disconnect on failure or error. */
+  private async runServerVerifier(): Promise<void> {
+    const verifier = this.config.serverVerifier!;
+    try {
+      const result = await verifier.verify(this.config, this.discoveredTools);
+      if (result.configUpdates) {
+        Object.assign(this.config, result.configUpdates);
+      }
+      if (!result.ok) {
+        await this.disconnect();
+        throw new Error(
+          `MCP server "${this.config.name}" failed verification: ${result.error ?? "unknown"}`,
+        );
+      }
+    } catch (err: unknown) {
+      if (!this.connected) throw err;
+      await this.disconnect();
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`MCP server "${this.config.name}" verification error: ${message}`);
     }
   }
 

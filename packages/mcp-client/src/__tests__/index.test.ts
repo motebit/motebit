@@ -38,8 +38,14 @@ import {
   connectMcpServers,
   StaticCredentialSource,
   KeyringCredentialSource,
+  ManifestPinningVerifier,
 } from "../index.js";
-import type { CredentialSource, CredentialRequest } from "../index.js";
+import type {
+  CredentialSource,
+  CredentialRequest,
+  ServerVerifier,
+  VerificationResult,
+} from "../index.js";
 import type { KeyringAdapter } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
@@ -1939,5 +1945,157 @@ describe("KeyringCredentialSource", () => {
     expect(headers.get("Authorization")).toBe("Bearer e2e-token");
 
     vi.unstubAllGlobals();
+  });
+});
+
+// ============================================================
+// ServerVerifier
+// ============================================================
+
+describe("ManifestPinningVerifier", () => {
+  const verifier = new ManifestPinningVerifier();
+  const tools = [
+    { name: "srv__tool_a", description: "[srv] Tool A", inputSchema: { type: "object" } },
+    { name: "srv__tool_b", description: "[srv] Tool B", inputSchema: { type: "object" } },
+  ];
+
+  it("accepts and pins on first connect (no existing hash)", async () => {
+    const config = stdioConfig({ name: "srv" });
+    const result = await verifier.verify(config, tools);
+
+    expect(result.ok).toBe(true);
+    expect(result.configUpdates?.toolManifestHash).toBeTypeOf("string");
+    expect(result.configUpdates?.pinnedToolNames).toEqual(["srv__tool_a", "srv__tool_b"]);
+  });
+
+  it("accepts when manifest matches pinned hash", async () => {
+    // First pass to get the hash
+    const config = stdioConfig({ name: "srv" });
+    const firstResult = await verifier.verify(config, tools);
+    const pinnedConfig = stdioConfig({
+      name: "srv",
+      toolManifestHash: firstResult.configUpdates!.toolManifestHash,
+      pinnedToolNames: firstResult.configUpdates!.pinnedToolNames,
+    });
+
+    const result = await verifier.verify(pinnedConfig, tools);
+    expect(result.ok).toBe(true);
+    expect(result.configUpdates).toBeUndefined();
+  });
+
+  it("rejects when manifest changes", async () => {
+    const config = stdioConfig({
+      name: "srv",
+      toolManifestHash: "0000000000000000",
+      pinnedToolNames: ["srv__old_tool"],
+    });
+
+    const result = await verifier.verify(config, tools);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Tool manifest changed");
+    expect(result.error).toContain("+2 added");
+    expect(result.error).toContain("-1 removed");
+  });
+});
+
+describe("McpClientAdapter — ServerVerifier", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListTools.mockResolvedValue(mcpToolsResponse([{ name: "tool1", description: "Tool 1" }]));
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  it("runs verifier after connect and applies configUpdates", async () => {
+    const verifier: ServerVerifier = {
+      async verify(_config, _tools): Promise<VerificationResult> {
+        return {
+          ok: true,
+          configUpdates: { toolManifestHash: "abc123", pinnedToolNames: ["test-server__tool1"] },
+        };
+      },
+    };
+
+    const adapter = new McpClientAdapter(stdioConfig({ serverVerifier: verifier }));
+    await adapter.connect();
+
+    expect(adapter.isConnected).toBe(true);
+    expect(adapter.serverConfig.toolManifestHash).toBe("abc123");
+    expect(adapter.serverConfig.pinnedToolNames).toEqual(["test-server__tool1"]);
+  });
+
+  it("disconnects on verification failure (fail-closed)", async () => {
+    const verifier: ServerVerifier = {
+      async verify(_config, _tools): Promise<VerificationResult> {
+        return { ok: false, error: "manifest changed" };
+      },
+    };
+
+    const adapter = new McpClientAdapter(stdioConfig({ serverVerifier: verifier }));
+    await expect(adapter.connect()).rejects.toThrow("failed verification");
+    expect(adapter.isConnected).toBe(false);
+  });
+
+  it("disconnects on verifier error (fail-closed)", async () => {
+    const verifier: ServerVerifier = {
+      async verify(): Promise<VerificationResult> {
+        throw new Error("verifier crashed");
+      },
+    };
+
+    const adapter = new McpClientAdapter(stdioConfig({ serverVerifier: verifier }));
+    await expect(adapter.connect()).rejects.toThrow("verifier crashed");
+    expect(adapter.isConnected).toBe(false);
+  });
+
+  it("passes discovered tools to verifier", async () => {
+    const verifySpy = vi.fn().mockResolvedValue({ ok: true });
+    const adapter = new McpClientAdapter(stdioConfig({ serverVerifier: { verify: verifySpy } }));
+    await adapter.connect();
+
+    expect(verifySpy).toHaveBeenCalledTimes(1);
+    const [_config, tools] = verifySpy.mock.calls[0]!;
+    expect(tools).toHaveLength(1);
+    expect(tools[0].name).toBe("test-server__tool1");
+  });
+
+  it("works with ManifestPinningVerifier end-to-end", async () => {
+    const verifier = new ManifestPinningVerifier();
+
+    // First connect — pins manifest
+    const adapter1 = new McpClientAdapter(stdioConfig({ serverVerifier: verifier }));
+    await adapter1.connect();
+    expect(adapter1.isConnected).toBe(true);
+    expect(adapter1.serverConfig.toolManifestHash).toBeTypeOf("string");
+
+    // Second connect with same tools and pinned hash — should pass
+    const adapter2 = new McpClientAdapter(
+      stdioConfig({
+        serverVerifier: verifier,
+        toolManifestHash: adapter1.serverConfig.toolManifestHash,
+        pinnedToolNames: adapter1.serverConfig.pinnedToolNames,
+      }),
+    );
+    await adapter2.connect();
+    expect(adapter2.isConnected).toBe(true);
+
+    // Third connect with different tools but same pinned hash — should fail
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "different_tool", description: "Changed" }]),
+    );
+    const adapter3 = new McpClientAdapter(
+      stdioConfig({
+        serverVerifier: verifier,
+        toolManifestHash: adapter1.serverConfig.toolManifestHash,
+        pinnedToolNames: adapter1.serverConfig.pinnedToolNames,
+      }),
+    );
+    await expect(adapter3.connect()).rejects.toThrow("failed verification");
+    expect(adapter3.isConnected).toBe(false);
+  });
+
+  it("skips verification when no serverVerifier configured", async () => {
+    const adapter = new McpClientAdapter(stdioConfig());
+    await adapter.connect();
+    expect(adapter.isConnected).toBe(true);
   });
 });

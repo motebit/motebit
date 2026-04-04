@@ -219,6 +219,20 @@ export interface CredentialSource {
   getCredential(request: CredentialRequest): Promise<string | null>;
 }
 
+/** Result of server verification. See @motebit/mcp-client for implementations. */
+export interface VerificationResult {
+  ok: boolean;
+  error?: string;
+  configUpdates?: Partial<
+    Pick<McpServerConfig, "toolManifestHash" | "pinnedToolNames" | "trusted">
+  >;
+}
+
+/** Adapter interface for verifying MCP server integrity after connect. See @motebit/mcp-client. */
+export interface ServerVerifier {
+  verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult>;
+}
+
 export interface McpServerConfig {
   name: string;
   transport: "stdio" | "http";
@@ -244,6 +258,8 @@ export interface McpServerConfig {
   motebitPublicKey?: string;
   /** Dynamic credential source for non-motebit MCP servers. Takes precedence over authToken. */
   credentialSource?: CredentialSource;
+  /** Server verifier run after connect. Fail-closed: verification failure disconnects. */
+  serverVerifier?: ServerVerifier;
 }
 
 // === Browser-safe Tool Registry ===
