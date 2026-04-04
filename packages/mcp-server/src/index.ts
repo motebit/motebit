@@ -43,8 +43,8 @@ interface CredentialVerifier {
 /** Default verifier: constant-time-ish string comparison against a static token. */
 class StaticTokenVerifier implements CredentialVerifier {
   constructor(private readonly expectedToken: string) {}
-  async verify(token: string): Promise<boolean> {
-    return token === this.expectedToken;
+  verify(token: string): Promise<boolean> {
+    return Promise.resolve(token === this.expectedToken);
   }
 }
 
