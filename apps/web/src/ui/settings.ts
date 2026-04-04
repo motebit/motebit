@@ -782,7 +782,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   function updateModelIndicator(): void {
     const model = ctx.app.currentModel;
-    modelIndicator.textContent = model ?? "";
+    modelIndicator.textContent = ctx.app.isProviderConnected ? (model ?? "") : "";
   }
 
   function updateConnectPrompt(): void {

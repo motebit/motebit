@@ -34,6 +34,10 @@ export function checkWebGPU(): boolean {
 
 // === WebLLM Provider ===
 
+/**
+ * Engine interface matching @mlc-ai/web-llm's MLCEngineInterface.
+ * Both CreateMLCEngine and CreateWebWorkerMLCEngine return this shape.
+ */
 interface WebLLMEngine {
   reload(model: string): Promise<void>;
   chat: {
@@ -53,10 +57,16 @@ interface WebLLMModule {
     model: string,
     opts?: { initProgressCallback?: (report: { text: string; progress: number }) => void },
   ): Promise<WebLLMEngine>;
+  CreateWebWorkerMLCEngine(
+    worker: Worker,
+    model: string,
+    opts?: { initProgressCallback?: (report: { text: string; progress: number }) => void },
+  ): Promise<WebLLMEngine>;
 }
 
 export class WebLLMProvider implements StreamingProvider {
   private engine: WebLLMEngine | null = null;
+  private worker: Worker | null = null;
   private _model: string;
   private _temperature: number;
   private _maxTokens: number;
@@ -89,6 +99,8 @@ export class WebLLMProvider implements StreamingProvider {
   setModel(model: string): void {
     this._model = model;
     this.engine = null;
+    this.worker?.terminate();
+    this.worker = null;
   }
   setTemperature(temperature: number): void {
     this._temperature = temperature;
@@ -98,28 +110,55 @@ export class WebLLMProvider implements StreamingProvider {
   }
 
   async init(onProgress?: (report: { progress: number; text: string }) => void): Promise<void> {
+    this.engine = await this.createEngine(onProgress);
+  }
+
+  /**
+   * Create engine in a Web Worker (off main thread) with fallback to main thread.
+   * Worker-based: model loading, shader compilation, and inference all run in the worker.
+   * Main thread stays free for Three.js creature rendering and DOM updates.
+   */
+  private async createEngine(
+    onProgress?: (report: { progress: number; text: string }) => void,
+  ): Promise<WebLLMEngine> {
+    const progressCb = onProgress
+      ? (report: { text: string; progress: number }) => {
+          onProgress({ progress: report.progress, text: report.text });
+        }
+      : this.onProgress
+        ? (report: { text: string; progress: number }) => {
+            this.onProgress!(report.text, report.progress);
+          }
+        : undefined;
+
     // @ts-expect-error — CDN dynamic import, typed via WebLLMModule interface
     const webllm = (await import("https://esm.run/@mlc-ai/web-llm")) as unknown as WebLLMModule;
-    this.engine = await webllm.CreateMLCEngine(this._model, {
-      initProgressCallback: onProgress
-        ? (report: { text: string; progress: number }) => {
-            onProgress({ progress: report.progress, text: report.text });
-          }
-        : undefined,
-    });
+
+    // Try Web Worker engine first — keeps main thread free for rendering
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- runtime check: CDN version may not export CreateWebWorkerMLCEngine
+    if (typeof Worker !== "undefined" && webllm.CreateWebWorkerMLCEngine) {
+      try {
+        this.worker = new Worker(new URL("./webllm-worker.ts", import.meta.url), {
+          type: "module",
+        });
+        const engine = await webllm.CreateWebWorkerMLCEngine(this.worker, this._model, {
+          initProgressCallback: progressCb,
+        });
+        return engine;
+      } catch {
+        // Worker creation failed — fall back to main thread
+        this.worker?.terminate();
+        this.worker = null;
+      }
+    }
+
+    // Fallback: main thread engine (blocks rendering but still works)
+    return webllm.CreateMLCEngine(this._model, { initProgressCallback: progressCb });
   }
 
   private async getEngine(): Promise<WebLLMEngine> {
     if (this.engine) return this.engine;
-    // @ts-expect-error — CDN dynamic import, typed via WebLLMModule interface
-    const webllm = (await import("https://esm.run/@mlc-ai/web-llm")) as unknown as WebLLMModule;
-    this.engine = await webllm.CreateMLCEngine(this._model, {
-      initProgressCallback: this.onProgress
-        ? (report: { text: string; progress: number }) => {
-            this.onProgress!(report.text, report.progress);
-          }
-        : undefined,
-    });
+    this.engine = await this.createEngine();
     return this.engine;
   }
 

@@ -28,6 +28,12 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
     .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
+    .replace(/\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\]/g, "")
+    .replace(/\[\/MEMORY_DATA\]/g, "")
     .replace(/\*{1,3}/g, "")
     .replace(/ {2,}/g, " ");
 

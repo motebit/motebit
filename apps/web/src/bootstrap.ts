@@ -66,7 +66,7 @@ export async function probeLocalModels(
     // Expected: server not running, connection refused, DNS failure, timeout.
     // Log unexpected errors (parse failures, TypeError) for debugging.
     if (err instanceof TypeError || err instanceof SyntaxError) {
-      console.warn(`probe ${baseUrl}: unexpected error:`, err.message);
+      console.warn(`probe ${baseUrl}: unexpected error:`, err.message); // eslint-disable-line no-console -- runtime diagnostic for inference probe failures
     }
   }
   return null;
@@ -199,7 +199,7 @@ export async function isConfigReachable(
       return res.ok;
     } catch (err) {
       if (err instanceof TypeError || err instanceof SyntaxError) {
-        console.warn(`reachability check ${baseUrl}: unexpected error:`, err.message);
+        console.warn(`reachability check ${baseUrl}: unexpected error:`, err.message); // eslint-disable-line no-console -- runtime diagnostic for reachability probe
       }
       return false;
     }

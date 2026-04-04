@@ -10,6 +10,12 @@ function stripInternalTags(text: string): string {
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
+    .replace(/\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\]/g, "")
+    .replace(/\[\/MEMORY_DATA\]/g, "")
     .replace(/<(?:state|thinking|memory)[^>]*$/g, "");
 }
 

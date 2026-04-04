@@ -1,34 +1,30 @@
 ---
 title: How We Built This
-description: 133K lines of TypeScript in 26 days. One human architect, one AI.
+description: 200K lines of TypeScript in 47 days. One human architect, one AI pair programmer. 1,204 commits.
 ---
 
-Motebit was built in 26 days.
+Motebit was built in 47 days.
 
-Not a prototype. Not a proof of concept. A 39-package monorepo — 133,000 lines of TypeScript, 3,000+ tests, five application surfaces, three open specifications, four published npm packages, and zero TODOs.
+Not a prototype. Not a proof of concept. A 45-package monorepo — ~200,000 lines of TypeScript, 4,600+ tests, eight application surfaces, five open specifications, five published npm packages, and a NIST submission backed by working code.
 
-One human. One AI. 428 commits.
+One human. One AI. 1,204 commits. 1,154 co-authored with [Claude](https://claude.ai).
+
+The git history is public. Every claim on this page is verifiable.
 
 ## The numbers
 
 | | |
 |---|---|
-| **Duration** | February 15 – March 13, 2026 |
-| **Commits** | 428 |
-| **Lines of TypeScript** | 133,000 |
-| **Tests** | 3,000+ across 98 files |
-| **Test-to-code ratio** | 1.1× |
-| **Packages** | 39 |
-| **Application surfaces** | 5 — desktop, CLI, mobile, web, spatial |
-| **Published npm packages** | 4 — create-motebit, motebit, @motebit/sdk, @motebit/verify |
-| **Open specifications** | 3 — identity, execution ledger, relay federation |
-| **TODOs in codebase** | 0 |
-
-402 of 428 commits were co-authored with [Claude](https://claude.ai).
+| **Duration** | February 15 – April 2, 2026 (47 calendar days, 40 with commits) |
+| **Commits** | 1,204 |
+| **Lines of TypeScript** | ~200,000 |
+| **Tests** | 4,600+ |
+| **Packages** | 45 |
+| **Application surfaces** | 8 — desktop, CLI, mobile, web, spatial, admin, docs, identity |
+| **Published npm packages** | 5 — create-motebit, motebit, @motebit/protocol, @motebit/sdk, @motebit/verify |
+| **Open specifications** | 5 — identity, execution ledger, relay federation, market, credentials |
 
 ## Commit one
-
-The git history is public. Anyone can verify it.
 
 ```
 commit d9a2cf2
@@ -42,11 +38,83 @@ Date:   Sun Feb 15 20:26:39 2026 -0800
  96 files changed, 17766 insertions(+)
 ```
 
-The first commit was not a `git init` with a README. It was 96 files and 17,766 lines: 12 packages, 5 services, 4 apps, Terraform infrastructure, CI pipelines, and 201 passing tests.
+The first commit was not a `git init` with a README. It was 96 files and 17,766 lines: 12 packages, 5 services, 4 apps, and 201 passing tests.
 
-The package structure in that commit — sdk, crypto, event-log, core-identity, memory-graph, state-vector, behavior-engine, render-engine, ai-core, privacy-layer, sync-engine — is the same structure that exists today. It was never restructured. 428 commits later, the foundation never moved.
+The package structure in that commit — sdk, crypto, event-log, core-identity, memory-graph, state-vector, behavior-engine, render-engine, ai-core, privacy-layer, sync-engine — is the same structure that exists today. It was never restructured. 1,204 commits later, the foundation never moved.
 
 The architecture was designed, then instantiated. Not discovered through iteration. The git history is the proof.
+
+## Three acts
+
+### Act 1: The Architecture (Feb 15–25 — 11 days, 233 commits)
+
+Over 11 days, the skeleton became a body. Crypto was implemented (Ed25519, AES-256-GCM, PBKDF2). Memory got semantic similarity and half-life decay. The state vector got tick-based EMA smoothing. The behavior engine became a pure function from state to cues. The render engine got glass refraction. Five application surfaces came online. The relay grew authentication, task routing, and multi-device sync.
+
+By February 25, the system worked end-to-end: you could create an identity, talk to the agent, watch it think, and sync across devices.
+
+Then: a 6-day gap (March 1–6). Zero commits. The architecture was complete enough to see clearly, and what it revealed was the next layer of the problem. Identity existed. Memory existed. Tools existed. But there was no economy — no way for agents to find each other, prove work, earn trust, or settle money. The gap was where the economic thesis crystallized.
+
+### Act 2: The 46-Hour Sprint (Mar 12–13 — 125 commits)
+
+The return was immediate and vertical. The first week back (Mar 7–11) rebuilt the trust model, added DID interoperability, wired behavioral metrics, and shipped cross-device goal delegation. Then came a single 46-hour session that built the entire economic layer.
+
+**Hours 1–24** (midnight Mar 12 – midnight): DID interop across all identity boundaries. Memory compounding — reinforcement stability, Hebbian co-retrieval, synthesis lineage. The trust model hardened: Beta-binomial reputation scoring, branded IDs. The execution ledger spec shipped. Market routing with scored selection replaced broadcast. Active inference precision. The self-model summary: the agent narrates its own intelligence trajectory. Changesets, CLA, trademark policy — the legal scaffolding for a public project.
+
+**Hour 26** (2:23 AM, Mar 13): the first semiring commit. Trust algebra inlined into the existing package. The routing worked. But it was specific to trust — a concrete implementation, not yet an abstraction.
+
+**Hours 27–34** (3–10 AM, Mar 13): Budget wired into the relay delegation path. Receipt verification enforced. Credentials issued on verified delivery. UI shipped across all surfaces. Rate limiting. Fly.io production deploy. **v0.3.0 released at 5:33 AM.** Cross-internet delegation dogfooded live. Two-motebit delegation E2E: two sovereign agents delegating across the live relay, signed receipts verified independently at every hop.
+
+**Hour 40** (4:48 PM, Mar 13):
+
+```
+Add @motebit/semiring: algebraic computation graph for agent network routing
+```
+
+For 40 hours, routing had been built procedurally. Trust scores wired here. Cost calculations there. Each concern handled individually. At hour 40, the abstraction snapped into focus: routing is algebraic.
+
+A generic `Semiring<T>` interface. Five concrete implementations at the time: Trust, Cost, Latency, Reliability, RegulatoryRisk. Product combinators. Weighted digraph. Generic traversal. (Two more — Bottleneck and Boolean — were added on March 31, proving the abstraction scales. Seven total.)
+
+The next commit, four minutes later, proved the abstraction was right:
+
+```
+Add RegulatoryRiskSemiring: compliance-aware routing in 7 lines
+```
+
+A new routing concern — regulatory compliance across jurisdictions — expressed in 7 lines of code. Zero new algorithms. Swap the semiring, change what "best path" means. The entire routing layer collapsed from procedural wiring into algebra.
+
+**Hours 40–42** (4:48–6:27 PM, Mar 13): The semiring wired into production. Regulatory risk routed end-to-end. The trust feedback loop closed — receipts compound the agent graph. Then federation. All five phases in 24 minutes:
+
+1. Persist relay identity across restarts
+2. Peering protocol with mutual Ed25519 authentication
+3. Federated discovery across peered relays
+4. Cross-relay task routing via semiring graph
+5. Relay reputation, settlement chains, attestations
+
+Federation routed through the semiring. The abstraction from 40 minutes earlier was already load-bearing.
+
+**Hours 43–46** (9–11 PM, Mar 13): Federation hardening. Four critical security issues fixed. Six economy gaps closed. Relay index.ts extracted from 5,780 lines to 4,126. Structured logging with correlation IDs.
+
+Last commit: 10:54 PM. Sleep. 11:21 AM the next morning: "Publish: How We Built This" — the original snapshot of this page, frozen at day 26.
+
+### Act 3: The Proof (Mar 14 – Apr 2 — 776 commits)
+
+The project nearly doubled. From 39 packages to 45. From 133K lines to 200K. From 3 specs to 5. From 3,054 tests to 4,600+.
+
+**The market spec** (`motebit/market@1.0`) — budget allocation, settlement protocol, fee structure, trust-weighted routing, credential blending.
+
+**The credential spec** (`motebit/credential@1.0`) — W3C VC 2.0 issuance, credential weighting, revocation.
+
+**Virtual accounts with Stripe** — real USD entering and leaving the system. Deposit, settle, withdraw. The first real dollar through the loop.
+
+**Guardian attestation** — organizational custody via Ed25519 guardian key. Enterprise identity without centralized control.
+
+**Protocol bridges** — A2A (Google), x402 (Coinbase), AP2, OSSA. One agent identity across every major 2026 agent protocol.
+
+**The planner** — goal decomposition, plan-level reflection, multi-step delegation to specialist agents.
+
+**Federation chaos tests** — 14 adversarial scenarios. Circuit breakers, heartbeat hysteresis, forward-path health monitoring.
+
+**The NIST submission** — a formal comment to NIST's NCCoE concept paper on "Software and AI Agent Identity and Authorization." Every claim backed by implementation. Every implementation backed by tests.
 
 ## How it worked
 
@@ -65,7 +133,7 @@ It declares:
 - **The conventions.** Error handling uses `{ cause: err }` for stack preservation. Branded ID types enforce compile-time safety. Secrets go in the OS keyring, never config files. These rules prevent drift across hundreds of commits.
 - **The state of the world.** What's built, what's proven, what's untested. This keeps the AI from reimplementing what exists or assuming what doesn't.
 
-The document grew from a few paragraphs to 8,000+ words. It became the single source of truth that kept 39 packages architecturally coherent.
+The document grew from a few paragraphs to 8,000+ words. It became the single source of truth that kept 45 packages architecturally coherent across 1,204 commits.
 
 ### The design documents are load-bearing
 
@@ -85,40 +153,57 @@ These are not decoration. They are constraints. When the AI suggests a feature, 
 - Every strategic decision — what to build, what to cut, what patterns to use
 - The specifications and design documents
 - The cryptographic primitives and security model
+- The 6-day gap where the economic thesis crystallized
 
 **The AI:**
 - Implementation code following the architectural patterns
 - Test suites including formal axiom verification
-- Consistency across 39 packages
+- Consistency across 45 packages
 - The mechanical work of wiring adapters, types, and protocols
-
-10% of the time was architecture and direction. 90% was implementation and review. But the 10% is what made the 90% coherent rather than just voluminous.
+- 1,154 of 1,204 commits
 
 ## What this means
 
-This is not a story about AI replacing developers. A codebase of this size without architectural direction would be a mess — more code is not better code. The AI did not make the decisions that matter. It executed them at a speed that wasn't previously possible.
+This is not a story about AI replacing developers. It's a story about what happens when architectural clarity meets implementation speed.
 
-What changed is the economics. A single person with domain knowledge and clear architectural vision can now build what previously required a team. The cost of exploring an idea dropped by an order of magnitude. The cost of bad ideas dropped too — you can build, evaluate, and discard faster.
+A single person with domain knowledge and a clear thesis can now build what previously required a team and a year. But the thesis is the load-bearing structure. Remove it and you get a large pile of code that doesn't cohere. The AI doesn't know what matters. The human does.
 
-## What's real and what's not
+The economics changed. The requirement for taste didn't.
+
+## What's proven and what's not
 
 The infrastructure is built. The cryptography is correct — Ed25519 via audited `@noble` libraries, AES-256-GCM, PBKDF2 at 600k iterations. The tests verify mathematical axioms (all seven semiring properties), cryptographic roundtrips, and tamper detection.
 
-What was untested at day 26 — and where it stands now:
-- ~~Two motebits delegating across the internet~~ — **Proven.** Alice CLI → Bob web-search → Charlie read-url across Fly.io, with Ed25519 signed receipts at every hop, relay-verified independently, budget settled with platform fee.
-- Multi-device sync under real network conditions — still untested
-- The intelligence gradient trending upward over weeks of real usage — still untested
-- External developers completing the full flow without guidance — still untested (the `npm create motebit --agent` scaffold exists since March 19, but no external developer has run it yet)
-- Multi-relay federation across independent operators — still untested in production (all 5 phases implemented, tested between co-located test relays)
+**Proven:**
+- Multi-hop delegation across the internet — CLI → web-search → read-url, with Ed25519 signed receipts at every hop, relay-verified independently, budget settled with platform fee
+- Real money through the system — Stripe deposits, task settlement, account balances
+- Federation between co-located test relays (all 5 phases, 14 adversarial scenarios)
 
-We are honest about this because the gap between built and proven is where most projects die. Building the system was the easier part.
+**Not yet proven:**
+- External developers completing the full flow without guidance
+- Multi-device sync under real network conditions
+- The intelligence gradient trending upward over weeks of real usage
+- Multi-relay federation across independent operators in production
+
+We are honest about this because the gap between built and proven is where most projects die.
+
+## The final commit
+
+```
+commit 77a94ea
+Date:   Thu Apr 2 05:09:13 2026 -0700
+
+    Rename NIST submission draft to final
+```
+
+47 calendar days. 40 days with commits. A 6-day gap where the economic thesis crystallized. A 46-hour sprint where the semiring snapped into focus at hour 40. 1,204 commits. 1,154 co-authored with Claude.
+
+The architecture from commit one — February 15, 2026, 8:26 PM — is the architecture at commit 1,204. Nothing was restructured. The foundation never moved. Everything that came after was accumulation, not correction.
 
 ## Try it
-
-Meet the creature at [motebit.com](https://motebit.com) — zero install, zero signup. Or scaffold a signed identity from the command line:
 
 ```bash
 npm create motebit@latest my-agent
 ```
 
-30 seconds to a signed agent identity. The [specification](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) is MIT licensed. The [verification library](https://www.npmjs.com/package/@motebit/verify) is MIT licensed and zero-dependency. The [source](https://github.com/motebit/motebit) is available.
+30 seconds to a signed agent identity. The [specifications](https://github.com/motebit/motebit/tree/main/spec) are MIT licensed. The [source](https://github.com/motebit/motebit) is available.
