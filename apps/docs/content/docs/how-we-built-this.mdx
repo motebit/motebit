@@ -80,7 +80,18 @@ The next commit, four minutes later, proved the abstraction was right:
 Add RegulatoryRiskSemiring: compliance-aware routing in 7 lines
 ```
 
-A new routing concern — regulatory compliance across jurisdictions — expressed in 7 lines of code. Zero new algorithms. Swap the semiring, change what "best path" means. The entire routing layer collapsed from procedural wiring into algebra.
+The entire definition:
+
+```typescript
+export const RegulatoryRiskSemiring: Semiring<number> = {
+  zero: Infinity,
+  one: 0,
+  add: (a, b) => Math.min(a, b),
+  mul: (a, b) => a + b,
+};
+```
+
+Regulatory compliance across jurisdictions. Risk accumulates along delegation chains (additive composition). Parallel alternatives pick the lowest-risk route (min). Zero new algorithms. Swap the semiring, change what "best path" means. The entire routing layer collapsed from procedural wiring into algebra.
 
 **Hours 40–42** (4:48–6:27 PM, Mar 13): The semiring wired into production. Regulatory risk routed end-to-end. The trust feedback loop closed — receipts compound the agent graph. Then federation. All five phases in 24 minutes:
 
