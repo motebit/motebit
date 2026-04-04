@@ -4,7 +4,7 @@
 
 Motebit is maintained by [Daniel Hakim](https://github.com/hakimlabs) at Motebit, Inc. All architectural decisions, release approvals, and roadmap priorities are made by the maintainer.
 
-This is a single-maintainer project in early development. As the project grows and the community develops, governance will evolve to include contributor roles, an RFC process, and shared decision-making.
+This is a single-maintainer project. As the project grows, contributor roles and an RFC process for implementation proposals may be introduced. Architectural authority — the design thesis, the constraint documents, the layer structure, and the licensing model — remains with the maintainer.
 
 ## Contributions
 
