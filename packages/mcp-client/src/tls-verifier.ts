@@ -18,7 +18,7 @@ async function probeTlsCertificate(hostname: string, port: number): Promise<stri
       { host: hostname, port, servername: hostname, rejectUnauthorized: true, timeout: 10_000 },
       () => {
         const cert = socket.getPeerCertificate();
-        if (!cert || !cert.fingerprint256) {
+        if (cert == null || !cert.fingerprint256) {
           socket.destroy();
           reject(new Error(`No TLS certificate from ${hostname}:${String(port)}`));
           return;
@@ -30,7 +30,7 @@ async function probeTlsCertificate(hostname: string, port: number): Promise<stri
         resolve(fingerprint);
       },
     );
-    socket.on("error", (err) => {
+    socket.on("error", (err: Error) => {
       socket.destroy();
       reject(new Error(`TLS probe failed for ${hostname}:${String(port)}: ${err.message}`));
     });

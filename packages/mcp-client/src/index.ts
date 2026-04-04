@@ -41,8 +41,8 @@ export type {
 export class StaticCredentialSource implements CredentialSource {
   constructor(private readonly token: string) {}
 
-  async getCredential(_request: CredentialRequest): Promise<string> {
-    return this.token;
+  getCredential(_request: CredentialRequest): Promise<string> {
+    return Promise.resolve(this.token);
   }
 }
 
@@ -273,7 +273,7 @@ function stripIdentityTag(text: string): string {
 
 /** Extract tool name from a JSON-RPC request body, if it's a tools/call method. */
 function extractToolNameFromBody(body: unknown): string | undefined {
-  if (!body || typeof body !== "string") return undefined;
+  if (body == null || typeof body !== "string") return undefined;
   try {
     const parsed = JSON.parse(body) as { method?: string; params?: { name?: string } };
     if (parsed.method === "tools/call" && typeof parsed.params?.name === "string") {
@@ -347,7 +347,7 @@ export class McpClientAdapter {
         if (source) {
           // Per-tool credential resolution: custom fetch injects auth on every request.
           // Parses JSON-RPC body to extract tool name for scoped credentials.
-          const serverUrl = this.config.url!;
+          const serverUrl = this.config.url;
           const agentId = this.config.callerMotebitId;
           transportOpts.fetch = async (url: string | URL, init?: RequestInit) => {
             const toolName = extractToolNameFromBody(init?.body);

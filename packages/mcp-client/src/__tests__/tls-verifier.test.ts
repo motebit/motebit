@@ -27,7 +27,7 @@ function mockTlsSocket(fingerprint256: string) {
   };
   mockTlsConnect.mockImplementation((_opts: unknown, callback: () => void) => {
     // Call the connect callback synchronously
-    Promise.resolve().then(callback);
+    void Promise.resolve().then(callback);
     return socket;
   });
   return socket;
@@ -39,7 +39,7 @@ function mockTlsError(error: string) {
     destroy: vi.fn(),
     on: vi.fn((event: string, handler: (err: Error) => void) => {
       if (event === "error") {
-        Promise.resolve().then(() => handler(new Error(error)));
+        void Promise.resolve().then(() => handler(new Error(error)));
       }
     }),
   };
