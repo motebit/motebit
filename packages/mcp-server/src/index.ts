@@ -9,8 +9,9 @@ import { hexPublicKeyToDidKey, hexToBytes, verifyDelegation, parseScopeSet } fro
 import type { DelegationToken } from "@motebit/crypto";
 
 // Re-export for consumers
-export type { MotebitServerDeps, McpServerConfig };
+export type { MotebitServerDeps, McpServerConfig, CredentialVerifier };
 export { AgentTrustLevel } from "@motebit/sdk";
+export { StaticTokenVerifier };
 
 // Service scaffold — eliminates boilerplate for service motebits
 export { wireServerDeps, startServiceServer } from "./service.js";
@@ -31,6 +32,20 @@ export type {
 export interface CallerIdentity {
   motebitId: string;
   trustLevel: AgentTrustLevel;
+}
+
+/** Pluggable credential verifier for non-motebit bearer tokens. */
+interface CredentialVerifier {
+  /** Verify a non-motebit bearer token. Return true if valid, false to reject. */
+  verify(token: string): Promise<boolean>;
+}
+
+/** Default verifier: constant-time-ish string comparison against a static token. */
+class StaticTokenVerifier implements CredentialVerifier {
+  constructor(private readonly expectedToken: string) {}
+  async verify(token: string): Promise<boolean> {
+    return token === this.expectedToken;
+  }
 }
 
 interface MotebitServerDeps {
@@ -121,6 +136,8 @@ interface McpServerConfig {
   exposeState?: boolean;
   exposeMemories?: boolean;
   authToken?: string;
+  /** Pluggable verifier for non-motebit bearer tokens. Takes precedence over authToken. */
+  credentialVerifier?: CredentialVerifier;
   /** Known callers: motebit_id -> { publicKey hex, trustLevel } */
   knownCallers?: Map<string, { publicKey: string; trustLevel: AgentTrustLevel }>;
   /** What type of motebit this server represents. Affects default inbound policy. */
@@ -1083,22 +1100,35 @@ export class McpServerAdapter {
           return;
         }
         this.lastVerifiedCaller = callerInfo;
-      } else if (this.config.authToken) {
-        // Static token auth
-        if (bearerToken !== this.config.authToken) {
+      } else {
+        // Non-motebit token — resolve verifier (pluggable > static > none)
+        const verifier =
+          this.config.credentialVerifier ??
+          (this.config.authToken ? new StaticTokenVerifier(this.config.authToken) : undefined);
+
+        if (verifier) {
+          // Fail-closed: false or throw → 401
+          let valid = false;
+          try {
+            valid = bearerToken != null && (await verifier.verify(bearerToken));
+          } catch {
+            // verifier threw — fail closed
+          }
+          if (!valid) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "unauthorized" }));
+            return;
+          }
+        } else {
+          // No auth configured and no valid token — reject by default.
+          // Open access is never safe for HTTP transport. Operators must
+          // set authToken or callers must use motebit signed tokens.
           res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "unauthorized" }));
+          res.end(
+            JSON.stringify({ error: "unauthorized — set authToken or use a motebit signed token" }),
+          );
           return;
         }
-      } else {
-        // No auth configured and no valid token — reject by default.
-        // Open access is never safe for HTTP transport. Operators must
-        // set authToken or callers must use motebit signed tokens.
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({ error: "unauthorized — set authToken or use a motebit signed token" }),
-        );
-        return;
       }
 
       // MCP endpoint — Streamable HTTP transport

@@ -5,8 +5,9 @@ import {
   formatResult,
   filterMemories,
   jsonSchemaToZodShape,
+  StaticTokenVerifier,
 } from "../index.js";
-import type { MotebitServerDeps, McpServerConfig } from "../index.js";
+import type { MotebitServerDeps, McpServerConfig, CredentialVerifier } from "../index.js";
 import { RiskLevel } from "@motebit/sdk";
 import type { ToolResult, ToolDefinition } from "@motebit/sdk";
 
@@ -1333,6 +1334,136 @@ describe("McpServerAdapter — HTTP auth", () => {
     const addr = server.address() as import("node:net").AddressInfo;
 
     // No Authorization header — must be rejected (fail-closed)
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(401);
+
+    await adapter.stop();
+  });
+});
+
+// ============================================================
+// CredentialVerifier
+// ============================================================
+
+describe("StaticTokenVerifier", () => {
+  it("returns true for matching token", async () => {
+    const v = new StaticTokenVerifier("abc123");
+    expect(await v.verify("abc123")).toBe(true);
+  });
+
+  it("returns false for non-matching token", async () => {
+    const v = new StaticTokenVerifier("abc123");
+    expect(await v.verify("wrong")).toBe(false);
+  });
+});
+
+describe("McpServerAdapter — credentialVerifier", () => {
+  it("accepts token when custom verifier returns true", async () => {
+    const verifier: CredentialVerifier = { verify: async () => true };
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, credentialVerifier: verifier }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    // Auth passes → 400 (parse error on empty POST body, not 401)
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
+      method: "POST",
+      headers: { Authorization: "Bearer any-token" },
+    });
+    expect(res.status).toBe(400);
+
+    await adapter.stop();
+  });
+
+  it("rejects token when custom verifier returns false", async () => {
+    const verifier: CredentialVerifier = { verify: async () => false };
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, credentialVerifier: verifier }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
+      method: "POST",
+      headers: { Authorization: "Bearer any-token" },
+    });
+    expect(res.status).toBe(401);
+
+    await adapter.stop();
+  });
+
+  it("rejects when custom verifier throws (fail-closed)", async () => {
+    const verifier: CredentialVerifier = {
+      verify: async () => {
+        throw new Error("verifier broken");
+      },
+    };
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, credentialVerifier: verifier }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
+      method: "POST",
+      headers: { Authorization: "Bearer any-token" },
+    });
+    expect(res.status).toBe(401);
+
+    await adapter.stop();
+  });
+
+  it("credentialVerifier takes precedence over authToken", async () => {
+    // verifier rejects everything; authToken would accept "static-secret"
+    const verifier: CredentialVerifier = { verify: async () => false };
+    const adapter = new McpServerAdapter(
+      makeConfig({
+        transport: "http",
+        port: 0,
+        authToken: "static-secret",
+        credentialVerifier: verifier,
+      }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    // Even though authToken matches, credentialVerifier takes precedence and rejects
+    const res = await fetch(`http://localhost:${addr.port}/mcp`, {
+      method: "POST",
+      headers: { Authorization: "Bearer static-secret" },
+    });
+    expect(res.status).toBe(401);
+
+    await adapter.stop();
+  });
+
+  it("rejects when no bearer token and credentialVerifier is set", async () => {
+    const verifier: CredentialVerifier = { verify: async () => true };
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, credentialVerifier: verifier }),
+      makeDeps(),
+    );
+    await adapter.start();
+
+    const server = (adapter as unknown as { httpServer: import("node:http").Server }).httpServer;
+    const addr = server.address() as import("node:net").AddressInfo;
+
+    // No Authorization header — bearerToken is undefined, verifier never called with valid token
     const res = await fetch(`http://localhost:${addr.port}/mcp`, {
       method: "POST",
     });
