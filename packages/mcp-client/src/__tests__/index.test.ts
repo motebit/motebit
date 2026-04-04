@@ -2099,3 +2099,83 @@ describe("McpClientAdapter — ServerVerifier", () => {
     expect(adapter.isConnected).toBe(true);
   });
 });
+
+// ============================================================
+// CompositeServerVerifier
+// ============================================================
+
+describe("CompositeServerVerifier", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListTools.mockResolvedValue(mcpToolsResponse([{ name: "tool1", description: "Tool 1" }]));
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  it("passes when all verifiers return ok", async () => {
+    const v1: ServerVerifier = { verify: vi.fn().mockResolvedValue({ ok: true }) };
+    const v2: ServerVerifier = { verify: vi.fn().mockResolvedValue({ ok: true }) };
+
+    const { CompositeServerVerifier } = await import("../index.js");
+    const composite = new CompositeServerVerifier(v1, v2);
+    const adapter = new McpClientAdapter(stdioConfig({ serverVerifier: composite }));
+    await adapter.connect();
+
+    expect(adapter.isConnected).toBe(true);
+    expect(v1.verify).toHaveBeenCalledTimes(1);
+    expect(v2.verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails if any verifier rejects", async () => {
+    const v1: ServerVerifier = {
+      verify: vi.fn().mockResolvedValue({ ok: true, configUpdates: { trusted: true } }),
+    };
+    const v2: ServerVerifier = {
+      verify: vi.fn().mockResolvedValue({ ok: false, error: "cert mismatch" }),
+    };
+
+    const { CompositeServerVerifier } = await import("../index.js");
+    const composite = new CompositeServerVerifier(v1, v2);
+    const adapter = new McpClientAdapter(stdioConfig({ serverVerifier: composite }));
+
+    await expect(adapter.connect()).rejects.toThrow("failed verification");
+    expect(adapter.isConnected).toBe(false);
+  });
+
+  it("merges configUpdates from all verifiers", async () => {
+    const v1: ServerVerifier = {
+      verify: vi.fn().mockResolvedValue({
+        ok: true,
+        configUpdates: { toolManifestHash: "hash1" },
+      }),
+    };
+    const v2: ServerVerifier = {
+      verify: vi.fn().mockResolvedValue({
+        ok: true,
+        configUpdates: { tlsCertFingerprint: "fp1" },
+      }),
+    };
+
+    const { CompositeServerVerifier } = await import("../index.js");
+    const composite = new CompositeServerVerifier(v1, v2);
+    const adapter = new McpClientAdapter(stdioConfig({ serverVerifier: composite }));
+    await adapter.connect();
+
+    expect(adapter.serverConfig.toolManifestHash).toBe("hash1");
+    expect(adapter.serverConfig.tlsCertFingerprint).toBe("fp1");
+  });
+
+  it("stops at first failure and does not call subsequent verifiers", async () => {
+    const v1: ServerVerifier = {
+      verify: vi.fn().mockResolvedValue({ ok: false, error: "fail" }),
+    };
+    const v2: ServerVerifier = { verify: vi.fn().mockResolvedValue({ ok: true }) };
+
+    const { CompositeServerVerifier } = await import("../index.js");
+    const composite = new CompositeServerVerifier(v1, v2);
+    const adapter = new McpClientAdapter(stdioConfig({ serverVerifier: composite }));
+
+    await expect(adapter.connect()).rejects.toThrow("failed verification");
+    expect(v1.verify).toHaveBeenCalledTimes(1);
+    expect(v2.verify).not.toHaveBeenCalled();
+  });
+});

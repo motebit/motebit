@@ -10,6 +10,7 @@ export {
   discoverMotebit,
   discoverViaRelay,
 } from "./discovery.js";
+export { TlsCertificateVerifier } from "./tls-verifier.js";
 export type {
   DnsDiscoveryResult,
   ResolveTxtFn,
@@ -99,9 +100,9 @@ export interface VerificationResult {
   ok: boolean;
   /** Human-readable error when verification fails. */
   error?: string;
-  /** Config updates to persist (e.g., new manifest hash on first pin). */
+  /** Config updates to persist (e.g., new manifest hash on first pin, TLS cert fingerprint). */
   configUpdates?: Partial<
-    Pick<McpServerConfig, "toolManifestHash" | "pinnedToolNames" | "trusted">
+    Pick<McpServerConfig, "toolManifestHash" | "pinnedToolNames" | "trusted" | "tlsCertFingerprint">
   >;
 }
 
@@ -200,6 +201,36 @@ export class AdvisoryManifestVerifier implements ServerVerifier {
   }
 }
 
+/**
+ * Chains multiple ServerVerifiers. All must pass for the connection to proceed.
+ * Config updates from each verifier are merged (later verifiers override earlier on conflict).
+ */
+export class CompositeServerVerifier implements ServerVerifier {
+  private verifiers: ServerVerifier[];
+
+  constructor(...verifiers: ServerVerifier[]) {
+    this.verifiers = verifiers;
+  }
+
+  async verify(config: McpServerConfig, tools: ToolDefinition[]): Promise<VerificationResult> {
+    let mergedUpdates: VerificationResult["configUpdates"];
+
+    for (const verifier of this.verifiers) {
+      const result = await verifier.verify(config, tools);
+      if (result.configUpdates) {
+        mergedUpdates = { ...mergedUpdates, ...result.configUpdates };
+        // Apply updates to config for subsequent verifiers
+        Object.assign(config, result.configUpdates);
+      }
+      if (!result.ok) {
+        return { ok: false, error: result.error, configUpdates: mergedUpdates };
+      }
+    }
+
+    return { ok: true, configUpdates: mergedUpdates };
+  }
+}
+
 export interface McpServerConfig {
   name: string;
   transport: "stdio" | "http";
@@ -237,6 +268,8 @@ export interface McpServerConfig {
   guardianPublicKey?: string;
   /** Server verifier run after connect. Fail-closed: verification failure disconnects. */
   serverVerifier?: ServerVerifier;
+  /** SHA-256 fingerprint of the server's TLS certificate, pinned on first connect. */
+  tlsCertFingerprint?: string;
 }
 
 export interface MotebitIdentityResult {
