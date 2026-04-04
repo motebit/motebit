@@ -1818,6 +1818,30 @@ describe("KeyringCredentialSource", () => {
     );
   });
 
+  it("includes non-standard port in key to avoid collisions", async () => {
+    const keyring = createMockKeyring({
+      "mcp_credential:localhost:3000": "dev-token",
+      "mcp_credential:localhost:4000": "staging-token",
+    });
+    const source = new KeyringCredentialSource(keyring);
+
+    expect(await source.getCredential({ serverUrl: "http://localhost:3000/mcp" })).toBe(
+      "dev-token",
+    );
+    expect(await source.getCredential({ serverUrl: "http://localhost:4000/mcp" })).toBe(
+      "staging-token",
+    );
+  });
+
+  it("omits port for standard https (443)", async () => {
+    const keyring = createMockKeyring({ "mcp_credential:example.com": "std-token" });
+    const source = new KeyringCredentialSource(keyring);
+
+    expect(await source.getCredential({ serverUrl: "https://example.com:443/mcp" })).toBe(
+      "std-token",
+    );
+  });
+
   it("falls back to raw string when URL is invalid", async () => {
     const keyring = createMockKeyring({ "mcp_credential:not-a-url": "fallback" });
     const source = new KeyringCredentialSource(keyring);

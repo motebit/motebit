@@ -81,11 +81,13 @@ export class KeyringCredentialSource implements CredentialSource {
   }
 }
 
-/** Extract a stable server name from a URL for keyring key derivation. */
+/** Extract a stable server identity from a URL for keyring key derivation.
+ *  Includes port when non-standard (not 80/443) to avoid collisions. */
 function extractServerName(url: string): string {
   try {
     const parsed = new URL(url);
-    return parsed.hostname;
+    // parsed.port is "" when using the protocol's default port
+    return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
   } catch {
     return url;
   }
