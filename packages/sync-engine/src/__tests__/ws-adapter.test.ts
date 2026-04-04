@@ -57,6 +57,13 @@ class MockWebSocket {
   simulateError(): void {
     this.onerror?.();
   }
+
+  /** Simulate successful auth handshake: open → auth frame sent → auth_result ok */
+  simulateOpenWithAuth(): void {
+    this.simulateOpen();
+    // The adapter should have sent an auth frame — respond with success
+    this.simulateMessage({ type: "auth_result", ok: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +111,7 @@ describe("WebSocketEventStoreAdapter", () => {
 
   // --- Lifecycle ---
 
-  it("connect() creates a WebSocket with the correct URL", () => {
+  it("connect() creates a WebSocket with the correct URL (no token in URL)", () => {
     const adapter = new WebSocketEventStoreAdapter({ url: WS_URL, motebitId: MOTEBIT_ID });
     adapter.connect();
 
@@ -112,7 +119,7 @@ describe("WebSocketEventStoreAdapter", () => {
     expect(lastWS().url).toBe(WS_URL);
   });
 
-  it("connect() appends auth token as query param", () => {
+  it("connect() does NOT put auth token in URL", () => {
     const adapter = new WebSocketEventStoreAdapter({
       url: WS_URL,
       motebitId: MOTEBIT_ID,
@@ -120,18 +127,85 @@ describe("WebSocketEventStoreAdapter", () => {
     });
     adapter.connect();
 
-    expect(lastWS().url).toBe(`${WS_URL}?token=secret-token`);
+    // Token must NOT appear in URL
+    expect(lastWS().url).toBe(WS_URL);
+    expect(lastWS().url).not.toContain("token=");
   });
 
-  it("connect() URL-encodes auth token", () => {
+  it("connect() sends auth frame as first message after open", () => {
     const adapter = new WebSocketEventStoreAdapter({
       url: WS_URL,
       motebitId: MOTEBIT_ID,
-      authToken: "token with spaces&special=chars",
+      authToken: "secret-token",
     });
     adapter.connect();
+    lastWS().simulateOpen();
 
-    expect(lastWS().url).toContain("token=token%20with%20spaces%26special%3Dchars");
+    // First message should be auth frame
+    expect(lastWS().sent).toHaveLength(1);
+    const msg = JSON.parse(lastWS().sent[0]!) as { type: string; token: string };
+    expect(msg.type).toBe("auth");
+    expect(msg.token).toBe("secret-token");
+  });
+
+  it("connect() marks connected only after auth_result ok", () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "secret-token",
+    });
+    adapter.connect();
+    lastWS().simulateOpen();
+
+    // Not connected yet — waiting for auth_result
+    expect(adapter.isConnected).toBe(false);
+
+    // Server responds with auth success
+    lastWS().simulateMessage({ type: "auth_result", ok: true });
+    expect(adapter.isConnected).toBe(true);
+  });
+
+  it("connect() closes and reconnects on auth_result ok:false", () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "bad-token",
+      reconnectBaseMs: 100,
+      reconnectMaxMs: 10000,
+    });
+    adapter.connect();
+    lastWS().simulateOpen();
+
+    // Server rejects auth
+    lastWS().simulateMessage({ type: "auth_result", ok: false, error: "Unauthorized" });
+    expect(adapter.isConnected).toBe(false);
+    expect(lastWS().closed).toBe(true);
+
+    // Should schedule reconnect
+    vi.advanceTimersByTime(100);
+    expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it("connect() closes on auth timeout (5s)", () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "secret-token",
+      reconnectBaseMs: 100,
+      reconnectMaxMs: 10000,
+    });
+    adapter.connect();
+    lastWS().simulateOpen();
+
+    // Don't send auth_result — wait for timeout
+    expect(adapter.isConnected).toBe(false);
+    vi.advanceTimersByTime(5_000);
+    expect(adapter.isConnected).toBe(false);
+    expect(lastWS().closed).toBe(true);
+
+    // Should schedule reconnect after timeout
+    vi.advanceTimersByTime(100);
+    expect(MockWebSocket.instances).toHaveLength(2);
   });
 
   it("connect() is idempotent — second call is a no-op", () => {
@@ -142,7 +216,7 @@ describe("WebSocketEventStoreAdapter", () => {
     expect(MockWebSocket.instances).toHaveLength(1);
   });
 
-  it("isConnected is false before connect, true after open", () => {
+  it("isConnected is false before connect, true after open (no auth)", () => {
     const adapter = new WebSocketEventStoreAdapter({ url: WS_URL, motebitId: MOTEBIT_ID });
     expect(adapter.isConnected).toBe(false);
 
@@ -225,6 +299,33 @@ describe("WebSocketEventStoreAdapter", () => {
     expect(msg.events).toHaveLength(2);
     expect(msg.events[0]!.event_id).toBe("event-1");
     expect(msg.events[1]!.event_id).toBe("event-2");
+  });
+
+  it("pending events are flushed after auth success (with token)", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "secret-token",
+    });
+
+    // Queue events while disconnected
+    await adapter.append(makeEvent(1));
+
+    // Connect — auth frame sent first, events held until auth_result
+    adapter.connect();
+    lastWS().simulateOpen();
+
+    // Only auth frame sent so far
+    expect(lastWS().sent).toHaveLength(1);
+    expect(JSON.parse(lastWS().sent[0]!).type).toBe("auth");
+
+    // Server responds with auth success — now pending events should flush
+    lastWS().simulateMessage({ type: "auth_result", ok: true });
+
+    expect(lastWS().sent).toHaveLength(2);
+    const msg = JSON.parse(lastWS().sent[1]!) as { type: string; events: EventLogEntry[] };
+    expect(msg.type).toBe("push");
+    expect(msg.events).toHaveLength(1);
   });
 
   // --- onEvent / message dispatch ---
@@ -516,7 +617,7 @@ describe("WebSocketEventStoreAdapter", () => {
 
   // --- CredentialSource ---
 
-  it("connect() resolves token from credentialSource and appends to URL", async () => {
+  it("connect() resolves token from credentialSource and sends auth frame", async () => {
     const credentialSource: CredentialSource = {
       getCredential: vi.fn().mockResolvedValue("dynamic-ws-token"),
     };
@@ -532,7 +633,17 @@ describe("WebSocketEventStoreAdapter", () => {
     await vi.runAllTimersAsync();
 
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(lastWS().url).toBe(`${WS_URL}?token=dynamic-ws-token`);
+    // Token must NOT be in URL
+    expect(lastWS().url).toBe(WS_URL);
+    expect(lastWS().url).not.toContain("token=");
+
+    // Simulate open — auth frame should be sent
+    lastWS().simulateOpen();
+    expect(lastWS().sent).toHaveLength(1);
+    const msg = JSON.parse(lastWS().sent[0]!) as { type: string; token: string };
+    expect(msg.type).toBe("auth");
+    expect(msg.token).toBe("dynamic-ws-token");
+
     expect(credentialSource.getCredential).toHaveBeenCalledWith({ serverUrl: WS_URL });
   });
 
@@ -550,10 +661,15 @@ describe("WebSocketEventStoreAdapter", () => {
     adapter.connect();
     await vi.runAllTimersAsync();
 
-    expect(lastWS().url).toBe(`${WS_URL}?token=dynamic-token`);
+    lastWS().simulateOpen();
+    const msg = JSON.parse(lastWS().sent[0]!) as { type: string; token: string };
+    expect(msg.type).toBe("auth");
+    expect(msg.token).toBe("dynamic-token");
+    // URL must be clean
+    expect(lastWS().url).toBe(WS_URL);
   });
 
-  it("credentialSource returning null omits token from URL", async () => {
+  it("credentialSource returning null skips auth frame", async () => {
     const credentialSource: CredentialSource = {
       getCredential: vi.fn().mockResolvedValue(null),
     };
@@ -567,6 +683,11 @@ describe("WebSocketEventStoreAdapter", () => {
     await vi.runAllTimersAsync();
 
     expect(lastWS().url).toBe(WS_URL);
+
+    // Open — no auth frame, immediately connected
+    lastWS().simulateOpen();
+    expect(adapter.isConnected).toBe(true);
+    expect(lastWS().sent).toHaveLength(0);
   });
 
   it("credentialSource is re-resolved on reconnect", async () => {
@@ -586,10 +707,16 @@ describe("WebSocketEventStoreAdapter", () => {
     await vi.runAllTimersAsync();
 
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(lastWS().url).toContain("token=token-1");
+    // URL must be clean (no token)
+    expect(lastWS().url).toBe(WS_URL);
 
-    // Simulate open then close to trigger reconnect
+    // Open and complete auth
     lastWS().simulateOpen();
+    expect(lastWS().sent).toHaveLength(1);
+    expect(JSON.parse(lastWS().sent[0]!).token).toBe("token-1");
+    lastWS().simulateMessage({ type: "auth_result", ok: true });
+
+    // Simulate close to trigger reconnect
     lastWS().simulateClose();
 
     // Advance past reconnect delay
@@ -597,7 +724,36 @@ describe("WebSocketEventStoreAdapter", () => {
     await vi.runAllTimersAsync();
 
     expect(MockWebSocket.instances).toHaveLength(2);
-    expect(lastWS().url).toContain("token=token-2");
+    // URL still clean
+    expect(lastWS().url).toBe(WS_URL);
+
+    // Open second connection
+    lastWS().simulateOpen();
+    expect(lastWS().sent).toHaveLength(1);
+    expect(JSON.parse(lastWS().sent[0]!).token).toBe("token-2");
     expect(credentialSource.getCredential).toHaveBeenCalledTimes(2);
+  });
+
+  // --- Post-connect auth: messages during auth phase are forwarded ---
+
+  it("forwards non-auth messages to normal handler during auth handshake", () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "secret-token",
+    });
+    const received: EventLogEntry[] = [];
+    adapter.onEvent((e) => received.push(e));
+
+    adapter.connect();
+    lastWS().simulateOpen();
+
+    // Server sends an event before auth_result (edge case)
+    const event = makeEvent(1);
+    lastWS().simulateMessage({ type: "event", event });
+
+    // Should still be forwarded to normal handler
+    expect(received).toHaveLength(1);
+    expect(received[0]!.event_id).toBe("event-1");
   });
 });

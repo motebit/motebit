@@ -109,10 +109,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private connectWithToken(token: string | undefined): void {
     if (this.ws) return;
 
-    let url =
-      token != null && token !== ""
-        ? `${this.config.url}?token=${encodeURIComponent(token)}`
-        : this.config.url;
+    // Post-connect auth: never put tokens in the URL. Auth is sent as the first
+    // WebSocket frame after the connection opens, avoiding exposure in server logs,
+    // proxy logs, and browser history.
+    let url = this.config.url;
 
     if (this.config.capabilities && this.config.capabilities.length > 0) {
       const sep = url.includes("?") ? "&" : "?";
@@ -132,23 +132,61 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     }
 
     this.ws.onopen = () => {
-      this.connected = true;
-      // Stability hysteresis: don't reset backoff immediately — require 30s of
-      // sustained connection. Prevents rapid reconnect cycles on flaky networks
-      // from resetting the exponential backoff counter on each brief success.
-      if (this.stabilityTimer) clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = setTimeout(() => {
-        this.reconnectAttempt = 0;
-      }, 30_000);
+      // Post-connect auth: if we have a token, send it as the first frame and
+      // wait for auth_result before considering the connection ready. Fail-closed:
+      // rejection or 5s timeout closes the connection.
+      if (token != null && token !== "") {
+        this.ws!.send(JSON.stringify({ type: "auth", token }));
 
-      // Flush pending events
-      if (this.pendingEvents.length > 0) {
-        const events = this.pendingEvents.splice(0);
-        this.sendPush(events);
+        const authTimeout = setTimeout(() => {
+          // Auth timed out — fail-closed
+          if (this.ws) {
+            this.ws.onclose = null;
+            this.ws.close();
+            this.ws = null;
+          }
+          this.connected = false;
+          this.scheduleReconnect();
+        }, 5_000);
+
+        // Temporarily override onmessage to intercept auth_result
+        const originalOnMessage = this.ws!.onmessage;
+        this.ws!.onmessage = (event: MessageEvent) => {
+          try {
+            const msg = JSON.parse(String(event.data)) as {
+              type: string;
+              ok?: boolean;
+              error?: string;
+            };
+            if (msg.type === "auth_result") {
+              clearTimeout(authTimeout);
+              if (!msg.ok) {
+                // Auth rejected — close and schedule reconnect
+                if (this.ws) {
+                  this.ws.onclose = null;
+                  this.ws.close();
+                  this.ws = null;
+                }
+                this.connected = false;
+                this.scheduleReconnect();
+                return;
+              }
+              // Auth succeeded — restore normal message handler and mark ready
+              this.ws!.onmessage = originalOnMessage;
+              this.onAuthSuccess();
+              return;
+            }
+          } catch {
+            // Non-JSON or unexpected message during auth — ignore
+          }
+          // Forward non-auth messages to the normal handler
+          if (this.ws) originalOnMessage?.call(this.ws, event);
+        };
+        return;
       }
 
-      // Catch-up pull (fire and forget)
-      void this.catchUp();
+      // No token — unauthenticated connection, ready immediately
+      this.onAuthSuccess();
     };
 
     this.ws.onmessage = (event: MessageEvent) => {
@@ -273,6 +311,27 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   // === Internal ===
+
+  /** Called when auth succeeds (or is skipped for unauthenticated connections). */
+  private onAuthSuccess(): void {
+    this.connected = true;
+    // Stability hysteresis: don't reset backoff immediately — require 30s of
+    // sustained connection. Prevents rapid reconnect cycles on flaky networks
+    // from resetting the exponential backoff counter on each brief success.
+    if (this.stabilityTimer) clearTimeout(this.stabilityTimer);
+    this.stabilityTimer = setTimeout(() => {
+      this.reconnectAttempt = 0;
+    }, 30_000);
+
+    // Flush pending events
+    if (this.pendingEvents.length > 0) {
+      const events = this.pendingEvents.splice(0);
+      this.sendPush(events);
+    }
+
+    // Catch-up pull (fire and forget)
+    void this.catchUp();
+  }
 
   private async catchUp(): Promise<void> {
     if (!this.config.httpFallback || !this.config.localStore) return;

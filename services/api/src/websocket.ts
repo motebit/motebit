@@ -79,10 +79,111 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       const motebitId = asMotebitId(c.req.param("motebitId") as string);
       const url = new URL(c.req.url, "http://localhost");
       const deviceId = url.searchParams.get("device_id") ?? crypto.randomUUID();
-      const token = url.searchParams.get("token");
+      // Backwards compat: accept token from query param during migration.
+      // Preferred path: post-connect auth frame (token never in URL).
+      const queryToken = url.searchParams.get("token");
 
       // Per-connection rate limit key — wsLimiter provides 100 msg/10s
       const wsRateKey = `ws:${motebitId}:${deviceId}`;
+
+      // Track whether this connection has been authenticated (via query param or auth frame)
+      let authenticated = false;
+      // Track whether we're still waiting for an auth frame (connection not yet finalized)
+      let awaitingAuthFrame = false;
+
+      /**
+       * Validate a bearer token (shared by query-param and post-connect auth frame paths).
+       * Returns true if valid, false if invalid (and closes the WS unless suppressClose).
+       * When `sendAuthResult` is true, sends auth_result frame on failure instead of closing directly.
+       */
+      async function validateToken(
+        token: string,
+        mid: string,
+        ws: WSContext,
+        sendAuthResult = false,
+      ): Promise<boolean> {
+        if (enableDeviceAuth) {
+          // Master token bypass
+          if (apiToken != null && apiToken !== "" && token === apiToken) {
+            logger.info("auth.master_token_ws", { motebitId: mid });
+            return true;
+          }
+          if (!token.includes(".")) {
+            // Legacy device tokens (plain UUIDs) are no longer accepted
+            if (sendAuthResult) {
+              ws.send(
+                JSON.stringify({
+                  type: "auth_result",
+                  ok: false,
+                  error: "Legacy device tokens are no longer accepted",
+                }),
+              );
+            }
+            ws.close(4003, "Legacy device tokens are no longer accepted");
+            return false;
+          }
+          // Signed token verification
+          const verified = await verifySignedTokenForDevice(
+            token,
+            mid,
+            identityManager,
+            "sync",
+            isTokenBlacklisted,
+            isAgentRevoked,
+          );
+          if (!verified) {
+            if (sendAuthResult) {
+              ws.send(JSON.stringify({ type: "auth_result", ok: false, error: "Unauthorized" }));
+            }
+            ws.close(4003, "Unauthorized");
+            return false;
+          }
+          return true;
+        }
+        // No device auth — check apiToken (shared secret)
+        if (apiToken != null && apiToken !== "" && token !== apiToken) {
+          if (sendAuthResult) {
+            ws.send(JSON.stringify({ type: "auth_result", ok: false, error: "Unauthorized" }));
+          }
+          ws.close(4001, "Unauthorized");
+          return false;
+        }
+        return true;
+      }
+
+      /** Finalize a connection: register in connections map, recover pending tasks. */
+      function finalizeConnection(ws: WSContext): void {
+        // Parse device capabilities from URL query param
+        const capsParam = url.searchParams.get("capabilities");
+        const capabilities =
+          capsParam != null && capsParam !== ""
+            ? capsParam.split(",").filter((cap) => cap !== "")
+            : undefined;
+
+        if (!connections.has(motebitId)) {
+          connections.set(motebitId, []);
+        }
+        connections.get(motebitId)!.push({ ws, deviceId, capabilities });
+
+        // Task recovery: re-dispatch any pending tasks for this agent to the
+        // newly connected device. Covers reconnection after disconnect (e.g.
+        // cellular→WiFi handoff) and federation-forwarded tasks that arrived
+        // while no device was connected.
+        for (const [, entry] of taskQueue) {
+          if (
+            entry.task.motebit_id === motebitId &&
+            entry.task.status === AgentTaskStatus.Pending &&
+            !entry.receipt
+          ) {
+            ws.send(JSON.stringify({ type: "task_request", task: entry.task }));
+            logger.info("task.recovery_on_reconnect", {
+              correlationId: entry.task.task_id,
+              motebitId,
+              deviceId,
+            });
+          }
+        }
+      }
 
       return {
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
@@ -98,69 +199,22 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             return;
           }
 
-          // Validate token for WebSocket connections
-          if (enableDeviceAuth && token != null && token !== "") {
-            // Master token bypass
-            if (apiToken != null && apiToken !== "" && token === apiToken) {
-              // OK — master token (WebSocket)
-              logger.info("auth.master_token_ws", { motebitId });
-            } else if (!token.includes(".")) {
-              // Legacy device tokens (plain UUIDs) are no longer accepted — signed JWTs only
-              ws.close(4003, "Legacy device tokens are no longer accepted");
-              return;
-            } else {
-              // Signed token verification — O(1) lookup by device ID from token payload
-              const verified = await verifySignedTokenForDevice(
-                token,
-                motebitId,
-                identityManager,
-                "sync",
-                isTokenBlacklisted,
-                isAgentRevoked,
-              );
-              if (!verified) {
-                ws.close(4003, "Unauthorized");
-                return;
-              }
-            }
-          } else if (enableDeviceAuth && (token == null || token === "")) {
-            // No token provided but device auth is required — reject (mirrors REST middleware)
-            ws.close(4001, "Missing device token");
-            return;
-          } else if (apiToken != null && apiToken !== "" && token !== apiToken) {
-            ws.close(4001, "Unauthorized");
-            return;
+          // Backwards compat: if token was provided via query param, validate it now
+          if (queryToken != null && queryToken !== "") {
+            const authResult = await validateToken(queryToken, motebitId, ws);
+            if (!authResult) return; // ws already closed by validateToken
+            authenticated = true;
+          } else if (enableDeviceAuth) {
+            // Device auth required but no query token — wait for post-connect auth frame
+            awaitingAuthFrame = true;
+          } else if (apiToken != null && apiToken !== "") {
+            // API token required but no token at all — wait for post-connect auth frame
+            awaitingAuthFrame = true;
           }
 
-          // Parse device capabilities from URL query param
-          const capsParam = url.searchParams.get("capabilities");
-          const capabilities =
-            capsParam != null && capsParam !== ""
-              ? capsParam.split(",").filter((c) => c !== "")
-              : undefined;
-
-          if (!connections.has(motebitId)) {
-            connections.set(motebitId, []);
-          }
-          connections.get(motebitId)!.push({ ws, deviceId, capabilities });
-
-          // Task recovery: re-dispatch any pending tasks for this agent to the
-          // newly connected device. Covers reconnection after disconnect (e.g.
-          // cellular→WiFi handoff) and federation-forwarded tasks that arrived
-          // while no device was connected.
-          for (const [, entry] of taskQueue) {
-            if (
-              entry.task.motebit_id === motebitId &&
-              entry.task.status === AgentTaskStatus.Pending &&
-              !entry.receipt
-            ) {
-              ws.send(JSON.stringify({ type: "task_request", task: entry.task }));
-              logger.info("task.recovery_on_reconnect", {
-                correlationId: entry.task.task_id,
-                motebitId,
-                deviceId,
-              });
-            }
+          // If already authenticated (query param) or no auth required, finalize connection
+          if (!awaitingAuthFrame) {
+            finalizeConnection(ws);
           }
         },
 
@@ -179,12 +233,50 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               typeof raw === "string" ? raw : new TextDecoder().decode(raw as ArrayBuffer),
             ) as {
               type: string;
+              token?: string;
               events?: EventLogEntry[];
               conversations?: SyncConversation[];
               messages?: SyncConversationMessage[];
               task_id?: string;
               capabilities?: string[];
             };
+
+            // Post-connect auth frame: client sends { type: "auth", token: "..." }
+            // as the first message. Validate and respond with auth_result.
+            if (msg.type === "auth") {
+              if (authenticated) {
+                // Already authenticated (e.g. via query param) — ignore duplicate auth
+                ws.send(JSON.stringify({ type: "auth_result", ok: true }));
+                return;
+              }
+              const token = typeof msg.token === "string" ? msg.token : "";
+              if (token === "") {
+                ws.send(JSON.stringify({ type: "auth_result", ok: false, error: "Missing token" }));
+                ws.close(4001, "Missing token");
+                return;
+              }
+              const valid = await validateToken(token, motebitId, ws, true);
+              if (!valid) {
+                // validateToken already sent auth_result with ok:false and closed
+                return;
+              }
+              authenticated = true;
+              awaitingAuthFrame = false;
+              ws.send(JSON.stringify({ type: "auth_result", ok: true }));
+              finalizeConnection(ws);
+              return;
+            }
+
+            // Reject all non-auth messages if still waiting for auth frame
+            if (awaitingAuthFrame) {
+              ws.send(
+                JSON.stringify({
+                  type: "error",
+                  message: "Authentication required. Send auth frame first.",
+                }),
+              );
+              return;
+            }
 
             // Agent protocol: capabilities_announce
             if (msg.type === "capabilities_announce" && Array.isArray(msg.capabilities)) {
