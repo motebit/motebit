@@ -17,6 +17,40 @@ export type {
   RelayDiscoveryOptions,
 } from "./discovery.js";
 
+/** Context passed to CredentialSource when requesting a credential. */
+export interface CredentialRequest {
+  /** URL of the MCP server being called. */
+  serverUrl: string;
+  /** Tool name being invoked, if known at credential-acquisition time. */
+  toolName?: string;
+  /** Requested scope or audience for scoped credentials. */
+  scope?: string;
+  /** Motebit ID of the calling agent, if available. */
+  agentId?: string;
+}
+
+/**
+ * Adapter interface for obtaining credentials at tool-call time.
+ * Replaces static bearer tokens with dynamic, potentially short-lived credentials.
+ * Implementations may read from OS keyring, external vaults, or wrap static tokens.
+ */
+export interface CredentialSource {
+  /** Returns a credential for the given request. May be short-lived. */
+  getCredential(request: CredentialRequest): Promise<string | null>;
+}
+
+/**
+ * Wraps a static token string as a CredentialSource.
+ * Drop-in replacement for legacy authToken behavior.
+ */
+export class StaticCredentialSource implements CredentialSource {
+  constructor(private readonly token: string) {}
+
+  async getCredential(_request: CredentialRequest): Promise<string> {
+    return this.token;
+  }
+}
+
 export interface McpServerConfig {
   name: string;
   transport: "stdio" | "http";
@@ -42,8 +76,14 @@ export interface McpServerConfig {
   callerDeviceId?: string;
   /** Caller's Ed25519 private key — used to sign auth tokens. NOT persisted. */
   callerPrivateKey?: Uint8Array;
-  /** Static Bearer token for non-motebit MCP servers that require auth. */
+  /**
+   * Static Bearer token for non-motebit MCP servers that require auth.
+   * @deprecated Use `credentialSource` instead. Kept for backwards compatibility —
+   * internally wrapped as StaticCredentialSource.
+   */
   authToken?: string;
+  /** Dynamic credential source for non-motebit MCP servers. Takes precedence over authToken. */
+  credentialSource?: CredentialSource;
   /** Guardian public key (hex) for verifying guardian recovery succession records. */
   guardianPublicKey?: string;
 }
@@ -168,9 +208,20 @@ export class McpClientAdapter {
         if (token) {
           requestInit.headers = { Authorization: `Bearer motebit:${token}` };
         }
-      } else if (this.config.authToken) {
-        // Static Bearer token auth
-        requestInit.headers = { Authorization: `Bearer ${this.config.authToken}` };
+      } else {
+        // Resolve credential source: explicit credentialSource > legacy authToken wrapper
+        const source =
+          this.config.credentialSource ??
+          (this.config.authToken ? new StaticCredentialSource(this.config.authToken) : undefined);
+        if (source) {
+          const credential = await source.getCredential({
+            serverUrl: this.config.url!,
+            agentId: this.config.callerMotebitId,
+          });
+          if (credential) {
+            requestInit.headers = { Authorization: `Bearer ${credential}` };
+          }
+        }
       }
 
       const transportOpts = Object.keys(requestInit).length > 0 ? { requestInit } : undefined;

@@ -33,7 +33,8 @@ vi.mock("@motebit/crypto", () => ({
 }));
 
 // Import after mocks are set up
-import { McpClientAdapter, connectMcpServers } from "../index.js";
+import { McpClientAdapter, connectMcpServers, StaticCredentialSource } from "../index.js";
+import type { CredentialSource, CredentialRequest } from "../index.js";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
 function stdioConfig(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
@@ -1607,5 +1608,150 @@ describe("McpClientAdapter — createCallerToken paths", () => {
 
     await adapter.connect();
     expect(adapter.isConnected).toBe(true);
+  });
+});
+
+// ============================================================
+// CredentialSource adapter
+// ============================================================
+
+describe("StaticCredentialSource", () => {
+  it("always returns the wrapped token regardless of request", async () => {
+    const source = new StaticCredentialSource("my-token");
+    expect(await source.getCredential({ serverUrl: "https://example.com" })).toBe("my-token");
+    expect(await source.getCredential({ serverUrl: "https://other.com", scope: "admin" })).toBe(
+      "my-token",
+    );
+  });
+});
+
+describe("McpClientAdapter — CredentialSource", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListTools.mockResolvedValue(mcpToolsResponse([]));
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  it("uses credentialSource to set Bearer header", async () => {
+    const source: CredentialSource = {
+      async getCredential(_request: CredentialRequest) {
+        return "dynamic-token-123";
+      },
+    };
+    const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
+    await adapter.connect();
+
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
+      | { requestInit?: { headers?: Record<string, string> } }
+      | undefined;
+    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer dynamic-token-123");
+  });
+
+  it("credentialSource takes precedence over authToken", async () => {
+    const source: CredentialSource = {
+      async getCredential(_request: CredentialRequest) {
+        return "from-source";
+      },
+    };
+    const adapter = new McpClientAdapter(
+      httpConfig({ authToken: "from-static", credentialSource: source }),
+    );
+    await adapter.connect();
+
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
+      | { requestInit?: { headers?: Record<string, string> } }
+      | undefined;
+    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer from-source");
+  });
+
+  it("passes CredentialRequest with serverUrl and agentId to getCredential", async () => {
+    const getCredential = vi.fn().mockResolvedValue("token");
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        url: "https://my-server.com/mcp",
+        callerMotebitId: "agent-42",
+        credentialSource: { getCredential },
+      }),
+    );
+    await adapter.connect();
+
+    expect(getCredential).toHaveBeenCalledWith({
+      serverUrl: "https://my-server.com/mcp",
+      agentId: "agent-42",
+    });
+  });
+
+  it("sends no auth header when getCredential returns null", async () => {
+    const source: CredentialSource = {
+      async getCredential(_request: CredentialRequest) {
+        return null;
+      },
+    };
+    const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
+    await adapter.connect();
+
+    // No transport opts (no requestInit with headers)
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
+      | { requestInit?: { headers?: Record<string, string> } }
+      | undefined;
+    expect(transportOpts).toBeUndefined();
+  });
+
+  it("fails closed when getCredential throws — connection is denied", async () => {
+    const source: CredentialSource = {
+      async getCredential(_request: CredentialRequest) {
+        throw new Error("vault unreachable");
+      },
+    };
+    const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
+    // Fail-closed: credential failure should not crash connect, but should not send auth
+    await expect(adapter.connect()).rejects.toThrow("vault unreachable");
+  });
+
+  it("legacy authToken still works (backwards compatibility)", async () => {
+    const adapter = new McpClientAdapter(httpConfig({ authToken: "legacy-token" }));
+    await adapter.connect();
+
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
+      | { requestInit?: { headers?: Record<string, string> } }
+      | undefined;
+    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer legacy-token");
+  });
+
+  it("motebit auth takes precedence over credentialSource", async () => {
+    const source: CredentialSource = {
+      async getCredential(_request: CredentialRequest) {
+        return "should-not-be-used";
+      },
+    };
+
+    mockCallTool.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote", public_key: "ab".repeat(32) }),
+        },
+      ],
+      isError: false,
+    });
+
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-with-cred",
+        motebit: true,
+        callerMotebitId: "my-mote",
+        callerDeviceId: "my-device",
+        callerPrivateKey: new Uint8Array(64),
+        credentialSource: source,
+      } as McpServerConfig),
+    );
+    await adapter.connect();
+
+    const transportOpts = mockHttpTransport.mock.calls[0]![1] as {
+      requestInit: { headers: Record<string, string> };
+    };
+    expect(transportOpts.requestInit.headers["Authorization"]).toBe(
+      "Bearer motebit:mock-signed-token",
+    );
   });
 });

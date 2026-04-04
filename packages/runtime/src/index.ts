@@ -206,6 +206,19 @@ export type { RouteWeight } from "./agent-graph.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 
+/** Context passed to CredentialSource. See @motebit/mcp-client for full documentation. */
+export interface CredentialRequest {
+  serverUrl: string;
+  toolName?: string;
+  scope?: string;
+  agentId?: string;
+}
+
+/** Adapter interface for obtaining credentials at tool-call time. See @motebit/mcp-client for implementations. */
+export interface CredentialSource {
+  getCredential(request: CredentialRequest): Promise<string | null>;
+}
+
 export interface McpServerConfig {
   name: string;
   transport: "stdio" | "http";
@@ -229,6 +242,8 @@ export interface McpServerConfig {
   motebitType?: "personal" | "service" | "collaborative";
   /** Pinned public key hex (set on first verified connect). */
   motebitPublicKey?: string;
+  /** Dynamic credential source for non-motebit MCP servers. Takes precedence over authToken. */
+  credentialSource?: CredentialSource;
 }
 
 // === Browser-safe Tool Registry ===
