@@ -1,6 +1,9 @@
 import type { EventLogEntry, SyncCursor, ConflictEdge } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
 
+export { StaticCredentialSource } from "./credential-source.js";
+export type { CredentialRequest, CredentialSource } from "./credential-source.js";
+
 export { HttpEventStoreAdapter } from "./http-adapter.js";
 export type { HttpAdapterConfig } from "./http-adapter.js";
 export { WebSocketEventStoreAdapter } from "./ws-adapter.js";

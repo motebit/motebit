@@ -1,10 +1,13 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
+import type { CredentialSource, CredentialRequest } from "./credential-source.js";
 
 export interface HttpAdapterConfig {
   baseUrl: string;
   motebitId: string;
   authToken?: string;
+  /** Dynamic credential provider — takes precedence over authToken. */
+  credentialSource?: CredentialSource;
   /** Max retry attempts on transient failure (default 3) */
   maxRetries?: number;
   /** Base backoff in ms — actual delay is base * 2^attempt + jitter (default 1000) */
@@ -31,6 +34,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
   private baseUrl: string;
   private motebitId: string;
   private authToken: string | undefined;
+  private credentialSource: CredentialSource | undefined;
   private maxRetries: number;
   private retryBackoffMs: number;
 
@@ -38,6 +42,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.motebitId = config.motebitId;
     this.authToken = config.authToken;
+    this.credentialSource = config.credentialSource;
     this.maxRetries = config.maxRetries ?? 3;
     this.retryBackoffMs = config.retryBackoffMs ?? 1_000;
   }
@@ -46,7 +51,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
     const url = `${this.baseUrl}/sync/${this.motebitId}/push`;
     const res = await this.fetchWithRetry(url, {
       method: "POST",
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify({ events: [entry] }),
     });
     if (!res.ok) {
@@ -59,7 +64,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
     const url = `${this.baseUrl}/sync/${this.motebitId}/pull?after_clock=${afterClock}`;
     const res = await this.fetchWithRetry(url, {
       method: "GET",
-      headers: this.headers(),
+      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Pull failed: ${res.status} ${res.statusText}`);
@@ -72,7 +77,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
     const url = `${this.baseUrl}/sync/${this.motebitId}/clock`;
     const res = await this.fetchWithRetry(url, {
       method: "GET",
-      headers: this.headers(),
+      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Clock failed: ${res.status} ${res.statusText}`);
@@ -111,11 +116,20 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
     throw lastError ?? new Error(`Request failed after ${this.maxRetries} retries: ${url}`);
   }
 
-  private headers(): Record<string, string> {
+  private async headers(): Promise<Record<string, string>> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.authToken != null && this.authToken !== "") {
-      h["Authorization"] = `Bearer ${this.authToken}`;
+    const token = await this.resolveToken();
+    if (token != null && token !== "") {
+      h["Authorization"] = `Bearer ${token}`;
     }
     return h;
+  }
+
+  private async resolveToken(): Promise<string | null> {
+    if (this.credentialSource) {
+      const request: CredentialRequest = { serverUrl: this.baseUrl };
+      return this.credentialSource.getCredential(request);
+    }
+    return this.authToken ?? null;
   }
 }

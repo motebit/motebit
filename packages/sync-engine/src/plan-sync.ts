@@ -1,4 +1,5 @@
 import type { SyncPlan, SyncPlanStep, PlanSyncResult } from "@motebit/sdk";
+import type { CredentialSource, CredentialRequest } from "./credential-source.js";
 
 // === Plan Sync Store Adapter ===
 
@@ -35,6 +36,8 @@ export interface HttpPlanSyncConfig {
   baseUrl: string;
   motebitId: string;
   authToken?: string;
+  /** Dynamic credential provider — takes precedence over authToken. */
+  credentialSource?: CredentialSource;
 }
 
 /**
@@ -43,17 +46,19 @@ export interface HttpPlanSyncConfig {
 export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
   private baseUrl: string;
   private authToken: string | undefined;
+  private credentialSource: CredentialSource | undefined;
 
   constructor(config: HttpPlanSyncConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.authToken = config.authToken;
+    this.credentialSource = config.credentialSource;
   }
 
   async pushPlans(motebitId: string, plans: SyncPlan[]): Promise<number> {
     const url = `${this.baseUrl}/sync/${motebitId}/plans`;
     const res = await fetch(url, {
       method: "POST",
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify({ plans }),
     });
     if (!res.ok) {
@@ -67,7 +72,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
     const url = `${this.baseUrl}/sync/${motebitId}/plans?since=${since}`;
     const res = await fetch(url, {
       method: "GET",
-      headers: this.headers(),
+      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Pull plans failed: ${res.status} ${res.statusText}`);
@@ -80,7 +85,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
     const url = `${this.baseUrl}/sync/${motebitId}/plan-steps`;
     const res = await fetch(url, {
       method: "POST",
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify({ steps }),
     });
     if (!res.ok) {
@@ -94,7 +99,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
     const url = `${this.baseUrl}/sync/${motebitId}/plan-steps?since=${since}`;
     const res = await fetch(url, {
       method: "GET",
-      headers: this.headers(),
+      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Pull plan steps failed: ${res.status} ${res.statusText}`);
@@ -103,12 +108,21 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
     return body.steps;
   }
 
-  private headers(): Record<string, string> {
+  private async headers(): Promise<Record<string, string>> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.authToken != null && this.authToken !== "") {
-      h["Authorization"] = `Bearer ${this.authToken}`;
+    const token = await this.resolveToken();
+    if (token != null && token !== "") {
+      h["Authorization"] = `Bearer ${token}`;
     }
     return h;
+  }
+
+  private async resolveToken(): Promise<string | null> {
+    if (this.credentialSource) {
+      const request: CredentialRequest = { serverUrl: this.baseUrl };
+      return this.credentialSource.getCredential(request);
+    }
+    return this.authToken ?? null;
   }
 }
 

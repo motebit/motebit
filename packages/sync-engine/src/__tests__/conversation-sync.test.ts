@@ -9,6 +9,7 @@ import type {
   ConversationSyncStatus,
 } from "../conversation-sync.js";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
+import type { CredentialSource } from "../credential-source.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -478,5 +479,51 @@ describe("HttpConversationSyncAdapter", () => {
 
     const [, options] = mockFn.mock.calls[0]!;
     expect(options.headers["Authorization"]).toBeUndefined();
+  });
+
+  it("credentialSource provides Authorization header dynamically", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(
+      new Response(JSON.stringify({ conversations: [] }), { status: 200 }),
+    );
+
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue("dynamic-conv-token"),
+    };
+
+    const adapter = new HttpConversationSyncAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+    });
+
+    await adapter.pullConversations(MOTEBIT_ID, 0);
+
+    const [, options] = mockFn.mock.calls[0]!;
+    expect(options.headers["Authorization"]).toBe("Bearer dynamic-conv-token");
+    expect(credentialSource.getCredential).toHaveBeenCalledWith({ serverUrl: BASE_URL });
+  });
+
+  it("credentialSource takes precedence over authToken", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(
+      new Response(JSON.stringify({ conversations: [] }), { status: 200 }),
+    );
+
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue("dynamic-token"),
+    };
+
+    const adapter = new HttpConversationSyncAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: AUTH_TOKEN,
+      credentialSource,
+    });
+
+    await adapter.pullConversations(MOTEBIT_ID, 0);
+
+    const [, options] = mockFn.mock.calls[0]!;
+    expect(options.headers["Authorization"]).toBe("Bearer dynamic-token");
   });
 });

@@ -3,6 +3,7 @@ import { WebSocketEventStoreAdapter } from "../ws-adapter.js";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
+import type { CredentialSource } from "../credential-source.js";
 
 // ---------------------------------------------------------------------------
 // Mock WebSocket
@@ -511,5 +512,92 @@ describe("WebSocketEventStoreAdapter", () => {
   it("tombstone() resolves without error", async () => {
     const adapter = new WebSocketEventStoreAdapter({ url: WS_URL, motebitId: MOTEBIT_ID });
     await expect(adapter.tombstone("event-1", MOTEBIT_ID)).resolves.toBeUndefined();
+  });
+
+  // --- CredentialSource ---
+
+  it("connect() resolves token from credentialSource and appends to URL", async () => {
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue("dynamic-ws-token"),
+    };
+
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+    });
+    adapter.connect();
+
+    // credentialSource is async — flush the promise
+    await vi.runAllTimersAsync();
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(lastWS().url).toBe(`${WS_URL}?token=dynamic-ws-token`);
+    expect(credentialSource.getCredential).toHaveBeenCalledWith({ serverUrl: WS_URL });
+  });
+
+  it("credentialSource takes precedence over authToken for WebSocket", async () => {
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue("dynamic-token"),
+    };
+
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "static-token",
+      credentialSource,
+    });
+    adapter.connect();
+    await vi.runAllTimersAsync();
+
+    expect(lastWS().url).toBe(`${WS_URL}?token=dynamic-token`);
+  });
+
+  it("credentialSource returning null omits token from URL", async () => {
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue(null),
+    };
+
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+    });
+    adapter.connect();
+    await vi.runAllTimersAsync();
+
+    expect(lastWS().url).toBe(WS_URL);
+  });
+
+  it("credentialSource is re-resolved on reconnect", async () => {
+    let callCount = 0;
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockImplementation(async () => `token-${++callCount}`),
+    };
+
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+      reconnectBaseMs: 100,
+      reconnectMaxMs: 10000,
+    });
+    adapter.connect();
+    await vi.runAllTimersAsync();
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(lastWS().url).toContain("token=token-1");
+
+    // Simulate open then close to trigger reconnect
+    lastWS().simulateOpen();
+    lastWS().simulateClose();
+
+    // Advance past reconnect delay
+    vi.advanceTimersByTime(100);
+    await vi.runAllTimersAsync();
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(lastWS().url).toContain("token=token-2");
+    expect(credentialSource.getCredential).toHaveBeenCalledTimes(2);
   });
 });

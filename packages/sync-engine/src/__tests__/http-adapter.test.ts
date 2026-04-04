@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { HttpEventStoreAdapter } from "../http-adapter.js";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
+import type { CredentialSource } from "../credential-source.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -262,5 +263,96 @@ describe("HttpEventStoreAdapter", () => {
 
     const [url] = mockFn.mock.calls[0]!;
     expect(url).toBe(`http://localhost:3000/sync/${MOTEBIT_ID}/pull?after_clock=0`);
+  });
+
+  // --- CredentialSource ---
+
+  it("credentialSource provides the Authorization header dynamically", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
+
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue("dynamic-token"),
+    };
+
+    const adapter = new HttpEventStoreAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+    });
+
+    await adapter.query({});
+
+    const [, options] = mockFn.mock.calls[0]!;
+    expect(options.headers["Authorization"]).toBe("Bearer dynamic-token");
+    expect(credentialSource.getCredential).toHaveBeenCalledWith({ serverUrl: BASE_URL });
+  });
+
+  it("credentialSource takes precedence over authToken", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
+
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue("dynamic-token"),
+    };
+
+    const adapter = new HttpEventStoreAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "static-token",
+      credentialSource,
+    });
+
+    await adapter.query({});
+
+    const [, options] = mockFn.mock.calls[0]!;
+    expect(options.headers["Authorization"]).toBe("Bearer dynamic-token");
+  });
+
+  it("credentialSource returning null omits Authorization header", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
+
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue(null),
+    };
+
+    const adapter = new HttpEventStoreAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+    });
+
+    await adapter.query({});
+
+    const [, options] = mockFn.mock.calls[0]!;
+    expect(options.headers["Authorization"]).toBeUndefined();
+  });
+
+  it("credentialSource is called per-request (not cached)", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn
+      .mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
+
+    let callCount = 0;
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockImplementation(async () => `token-${++callCount}`),
+    };
+
+    const adapter = new HttpEventStoreAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+    });
+
+    await adapter.query({});
+    await adapter.query({});
+
+    expect(credentialSource.getCredential).toHaveBeenCalledTimes(2);
+    const [, opts1] = mockFn.mock.calls[0]!;
+    const [, opts2] = mockFn.mock.calls[1]!;
+    expect(opts1.headers["Authorization"]).toBe("Bearer token-1");
+    expect(opts2.headers["Authorization"]).toBe("Bearer token-2");
   });
 });

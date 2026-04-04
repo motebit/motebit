@@ -1,5 +1,6 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
+import type { CredentialSource, CredentialRequest } from "./credential-source.js";
 
 // Resolve WebSocket: use the global (Node 22+, browsers) or fall back to the `ws` package (Node 20).
 // globalThis.WebSocket is checked every time (tests may mock it). The `ws` import result is cached.
@@ -17,6 +18,8 @@ export interface WebSocketAdapterConfig {
   url: string;
   motebitId: string;
   authToken?: string;
+  /** Dynamic credential provider — takes precedence over authToken. Resolved at connect time. */
+  credentialSource?: CredentialSource;
   /** Device capabilities to advertise on connect. */
   capabilities?: string[];
   /** Reconnect delay base (ms). Doubles on each retry. */
@@ -51,12 +54,22 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private config: Required<
     Omit<
       WebSocketAdapterConfig,
-      "authToken" | "capabilities" | "httpFallback" | "localStore" | "onCatchUp"
+      | "authToken"
+      | "credentialSource"
+      | "capabilities"
+      | "httpFallback"
+      | "localStore"
+      | "onCatchUp"
     >
   > &
     Pick<
       WebSocketAdapterConfig,
-      "authToken" | "capabilities" | "httpFallback" | "localStore" | "onCatchUp"
+      | "authToken"
+      | "credentialSource"
+      | "capabilities"
+      | "httpFallback"
+      | "localStore"
+      | "onCatchUp"
     >;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
@@ -79,9 +92,26 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   connect(): void {
     if (this.ws) return;
 
+    // If a credentialSource is provided, resolve the token asynchronously
+    // before establishing the connection. Falls back to static authToken.
+    if (this.config.credentialSource) {
+      const request: CredentialRequest = { serverUrl: this.config.url };
+      void this.config.credentialSource.getCredential(request).then((token) => {
+        this.connectWithToken(token ?? undefined);
+      });
+      return;
+    }
+
+    this.connectWithToken(this.config.authToken ?? undefined);
+  }
+
+  /** Internal: establish the WebSocket connection with an already-resolved token. */
+  private connectWithToken(token: string | undefined): void {
+    if (this.ws) return;
+
     let url =
-      this.config.authToken != null && this.config.authToken !== ""
-        ? `${this.config.url}?token=${encodeURIComponent(this.config.authToken)}`
+      token != null && token !== ""
+        ? `${this.config.url}?token=${encodeURIComponent(token)}`
         : this.config.url;
 
     if (this.config.capabilities && this.config.capabilities.length > 0) {
@@ -91,13 +121,13 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
     // Resolve WebSocket impl (async for Node <22 where ws must be imported).
     // If globalThis.WebSocket exists (Node 22+, browsers, tests), use it synchronously.
-    // Otherwise, import ws and re-enter connect().
+    // Otherwise, import ws and re-enter connectWithToken().
     if (typeof globalThis.WebSocket !== "undefined") {
       this.ws = new globalThis.WebSocket(url);
     } else if (_wsPackage) {
       this.ws = new _wsPackage(url) as unknown as WebSocket;
     } else {
-      void resolveWebSocket().then(() => this.connect());
+      void resolveWebSocket().then(() => this.connectWithToken(token));
       return;
     }
 

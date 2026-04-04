@@ -3,6 +3,7 @@ import type {
   SyncConversationMessage,
   ConversationSyncResult,
 } from "@motebit/sdk";
+import type { CredentialSource, CredentialRequest } from "./credential-source.js";
 
 // === Conversation Sync Store Adapter ===
 
@@ -43,6 +44,8 @@ export interface HttpConversationSyncConfig {
   baseUrl: string;
   motebitId: string;
   authToken?: string;
+  /** Dynamic credential provider — takes precedence over authToken. */
+  credentialSource?: CredentialSource;
 }
 
 /**
@@ -51,17 +54,19 @@ export interface HttpConversationSyncConfig {
 export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapter {
   private baseUrl: string;
   private authToken: string | undefined;
+  private credentialSource: CredentialSource | undefined;
 
   constructor(config: HttpConversationSyncConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.authToken = config.authToken;
+    this.credentialSource = config.credentialSource;
   }
 
   async pushConversations(motebitId: string, conversations: SyncConversation[]): Promise<number> {
     const url = `${this.baseUrl}/sync/${motebitId}/conversations`;
     const res = await fetch(url, {
       method: "POST",
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify({ conversations }),
     });
     if (!res.ok) {
@@ -75,7 +80,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
     const url = `${this.baseUrl}/sync/${motebitId}/conversations?since=${since}`;
     const res = await fetch(url, {
       method: "GET",
-      headers: this.headers(),
+      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Pull conversations failed: ${res.status} ${res.statusText}`);
@@ -88,7 +93,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
     const url = `${this.baseUrl}/sync/${motebitId}/messages`;
     const res = await fetch(url, {
       method: "POST",
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify({ messages }),
     });
     if (!res.ok) {
@@ -106,7 +111,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
     const url = `${this.baseUrl}/sync/${motebitId}/messages?conversation_id=${conversationId}&since=${since}`;
     const res = await fetch(url, {
       method: "GET",
-      headers: this.headers(),
+      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Pull messages failed: ${res.status} ${res.statusText}`);
@@ -115,12 +120,21 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
     return body.messages;
   }
 
-  private headers(): Record<string, string> {
+  private async headers(): Promise<Record<string, string>> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.authToken != null && this.authToken !== "") {
-      h["Authorization"] = `Bearer ${this.authToken}`;
+    const token = await this.resolveToken();
+    if (token != null && token !== "") {
+      h["Authorization"] = `Bearer ${token}`;
     }
     return h;
+  }
+
+  private async resolveToken(): Promise<string | null> {
+    if (this.credentialSource) {
+      const request: CredentialRequest = { serverUrl: this.baseUrl };
+      return this.credentialSource.getCredential(request);
+    }
+    return this.authToken ?? null;
   }
 }
 

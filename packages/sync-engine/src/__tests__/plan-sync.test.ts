@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
-import { PlanSyncEngine, InMemoryPlanSyncStore } from "../plan-sync.js";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { PlanSyncEngine, InMemoryPlanSyncStore, HttpPlanSyncAdapter } from "../plan-sync.js";
 import type { PlanSyncRemoteAdapter } from "../plan-sync.js";
 import { PlanStatus, StepStatus } from "@motebit/sdk";
 import type { SyncPlan, SyncPlanStep, PlanId, GoalId, MotebitId } from "@motebit/sdk";
+import type { CredentialSource } from "../credential-source.js";
 
 function makePlan(id: string, updatedAt: number, status = PlanStatus.Active): SyncPlan {
   return {
@@ -184,5 +185,81 @@ describe("PlanSyncEngine", () => {
 
     await engine.sync();
     expect(statuses).toEqual(["syncing", "idle"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HttpPlanSyncAdapter — credentialSource
+// ---------------------------------------------------------------------------
+
+describe("HttpPlanSyncAdapter", () => {
+  const originalFetch = globalThis.fetch;
+  const BASE_URL = "http://localhost:3000";
+  const MOTEBIT = "test-mote";
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("uses authToken for Authorization header (backwards compat)", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ plans: [] }), { status: 200 }));
+
+    const adapter = new HttpPlanSyncAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT,
+      authToken: "static-plan-token",
+    });
+
+    await adapter.pullPlans(MOTEBIT, 0);
+
+    const [, options] = mockFn.mock.calls[0]!;
+    expect(options.headers["Authorization"]).toBe("Bearer static-plan-token");
+  });
+
+  it("credentialSource provides Authorization header dynamically", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ plans: [] }), { status: 200 }));
+
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue("dynamic-plan-token"),
+    };
+
+    const adapter = new HttpPlanSyncAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT,
+      credentialSource,
+    });
+
+    await adapter.pullPlans(MOTEBIT, 0);
+
+    const [, options] = mockFn.mock.calls[0]!;
+    expect(options.headers["Authorization"]).toBe("Bearer dynamic-plan-token");
+    expect(credentialSource.getCredential).toHaveBeenCalledWith({ serverUrl: BASE_URL });
+  });
+
+  it("credentialSource takes precedence over authToken", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ plans: [] }), { status: 200 }));
+
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockResolvedValue("dynamic-token"),
+    };
+
+    const adapter = new HttpPlanSyncAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT,
+      authToken: "static-token",
+      credentialSource,
+    });
+
+    await adapter.pullPlans(MOTEBIT, 0);
+
+    const [, options] = mockFn.mock.calls[0]!;
+    expect(options.headers["Authorization"]).toBe("Bearer dynamic-token");
   });
 });
