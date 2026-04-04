@@ -196,6 +196,20 @@ function stripIdentityTag(text: string): string {
   return text.replace(/\n?\[motebit:[^\]]*\]\s*$/, "");
 }
 
+/** Extract tool name from a JSON-RPC request body, if it's a tools/call method. */
+function extractToolNameFromBody(body: unknown): string | undefined {
+  if (!body || typeof body !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(body) as { method?: string; params?: { name?: string } };
+    if (parsed.method === "tools/call" && typeof parsed.params?.name === "string") {
+      return parsed.params.name;
+    }
+  } catch {
+    // Not JSON or not parseable — no tool name available
+  }
+  return undefined;
+}
+
 /** 24-hour grace period for accepting the previous key after rotation. */
 const KEY_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
 
@@ -238,17 +252,17 @@ export class McpClientAdapter {
       const { StreamableHTTPClientTransport } =
         await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
 
-      // Build request options with auth
-      const requestInit: Record<string, unknown> = {};
+      // Build transport options with auth
+      const transportOpts: Record<string, unknown> = {};
       if (
         (this.config.motebit || this.config.motebitType) &&
         this.config.callerMotebitId &&
         this.config.callerPrivateKey
       ) {
-        // Motebit signed token auth
+        // Motebit signed token auth — static header (short-lived, already scoped)
         const token = await this.createCallerToken();
         if (token) {
-          requestInit.headers = { Authorization: `Bearer motebit:${token}` };
+          transportOpts.requestInit = { headers: { Authorization: `Bearer motebit:${token}` } };
         }
       } else {
         // Resolve credential source: explicit credentialSource > legacy authToken wrapper
@@ -256,18 +270,31 @@ export class McpClientAdapter {
           this.config.credentialSource ??
           (this.config.authToken ? new StaticCredentialSource(this.config.authToken) : undefined);
         if (source) {
-          const credential = await source.getCredential({
-            serverUrl: this.config.url!,
-            agentId: this.config.callerMotebitId,
-          });
-          if (credential) {
-            requestInit.headers = { Authorization: `Bearer ${credential}` };
-          }
+          // Per-tool credential resolution: custom fetch injects auth on every request.
+          // Parses JSON-RPC body to extract tool name for scoped credentials.
+          const serverUrl = this.config.url!;
+          const agentId = this.config.callerMotebitId;
+          transportOpts.fetch = async (url: string | URL, init?: RequestInit) => {
+            const toolName = extractToolNameFromBody(init?.body);
+            const credential = await source.getCredential({
+              serverUrl,
+              toolName,
+              agentId,
+            });
+            const headers = new Headers(init?.headers);
+            if (credential) {
+              headers.set("Authorization", `Bearer ${credential}`);
+            }
+            return globalThis.fetch(url, { ...init, headers });
+          };
         }
       }
 
-      const transportOpts = Object.keys(requestInit).length > 0 ? { requestInit } : undefined;
-      const transport = new StreamableHTTPClientTransport(new URL(this.config.url), transportOpts);
+      const hasOpts = Object.keys(transportOpts).length > 0;
+      const transport = new StreamableHTTPClientTransport(
+        new URL(this.config.url),
+        hasOpts ? transportOpts : undefined,
+      );
       await this.client.connect(transport);
     }
 

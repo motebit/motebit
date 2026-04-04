@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { McpServerConfig } from "../index.js";
 
 // === Mock MCP SDK Client ===
@@ -149,16 +149,15 @@ describe("McpClientAdapter — HTTP transport", () => {
     expect(adapter.isConnected).toBe(true);
   });
 
-  it("passes static authToken as Bearer header", async () => {
+  it("passes static authToken via custom fetch for per-request auth", async () => {
     const adapter = new McpClientAdapter(httpConfig({ authToken: "my-secret-token" }));
     await adapter.connect();
 
     expect(mockHttpTransport).toHaveBeenCalledTimes(1);
-    // The second arg to StreamableHTTPClientTransport is the options with requestInit
     const transportOpts = mockHttpTransport.mock.calls[0]![1] as
-      | { requestInit?: { headers?: Record<string, string> } }
+      | { fetch?: (url: string | URL, init?: RequestInit) => Promise<Response> }
       | undefined;
-    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer my-secret-token");
+    expect(transportOpts?.fetch).toBeTypeOf("function");
   });
 });
 
@@ -1631,14 +1630,30 @@ describe("StaticCredentialSource", () => {
   });
 });
 
+// Helper: extract the custom fetch from transport constructor args and invoke it
+type CustomFetch = (url: string | URL, init?: RequestInit) => Promise<Response>;
+
+function getTransportFetch(): CustomFetch | undefined {
+  const opts = mockHttpTransport.mock.calls[0]?.[1] as { fetch?: CustomFetch } | undefined;
+  return opts?.fetch;
+}
+
+// Stub globalThis.fetch for custom-fetch tests
+const mockGlobalFetch = vi.fn().mockResolvedValue(new Response("ok"));
+
 describe("McpClientAdapter — CredentialSource", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListTools.mockResolvedValue(mcpToolsResponse([]));
     mockConnect.mockResolvedValue(undefined);
+    vi.stubGlobal("fetch", mockGlobalFetch);
   });
 
-  it("uses credentialSource to set Bearer header", async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("injects custom fetch when credentialSource is present", async () => {
     const source: CredentialSource = {
       async getCredential(_request: CredentialRequest) {
         return "dynamic-token-123";
@@ -1647,10 +1662,14 @@ describe("McpClientAdapter — CredentialSource", () => {
     const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
     await adapter.connect();
 
-    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
-      | { requestInit?: { headers?: Record<string, string> } }
-      | undefined;
-    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer dynamic-token-123");
+    const customFetch = getTransportFetch();
+    expect(customFetch).toBeTypeOf("function");
+
+    // Call the custom fetch and verify it sets the Authorization header
+    await customFetch!("https://example.com/mcp", { method: "POST", body: "{}" });
+    const passedInit = mockGlobalFetch.mock.calls[0]![1] as RequestInit;
+    const headers = new Headers(passedInit.headers);
+    expect(headers.get("Authorization")).toBe("Bearer dynamic-token-123");
   });
 
   it("credentialSource takes precedence over authToken", async () => {
@@ -1664,13 +1683,13 @@ describe("McpClientAdapter — CredentialSource", () => {
     );
     await adapter.connect();
 
-    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
-      | { requestInit?: { headers?: Record<string, string> } }
-      | undefined;
-    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer from-source");
+    const customFetch = getTransportFetch()!;
+    await customFetch("https://example.com/mcp", { method: "POST", body: "{}" });
+    const headers = new Headers((mockGlobalFetch.mock.calls[0]![1] as RequestInit).headers);
+    expect(headers.get("Authorization")).toBe("Bearer from-source");
   });
 
-  it("passes CredentialRequest with serverUrl and agentId to getCredential", async () => {
+  it("passes serverUrl and agentId in CredentialRequest", async () => {
     const getCredential = vi.fn().mockResolvedValue("token");
     const adapter = new McpClientAdapter(
       httpConfig({
@@ -1681,13 +1700,44 @@ describe("McpClientAdapter — CredentialSource", () => {
     );
     await adapter.connect();
 
-    expect(getCredential).toHaveBeenCalledWith({
-      serverUrl: "https://my-server.com/mcp",
-      agentId: "agent-42",
-    });
+    const customFetch = getTransportFetch()!;
+    await customFetch("https://my-server.com/mcp", { method: "POST", body: "{}" });
+    expect(getCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverUrl: "https://my-server.com/mcp",
+        agentId: "agent-42",
+      }),
+    );
   });
 
-  it("sends no auth header when getCredential returns null", async () => {
+  it("extracts toolName from JSON-RPC tools/call body", async () => {
+    const getCredential = vi.fn().mockResolvedValue("scoped-token");
+    const adapter = new McpClientAdapter(httpConfig({ credentialSource: { getCredential } }));
+    await adapter.connect();
+
+    const customFetch = getTransportFetch()!;
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: { name: "web_search", arguments: { query: "test" } },
+      id: 1,
+    });
+    await customFetch("https://example.com/mcp", { method: "POST", body });
+    expect(getCredential).toHaveBeenCalledWith(expect.objectContaining({ toolName: "web_search" }));
+  });
+
+  it("passes undefined toolName for non-tool-call requests", async () => {
+    const getCredential = vi.fn().mockResolvedValue("token");
+    const adapter = new McpClientAdapter(httpConfig({ credentialSource: { getCredential } }));
+    await adapter.connect();
+
+    const customFetch = getTransportFetch()!;
+    const body = JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 });
+    await customFetch("https://example.com/mcp", { method: "POST", body });
+    expect(getCredential).toHaveBeenCalledWith(expect.objectContaining({ toolName: undefined }));
+  });
+
+  it("sends no Authorization header when getCredential returns null", async () => {
     const source: CredentialSource = {
       async getCredential(_request: CredentialRequest) {
         return null;
@@ -1696,35 +1746,39 @@ describe("McpClientAdapter — CredentialSource", () => {
     const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
     await adapter.connect();
 
-    // No transport opts (no requestInit with headers)
-    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
-      | { requestInit?: { headers?: Record<string, string> } }
-      | undefined;
-    expect(transportOpts).toBeUndefined();
+    const customFetch = getTransportFetch()!;
+    await customFetch("https://example.com/mcp", { method: "POST", body: "{}" });
+    const headers = new Headers((mockGlobalFetch.mock.calls[0]![1] as RequestInit).headers);
+    expect(headers.get("Authorization")).toBeNull();
   });
 
-  it("fails closed when getCredential throws — connection is denied", async () => {
+  it("fails closed when getCredential throws during fetch", async () => {
     const source: CredentialSource = {
       async getCredential(_request: CredentialRequest) {
         throw new Error("vault unreachable");
       },
     };
     const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
-    // Fail-closed: credential failure should not crash connect, but should not send auth
-    await expect(adapter.connect()).rejects.toThrow("vault unreachable");
+    await adapter.connect();
+
+    // The error propagates when the custom fetch is called (at request time, not connect time)
+    const customFetch = getTransportFetch()!;
+    await expect(
+      customFetch("https://example.com/mcp", { method: "POST", body: "{}" }),
+    ).rejects.toThrow("vault unreachable");
   });
 
-  it("legacy authToken still works (backwards compatibility)", async () => {
+  it("legacy authToken works via custom fetch (backwards compatibility)", async () => {
     const adapter = new McpClientAdapter(httpConfig({ authToken: "legacy-token" }));
     await adapter.connect();
 
-    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
-      | { requestInit?: { headers?: Record<string, string> } }
-      | undefined;
-    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer legacy-token");
+    const customFetch = getTransportFetch()!;
+    await customFetch("https://example.com/mcp", { method: "POST", body: "{}" });
+    const headers = new Headers((mockGlobalFetch.mock.calls[0]![1] as RequestInit).headers);
+    expect(headers.get("Authorization")).toBe("Bearer legacy-token");
   });
 
-  it("motebit auth takes precedence over credentialSource", async () => {
+  it("motebit auth uses static requestInit, not custom fetch", async () => {
     const source: CredentialSource = {
       async getCredential(_request: CredentialRequest) {
         return "should-not-be-used";
@@ -1753,12 +1807,15 @@ describe("McpClientAdapter — CredentialSource", () => {
     );
     await adapter.connect();
 
+    // Motebit auth uses requestInit (static), not custom fetch
     const transportOpts = mockHttpTransport.mock.calls[0]![1] as {
-      requestInit: { headers: Record<string, string> };
+      requestInit?: { headers: Record<string, string> };
+      fetch?: CustomFetch;
     };
-    expect(transportOpts.requestInit.headers["Authorization"]).toBe(
+    expect(transportOpts.requestInit?.headers["Authorization"]).toBe(
       "Bearer motebit:mock-signed-token",
     );
+    expect(transportOpts.fetch).toBeUndefined();
   });
 });
 
@@ -1865,15 +1922,22 @@ describe("KeyringCredentialSource", () => {
     );
   });
 
-  it("works end-to-end with McpClientAdapter", async () => {
+  it("works end-to-end with McpClientAdapter via custom fetch", async () => {
+    const stubFetch = vi.fn().mockResolvedValue(new Response("ok"));
+    vi.stubGlobal("fetch", stubFetch);
+
     const keyring = createMockKeyring({ "mcp_credential:example.com": "e2e-token" });
     const source = new KeyringCredentialSource(keyring);
     const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
     await adapter.connect();
 
-    const transportOpts = mockHttpTransport.mock.calls[0]![1] as
-      | { requestInit?: { headers?: Record<string, string> } }
-      | undefined;
-    expect(transportOpts?.requestInit?.headers?.Authorization).toBe("Bearer e2e-token");
+    const customFetch = getTransportFetch()!;
+    expect(customFetch).toBeTypeOf("function");
+
+    await customFetch("https://example.com/mcp", { method: "POST", body: "{}" });
+    const headers = new Headers((stubFetch.mock.calls[0]![1] as RequestInit).headers);
+    expect(headers.get("Authorization")).toBe("Bearer e2e-token");
+
+    vi.unstubAllGlobals();
   });
 });
