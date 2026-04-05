@@ -303,9 +303,7 @@ describe("detectDeposits", () => {
       )
       .run("eip155:84532", "100", Date.now());
 
-    let callCount = 0;
     const mockFetch = vi.fn().mockImplementation(async () => {
-      callCount++;
       return { ok: true, json: async () => blockNumberResponse(200) };
     });
 
