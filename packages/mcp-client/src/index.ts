@@ -26,7 +26,9 @@ export {
   discoverMotebit,
   discoverViaRelay,
 } from "./discovery.js";
-export { TlsCertificateVerifier } from "./tls-verifier.js";
+// TlsCertificateVerifier is Node-only (uses node:tls). Not re-exported from barrel
+// to avoid pulling node:tls into browser bundles. Import from subpath instead:
+//   import { TlsCertificateVerifier } from "@motebit/mcp-client/tls-verifier";
 export type {
   DnsDiscoveryResult,
   ResolveTxtFn,
