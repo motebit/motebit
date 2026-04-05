@@ -273,6 +273,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/agents/:motebitId/withdrawals", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/checkout", rl(writeLimiter));
   app.use("/api/v1/stripe/webhook", rl(publicLimiter));
+  app.use("/api/v1/bridge/webhook", rl(publicLimiter));
   app.use("/api/v1/admin/withdrawals/*", rl(writeLimiter));
   app.use("/api/v1/admin/reconciliation", rl(expensiveLimiter));
   app.use("/api/v1/admin/freeze", rl(writeLimiter));
@@ -396,6 +397,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         c.req.path.startsWith("/api/v1/credentials/batch-status") ||
         c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/) ||
         c.req.path.startsWith("/api/v1/stripe/") ||
+        c.req.path.startsWith("/api/v1/bridge/") ||
         c.req.path.startsWith("/api/v1/subscriptions/")
       ) {
         await next();

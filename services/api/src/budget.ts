@@ -782,9 +782,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
       // RSA-SHA256 verification
       const signedPayload = `${timestamp}.${rawBody}`;
-      const verifier = createVerify("RSA-SHA256");
-      verifier.update(signedPayload);
-      const valid = verifier.verify(bridgeWebhookPublicKey, sig, "base64");
+      let valid = false;
+      try {
+        const verifier = createVerify("RSA-SHA256");
+        verifier.update(signedPayload);
+        valid = verifier.verify(bridgeWebhookPublicKey, sig, "base64");
+      } catch {
+        // Malformed signature bytes — treat as invalid
+      }
       if (!valid) {
         logger.warn("bridge.webhook.invalid_signature", { correlationId });
         throw new HTTPException(400, { message: "Invalid webhook signature" });
