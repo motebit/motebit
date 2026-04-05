@@ -7,7 +7,7 @@ export type { CredentialRequest, CredentialSource } from "@motebit/sdk";
 /** Static credential source — wraps a fixed token string. */
 export class StaticCredentialSource implements CredentialSource {
   constructor(private readonly token: string) {}
-  async getCredential(_request: CredentialRequest): Promise<string | null> {
-    return this.token;
+  getCredential(_request: CredentialRequest): Promise<string | null> {
+    return Promise.resolve(this.token);
   }
 }
