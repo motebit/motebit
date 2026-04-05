@@ -1231,4 +1231,89 @@ describe("Virtual Accounts", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // --- Bridge webhook ---
+
+  it("bridge webhook ignores non-payment_processed events", async () => {
+    const res = await relay.app.request("/api/v1/bridge/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        event_type: "transfer.updated.status_transitioned",
+        event_object: { id: "transfer-001", state: "funds_received" },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { processed: boolean };
+    expect(body.processed).toBe(false);
+  });
+
+  it("bridge webhook returns processed:false for unknown transfer", async () => {
+    const res = await relay.app.request("/api/v1/bridge/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        event_type: "transfer.updated.status_transitioned",
+        event_object: { id: "nonexistent-transfer", state: "payment_processed" },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { processed: boolean };
+    expect(body.processed).toBe(false);
+  });
+
+  it("bridge webhook completes pending withdrawal on payment_processed", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 50);
+
+    // Request withdrawal
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ amount: 20 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    // Simulate: link a Bridge transfer ID to the withdrawal (as the auto-settlement code does)
+    relay.moteDb.db
+      .prepare("UPDATE relay_withdrawals SET payout_reference = ? WHERE withdrawal_id = ?")
+      .run(`bridge:transfer-xyz`, withdrawal.withdrawal_id);
+
+    // Bridge webhook: transfer completed
+    const webhookRes = await relay.app.request("/api/v1/bridge/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        event_type: "transfer.updated.status_transitioned",
+        event_object: {
+          id: "transfer-xyz",
+          state: "payment_processed",
+          receipt: { destination_tx_hash: "0xbridge_tx_hash" },
+          destination: { payment_rail: "base" },
+        },
+      }),
+    });
+    expect(webhookRes.status).toBe(200);
+    const webhookBody = (await webhookRes.json()) as { processed: boolean };
+    expect(webhookBody.processed).toBe(true);
+
+    // Verify withdrawal is now completed
+    const historyRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdrawals`, {
+      headers: AUTH_HEADER,
+    });
+    const history = (await historyRes.json()) as {
+      withdrawals: Array<{ status: string; payout_reference: string }>;
+    };
+    const completed = history.withdrawals.find((w) => w.status === "completed");
+    expect(completed).toBeDefined();
+    expect(completed!.payout_reference).toBe("0xbridge_tx_hash");
+  });
 });
