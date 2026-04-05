@@ -111,7 +111,11 @@ import { registerTaskRoutes } from "./tasks.js";
 import { TaskQueue } from "./task-queue.js";
 import { registerCommandRoutes, handleCommandResponse } from "./command-route.js";
 import Stripe from "stripe";
-import { SettlementRailRegistry, StripeSettlementRail } from "./settlement-rails/index.js";
+import {
+  SettlementRailRegistry,
+  StripeSettlementRail,
+  X402SettlementRail,
+} from "./settlement-rails/index.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
@@ -226,6 +230,28 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         currency: stripeConfig.currency,
       }),
     );
+  }
+  if (x402Config?.payToAddress) {
+    try {
+      const { HTTPFacilitatorClient } = await import("@x402/core/server");
+      const facilitatorClient = new HTTPFacilitatorClient({
+        url: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
+      });
+      railRegistry.register(
+        new X402SettlementRail({
+          facilitatorClient,
+          network: x402Config.network,
+          payToAddress: x402Config.payToAddress,
+        }),
+      );
+    } catch (err) {
+      // x402 packages may not be available in all environments.
+      // Fail open at startup — the rail simply won't be registered.
+      console.warn(
+        "x402 settlement rail not registered:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
@@ -639,6 +665,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isTokenBlacklisted,
     isAgentRevoked,
     platformFeeRate,
+    railRegistry,
   });
 
   // --- Helper: count all connected WebSocket clients ---

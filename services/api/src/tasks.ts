@@ -131,6 +131,8 @@ export interface TasksDeps {
   isAgentRevoked: (motebitId: string) => boolean;
   /** Platform fee rate (0–1). Defaults to SDK constant (0.05) if not provided. */
   platformFeeRate?: number;
+  /** Settlement rail registry — for attaching payment proofs through the rail boundary. */
+  railRegistry?: import("./settlement-rails/index.js").SettlementRailRegistry;
 }
 
 // ---------------------------------------------------------------------------
@@ -1358,6 +1360,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             moteDb.db.exec("ROLLBACK");
             throw new SettlementError("SETTLEMENT_FAILED", "x402 auto-deposit failed", {
               cause: depositErr,
+            });
+          }
+
+          // Attach proof through the x402 rail — sibling parity with Stripe webhook flow.
+          const x402Rail = deps.railRegistry?.get("x402");
+          if (x402Rail) {
+            await x402Rail.attachProof(`x402-${taskId}`, {
+              reference: x402TxHash,
+              railType: "protocol",
+              network: x402Net,
+              confirmedAt: Date.now(),
             });
           }
         }

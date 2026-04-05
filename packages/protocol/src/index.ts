@@ -897,6 +897,11 @@ export interface WithdrawalResult {
  * - DirectAssetRail — direct onchain stablecoin transfer (USDC on Tempo/Base/Solana)
  * - OrchestrationRail — fiat↔crypto bridging (Bridge)
  *
+ * Not all rails support deposits. Fiat and direct-asset rails accept proactive
+ * deposits. Protocol rails (x402, MPP) are pay-per-request — money moves at the
+ * HTTP boundary, not through the rail. Use `supportsDeposit` discriminant for
+ * runtime narrowing: `if (rail.supportsDeposit) rail.deposit(...)`.
+ *
  * The relay picks the rail at routing time based on what the counterparty accepts.
  */
 export interface SettlementRail {
@@ -906,19 +911,11 @@ export interface SettlementRail {
   /** Human-readable name for logging and config (e.g., "stripe", "x402-base", "bridge"). */
   readonly name: string;
 
+  /** Whether this rail supports proactive deposits. False for pay-per-request rails (x402, MPP). */
+  readonly supportsDeposit: boolean;
+
   /** Whether this rail is currently available (provider reachable, config valid). */
   isAvailable(): Promise<boolean>;
-
-  /**
-   * Initiate a deposit. Returns a deposit result or a redirect URL
-   * (for interactive flows like Stripe Checkout).
-   */
-  deposit(
-    motebitId: string,
-    amount: number,
-    currency: string,
-    idempotencyKey: string,
-  ): Promise<DepositResult | { redirectUrl: string }>;
 
   /**
    * Execute a withdrawal to an external destination.
@@ -937,6 +934,30 @@ export interface SettlementRail {
    * Called after settleOnReceipt() computes the settlement record.
    */
   attachProof(settlementId: string, proof: PaymentProof): Promise<void>;
+}
+
+/**
+ * A settlement rail that supports proactive deposits (Stripe Checkout, onchain transfers).
+ * Use the `supportsDeposit` discriminant for runtime narrowing from `SettlementRail`.
+ */
+export interface DepositableSettlementRail extends SettlementRail {
+  readonly supportsDeposit: true;
+
+  /**
+   * Initiate a deposit. Returns a deposit result or a redirect URL
+   * (for interactive flows like Stripe Checkout).
+   */
+  deposit(
+    motebitId: string,
+    amount: number,
+    currency: string,
+    idempotencyKey: string,
+  ): Promise<DepositResult | { redirectUrl: string }>;
+}
+
+/** Type guard: narrows SettlementRail to DepositableSettlementRail. */
+export function isDepositableRail(rail: SettlementRail): rail is DepositableSettlementRail {
+  return rail.supportsDeposit;
 }
 
 // === Collaborative Plan Proposals ===

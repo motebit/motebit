@@ -108,6 +108,7 @@ const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "asSettlementId",
     "asListingId",
     "asProposalId",
+    "isDepositableRail",
   ]),
   "@motebit/verify": new Set(["verify", "verifyIdentityFile", "parse"]),
 };

@@ -9,6 +9,8 @@ import type { SettlementRail } from "@motebit/sdk";
 
 export { StripeSettlementRail } from "./stripe-rail.js";
 export type { StripeRailConfig } from "./stripe-rail.js";
+export { X402SettlementRail } from "./x402-rail.js";
+export type { X402RailConfig, X402FacilitatorClient } from "./x402-rail.js";
 
 export class SettlementRailRegistry {
   private readonly rails = new Map<string, SettlementRail>();

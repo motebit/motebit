@@ -78,6 +78,40 @@ export class KeyringCredentialSource implements CredentialSource {
   }
 }
 
+/**
+ * Adapter interface for external secret vaults (HashiCorp Vault, AWS Secrets Manager,
+ * 1Password Connect, etc.). The vault is glucose — this is the enzyme boundary.
+ */
+export interface VaultClient {
+  get(key: string): Promise<string | null>;
+}
+
+/** Default vault key: `mcp/{serverName}`. */
+function defaultVaultKey(serverName: string): string {
+  return `mcp/${serverName}`;
+}
+
+/**
+ * Reads credentials from an external secret vault at call time.
+ * Secret is never cached — resolved per-request from the vault.
+ * Build the adapter boundary, not the vault.
+ */
+export class VaultCredentialSource implements CredentialSource {
+  private vault: VaultClient;
+  private resolveKey: (serverName: string) => string;
+
+  constructor(vault: VaultClient, resolveKey: (serverName: string) => string = defaultVaultKey) {
+    this.vault = vault;
+    this.resolveKey = resolveKey;
+  }
+
+  async getCredential(request: CredentialRequest): Promise<string | null> {
+    const serverName = extractServerName(request.serverUrl);
+    const key = this.resolveKey(serverName);
+    return this.vault.get(key);
+  }
+}
+
 /** Extract a stable server identity from a URL for keyring key derivation.
  *  Includes port when non-standard (not 80/443) to avoid collisions. */
 function extractServerName(url: string): string {

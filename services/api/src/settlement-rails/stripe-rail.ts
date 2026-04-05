@@ -7,7 +7,12 @@
  */
 
 import type Stripe from "stripe";
-import type { SettlementRail, PaymentProof, DepositResult, WithdrawalResult } from "@motebit/sdk";
+import type {
+  DepositableSettlementRail,
+  PaymentProof,
+  DepositResult,
+  WithdrawalResult,
+} from "@motebit/sdk";
 import { createLogger } from "../logger.js";
 
 const logger = createLogger({ service: "stripe-rail" });
@@ -23,9 +28,10 @@ export interface StripeRailConfig {
   baseUrl?: string;
 }
 
-export class StripeSettlementRail implements SettlementRail {
+export class StripeSettlementRail implements DepositableSettlementRail {
   readonly railType = "fiat" as const;
   readonly name = "stripe";
+  readonly supportsDeposit = true as const;
 
   private readonly stripe: Stripe;
   readonly webhookSecret: string;

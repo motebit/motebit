@@ -38,8 +38,10 @@ import {
   connectMcpServers,
   StaticCredentialSource,
   KeyringCredentialSource,
+  VaultCredentialSource,
   ManifestPinningVerifier,
 } from "../index.js";
+import type { VaultClient } from "../index.js";
 import type {
   CredentialSource,
   CredentialRequest,
@@ -1841,6 +1843,121 @@ describe("KeyringCredentialSource", () => {
     await customFetch("https://example.com/mcp", { method: "POST", body: "{}" });
     const headers = new Headers((stubFetch.mock.calls[0]![1] as RequestInit).headers);
     expect(headers.get("Authorization")).toBe("Bearer e2e-token");
+
+    vi.unstubAllGlobals();
+  });
+});
+
+// ============================================================
+// VaultCredentialSource
+// ============================================================
+
+function createMockVault(store: Record<string, string> = {}): VaultClient {
+  return {
+    async get(key: string) {
+      return store[key] ?? null;
+    },
+  };
+}
+
+describe("VaultCredentialSource", () => {
+  it("reads credential from vault using default key format", async () => {
+    const vault = createMockVault({ "mcp/example.com": "vault-secret" });
+    const source = new VaultCredentialSource(vault);
+
+    const cred = await source.getCredential({ serverUrl: "https://example.com/mcp" });
+    expect(cred).toBe("vault-secret");
+  });
+
+  it("returns null when vault has no entry for the server", async () => {
+    const vault = createMockVault({});
+    const source = new VaultCredentialSource(vault);
+
+    const cred = await source.getCredential({ serverUrl: "https://unknown.com/mcp" });
+    expect(cred).toBeNull();
+  });
+
+  it("uses custom key resolver when provided", async () => {
+    const vault = createMockVault({ "secrets/data/my-server.com": "custom-secret" });
+    const source = new VaultCredentialSource(vault, (name) => `secrets/data/${name}`);
+
+    const cred = await source.getCredential({ serverUrl: "https://my-server.com/api" });
+    expect(cred).toBe("custom-secret");
+  });
+
+  it("extracts hostname from URL for key derivation", async () => {
+    const vault = createMockVault({ "mcp/api.github.com": "gh-token" });
+    const source = new VaultCredentialSource(vault);
+
+    // Different paths, same hostname → same key
+    expect(await source.getCredential({ serverUrl: "https://api.github.com/mcp" })).toBe(
+      "gh-token",
+    );
+    expect(await source.getCredential({ serverUrl: "https://api.github.com/v2/tools" })).toBe(
+      "gh-token",
+    );
+  });
+
+  it("includes non-standard port in key to avoid collisions", async () => {
+    const vault = createMockVault({
+      "mcp/localhost:3000": "dev-token",
+      "mcp/localhost:4000": "staging-token",
+    });
+    const source = new VaultCredentialSource(vault);
+
+    expect(await source.getCredential({ serverUrl: "http://localhost:3000/mcp" })).toBe(
+      "dev-token",
+    );
+    expect(await source.getCredential({ serverUrl: "http://localhost:4000/mcp" })).toBe(
+      "staging-token",
+    );
+  });
+
+  it("omits port for standard https (443)", async () => {
+    const vault = createMockVault({ "mcp/example.com": "std-token" });
+    const source = new VaultCredentialSource(vault);
+
+    expect(await source.getCredential({ serverUrl: "https://example.com:443/mcp" })).toBe(
+      "std-token",
+    );
+  });
+
+  it("falls back to raw string when URL is invalid", async () => {
+    const vault = createMockVault({ "mcp/not-a-url": "fallback" });
+    const source = new VaultCredentialSource(vault);
+
+    const cred = await source.getCredential({ serverUrl: "not-a-url" });
+    expect(cred).toBe("fallback");
+  });
+
+  it("propagates vault errors (fail-closed)", async () => {
+    const vault: VaultClient = {
+      async get(_key: string) {
+        throw new Error("vault sealed");
+      },
+    };
+    const source = new VaultCredentialSource(vault);
+
+    await expect(source.getCredential({ serverUrl: "https://example.com" })).rejects.toThrow(
+      "vault sealed",
+    );
+  });
+
+  it("works end-to-end with McpClientAdapter via custom fetch", async () => {
+    const stubFetch = vi.fn().mockResolvedValue(new Response("ok"));
+    vi.stubGlobal("fetch", stubFetch);
+
+    const vault = createMockVault({ "mcp/example.com": "vault-e2e-token" });
+    const source = new VaultCredentialSource(vault);
+    const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
+    await adapter.connect();
+
+    const customFetch = getTransportFetch()!;
+    expect(customFetch).toBeTypeOf("function");
+
+    await customFetch("https://example.com/mcp", { method: "POST", body: "{}" });
+    const headers = new Headers((stubFetch.mock.calls[0]![1] as RequestInit).headers);
+    expect(headers.get("Authorization")).toBe("Bearer vault-e2e-token");
 
     vi.unstubAllGlobals();
   });

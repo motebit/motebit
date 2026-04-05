@@ -56,6 +56,7 @@ describe("StripeSettlementRail", () => {
   it("has correct railType and name", () => {
     expect(rail.railType).toBe("fiat");
     expect(rail.name).toBe("stripe");
+    expect(rail.supportsDeposit).toBe(true);
   });
 
   describe("isAvailable", () => {
