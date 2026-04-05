@@ -92,6 +92,7 @@ import {
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { startBatchAnchorLoop } from "./anchoring.js";
+import { startDepositDetector } from "./deposit-detector.js";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
 import { registerA2ARoutes } from "./a2a-bridge.js";
@@ -798,6 +799,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getEmergencyFreeze(),
   );
 
+  // --- Deposit detector (scans onchain Transfer events for agent wallets) ---
+  const depositDetectorChain = directAssetConfig?.chain ?? x402Config.network;
+  const depositDetectorInterval = startDepositDetector({
+    db: moteDb.db,
+    chain: depositDetectorChain,
+  });
+
   // --- Task routes (submission, polling, receipt settlement) ---
   await registerTaskRoutes({
     app,
@@ -894,6 +902,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(heartbeatInterval);
     clearInterval(settlementRetryInterval);
     clearInterval(batchAnchorInterval);
+    clearInterval(depositDetectorInterval);
     moteDb.close();
   }
 
