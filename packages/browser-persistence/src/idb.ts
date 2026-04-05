@@ -144,8 +144,13 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   });
 }
 
-/** Promise wrapper for IDBRequest. */
+/** Promise wrapper for IDBRequest. Handles sync completion in headless browsers. */
 export function idbRequest<T>(req: IDBRequest<T>): Promise<T> {
+  // If the request already completed synchronously, resolve immediately.
+  // This can happen in headless Chromium on empty/cached databases.
+  if (req.readyState === "done") {
+    return req.error ? Promise.reject(req.error) : Promise.resolve(req.result);
+  }
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error ?? new Error("IDB request failed"));
@@ -154,6 +159,7 @@ export function idbRequest<T>(req: IDBRequest<T>): Promise<T> {
 
 /** Promise that resolves on transaction complete, rejects on error. */
 export function idbTransaction(tx: IDBTransaction): Promise<void> {
+  if (tx.error) return Promise.reject(tx.error);
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error ?? new Error("Transaction error"));
