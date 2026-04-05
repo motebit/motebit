@@ -42,6 +42,8 @@ export interface X402RailConfig {
   network: string;
   /** Relay operator's wallet address — receives platform fees. */
   payToAddress: string;
+  /** Callback to persist proof. Injected by relay — the rail does not own storage. */
+  onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 }
 
 export class X402SettlementRail implements SettlementRail {
@@ -52,11 +54,13 @@ export class X402SettlementRail implements SettlementRail {
   private readonly facilitator: X402FacilitatorClient;
   readonly network: string;
   readonly payToAddress: string;
+  private readonly onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 
   constructor(config: X402RailConfig) {
     this.facilitator = config.facilitatorClient;
     this.network = config.network;
     this.payToAddress = config.payToAddress;
+    this.onProofAttached = config.onProofAttached;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -152,7 +156,7 @@ export class X402SettlementRail implements SettlementRail {
       network: proof.network,
       railType: proof.railType,
     });
-    // Storage is handled by the relay's ledger — this is the boundary notification.
+    this.onProofAttached?.(settlementId, proof);
     return Promise.resolve();
   }
 }

@@ -1083,7 +1083,11 @@ describe("Virtual Accounts", () => {
     await relay.app.request(`/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/complete`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({ payout_reference: "pay_ref_1" }),
+      body: JSON.stringify({
+        payout_reference: "pay_ref_1",
+        rail: "x402",
+        network: "eip155:84532",
+      }),
     });
 
     const res = await relay.app.request("/api/v1/admin/reconciliation", {
@@ -1143,6 +1147,82 @@ describe("Virtual Accounts", () => {
     const body = (await res.json()) as { consistent: boolean; errors: string[] };
     expect(body.consistent).toBe(false);
     expect(body.errors.some((e) => e.includes("no matching debit transaction"))).toBe(true);
+  });
+
+  it("reconciliation flags completed withdrawal without settlement proof", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 50);
+
+    // Request and complete a withdrawal WITHOUT specifying a rail
+    // (manual off-rail payout — no proof persisted)
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ amount: 20 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    await relay.app.request(`/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ payout_reference: "manual_transfer_ref" }),
+    });
+
+    const res = await relay.app.request("/api/v1/admin/reconciliation", {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { consistent: boolean; errors: string[] };
+    // Should flag the withdrawal as having payout_reference but no settlement proof
+    expect(body.consistent).toBe(false);
+    expect(body.errors.some((e) => e.includes("no settlement proof"))).toBe(true);
+  });
+
+  it("reconciliation passes when withdrawal completed with rail proof", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 50);
+
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ amount: 15 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    // Complete WITH rail specified — proof should be persisted
+    await relay.app.request(`/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        payout_reference: "0xabc123",
+        rail: "x402",
+        network: "eip155:84532",
+      }),
+    });
+
+    const res = await relay.app.request("/api/v1/admin/reconciliation", {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { consistent: boolean; errors: string[] };
+    // No proof-related errors — the rail persisted the proof
+    expect(body.errors.filter((e) => e.includes("settlement proof"))).toHaveLength(0);
   });
 
   it("reconciliation requires admin auth", async () => {

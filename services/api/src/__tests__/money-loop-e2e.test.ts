@@ -210,7 +210,11 @@ describe("Money Loop E2E", () => {
       {
         method: "POST",
         headers: JSON_AUTH,
-        body: JSON.stringify({ payout_reference: "stripe_tr_abc123" }),
+        body: JSON.stringify({
+          payout_reference: "stripe_tr_abc123",
+          rail: "x402",
+          network: "eip155:84532",
+        }),
       },
     );
     expect(completeRes.status).toBe(200);

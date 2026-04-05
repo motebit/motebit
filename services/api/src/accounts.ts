@@ -666,5 +666,95 @@ export function reconcileLedger(db: DatabaseDriver): ReconciliationResult {
     );
   }
 
+  // 6. Every completed withdrawal with a payout_reference should have a settlement proof
+  const completedWithoutProof = db
+    .prepare(
+      `SELECT w.withdrawal_id, w.motebit_id, w.payout_reference
+       FROM relay_withdrawals w
+       LEFT JOIN relay_settlement_proofs p ON p.settlement_id = w.withdrawal_id
+       WHERE w.status = 'completed' AND w.payout_reference IS NOT NULL AND p.settlement_id IS NULL`,
+    )
+    .all() as Array<{ withdrawal_id: string; motebit_id: string; payout_reference: string }>;
+  for (const w of completedWithoutProof) {
+    // Soft warning — older withdrawals completed before proof persistence won't have proofs.
+    // This becomes a hard error once all paths go through rails.
+    errors.push(
+      `Completed withdrawal ${w.withdrawal_id} (agent ${w.motebit_id}) has payout_reference but no settlement proof`,
+    );
+  }
+
   return { consistent: errors.length === 0, errors };
+}
+
+// ── Settlement proof storage ────────────────────────────────────────────
+
+/** Create settlement proof table. Idempotent. */
+export function createProofTable(db: DatabaseDriver): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS relay_settlement_proofs (
+      settlement_id TEXT NOT NULL,
+      reference TEXT NOT NULL,
+      rail_type TEXT NOT NULL,
+      rail_name TEXT NOT NULL,
+      network TEXT,
+      confirmed_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (settlement_id, reference)
+    );
+    CREATE INDEX IF NOT EXISTS idx_settlement_proofs_rail
+      ON relay_settlement_proofs (rail_name, created_at DESC);
+  `);
+}
+
+/** Store a settlement proof. Idempotent — duplicate (settlement_id, reference) is ignored. */
+export function storeSettlementProof(
+  db: DatabaseDriver,
+  settlementId: string,
+  proof: {
+    reference: string;
+    railType: string;
+    network?: string;
+    confirmedAt: number;
+  },
+  railName: string,
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO relay_settlement_proofs
+     (settlement_id, reference, rail_type, rail_name, network, confirmed_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    settlementId,
+    proof.reference,
+    proof.railType,
+    railName,
+    proof.network ?? null,
+    proof.confirmedAt,
+    Date.now(),
+  );
+}
+
+/** Query proofs for a settlement ID. */
+export function getSettlementProofs(
+  db: DatabaseDriver,
+  settlementId: string,
+): Array<{
+  settlement_id: string;
+  reference: string;
+  rail_type: string;
+  rail_name: string;
+  network: string | null;
+  confirmed_at: number;
+  created_at: number;
+}> {
+  return db
+    .prepare("SELECT * FROM relay_settlement_proofs WHERE settlement_id = ?")
+    .all(settlementId) as Array<{
+    settlement_id: string;
+    reference: string;
+    rail_type: string;
+    rail_name: string;
+    network: string | null;
+    confirmed_at: number;
+    created_at: number;
+  }>;
 }

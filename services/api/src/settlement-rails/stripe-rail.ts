@@ -26,6 +26,8 @@ export interface StripeRailConfig {
   currency?: string;
   /** Base URL for success/cancel redirects (e.g., "https://relay.motebit.com"). */
   baseUrl?: string;
+  /** Callback to persist proof. Injected by relay — the rail does not own storage. */
+  onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 }
 
 export class StripeSettlementRail implements DepositableSettlementRail {
@@ -37,11 +39,13 @@ export class StripeSettlementRail implements DepositableSettlementRail {
   readonly webhookSecret: string;
   private readonly currency: string;
   private readonly baseUrl: string | undefined;
+  private readonly onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 
   constructor(config: StripeRailConfig) {
     this.stripe = config.stripeClient;
     this.webhookSecret = config.webhookSecret;
     this.currency = config.currency ?? "usd";
+    this.onProofAttached = config.onProofAttached;
     this.baseUrl = config.baseUrl;
   }
 
@@ -149,8 +153,7 @@ export class StripeSettlementRail implements DepositableSettlementRail {
       reference: proof.reference,
       railType: proof.railType,
     });
-    // Storage is handled by the relay's ledger — this is the boundary notification.
-    // Future: persist to a settlement_proofs table for audit.
+    this.onProofAttached?.(settlementId, proof);
     return Promise.resolve();
   }
 

@@ -97,7 +97,13 @@ import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscripti
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { createTaskRouter } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
-import { createAccountTables, createWithdrawalTables, creditAccount } from "./accounts.js";
+import {
+  createAccountTables,
+  createWithdrawalTables,
+  createProofTable,
+  creditAccount,
+  storeSettlementProof,
+} from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import { registerStateExportRoutes } from "./state-export.js";
 import { registerTrustGraphRoutes } from "./trust-graph.js";
@@ -220,14 +226,36 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
 
-  // --- Settlement rail registry ---
+  const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
+  const eventStore = new EventStore(moteDb.eventStore);
+  const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
+
+  // --- Tables from extracted modules (federation must precede relay schema for ALTER TABLE) ---
+  createFederationTables(moteDb.db);
+  createPairingTables(moteDb.db);
+  createDataSyncTables(moteDb.db);
+  createAccountTables(moteDb.db);
+  createWithdrawalTables(moteDb.db);
+  createProofTable(moteDb.db);
+  createIdempotencyTable(moteDb.db);
+
+  // --- Settlement rail registry (after DB + tables so proofs can persist) ---
   const railRegistry = new SettlementRailRegistry();
+  const proofCallback =
+    (railName: string) =>
+    (
+      settlementId: string,
+      proof: { reference: string; railType: string; network?: string; confirmedAt: number },
+    ) =>
+      storeSettlementProof(moteDb.db, settlementId, proof, railName);
+
   if (stripeClient && stripeConfig) {
     railRegistry.register(
       new StripeSettlementRail({
         stripeClient,
         webhookSecret: stripeConfig.webhookSecret,
         currency: stripeConfig.currency,
+        onProofAttached: proofCallback("stripe"),
       }),
     );
   }
@@ -242,29 +270,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           facilitatorClient,
           network: x402Config.network,
           payToAddress: x402Config.payToAddress,
+          onProofAttached: proofCallback("x402"),
         }),
       );
     } catch (err) {
-      // x402 packages may not be available in all environments.
-      // Fail open at startup — the rail simply won't be registered.
       console.warn(
         "x402 settlement rail not registered:",
         err instanceof Error ? err.message : String(err),
       );
     }
   }
-
-  const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
-  const eventStore = new EventStore(moteDb.eventStore);
-  const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
-
-  // --- Tables from extracted modules (federation must precede relay schema for ALTER TABLE) ---
-  createFederationTables(moteDb.db);
-  createPairingTables(moteDb.db);
-  createDataSyncTables(moteDb.db);
-  createAccountTables(moteDb.db);
-  createWithdrawalTables(moteDb.db);
-  createIdempotencyTable(moteDb.db);
   createSubscriptionTables(moteDb.db);
 
   // --- Schema: relay-owned tables, migrations, startup cleanup ---

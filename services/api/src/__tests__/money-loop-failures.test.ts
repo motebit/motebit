@@ -466,7 +466,11 @@ describe("Money Loop Failure Injection", () => {
       {
         method: "POST",
         headers: JSON_AUTH,
-        body: JSON.stringify({ payout_reference: "stripe_tr_first" }),
+        body: JSON.stringify({
+          payout_reference: "stripe_tr_first",
+          rail: "x402",
+          network: "eip155:84532",
+        }),
       },
     );
     expect(completeRes.status).toBe(200);
@@ -515,7 +519,11 @@ describe("Money Loop Failure Injection", () => {
       {
         method: "POST",
         headers: JSON_AUTH,
-        body: JSON.stringify({ payout_reference: "stripe_tr_done" }),
+        body: JSON.stringify({
+          payout_reference: "stripe_tr_done",
+          rail: "x402",
+          network: "eip155:84532",
+        }),
       },
     );
     expect(completeRes.status).toBe(200);

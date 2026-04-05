@@ -165,6 +165,27 @@ describe("StripeSettlementRail", () => {
         }),
       ).resolves.toBeUndefined();
     });
+
+    it("calls onProofAttached callback when provided", async () => {
+      const onProof = vi.fn();
+      const railWithCallback = new StripeSettlementRail({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stripeClient: mockStripe as any,
+        webhookSecret: "whsec_test_secret",
+        onProofAttached: onProof,
+      });
+
+      const proof = {
+        reference: "pi_test_abc",
+        railType: "fiat" as const,
+        network: "stripe",
+        confirmedAt: Date.now(),
+      };
+      await railWithCallback.attachProof("settle-stripe-001", proof);
+
+      expect(onProof).toHaveBeenCalledOnce();
+      expect(onProof).toHaveBeenCalledWith("settle-stripe-001", proof);
+    });
   });
 
   describe("constructWebhookEvent", () => {

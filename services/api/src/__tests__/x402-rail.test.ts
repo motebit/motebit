@@ -173,6 +173,38 @@ describe("X402SettlementRail", () => {
         }),
       ).resolves.toBeUndefined();
     });
+
+    it("calls onProofAttached callback when provided", async () => {
+      const onProof = vi.fn();
+      const railWithCallback = new X402SettlementRail({
+        facilitatorClient: createMockFacilitator(),
+        network: "eip155:84532",
+        payToAddress: "0xRelay",
+        onProofAttached: onProof,
+      });
+
+      const proof = {
+        reference: "0xdef456",
+        railType: "protocol" as const,
+        network: "eip155:84532",
+        confirmedAt: Date.now(),
+      };
+      await railWithCallback.attachProof("settle-002", proof);
+
+      expect(onProof).toHaveBeenCalledOnce();
+      expect(onProof).toHaveBeenCalledWith("settle-002", proof);
+    });
+
+    it("does not throw when onProofAttached is not provided", async () => {
+      // Default rail (no callback) — already tested above, but explicit
+      await expect(
+        rail.attachProof("settle-003", {
+          reference: "0x999",
+          railType: "protocol",
+          confirmedAt: Date.now(),
+        }),
+      ).resolves.toBeUndefined();
+    });
   });
 });
 
