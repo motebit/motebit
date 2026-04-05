@@ -118,10 +118,11 @@ async function main(): Promise<void> {
     };
     log("GitHub auth: OAuth (auto-refresh)");
   } else if (config.githubToken) {
-    resolveGithubToken = async () => config.githubToken;
+    const staticToken = config.githubToken;
+    resolveGithubToken = () => Promise.resolve(staticToken);
     log("GitHub auth: static token");
   } else {
-    resolveGithubToken = async () => undefined;
+    resolveGithubToken = () => Promise.resolve(undefined);
     log("GitHub auth: none (public rate limit)");
   }
 
