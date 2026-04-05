@@ -199,6 +199,8 @@ export interface SyncRelayConfig {
     sourceCurrency?: string;
     /** Bridge API base URL. Default: "https://api.bridge.xyz/v0". */
     baseUrl?: string;
+    /** Webhook public key (PEM) for signature verification. Omit to skip verification (dev only). */
+    webhookPublicKey?: string;
   };
 }
 
@@ -673,6 +675,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     stripeClient,
     stripeConfig: stripeConfig ?? null,
     railRegistry,
+    bridgeWebhookPublicKey: bridgeConfig?.webhookPublicKey,
   });
 
   // --- Agent routes (registration, discovery, capabilities, settlements, ledger) ---
@@ -946,6 +949,7 @@ if (process.env.VITEST != null) {
             sourcePaymentRail: process.env.BRIDGE_SOURCE_RAIL,
             sourceCurrency: process.env.BRIDGE_SOURCE_CURRENCY,
             baseUrl: process.env.BRIDGE_API_BASE_URL,
+            webhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY,
           }
         : undefined,
   });

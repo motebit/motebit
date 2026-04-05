@@ -6,6 +6,7 @@ import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { bytesToHex, hash as sha256Hash } from "@motebit/crypto";
+import { createVerify } from "node:crypto";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { persistFreeze } from "./freeze.js";
@@ -44,11 +45,21 @@ export interface BudgetDeps {
   stripeConfig: { secretKey: string; webhookSecret: string; currency?: string } | null;
   /** Settlement rail registry — holds configured rails by name. */
   railRegistry?: SettlementRailRegistry;
+  /** Bridge webhook public key (PEM) for signature verification. */
+  bridgeWebhookPublicKey?: string;
 }
 
 export function registerBudgetRoutes(deps: BudgetDeps): void {
-  const { app, moteDb, relayIdentity, freezeState, stripeClient, stripeConfig, railRegistry } =
-    deps;
+  const {
+    app,
+    moteDb,
+    relayIdentity,
+    freezeState,
+    stripeClient,
+    stripeConfig,
+    railRegistry,
+    bridgeWebhookPublicKey,
+  } = deps;
   const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
 
   // --- Deposit ---
@@ -742,25 +753,69 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   // --- Bridge webhook ---
   app.post("/api/v1/bridge/webhook", async (c) => {
     const correlationId = c.get("correlationId" as never) as string;
-    const body = await c.req.json<{
-      type?: string;
-      transfer_id?: string;
-      state?: string;
-      receipt?: {
-        source_tx_hash?: string;
-        destination_tx_hash?: string;
+
+    // Signature verification: RSA-SHA256 over "{timestamp}.{rawBody}"
+    // Header format: X-Webhook-Signature: t=<timestamp>,v0=<base64 signature>
+    const rawBody = await c.req.text();
+    if (bridgeWebhookPublicKey) {
+      const sigHeader = c.req.header("X-Webhook-Signature");
+      if (!sigHeader) {
+        logger.warn("bridge.webhook.missing_signature", { correlationId });
+        throw new HTTPException(400, { message: "Missing X-Webhook-Signature header" });
+      }
+
+      const parts = sigHeader.split(",");
+      const timestamp = parts.find((p) => p.startsWith("t="))?.slice(2);
+      const sig = parts.find((p) => p.startsWith("v0="))?.slice(3);
+
+      if (!timestamp || !sig) {
+        logger.warn("bridge.webhook.malformed_signature", { correlationId, sigHeader });
+        throw new HTTPException(400, { message: "Malformed X-Webhook-Signature header" });
+      }
+
+      // Replay protection: reject events older than 10 minutes
+      const age = Date.now() - Number(timestamp);
+      if (age > 600_000 || Number.isNaN(age)) {
+        logger.warn("bridge.webhook.stale_timestamp", { correlationId, timestamp, age });
+        throw new HTTPException(400, { message: "Webhook timestamp too old" });
+      }
+
+      // RSA-SHA256 verification
+      const signedPayload = `${timestamp}.${rawBody}`;
+      const verifier = createVerify("RSA-SHA256");
+      verifier.update(signedPayload);
+      const valid = verifier.verify(bridgeWebhookPublicKey, sig, "base64");
+      if (!valid) {
+        logger.warn("bridge.webhook.invalid_signature", { correlationId });
+        throw new HTTPException(400, { message: "Invalid webhook signature" });
+      }
+    }
+
+    const body = JSON.parse(rawBody) as {
+      event_type?: string;
+      event_object_id?: string;
+      event_object_status?: string;
+      event_object?: {
+        id?: string;
+        state?: string;
+        receipt?: {
+          source_tx_hash?: string;
+          destination_tx_hash?: string;
+        };
+        destination?: {
+          payment_rail?: string;
+        };
       };
-      destination?: {
-        payment_rail?: string;
-      };
-    }>();
+    };
 
     // Only process transfer state changes that reach terminal success
-    if (body.state !== "payment_processed" || !body.transfer_id) {
+    const transferState = body.event_object?.state ?? body.event_object_status;
+    const transferId = body.event_object?.id ?? body.event_object_id;
+    if (transferState !== "payment_processed" || !transferId) {
       return c.json({ received: true, processed: false });
     }
 
-    const bridgeRef = `bridge:${body.transfer_id}`;
+    const bridgeRef = `bridge:${transferId}`;
 
     // Look up pending withdrawal by Bridge transfer reference
     const withdrawal = moteDb.db
@@ -780,15 +835,15 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     if (!withdrawal) {
       logger.info("bridge.webhook.no_matching_withdrawal", {
         correlationId,
-        transferId: body.transfer_id,
+        transferId,
       });
       return c.json({ received: true, processed: false });
     }
 
     // Auto-complete the withdrawal with signed receipt
     const completedAt = Date.now();
-    const txHash = body.receipt?.destination_tx_hash ?? body.transfer_id;
-    const network = body.destination?.payment_rail;
+    const txHash = body.event_object?.receipt?.destination_tx_hash ?? transferId;
+    const network = body.event_object?.destination?.payment_rail;
     const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
     const signature = await signWithdrawalReceipt(
       {
@@ -827,7 +882,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       logger.info("bridge.webhook.withdrawal_completed", {
         correlationId,
         withdrawalId: withdrawal.withdrawal_id,
-        transferId: body.transfer_id,
+        transferId,
         txHash,
         network,
       });
