@@ -112,6 +112,123 @@ export class VaultCredentialSource implements CredentialSource {
   }
 }
 
+// ── OAuth 2.0 credential source ─────────────────────────────────────────
+
+/** Token returned by the OAuth provider after initial grant or refresh. */
+export interface OAuthToken {
+  /** Bearer access token. */
+  accessToken: string;
+  /** Refresh token for obtaining new access tokens. Absent if grant doesn't support refresh. */
+  refreshToken?: string;
+  /** Absolute timestamp (ms since epoch) when the access token expires. */
+  expiresAt: number;
+}
+
+/**
+ * Adapter interface for OAuth 2.0 token acquisition and refresh.
+ * The provider is glucose — GitHub OAuth, Stripe Connect, generic OIDC.
+ * OAuthCredentialSource is the enzyme boundary.
+ */
+export interface OAuthTokenProvider {
+  /** Obtain an initial token (e.g., from stored refresh token or authorization code). */
+  getToken(): Promise<OAuthToken>;
+  /** Exchange a refresh token for a fresh access token. */
+  refresh(token: string): Promise<OAuthToken>;
+}
+
+/** Default refresh-ahead buffer: refresh when token expires within 60 seconds. */
+const OAUTH_REFRESH_AHEAD_MS = 60_000;
+
+/**
+ * OAuth 2.0 credential source with token lifecycle management.
+ *
+ * First CredentialSource with internal mutable state:
+ * - Caches the current access token
+ * - Refreshes ahead of expiry (configurable buffer)
+ * - Deduplicates concurrent refresh calls (single in-flight refresh)
+ * - Fail-closed: refresh errors propagate to callers
+ *
+ * The OAuthTokenProvider is injected — specific OAuth servers (GitHub, Stripe,
+ * generic OIDC) implement it. The source does not know about authorization
+ * endpoints, client IDs, or scopes. It manages the token lifecycle only.
+ */
+export class OAuthCredentialSource implements CredentialSource {
+  private provider: OAuthTokenProvider;
+  private refreshAheadMs: number;
+
+  private cachedToken: OAuthToken | null = null;
+  private inflightRefresh: Promise<OAuthToken> | null = null;
+
+  constructor(provider: OAuthTokenProvider, refreshAheadMs: number = OAUTH_REFRESH_AHEAD_MS) {
+    this.provider = provider;
+    this.refreshAheadMs = refreshAheadMs;
+  }
+
+  async getCredential(_request: CredentialRequest): Promise<string | null> {
+    const token = await this.getFreshToken();
+    return token.accessToken;
+  }
+
+  private async getFreshToken(): Promise<OAuthToken> {
+    // Fast path: cached token is still fresh
+    if (this.cachedToken && !this.isExpiringSoon(this.cachedToken)) {
+      return this.cachedToken;
+    }
+
+    // Refresh path: token is expired or expiring soon
+    if (this.cachedToken?.refreshToken) {
+      return this.refreshWithDedup(this.cachedToken.refreshToken);
+    }
+
+    // Initial acquisition: no cached token or no refresh token
+    return this.acquireWithDedup();
+  }
+
+  private isExpiringSoon(token: OAuthToken): boolean {
+    return Date.now() >= token.expiresAt - this.refreshAheadMs;
+  }
+
+  /**
+   * Deduplicate concurrent refresh calls. If a refresh is already in-flight,
+   * subsequent callers await the same promise instead of firing a second refresh.
+   */
+  private async refreshWithDedup(refreshToken: string): Promise<OAuthToken> {
+    if (this.inflightRefresh) {
+      return this.inflightRefresh;
+    }
+
+    this.inflightRefresh = this.provider
+      .refresh(refreshToken)
+      .then((token) => {
+        this.cachedToken = token;
+        return token;
+      })
+      .finally(() => {
+        this.inflightRefresh = null;
+      });
+
+    return this.inflightRefresh;
+  }
+
+  private async acquireWithDedup(): Promise<OAuthToken> {
+    if (this.inflightRefresh) {
+      return this.inflightRefresh;
+    }
+
+    this.inflightRefresh = this.provider
+      .getToken()
+      .then((token) => {
+        this.cachedToken = token;
+        return token;
+      })
+      .finally(() => {
+        this.inflightRefresh = null;
+      });
+
+    return this.inflightRefresh;
+  }
+}
+
 /** Extract a stable server identity from a URL for keyring key derivation.
  *  Includes port when non-standard (not 80/443) to avoid collisions. */
 function extractServerName(url: string): string {

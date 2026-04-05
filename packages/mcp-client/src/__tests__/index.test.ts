@@ -39,9 +39,10 @@ import {
   StaticCredentialSource,
   KeyringCredentialSource,
   VaultCredentialSource,
+  OAuthCredentialSource,
   ManifestPinningVerifier,
 } from "../index.js";
-import type { VaultClient } from "../index.js";
+import type { VaultClient, OAuthTokenProvider } from "../index.js";
 import type {
   CredentialSource,
   CredentialRequest,
@@ -1958,6 +1959,247 @@ describe("VaultCredentialSource", () => {
     await customFetch("https://example.com/mcp", { method: "POST", body: "{}" });
     const headers = new Headers((stubFetch.mock.calls[0]![1] as RequestInit).headers);
     expect(headers.get("Authorization")).toBe("Bearer vault-e2e-token");
+
+    vi.unstubAllGlobals();
+  });
+});
+
+// ============================================================
+// OAuthCredentialSource
+// ============================================================
+
+function createMockOAuthProvider(
+  initialToken?: import("../index.js").OAuthToken,
+  refreshedToken?: import("../index.js").OAuthToken,
+): OAuthTokenProvider & { getToken: ReturnType<typeof vi.fn>; refresh: ReturnType<typeof vi.fn> } {
+  return {
+    getToken: vi.fn().mockResolvedValue(
+      initialToken ?? {
+        accessToken: "initial-access-token",
+        refreshToken: "initial-refresh-token",
+        expiresAt: Date.now() + 3600_000, // 1 hour from now
+      },
+    ),
+    refresh: vi.fn().mockResolvedValue(
+      refreshedToken ?? {
+        accessToken: "refreshed-access-token",
+        refreshToken: "new-refresh-token",
+        expiresAt: Date.now() + 3600_000,
+      },
+    ),
+  };
+}
+
+describe("OAuthCredentialSource", () => {
+  it("acquires initial token on first call", async () => {
+    const provider = createMockOAuthProvider();
+    const source = new OAuthCredentialSource(provider);
+
+    const cred = await source.getCredential({ serverUrl: "https://api.example.com" });
+    expect(cred).toBe("initial-access-token");
+    expect(provider.getToken).toHaveBeenCalledOnce();
+    expect(provider.refresh).not.toHaveBeenCalled();
+  });
+
+  it("returns cached token on subsequent calls when fresh", async () => {
+    const provider = createMockOAuthProvider();
+    const source = new OAuthCredentialSource(provider);
+
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+
+    // Only one acquisition — token is cached
+    expect(provider.getToken).toHaveBeenCalledOnce();
+    expect(provider.refresh).not.toHaveBeenCalled();
+  });
+
+  it("refreshes when token is expired", async () => {
+    const provider = createMockOAuthProvider({
+      accessToken: "expired-token",
+      refreshToken: "my-refresh-token",
+      expiresAt: Date.now() - 1000, // already expired
+    });
+    const source = new OAuthCredentialSource(provider);
+
+    // First call acquires, but token is immediately expired
+    const cred = await source.getCredential({ serverUrl: "https://api.example.com" });
+    // Should have acquired, then on the same call detected expiry and refreshed
+    // Actually: getToken returns expired token, cachedToken is set, then
+    // next line checks isExpiringSoon — but getCredential calls getFreshToken once.
+    // Let me trace: cachedToken is null → acquireWithDedup → sets cachedToken (expired).
+    // Returns expired token's accessToken. Next call: cachedToken exists, isExpiringSoon=true,
+    // has refreshToken → refreshWithDedup.
+    expect(cred).toBe("expired-token"); // first call gets what provider gives
+
+    const cred2 = await source.getCredential({ serverUrl: "https://api.example.com" });
+    expect(cred2).toBe("refreshed-access-token");
+    expect(provider.refresh).toHaveBeenCalledWith("my-refresh-token");
+  });
+
+  it("refreshes ahead when token is within buffer of expiry", async () => {
+    const provider = createMockOAuthProvider({
+      accessToken: "almost-expired",
+      refreshToken: "refresh-me",
+      expiresAt: Date.now() + 30_000, // 30s left, within default 60s buffer
+    });
+    const source = new OAuthCredentialSource(provider);
+
+    // First call acquires
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+    // Second call: token is within refresh-ahead window
+    const cred = await source.getCredential({ serverUrl: "https://api.example.com" });
+    expect(cred).toBe("refreshed-access-token");
+    expect(provider.refresh).toHaveBeenCalledWith("refresh-me");
+  });
+
+  it("does not refresh when token has plenty of time", async () => {
+    const provider = createMockOAuthProvider({
+      accessToken: "fresh-token",
+      refreshToken: "unused-refresh",
+      expiresAt: Date.now() + 3600_000, // 1 hour
+    });
+    const source = new OAuthCredentialSource(provider);
+
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+
+    expect(provider.refresh).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates concurrent refresh calls", async () => {
+    let resolveRefresh!: (token: OAuthToken) => void;
+    const slowRefresh = new Promise<OAuthToken>((resolve) => {
+      resolveRefresh = resolve;
+    });
+
+    const provider = createMockOAuthProvider({
+      accessToken: "stale",
+      refreshToken: "concurrent-refresh",
+      expiresAt: Date.now() - 1000, // expired
+    });
+    provider.refresh.mockReturnValue(slowRefresh);
+    const source = new OAuthCredentialSource(provider);
+
+    // Acquire initial token
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+
+    // Fire 3 concurrent getCredential calls — all need refresh
+    const p1 = source.getCredential({ serverUrl: "https://api.example.com" });
+    const p2 = source.getCredential({ serverUrl: "https://api.example.com" });
+    const p3 = source.getCredential({ serverUrl: "https://api.example.com" });
+
+    // Resolve the single refresh
+    resolveRefresh({
+      accessToken: "concurrent-result",
+      refreshToken: "new-refresh",
+      expiresAt: Date.now() + 3600_000,
+    });
+
+    const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+    expect(r1).toBe("concurrent-result");
+    expect(r2).toBe("concurrent-result");
+    expect(r3).toBe("concurrent-result");
+
+    // Only one refresh call despite 3 concurrent callers
+    expect(provider.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("propagates refresh errors (fail-closed)", async () => {
+    const provider = createMockOAuthProvider({
+      accessToken: "expired",
+      refreshToken: "bad-refresh",
+      expiresAt: Date.now() - 1000,
+    });
+    provider.refresh.mockRejectedValue(new Error("refresh_token_revoked"));
+    const source = new OAuthCredentialSource(provider);
+
+    // Acquire initial (expired) token
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+
+    // Refresh fails — error propagates
+    await expect(source.getCredential({ serverUrl: "https://api.example.com" })).rejects.toThrow(
+      "refresh_token_revoked",
+    );
+  });
+
+  it("re-acquires after failed refresh clears inflight", async () => {
+    const provider = createMockOAuthProvider({
+      accessToken: "expired",
+      refreshToken: "bad-refresh",
+      expiresAt: Date.now() - 1000,
+    });
+    provider.refresh.mockRejectedValueOnce(new Error("temporary_error")).mockResolvedValueOnce({
+      accessToken: "recovered",
+      refreshToken: "new-refresh",
+      expiresAt: Date.now() + 3600_000,
+    });
+    const source = new OAuthCredentialSource(provider);
+
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+
+    // First refresh fails
+    await expect(source.getCredential({ serverUrl: "https://api.example.com" })).rejects.toThrow(
+      "temporary_error",
+    );
+
+    // Second attempt succeeds — inflight was cleared by finally()
+    const cred = await source.getCredential({ serverUrl: "https://api.example.com" });
+    expect(cred).toBe("recovered");
+  });
+
+  it("falls back to getToken when no refresh token available", async () => {
+    const provider = createMockOAuthProvider({
+      accessToken: "no-refresh",
+      // no refreshToken
+      expiresAt: Date.now() - 1000,
+    });
+    const source = new OAuthCredentialSource(provider);
+
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+
+    // Token expired, no refresh token → re-acquire via getToken
+    provider.getToken.mockResolvedValueOnce({
+      accessToken: "re-acquired",
+      expiresAt: Date.now() + 3600_000,
+    });
+    const cred = await source.getCredential({ serverUrl: "https://api.example.com" });
+    expect(cred).toBe("re-acquired");
+    expect(provider.getToken).toHaveBeenCalledTimes(2);
+    expect(provider.refresh).not.toHaveBeenCalled();
+  });
+
+  it("respects custom refresh-ahead buffer", async () => {
+    const provider = createMockOAuthProvider({
+      accessToken: "short-buffer",
+      refreshToken: "refresh-me",
+      expiresAt: Date.now() + 30_000, // 30s left
+    });
+    // 10s buffer — 30s remaining is NOT within buffer
+    const source = new OAuthCredentialSource(provider, 10_000);
+
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+    await source.getCredential({ serverUrl: "https://api.example.com" });
+
+    // Should NOT have refreshed — 30s > 10s buffer
+    expect(provider.refresh).not.toHaveBeenCalled();
+  });
+
+  it("works end-to-end with McpClientAdapter via custom fetch", async () => {
+    const stubFetch = vi.fn().mockResolvedValue(new Response("ok"));
+    vi.stubGlobal("fetch", stubFetch);
+
+    const provider = createMockOAuthProvider();
+    const source = new OAuthCredentialSource(provider);
+    const adapter = new McpClientAdapter(httpConfig({ credentialSource: source }));
+    await adapter.connect();
+
+    const customFetch = getTransportFetch()!;
+    expect(customFetch).toBeTypeOf("function");
+
+    await customFetch("https://api.example.com/mcp", { method: "POST", body: "{}" });
+    const headers = new Headers((stubFetch.mock.calls[0]![1] as RequestInit).headers);
+    expect(headers.get("Authorization")).toBe("Bearer initial-access-token");
 
     vi.unstubAllGlobals();
   });
