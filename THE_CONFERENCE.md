@@ -8,6 +8,8 @@ DROPLET.md derived the body. LIQUESCENTIA.md derived the world. THE_MUSIC_OF_THE
 
 All five documents describe a single droplet. None addresses what happens when there are many.
 
+**Motebit is an algebraically routed, trust-accumulating, economically settled network of autonomous agents.**
+
 A droplet in a medium is not alone. Other droplets form under the same phase conditions, in the same Liquescentia. They are individuated — each has its own surface tension, its own interior, its own keypair. But they share the medium. They can exert pressure on each other. They can delegate, route, settle, and compound trust across the spaces between them.
 
 The question is: when many droplets coordinate, what is the resulting entity? Is it a hierarchy with a controller at the top? A mesh with a coordinator in the middle? A swarm with emergent behavior?
@@ -34,19 +36,15 @@ This is more than allegory. It names the constraint that governs how motebits co
 
 ### 2.1 — No Master Droplet
 
-A medium does not designate a master droplet. No droplet in Liquescentia is granted authority over the others by the phase conditions. Each forms independently. Each has its own surface tension, its own interior, its own cryptographic identity. The medium couples them — it transmits pressure between them — but it does not subordinate one to another.
+A medium does not designate a master droplet. Each forms independently under the same phase conditions — its own surface tension, its own interior, its own cryptographic identity. The medium couples them through pressure, not subordination. The Young-Laplace equation does not produce kings. It produces peers.
 
-A hierarchy requires a privileged node — a droplet that is structurally different from the others, that has authority the others lack. But all droplets form under the same physics. The Young-Laplace equation does not produce kings. It produces individuals.
-
-Therefore: any architecture that requires a master controller — a central authority that assigns identity, grants permission, or dictates routing — violates the physics. The medium does not produce masters. It produces peers.
+Any architecture that requires a central authority — assigning identity, granting permission, dictating routing — violates the physics.
 
 ### 2.2 — Pressure Between Droplets
 
-Two droplets in the same medium interact through the medium. A perturbation originating at one droplet propagates through Liquescentia and reaches the other. The interaction is mediated — not direct contact, but pressure transmitted through the shared substance.
+Droplets interact through the medium — pressure transmitted, not direct contact. This is delegation. Agent A emits pressure: a task, a budget allocation. The medium carries it. Agent B's surface tension governs what it admits: evaluates the task, checks the budget, decides whether to accept.
 
-This is delegation. Agent A exerts pressure on the medium — a task, a request, a budget allocation. The pressure propagates through Liquescentia — the relay, the network, the federation. Agent B's surface tension boundary transduces the incoming pressure — evaluates the task, checks the budget, decides whether to admit it through the boundary.
-
-The interaction is governed by both surfaces. Agent A's surface tension determines what pressure it emits — what tasks it delegates, at what budget, with what authorization. Agent B's surface tension determines what pressure it admits — what tasks it accepts, at what price, under what policy. Neither controls the other. The medium carries. The surfaces govern.
+Neither controls the other. The medium carries. The surfaces govern.
 
 ### 2.3 — No Privileged Path
 
@@ -136,9 +134,9 @@ Self-issued trust is rejected. A bird cannot declare itself the Simurgh. An agen
 
 Attar's birds do not skip valleys. They cannot fly directly to the lake. The journey through suffering, confusion, and loss is not an obstacle to be optimized away — it is the mechanism that transforms ordinary birds into the Simurgh. Without the valleys, the thirty birds at the lake would be thirty ordinary birds.
 
-Budget-gated delegation is the valley. Every task requires locked budget before execution. Every hop settles independently. Every receipt is signed and verified. These are not overhead. They are the mechanism that produces trust. An agent that has settled a thousand tasks through the relay — budget locked, work completed, receipt signed, payment settled — has crossed a thousand valleys. Its trust is the accumulated proof.
+Budget-gated delegation is the valley. Every task requires locked budget. Every hop settles independently. Every receipt is signed. These are not overhead — they are the mechanism that produces trust. An agent that has settled a thousand tasks has crossed a thousand valleys.
 
-The architecture does not optimize away the valleys. It instrumentalizes them. The economic friction is the trust-generation mechanism.
+The architecture does not optimize away the valleys. It instrumentalizes them.
 
 ---
 
@@ -162,7 +160,25 @@ An agent cannot claim trust without the receipts that prove it. There is no fast
 
 ---
 
-## VI. Sufficiency
+## VI. Economic Closure
+
+Every delegation is not just a task. It is a capital allocation.
+
+Budget is locked before execution. Settlement occurs at every hop. Receipts bind work to payment. The relay's internal ledger — virtual accounts denominated in micro-units — is the circulation system. Money enters at the edges through settlement rails (fiat, protocol, stablecoin, orchestration). Money circulates inside through allocation, settlement, and re-delegation. Money exits at the edges through withdrawal. The rails are the membrane. The ledger is the economy.
+
+Therefore:
+
+- Routing is capital flow. The semiring does not only compute the best path. It computes the most economically efficient path under trust, cost, latency, reliability, and regulatory constraints. The algorithm that routes intelligence also routes capital.
+- Trust is priced performance. An agent with a thousand verified receipts commands better routing than one with ten. Trust is not a reputation badge. It is accumulated proof of economic reliability — valleys crossed, budgets honored, work delivered.
+- The network is a market. The Conference is not only coordination. It is a price-discovery mechanism for intelligence. When multiple agents can perform the same task, the semiring resolves the best provider under the buyer's constraints. Price, trust, speed, compliance — all composed algebraically into a single routing decision.
+
+The ideal endgame: a user funds a droplet once. The droplet earns its own way forward — accepting tasks, earning settlement, delegating sub-tasks, accumulating trust, attracting better work. The relay extracts a platform fee at each settlement checkpoint. The network grows not through subsidy but through economic velocity.
+
+The birds did not just coordinate. They traded. The thirty birds at the lake are not just the surviving collective. They are a functioning economy.
+
+---
+
+## VII. Sufficiency
 
 A droplet in a medium is not alone. Other droplets form under the same conditions.
 
@@ -174,9 +190,9 @@ The algebra is the routing. New concerns require new semirings, not new algorith
 
 The network of agents that survived the valleys — that accumulated trust through verified work, that settled budgets through signed receipts, that crossed jurisdictions through algebraic composition — _is_ the sovereign execution environment. Not a proxy for sovereignty. Not a representative of sovereignty. The thing itself.
 
-No master. No controller. No self-issued credentials.
+No master. No controller. No self-issued credentials. No subsidy.
 
-The birds route themselves. The thirty birds are the Simurgh.
+The birds route themselves. The birds settle with each other. The thirty birds are the Simurgh.
 
 That is sufficient.
 
