@@ -20,6 +20,7 @@
     "@anthropic-ai/sdk": "^0.52.0",
     "@motebit/crypto": "workspace:*",
     "@motebit/identity-file": "workspace:*",
+    "@motebit/mcp-client": "workspace:^",
     "@motebit/mcp-server": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
     "@motebit/persistence": "workspace:*",

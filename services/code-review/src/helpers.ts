@@ -20,5 +20,9 @@ export function loadConfig() {
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
     githubToken: process.env["GITHUB_TOKEN"],
+    /** GitHub OAuth — takes precedence over static GITHUB_TOKEN. */
+    githubOAuthClientId: process.env["GITHUB_OAUTH_CLIENT_ID"],
+    githubOAuthClientSecret: process.env["GITHUB_OAUTH_CLIENT_SECRET"],
+    githubOAuthRefreshToken: process.env["GITHUB_OAUTH_REFRESH_TOKEN"],
   };
 }

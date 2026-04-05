@@ -27,6 +27,7 @@ import { embedText } from "@motebit/memory-graph";
 import { loadConfig, fromHex } from "./helpers.js";
 import { parsePrReference, fetchPullRequest } from "./github.js";
 import { reviewPullRequest } from "./review.js";
+import { OAuthCredentialSource, GitHubOAuthTokenProvider } from "@motebit/mcp-client";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -50,7 +51,10 @@ const reviewPrDefinition: ToolDefinition = {
   riskHint: { risk: 1 }, // R1_DRAFT — network read, no side effects
 };
 
-function createReviewPrHandler(anthropicApiKey: string, githubToken?: string): ToolHandler {
+function createReviewPrHandler(
+  anthropicApiKey: string,
+  resolveToken: () => Promise<string | undefined>,
+): ToolHandler {
   return async (args: Record<string, unknown>) => {
     const owner = args["owner"] as string;
     const repo = args["repo"] as string;
@@ -61,7 +65,8 @@ function createReviewPrHandler(anthropicApiKey: string, githubToken?: string): T
     }
 
     try {
-      const pr = await fetchPullRequest(owner, repo, prNumber, githubToken);
+      const token = await resolveToken();
+      const pr = await fetchPullRequest(owner, repo, prNumber, token);
       log(
         `fetched PR ${owner}/${repo}#${prNumber}: "${pr.title}" (${pr.changed_files} files, +${pr.additions} -${pr.deletions})`,
       );
@@ -93,6 +98,33 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // GitHub token resolver: OAuth (auto-refresh) takes precedence over static token.
+  let resolveGithubToken: () => Promise<string | undefined>;
+  if (
+    config.githubOAuthClientId &&
+    config.githubOAuthClientSecret &&
+    config.githubOAuthRefreshToken
+  ) {
+    const oauthSource = new OAuthCredentialSource(
+      new GitHubOAuthTokenProvider({
+        clientId: config.githubOAuthClientId,
+        clientSecret: config.githubOAuthClientSecret,
+        initialRefreshToken: config.githubOAuthRefreshToken,
+      }),
+    );
+    resolveGithubToken = async () => {
+      const token = await oauthSource.getCredential({ serverUrl: "https://api.github.com" });
+      return token ?? undefined;
+    };
+    log("GitHub auth: OAuth (auto-refresh)");
+  } else if (config.githubToken) {
+    resolveGithubToken = async () => config.githubToken;
+    log("GitHub auth: static token");
+  } else {
+    resolveGithubToken = async () => undefined;
+    log("GitHub auth: none (public rate limit)");
+  }
+
   // 1. Load and verify identity
   const identityPath = path.resolve(config.identityPath);
   if (!fs.existsSync(identityPath)) {
@@ -116,7 +148,7 @@ async function main(): Promise<void> {
   const registry = new InMemoryToolRegistry();
   registry.register(
     reviewPrDefinition,
-    createReviewPrHandler(config.anthropicApiKey, config.githubToken),
+    createReviewPrHandler(config.anthropicApiKey, resolveGithubToken),
   );
 
   // 3. Open database + create runtime (no AI provider — LLM used directly in tool handler)
@@ -191,12 +223,8 @@ async function main(): Promise<void> {
         };
       } else {
         try {
-          const pr = await fetchPullRequest(
-            prRef.owner,
-            prRef.repo,
-            prRef.number,
-            config.githubToken,
-          );
+          const token = await resolveGithubToken();
+          const pr = await fetchPullRequest(prRef.owner, prRef.repo, prRef.number, token);
           log(
             `PR ${prRef.owner}/${prRef.repo}#${prRef.number}: "${pr.title}" (${pr.changed_files} files)`,
           );
