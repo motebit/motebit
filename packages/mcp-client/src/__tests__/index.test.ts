@@ -42,7 +42,7 @@ import {
   OAuthCredentialSource,
   ManifestPinningVerifier,
 } from "../index.js";
-import type { VaultClient, OAuthTokenProvider } from "../index.js";
+import type { VaultClient, OAuthTokenProvider, OAuthToken } from "../index.js";
 import type {
   CredentialSource,
   CredentialRequest,

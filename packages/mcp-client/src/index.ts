@@ -26,6 +26,8 @@ export {
   discoverMotebit,
   discoverViaRelay,
 } from "./discovery.js";
+export { GitHubOAuthTokenProvider } from "./github-oauth.js";
+export type { GitHubOAuthConfig } from "./github-oauth.js";
 // TlsCertificateVerifier is Node-only (uses node:tls). Not re-exported from barrel
 // to avoid pulling node:tls into browser bundles. Import from subpath instead:
 //   import { TlsCertificateVerifier } from "@motebit/mcp-client/tls-verifier";
