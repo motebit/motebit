@@ -21,6 +21,19 @@ const logger = createLogger({ service: "privy-wallet" });
 /** ERC-20 transfer(address,uint256) function selector: keccak256("transfer(address,uint256)").slice(0,4) */
 const ERC20_TRANSFER_SELECTOR = "0xa9059cbb";
 
+/** ERC-20 balanceOf(address) function selector: keccak256("balanceOf(address)").slice(0,4) */
+const ERC20_BALANCE_OF_SELECTOR = "0x70a08231";
+
+/** Public RPC endpoints by CAIP-2 chain ID. */
+const DEFAULT_RPC_URLS: Record<string, string> = {
+  "eip155:1": "https://eth.llamarpc.com",
+  "eip155:8453": "https://mainnet.base.org",
+  "eip155:84532": "https://sepolia.base.org",
+  "eip155:10": "https://mainnet.optimism.io",
+  "eip155:137": "https://polygon-rpc.com",
+  "eip155:42161": "https://arb1.arbitrum.io/rpc",
+};
+
 /** Known USDC contract addresses by CAIP-2 chain ID. */
 const USDC_CONTRACTS: Record<string, string> = {
   "eip155:1": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // Ethereum mainnet
@@ -66,6 +79,42 @@ export class InMemoryWalletStore implements WalletStore {
 
 // --- Provider ---
 
+/**
+ * Query an ERC-20 balanceOf via JSON-RPC eth_call.
+ * Returns the token balance as bigint, or null if the call fails.
+ */
+async function queryErc20Balance(
+  rpcUrl: string,
+  contractAddress: string,
+  walletAddress: string,
+  fetchFn: typeof globalThis.fetch = globalThis.fetch,
+): Promise<bigint | null> {
+  const addressHex = walletAddress.slice(2).toLowerCase().padStart(64, "0");
+  const calldata = `${ERC20_BALANCE_OF_SELECTOR}${addressHex}`;
+
+  try {
+    const res = await fetchFn(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_call",
+        params: [{ to: contractAddress, data: calldata }, "latest"],
+      }),
+    });
+
+    if (!res.ok) return null;
+    const json = (await res.json()) as { result?: string; error?: unknown };
+    if (!json.result || json.error) return null;
+
+    // Result is hex-encoded uint256
+    return BigInt(json.result);
+  } catch {
+    return null;
+  }
+}
+
 export interface PrivyWalletProviderConfig {
   /** Privy App ID. */
   appId: string;
@@ -73,11 +122,17 @@ export interface PrivyWalletProviderConfig {
   appSecret: string;
   /** Persistent wallet store. Default: in-memory (lost on restart). */
   walletStore?: WalletStore;
+  /** Custom RPC URLs by CAIP-2 chain ID. Merged with defaults. */
+  rpcUrls?: Record<string, string>;
+  /** Injected fetch for testability. Default: globalThis.fetch. */
+  fetch?: typeof globalThis.fetch;
 }
 
 export class PrivyWalletProvider implements WalletProvider {
   private readonly privy: PrivyClient;
   private readonly store: WalletStore;
+  private readonly rpcUrls: Record<string, string>;
+  private readonly _fetch: typeof globalThis.fetch;
   /** Runtime cache: agentId → { id, address }. Populated from store on first access. */
   private readonly walletCache = new Map<string, { id: string; address: string }>();
 
@@ -87,6 +142,8 @@ export class PrivyWalletProvider implements WalletProvider {
       appSecret: config.appSecret,
     });
     this.store = config.walletStore ?? new InMemoryWalletStore();
+    this.rpcUrls = { ...DEFAULT_RPC_URLS, ...config.rpcUrls };
+    this._fetch = config.fetch ?? globalThis.fetch;
   }
 
   async getAddress(agentId: string, _chain: string): Promise<string> {
@@ -95,17 +152,28 @@ export class PrivyWalletProvider implements WalletProvider {
   }
 
   /**
-   * Get token balance for an agent's wallet.
-   *
-   * Privy's Node SDK doesn't expose a direct balance query.
-   * The relay's virtual account ledger is the authoritative source for
-   * whether a withdrawal is permitted — the onchain balance is a
-   * secondary safety check. For launch, trust the ledger.
-   *
-   * TODO: Wire RPC provider (Alchemy/Infura) for onchain balance verification.
+   * Get ERC-20 token balance for an agent's wallet via JSON-RPC eth_call.
+   * Falls back to MAX_SAFE_INTEGER if the RPC call fails (fail-open for balance
+   * check — the onchain transaction will revert if insufficient, which is safe).
    */
-  getBalance(_agentId: string, _chain: string, _asset: string): Promise<bigint> {
-    return Promise.resolve(BigInt(Number.MAX_SAFE_INTEGER));
+  async getBalance(agentId: string, chain: string, asset: string): Promise<bigint> {
+    const wallet = await this.getOrCreateWallet(agentId);
+    const contractAddress = asset.toUpperCase() === "USDC" ? USDC_CONTRACTS[chain] : undefined;
+    const rpcUrl = this.rpcUrls[chain];
+
+    if (!contractAddress || !rpcUrl) {
+      // Unknown asset or chain — trust the ledger
+      return BigInt(Number.MAX_SAFE_INTEGER);
+    }
+
+    const balance = await queryErc20Balance(rpcUrl, contractAddress, wallet.address, this._fetch);
+    if (balance === null) {
+      // RPC failed — fail-open, trust the ledger. The onchain tx will revert if short.
+      logger.warn("privy.balance.rpc_failed", { agentId, chain, asset });
+      return BigInt(Number.MAX_SAFE_INTEGER);
+    }
+
+    return balance;
   }
 
   async sendTransfer(params: {
@@ -208,4 +276,4 @@ export class PrivyWalletProvider implements WalletProvider {
 }
 
 // Export for testing
-export { encodeErc20Transfer, USDC_CONTRACTS };
+export { encodeErc20Transfer, queryErc20Balance, USDC_CONTRACTS, DEFAULT_RPC_URLS };

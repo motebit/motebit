@@ -25,8 +25,13 @@ vi.mock("@privy-io/node", () => ({
 }));
 
 // Import after mock is set up
-const { PrivyWalletProvider, encodeErc20Transfer, USDC_CONTRACTS, InMemoryWalletStore } =
-  await import("../settlement-rails/privy-wallet-provider.js");
+const {
+  PrivyWalletProvider,
+  encodeErc20Transfer,
+  queryErc20Balance,
+  USDC_CONTRACTS,
+  InMemoryWalletStore,
+} = await import("../settlement-rails/privy-wallet-provider.js");
 
 describe("PrivyWalletProvider", () => {
   let provider: WalletProvider;
@@ -91,8 +96,50 @@ describe("PrivyWalletProvider", () => {
   });
 
   describe("getBalance", () => {
-    it("returns max safe integer (ledger is source of truth)", async () => {
-      const balance = await provider.getBalance("agent-001", "eip155:8453", "USDC");
+    it("queries ERC-20 balance via RPC when chain and asset are known", async () => {
+      // Mock fetch for RPC call — return 100 USDC (100 * 10^6 = 0x5F5E100)
+      const mockRpcFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          jsonrpc: "2.0",
+          id: 1,
+          result: "0x0000000000000000000000000000000000000000000000000000000005f5e100",
+        }),
+      });
+
+      const rpcProvider = new PrivyWalletProvider({
+        appId: "test-app-id",
+        appSecret: "test-app-secret",
+        fetch: mockRpcFetch as unknown as typeof globalThis.fetch,
+      });
+
+      const balance = await rpcProvider.getBalance("agent-001", "eip155:8453", "USDC");
+      expect(balance).toBe(BigInt(100_000_000)); // 100 USDC in 6 decimals
+
+      // RPC call made for balance query (Privy SDK is mocked separately)
+      expect(mockRpcFetch).toHaveBeenCalledOnce();
+    });
+
+    it("returns MAX_SAFE_INTEGER when RPC fails (fail-open)", async () => {
+      const failingFetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+
+      const rpcProvider = new PrivyWalletProvider({
+        appId: "test-app-id",
+        appSecret: "test-app-secret",
+        fetch: failingFetch as unknown as typeof globalThis.fetch,
+      });
+
+      const balance = await rpcProvider.getBalance("agent-001", "eip155:8453", "USDC");
+      expect(balance).toBe(BigInt(Number.MAX_SAFE_INTEGER));
+    });
+
+    it("returns MAX_SAFE_INTEGER for unknown chain (no RPC URL)", async () => {
+      const balance = await provider.getBalance("agent-001", "eip155:999999", "USDC");
+      expect(balance).toBe(BigInt(Number.MAX_SAFE_INTEGER));
+    });
+
+    it("returns MAX_SAFE_INTEGER for unknown asset", async () => {
+      const balance = await provider.getBalance("agent-001", "eip155:8453", "DAI");
       expect(balance).toBe(BigInt(Number.MAX_SAFE_INTEGER));
     });
   });
@@ -245,6 +292,73 @@ describe("encodeErc20Transfer", () => {
 
     expect(calldata.startsWith("0xa9059cbb")).toBe(true);
     expect(calldata.length).toBe(138);
+  });
+});
+
+describe("queryErc20Balance", () => {
+  it("returns balance from successful RPC call", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        jsonrpc: "2.0",
+        id: 1,
+        result: "0x00000000000000000000000000000000000000000000000000000000004c4b40",
+      }),
+    });
+
+    const balance = await queryErc20Balance(
+      "https://rpc.example.com",
+      "0xUSDC",
+      "0xWallet1234567890abcdef1234567890abcdef",
+      mockFetch as unknown as typeof globalThis.fetch,
+    );
+
+    expect(balance).toBe(BigInt(5_000_000));
+
+    // Verify the RPC request shape
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(url).toBe("https://rpc.example.com");
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.method).toBe("eth_call");
+  });
+
+  it("returns null on RPC error", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "error" } }),
+    });
+
+    const balance = await queryErc20Balance(
+      "https://rpc.example.com",
+      "0xUSDC",
+      "0xWallet",
+      mockFetch as unknown as typeof globalThis.fetch,
+    );
+    expect(balance).toBeNull();
+  });
+
+  it("returns null on network failure", async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+
+    const balance = await queryErc20Balance(
+      "https://rpc.example.com",
+      "0xUSDC",
+      "0xWallet",
+      mockFetch as unknown as typeof globalThis.fetch,
+    );
+    expect(balance).toBeNull();
+  });
+
+  it("returns null on HTTP error", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+
+    const balance = await queryErc20Balance(
+      "https://rpc.example.com",
+      "0xUSDC",
+      "0xWallet",
+      mockFetch as unknown as typeof globalThis.fetch,
+    );
+    expect(balance).toBeNull();
   });
 });
 
