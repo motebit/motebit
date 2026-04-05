@@ -15,8 +15,8 @@ export { BridgeSettlementRail } from "./bridge-rail.js";
 export type { BridgeRailConfig, BridgeClient, BridgeTransfer } from "./bridge-rail.js";
 export { DirectAssetRail } from "./direct-asset-rail.js";
 export type { DirectAssetRailConfig, WalletProvider } from "./direct-asset-rail.js";
-export { PrivyWalletProvider } from "./privy-wallet-provider.js";
-export type { PrivyWalletProviderConfig } from "./privy-wallet-provider.js";
+export { PrivyWalletProvider, InMemoryWalletStore } from "./privy-wallet-provider.js";
+export type { PrivyWalletProviderConfig, WalletStore } from "./privy-wallet-provider.js";
 
 export class SettlementRailRegistry {
   private readonly rails = new Map<string, SettlementRail>();

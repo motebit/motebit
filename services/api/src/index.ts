@@ -101,6 +101,8 @@ import {
   createAccountTables,
   createWithdrawalTables,
   createProofTable,
+  createWalletTable,
+  createSqliteWalletStore,
   creditAccount,
   storeSettlementProof,
 } from "./accounts.js";
@@ -205,8 +207,10 @@ export interface SyncRelayConfig {
   };
   /** Direct asset rail configuration. Omit to disable onchain wallet withdrawals. */
   directAsset?: {
-    /** Wallet provider instance (Privy, Turnkey, or mock). */
-    walletProvider: import("./settlement-rails/direct-asset-rail.js").WalletProvider;
+    /** Pre-built wallet provider (for tests/custom providers). */
+    walletProvider?: import("./settlement-rails/direct-asset-rail.js").WalletProvider;
+    /** Privy credentials — relay constructs PrivyWalletProvider with DB-backed persistence. */
+    privy?: { appId: string; appSecret: string };
     /** CAIP-2 chain identifier (e.g., "eip155:8453" for Base). Default: "eip155:8453". */
     chain?: string;
     /** Asset identifier (e.g., "USDC"). Default: "USDC". */
@@ -267,6 +271,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   createAccountTables(moteDb.db);
   createWithdrawalTables(moteDb.db);
   createProofTable(moteDb.db);
+  createWalletTable(moteDb.db);
   createIdempotencyTable(moteDb.db);
 
   // --- Settlement rail registry (after DB + tables so proofs can persist) ---
@@ -391,15 +396,26 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     );
   }
   if (directAssetConfig) {
-    railRegistry.register(
-      new DirectAssetRail({
-        walletProvider: directAssetConfig.walletProvider,
-        chain: directAssetConfig.chain ?? "eip155:8453",
-        asset: directAssetConfig.asset ?? "USDC",
-        decimals: directAssetConfig.decimals,
-        onProofAttached: proofCallback("direct-asset"),
-      }),
-    );
+    // Resolve wallet provider: pre-built > Privy with DB persistence
+    let walletProvider = directAssetConfig.walletProvider;
+    if (!walletProvider && directAssetConfig.privy) {
+      const { PrivyWalletProvider } = await import("./settlement-rails/privy-wallet-provider.js");
+      walletProvider = new PrivyWalletProvider({
+        ...directAssetConfig.privy,
+        walletStore: createSqliteWalletStore(moteDb.db),
+      });
+    }
+    if (walletProvider) {
+      railRegistry.register(
+        new DirectAssetRail({
+          walletProvider,
+          chain: directAssetConfig.chain ?? "eip155:8453",
+          asset: directAssetConfig.asset ?? "USDC",
+          decimals: directAssetConfig.decimals,
+          onProofAttached: proofCallback("direct-asset"),
+        }),
+      );
+    }
   }
   createSubscriptionTables(moteDb.db);
 
@@ -979,12 +995,10 @@ if (process.env.VITEST != null) {
     directAsset:
       process.env.PRIVY_APP_ID && process.env.PRIVY_APP_SECRET
         ? {
-            walletProvider: new (
-              await import("./settlement-rails/privy-wallet-provider.js")
-            ).PrivyWalletProvider({
+            privy: {
               appId: process.env.PRIVY_APP_ID,
               appSecret: process.env.PRIVY_APP_SECRET,
-            }),
+            },
             chain: process.env.DIRECT_ASSET_CHAIN,
             asset: process.env.DIRECT_ASSET_TOKEN,
           }

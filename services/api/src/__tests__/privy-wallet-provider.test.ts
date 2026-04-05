@@ -25,7 +25,8 @@ vi.mock("@privy-io/node", () => ({
 }));
 
 // Import after mock is set up
-const { PrivyWalletProvider } = await import("../settlement-rails/privy-wallet-provider.js");
+const { PrivyWalletProvider, encodeErc20Transfer, USDC_CONTRACTS, InMemoryWalletStore } =
+  await import("../settlement-rails/privy-wallet-provider.js");
 
 describe("PrivyWalletProvider", () => {
   let provider: WalletProvider;
@@ -40,6 +41,10 @@ describe("PrivyWalletProvider", () => {
     mockSendTransaction.mockResolvedValue({
       hash: "0xtx_privy_abc123",
       caip2: "eip155:8453",
+    });
+    mockGet.mockResolvedValue({
+      id: "wallet-001",
+      address: "0xAgentWallet1234567890abcdef12345678",
     });
     provider = new PrivyWalletProvider({
       appId: "test-app-id",
@@ -60,7 +65,6 @@ describe("PrivyWalletProvider", () => {
       await provider.getAddress("agent-001", "eip155:8453");
       await provider.getAddress("agent-001", "eip155:8453");
 
-      // Only one create call despite 3 getAddress calls
       expect(mockCreate).toHaveBeenCalledOnce();
     });
 
@@ -93,81 +97,93 @@ describe("PrivyWalletProvider", () => {
     });
   });
 
-  describe("sendTransfer", () => {
-    it("creates wallet if needed, then sends transaction", async () => {
-      const result = await provider.sendTransfer({
+  describe("sendTransfer — ERC-20 (USDC)", () => {
+    it("encodes ERC-20 transfer calldata for USDC on known chain", async () => {
+      await provider.sendTransfer({
         agentId: "agent-001",
         chain: "eip155:8453",
-        to: "0xDestination",
+        to: "0xDestination1234567890abcdef12345678",
         asset: "USDC",
         amount: BigInt(5_000_000),
         idempotencyKey: "idem-1",
       });
 
-      expect(result.txHash).toBe("0xtx_privy_abc123");
-
-      // Wallet created
-      expect(mockCreate).toHaveBeenCalledOnce();
-
-      // Transaction sent with correct params
-      expect(mockSendTransaction).toHaveBeenCalledWith("wallet-001", {
-        caip2: "eip155:8453",
-        params: {
-          transaction: {
-            to: "0xDestination",
-            value: "5000000",
-            chain_id: 8453,
+      expect(mockSendTransaction).toHaveBeenCalledWith(
+        "wallet-001",
+        expect.objectContaining({
+          caip2: "eip155:8453",
+          params: {
+            transaction: expect.objectContaining({
+              // ERC-20: `to` is the USDC contract, not the recipient
+              to: USDC_CONTRACTS["eip155:8453"],
+              value: 0,
+              // `data` contains the transfer(to, amount) calldata
+              data: expect.stringContaining("0xa9059cbb"),
+              chain_id: 8453,
+            }),
           },
-        },
-      });
+        }),
+      );
     });
 
-    it("reuses cached wallet for subsequent transfers", async () => {
+    it("falls back to native transfer for unknown asset", async () => {
       await provider.sendTransfer({
         agentId: "agent-001",
         chain: "eip155:8453",
-        to: "0xDest1",
-        asset: "USDC",
-        amount: BigInt(1_000_000),
-        idempotencyKey: "idem-1",
-      });
-
-      await provider.sendTransfer({
-        agentId: "agent-001",
-        chain: "eip155:8453",
-        to: "0xDest2",
-        asset: "USDC",
-        amount: BigInt(2_000_000),
-        idempotencyKey: "idem-2",
-      });
-
-      expect(mockCreate).toHaveBeenCalledOnce(); // wallet cached
-      expect(mockSendTransaction).toHaveBeenCalledTimes(2);
-    });
-
-    it("parses chain ID from CAIP-2", async () => {
-      await provider.sendTransfer({
-        agentId: "agent-001",
-        chain: "eip155:1",
         to: "0xDest",
-        asset: "USDC",
-        amount: BigInt(100),
-        idempotencyKey: "idem-3",
+        asset: "ETH",
+        amount: BigInt(1_000_000_000_000_000),
+        idempotencyKey: "idem-2",
       });
 
       expect(mockSendTransaction).toHaveBeenCalledWith(
         "wallet-001",
         expect.objectContaining({
-          caip2: "eip155:1",
-          params: expect.objectContaining({
+          params: {
             transaction: expect.objectContaining({
-              chain_id: 1,
+              to: "0xDest",
+              value: "1000000000000000",
             }),
-          }),
+          },
         }),
       );
     });
+  });
 
+  describe("wallet persistence", () => {
+    it("restores wallet from store on restart (no new creation)", async () => {
+      const store = new InMemoryWalletStore();
+      store.setWalletId("agent-001", "existing-wallet-id", "0xExistingAddr");
+
+      const persistedProvider = new PrivyWalletProvider({
+        appId: "test-app-id",
+        appSecret: "test-app-secret",
+        walletStore: store,
+      });
+
+      const address = await persistedProvider.getAddress("agent-001", "eip155:8453");
+
+      // Should have fetched from Privy by ID, not created new
+      expect(mockGet).toHaveBeenCalledWith("existing-wallet-id");
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(address).toBe("0xAgentWallet1234567890abcdef12345678"); // from mockGet
+    });
+
+    it("persists new wallet to store on creation", async () => {
+      const store = new InMemoryWalletStore();
+      const persistedProvider = new PrivyWalletProvider({
+        appId: "test-app-id",
+        appSecret: "test-app-secret",
+        walletStore: store,
+      });
+
+      await persistedProvider.getAddress("agent-new", "eip155:8453");
+
+      expect(store.getWalletId("agent-new")).toBe("wallet-001");
+    });
+  });
+
+  describe("error handling", () => {
     it("propagates Privy API errors (fail-closed)", async () => {
       mockSendTransaction.mockRejectedValueOnce(new Error("insufficient gas"));
 
@@ -178,7 +194,7 @@ describe("PrivyWalletProvider", () => {
           to: "0xDest",
           asset: "USDC",
           amount: BigInt(5_000_000),
-          idempotencyKey: "idem-4",
+          idempotencyKey: "idem-err",
         }),
       ).rejects.toThrow("insufficient gas");
     });
@@ -193,9 +209,52 @@ describe("PrivyWalletProvider", () => {
           to: "0xDest",
           asset: "USDC",
           amount: BigInt(1_000_000),
-          idempotencyKey: "idem-5",
+          idempotencyKey: "idem-err2",
         }),
       ).rejects.toThrow("rate limited");
     });
+  });
+});
+
+describe("encodeErc20Transfer", () => {
+  it("encodes transfer(to, amount) with correct selector", () => {
+    const calldata = encodeErc20Transfer(
+      "0x1234567890abcdef1234567890abcdef12345678",
+      BigInt(5_000_000),
+    );
+
+    // Starts with transfer selector
+    expect(calldata.startsWith("0xa9059cbb")).toBe(true);
+    // Total length: 10 (selector) + 64 (address) + 64 (amount) = 138 chars
+    expect(calldata.length).toBe(138);
+    // Address is left-padded to 32 bytes
+    expect(calldata.slice(10, 74)).toBe(
+      "0000000000000000000000001234567890abcdef1234567890abcdef12345678",
+    );
+    // Amount is left-padded to 32 bytes
+    expect(calldata.slice(74)).toBe(
+      "00000000000000000000000000000000000000000000000000000000004c4b40",
+    );
+  });
+
+  it("handles large amounts", () => {
+    const calldata = encodeErc20Transfer(
+      "0x0000000000000000000000000000000000000001",
+      BigInt("1000000000000000000"), // 1e18
+    );
+
+    expect(calldata.startsWith("0xa9059cbb")).toBe(true);
+    expect(calldata.length).toBe(138);
+  });
+});
+
+describe("USDC_CONTRACTS", () => {
+  it("has entries for major chains", () => {
+    expect(USDC_CONTRACTS["eip155:1"]).toBeDefined(); // Ethereum
+    expect(USDC_CONTRACTS["eip155:8453"]).toBeDefined(); // Base
+    expect(USDC_CONTRACTS["eip155:84532"]).toBeDefined(); // Base Sepolia
+    expect(USDC_CONTRACTS["eip155:137"]).toBeDefined(); // Polygon
+    expect(USDC_CONTRACTS["eip155:42161"]).toBeDefined(); // Arbitrum
+    expect(USDC_CONTRACTS["eip155:10"]).toBeDefined(); // Optimism
   });
 });
