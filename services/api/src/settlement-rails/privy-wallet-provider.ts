@@ -50,8 +50,8 @@ export class PrivyWalletProvider implements WalletProvider {
    *
    * TODO: Wire RPC provider (Alchemy/Infura) for onchain balance verification.
    */
-  async getBalance(_agentId: string, _chain: string, _asset: string): Promise<bigint> {
-    return BigInt(Number.MAX_SAFE_INTEGER);
+  getBalance(_agentId: string, _chain: string, _asset: string): Promise<bigint> {
+    return Promise.resolve(BigInt(Number.MAX_SAFE_INTEGER));
   }
 
   async sendTransfer(params: {
