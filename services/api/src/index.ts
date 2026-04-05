@@ -122,6 +122,7 @@ import {
   StripeSettlementRail,
   X402SettlementRail,
   BridgeSettlementRail,
+  DirectAssetRail,
 } from "./settlement-rails/index.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
@@ -202,6 +203,17 @@ export interface SyncRelayConfig {
     /** Webhook public key (PEM) for signature verification. Omit to skip verification (dev only). */
     webhookPublicKey?: string;
   };
+  /** Direct asset rail configuration. Omit to disable onchain wallet withdrawals. */
+  directAsset?: {
+    /** Wallet provider instance (Privy, Turnkey, or mock). */
+    walletProvider: import("./settlement-rails/direct-asset-rail.js").WalletProvider;
+    /** CAIP-2 chain identifier (e.g., "eip155:8453" for Base). Default: "eip155:8453". */
+    chain?: string;
+    /** Asset identifier (e.g., "USDC"). Default: "USDC". */
+    asset?: string;
+    /** Token decimals. Default: 6. */
+    decimals?: number;
+  };
 }
 
 export interface SyncRelay {
@@ -238,6 +250,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     federation: federationConfig,
     stripe: stripeConfig,
     bridge: bridgeConfig,
+    directAsset: directAssetConfig,
     platformFeeRate = parseFloat(process.env.MOTEBIT_PLATFORM_FEE_RATE ?? "0.05"),
   } = config;
 
@@ -374,6 +387,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         sourcePaymentRail: bridgeConfig.sourcePaymentRail ?? "base",
         sourceCurrency: bridgeConfig.sourceCurrency ?? "usdc",
         onProofAttached: proofCallback("bridge"),
+      }),
+    );
+  }
+  if (directAssetConfig) {
+    railRegistry.register(
+      new DirectAssetRail({
+        walletProvider: directAssetConfig.walletProvider,
+        chain: directAssetConfig.chain ?? "eip155:8453",
+        asset: directAssetConfig.asset ?? "USDC",
+        decimals: directAssetConfig.decimals,
+        onProofAttached: proofCallback("direct-asset"),
       }),
     );
   }

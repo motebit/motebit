@@ -13,6 +13,8 @@ export { X402SettlementRail } from "./x402-rail.js";
 export type { X402RailConfig, X402FacilitatorClient } from "./x402-rail.js";
 export { BridgeSettlementRail } from "./bridge-rail.js";
 export type { BridgeRailConfig, BridgeClient, BridgeTransfer } from "./bridge-rail.js";
+export { DirectAssetRail } from "./direct-asset-rail.js";
+export type { DirectAssetRailConfig, WalletProvider } from "./direct-asset-rail.js";
 
 export class SettlementRailRegistry {
   private readonly rails = new Map<string, SettlementRail>();
