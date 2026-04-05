@@ -282,7 +282,91 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       destination: result.destination,
       idempotencyKey: idempotencyKey ?? null,
     });
-    const responseBody = { motebit_id: motebitId, withdrawal: toWithdrawalResponse(result) };
+
+    // Automated x402 settlement: if destination is a wallet address and x402 rail
+    // is available, settle immediately via the facilitator instead of manual admin queue.
+    // Fail-safe: if settlement fails, withdrawal stays pending for admin resolution.
+    // Funds are already held by requestWithdrawal — no double-spend risk.
+    let autoSettled = false;
+    if (
+      railRegistry &&
+      result.destination !== "pending" &&
+      /^0x[0-9a-fA-F]{40}$/.test(result.destination)
+    ) {
+      const x402Rail = railRegistry.get("x402");
+      if (x402Rail) {
+        try {
+          const available = await x402Rail.isAvailable();
+          if (available) {
+            const withdrawResult = await x402Rail.withdraw(
+              motebitId,
+              body.amount,
+              "USDC",
+              result.destination,
+              result.withdrawal_id,
+            );
+
+            // Auto-complete: sign receipt and finalize
+            const completedAt = Date.now();
+            const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
+            const signature = await signWithdrawalReceipt(
+              {
+                withdrawal_id: result.withdrawal_id,
+                motebit_id: motebitId,
+                amount: body.amount,
+                currency: result.currency,
+                destination: result.destination,
+                payout_reference: withdrawResult.proof.reference,
+                completed_at: completedAt,
+                relay_id: relayIdentity.relayMotebitId,
+              },
+              relayIdentity.privateKey,
+            );
+            completeWithdrawal(
+              moteDb.db,
+              result.withdrawal_id,
+              withdrawResult.proof.reference,
+              signature,
+              relayPublicKeyHex,
+              completedAt,
+            );
+
+            // Attach proof through the rail boundary
+            await x402Rail.attachProof(result.withdrawal_id, withdrawResult.proof);
+
+            autoSettled = true;
+            logger.info("withdrawal.x402.auto_settled", {
+              correlationId,
+              motebitId,
+              withdrawalId: result.withdrawal_id,
+              txHash: withdrawResult.proof.reference,
+              network: withdrawResult.proof.network,
+            });
+          }
+        } catch (err) {
+          // Settlement failed — withdrawal stays pending for manual admin resolution.
+          // Funds remain held. This is the correct fail-safe behavior.
+          logger.warn("withdrawal.x402.auto_settle_failed", {
+            correlationId,
+            motebitId,
+            withdrawalId: result.withdrawal_id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    const responseBody = {
+      motebit_id: motebitId,
+      withdrawal: toWithdrawalResponse(
+        autoSettled
+          ? {
+              ...result,
+              status: "completed" as const,
+            }
+          : result,
+      ),
+    };
     completeIdempotency(
       moteDb.db,
       idempotencyKeyHeader,
@@ -316,7 +400,13 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   app.post("/api/v1/admin/withdrawals/:withdrawalId/complete", async (c) => {
     const withdrawalId = c.req.param("withdrawalId");
     const correlationId = c.get("correlationId" as never) as string;
-    const body = await c.req.json<{ payout_reference: string }>();
+    const body = await c.req.json<{
+      payout_reference: string;
+      /** Rail name (e.g., "stripe", "x402") for proof attachment. Optional — skips if not provided. */
+      rail?: string;
+      /** CAIP-2 network for the proof (e.g., "eip155:84532"). Optional. */
+      network?: string;
+    }>();
     if (!body.payout_reference || typeof body.payout_reference !== "string")
       throw new HTTPException(400, { message: "payout_reference is required" });
 
@@ -357,10 +447,26 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     if (!success)
       throw new HTTPException(404, { message: "Withdrawal not found or already completed/failed" });
 
+    // Attach proof through the rail boundary — sibling parity with deposit proof flows.
+    // Admin specifies which rail completed the payout. If omitted, proof is not attached
+    // (manual/off-rail payouts are valid — the signed receipt is the audit trail).
+    if (body.rail && railRegistry) {
+      const rail = railRegistry.get(body.rail);
+      if (rail) {
+        await rail.attachProof(withdrawalId, {
+          reference: body.payout_reference,
+          railType: rail.railType,
+          network: body.network,
+          confirmedAt: completedAt,
+        });
+      }
+    }
+
     logger.info("withdrawal.admin.completed", {
       correlationId,
       withdrawalId,
       payoutReference: body.payout_reference,
+      rail: body.rail ?? null,
       signed: true,
     });
     return c.json({

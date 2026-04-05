@@ -662,6 +662,130 @@ describe("Virtual Accounts", () => {
     expect(balance.balance).toBe(50);
   });
 
+  it("admin-complete with rail field still succeeds (proof attachment)", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ amount: 30 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    // Admin completes with rail and network fields
+    const completeRes = await relay.app.request(
+      `/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/complete`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify({
+          payout_reference: "0xabc123",
+          rail: "x402",
+          network: "eip155:84532",
+        }),
+      },
+    );
+    expect(completeRes.status).toBe(200);
+    const body = (await completeRes.json()) as { status: string };
+    expect(body.status).toBe("completed");
+  });
+
+  it("admin-complete with unknown rail field still succeeds", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ amount: 20 }),
+    });
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { withdrawal_id: string };
+    };
+
+    // Admin completes with a non-existent rail — should still complete (no proof attached)
+    const completeRes = await relay.app.request(
+      `/api/v1/admin/withdrawals/${withdrawal.withdrawal_id}/complete`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify({
+          payout_reference: "manual_transfer_ref",
+          rail: "nonexistent",
+        }),
+      },
+    );
+    expect(completeRes.status).toBe(200);
+  });
+
+  it("withdrawal to non-wallet destination stays pending (no auto-settlement)", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    // Withdraw without destination — defaults to "pending"
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ amount: 25 }),
+    });
+    expect(withdrawRes.status).toBe(200);
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { status: string; withdrawal_id: string };
+    };
+    // Should stay pending — "pending" destination does not trigger x402 auto-settlement
+    expect(withdrawal.status).toBe("pending");
+  });
+
+  it("withdrawal to wallet address with x402 unavailable stays pending", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+
+    await deposit(relay, motebitId, 100);
+
+    // Withdraw to a wallet-like address — x402 facilitator is not reachable in tests,
+    // so auto-settlement will fail and fall back to manual pending
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...AUTH_HEADER,
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({
+        amount: 10,
+        destination: "0x1234567890abcdef1234567890abcdef12345678",
+      }),
+    });
+    expect(withdrawRes.status).toBe(200);
+    const { withdrawal } = (await withdrawRes.json()) as {
+      withdrawal: { status: string };
+    };
+    // x402 facilitator is not reachable in tests — isAvailable() returns false
+    // or settle() fails. Either way, auto-settlement falls back to manual pending.
+    expect(withdrawal.status).toBe("pending");
+  });
+
   it("admin can fail a withdrawal and refund the agent", async () => {
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
