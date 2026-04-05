@@ -17,6 +17,7 @@ import {
   hasTransactionWithReference,
   requestWithdrawal,
   completeWithdrawal,
+  linkWithdrawalTransfer,
   signWithdrawalReceipt,
   failWithdrawal,
   getWithdrawals,
@@ -283,16 +284,15 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       idempotencyKey: idempotencyKey ?? null,
     });
 
-    // Automated x402 settlement: if destination is a wallet address and x402 rail
-    // is available, settle immediately via the facilitator instead of manual admin queue.
+    // Automated settlement: try x402 (instant) or Bridge (instant or async).
     // Fail-safe: if settlement fails, withdrawal stays pending for admin resolution.
     // Funds are already held by requestWithdrawal — no double-spend risk.
     let autoSettled = false;
-    if (
-      railRegistry &&
-      result.destination !== "pending" &&
-      /^0x[0-9a-fA-F]{40}$/.test(result.destination)
-    ) {
+    const isWalletDest =
+      result.destination !== "pending" && /^0x[0-9a-fA-F]{40}$/.test(result.destination);
+
+    // Path 1: x402 instant settlement for wallet destinations
+    if (!autoSettled && railRegistry && isWalletDest) {
       const x402Rail = railRegistry.get("x402");
       if (x402Rail) {
         try {
@@ -306,7 +306,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
               result.withdrawal_id,
             );
 
-            // Auto-complete: sign receipt and finalize
             const completedAt = Date.now();
             const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
             const signature = await signWithdrawalReceipt(
@@ -330,8 +329,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
               relayPublicKeyHex,
               completedAt,
             );
-
-            // Attach proof through the rail boundary
             await x402Rail.attachProof(result.withdrawal_id, withdrawResult.proof);
 
             autoSettled = true;
@@ -344,9 +341,77 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
             });
           }
         } catch (err) {
-          // Settlement failed — withdrawal stays pending for manual admin resolution.
-          // Funds remain held. This is the correct fail-safe behavior.
           logger.warn("withdrawal.x402.auto_settle_failed", {
+            correlationId,
+            motebitId,
+            withdrawalId: result.withdrawal_id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    // Path 2: Bridge transfer (crypto→crypto instant or crypto→fiat async)
+    if (!autoSettled && railRegistry && result.destination !== "pending") {
+      const bridgeRail = railRegistry.get("bridge");
+      if (bridgeRail) {
+        try {
+          const available = await bridgeRail.isAvailable();
+          if (available) {
+            const withdrawResult = await bridgeRail.withdraw(
+              motebitId,
+              body.amount,
+              result.currency ?? "USDC",
+              result.destination,
+              result.withdrawal_id,
+            );
+
+            if (withdrawResult.proof.confirmedAt > 0) {
+              // Instant completion (crypto→crypto)
+              const completedAt = Date.now();
+              const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
+              const signature = await signWithdrawalReceipt(
+                {
+                  withdrawal_id: result.withdrawal_id,
+                  motebit_id: motebitId,
+                  amount: body.amount,
+                  currency: result.currency,
+                  destination: result.destination,
+                  payout_reference: withdrawResult.proof.reference,
+                  completed_at: completedAt,
+                  relay_id: relayIdentity.relayMotebitId,
+                },
+                relayIdentity.privateKey,
+              );
+              completeWithdrawal(
+                moteDb.db,
+                result.withdrawal_id,
+                withdrawResult.proof.reference,
+                signature,
+                relayPublicKeyHex,
+                completedAt,
+              );
+              await bridgeRail.attachProof(result.withdrawal_id, withdrawResult.proof);
+              autoSettled = true;
+            } else {
+              // Async path: link Bridge transfer ID to withdrawal for webhook completion
+              linkWithdrawalTransfer(
+                moteDb.db,
+                result.withdrawal_id,
+                withdrawResult.proof.reference,
+              );
+            }
+
+            logger.info("withdrawal.bridge.initiated", {
+              correlationId,
+              motebitId,
+              withdrawalId: result.withdrawal_id,
+              bridgeRef: withdrawResult.proof.reference,
+              confirmed: withdrawResult.proof.confirmedAt > 0,
+            });
+          }
+        } catch (err) {
+          logger.warn("withdrawal.bridge.auto_settle_failed", {
             correlationId,
             motebitId,
             withdrawalId: result.withdrawal_id,
@@ -672,5 +737,102 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     }
 
     return c.json({ received: true });
+  });
+
+  // --- Bridge webhook ---
+  app.post("/api/v1/bridge/webhook", async (c) => {
+    const correlationId = c.get("correlationId" as never) as string;
+    const body = await c.req.json<{
+      type?: string;
+      transfer_id?: string;
+      state?: string;
+      receipt?: {
+        source_tx_hash?: string;
+        destination_tx_hash?: string;
+      };
+      destination?: {
+        payment_rail?: string;
+      };
+    }>();
+
+    // Only process transfer state changes that reach terminal success
+    if (body.state !== "payment_processed" || !body.transfer_id) {
+      return c.json({ received: true, processed: false });
+    }
+
+    const bridgeRef = `bridge:${body.transfer_id}`;
+
+    // Look up pending withdrawal by Bridge transfer reference
+    const withdrawal = moteDb.db
+      .prepare(
+        "SELECT * FROM relay_withdrawals WHERE payout_reference = ? AND status IN ('pending', 'processing')",
+      )
+      .get(bridgeRef) as
+      | {
+          withdrawal_id: string;
+          motebit_id: string;
+          amount: number;
+          currency: string;
+          destination: string;
+        }
+      | undefined;
+
+    if (!withdrawal) {
+      logger.info("bridge.webhook.no_matching_withdrawal", {
+        correlationId,
+        transferId: body.transfer_id,
+      });
+      return c.json({ received: true, processed: false });
+    }
+
+    // Auto-complete the withdrawal with signed receipt
+    const completedAt = Date.now();
+    const txHash = body.receipt?.destination_tx_hash ?? body.transfer_id;
+    const network = body.destination?.payment_rail;
+    const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
+    const signature = await signWithdrawalReceipt(
+      {
+        withdrawal_id: withdrawal.withdrawal_id,
+        motebit_id: withdrawal.motebit_id,
+        amount: fromMicro(withdrawal.amount),
+        currency: withdrawal.currency,
+        destination: withdrawal.destination,
+        payout_reference: txHash,
+        completed_at: completedAt,
+        relay_id: relayIdentity.relayMotebitId,
+      },
+      relayIdentity.privateKey,
+    );
+    const success = completeWithdrawal(
+      moteDb.db,
+      withdrawal.withdrawal_id,
+      txHash,
+      signature,
+      relayPublicKeyHex,
+      completedAt,
+    );
+
+    if (success) {
+      // Attach proof through the Bridge rail
+      const bridgeRail = railRegistry?.get("bridge");
+      if (bridgeRail) {
+        await bridgeRail.attachProof(withdrawal.withdrawal_id, {
+          reference: txHash,
+          railType: "orchestration",
+          network,
+          confirmedAt: completedAt,
+        });
+      }
+
+      logger.info("bridge.webhook.withdrawal_completed", {
+        correlationId,
+        withdrawalId: withdrawal.withdrawal_id,
+        transferId: body.transfer_id,
+        txHash,
+        network,
+      });
+    }
+
+    return c.json({ received: true, processed: success });
   });
 }

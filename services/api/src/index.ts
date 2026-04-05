@@ -121,6 +121,7 @@ import {
   SettlementRailRegistry,
   StripeSettlementRail,
   X402SettlementRail,
+  BridgeSettlementRail,
 } from "./settlement-rails/index.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
@@ -186,6 +187,19 @@ export interface SyncRelayConfig {
     webhookSecret: string;
     currency?: string; // default 'usd'
   };
+  /** Bridge.xyz configuration. Omit to disable Bridge orchestration rail. */
+  bridge?: {
+    /** Bridge API key. */
+    apiKey: string;
+    /** Bridge customer ID for the relay operator. */
+    customerId: string;
+    /** Source payment rail for withdrawals (e.g., "base"). Default: "base". */
+    sourcePaymentRail?: string;
+    /** Source currency (e.g., "usdc"). Default: "usdc". */
+    sourceCurrency?: string;
+    /** Bridge API base URL. Default: "https://api.bridge.xyz/v0". */
+    baseUrl?: string;
+  };
 }
 
 export interface SyncRelay {
@@ -221,6 +235,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     issueCredentials = process.env.MOTEBIT_RELAY_ISSUE_CREDENTIALS === "true",
     federation: federationConfig,
     stripe: stripeConfig,
+    bridge: bridgeConfig,
     platformFeeRate = parseFloat(process.env.MOTEBIT_PLATFORM_FEE_RATE ?? "0.05"),
   } = config;
 
@@ -279,6 +294,86 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         err instanceof Error ? err.message : String(err),
       );
     }
+  }
+  if (bridgeConfig) {
+    const baseUrl = bridgeConfig.baseUrl ?? "https://api.bridge.xyz/v0";
+    const bridgeApiKey = bridgeConfig.apiKey;
+    const bridgeClient: import("./settlement-rails/bridge-rail.js").BridgeClient = {
+      async createTransfer(params) {
+        const res = await fetch(`${baseUrl}/transfers`, {
+          method: "POST",
+          headers: {
+            "Api-Key": bridgeApiKey,
+            "Content-Type": "application/json",
+            "Idempotency-Key": params.idempotencyKey,
+          },
+          body: JSON.stringify({
+            on_behalf_of: params.onBehalfOf,
+            amount: params.amount,
+            source: {
+              currency: params.sourceCurrency,
+              payment_rail: params.sourcePaymentRail,
+            },
+            destination: {
+              currency: params.destinationCurrency,
+              payment_rail: params.destinationPaymentRail,
+              ...(params.destinationAddress ? { to_address: params.destinationAddress } : {}),
+              ...(params.externalAccountId
+                ? { external_account_id: params.externalAccountId }
+                : {}),
+            },
+          }),
+        });
+        if (!res.ok) throw new Error(`Bridge API: ${res.status} ${res.statusText}`);
+        const data = (await res.json()) as Record<string, unknown>;
+        return {
+          id: data.id as string,
+          state: data.state as string,
+          amount: data.amount as string,
+          receipt: data.receipt as
+            | { sourceTxHash?: string; destinationTxHash?: string }
+            | undefined,
+          source: data.source as { paymentRail: string } | undefined,
+          destination: data.destination as { paymentRail: string } | undefined,
+        };
+      },
+      async getTransfer(transferId) {
+        const res = await fetch(`${baseUrl}/transfers/${transferId}`, {
+          headers: { "Api-Key": bridgeApiKey },
+        });
+        if (!res.ok) throw new Error(`Bridge API: ${res.status} ${res.statusText}`);
+        const data = (await res.json()) as Record<string, unknown>;
+        return {
+          id: data.id as string,
+          state: data.state as string,
+          amount: data.amount as string,
+          receipt: data.receipt as
+            | { sourceTxHash?: string; destinationTxHash?: string }
+            | undefined,
+          source: data.source as { paymentRail: string } | undefined,
+          destination: data.destination as { paymentRail: string } | undefined,
+        };
+      },
+      async isReachable() {
+        try {
+          const res = await fetch(`${baseUrl}/transfers?limit=1`, {
+            headers: { "Api-Key": bridgeApiKey },
+          });
+          return res.ok;
+        } catch {
+          return false;
+        }
+      },
+    };
+    railRegistry.register(
+      new BridgeSettlementRail({
+        bridgeClient: bridgeClient,
+        customerId: bridgeConfig.customerId,
+        sourcePaymentRail: bridgeConfig.sourcePaymentRail ?? "base",
+        sourceCurrency: bridgeConfig.sourceCurrency ?? "usdc",
+        onProofAttached: proofCallback("bridge"),
+      }),
+    );
   }
   createSubscriptionTables(moteDb.db);
 
@@ -841,6 +936,16 @@ if (process.env.VITEST != null) {
             secretKey: process.env.STRIPE_SECRET_KEY,
             webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
             currency: process.env.STRIPE_CURRENCY,
+          }
+        : undefined,
+    bridge:
+      process.env.BRIDGE_API_KEY && process.env.BRIDGE_CUSTOMER_ID
+        ? {
+            apiKey: process.env.BRIDGE_API_KEY,
+            customerId: process.env.BRIDGE_CUSTOMER_ID,
+            sourcePaymentRail: process.env.BRIDGE_SOURCE_RAIL,
+            sourceCurrency: process.env.BRIDGE_SOURCE_CURRENCY,
+            baseUrl: process.env.BRIDGE_API_BASE_URL,
           }
         : undefined,
   });

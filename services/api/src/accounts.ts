@@ -459,6 +459,21 @@ export function requestWithdrawal(
  * When a signature is provided, `completedAt` must match the timestamp used in the signed payload.
  * Returns true if the withdrawal was found and updated.
  */
+
+/** Link a pending withdrawal to an external transfer ID (e.g., Bridge transfer). */
+export function linkWithdrawalTransfer(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  payoutReference: string,
+): boolean {
+  const info = db
+    .prepare(
+      "UPDATE relay_withdrawals SET payout_reference = ? WHERE withdrawal_id = ? AND status IN ('pending', 'processing') AND payout_reference IS NULL",
+    )
+    .run(payoutReference, withdrawalId);
+  return info.changes > 0;
+}
+
 export function completeWithdrawal(
   db: DatabaseDriver,
   withdrawalId: string,
