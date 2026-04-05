@@ -976,6 +976,19 @@ if (process.env.VITEST != null) {
             webhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY,
           }
         : undefined,
+    directAsset:
+      process.env.PRIVY_APP_ID && process.env.PRIVY_APP_SECRET
+        ? {
+            walletProvider: new (
+              await import("./settlement-rails/privy-wallet-provider.js")
+            ).PrivyWalletProvider({
+              appId: process.env.PRIVY_APP_ID,
+              appSecret: process.env.PRIVY_APP_SECRET,
+            }),
+            chain: process.env.DIRECT_ASSET_CHAIN,
+            asset: process.env.DIRECT_ASSET_TOKEN,
+          }
+        : undefined,
   });
   app = relay.app;
 
