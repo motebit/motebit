@@ -168,7 +168,8 @@ export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
 // === Settings ===
 
 export interface MobileSettings {
-  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy";
+  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local";
+  localBackend?: "apple-fm" | "mlx";
   model: string;
   ollamaEndpoint: string;
   colorPreset: string;
@@ -215,7 +216,8 @@ const IDENTITY_FILE_KEY = "@motebit/identity_file";
 // === AI Config ===
 
 export interface MobileAIConfig {
-  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy";
+  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local";
+  localBackend?: "apple-fm" | "mlx";
   model?: string;
   apiKey?: string;
   ollamaEndpoint?: string;
@@ -558,6 +560,14 @@ export class MobileApp {
         },
         fallback_to_local: true,
       });
+    } else if (config.provider === "local") {
+      const { LocalInferenceProvider } = await import("./adapters/local-inference.js");
+      const localProvider = new LocalInferenceProvider({
+        backend: config.localBackend ?? "apple-fm",
+        maxTokens: config.maxTokens,
+      });
+      await localProvider.init();
+      provider = localProvider;
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model = config.model ?? DEFAULT_ANTHROPIC_MODEL;

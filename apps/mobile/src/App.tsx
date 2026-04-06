@@ -362,6 +362,7 @@ export default function App(): React.ReactElement {
 
       await a.initAI({
         provider: s.provider,
+        localBackend: s.localBackend,
         model: s.model,
         apiKey,
         ollamaEndpoint:

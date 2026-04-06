@@ -726,7 +726,7 @@ function IntelligenceTab({
   onChangeOpenaiKey,
   onChangeNeuralVadEnabled,
 }: {
-  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy";
+  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local";
   model: string;
   apiKey: string;
   ollamaEndpoint: string;
@@ -736,7 +736,7 @@ function IntelligenceTab({
   ttsVoice: string;
   openaiKey: string;
   neuralVadEnabled: boolean;
-  onChangeProvider: (p: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy") => void;
+  onChangeProvider: (p: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local") => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeOllamaEndpoint: (e: string) => void;
@@ -798,6 +798,17 @@ function IntelligenceTab({
             Motebit (free)
           </Text>
         </TouchableOpacity>
+        {Platform.OS === "ios" && (
+          <TouchableOpacity
+            style={[styles.radioItem, provider === "local" && styles.radioActive]}
+            onPress={() => onChangeProvider("local")}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.radioText, provider === "local" && styles.radioTextActive]}>
+              On-Device
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <Text style={styles.sectionTitle}>Model</Text>
