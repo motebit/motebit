@@ -126,7 +126,7 @@ export class LocalInferenceProvider implements StreamingProvider {
         yield { type: "text" as const, text: tokens.shift()! };
       }
 
-      if (error) {
+      if (error !== null) {
         throw new Error(error);
       }
 
@@ -203,8 +203,8 @@ export class LocalInferenceProvider implements StreamingProvider {
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i];
       if (event != null && String(event.event_type) === "user_message") {
-        const payload = event.payload as Record<string, unknown> | undefined;
-        return String(payload?.text ?? payload?.content ?? "");
+        const payload = event.payload as Record<string, string | undefined> | undefined;
+        return payload?.text ?? payload?.content ?? "";
       }
     }
     return "";
