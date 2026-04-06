@@ -1,3 +1,6 @@
+# Scan staged files for accidentally committed secrets (zero-dependency, fast)
+bash scripts/check-secrets.sh
+
 npx lint-staged --no-stash
 
 # Auto-generate changeset if published packages have staged changes and no changeset exists
