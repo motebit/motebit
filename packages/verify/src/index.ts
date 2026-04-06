@@ -636,6 +636,44 @@ async function verifyIdentity(content: string): Promise<IdentityVerifyResult> {
     return identityError("Signature verification failed");
   }
 
+  // Verify guardian attestation if present — proves the guardian governs this agent (§3.3).
+  // The attestation is an Ed25519 signature by the guardian's private key over the canonical
+  // JSON of {action:"guardian_attestation", guardian_public_key, motebit_id}.
+  const guardian = parsed.frontmatter.guardian;
+  if (guardian?.attestation && guardian.public_key) {
+    const motebitId = parsed.frontmatter.motebit_id;
+    const attestPayload = canonicalJson({
+      action: "guardian_attestation",
+      guardian_public_key: guardian.public_key,
+      motebit_id: motebitId,
+    });
+    const attestMessage = new TextEncoder().encode(attestPayload);
+    let guardianPubKey: Uint8Array;
+    try {
+      guardianPubKey = hexToBytes(guardian.public_key);
+    } catch {
+      return identityError("Invalid guardian public key hex");
+    }
+    if (guardianPubKey.length !== 32) {
+      return identityError("Guardian public key must be 32 bytes");
+    }
+    let attestSig: Uint8Array;
+    try {
+      attestSig = hexToBytes(guardian.attestation);
+    } catch {
+      return identityError("Invalid guardian attestation encoding");
+    }
+    let attestValid: boolean;
+    try {
+      attestValid = await ed.verifyAsync(attestSig, attestMessage, guardianPubKey);
+    } catch {
+      attestValid = false;
+    }
+    if (!attestValid) {
+      return identityError("Guardian attestation signature verification failed");
+    }
+  }
+
   const chain = parsed.frontmatter.succession;
   let successionResult: IdentityVerifyResult["succession"];
 

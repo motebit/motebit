@@ -135,6 +135,11 @@ export class PrivyWalletProvider implements WalletProvider {
   private readonly _fetch: typeof globalThis.fetch;
   /** Runtime cache: agentId → { id, address }. Populated from store on first access. */
   private readonly walletCache = new Map<string, { id: string; address: string }>();
+  /** In-flight wallet creation promises. Prevents duplicate Privy wallets from concurrent requests. */
+  private readonly walletCreationLocks = new Map<
+    string,
+    Promise<{ id: string; address: string }>
+  >();
 
   constructor(config: PrivyWalletProviderConfig) {
     this.privy = new PrivyClient({
@@ -256,7 +261,22 @@ export class PrivyWalletProvider implements WalletProvider {
       return entry;
     }
 
-    // 3. Create new wallet
+    // 3. Create new wallet — deduplicate concurrent requests to prevent duplicate Privy wallets.
+    // Without this lock, two concurrent getOrCreateWallet("agent-1") calls could both see
+    // no stored wallet and each create a separate Privy wallet, wasting money and splitting funds.
+    const inflight = this.walletCreationLocks.get(agentId);
+    if (inflight) return inflight;
+
+    const creation = this.createAndPersistWallet(agentId);
+    this.walletCreationLocks.set(agentId, creation);
+    try {
+      return await creation;
+    } finally {
+      this.walletCreationLocks.delete(agentId);
+    }
+  }
+
+  private async createAndPersistWallet(agentId: string): Promise<{ id: string; address: string }> {
     const wallet = await this.privy.wallets().create({
       chain_type: "ethereum",
     });

@@ -386,7 +386,7 @@ describe("createSignedToken / verifySignedToken", () => {
     expect(result!.aud).toBe("task:submit");
   });
 
-  it("round-trips without audience (backward compat)", async () => {
+  it("rejects tokens without audience binding (cross-endpoint replay prevention)", async () => {
     const kp = await generateKeypair();
     const payload: SignedTokenPayload = {
       mid: "mote-123",
@@ -397,8 +397,7 @@ describe("createSignedToken / verifySignedToken", () => {
     };
     const token = await createSignedToken(payload, kp.privateKey);
     const result = await verifySignedToken(token, kp.publicKey);
-    expect(result).not.toBeNull();
-    expect(result!.aud).toBeUndefined();
+    expect(result).toBeNull();
   });
 
   it("rejects expired token", async () => {

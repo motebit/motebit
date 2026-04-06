@@ -132,7 +132,9 @@ function sanitizeSource(source: string): string {
 function stripBoundaryMarkers(content: string): string {
   return content
     .replace(/\[EXTERNAL_DATA\b/g, "[ESCAPED_DATA")
-    .replace(/\[\/EXTERNAL_DATA\]/g, "[/ESCAPED_DATA]");
+    .replace(/\[\/EXTERNAL_DATA\]/g, "[/ESCAPED_DATA]")
+    .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_DATA")
+    .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_DATA]");
 }
 
 export interface SanitizeResult {

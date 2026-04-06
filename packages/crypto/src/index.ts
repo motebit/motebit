@@ -456,6 +456,9 @@ export async function verifySignedToken(
   // Reject tokens without a unique nonce (jti) — prevents replay attacks
   if (!payload.jti) return null;
 
+  // Reject tokens without audience binding — prevents cross-endpoint replay
+  if (!payload.aud) return null;
+
   return payload;
 }
 
