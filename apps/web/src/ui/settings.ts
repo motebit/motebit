@@ -133,6 +133,32 @@ const APPROVAL_PRESET_CONFIGS: Record<
   autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
 };
 
+const RISK_LABELS: Record<number, string> = {
+  0: "R0 Read",
+  1: "R1 Draft",
+  2: "R2 Write",
+  3: "R3 Execute",
+  4: "R4 Money",
+};
+
+const policySummary = document.getElementById("governance-policy-summary") as HTMLDivElement;
+
+function updatePolicySummary(presetName: string): void {
+  const preset = APPROVAL_PRESET_CONFIGS[presetName] ?? APPROVAL_PRESET_CONFIGS.balanced!;
+  const autoAllow =
+    preset.requireApprovalAbove === 0
+      ? "Nothing — all tools require approval"
+      : `Up to ${RISK_LABELS[preset.requireApprovalAbove - 1] ?? `R${preset.requireApprovalAbove - 1}`}`;
+  const requireApproval = `${RISK_LABELS[preset.requireApprovalAbove] ?? `R${preset.requireApprovalAbove}`} and above`;
+  const deny = `Above ${RISK_LABELS[preset.denyAbove - 1] ?? `R${preset.denyAbove - 1}`}`;
+  policySummary.innerHTML =
+    `<strong>Active policy:</strong><br>` +
+    `Auto-allow: ${autoAllow}<br>` +
+    `Require approval: ${requireApproval}<br>` +
+    `Deny: ${deny}<br>` +
+    `Operator mode: off`;
+}
+
 function applyGovernanceToRuntime(ctx: WebContext, gov: GovernanceConfig): void {
   const runtime = ctx.app.getRuntime();
   if (!runtime) return;
@@ -455,6 +481,14 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       govRejectSecrets.checked = govConfig.rejectSecrets;
       govMaxCalls.value = String(govConfig.maxCallsPerTurn);
     }
+    // Show active policy summary and update on preset change
+    const activePreset = govConfig?.approvalPreset ?? "balanced";
+    updatePolicySummary(activePreset);
+    approvalPresets.forEach((radio) => {
+      radio.addEventListener("change", () => {
+        if (radio.checked) updatePolicySummary(radio.value);
+      });
+    });
 
     // Populate TTS voices
     populateTtsVoices();

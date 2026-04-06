@@ -301,6 +301,11 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
             renderItem={({ item }) => {
               const color = TYPE_COLORS[item.credential_type] ?? "#616161";
               const issuer = resolveIssuer(item.credential);
+              const rawSubjectId = item.credential.credentialSubject?.id;
+              const subject =
+                typeof rawSubjectId === "string" && rawSubjectId.length > 0
+                  ? rawSubjectId.slice(0, 28) + "..."
+                  : undefined;
               const isRevoked = revokedIds.has(item.credential_id);
               return (
                 <View style={[styles.credentialItem, isRevoked ? { opacity: 0.5 } : undefined]}>
@@ -320,6 +325,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
                     </View>
                   </View>
                   <Text style={styles.credentialMeta}>issuer: {issuer}</Text>
+                  {subject ? <Text style={styles.credentialMeta}>subject: {subject}</Text> : null}
                   <Text style={styles.credentialMeta}>{formatTimeAgo(item.issued_at)}</Text>
                 </View>
               );
