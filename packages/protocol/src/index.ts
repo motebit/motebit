@@ -550,6 +550,20 @@ export enum DeviceCapability {
   Keyring = "keyring",
   Background = "background",
   LocalLlm = "local_llm",
+  /** Device supports push-triggered wake for background task execution. */
+  PushWake = "push_wake",
+}
+
+/** Push notification platform for wake-on-demand mobile execution. */
+export type PushPlatform = "fcm" | "apns" | "expo";
+
+/** Push token registration payload — sent from device to relay. */
+export interface PushTokenRegistration {
+  device_id: string;
+  push_token: string;
+  platform: PushPlatform;
+  /** Unix ms timestamp when the token was obtained. Used for staleness detection. */
+  registered_at: number;
 }
 
 export enum AgentTaskStatus {

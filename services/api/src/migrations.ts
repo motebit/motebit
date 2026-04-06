@@ -426,4 +426,22 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 6,
+    name: "add_push_tokens",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_push_tokens (
+          motebit_id TEXT NOT NULL,
+          device_id TEXT NOT NULL,
+          push_token TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          registered_at INTEGER NOT NULL,
+          expires_at INTEGER,
+          PRIMARY KEY (motebit_id, device_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_push_tokens_motebit ON relay_push_tokens(motebit_id);
+      `);
+    },
+  },
 ];

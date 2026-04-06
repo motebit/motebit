@@ -51,6 +51,7 @@ import {
 } from "@motebit/market";
 import type { CandidateProfile, CompositeFunction } from "@motebit/market";
 import { getAccountBalance, creditAccount, debitAccount, toMicro } from "./accounts.js";
+import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
 import { forwardTaskViaMcp, type ReceiptCandidate } from "./task-routing.js";
@@ -134,6 +135,8 @@ export interface TasksDeps {
   platformFeeRate?: number;
   /** Settlement rail registry — for attaching payment proofs through the rail boundary. */
   railRegistry?: import("./settlement-rails/index.js").SettlementRailRegistry;
+  /** Push adapter for waking offline mobile devices. */
+  pushAdapter?: import("./push-adapter.js").PushAdapter;
 }
 
 // ---------------------------------------------------------------------------
@@ -1017,6 +1020,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     verifySignedTokenForDevice,
     isTokenBlacklisted,
     isAgentRevoked,
+    pushAdapter,
   } = deps;
 
   // Apply configured fee rate (affects module-level PLATFORM_FEE_RATE used by handleReceiptIngestion)
@@ -1789,6 +1793,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         );
         routed = true;
       }
+    }
+
+    // Phase 4: Push wake — when no WebSocket, no HTTP MCP, and no federation routed the task,
+    // attempt to wake a mobile device via push notification. Fire-and-forget — the task stays
+    // in queue regardless. The device will reconnect via WebSocket and claim the task.
+    if (!routed && !federationAttempted && pushAdapter) {
+      void attemptPushWake(motebitId, { pushAdapter, db: moteDb.db });
     }
 
     const responseBody = {

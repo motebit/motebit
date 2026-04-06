@@ -871,4 +871,46 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     moteDb.db.prepare(`DELETE FROM agent_registry WHERE motebit_id = ?`).run(callerMotebitId);
     return c.json({ ok: true });
   });
+
+  // --- Push token management (mobile wake-on-demand) ---
+
+  app.post("/api/v1/agents/push-token", async (c) => {
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (!callerMotebitId) {
+      throw new HTTPException(401, { message: "Authentication required" });
+    }
+    const body = await c.req.json<{
+      device_id: string;
+      push_token: string;
+      platform: string;
+    }>();
+    if (!body.device_id || !body.push_token || !body.platform) {
+      throw new HTTPException(400, { message: "device_id, push_token, and platform are required" });
+    }
+    if (!["fcm", "apns", "expo"].includes(body.platform)) {
+      throw new HTTPException(400, { message: "platform must be fcm, apns, or expo" });
+    }
+    moteDb.db
+      .prepare(
+        `INSERT OR REPLACE INTO relay_push_tokens (motebit_id, device_id, push_token, platform, registered_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(callerMotebitId, body.device_id, body.push_token, body.platform, Date.now());
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/v1/agents/push-token", async (c) => {
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (!callerMotebitId) {
+      throw new HTTPException(401, { message: "Authentication required" });
+    }
+    const body = await c.req.json<{ device_id: string }>();
+    if (!body.device_id) {
+      throw new HTTPException(400, { message: "device_id is required" });
+    }
+    moteDb.db
+      .prepare("DELETE FROM relay_push_tokens WHERE motebit_id = ? AND device_id = ?")
+      .run(callerMotebitId, body.device_id);
+    return c.json({ ok: true });
+  });
 }
