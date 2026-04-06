@@ -120,6 +120,51 @@ interface SettingsModalProps {
   onCustomColorChange?: (hue: number, saturation: number) => void;
 }
 
+const RISK_LABELS: Record<number, string> = {
+  0: "R0 Read",
+  1: "R1 Draft",
+  2: "R2 Write",
+  3: "R3 Execute",
+  4: "R4 Money",
+};
+
+function PolicySummary({
+  preset,
+  isOperatorMode,
+}: {
+  preset: string;
+  isOperatorMode: boolean;
+}): React.ReactElement {
+  const themeColors = useTheme();
+  const config = APPROVAL_PRESET_CONFIGS[preset] ?? APPROVAL_PRESET_CONFIGS.balanced!;
+  const autoAllow =
+    config.requireApprovalAbove === 0
+      ? "Nothing"
+      : `Up to ${RISK_LABELS[config.requireApprovalAbove - 1] ?? `R${config.requireApprovalAbove - 1}`}`;
+  const requireApproval = `${RISK_LABELS[config.requireApprovalAbove] ?? `R${config.requireApprovalAbove}`}+`;
+  const deny = `Above ${RISK_LABELS[config.denyAbove - 1] ?? `R${config.denyAbove - 1}`}`;
+  return (
+    <View
+      style={{
+        padding: 10,
+        borderRadius: 8,
+        backgroundColor: themeColors.bgSecondary,
+        marginTop: 8,
+      }}
+    >
+      <Text style={{ fontSize: 11, color: themeColors.textMuted, lineHeight: 18 }}>
+        Auto-allow: {autoAllow}
+        {"\n"}
+        Require approval: {requireApproval}
+        {"\n"}
+        Deny: {deny}
+        {"\n"}
+        Operator mode: {isOperatorMode ? "on" : "off"}
+      </Text>
+    </View>
+  );
+}
+
 export function SettingsModal({
   visible,
   app,
@@ -935,6 +980,7 @@ function GovernanceTab({
           </TouchableOpacity>
         ))}
       </View>
+      <PolicySummary preset={draft.approvalPreset} isOperatorMode={isOperatorMode} />
 
       <Text style={styles.sectionTitle}>Memory</Text>
       <View style={styles.fieldRow}>
