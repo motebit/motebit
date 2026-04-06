@@ -10,6 +10,9 @@ export default defineConfig({
       external: ["@modelcontextprotocol/sdk/client/stdio.js", "cross-spawn", /^node:/],
     },
   },
+  worker: {
+    format: "es",
+  },
   server: {
     port: 3000,
   },

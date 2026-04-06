@@ -134,19 +134,25 @@ export class WebLLMProvider implements StreamingProvider {
     // @ts-expect-error — CDN dynamic import, typed via WebLLMModule interface
     const webllm = (await import("https://esm.run/@mlc-ai/web-llm")) as unknown as WebLLMModule;
 
-    // Try Web Worker engine first — keeps main thread free for rendering
+    // Try Web Worker engine first — keeps main thread free for rendering.
+    // Timeout after 15s: if the worker↔main handshake hangs (CDN version mismatch,
+    // worker init failure), fall back to main thread rather than freezing forever.
     // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- runtime check: CDN version may not export CreateWebWorkerMLCEngine
     if (typeof Worker !== "undefined" && webllm.CreateWebWorkerMLCEngine) {
       try {
         this.worker = new Worker(new URL("./webllm-worker.ts", import.meta.url), {
           type: "module",
         });
-        const engine = await webllm.CreateWebWorkerMLCEngine(this.worker, this._model, {
+        const workerEngine = webllm.CreateWebWorkerMLCEngine(this.worker, this._model, {
           initProgressCallback: progressCb,
         });
+        const timeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Worker init timeout")), 15_000),
+        );
+        const engine = await Promise.race([workerEngine, timeout]);
         return engine;
       } catch {
-        // Worker creation failed — fall back to main thread
+        // Worker creation or handshake failed — fall back to main thread
         this.worker?.terminate();
         this.worker = null;
       }
