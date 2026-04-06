@@ -10,7 +10,10 @@
  * Modeled on DesktopApp / SpatialApp — same pattern, different adapters.
  */
 
+import { AppState, type AppStateStatus } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Notifications from "expo-notifications";
+import * as TaskManager from "expo-task-manager";
 import {
   MotebitRuntime,
   RelayDelegationAdapter,
@@ -1508,6 +1511,109 @@ export class MobileApp {
     }
   }
 
+  // === Push Token Lifecycle ===
+
+  private static readonly PUSH_TOKEN_KEY = "@motebit/push_token";
+  private _pushTokenListener: Notifications.Subscription | null = null;
+  private _appStateListener: ReturnType<typeof AppState.addEventListener> | null = null;
+
+  /**
+   * Register push token with the relay for wake-on-demand task execution.
+   * Called during startSync() after WebSocket connects.
+   */
+  async registerPushToken(syncUrl: string): Promise<void> {
+    try {
+      const { status } = await Notifications.getPermissionsAsync();
+      let finalStatus = status;
+      if (status !== "granted") {
+        const { status: asked } = await Notifications.requestPermissionsAsync();
+        finalStatus = asked;
+      }
+      if (finalStatus !== "granted") return;
+
+      const tokenData = await Notifications.getExpoPushTokenAsync();
+      const pushToken = tokenData.data;
+      if (!pushToken) return;
+
+      // Skip if token hasn't changed
+      const stored = await AsyncStorage.getItem(MobileApp.PUSH_TOKEN_KEY);
+      if (stored === pushToken) return;
+
+      const authToken = await this.createSyncToken("push:register");
+      if (!authToken) return;
+
+      const res = await fetch(`${syncUrl}/api/v1/agents/push-token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          device_id: this.deviceId,
+          push_token: pushToken,
+          platform: "expo",
+        }),
+      });
+
+      if (res.ok) {
+        await AsyncStorage.setItem(MobileApp.PUSH_TOKEN_KEY, pushToken);
+      }
+    } catch {
+      // Push registration is best-effort — sync still works without it
+    }
+  }
+
+  /** Remove push token from relay (app logout / identity deregister). */
+  async removePushToken(syncUrl: string): Promise<void> {
+    try {
+      const authToken = await this.createSyncToken("push:register");
+      if (!authToken) return;
+      await fetch(`${syncUrl}/api/v1/agents/push-token`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ device_id: this.deviceId }),
+      });
+      await AsyncStorage.removeItem(MobileApp.PUSH_TOKEN_KEY);
+    } catch {
+      // Best-effort cleanup
+    }
+  }
+
+  /** Start listening for push token rotation and app state changes. */
+  startPushLifecycle(): void {
+    // Token rotation: FCM/APNs may rotate tokens at any time
+    this._pushTokenListener = Notifications.addPushTokenListener((_token) => {
+      void (async () => {
+        const syncUrl = await this.getSyncUrl();
+        if (syncUrl) {
+          await AsyncStorage.removeItem(MobileApp.PUSH_TOKEN_KEY); // Force re-register
+          await this.registerPushToken(syncUrl);
+        }
+      })();
+    });
+
+    // AppState: refresh push token on foreground return
+    this._appStateListener = AppState.addEventListener("change", (state: AppStateStatus) => {
+      if (state === "active") {
+        void (async () => {
+          const syncUrl = await this.getSyncUrl();
+          if (syncUrl) await this.registerPushToken(syncUrl);
+        })();
+      }
+    });
+  }
+
+  /** Clean up push lifecycle listeners. */
+  stopPushLifecycle(): void {
+    this._pushTokenListener?.remove();
+    this._pushTokenListener = null;
+    this._appStateListener?.remove();
+    this._appStateListener = null;
+  }
+
   // === Sync ===
 
   private static readonly SYNC_URL_KEY = "@motebit/sync_url";
@@ -1663,6 +1769,10 @@ export class MobileApp {
     // Immediate first sync after short delay (let initialization settle)
     setTimeout(() => void this.syncCycle(url), 3000);
 
+    // Register push token for wake-on-demand background execution
+    void this.registerPushToken(url);
+    this.startPushLifecycle();
+
     // Adversarial onboarding: run self-test once after first relay connection
     void this.runOnboardingSelfTest(url);
   }
@@ -1703,6 +1813,7 @@ export class MobileApp {
   }
 
   stopSync(): void {
+    this.stopPushLifecycle();
     if (this.syncTimer) {
       clearInterval(this.syncTimer);
       this.syncTimer = null;
@@ -1813,7 +1924,11 @@ export class MobileApp {
           this.motebitId;
 
         const localEventStore = this._localEventStore;
-        const mobileCapabilities = [DeviceCapability.HttpMcp, DeviceCapability.Keyring];
+        const mobileCapabilities = [
+          DeviceCapability.HttpMcp,
+          DeviceCapability.Keyring,
+          DeviceCapability.PushWake,
+        ];
         const wsAdapter = new WebSocketEventStoreAdapter({
           url: wsUrl,
           motebitId: this.motebitId,
@@ -2527,3 +2642,35 @@ class ExpoPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
     });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Background push notification handler — module-level registration required
+// by expo-task-manager. Runs when a silent push arrives while app is
+// backgrounded. The handler is a no-op wake signal: the app will reconnect
+// via WebSocket on next foreground, or the OS may grant a brief execution
+// window for the task manager callback.
+// ---------------------------------------------------------------------------
+
+const BACKGROUND_TASK_WAKE = "MOTEBIT_TASK_WAKE";
+
+TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
+  // The push is a wake signal — actual task execution happens when the app
+  // reconnects via WebSocket. On iOS, this callback gets ~30s. On Android,
+  // a foreground service extends the window.
+  //
+  // For now, this is intentionally minimal: the OS wakes the app, the app
+  // comes to foreground (or background fetch triggers), and the existing
+  // syncCycle → WebSocket → task_request flow handles execution.
+  //
+  // Future: ephemeral WebSocket connection + task execution within this callback.
+});
+
+// Silent notification handler — don't show alerts for task wake pushes
+Notifications.setNotificationHandler({
+  // eslint-disable-next-line @typescript-eslint/require-await -- Expo API requires async
+  handleNotification: async () => ({
+    shouldShowAlert: false,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});

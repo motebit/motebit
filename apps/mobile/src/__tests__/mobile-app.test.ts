@@ -2,6 +2,29 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // === Module Mocks ===
 
+// react-native (AppState)
+vi.mock("react-native", () => ({
+  AppState: {
+    addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+    currentState: "active",
+  },
+}));
+
+// expo-notifications
+vi.mock("expo-notifications", () => ({
+  getPermissionsAsync: vi.fn(() => Promise.resolve({ status: "undetermined" })),
+  requestPermissionsAsync: vi.fn(() => Promise.resolve({ status: "denied" })),
+  getExpoPushTokenAsync: vi.fn(() => Promise.resolve({ data: "" })),
+  addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
+  setNotificationHandler: vi.fn(),
+}));
+
+// expo-task-manager
+vi.mock("expo-task-manager", () => ({
+  defineTask: vi.fn(),
+  isTaskDefined: vi.fn(() => false),
+}));
+
 // expo-secure-store
 const secureStoreData = new Map<string, string>();
 vi.mock("expo-secure-store", () => ({
