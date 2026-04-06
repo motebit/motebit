@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { settleOnReceipt, validateAllocation, computeGrossAmount } from "../settlement.js";
+import {
+  settleOnReceipt,
+  validateAllocation,
+  computeGrossAmount,
+  canTransitionAllocation,
+  assertAllocationTransition,
+} from "../settlement.js";
 import {
   asAllocationId,
   asGoalId,
@@ -398,5 +404,63 @@ describe("computeGrossAmount", () => {
 
   it("throws on negative fee rate", () => {
     expect(() => computeGrossAmount(1.0, -0.1)).toThrow("feeRate must be in [0, 1)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Allocation state machine
+// ---------------------------------------------------------------------------
+
+describe("canTransitionAllocation", () => {
+  it("allows locked → settled", () => {
+    expect(canTransitionAllocation("locked", "settled")).toBe(true);
+  });
+
+  it("allows locked → released", () => {
+    expect(canTransitionAllocation("locked", "released")).toBe(true);
+  });
+
+  it("allows locked → disputed", () => {
+    expect(canTransitionAllocation("locked", "disputed")).toBe(true);
+  });
+
+  it("allows disputed → settled", () => {
+    expect(canTransitionAllocation("disputed", "settled")).toBe(true);
+  });
+
+  it("allows disputed → released", () => {
+    expect(canTransitionAllocation("disputed", "released")).toBe(true);
+  });
+
+  it("rejects settled → anything (terminal)", () => {
+    expect(canTransitionAllocation("settled", "locked")).toBe(false);
+    expect(canTransitionAllocation("settled", "released")).toBe(false);
+    expect(canTransitionAllocation("settled", "disputed")).toBe(false);
+  });
+
+  it("rejects released → anything (terminal)", () => {
+    expect(canTransitionAllocation("released", "locked")).toBe(false);
+    expect(canTransitionAllocation("released", "settled")).toBe(false);
+    expect(canTransitionAllocation("released", "disputed")).toBe(false);
+  });
+
+  it("rejects locked → locked (no self-transition)", () => {
+    expect(canTransitionAllocation("locked", "locked")).toBe(false);
+  });
+});
+
+describe("assertAllocationTransition", () => {
+  it("does not throw on valid transition", () => {
+    expect(() => assertAllocationTransition("locked", "settled")).not.toThrow();
+  });
+
+  it("throws on invalid transition with descriptive message", () => {
+    expect(() => assertAllocationTransition("settled", "released")).toThrow(
+      "illegal allocation transition: settled → released",
+    );
+  });
+
+  it("includes valid transitions in error message", () => {
+    expect(() => assertAllocationTransition("released", "locked")).toThrow("none (terminal)");
   });
 });

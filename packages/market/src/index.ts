@@ -27,7 +27,14 @@ export { allocateBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";
 export { computeServiceReputation } from "./reputation.js";
 export type { ReputationSnapshot } from "./reputation.js";
-export { settleOnReceipt, validateAllocation, computeGrossAmount } from "./settlement.js";
+export {
+  settleOnReceipt,
+  validateAllocation,
+  computeGrossAmount,
+  canTransitionAllocation,
+  assertAllocationTransition,
+} from "./settlement.js";
+export type { AllocationStatus } from "./settlement.js";
 export { scoreQuality } from "./quality-gate.js";
 export type { QualityScore, QualityGateConfig } from "./quality-gate.js";
 export { scoreResultQuality, QUALITY_FAILURE_THRESHOLD } from "./quality.js";

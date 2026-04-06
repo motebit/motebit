@@ -7,6 +7,47 @@ import type {
   SettlementRecord,
 } from "@motebit/protocol";
 
+// ---------------------------------------------------------------------------
+// Allocation state machine — the canonical transitions for budget allocations.
+// An allocation can only be claimed once. Settlement and refund are mutually
+// exclusive terminal states. This prevents double-spend: if a late-arriving
+// receipt settles an allocation, the retry refund path cannot also release it.
+// ---------------------------------------------------------------------------
+
+export type AllocationStatus = BudgetAllocation["status"];
+
+/** Valid allocation status transitions. Every transition not listed here is illegal. */
+const VALID_TRANSITIONS: ReadonlyMap<AllocationStatus, ReadonlySet<AllocationStatus>> = new Map([
+  ["locked", new Set<AllocationStatus>(["settled", "released", "disputed"])],
+  ["disputed", new Set<AllocationStatus>(["settled", "released"])],
+  // settled and released are terminal — no outbound transitions
+  ["settled", new Set<AllocationStatus>()],
+  ["released", new Set<AllocationStatus>()],
+]);
+
+/**
+ * Check whether an allocation status transition is valid.
+ * Relays must call this before any status change to enforce the state machine.
+ */
+export function canTransitionAllocation(from: AllocationStatus, to: AllocationStatus): boolean {
+  const allowed = VALID_TRANSITIONS.get(from);
+  return allowed !== undefined && allowed.has(to);
+}
+
+/**
+ * Assert that an allocation status transition is valid. Throws with a
+ * descriptive message if the transition is illegal — use this in code paths
+ * where an invalid transition is a programming error, not a user input issue.
+ */
+export function assertAllocationTransition(from: AllocationStatus, to: AllocationStatus): void {
+  if (!canTransitionAllocation(from, to)) {
+    throw new Error(
+      `illegal allocation transition: ${from} → ${to}. ` +
+        `Valid transitions from '${from}': [${[...(VALID_TRANSITIONS.get(from) ?? [])].join(", ") || "none (terminal)"}]`,
+    );
+  }
+}
+
 /**
  * Round to 6 decimal places (USDC precision). When the relay stores amounts
  * as integer micro-units (1 USD = 1,000,000), this is equivalent to rounding
