@@ -129,6 +129,9 @@ describe("detectOllamaModels", () => {
 
 // ─── createProvider ──────────────────────────────────────────────────
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock classes expose .config
+const cfg = (p: unknown): Record<string, any> => (p as { config: Record<string, unknown> }).config;
+
 describe("createProvider", () => {
   it("creates anthropic provider via CloudProvider", () => {
     const provider = createProvider({
@@ -137,8 +140,8 @@ describe("createProvider", () => {
       apiKey: "sk-test",
     });
     expect(provider).toBeDefined();
-    expect((provider as { config: Record<string, unknown> }).config.provider).toBe("anthropic");
-    expect((provider as { config: Record<string, unknown> }).config.api_key).toBe("sk-test");
+    expect(cfg(provider).provider).toBe("anthropic");
+    expect(cfg(provider).api_key).toBe("sk-test");
   });
 
   it("creates openai provider via CloudProvider", () => {
@@ -149,7 +152,7 @@ describe("createProvider", () => {
       baseUrl: "https://api.openai.com/v1",
     });
     expect(provider).toBeDefined();
-    expect((provider as { config: Record<string, unknown> }).config.provider).toBe("openai");
+    expect(cfg(provider).provider).toBe("openai");
   });
 
   it("creates ollama provider via OllamaProvider", () => {
@@ -158,10 +161,8 @@ describe("createProvider", () => {
       model: "llama3",
     });
     expect(provider).toBeDefined();
-    expect((provider as { config: Record<string, unknown> }).config.model).toBe("llama3");
-    expect((provider as { config: Record<string, unknown> }).config.base_url).toBe(
-      "http://127.0.0.1:11434",
-    );
+    expect(cfg(provider).model).toBe("llama3");
+    expect(cfg(provider).base_url).toBe("http://127.0.0.1:11434");
   });
 
   it("creates webllm provider", () => {
@@ -181,15 +182,10 @@ describe("createProvider", () => {
       proxyToken: "tok_abc",
     });
     expect(provider).toBeDefined();
-    expect((provider as { config: Record<string, unknown> }).config.provider).toBe("anthropic");
-    expect(
-      (
-        (provider as { config: Record<string, unknown> }).config.extra_headers as Record<
-          string,
-          string
-        >
-      )?.["x-proxy-token"],
-    ).toBe("tok_abc");
+    expect(cfg(provider).provider).toBe("anthropic");
+    expect((cfg(provider).extra_headers as Record<string, string>)?.["x-proxy-token"]).toBe(
+      "tok_abc",
+    );
   });
 
   it("creates proxy provider without token", () => {
@@ -198,7 +194,7 @@ describe("createProvider", () => {
       model: "claude-sonnet-4-20250514",
     });
     expect(provider).toBeDefined();
-    expect((provider as { config: Record<string, unknown> }).config.extra_headers).toBeUndefined();
+    expect(cfg(provider).extra_headers).toBeUndefined();
   });
 });
 
