@@ -1524,8 +1524,8 @@ export class MobileApp {
   async registerPushToken(syncUrl: string): Promise<void> {
     try {
       const { status } = await Notifications.getPermissionsAsync();
-      let finalStatus = status;
-      if (status !== "granted") {
+      let finalStatus: string = status;
+      if (finalStatus !== "granted") {
         const { status: asked } = await Notifications.requestPermissionsAsync();
         finalStatus = asked;
       }
