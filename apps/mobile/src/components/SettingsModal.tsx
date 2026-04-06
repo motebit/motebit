@@ -349,6 +349,7 @@ export function SettingsModal({
                 model={draft.model}
                 apiKey={apiKey}
                 ollamaEndpoint={draft.ollamaEndpoint}
+                localBackend={draft.localBackend ?? "apple-fm"}
                 voiceEnabled={draft.voiceEnabled}
                 voiceResponseEnabled={draft.voiceResponseEnabled}
                 voiceAutoSend={draft.voiceAutoSend}
@@ -359,16 +360,19 @@ export function SettingsModal({
                   updateDraft({
                     provider: p,
                     model:
-                      p === "ollama"
-                        ? DEFAULT_OLLAMA_MODEL
-                        : p === "openai"
-                          ? DEFAULT_OPENAI_MODEL
-                          : DEFAULT_ANTHROPIC_MODEL,
+                      p === "local"
+                        ? "on-device"
+                        : p === "ollama"
+                          ? DEFAULT_OLLAMA_MODEL
+                          : p === "openai"
+                            ? DEFAULT_OPENAI_MODEL
+                            : DEFAULT_ANTHROPIC_MODEL,
                   })
                 }
                 onChangeModel={(m) => updateDraft({ model: m })}
                 onChangeApiKey={setApiKey}
                 onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
+                onChangeLocalBackend={(b) => updateDraft({ localBackend: b })}
                 onChangeVoiceEnabled={(v) => updateDraft({ voiceEnabled: v })}
                 onChangeVoiceResponseEnabled={(v) => updateDraft({ voiceResponseEnabled: v })}
                 onChangeVoiceAutoSend={(v) => updateDraft({ voiceAutoSend: v })}
@@ -704,11 +708,184 @@ const TTS_VOICE_OPTIONS = [
   { key: "shimmer", label: "Shimmer" },
 ];
 
+// === On-Device Section ===
+
+function OnDeviceSection({
+  localBackend,
+  onChangeBackend,
+}: {
+  localBackend: "apple-fm" | "mlx";
+  onChangeBackend: (b: "apple-fm" | "mlx") => void;
+}) {
+  const colors = useTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
+  const [capabilities, setCapabilities] = useState<{
+    appleFM: boolean;
+    mlx: boolean;
+    deviceMemoryGB: number;
+  } | null>(null);
+  const [mlxStatus, setMlxStatus] = useState<"none" | "downloading" | "ready">("none");
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const mod = await import("../../modules/expo-local-inference");
+        const caps = mod.default.getCapabilities();
+        setCapabilities(caps);
+        // Check if MLX model is already downloaded
+        const { getDownloadedModels } = await import("../adapters/mlx-model-manager");
+        const models = await getDownloadedModels();
+        if (models.length > 0) setMlxStatus("ready");
+      } catch {
+        // Native module not available (dev build needed)
+      }
+    })();
+  }, []);
+
+  const handleDownloadModel = useCallback(async () => {
+    setMlxStatus("downloading");
+    setDownloadProgress(0);
+    try {
+      const { downloadModel } = await import("../adapters/mlx-model-manager");
+      await downloadModel(undefined, (p) => setDownloadProgress(p));
+      setMlxStatus("ready");
+    } catch {
+      setMlxStatus("none");
+      Alert.alert("Download failed", "Could not download the model. Check your connection.");
+    }
+  }, []);
+
+  const handleDeleteModel = useCallback(async () => {
+    try {
+      const { deleteModel, DEFAULT_MLX_MODEL } = await import("../adapters/mlx-model-manager");
+      await deleteModel(DEFAULT_MLX_MODEL);
+      setMlxStatus("none");
+      setDownloadProgress(0);
+    } catch {
+      // Ignore delete errors
+    }
+  }, []);
+
+  if (capabilities == null) {
+    return (
+      <View style={{ marginTop: 12 }}>
+        <Text style={styles.radioDesc}>Checking device capabilities...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ marginTop: 12, gap: 12 }}>
+      {capabilities.appleFM && (
+        <TouchableOpacity
+          style={[styles.radioItem, localBackend === "apple-fm" && styles.radioActive]}
+          onPress={() => onChangeBackend("apple-fm")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, localBackend === "apple-fm" && styles.radioTextActive]}>
+            Apple Intelligence
+          </Text>
+          <Text style={styles.radioDesc}>Built-in. No download needed. Runs on Neural Engine.</Text>
+        </TouchableOpacity>
+      )}
+
+      {capabilities.mlx && (
+        <TouchableOpacity
+          style={[styles.radioItem, localBackend === "mlx" && styles.radioActive]}
+          onPress={() => onChangeBackend("mlx")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, localBackend === "mlx" && styles.radioTextActive]}>
+            Custom Model (MLX)
+          </Text>
+          <Text style={styles.radioDesc}>
+            Llama 3.2 1B. Your model, your device, fully sovereign.
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {localBackend === "mlx" && (
+        <View style={{ marginTop: 4, gap: 8 }}>
+          {mlxStatus === "none" && (
+            <TouchableOpacity
+              style={[styles.radioItem, { borderColor: colors.accent }]}
+              onPress={() => void handleDownloadModel()}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.radioText, { color: colors.accent }]}>
+                Download Model (~800 MB)
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {mlxStatus === "downloading" && (
+            <View style={styles.radioItem}>
+              <Text style={styles.radioText}>
+                Downloading... {Math.round(downloadProgress * 100)}%
+              </Text>
+              <View
+                style={{
+                  height: 4,
+                  borderRadius: 2,
+                  backgroundColor: colors.borderPrimary,
+                  marginTop: 8,
+                  overflow: "hidden",
+                }}
+              >
+                <View
+                  style={{
+                    height: 4,
+                    borderRadius: 2,
+                    backgroundColor: colors.accent,
+                    width: `${Math.round(downloadProgress * 100)}%`,
+                  }}
+                />
+              </View>
+            </View>
+          )}
+
+          {mlxStatus === "ready" && (
+            <View
+              style={[
+                styles.radioItem,
+                { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+              ]}
+            >
+              <Text style={styles.radioText}>Model ready</Text>
+              <TouchableOpacity onPress={() => void handleDeleteModel()}>
+                <Text style={{ color: colors.textMuted, fontSize: 13 }}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
+
+      {!capabilities.appleFM && !capabilities.mlx && (
+        <Text style={styles.radioDesc}>
+          On-device inference requires iOS 26 (Apple Intelligence) or 3GB+ RAM (MLX).
+        </Text>
+      )}
+
+      {capabilities.appleFM && !capabilities.mlx && (
+        <Text style={styles.radioDesc}>
+          {capabilities.deviceMemoryGB}GB RAM. Apple Intelligence available.
+        </Text>
+      )}
+    </View>
+  );
+}
+
+// === Intelligence Tab ===
+
+type ProviderType = "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local";
+
 function IntelligenceTab({
   provider,
   model,
   apiKey,
   ollamaEndpoint,
+  localBackend,
   voiceEnabled,
   voiceResponseEnabled,
   voiceAutoSend,
@@ -719,6 +896,7 @@ function IntelligenceTab({
   onChangeModel,
   onChangeApiKey,
   onChangeOllamaEndpoint,
+  onChangeLocalBackend,
   onChangeVoiceEnabled,
   onChangeVoiceResponseEnabled,
   onChangeVoiceAutoSend,
@@ -726,20 +904,22 @@ function IntelligenceTab({
   onChangeOpenaiKey,
   onChangeNeuralVadEnabled,
 }: {
-  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local";
+  provider: ProviderType;
   model: string;
   apiKey: string;
   ollamaEndpoint: string;
+  localBackend: "apple-fm" | "mlx";
   voiceEnabled: boolean;
   voiceResponseEnabled: boolean;
   voiceAutoSend: boolean;
   ttsVoice: string;
   openaiKey: string;
   neuralVadEnabled: boolean;
-  onChangeProvider: (p: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local") => void;
+  onChangeProvider: (p: ProviderType) => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeOllamaEndpoint: (e: string) => void;
+  onChangeLocalBackend: (b: "apple-fm" | "mlx") => void;
   onChangeVoiceEnabled: (v: boolean) => void;
   onChangeVoiceResponseEnabled: (v: boolean) => void;
   onChangeVoiceAutoSend: (v: boolean) => void;
@@ -811,14 +991,22 @@ function IntelligenceTab({
         )}
       </View>
 
-      <Text style={styles.sectionTitle}>Model</Text>
-      <TextInput
-        style={styles.textField}
-        value={model}
-        onChangeText={onChangeModel}
-        placeholder="Model name"
-        placeholderTextColor={colors.inputPlaceholder}
-      />
+      {provider === "local" && (
+        <OnDeviceSection localBackend={localBackend} onChangeBackend={onChangeLocalBackend} />
+      )}
+
+      {provider !== "local" && (
+        <>
+          <Text style={styles.sectionTitle}>Model</Text>
+          <TextInput
+            style={styles.textField}
+            value={model}
+            onChangeText={onChangeModel}
+            placeholder="Model name"
+            placeholderTextColor={colors.inputPlaceholder}
+          />
+        </>
+      )}
 
       {(provider === "ollama" || provider === "hybrid") && (
         <>
