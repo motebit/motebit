@@ -233,6 +233,128 @@ describe("Settlement Retry Exhaustion Refund", () => {
   });
 });
 
+// === Part A.2: Double-spend prevention ===
+// Verifies that the refund callback cannot credit the delegator if the allocation
+// has already been settled (e.g., a late-arriving receipt settled the worker).
+
+describe("Refund double-spend prevention", () => {
+  let db: DatabaseDriver;
+  let identity: RelayIdentity;
+
+  beforeEach(async () => {
+    const keypair = await generateKeypair();
+    identity = {
+      relayMotebitId: `relay-${crypto.randomUUID()}`,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: bytesToHex(keypair.publicKey),
+      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
+    };
+
+    const moteDb = await openMotebitDatabase(":memory:");
+    createFederationTables(moteDb.db);
+    moteDb.db.exec(
+      "CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)",
+    );
+    // Create accounts + allocations tables for refund testing
+    moteDb.db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_accounts (
+        motebit_id TEXT PRIMARY KEY,
+        balance INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS relay_allocations (
+        allocation_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE,
+        motebit_id TEXT NOT NULL,
+        amount_locked INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'locked',
+        created_at INTEGER NOT NULL,
+        settled_at INTEGER,
+        released_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS relay_transactions (
+        transaction_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        reference_id TEXT,
+        description TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS relay_refund_log (
+        refund_id TEXT PRIMARY KEY,
+        retry_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        allocation_id TEXT NOT NULL,
+        delegator_id TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'completed',
+        error TEXT,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    db = moteDb.db;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("skips refund when allocation is already settled", async () => {
+    const taskId = `task-${crypto.randomUUID()}`;
+    const allocId = `alloc-${crypto.randomUUID()}`;
+    const delegatorId = "delegator-1";
+
+    // Create a settled allocation (simulates: receipt arrived and settled before retry exhaustion)
+    db.prepare("INSERT INTO relay_accounts (motebit_id, balance) VALUES (?, ?)").run(
+      delegatorId,
+      0,
+    );
+    db.prepare(
+      "INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at, settled_at) VALUES (?, ?, ?, ?, 'settled', ?, ?)",
+    ).run(allocId, taskId, delegatorId, 500_000, Date.now(), Date.now());
+
+    insertPeer(db, "peer-1", "http://peer.test");
+    insertRetry(db, {
+      peerRelayId: "peer-1",
+      taskId,
+      attempts: 4,
+      maxAttempts: 5,
+    });
+
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("Unreachable");
+    });
+
+    let callbackInvoked = false;
+    await processSettlementRetries(db, identity, (retry) => {
+      callbackInvoked = true;
+      // Simulate the refund callback from index.ts — atomic status claim
+      const claimResult = db
+        .prepare(
+          "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE task_id = ? AND status = 'locked'",
+        )
+        .run(Date.now(), retry.task_id);
+      // Should be 0 changes because allocation is already 'settled'
+      expect(claimResult.changes).toBe(0);
+    });
+
+    expect(callbackInvoked).toBe(true);
+
+    // Delegator balance unchanged — no double-spend
+    const account = db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get(delegatorId) as { balance: number };
+    expect(account.balance).toBe(0);
+
+    // Allocation still in settled state — not corrupted
+    const alloc = db
+      .prepare("SELECT status FROM relay_allocations WHERE allocation_id = ?")
+      .get(allocId) as { status: string };
+    expect(alloc.status).toBe("settled");
+  });
+});
+
 // === Part B: Recursive Multi-Hop Settlement ===
 
 describe("Recursive Multi-Hop Settlement", () => {

@@ -752,19 +752,43 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     30_000,
     (retry) => {
+      const refundId = crypto.randomUUID();
       try {
-        const alloc = moteDb.db
-          .prepare(
-            "SELECT allocation_id, task_id, motebit_id, amount_locked FROM relay_allocations WHERE task_id = ? AND status = 'locked'",
-          )
-          .get(retry.task_id) as
-          | { allocation_id: string; task_id: string; motebit_id: string; amount_locked: number }
-          | undefined;
-        if (!alloc) return;
         const taskEntry = taskQueue.get(retry.task_id);
-        const delegatorId = taskEntry?.submitted_by ?? alloc.motebit_id;
         moteDb.db.exec("BEGIN");
         try {
+          // Atomically claim the allocation: UPDATE ... WHERE status = 'locked' ensures
+          // that if settlement already completed (status = 'settled'), this is a no-op.
+          // This prevents the double-spend: settlement credits the worker AND refund credits
+          // the delegator for the same locked funds.
+          const claimResult = moteDb.db
+            .prepare(
+              "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE task_id = ? AND status = 'locked'",
+            )
+            .run(Date.now(), retry.task_id);
+          if (claimResult.changes === 0) {
+            // Allocation was already settled or released — no refund needed
+            moteDb.db.exec("ROLLBACK");
+            logger.info("settlement.retry.refund_skipped", {
+              retryId: retry.retry_id,
+              taskId: retry.task_id,
+              reason: "allocation not in locked state (already settled or released)",
+            });
+            return;
+          }
+          // Allocation claimed — now safe to credit the delegator
+          const alloc = moteDb.db
+            .prepare(
+              "SELECT allocation_id, motebit_id, amount_locked FROM relay_allocations WHERE task_id = ?",
+            )
+            .get(retry.task_id) as
+            | { allocation_id: string; motebit_id: string; amount_locked: number }
+            | undefined;
+          if (!alloc) {
+            moteDb.db.exec("ROLLBACK");
+            return;
+          }
+          const delegatorId = taskEntry?.submitted_by ?? alloc.motebit_id;
           creditAccount(
             moteDb.db,
             delegatorId,
@@ -773,23 +797,45 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             alloc.allocation_id,
             `Retry exhaustion refund for task ${retry.task_id}`,
           );
+          // Persist refund record for audit trail
           moteDb.db
             .prepare(
-              "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE allocation_id = ?",
+              "INSERT OR IGNORE INTO relay_refund_log (refund_id, retry_id, task_id, allocation_id, delegator_id, amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)",
             )
-            .run(Date.now(), alloc.allocation_id);
+            .run(
+              refundId,
+              retry.retry_id,
+              retry.task_id,
+              alloc.allocation_id,
+              delegatorId,
+              alloc.amount_locked,
+              Date.now(),
+            );
           moteDb.db.exec("COMMIT");
           logger.info("settlement.retry.refunded", {
+            refundId,
             taskId: retry.task_id,
             allocationId: alloc.allocation_id,
             amount: alloc.amount_locked,
             delegator: delegatorId,
           });
-        } catch {
+        } catch (txnErr) {
           moteDb.db.exec("ROLLBACK");
+          // Log the failed refund attempt for operator visibility
+          logger.error("settlement.retry.refund_txn_failed", {
+            refundId,
+            retryId: retry.retry_id,
+            taskId: retry.task_id,
+            error: txnErr instanceof Error ? txnErr.message : String(txnErr),
+          });
         }
-      } catch {
-        /* Best-effort refund */
+      } catch (err) {
+        logger.error("settlement.retry.refund_error", {
+          refundId,
+          retryId: retry.retry_id,
+          taskId: retry.task_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     },
     () => getEmergencyFreeze(),

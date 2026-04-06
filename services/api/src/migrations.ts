@@ -406,4 +406,24 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    name: "add_refund_log",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_refund_log (
+          refund_id TEXT PRIMARY KEY,
+          retry_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          allocation_id TEXT NOT NULL,
+          delegator_id TEXT NOT NULL,
+          amount INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'completed',
+          error TEXT,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_refund_log_task ON relay_refund_log(task_id);
+      `);
+    },
+  },
 ];
