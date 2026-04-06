@@ -328,14 +328,14 @@ export async function POST(request: Request): Promise<Response> {
     resolvedModel = resolveModelAlias(resolvedModel);
   }
 
-  // Auto-routing: classify with Haiku, pick the best model the balance can afford
+  // Auto-routing: classify with Haiku, pick the best model the balance can afford (Sonnet → Haiku → Flash-Lite)
   let classifierCost = 0;
   if (resolvedModel === "auto" && !isBYOK) {
     const classifierKey = process.env.ANTHROPIC_API_KEY;
     if (classifierKey) {
       const lastMsg = (body.messages as Array<{ content: string }>)?.at(-1)?.content ?? "";
       const taskType = await classifyTask(classifierKey, lastMsg);
-      // Pick best model within balance — downgrades Opus → Sonnet → Haiku if needed
+      // Pick best model within balance — downgrades Opus → Sonnet → Haiku → Flash-Lite if needed
       const balance = tokenPayload?.bal ?? 0;
       const picked = getAffordableModelForTask(taskType, balance);
       // Check if the picked model's provider is configured
@@ -345,7 +345,7 @@ export async function POST(request: Request): Promise<Response> {
       } else {
         resolvedModel = AUTO_DEFAULT_MODEL; // fallback to Sonnet
       }
-      // Estimate classifier cost (~200 tokens in + ~20 tokens out on Haiku)
+      // Estimate classifier cost (~200 tokens in + ~20 tokens out via Haiku)
       classifierCost = calculateCostMicro(CLASSIFIER_MODEL, 200, 20);
     } else {
       resolvedModel = AUTO_DEFAULT_MODEL;

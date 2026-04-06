@@ -58,14 +58,15 @@ const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: 
   "claude-opus-4-6": { provider: "anthropic", input: 5.0, output: 25.0 },
   "claude-sonnet-4-6": { provider: "anthropic", input: 3.0, output: 15.0 },
   "claude-haiku-4-5-20251001": { provider: "anthropic", input: 1.0, output: 5.0 },
-  // OpenAI — gpt-5.4 (strongest), gpt-5.4-mini (default), gpt-5.4-nano (fast)
-  "gpt-5.4": { provider: "openai", input: 10.0, output: 30.0 },
-  "gpt-5.4-mini": { provider: "openai", input: 1.5, output: 6.0 },
-  "gpt-5.4-nano": { provider: "openai", input: 0.15, output: 0.6 },
+  // OpenAI — gpt-5.4 (strongest), gpt-5.4-mini (mid), gpt-5.4-nano (fast)
+  "gpt-5.4": { provider: "openai", input: 2.5, output: 15.0 },
+  "gpt-5.4-mini": { provider: "openai", input: 0.75, output: 4.5 },
+  "gpt-5.4-nano": { provider: "openai", input: 0.2, output: 1.25 },
   // Google — 2.5 pro (strongest), 2.5 flash (default), 2.5 flash-lite (fast)
+  // Note: Pro has tiered pricing (>200k: $2.50/$15). Using ≤200k rate; acceptable margin risk.
   "gemini-2.5-pro": { provider: "google", input: 1.25, output: 10.0 },
-  "gemini-2.5-flash": { provider: "google", input: 0.15, output: 0.6 },
-  "gemini-2.5-flash-lite": { provider: "google", input: 0.075, output: 0.3 },
+  "gemini-2.5-flash": { provider: "google", input: 0.3, output: 2.5 },
+  "gemini-2.5-flash-lite": { provider: "google", input: 0.1, output: 0.4 },
 };
 
 /**
@@ -108,8 +109,11 @@ export function resolveModelAlias(model: string): string {
   return MODEL_ALIASES[model] ?? model;
 }
 
-/** The classifier model used for auto-routing. Cheapest available. */
+/** The classifier model used for auto-routing. Must be an Anthropic model (classifyTask calls Anthropic API). */
 export const CLASSIFIER_MODEL = "claude-haiku-4-5-20251001";
+
+/** Cheapest model across all providers — used as last-resort fallback when balance is near zero. */
+export const CHEAPEST_MODEL = "gemini-2.5-flash-lite";
 
 /** Model recommendations by task type. */
 const TASK_MODEL_MAP: Record<string, string> = {
@@ -137,23 +141,23 @@ const ESTIMATED_INPUT_TOKENS = 500;
  */
 export function getAffordableModelForTask(taskType: string, balanceMicro: number): string {
   const preferred = TASK_MODEL_MAP[taskType] ?? AUTO_DEFAULT_MODEL;
-  if (balanceMicro <= 0) return CLASSIFIER_MODEL;
+  if (balanceMicro <= 0) return CHEAPEST_MODEL;
 
   const cost = calculateCostMicro(preferred, ESTIMATED_INPUT_TOKENS, ESTIMATED_OUTPUT_TOKENS);
   if (cost <= balanceMicro) return preferred;
 
-  // Walk down the fallback chain: Sonnet → Haiku
+  // Walk down the fallback chain: Sonnet → Haiku → Flash-Lite
   for (const fallback of FALLBACK_CHAIN) {
     const fbCost = calculateCostMicro(fallback, ESTIMATED_INPUT_TOKENS, ESTIMATED_OUTPUT_TOKENS);
     if (fbCost <= balanceMicro) return fallback;
   }
 
-  // Even Haiku is too expensive — return Haiku anyway (debit will absorb the small overrun)
-  return CLASSIFIER_MODEL;
+  // Even Flash-Lite is too expensive — return it anyway (debit will absorb the small overrun)
+  return CHEAPEST_MODEL;
 }
 
-/** Cheapest-first fallback chain for auto-routing when balance is low. */
-const FALLBACK_CHAIN = [AUTO_DEFAULT_MODEL, CLASSIFIER_MODEL];
+/** Fallback chain for auto-routing when balance is low: Sonnet → Haiku → Flash-Lite. */
+const FALLBACK_CHAIN = [AUTO_DEFAULT_MODEL, CLASSIFIER_MODEL, CHEAPEST_MODEL];
 
 /** Get the recommended model for a task type (no balance check). */
 export function getModelForTaskType(taskType: string): string {

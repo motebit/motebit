@@ -7,6 +7,7 @@ import {
   calculateCostMicro,
   resolveModelAlias,
   CLASSIFIER_MODEL,
+  CHEAPEST_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../validation.js";
 
@@ -96,17 +97,17 @@ describe("calculateCostMicro", () => {
   });
 
   it("gpt-5.4-mini: 1000 in / 500 out", () => {
-    // raw = (1000/1e6)*1.5 + (500/1e6)*6.0 = 0.0015 + 0.003 = 0.0045
-    // with margin = 0.0045 * 1.2 = 0.0054
-    // micro = ceil(0.0054 * 1e6) = 5400
-    expect(calculateCostMicro("gpt-5.4-mini", 1000, 500)).toBe(5400);
+    // raw = (1000/1e6)*0.75 + (500/1e6)*4.5 = 0.00075 + 0.00225 = 0.003
+    // with margin = 0.003 * 1.2 = 0.0036
+    // micro = ceil(0.0036 * 1e6) = 3600
+    expect(calculateCostMicro("gpt-5.4-mini", 1000, 500)).toBe(3600);
   });
 
   it("gpt-5.4-nano: 1000 in / 500 out", () => {
-    // raw = (1000/1e6)*0.15 + (500/1e6)*0.6 = 0.00015 + 0.0003 = 0.00045
-    // with margin = 0.00045 * 1.2 = 0.00054
-    // micro = ceil(0.00054 * 1e6) = 540
-    expect(calculateCostMicro("gpt-5.4-nano", 1000, 500)).toBe(540);
+    // raw = (1000/1e6)*0.2 + (500/1e6)*1.25 = 0.0002 + 0.000625 = 0.000825
+    // with margin = 0.000825 * 1.2 = 0.00099
+    // micro = ceil(0.00099 * 1e6) = 990
+    expect(calculateCostMicro("gpt-5.4-nano", 1000, 500)).toBe(990);
   });
 
   it("gemini-2.5-pro: 1000 in / 500 out", () => {
@@ -117,10 +118,10 @@ describe("calculateCostMicro", () => {
   });
 
   it("gemini-2.5-flash: 1000 in / 500 out", () => {
-    // raw = (1000/1e6)*0.15 + (500/1e6)*0.6 = 0.00015 + 0.0003 = 0.00045
-    // with margin = 0.00045 * 1.2 = 0.00054
-    // micro = ceil(0.00054 * 1e6) = 540
-    expect(calculateCostMicro("gemini-2.5-flash", 1000, 500)).toBe(540);
+    // raw = (1000/1e6)*0.3 + (500/1e6)*2.5 = 0.0003 + 0.00125 = 0.00155
+    // with margin = 0.00155 * 1.2 = 0.00186
+    // micro = ceil(0.00186 * 1e6) = 1860
+    expect(calculateCostMicro("gemini-2.5-flash", 1000, 500)).toBe(1860);
   });
 
   it("returns 0 for unknown model", () => {
@@ -153,8 +154,18 @@ describe("constant validity", () => {
     expect(getModelProvider(CLASSIFIER_MODEL)).not.toBeNull();
   });
 
+  it("CHEAPEST_MODEL has a configured provider", () => {
+    expect(getModelProvider(CHEAPEST_MODEL)).not.toBeNull();
+  });
+
   it("AUTO_DEFAULT_MODEL has a configured provider", () => {
     expect(getModelProvider(AUTO_DEFAULT_MODEL)).not.toBeNull();
+  });
+
+  it("CHEAPEST_MODEL is cheaper than CLASSIFIER_MODEL", () => {
+    const cheapCost = calculateCostMicro(CHEAPEST_MODEL, 1000, 500);
+    const classifierCost = calculateCostMicro(CLASSIFIER_MODEL, 1000, 500);
+    expect(cheapCost).toBeLessThan(classifierCost);
   });
 });
 
@@ -178,28 +189,33 @@ describe("getAffordableModelForTask — balance-aware routing", () => {
   });
 
   it("downgrades Opus to Sonnet when balance is low", () => {
-    // $0.01 = 10_000 micro. Opus costs ~33k, Sonnet costs ~22k.
+    // $0.01 = 10_000 micro. Opus costs ~21k, Sonnet costs ~13k, Haiku ~4k.
     const model = getAffordableModelForTask("reasoning", 10_000);
     expect(model).not.toBe("claude-opus-4-6");
-    // Should fall back to Sonnet or Haiku
-    expect(["claude-sonnet-4-6", "claude-haiku-4-5-20251001", AUTO_DEFAULT_MODEL]).toContain(model);
+    // Should fall back to Sonnet, Haiku, or Flash-Lite
+    expect([
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5-20251001",
+      CLASSIFIER_MODEL,
+      AUTO_DEFAULT_MODEL,
+    ]).toContain(model);
   });
 
-  it("downgrades Sonnet to Haiku when balance is very low", () => {
-    // $0.01 = 10_000 micro. Sonnet costs ~20k, Haiku costs ~7k.
+  it("downgrades Sonnet to Haiku when balance can afford it", () => {
+    // $0.01 = 10_000 micro. Sonnet costs ~13k (too much), Haiku costs ~6.6k (fits).
     const model = getAffordableModelForTask("chat", 10_000);
     expect(model).toBe(CLASSIFIER_MODEL); // Haiku
   });
 
-  it("returns Haiku even when balance is near zero", () => {
-    // Even at $0.001, returns Haiku (cheapest, will absorb tiny overrun)
-    const model = getAffordableModelForTask("reasoning", 1_000);
-    expect(model).toBe(CLASSIFIER_MODEL);
+  it("returns Flash-Lite even when balance is near zero", () => {
+    // Even at $0.0001, returns Flash-Lite (cheapest, will absorb tiny overrun)
+    const model = getAffordableModelForTask("reasoning", 100);
+    expect(model).toBe(CHEAPEST_MODEL);
   });
 
-  it("returns Haiku for zero balance", () => {
+  it("returns Flash-Lite for zero balance", () => {
     const model = getAffordableModelForTask("reasoning", 0);
-    expect(model).toBe(CLASSIFIER_MODEL);
+    expect(model).toBe(CHEAPEST_MODEL);
   });
 
   it("returns preferred model for cheap tasks with low balance", () => {

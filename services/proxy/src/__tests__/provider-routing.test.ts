@@ -5,6 +5,7 @@ import {
   calculateCostMicro,
   getSupportedModels,
   CLASSIFIER_MODEL,
+  CHEAPEST_MODEL,
   AUTO_DEFAULT_MODEL,
   DEPOSIT_LIMITS,
   BYOK_LIMITS,
@@ -88,16 +89,16 @@ describe("cost calculation", () => {
     expect(calculateCostMicro("claude-haiku-4-5-20251001", 1000, 100)).toBe(1800);
   });
 
-  it("gpt-5.4-mini: 1000 in + 100 out = 2520 micro", () => {
-    // raw = (1000/1M)*1.5 + (100/1M)*6.0 = 0.0015 + 0.0006 = 0.0021
-    // with margin = 0.00252, micro = ceil(2520) = 2520
-    expect(calculateCostMicro("gpt-5.4-mini", 1000, 100)).toBe(2520);
+  it("gpt-5.4-mini: 1000 in + 100 out = 1440 micro", () => {
+    // raw = (1000/1M)*0.75 + (100/1M)*4.5 = 0.00075 + 0.00045 = 0.0012
+    // with margin = 0.00144, micro = ceil(1440) = 1440
+    expect(calculateCostMicro("gpt-5.4-mini", 1000, 100)).toBe(1440);
   });
 
-  it("gpt-5.4-nano: 1000 in + 100 out = 252 micro", () => {
-    // raw = (1000/1M)*0.15 + (100/1M)*0.6 = 0.00015 + 0.00006 = 0.00021
-    // with margin = 0.000252, micro = ceil(252) = 252
-    expect(calculateCostMicro("gpt-5.4-nano", 1000, 100)).toBe(252);
+  it("gpt-5.4-nano: 1000 in + 100 out = 390 micro", () => {
+    // raw = (1000/1M)*0.2 + (100/1M)*1.25 = 0.0002 + 0.000125 = 0.000325
+    // with margin = 0.00039, micro = ceil(390) = 390
+    expect(calculateCostMicro("gpt-5.4-nano", 1000, 100)).toBe(390);
   });
 
   it("gemini-2.5-pro: 1000 in + 100 out = 2700 micro", () => {
@@ -106,10 +107,10 @@ describe("cost calculation", () => {
     expect(calculateCostMicro("gemini-2.5-pro", 1000, 100)).toBe(2700);
   });
 
-  it("gemini-2.5-flash: 1000 in + 100 out = 252 micro", () => {
-    // raw = (1000/1M)*0.15 + (100/1M)*0.6 = 0.00015 + 0.00006 = 0.00021
-    // with margin = 0.000252, micro = ceil(252) = 252
-    expect(calculateCostMicro("gemini-2.5-flash", 1000, 100)).toBe(252);
+  it("gemini-2.5-flash: 1000 in + 100 out = 660 micro", () => {
+    // raw = (1000/1M)*0.3 + (100/1M)*2.5 = 0.0003 + 0.00025 = 0.00055
+    // with margin = 0.00066, micro = ceil(660) = 660
+    expect(calculateCostMicro("gemini-2.5-flash", 1000, 100)).toBe(660);
   });
 
   it("unknown model returns 0", () => {
@@ -144,6 +145,10 @@ describe("routing integrity", () => {
 
   it("AUTO_DEFAULT_MODEL has a provider configured", () => {
     expect(getModelProvider(AUTO_DEFAULT_MODEL)).not.toBeNull();
+  });
+
+  it("CHEAPEST_MODEL has a provider configured", () => {
+    expect(getModelProvider(CHEAPEST_MODEL)).not.toBeNull();
   });
 
   it("all supported models have providers", () => {
