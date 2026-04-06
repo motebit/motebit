@@ -39,8 +39,8 @@
     "@motebit/voice": "workspace:*",
     "@ricky0123/vad-web": "^0.0.30",
     "@tauri-apps/api": "^2.0.0",
-    "onnxruntime-web": "^1.24.1",
-    "three": "^0.170.0"
+    "onnxruntime-web": "^1.24.3",
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",
