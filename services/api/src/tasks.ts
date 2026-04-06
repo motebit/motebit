@@ -45,6 +45,7 @@ import {
   explainedRankCandidates,
   settleOnReceipt,
   allocateBudget,
+  computeGrossAmount,
   weightedSumComposite,
   lexicographicComposite,
 } from "@motebit/market";
@@ -549,7 +550,7 @@ export async function handleReceiptIngestion(
         const subUnitCost = getListingUnitCost(moteDb, sub.motebit_id as string);
         const subGross =
           subEntry.price_snapshot ??
-          (subUnitCost > 0 ? toMicro(subUnitCost / (1 - PLATFORM_FEE_RATE)) : 0);
+          (subUnitCost > 0 ? toMicro(computeGrossAmount(subUnitCost, PLATFORM_FEE_RATE)) : 0);
         if (subGross <= 0) {
           // No cost — still recurse into nested receipts
           const nestedReceipts = sub.delegation_receipts ?? [];
@@ -686,7 +687,9 @@ export async function handleReceiptIngestion(
       const grossAmount =
         entry.price_snapshot ??
         persistentAlloc?.amount_locked ??
-        (fallbackUnitCost > 0 ? toMicro(fallbackUnitCost / (1 - PLATFORM_FEE_RATE)) : 0);
+        (fallbackUnitCost > 0
+          ? toMicro(computeGrossAmount(fallbackUnitCost, PLATFORM_FEE_RATE))
+          : 0);
 
       const settlementId = asSettlementId(crypto.randomUUID());
       const allocationId = persistentAlloc
@@ -1071,7 +1074,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           network,
           price: () => {
             if (!currentPricing) return "$0";
-            const gross = currentPricing.unitCost / (1 - PLATFORM_FEE_RATE);
+            const gross = computeGrossAmount(currentPricing.unitCost, PLATFORM_FEE_RATE);
             return `$${gross.toFixed(6)}`;
           },
           payTo: () => {
@@ -1171,7 +1174,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         }
 
         if (delegatorId) {
-          const grossMicro = toMicro(currentPricing.unitCost / (1 - PLATFORM_FEE_RATE));
+          const grossMicro = toMicro(
+            computeGrossAmount(currentPricing.unitCost, PLATFORM_FEE_RATE),
+          );
           const account = getAccountBalance(moteDb.db, delegatorId);
           if (account && account.balance >= grossMicro) {
             return next();
@@ -1290,7 +1295,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     const unitCostAtSubmission = getListingUnitCost(moteDb, motebitId);
     const priceSnapshot =
       unitCostAtSubmission > 0
-        ? toMicro(unitCostAtSubmission / (1 - PLATFORM_FEE_RATE)) // gross in micro-units
+        ? toMicro(computeGrossAmount(unitCostAtSubmission, PLATFORM_FEE_RATE)) // gross in micro-units
         : undefined;
 
     // Capture x402 payment proof from the settlement hook (set during middleware).

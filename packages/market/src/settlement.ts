@@ -18,6 +18,25 @@ function microRound(n: number): number {
 }
 
 /**
+ * Compute gross amount from a net unit cost and fee rate.
+ * Inverse of settlement fee extraction: gross × (1 − feeRate) = net,
+ * so gross = net / (1 − feeRate).
+ *
+ * Used when an agent advertises a net price and the relay needs to know
+ * how much to lock (gross) so the agent receives the advertised amount
+ * after the platform fee is deducted.
+ */
+export function computeGrossAmount(
+  netUnitCost: number,
+  feeRate: number = PLATFORM_FEE_RATE,
+): number {
+  if (feeRate < 0 || feeRate >= 1) {
+    throw new Error(`feeRate must be in [0, 1), got ${feeRate}`);
+  }
+  return netUnitCost / (1 - feeRate);
+}
+
+/**
  * Validate allocation invariants before settlement begins.
  * Throws on negative amount or unsafe integer range.
  */

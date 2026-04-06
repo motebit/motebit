@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { settleOnReceipt, validateAllocation } from "../settlement.js";
+import { settleOnReceipt, validateAllocation, computeGrossAmount } from "../settlement.js";
 import {
   asAllocationId,
   asGoalId,
@@ -364,5 +364,39 @@ describe("settlement validation guards", () => {
         SID,
       ),
     ).toThrow("settlement invariant: negative allocation");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeGrossAmount — inverse of fee extraction
+// ---------------------------------------------------------------------------
+
+describe("computeGrossAmount", () => {
+  it("computes gross from net at default 5% fee rate", () => {
+    // Agent charges $0.50 net. Gross = 0.50 / 0.95 ≈ 0.526316
+    const gross = computeGrossAmount(0.5);
+    expect(gross).toBeCloseTo(0.5 / 0.95, 10);
+    // After fee extraction: gross * 0.95 ≈ net
+    expect(gross * (1 - PLATFORM_FEE_RATE)).toBeCloseTo(0.5, 6);
+  });
+
+  it("roundtrips: settleOnReceipt(gross) returns the original net", () => {
+    const net = 1.0;
+    const gross = computeGrossAmount(net);
+    const alloc = makeAllocation({ amount_locked: gross });
+    const settlement = settleOnReceipt(alloc, makeReceipt(), null, SID);
+    expect(settlement.amount_settled).toBeCloseTo(net, 5);
+  });
+
+  it("returns net unchanged at zero fee rate", () => {
+    expect(computeGrossAmount(1.0, 0)).toBe(1.0);
+  });
+
+  it("throws on fee rate >= 1", () => {
+    expect(() => computeGrossAmount(1.0, 1.0)).toThrow("feeRate must be in [0, 1)");
+  });
+
+  it("throws on negative fee rate", () => {
+    expect(() => computeGrossAmount(1.0, -0.1)).toThrow("feeRate must be in [0, 1)");
   });
 });
