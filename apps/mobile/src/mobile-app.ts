@@ -1194,7 +1194,7 @@ export class MobileApp {
    */
   async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
     // 1. Load existing private key
-    const oldPrivKeyBytes = await this._getPrivKeyBytes();
+    const oldPrivKeyBytes = await this.getPrivKeyBytes();
 
     try {
       // 2. Derive old public key from the stored hex
@@ -1422,7 +1422,8 @@ export class MobileApp {
 
   // === Pairing: Device A (existing device) ===
 
-  private async _getPrivKeyBytes(): Promise<Uint8Array> {
+  /** Load device private key bytes from secure store. Caller must secureErase() when done. */
+  async getPrivKeyBytes(): Promise<Uint8Array> {
     const privKeyHex = await this.keyring.get("device_private_key");
     if (privKeyHex == null || privKeyHex === "") throw new Error("No device private key available");
     const bytes = new Uint8Array(privKeyHex.length / 2);
@@ -1432,8 +1433,8 @@ export class MobileApp {
     return bytes;
   }
 
-  private async createSyncToken(aud: string = "sync"): Promise<string> {
-    const privKeyBytes = await this._getPrivKeyBytes();
+  async createSyncToken(aud: string = "sync"): Promise<string> {
+    const privKeyBytes = await this.getPrivKeyBytes();
 
     try {
       return await createSignedToken(
@@ -1742,7 +1743,7 @@ export class MobileApp {
     await this.setSyncUrl(url);
 
     // Derive encryption key once for the sync session, then erase raw key bytes
-    const privKeyBytes = await this._getPrivKeyBytes();
+    const privKeyBytes = await this.getPrivKeyBytes();
     this._syncEncKey = await deriveSyncEncryptionKey(privKeyBytes);
     secureErase(privKeyBytes);
 
@@ -2646,23 +2647,172 @@ class ExpoPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
 // ---------------------------------------------------------------------------
 // Background push notification handler — module-level registration required
 // by expo-task-manager. Runs when a silent push arrives while app is
-// backgrounded. The handler is a no-op wake signal: the app will reconnect
-// via WebSocket on next foreground, or the OS may grant a brief execution
-// window for the task manager callback.
+// backgrounded. iOS gives ~30s; Android foreground service extends the window.
+//
+// The handler spins up an ephemeral WebSocket, claims the pending task,
+// executes it through the runtime, signs a receipt, and POSTs it back —
+// all within the OS execution window. This is the autonomous mobile
+// execution loop: the 30-second daemon.
 // ---------------------------------------------------------------------------
 
 const BACKGROUND_TASK_WAKE = "MOTEBIT_TASK_WAKE";
 
+/** Module-level reference to the active MobileApp. Set by App.tsx on init. */
+let _backgroundApp: MobileApp | null = null;
+
+/** Register the app instance for background task execution. */
+export function setBackgroundApp(app: MobileApp | null): void {
+  _backgroundApp = app;
+}
+
+/** iOS execution budget: 25s (5s margin from the ~30s OS limit). */
+const BACKGROUND_EXECUTION_BUDGET_MS = 25_000;
+
 TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
-  // The push is a wake signal — actual task execution happens when the app
-  // reconnects via WebSocket. On iOS, this callback gets ~30s. On Android,
-  // a foreground service extends the window.
-  //
-  // For now, this is intentionally minimal: the OS wakes the app, the app
-  // comes to foreground (or background fetch triggers), and the existing
-  // syncCycle → WebSocket → task_request flow handles execution.
-  //
-  // Future: ephemeral WebSocket connection + task execution within this callback.
+  const app = _backgroundApp;
+  const runtime = app?.getRuntime();
+  if (!app || !runtime || !app.motebitId) return;
+
+  const syncUrl = await app.getSyncUrl();
+  if (!syncUrl) return;
+
+  const token = await app.createSyncToken("sync");
+  if (!token) return;
+
+  // Build ephemeral WebSocket URL
+  const wsUrl =
+    syncUrl.replace(/^https?/, (m: string) => (m === "https" ? "wss" : "ws")) +
+    "/ws/sync/" +
+    app.motebitId;
+
+  // Race: task execution vs timeout guard
+  const deadline = Date.now() + BACKGROUND_EXECUTION_BUDGET_MS;
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+
+    // Timeout guard — if execution exceeds budget, bail cleanly
+    const timer = setTimeout(done, BACKGROUND_EXECUTION_BUDGET_MS);
+
+    // Ephemeral WebSocket connection
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      // Authenticate with post-connect auth frame
+      ws.send(JSON.stringify({ type: "auth", token }));
+    };
+
+    ws.onmessage = (event) => {
+      if (settled) return;
+      let msg: { type?: string; task?: AgentTask; ok?: boolean };
+      try {
+        msg = JSON.parse(typeof event.data === "string" ? event.data : "") as typeof msg;
+      } catch {
+        return;
+      }
+
+      // Wait for auth confirmation, then we'll get task_request from recovery
+      if (msg.type === "auth_result" && !msg.ok) {
+        ws.close();
+        clearTimeout(timer);
+        done();
+        return;
+      }
+
+      if (msg.type !== "task_request" || msg.task == null) return;
+
+      const task = msg.task;
+
+      // Claim the task
+      ws.send(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+
+      // Execute with time budget
+      void (async () => {
+        try {
+          let privKeyBytes: Uint8Array;
+          try {
+            privKeyBytes = await app.getPrivKeyBytes();
+          } catch {
+            done();
+            return;
+          }
+
+          const remainingMs = deadline - Date.now();
+          if (remainingMs < 5000) {
+            // Not enough time to execute — let it expire for next foreground
+            secureErase(privKeyBytes);
+            done();
+            return;
+          }
+
+          let receipt: ExecutionReceipt | undefined;
+
+          // Race execution against remaining budget
+          const executionPromise = (async () => {
+            for await (const chunk of runtime.handleAgentTask(
+              task,
+              privKeyBytes,
+              app.deviceId,
+              undefined,
+              { delegatedScope: task.delegated_scope },
+            )) {
+              if (chunk.type === "task_result") {
+                receipt = chunk.receipt;
+              }
+            }
+          })();
+
+          const timeoutPromise = new Promise<"timeout">(
+            (r) => setTimeout(() => r("timeout"), remainingMs - 3000), // 3s margin for receipt POST
+          );
+
+          const result = await Promise.race([executionPromise, timeoutPromise]);
+
+          secureErase(privKeyBytes);
+
+          // POST receipt if we got one (even on timeout — partial work is valuable)
+          if (receipt) {
+            const freshToken = await app.createSyncToken("task:submit");
+            await fetch(`${syncUrl}/agent/${app.motebitId}/task/${task.task_id}/result`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${freshToken}`,
+              },
+              body: JSON.stringify(receipt),
+              signal: AbortSignal.timeout(3000),
+            });
+          }
+
+          if (result === "timeout") {
+            // Execution timed out — receipt may or may not have been posted
+            // Task stays in relay queue for retry on next wake
+          }
+        } catch {
+          // Background execution failed — task stays in queue
+        } finally {
+          ws.close();
+          clearTimeout(timer);
+          done();
+        }
+      })();
+    };
+
+    ws.onerror = () => {
+      clearTimeout(timer);
+      done();
+    };
+
+    ws.onclose = () => {
+      clearTimeout(timer);
+      done();
+    };
+  });
 });
 
 // Silent notification handler — don't show alerts for task wake pushes

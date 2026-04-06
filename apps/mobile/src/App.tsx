@@ -45,7 +45,7 @@ import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
 import { OpenAITTSProvider } from "./adapters/openai-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
 import { AudioMonitor } from "./adapters/audio-monitor";
-import { MobileApp, APPROVAL_PRESET_CONFIGS, COLOR_PRESETS } from "./mobile-app";
+import { MobileApp, APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, setBackgroundApp } from "./mobile-app";
 import type {
   MobileSettings,
   MobileAIConfig,
@@ -86,7 +86,10 @@ interface ChatMessage {
 
 let appInstance: MobileApp | null = null;
 function getApp(): MobileApp {
-  if (!appInstance) appInstance = new MobileApp();
+  if (!appInstance) {
+    appInstance = new MobileApp();
+    setBackgroundApp(appInstance);
+  }
   return appInstance;
 }
 
