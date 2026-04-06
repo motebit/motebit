@@ -691,8 +691,7 @@ export function reconcileLedger(db: DatabaseDriver): ReconciliationResult {
     )
     .all() as Array<{ withdrawal_id: string; motebit_id: string; payout_reference: string }>;
   for (const w of completedWithoutProof) {
-    // Soft warning — older withdrawals completed before proof persistence won't have proofs.
-    // This becomes a hard error once all paths go through rails.
+    // Hard error — all completion paths now write proof records (rail or manual).
     errors.push(
       `Completed withdrawal ${w.withdrawal_id} (agent ${w.motebit_id}) has payout_reference but no settlement proof`,
     );

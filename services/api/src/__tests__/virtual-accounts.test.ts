@@ -1149,14 +1149,14 @@ describe("Virtual Accounts", () => {
     expect(body.errors.some((e) => e.includes("no matching debit transaction"))).toBe(true);
   });
 
-  it("reconciliation flags completed withdrawal without settlement proof", async () => {
+  it("reconciliation passes for manual withdrawal (auto-emits manual proof)", async () => {
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
 
     await deposit(relay, motebitId, 50);
 
     // Request and complete a withdrawal WITHOUT specifying a rail
-    // (manual off-rail payout — no proof persisted)
+    // (manual off-rail payout — manual proof record emitted automatically)
     const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
       headers: {
@@ -1181,9 +1181,9 @@ describe("Virtual Accounts", () => {
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { consistent: boolean; errors: string[] };
-    // Should flag the withdrawal as having payout_reference but no settlement proof
-    expect(body.consistent).toBe(false);
-    expect(body.errors.some((e) => e.includes("no settlement proof"))).toBe(true);
+    // Manual completion now emits a proof record — reconciliation should pass
+    expect(body.consistent).toBe(true);
+    expect(body.errors).toHaveLength(0);
   });
 
   it("reconciliation passes when withdrawal completed with rail proof", async () => {
