@@ -24,6 +24,7 @@ import {
 } from "./bootstrap";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
+import { initPairing, startLinkDevice, startClaimDevice } from "./ui/pairing";
 import { initSubscription } from "./ui/subscription";
 import { initConversations } from "./ui/conversations";
 import { initVoice } from "./ui/voice";
@@ -70,6 +71,13 @@ const chatAPI = initChat(ctx, {
 });
 
 const settings = initSettings(ctx, { colorPicker });
+initPairing(ctx);
+document
+  .getElementById("settings-link-device")
+  ?.addEventListener("click", () => startLinkDevice(ctx));
+document
+  .getElementById("settings-claim-device")
+  ?.addEventListener("click", () => startClaimDevice(ctx));
 const subscription = initSubscription(ctx);
 
 const conversations = initConversations(ctx, {

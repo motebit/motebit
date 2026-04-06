@@ -41,6 +41,9 @@ import {
   HttpPlanSyncAdapter,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
+  PairingClient,
+  type PairingSession,
+  type PairingStatus,
   type SyncStatus,
 } from "@motebit/sync-engine";
 import {
@@ -1234,5 +1237,51 @@ export class WebApp {
     }
     this.runtime?.sync.stop();
     this.setSyncStatus("disconnected");
+  }
+
+  // --- Pairing (multi-device) ---
+
+  async initiatePairing(syncUrl: string): Promise<{ pairingCode: string; pairingId: string }> {
+    const token = await this.createSyncToken("pair");
+    if (!token) throw new Error("No signing key — initialize identity first");
+    const client = new PairingClient({ relayUrl: syncUrl });
+    const result = await client.initiate(token);
+    return { pairingCode: result.pairingCode, pairingId: result.pairingId };
+  }
+
+  async getPairingSession(syncUrl: string, pairingId: string): Promise<PairingSession> {
+    const token = await this.createSyncToken("pair");
+    if (!token) throw new Error("No signing key");
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.getSession(pairingId, token);
+  }
+
+  async approvePairing(syncUrl: string, pairingId: string): Promise<{ deviceId: string }> {
+    const token = await this.createSyncToken("pair");
+    if (!token) throw new Error("No signing key");
+    const client = new PairingClient({ relayUrl: syncUrl });
+    const result = await client.approve(pairingId, token);
+    return { deviceId: result.deviceId };
+  }
+
+  async denyPairing(syncUrl: string, pairingId: string): Promise<void> {
+    const token = await this.createSyncToken("pair");
+    if (!token) throw new Error("No signing key");
+    const client = new PairingClient({ relayUrl: syncUrl });
+    await client.deny(pairingId, token);
+  }
+
+  async claimPairing(
+    syncUrl: string,
+    code: string,
+  ): Promise<{ pairingId: string; motebitId: string }> {
+    if (!this._publicKeyHex) throw new Error("No public key — initialize identity first");
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.claim(code.toUpperCase(), "Browser", this._publicKeyHex);
+  }
+
+  async pollPairingStatus(syncUrl: string, pairingId: string): Promise<PairingStatus> {
+    const client = new PairingClient({ relayUrl: syncUrl });
+    return client.pollStatus(pairingId);
   }
 }
