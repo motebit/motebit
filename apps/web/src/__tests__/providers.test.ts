@@ -6,15 +6,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock @motebit/ai-core/browser to avoid pulling in the full module
 vi.mock("@motebit/ai-core/browser", () => ({
-  CloudProvider: class {},
-  OllamaProvider: class {},
+  CloudProvider: class MockCloudProvider {
+    constructor(public config: Record<string, unknown>) {}
+  },
+  OllamaProvider: class MockOllamaProvider {
+    constructor(public config: Record<string, unknown>) {}
+  },
   DEFAULT_OLLAMA_URL: "http://127.0.0.1:11434",
   extractMemoryTags: () => [],
   extractStateTags: () => ({}),
   stripTags: (s: string) => s,
 }));
 
-import { detectOllamaModels, checkWebGPU } from "../providers.js";
+import { detectOllamaModels, checkWebGPU, createProvider, WebLLMProvider } from "../providers.js";
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -120,5 +124,120 @@ describe("detectOllamaModels", () => {
 
     const models = await detectOllamaModels("http://localhost:11434");
     expect(models).toEqual([]);
+  });
+});
+
+// ─── createProvider ──────────────────────────────────────────────────
+
+describe("createProvider", () => {
+  it("creates anthropic provider via CloudProvider", () => {
+    const provider = createProvider({
+      type: "anthropic",
+      model: "claude-sonnet-4-20250514",
+      apiKey: "sk-test",
+    });
+    expect(provider).toBeDefined();
+    expect((provider as { config: Record<string, unknown> }).config.provider).toBe("anthropic");
+    expect((provider as { config: Record<string, unknown> }).config.api_key).toBe("sk-test");
+  });
+
+  it("creates openai provider via CloudProvider", () => {
+    const provider = createProvider({
+      type: "openai",
+      model: "gpt-4o",
+      apiKey: "sk-openai",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expect(provider).toBeDefined();
+    expect((provider as { config: Record<string, unknown> }).config.provider).toBe("openai");
+  });
+
+  it("creates ollama provider via OllamaProvider", () => {
+    const provider = createProvider({
+      type: "ollama",
+      model: "llama3",
+    });
+    expect(provider).toBeDefined();
+    expect((provider as { config: Record<string, unknown> }).config.model).toBe("llama3");
+    expect((provider as { config: Record<string, unknown> }).config.base_url).toBe(
+      "http://127.0.0.1:11434",
+    );
+  });
+
+  it("creates webllm provider", () => {
+    const provider = createProvider({
+      type: "webllm",
+      model: "Llama-3-8B-Instruct-q4f32_1",
+      temperature: 0.5,
+      maxTokens: 2048,
+    });
+    expect(provider).toBeInstanceOf(WebLLMProvider);
+  });
+
+  it("creates proxy provider via CloudProvider", () => {
+    const provider = createProvider({
+      type: "proxy",
+      model: "claude-sonnet-4-20250514",
+      proxyToken: "tok_abc",
+    });
+    expect(provider).toBeDefined();
+    expect((provider as { config: Record<string, unknown> }).config.provider).toBe("anthropic");
+    expect(
+      (
+        (provider as { config: Record<string, unknown> }).config.extra_headers as Record<
+          string,
+          string
+        >
+      )?.["x-proxy-token"],
+    ).toBe("tok_abc");
+  });
+
+  it("creates proxy provider without token", () => {
+    const provider = createProvider({
+      type: "proxy",
+      model: "claude-sonnet-4-20250514",
+    });
+    expect(provider).toBeDefined();
+    expect((provider as { config: Record<string, unknown> }).config.extra_headers).toBeUndefined();
+  });
+});
+
+// ─── WebLLMProvider ──────────────────────────────────────────────────
+
+describe("WebLLMProvider", () => {
+  it("initializes with defaults", () => {
+    const p = new WebLLMProvider("test-model");
+    expect(p.model).toBe("test-model");
+    expect(p.temperature).toBe(0.7);
+    expect(p.maxTokens).toBe(4096);
+  });
+
+  it("accepts custom options", () => {
+    const p = new WebLLMProvider("model", { temperature: 0.3, maxTokens: 1024 });
+    expect(p.temperature).toBe(0.3);
+    expect(p.maxTokens).toBe(1024);
+  });
+
+  it("setters update values", () => {
+    const p = new WebLLMProvider("model-a");
+    p.setModel("model-b");
+    expect(p.model).toBe("model-b");
+    p.setTemperature(0.1);
+    expect(p.temperature).toBe(0.1);
+    p.setMaxTokens(512);
+    expect(p.maxTokens).toBe(512);
+  });
+
+  it("estimateConfidence returns 0.7", async () => {
+    const p = new WebLLMProvider("m");
+    expect(await p.estimateConfidence()).toBe(0.7);
+  });
+
+  it("extractMemoryCandidates returns candidates from response", async () => {
+    const p = new WebLLMProvider("m");
+    const response = { text: "hello", memory_candidates: [] } as unknown as Parameters<
+      typeof p.extractMemoryCandidates
+    >[0];
+    expect(await p.extractMemoryCandidates(response)).toEqual([]);
   });
 });
