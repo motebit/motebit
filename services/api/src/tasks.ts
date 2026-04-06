@@ -210,6 +210,8 @@ export async function handleReceiptIngestion(
     connections: Map<string, ConnectedDevice[]>;
     taskQueue: Map<string, TaskQueueEntry>;
     issueCredentials: boolean;
+    /** Maximum delegation chain depth for multi-hop settlement. Default: 10. */
+    maxSettlementDepth?: number;
   },
 ): Promise<
   | { verified: true; credential_id: string | null; already_settled?: boolean }
@@ -474,7 +476,7 @@ export async function handleReceiptIngestion(
   // --- Multi-hop settlement (recursive) ---
   const delegationReceipts = receipt.delegation_receipts ?? [];
   if (delegationReceipts.length > 0) {
-    const MAX_SETTLEMENT_DEPTH = 10;
+    const MAX_SETTLEMENT_DEPTH = deps.maxSettlementDepth ?? 10;
 
     const settleSubReceipt = async (
       sub: ExecutionReceipt,
@@ -482,10 +484,15 @@ export async function handleReceiptIngestion(
       depth: number,
     ): Promise<void> => {
       if (depth > MAX_SETTLEMENT_DEPTH) {
-        logger.warn("multihop.settlement.depth_limit", {
+        const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
+        logger.error("multihop.settlement.depth_limit_exceeded", {
           correlationId: parentTaskId,
           subAgent: sub.motebit_id,
+          subTaskId: typeof subRelayTaskId === "string" ? subRelayTaskId : null,
           depth,
+          maxDepth: MAX_SETTLEMENT_DEPTH,
+          reason: "depth_limit_exceeded",
+          action: "unsettled — agent will not be paid for this sub-delegation",
         });
         return;
       }
