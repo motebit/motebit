@@ -1856,7 +1856,15 @@ export default function App(): React.ReactElement {
           <TouchableOpacity
             style={ds.syncButton}
             onPress={() => {
-              /* TODO: sync popup */
+              if (syncStatus === "offline") {
+                setShowSettings(true);
+              } else if (syncStatus === "idle") {
+                showToast("Synced with relay");
+              } else if (syncStatus === "syncing") {
+                showToast("Syncing…");
+              } else if (syncStatus === "error") {
+                showToast("Sync error — check relay in Settings");
+              }
             }}
             activeOpacity={0.7}
           >
