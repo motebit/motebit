@@ -9,7 +9,7 @@
  * The device reconnects via WebSocket to claim pending tasks.
  */
 
-import type { PushPlatform } from "@motebit/protocol";
+import type { PushPlatform } from "@motebit/sdk";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "push-adapter" });
