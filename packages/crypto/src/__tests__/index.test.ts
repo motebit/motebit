@@ -388,13 +388,14 @@ describe("createSignedToken / verifySignedToken", () => {
 
   it("rejects tokens without audience binding (cross-endpoint replay prevention)", async () => {
     const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    // Intentionally omit aud to test runtime guard against malformed payloads
+    const payload = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
       jti: crypto.randomUUID(),
-    };
+    } as SignedTokenPayload;
     const token = await createSignedToken(payload, kp.privateKey);
     const result = await verifySignedToken(token, kp.publicKey);
     expect(result).toBeNull();
@@ -439,13 +440,13 @@ describe("createSignedToken / verifySignedToken", () => {
 
   it("rejects token without jti (replay attack protection)", async () => {
     const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    // Intentionally omit jti and aud to test runtime guard against malformed payloads
+    const payload = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
-      // no jti — should be rejected
-    };
+    } as SignedTokenPayload;
     const token = await createSignedToken(payload, kp.privateKey);
     const result = await verifySignedToken(token, kp.publicKey);
     expect(result).toBeNull();

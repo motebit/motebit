@@ -277,13 +277,40 @@ export class PrivyWalletProvider implements WalletProvider {
   }
 
   private async createAndPersistWallet(agentId: string): Promise<{ id: string; address: string }> {
+    // Re-check persistent store after acquiring the lock — another process (or a previous
+    // restart) may have persisted a wallet between our first check and lock acquisition.
+    const raceWinner = this.store.getWalletId(agentId);
+    if (raceWinner) {
+      const wallet = await this.privy.wallets().get(raceWinner);
+      const entry = { id: wallet.id, address: wallet.address };
+      this.walletCache.set(agentId, entry);
+      return entry;
+    }
+
     const wallet = await this.privy.wallets().create({
       chain_type: "ethereum",
     });
 
+    // INSERT OR IGNORE: if another process persisted a wallet for this agent between our
+    // re-check and this insert, the PRIMARY KEY constraint drops this insert silently.
+    // Re-read to detect the race and use the winner's wallet.
+    this.store.setWalletId(agentId, wallet.id, wallet.address);
+    const persistedId = this.store.getWalletId(agentId);
+    if (persistedId && persistedId !== wallet.id) {
+      // Another process won the race — use its wallet, log the orphan
+      logger.warn("privy.wallet.race_detected", {
+        agentId,
+        orphanedWalletId: wallet.id,
+        winnerId: persistedId,
+      });
+      const winner = await this.privy.wallets().get(persistedId);
+      const entry = { id: winner.id, address: winner.address };
+      this.walletCache.set(agentId, entry);
+      return entry;
+    }
+
     const entry = { id: wallet.id, address: wallet.address };
     this.walletCache.set(agentId, entry);
-    this.store.setWalletId(agentId, wallet.id, wallet.address);
 
     logger.info("privy.wallet.created", {
       agentId,

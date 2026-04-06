@@ -113,11 +113,11 @@ These are not suggestions. They are the architectural invariants that make the m
 
 **Sybil defense (five layers).** Self-delegation must not farm trust. Layer 1: skip trust record update when delegator === worker. Layer 2: aggregation ignores self-issued credentials. Layer 3: minimum issuer trust threshold (0.05) excludes new sybil identities. Layer 4: credential revocation check excludes compromised issuers. Layer 5: reject self-issued credentials at submission endpoint. Self-delegation executes and settles budget — it just produces no trust signal.
 
-**Memory injection defense (two layers).** Layer 1 — formation gate: `ContentSanitizer` scans candidates, injection-flagged get confidence capped to 0.3 (fast decay, not rejected outright). Layer 2 — context boundary: `[MEMORY_DATA]...[/MEMORY_DATA]` wrapping with escape prevention. System prompt treats memory data identically to external data.
+**Memory injection defense (two layers).** Layer 1 — formation gate: `ContentSanitizer` scans candidates, injection-flagged get confidence capped to 0.3 (fast decay, not rejected outright). Layer 2 — context boundary: two canonical boundary markers, `[EXTERNAL_DATA source="..."]...[/EXTERNAL_DATA]` for tool results (emitted by `ContentSanitizer`) and `[MEMORY_DATA]...[/MEMORY_DATA]` for recalled memories (emitted by `ai-core` context packing). `stripBoundaryMarkers` escapes both marker types in external content to prevent cross-boundary impersonation. System prompt treats both boundary types identically as data, never directives.
 
 **Receipt economic binding.** `relay_task_id` in every `ExecutionReceipt`, inside the Ed25519 signature. Relay verifies binding at settlement. Prevents cross-task replay. Required — no legacy fallback.
 
-**Token audience binding.** `expectedAudience` is required on all `verifySignedTokenForDevice` calls. Tokens without `aud` are rejected. Prevents cross-endpoint replay.
+**Token audience binding.** `aud` is required on `SignedTokenPayload` (compile-time) and enforced by `verifySignedToken` (runtime). `expectedAudience` is required on all `verifySignedTokenForDevice` calls. Tokens without `aud` are rejected at both layers. Canonical audience values: `sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`. Prevents cross-endpoint replay.
 
 **Budget-gated delegation.** estimateCost → allocateBudget → settleOnReceipt. HTTP 402 if insufficient. Per-submitter task queue limit (1000/agent, HTTP 429) prevents fair-share starvation. Multi-hop: each hop settled independently from nested `delegation_receipts`.
 
