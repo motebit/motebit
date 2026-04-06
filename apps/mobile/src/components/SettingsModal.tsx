@@ -416,6 +416,29 @@ export function SettingsModal({
                   }
                 })();
               }}
+              onExportIdentity={() => {
+                void (async () => {
+                  try {
+                    const mdContent = await app.exportIdentity();
+                    if (mdContent == null) {
+                      Alert.alert("Export Failed", "Identity not available for export.");
+                      return;
+                    }
+                    const canShare = await Sharing.isAvailableAsync();
+                    if (canShare) {
+                      const filePath = `${FileSystem.cacheDirectory}motebit.md`;
+                      await FileSystem.writeAsStringAsync(filePath, mdContent);
+                      await Sharing.shareAsync(filePath, { mimeType: "text/markdown" });
+                    } else {
+                      Clipboard.setString(mdContent);
+                      Alert.alert("Exported", "Identity file copied to clipboard.");
+                    }
+                  } catch (err: unknown) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    Alert.alert("Export Failed", msg);
+                  }
+                })();
+              }}
               onLinkDevice={onLinkDevice}
               onRotateKey={() => {
                 Alert.alert(
@@ -1031,6 +1054,7 @@ function IdentityTab({
   deviceId,
   publicKey,
   onExport,
+  onExportIdentity,
   onLinkDevice,
   onRotateKey,
 }: {
@@ -1038,6 +1062,7 @@ function IdentityTab({
   deviceId: string;
   publicKey: string;
   onExport: () => void;
+  onExportIdentity?: () => void;
   onLinkDevice?: () => void;
   onRotateKey?: () => void;
 }) {
@@ -1161,6 +1186,16 @@ function IdentityTab({
       >
         <Text style={styles.docsText}>Documentation</Text>
       </TouchableOpacity>
+
+      {onExportIdentity && (
+        <TouchableOpacity
+          style={styles.exportButton}
+          onPress={onExportIdentity}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.exportText}>Export Identity</Text>
+        </TouchableOpacity>
+      )}
 
       <TouchableOpacity style={styles.exportButton} onPress={onExport} activeOpacity={0.7}>
         <Text style={styles.exportText}>Export All Data</Text>

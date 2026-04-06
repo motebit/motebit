@@ -346,6 +346,24 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   setupIdentityCopyHandlers();
 
+  // Rotate Key button
+  document.getElementById("settings-rotate-key")?.addEventListener("click", () => {
+    const confirmed = confirm(
+      "Rotate your Ed25519 keypair? The old key signs a succession record transferring trust to the new key.",
+    );
+    if (!confirmed) return;
+    void ctx.app
+      .rotateKey("manual rotation")
+      .then(() => {
+        populateIdentityFields();
+        ctx.showToast("Key rotated successfully");
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.showToast(`Key rotation failed: ${msg}`);
+      });
+  });
+
   // Export Data button
   document.getElementById("settings-export-data")?.addEventListener("click", () => {
     void ctx.app.exportData().then((json) => {

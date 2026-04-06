@@ -709,6 +709,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       // Update identity display with new key
       populateIdentityTab();
 
+      // Notify other panels (e.g. sovereign succession) of the rotation
+      window.dispatchEvent(new Event("motebit:key-rotated"));
+
       setTimeout(() => {
         closeRotateKeyDialog();
       }, 2000);

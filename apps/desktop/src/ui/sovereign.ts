@@ -1,3 +1,4 @@
+import type { InvokeFn } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 
@@ -704,6 +705,30 @@ export function initSovereign(ctx: DesktopContext): SovereignAPI {
     }
   }
 
+  // === Export Identity ===
+
+  document.getElementById("sov-export-identity")!.addEventListener("click", () => {
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const content = await ctx.app.exportIdentityFile(invoke as InvokeFn);
+        if (content == null || content === "") {
+          ctx.showToast("Export failed — keypair not available");
+          return;
+        }
+        const blob = new Blob([content], { type: "text/markdown" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "motebit.md";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 250);
+      } catch {
+        ctx.showToast("Identity export failed");
+      }
+    })();
+  });
+
   // === Open / Close ===
 
   function open(): void {
@@ -719,6 +744,20 @@ export function initSovereign(ctx: DesktopContext): SovereignAPI {
     sovereignPanel.classList.remove("open");
     sovereignBackdrop.classList.remove("open");
   }
+
+  // === Rotate Key (delegates to settings dialog) ===
+
+  document.getElementById("succession-rotate-btn")!.addEventListener("click", () => {
+    const settingsRotateBtn = document.getElementById("settings-rotate-key");
+    if (settingsRotateBtn) {
+      settingsRotateBtn.click();
+    }
+  });
+
+  // Refresh succession display after key rotation completes
+  window.addEventListener("motebit:key-rotated", () => {
+    void loadSuccession();
+  });
 
   // Event listeners
   document.getElementById("sovereign-btn")!.addEventListener("click", open);
