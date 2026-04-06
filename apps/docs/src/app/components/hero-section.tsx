@@ -10,7 +10,7 @@ export function HeroSection() {
   const textY = useTransform(scrollY, [0, 400], [0, 60]);
 
   return (
-    <section className="relative min-h-screen">
+    <section className="relative md:min-h-screen">
       {/* Gradient overlay — subtle ground fade for content sections below */}
       <div
         className="absolute inset-x-0 bottom-0 h-[20vh] pointer-events-none z-[1]"
@@ -22,10 +22,9 @@ export function HeroSection() {
       {/* Hero copy — left-aligned on desktop, centered below on mobile */}
       <motion.div
         style={{ opacity: textOpacity, y: textY }}
-        className="absolute inset-0 z-[2] flex items-center pointer-events-none"
+        className="relative md:absolute inset-0 z-[2] flex items-center pointer-events-none"
       >
         <div className="w-full px-6 md:px-12 lg:px-20 pointer-events-auto">
-          {/* Desktop: left-aligned alongside creature. Mobile: centered below creature */}
           <div className="flex flex-col items-center text-center md:items-start md:text-left md:max-w-md lg:max-w-lg hero-enter">
             <h1 className="text-[clamp(2rem,4.5vw,3.5rem)] font-bold tracking-[-0.04em] leading-[1.05] text-zinc-900 dark:text-zinc-100">
               A droplet of intelligence under surface tension.
