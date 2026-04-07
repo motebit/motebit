@@ -5,13 +5,7 @@
  * Provides Tauri-specific storage adapters and AI provider creation.
  */
 
-import {
-  MotebitRuntime,
-  executeCommand,
-  ProxySession,
-  cmdSelfTest,
-  PLANNING_TASK_ROUTER,
-} from "@motebit/runtime";
+import { MotebitRuntime, ProxySession, PLANNING_TASK_ROUTER } from "@motebit/runtime";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import type {
   TurnResult,
@@ -33,7 +27,7 @@ import {
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
 export type { LocalInferenceDetectionResult, OllamaDetectionResult } from "@motebit/ai-core";
-import type { MemoryNode, MemoryEdge, AgentTask, ExecutionReceipt } from "@motebit/sdk";
+import type { MemoryNode, MemoryEdge } from "@motebit/sdk";
 import {
   DeviceCapability,
   resolveProviderSpec,
@@ -49,21 +43,8 @@ import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage } from "@motebit/memory-graph";
 import { InMemoryIdentityStorage } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
-import { deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
 import { parse as parseIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
-import {
-  ConversationSyncEngine,
-  HttpConversationSyncAdapter,
-  EncryptedConversationSyncAdapter,
-  EncryptedPlanSyncAdapter,
-  PlanSyncEngine,
-  HttpPlanSyncAdapter,
-  HttpEventStoreAdapter,
-  WebSocketEventStoreAdapter,
-  EncryptedEventStoreAdapter,
-  decryptEventPayload,
-} from "@motebit/sync-engine";
-import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
+import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import {
@@ -85,10 +66,6 @@ import {
   type InvokeFn,
 } from "./tauri-storage.js";
 import { TauriKeyringAdapter, TauriToolAuditSink } from "./tauri-system-adapters.js";
-import {
-  TauriConversationSyncStoreAdapter,
-  TauriPlanSyncStoreAdapter,
-} from "./tauri-sync-adapters.js";
 import * as memoryCommands from "./memory-commands.js";
 import * as rendererCommands from "./renderer-commands.js";
 import { IdentityManager } from "./identity-manager.js";
@@ -105,6 +82,8 @@ export type {
   GoalPlanProgressEvent,
   GoalApprovalEvent,
 } from "./goal-scheduler.js";
+import { SyncController, type SyncStatusEvent } from "./sync-controller.js";
+export type { SyncStatusEvent, SyncIndicatorStatus } from "./sync-controller.js";
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
@@ -121,26 +100,8 @@ export type { PairingSession, PairingStatus };
 export type { MemoryNode, MemoryEdge };
 export type { DeletionCertificate } from "@motebit/crypto";
 
-// === Sync Status ===
-
-export type SyncIndicatorStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "syncing"
-  | "conflict"
-  | "error";
-
-export interface SyncStatusEvent {
-  status: SyncIndicatorStatus;
-  lastSyncAt: number | null;
-  eventsPushed: number;
-  eventsPulled: number;
-  conflictCount: number;
-  error: string | null;
-}
-
-// Goal event types live in ./goal-scheduler.ts and are re-exported from the top of this file.
+// Sync + goal event types live in ./sync-controller.ts and ./goal-scheduler.ts
+// and are re-exported from the top of this file.
 
 // === Tauri Command Interface ===
 
@@ -416,26 +377,17 @@ export class DesktopApp {
   private planStoreRef: TauriPlanStore | PlanStoreAdapter | null = null;
   private conversationStoreRef: TauriConversationStore | null = null;
   private _autoTitlePending = false;
-  private _syncStatusCallback: ((event: SyncStatusEvent) => void) | null = null;
-  private _lastSyncStatus: SyncStatusEvent = {
-    status: "disconnected",
-    lastSyncAt: null,
-    eventsPushed: 0,
-    eventsPulled: 0,
-    conflictCount: 0,
-    error: null,
-  };
-  private _syncUnsubscribe: (() => void) | null = null;
-  private _wsAdapter: WebSocketEventStoreAdapter | null = null;
-  private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
-  private _wsUnsubOnEvent: (() => void) | null = null;
-  private _wsUnsubOnCustom: (() => void) | null = null;
   private _localEventStore: EventStoreAdapter | null = null;
-  private _serving = false;
-  private _servingPrivateKey: Uint8Array | null = null;
-  private _servingSyncUrl: string | null = null;
-  private _servingAuthToken: string | null = null;
-  private _activeTaskCount = 0;
+  private sync = new SyncController({
+    getRuntime: () => this.runtime,
+    getMotebitId: () => this.motebitId,
+    getDeviceId: () => this.deviceId,
+    getConversationStore: () => this.conversationStoreRef,
+    getPlanStore: () => this.planStoreRef,
+    getLocalEventStore: () => this._localEventStore,
+    getDeviceKeypair: (invoke) => this.identity.getDeviceKeypair(invoke),
+    createSyncToken: (privateKeyHex, aud) => this.identity.createSyncToken(privateKeyHex, aud),
+  });
   private _proxySession: ProxySession | null = null;
   private _proxyConfig: ProxyProviderConfig | null = null;
 
@@ -1265,27 +1217,21 @@ export class DesktopApp {
     this.goals.onGoalPlanProgress(callback);
   }
 
+  // === Sync (delegates to SyncController) ===
+
   /** Subscribe to sync status changes (for UI indicator). */
   onSyncStatus(callback: (event: SyncStatusEvent) => void): void {
-    this._syncStatusCallback = callback;
-    // Immediately emit current status so the UI can initialize
-    callback(this._lastSyncStatus);
+    this.sync.onSyncStatus(callback);
   }
 
   /** Get the current sync status snapshot. */
   get syncStatus(): SyncStatusEvent {
-    return { ...this._lastSyncStatus };
+    return this.sync.syncStatus;
   }
 
   /** Current relay sync URL, or null if not configured. */
   getSyncUrl(): string | null {
     return this._proxySyncUrlCache;
-  }
-
-  /** Emit a sync status event and update internal state. */
-  private emitSyncStatus(partial: Partial<SyncStatusEvent>): void {
-    this._lastSyncStatus = { ...this._lastSyncStatus, ...partial };
-    this._syncStatusCallback?.(this._lastSyncStatus);
   }
 
   /** Resume a goal after the user approves/denies a tool call. */
@@ -1540,13 +1486,10 @@ export class DesktopApp {
     return null;
   }
 
-  // === Conversation Sync ===
+  // === Sync / Serving (delegates to SyncController) ===
 
-  /**
-   * Sync conversations with the remote relay server.
-   * Creates a ConversationSyncEngine that bridges TauriConversationStore to the relay.
-   */
-  async syncConversations(
+  /** Sync conversations + plans with the remote relay server. */
+  syncConversations(
     syncUrl: string,
     authToken?: string,
     encryptionKey?: Uint8Array,
@@ -1556,486 +1499,39 @@ export class DesktopApp {
     messages_pushed: number;
     messages_pulled: number;
   }> {
-    if (!this.conversationStoreRef) {
-      return {
-        conversations_pushed: 0,
-        conversations_pulled: 0,
-        messages_pushed: 0,
-        messages_pulled: 0,
-      };
-    }
-
-    this.emitSyncStatus({ status: "syncing" });
-
-    const storeAdapter = new TauriConversationSyncStoreAdapter(
-      this.conversationStoreRef,
-      this.motebitId,
-    );
-    // Pre-fetch local data before sync (async Tauri -> sync adapter bridge)
-    await storeAdapter.prefetch(0);
-
-    const syncEngine = new ConversationSyncEngine(storeAdapter, this.motebitId);
-    const httpConvAdapter = new HttpConversationSyncAdapter({
-      baseUrl: syncUrl,
-      motebitId: this.motebitId,
-      authToken,
-    });
-    // Encrypt conversations at the sync boundary — relay stores opaque ciphertext
-    syncEngine.connectRemote(
-      encryptionKey
-        ? new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encryptionKey })
-        : httpConvAdapter,
-    );
-
-    try {
-      const result = await syncEngine.sync();
-
-      // Plan sync — push/pull plans for cross-device visibility
-      if (this.planStoreRef) {
-        const planSyncAdapter = new TauriPlanSyncStoreAdapter(this.planStoreRef, this.motebitId);
-        await planSyncAdapter.prefetch(0);
-        const planSync = new PlanSyncEngine(planSyncAdapter, this.motebitId);
-        const httpPlanAdapter = new HttpPlanSyncAdapter({
-          baseUrl: syncUrl,
-          motebitId: this.motebitId,
-          authToken,
-        });
-        planSync.connectRemote(
-          encryptionKey
-            ? new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encryptionKey })
-            : httpPlanAdapter,
-        );
-        await planSync.sync();
-      }
-
-      this.emitSyncStatus({
-        status: "connected",
-        lastSyncAt: Date.now(),
-        eventsPushed:
-          this._lastSyncStatus.eventsPushed + result.conversations_pushed + result.messages_pushed,
-        eventsPulled:
-          this._lastSyncStatus.eventsPulled + result.conversations_pulled + result.messages_pulled,
-      });
-      return result;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.emitSyncStatus({ status: "error", error: msg });
-      throw err;
-    }
+    return this.sync.syncConversations(syncUrl, authToken, encryptionKey);
   }
 
-  /**
-   * Start full sync: event-level background polling + one-shot conversation sync.
-   * Call after pairing completes or at app startup when syncUrl is configured.
-   */
-  async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
-    if (!this.runtime) return;
-
-    this.emitSyncStatus({ status: "connecting", error: null });
-
-    // Get keypair for token creation + encryption key derivation
-    const keypair = await this.getDeviceKeypair(invoke);
-    if (!keypair) {
-      this.emitSyncStatus({ status: "error", error: "No device keypair available" });
-      return;
-    }
-
-    // Derive private key bytes (hex → Uint8Array)
-    const privKeyBytes = new Uint8Array(keypair.privateKey.length / 2);
-    for (let i = 0; i < keypair.privateKey.length; i += 2) {
-      privKeyBytes[i / 2] = parseInt(keypair.privateKey.slice(i, i + 2), 16);
-    }
-
-    // Derive deterministic encryption key from private key, then erase raw bytes
-    const encKey = await deriveSyncEncryptionKey(privKeyBytes);
-    secureErase(privKeyBytes);
-
-    // Get or create a signed auth token
-    let token = authToken;
-    if (token == null || token === "") {
-      token = await this.createSyncToken(keypair.privateKey);
-    }
-
-    // Build adapter stack: HTTP (fallback) → Encrypted HTTP → WS → Encrypted WS
-    const httpAdapter = new HttpEventStoreAdapter({
-      baseUrl: syncUrl,
-      motebitId: this.motebitId,
-      authToken: token,
-    });
-    const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
-
-    // WebSocket URL: http(s) → ws(s)
-    const wsUrl =
-      syncUrl.replace(/^https?/, (m) => (m === "https" ? "wss" : "ws")) +
-      "/ws/sync/" +
-      this.motebitId;
-
-    const localEventStore = this._localEventStore;
-    const desktopCapabilities = [
-      DeviceCapability.StdioMcp,
-      DeviceCapability.HttpMcp,
-      DeviceCapability.FileSystem,
-      DeviceCapability.Keyring,
-      DeviceCapability.Background,
-    ];
-
-    const wsAdapter = new WebSocketEventStoreAdapter({
-      url: wsUrl,
-      motebitId: this.motebitId,
-      authToken: token,
-      capabilities: desktopCapabilities,
-      httpFallback: encryptedHttp,
-      localStore: localEventStore ?? undefined,
-      onCatchUp: (pulled) => {
-        if (pulled > 0) {
-          this.emitSyncStatus({
-            lastSyncAt: Date.now(),
-            eventsPulled: this._lastSyncStatus.eventsPulled + pulled,
-          });
-        }
-      },
-    });
-    this._wsAdapter = wsAdapter;
-
-    // Encrypted wrapper around WS adapter for outbound events
-    const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
-
-    // Inbound real-time events: decrypt and write to local store
-    this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
-      void (async () => {
-        if (!localEventStore) return;
-        const dec = await decryptEventPayload(raw, encKey);
-        await localEventStore.append(dec);
-      })();
-    });
-
-    // Wire the encrypted WS adapter as the sync remote and start
-    this.runtime.connectSync(encryptedWs);
-    wsAdapter.connect();
-
-    // Subscribe to SyncEngine status changes
-    if (this._syncUnsubscribe) this._syncUnsubscribe();
-    this._syncUnsubscribe = this.runtime.sync.onStatusChange((engineStatus: SyncStatus) => {
-      if (engineStatus === "syncing") {
-        this.emitSyncStatus({ status: "syncing" });
-      } else if (engineStatus === "idle") {
-        const conflicts = this.runtime?.sync.getConflicts() ?? [];
-        this.emitSyncStatus({
-          status: conflicts.length > 0 ? "conflict" : "connected",
-          lastSyncAt: Date.now(),
-          conflictCount: conflicts.length,
-        });
-      } else if (engineStatus === "error") {
-        this.emitSyncStatus({ status: "error", error: "Sync cycle failed" });
-      } else if (engineStatus === "offline") {
-        this.emitSyncStatus({ status: "disconnected" });
-      }
-    });
-
-    this.runtime.startSync();
-    this.emitSyncStatus({ status: "connected" });
-
-    // Enable interactive delegation — lets the AI transparently delegate tasks
-    // to remote agents during conversation via the delegate_to_agent tool.
-    const privKeyHex = keypair.privateKey;
-    this.runtime.enableInteractiveDelegation({
-      syncUrl,
-      authToken: async () => this.createSyncToken(privKeyHex, "task:submit"),
-    });
-
-    // Store serving state for task handler
-    const servingPrivKey = new Uint8Array(privKeyHex.length / 2);
-    for (let i = 0; i < privKeyHex.length; i += 2) {
-      servingPrivKey[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
-    }
-    this._servingPrivateKey = servingPrivKey;
-    this._servingSyncUrl = syncUrl;
-    this._servingAuthToken = token;
-
-    // Wire task handler — accept delegations from the network.
-    // The glass droplet becomes a body that works, not just a face that talks.
-    if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
-    this._wsUnsubOnCustom = wsAdapter.onCustomMessage((msg) => {
-      // Handle remote command requests (forwarded by relay)
-      if (msg.type === "command_request" && this.runtime) {
-        const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
-        void (async () => {
-          try {
-            const result = await executeCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
-            this._wsAdapter?.sendRaw(
-              JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
-            );
-          } catch (err: unknown) {
-            this._wsAdapter?.sendRaw(
-              JSON.stringify({
-                type: "command_response",
-                id: cmdMsg.id,
-                result: {
-                  summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                },
-              }),
-            );
-          }
-        })();
-        return;
-      }
-
-      if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
-      if (!this.runtime || !this._servingPrivateKey) return;
-
-      const task = msg.task as AgentTask;
-      const runtime = this.runtime;
-      const privateKey = this._servingPrivateKey;
-
-      // Claim the task
-      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-      this._activeTaskCount++;
-
-      // Execute — creature glow will rise from processing state
-      void (async () => {
-        try {
-          let receipt: ExecutionReceipt | undefined;
-          for await (const chunk of runtime.handleAgentTask(
-            task,
-            privateKey,
-            this.deviceId,
-            undefined,
-            { delegatedScope: task.delegated_scope },
-          )) {
-            if (chunk.type === "task_result") {
-              receipt = chunk.receipt;
-            }
-          }
-
-          if (receipt) {
-            const resultUrl = `${syncUrl}/agent/${this.motebitId}/task/${task.task_id}/result`;
-            await fetch(resultUrl, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${this._servingAuthToken ?? ""}`,
-              },
-              body: JSON.stringify(receipt),
-            });
-          }
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          // Task-handler diagnostic — surface failures to the desktop log so
-          // operators can see why a delegation didn't complete. The serving
-          // path runs detached from the chat UI, so there's no other place
-          // for this to land.
-          // eslint-disable-next-line no-console -- task-handler diagnostic
-          console.error(`Task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
-        } finally {
-          this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
-        }
-      })();
-    });
-
-    // Token refresh: rebuild WS connection every 4.5 min (tokens expire at 5 min)
-    this._wsTokenRefreshTimer = setInterval(() => {
-      void (async () => {
-        try {
-          wsAdapter.disconnect();
-          const freshToken = await this.createSyncToken(keypair.privateKey);
-          const freshWs = new WebSocketEventStoreAdapter({
-            url: wsUrl,
-            motebitId: this.motebitId,
-            authToken: freshToken,
-            capabilities: desktopCapabilities,
-            httpFallback: encryptedHttp,
-            localStore: localEventStore ?? undefined,
-          });
-
-          // Swap onEvent listener
-          if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
-          this._wsUnsubOnEvent = freshWs.onEvent((raw) => {
-            void (async () => {
-              if (!localEventStore) return;
-              const dec = await decryptEventPayload(raw, encKey);
-              await localEventStore.append(dec);
-            })();
-          });
-
-          const freshEncrypted = new EncryptedEventStoreAdapter({ inner: freshWs, key: encKey });
-          this.runtime?.connectSync(freshEncrypted);
-          freshWs.connect();
-          this._wsAdapter = freshWs;
-        } catch {
-          // Token refresh failed — WS will reconnect on its own
-        }
-      })();
-    }, 4.5 * 60_000);
-
-    // One-shot conversation sync (encrypted, stays HTTP — no WS needed for conversations)
-    void this.syncConversations(syncUrl, token, encKey)
-      .then((result) => {
-        this.emitSyncStatus({
-          lastSyncAt: Date.now(),
-          eventsPushed:
-            this._lastSyncStatus.eventsPushed +
-            result.conversations_pushed +
-            result.messages_pushed,
-          eventsPulled:
-            this._lastSyncStatus.eventsPulled +
-            result.conversations_pulled +
-            result.messages_pulled,
-        });
-      })
-      .catch(() => {});
-
-    // Adversarial onboarding: run self-test once after first relay connection
-    void this.runOnboardingSelfTest(syncUrl, keypair.privateKey);
+  /** Start full sync: event-level WS + one-shot conversation sync. */
+  startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
+    return this.sync.startSync(invoke, syncUrl, authToken);
   }
 
-  /**
-   * Run cmdSelfTest exactly once per device. Uses localStorage flag to avoid
-   * repeating on subsequent launches. Best-effort — failures are logged, never blocking.
-   */
-  private async runOnboardingSelfTest(syncUrl: string, privateKeyHex: string): Promise<void> {
-    const FLAG = "motebit:self-test-done";
-    try {
-      if (localStorage.getItem(FLAG) === "true") return;
-    } catch {
-      return; // localStorage unavailable
-    }
-    if (!this.runtime) return;
-
-    try {
-      const token = await this.createSyncToken(privateKeyHex, "task:submit");
-      if (!token) return;
-
-      const result = await cmdSelfTest(this.runtime, {
-        relay: { relayUrl: syncUrl, authToken: token, motebitId: this.motebitId },
-        mintToken: async () => this.createSyncToken(privateKeyHex, "task:submit"),
-        timeoutMs: 30_000,
-      });
-
-      // eslint-disable-next-line no-console
-      console.log("[self-test]", result.summary);
-      if (result.data?.status === "passed" || result.data?.status === "skipped") {
-        localStorage.setItem(FLAG, "true");
-      }
-    } catch (err: unknown) {
-      // eslint-disable-next-line no-console
-      console.warn("[self-test] error:", err instanceof Error ? err.message : String(err));
-    }
+  /** Start serving — register with relay and accept delegations. */
+  startServing(): Promise<{ ok: boolean; error?: string }> {
+    return this.sync.startServing(this.publicKey);
   }
 
-  /**
-   * Start serving — register with relay and accept delegations.
-   * The creature becomes a body that works, not just a face that talks.
-   */
-  async startServing(): Promise<{ ok: boolean; error?: string }> {
-    if (!this.runtime || !this._servingSyncUrl || !this._servingAuthToken) {
-      return { ok: false, error: "Sync not connected — connect to relay first" };
-    }
-    if (this._serving) return { ok: true };
-
-    // Expose only network-safe tools. Operator tools (read_file, recall_memories,
-    // list_events, self_reflect, delegate_to_agent) are interior — they don't cross the surface.
-    // What remains: MCP tools the user connected + web_search + read_url.
-    const LOCAL_ONLY = new Set([
-      "read_file",
-      "recall_memories",
-      "list_events",
-      "self_reflect",
-      "delegate_to_agent",
-    ]);
-    const tools = this.runtime.getToolRegistry().list();
-    const capabilities = tools
-      .filter((t: { name: string }) => !LOCAL_ONLY.has(t.name))
-      .map((t: { name: string }) => t.name);
-
-    try {
-      const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/register`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this._servingAuthToken}`,
-        },
-        body: JSON.stringify({
-          motebit_id: this.motebitId,
-          endpoint_url: `ws://${this.motebitId}`,
-          public_key: this.publicKey,
-          capabilities,
-        }),
-      });
-
-      if (!res.ok) {
-        const body = await res.text();
-        return { ok: false, error: `Registration failed: ${body}` };
-      }
-
-      this._serving = true;
-      return { ok: true };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: msg };
-    }
-  }
-
-  /**
-   * Stop serving — stop accepting delegations.
-   */
   stopServing(): void {
-    this._serving = false;
+    this.sync.stopServing();
   }
 
-  /** Whether the desktop is currently accepting delegations. */
   isServing(): boolean {
-    return this._serving;
+    return this.sync.isServing();
   }
 
-  /** Number of tasks currently executing. */
   activeTaskCount(): number {
-    return this._activeTaskCount;
+    return this.sync.activeTaskCount();
   }
 
-  /** Discover agents on the relay network. Returns empty array if not connected. */
-  async discoverAgents(): Promise<
+  discoverAgents(): Promise<
     Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>
   > {
-    if (!this._servingSyncUrl || !this._servingAuthToken) return [];
-    try {
-      const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/discover`, {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this._servingAuthToken}`,
-        },
-      });
-      if (!res.ok) return [];
-      const data = (await res.json()) as {
-        agents: Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>;
-      };
-      return data.agents ?? [];
-    } catch {
-      return [];
-    }
+    return this.sync.discoverAgents();
   }
 
-  /**
-   * Stop background event sync.
-   */
   stopSync(): void {
-    if (this._wsTokenRefreshTimer) {
-      clearInterval(this._wsTokenRefreshTimer);
-      this._wsTokenRefreshTimer = null;
-    }
-    if (this._wsUnsubOnEvent) {
-      this._wsUnsubOnEvent();
-      this._wsUnsubOnEvent = null;
-    }
-    if (this._wsAdapter) {
-      this._wsAdapter.disconnect();
-      this._wsAdapter = null;
-    }
-    if (this._syncUnsubscribe) {
-      this._syncUnsubscribe();
-      this._syncUnsubscribe = null;
-    }
-    this.runtime?.sync.stop();
-    this.emitSyncStatus({ status: "disconnected" });
+    this.sync.stopSync();
   }
 }
 
