@@ -1,8 +1,8 @@
 import {
-  CloudProvider,
+  AnthropicProvider,
   OpenAIProvider,
   DEFAULT_OLLAMA_URL,
-  type CloudProviderConfig,
+  type AnthropicProviderConfig,
   type OpenAIProviderConfig,
   type StreamingProvider,
   extractMemoryTags,
@@ -19,7 +19,7 @@ import {
 } from "@motebit/sdk";
 import type { ProviderConfig } from "./storage";
 
-export { CloudProvider, OpenAIProvider, DEFAULT_OLLAMA_URL };
+export { AnthropicProvider, OpenAIProvider, DEFAULT_OLLAMA_URL };
 export type { StreamingProvider };
 
 // === Utility Functions ===
@@ -309,7 +309,7 @@ const WEB_RESOLVER_ENV: ResolverEnv = {
  * transport switch — given a spec, return an instance.
  *
  * Two cloud transport classes:
- *   - `CloudProvider` speaks the Anthropic wire protocol (`/v1/messages`).
+ *   - `AnthropicProvider` speaks the Anthropic wire protocol (`/v1/messages`).
  *     Used for `wireProtocol === "anthropic"` (BYOK Anthropic + motebit-cloud
  *     via the relay, which the relay translates to other vendors server-side).
  *   - `OpenAIProvider` speaks the OpenAI wire protocol (`/v1/chat/completions`).
@@ -335,7 +335,7 @@ function specToProvider(spec: ProviderSpec): StreamingProvider | IntelligencePro
         };
         return new OpenAIProvider(openaiConfig);
       }
-      const cloudConfig: CloudProviderConfig = {
+      const cloudConfig: AnthropicProviderConfig = {
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,
@@ -343,7 +343,7 @@ function specToProvider(spec: ProviderSpec): StreamingProvider | IntelligencePro
         temperature: spec.temperature,
         extra_headers: spec.extraHeaders,
       };
-      return new CloudProvider(cloudConfig);
+      return new AnthropicProvider(cloudConfig);
     }
     case "webllm":
       return new WebLLMProvider(spec.model, {

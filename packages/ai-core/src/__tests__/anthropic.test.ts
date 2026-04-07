@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  CloudProvider,
+  AnthropicProvider,
   extractMemoryTags,
   extractStateTags,
   extractActions,
   actionsToStateUpdates,
   stripTags,
 } from "../index";
-import type { CloudProviderConfig } from "../index";
+import type { AnthropicProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel } from "@motebit/sdk";
 import type { ContextPack, MotebitState } from "@motebit/sdk";
 
@@ -234,11 +234,11 @@ describe("actionsToStateUpdates", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CloudProvider: Anthropic integration
+// AnthropicProvider: Anthropic integration
 // ---------------------------------------------------------------------------
 
-describe("CloudProvider Anthropic integration", () => {
-  const config: CloudProviderConfig = {
+describe("AnthropicProvider Anthropic integration", () => {
+  const config: AnthropicProviderConfig = {
     api_key: "test-api-key",
     model: "claude-sonnet-4-5-20250929",
     max_tokens: 2048,
@@ -258,7 +258,7 @@ describe("CloudProvider Anthropic integration", () => {
   it("sends correct request body", async () => {
     mockFetchSuccess("Hi");
 
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     await provider.generate(makeContextPack({ user_message: "Test" }));
 
     const mock = getFetchMock();
@@ -274,7 +274,7 @@ describe("CloudProvider Anthropic integration", () => {
   it("system prompt contains state field documentation", async () => {
     mockFetchSuccess("Hi");
 
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     await provider.generate(makeContextPack());
 
     const mock = getFetchMock();
@@ -290,7 +290,7 @@ describe("CloudProvider Anthropic integration", () => {
       'That\'s interesting! <memory confidence="0.85" sensitivity="personal">User enjoys hiking on weekends</memory> Tell me more!';
     mockFetchSuccess(responseText);
 
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     const response = await provider.generate(makeContextPack());
 
     expect(response.memory_candidates).toHaveLength(1);
@@ -303,7 +303,7 @@ describe("CloudProvider Anthropic integration", () => {
     const responseText = 'Wow! <state field="curiosity" value="0.9"/> That\'s fascinating!';
     mockFetchSuccess(responseText);
 
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     const response = await provider.generate(makeContextPack());
 
     expect(response.state_updates.curiosity).toBe(0.9);
@@ -313,19 +313,19 @@ describe("CloudProvider Anthropic integration", () => {
   it("handles non-ok response", async () => {
     mockFetchError(429, JSON.stringify({ error: { message: "Rate limit" } }));
 
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     await expect(provider.generate(makeContextPack())).rejects.toThrow("Anthropic API error 429");
   });
 
   it("uses custom base_url when provided", async () => {
-    const customConfig: CloudProviderConfig = {
+    const customConfig: AnthropicProviderConfig = {
       ...config,
       base_url: "https://custom-proxy.example.com",
     };
 
     mockFetchSuccess("Hi");
 
-    const provider = new CloudProvider(customConfig);
+    const provider = new AnthropicProvider(customConfig);
     await provider.generate(makeContextPack());
 
     const mock = getFetchMock();

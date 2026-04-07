@@ -29,7 +29,7 @@ import type {
 } from "@motebit/runtime";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
-  CloudProvider,
+  AnthropicProvider,
   OpenAIProvider,
   detectLocalInference,
   resolveConfig,
@@ -340,10 +340,10 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
 function desktopSpecToProvider(
   spec: ProviderSpec,
   temperature: number | undefined,
-): CloudProvider | OpenAIProvider {
+): AnthropicProvider | OpenAIProvider {
   switch (spec.kind) {
     case "cloud":
-      // Cloud kind dispatches on wireProtocol: anthropic → CloudProvider,
+      // Cloud kind dispatches on wireProtocol: anthropic → AnthropicProvider,
       // openai → OpenAIProvider (used for BYOK OpenAI/Google and local-server
       // inference via the OpenAI-compat shim).
       if (spec.wireProtocol === "openai") {
@@ -356,7 +356,7 @@ function desktopSpecToProvider(
           extra_headers: spec.extraHeaders,
         });
       }
-      return new CloudProvider({
+      return new AnthropicProvider({
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,

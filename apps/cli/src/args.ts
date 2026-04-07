@@ -104,6 +104,13 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   // memory + the de-facto-standard local inference server. The internal
   // representation is always "local-server" so the rest of the system stays
   // vendor-agnostic.
+  //
+  // @deprecated CLI flag alias only — schedule for removal on the next
+  // major version bump (when other breaking changes are communicated). The
+  // persisted-value migration in `extractPersonality` (config.ts) is a
+  // separate concern and stays permanently. The two have different
+  // lifecycles: this is muscle-memory accommodation and sunsets; the
+  // persisted migration must outlive every config.json file in the wild.
   const rawProvider = values.provider === "ollama" ? "local-server" : values.provider;
   const VALID_PROVIDERS: readonly CliProvider[] = [
     "anthropic",

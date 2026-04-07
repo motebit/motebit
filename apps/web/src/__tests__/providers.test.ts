@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock @motebit/ai-core/browser to avoid pulling in the full module
 vi.mock("@motebit/ai-core/browser", () => ({
-  CloudProvider: class MockCloudProvider {
+  AnthropicProvider: class MockAnthropicProvider {
     constructor(public config: Record<string, unknown>) {}
   },
   OpenAIProvider: class MockOpenAIProvider {
@@ -50,7 +50,7 @@ describe("checkWebGPU", () => {
 const cfg = (p: unknown): Record<string, any> => (p as { config: Record<string, unknown> }).config;
 
 describe("createProvider", () => {
-  it("creates BYOK anthropic via CloudProvider", () => {
+  it("creates BYOK anthropic via AnthropicProvider", () => {
     const provider = createProvider({
       mode: "byok",
       vendor: "anthropic",
@@ -122,7 +122,7 @@ describe("createProvider", () => {
       proxyToken: "tok_abc",
     });
     expect(provider).toBeDefined();
-    // motebit-cloud routes through CloudProvider (Anthropic protocol) with
+    // motebit-cloud routes through AnthropicProvider (Anthropic protocol) with
     // an empty api_key — the relay injects the real key server-side.
     expect(cfg(provider).api_key).toBe("");
     expect((cfg(provider).extra_headers as Record<string, string>)?.["x-proxy-token"]).toBe(

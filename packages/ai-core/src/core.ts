@@ -37,22 +37,17 @@ export type { TaskType, TaskProfile, TaskRouterConfig, ResolvedTaskConfig } from
 // === Provider Configuration ===
 
 /**
- * Configuration for `CloudProvider` — the Anthropic-protocol HTTP client.
+ * Configuration for `AnthropicProvider` — the Anthropic Messages API HTTP client.
  *
- * Despite the historical name, `CloudProvider` only speaks the Anthropic
- * Messages API (`POST /v1/messages` with `x-api-key` and the Anthropic SSE
- * event format). The OpenAI wire protocol lives in `OpenAIProvider`
- * (`./openai-provider.ts`). Until 2026-04-06 this config carried a
- * `provider: "openai" | "anthropic" | "custom"` field that suggested
- * polyglot wire-protocol support, but the field only changed the default
- * base URL — every other code path was hardcoded to Anthropic. Constructing
- * with `provider: "openai"` produced Anthropic-format requests against the
- * OpenAI base URL, which 404'd. The field is removed.
+ * Speaks the Anthropic wire protocol (`POST /v1/messages` with `x-api-key`
+ * and the Anthropic SSE event format). For OpenAI-compatible servers (BYOK
+ * OpenAI, Google via OpenAI-compat, local-server via `/v1`), use
+ * `OpenAIProvider` (`./openai-provider.ts`).
  *
  * Used for: BYOK Anthropic (direct), Motebit Cloud (via the relay, which
  * translates Anthropic format to OpenAI/Google server-side for upstream).
  */
-export interface CloudProviderConfig {
+export interface AnthropicProviderConfig {
   api_key: string;
   model: string;
   /** Defaults to `https://api.anthropic.com`. */
@@ -480,10 +475,15 @@ export interface StreamingProvider extends IntelligenceProvider {
   ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }>;
 }
 
-// === Cloud Provider ===
+// === Anthropic Provider ===
 
-export class CloudProvider implements StreamingProvider {
-  constructor(private config: CloudProviderConfig) {}
+/**
+ * Anthropic Messages API HTTP client. Speaks the Anthropic wire protocol
+ * (`/v1/messages`). For OpenAI-compatible servers (BYOK OpenAI, Google via
+ * OpenAI-compat, local-server via `/v1`), use `OpenAIProvider`.
+ */
+export class AnthropicProvider implements StreamingProvider {
+  constructor(private config: AnthropicProviderConfig) {}
 
   get model(): string {
     return this.config.model;
@@ -997,3 +997,14 @@ async function probeOneEndpoint(baseUrl: string): Promise<LocalInferenceDetectio
     return empty;
   }
 }
+
+// === Deprecated aliases ===
+
+/**
+ * @deprecated Use `AnthropicProvider`. Historical name retained for one
+ * release cycle. The "Cloud" prefix was a category error — this class
+ * has only ever spoken the Anthropic wire protocol.
+ */
+export const CloudProvider = AnthropicProvider;
+/** @deprecated Use `AnthropicProviderConfig`. */
+export type CloudProviderConfig = AnthropicProviderConfig;

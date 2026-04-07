@@ -12,7 +12,7 @@ import {
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
   GOOGLE_MODELS,
-  OLLAMA_SUGGESTED_MODELS,
+  LOCAL_SERVER_SUGGESTED_MODELS,
   PROXY_MODELS,
   APPROVAL_PRESET_CONFIGS,
   type ApprovalPreset,
@@ -135,8 +135,10 @@ interface PendingSave {
 let pendingSettingsSave: PendingSave | null = null;
 
 // Model lists imported from @motebit/sdk (single source of truth).
-// Desktop uses OLLAMA_SUGGESTED_MODELS as its local Ollama dropdown list.
-const OLLAMA_MODELS = OLLAMA_SUGGESTED_MODELS as readonly string[];
+// Desktop's local-server model dropdown — sourced from the canonical
+// `LOCAL_SERVER_SUGGESTED_MODELS` list in @motebit/sdk. The local module
+// alias is kept short for the call sites below.
+const LOCAL_SERVER_MODELS = LOCAL_SERVER_SUGGESTED_MODELS as readonly string[];
 
 // === Settings API ===
 
@@ -204,7 +206,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         : provider === "google"
           ? GOOGLE_MODELS
           : provider === "local-server"
-            ? OLLAMA_MODELS
+            ? LOCAL_SERVER_MODELS
             : provider === "proxy"
               ? PROXY_MODELS
               : ANTHROPIC_MODELS;
@@ -322,7 +324,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   function populateOnDeviceModeModels(currentModel?: string): void {
     settingsOnDeviceModel.innerHTML = "";
-    for (const model of OLLAMA_MODELS) {
+    for (const model of LOCAL_SERVER_MODELS) {
       const opt = document.createElement("option");
       opt.value = model;
       opt.textContent = model;
@@ -333,7 +335,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     customOpt.textContent = "Custom...";
     settingsOnDeviceModel.appendChild(customOpt);
     if (currentModel != null && currentModel !== "") {
-      if (OLLAMA_MODELS.includes(currentModel)) {
+      if (LOCAL_SERVER_MODELS.includes(currentModel)) {
         settingsOnDeviceModel.value = currentModel;
         settingsOnDeviceModelCustom.style.display = "none";
       } else {

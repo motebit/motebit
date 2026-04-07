@@ -4,7 +4,7 @@
  * Re-exports everything from core.ts (providers, tag parsing, context packing)
  * but EXCLUDES loop.js which transitively requires memory-graph → onnxruntime-node.
  *
- * Usage: import { CloudProvider, OpenAIProvider, ... } from "@motebit/ai-core/browser";
+ * Usage: import { AnthropicProvider, OpenAIProvider, ... } from "@motebit/ai-core/browser";
  */
 export * from "./core.js";
 export { OpenAIProvider } from "./openai-provider.js";

@@ -8,8 +8,8 @@ vi.mock("@motebit/memory-graph", async () => {
 
 import { runTurn, runTurnStreaming } from "../loop";
 import type { MotebitLoopDependencies, AgenticChunk } from "../loop";
-import { CloudProvider } from "../index";
-import type { CloudProviderConfig, StreamingProvider } from "../index";
+import { AnthropicProvider } from "../index";
+import type { AnthropicProviderConfig, StreamingProvider } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
@@ -30,7 +30,7 @@ import type {
 const MOTEBIT_ID = "motebit-loop-test";
 
 /**
- * Build an SSE-formatted body that CloudProvider.generateStream can parse.
+ * Build an SSE-formatted body that AnthropicProvider.generateStream can parse.
  * The stream sends the full text in a single content_block_delta, then closes.
  */
 function mockSSEBody(text: string): string {
@@ -57,7 +57,7 @@ function mockFetchError(status: number, body: string): void {
 }
 
 function makeDeps(): MotebitLoopDependencies {
-  const cloudConfig: CloudProviderConfig = {
+  const cloudConfig: AnthropicProviderConfig = {
     api_key: "test-key",
     model: "claude-sonnet-4-5-20250929",
   };
@@ -67,7 +67,7 @@ function makeDeps(): MotebitLoopDependencies {
   const memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
   const stateEngine = new StateVectorEngine();
   const behaviorEngine = new BehaviorEngine();
-  const cloudProvider = new CloudProvider(cloudConfig);
+  const cloudProvider = new AnthropicProvider(cloudConfig);
 
   return {
     motebitId: MOTEBIT_ID,

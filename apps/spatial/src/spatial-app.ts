@@ -39,7 +39,7 @@ import type { PlanChunk, ConversationMessage } from "@motebit/runtime";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import type { InteriorColor } from "@motebit/render-engine";
 import {
-  CloudProvider,
+  AnthropicProvider,
   OpenAIProvider,
   resolveConfig,
   DEFAULT_OLLAMA_URL,
@@ -49,7 +49,7 @@ import {
   buildSystemPrompt,
   type MotebitPersonalityConfig,
   type StreamingProvider,
-  type CloudProviderConfig,
+  type AnthropicProviderConfig,
   type OpenAIProviderConfig,
 } from "@motebit/ai-core";
 import {
@@ -380,7 +380,7 @@ function spatialSpecToProvider(spec: ProviderSpec): StreamingProvider {
         };
         return new OpenAIProvider(cfg);
       }
-      const cfg: CloudProviderConfig = {
+      const cfg: AnthropicProviderConfig = {
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,
@@ -388,7 +388,7 @@ function spatialSpecToProvider(spec: ProviderSpec): StreamingProvider {
         temperature: spec.temperature,
         extra_headers: spec.extraHeaders,
       };
-      return new CloudProvider(cfg);
+      return new AnthropicProvider(cfg);
     }
     case "webllm":
       return new WebLLMProvider(spec.model, {

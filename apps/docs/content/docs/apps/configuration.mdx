@@ -92,4 +92,4 @@ Set your API key via the desktop settings panel (stored in keyring) or environme
 
 ### Custom endpoints
 
-The `CloudProvider` supports custom base URLs for OpenAI-compatible APIs in code via the provider configuration. Note that `base_url` is not currently read from `config.json` by the CLI -- it must be set programmatically when constructing a provider.
+The `AnthropicProvider` (Anthropic Messages API client) and `OpenAIProvider` (OpenAI-compatible client) both support custom base URLs in code via the provider configuration. Note that `base_url` is not currently read from `config.json` by the CLI -- it must be set programmatically when constructing a provider.

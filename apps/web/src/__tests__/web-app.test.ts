@@ -71,17 +71,20 @@ vi.mock("../providers.js", () => ({
 
 beforeEach(() => {
   localStorage.clear();
-  // Reset IDB between tests
-  indexedDB.deleteDatabase("motebit-events");
-  indexedDB.deleteDatabase("motebit-memory");
-  indexedDB.deleteDatabase("motebit-identity");
-  indexedDB.deleteDatabase("motebit-audit");
-  indexedDB.deleteDatabase("motebit-state");
-  indexedDB.deleteDatabase("motebit-conversations");
-  indexedDB.deleteDatabase("motebit-plans");
-  indexedDB.deleteDatabase("motebit-gradient");
-  indexedDB.deleteDatabase("motebit-agent-trust");
-  indexedDB.deleteDatabase("motebit-keystore");
+  // No IDB cleanup. Web persists everything to a single `"motebit"` database
+  // (opened by createBrowserStorage → openMotebitDB) plus a `"motebit-keystore"`
+  // database for encrypted credentials. Both are robust to test reuse:
+  //   - `"motebit"` schema upgrades are idempotent and bootstrap re-derives
+  //     state from the test's localStorage / motebit_id, so persistent IDB
+  //     content from earlier tests doesn't interfere.
+  //   - `"motebit-keystore"` is never actually opened here because
+  //     `EncryptedKeyStore` is mocked above (line 48).
+  // Earlier versions of this hook called `deleteDatabase` on ten fictitious
+  // names (`motebit-events`, `motebit-memory`, …) that never existed —
+  // those were no-ops. Calling it on the real `"motebit"` would block on
+  // open connections from the previous test. Removing the cleanup entirely
+  // is the honest answer: the tests don't need it, and pretending to clean
+  // up was misleading.
 });
 
 afterEach(() => {
@@ -171,7 +174,7 @@ describe("Provider management", () => {
     await app.bootstrap();
 
     // connectProvider calls createProvider internally then setProvider on runtime.
-    // In test env, CloudProvider may not construct fully (missing fetch polyfill for proxy URL).
+    // In test env, AnthropicProvider may not construct fully (missing fetch polyfill for proxy URL).
     // Verify the codepath works by spying on the runtime's setProvider.
     const runtime = app.getRuntime()!;
     const spy = vi.spyOn(runtime, "setProvider");
@@ -182,7 +185,7 @@ describe("Provider management", () => {
       apiKey: "sk-test",
     });
     expect(spy).toHaveBeenCalledOnce();
-    // Provider was passed to runtime — the CloudProvider instance may not fully
+    // Provider was passed to runtime — the AnthropicProvider instance may not fully
     // wire loopDeps in test env, but the codepath is exercised.
 
     app.stop();

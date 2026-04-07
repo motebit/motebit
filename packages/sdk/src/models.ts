@@ -24,8 +24,21 @@ export const GOOGLE_MODELS = [
   "gemini-2.5-flash-lite",
 ] as const;
 
-/** Common Ollama models (user can pull any model; these are suggestions). */
-export const OLLAMA_SUGGESTED_MODELS = [
+/**
+ * Common open-weights models that any local inference server can run.
+ *
+ * These identifiers are the model FAMILIES supported by every major local
+ * inference server (Ollama, LM Studio, llama.cpp, Jan, vLLM). The names are
+ * not Ollama-specific — Llama is Meta's, Mistral is Mistral AI's, Gemma is
+ * Google's, Phi is Microsoft's, Qwen is Alibaba's, Codellama is Meta's. Each
+ * server pulls them from its own catalog (Ollama from its registry, LM Studio
+ * from HuggingFace, llama.cpp from GGUF files, etc.).
+ *
+ * Use this as the dropdown source for "what model do you want to run" in
+ * any on-device / local-server UI. The user can pull any model; these are
+ * the safe defaults to surface first.
+ */
+export const LOCAL_SERVER_SUGGESTED_MODELS = [
   "llama3.2",
   "llama3.1",
   "llama3",
@@ -35,6 +48,13 @@ export const OLLAMA_SUGGESTED_MODELS = [
   "phi3",
   "qwen2",
 ] as const;
+
+/**
+ * @deprecated Use `LOCAL_SERVER_SUGGESTED_MODELS`. The old name implied the
+ * list was Ollama-specific; in fact every entry runs on every supported
+ * local inference server. Historical alias retained for one release cycle.
+ */
+export const OLLAMA_SUGGESTED_MODELS = LOCAL_SERVER_SUGGESTED_MODELS;
 
 /** Models available through the Motebit proxy (all cloud providers). */
 export const PROXY_MODELS = [
@@ -81,5 +101,7 @@ export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";
 export type AnthropicModel = (typeof ANTHROPIC_MODELS)[number];
 export type OpenAIModel = (typeof OPENAI_MODELS)[number];
 export type GoogleModel = (typeof GOOGLE_MODELS)[number];
-export type OllamaSuggestedModel = (typeof OLLAMA_SUGGESTED_MODELS)[number];
+export type LocalServerSuggestedModel = (typeof LOCAL_SERVER_SUGGESTED_MODELS)[number];
+/** @deprecated Use `LocalServerSuggestedModel`. */
+export type OllamaSuggestedModel = LocalServerSuggestedModel;
 export type ProxyModel = (typeof PROXY_MODELS)[number];

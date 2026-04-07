@@ -151,6 +151,12 @@ export function extractPersonality(full: FullConfig): MotebitPersonalityConfig {
   // Migrate the historical "ollama" value to the vendor-agnostic "local-server"
   // name. Old config.json files persist `default_provider: "ollama"`; we read
   // them transparently and present the new name to the rest of the system.
+  //
+  // @permanent — never remove. Unlike the `--provider ollama` CLI flag
+  // alias in args.ts (which is muscle-memory accommodation and sunsets on
+  // a major version bump), this migration reads persisted user data we
+  // can never crawl and rewrite. It must keep working for every config.json
+  // file that has ever existed in the wild.
   const provider: PersonalityProvider | undefined =
     full.default_provider === "ollama" ? "local-server" : full.default_provider;
   return {

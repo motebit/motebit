@@ -34,7 +34,7 @@ import type {
   ProxySessionAdapter,
 } from "@motebit/runtime";
 import type { GradientSnapshot } from "@motebit/runtime";
-import { CloudProvider, OpenAIProvider, DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
+import { AnthropicProvider, OpenAIProvider, DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import {
   resolveProviderSpec,
   UnsupportedBackendError,
@@ -487,11 +487,13 @@ async function mobileSpecToProvider(
   spec: ProviderSpec,
   maxTokensFromConfig?: number,
 ): Promise<
-  CloudProvider | OpenAIProvider | import("./adapters/local-inference.js").LocalInferenceProvider
+  | AnthropicProvider
+  | OpenAIProvider
+  | import("./adapters/local-inference.js").LocalInferenceProvider
 > {
   switch (spec.kind) {
     case "cloud":
-      // Cloud kind dispatches on wireProtocol: anthropic → CloudProvider,
+      // Cloud kind dispatches on wireProtocol: anthropic → AnthropicProvider,
       // openai → OpenAIProvider (used for BYOK OpenAI/Google and any local
       // server via the OpenAI-compat shim).
       if (spec.wireProtocol === "openai") {
@@ -504,7 +506,7 @@ async function mobileSpecToProvider(
           extra_headers: spec.extraHeaders,
         });
       }
-      return new CloudProvider({
+      return new AnthropicProvider({
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,

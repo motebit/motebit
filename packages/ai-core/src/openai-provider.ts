@@ -11,14 +11,15 @@
 //   - Local-server inference (Ollama OpenAI shim, LM Studio, llama.cpp,
 //     Jan, vLLM, text-generation-webui, …)
 //
-// Why this exists: `CloudProvider` in core.ts has a misleading
-// `provider: "openai" | "anthropic" | "custom"` field, but its actual HTTP
-// path, headers, request body, response shape, and streaming format are
-// all hardcoded to the **Anthropic** Messages API. The "openai" branch was
-// vestigial — it only changed the default base URL — so any client
-// constructing `CloudProvider({ provider: "openai", ... })` was making
-// Anthropic-format requests against OpenAI's endpoint and would 404 on the
-// first real call. This class is the real OpenAI client.
+// Why this exists: `AnthropicProvider` (formerly `CloudProvider`) in core.ts
+// only speaks the Anthropic Messages API — its HTTP path, headers, request
+// body, response shape, and streaming format are all Anthropic-specific.
+// Before this class was extracted, `CloudProvider` carried a vestigial
+// `provider: "openai" | "anthropic" | "custom"` field that only changed the
+// default base URL, so any client constructing
+// `CloudProvider({ provider: "openai", ... })` was making Anthropic-format
+// requests against OpenAI's endpoint and would 404 on the first real call.
+// This class is the real OpenAI client.
 //
 // Discovered during the Ollama cleanup investigation (2026-04-06).
 
@@ -487,7 +488,7 @@ export class OpenAIProvider implements IntelligenceProvider {
 
 // === Pure helpers (file-local) ===
 
-/** Read a Response body with a 3-second timeout (matches CloudProvider). */
+/** Read a Response body with a 3-second timeout (matches AnthropicProvider). */
 async function safeReadText(res: Response): Promise<string> {
   try {
     return await Promise.race([

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { packContext, CloudProvider, stripPartialActionTag, getImpulsesForAction } from "../index";
-import type { CloudProviderConfig } from "../index";
+import {
+  packContext,
+  AnthropicProvider,
+  CloudProvider,
+  stripPartialActionTag,
+  getImpulsesForAction,
+} from "../index";
+import type { AnthropicProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel, EventType, MemoryType } from "@motebit/sdk";
 import type {
   AIResponse,
@@ -241,11 +247,30 @@ describe("packContext — memory injection defense boundaries", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CloudProvider
+// Deprecated alias contract
 // ---------------------------------------------------------------------------
 
-describe("CloudProvider", () => {
-  const config: CloudProviderConfig = {
+describe("CloudProvider deprecated alias", () => {
+  it("is the same value as AnthropicProvider", () => {
+    expect(CloudProvider).toBe(AnthropicProvider);
+  });
+
+  it("supports `new CloudProvider(...)` and `instanceof` checks", () => {
+    const provider = new CloudProvider({
+      api_key: "test-key",
+      model: "claude-sonnet-4-5-20250929",
+    });
+    expect(provider).toBeInstanceOf(CloudProvider);
+    expect(provider).toBeInstanceOf(AnthropicProvider);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AnthropicProvider
+// ---------------------------------------------------------------------------
+
+describe("AnthropicProvider", () => {
+  const config: AnthropicProviderConfig = {
     api_key: "test-key",
     model: "claude-sonnet-4-5-20250929",
   };
@@ -263,7 +288,7 @@ describe("CloudProvider", () => {
   it("generate() calls Anthropic API and returns parsed response", async () => {
     mockFetchSuccess("Hello! I'm Motebit.");
 
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     const response: AIResponse = await provider.generate(makeContextPack());
 
     expect(response.text).toBe("Hello! I'm Motebit.");
@@ -275,7 +300,7 @@ describe("CloudProvider", () => {
   it("sends correct headers", async () => {
     mockFetchSuccess("Hi");
 
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     await provider.generate(makeContextPack());
 
     const mock = getFetchMock();
@@ -290,18 +315,18 @@ describe("CloudProvider", () => {
   it("throws on API error", async () => {
     mockFetchError(401, "Unauthorized");
 
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     await expect(provider.generate(makeContextPack())).rejects.toThrow("Anthropic API error 401");
   });
 
   it("estimateConfidence() returns 0.8", async () => {
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     const confidence: number = await provider.estimateConfidence();
     expect(confidence).toBe(0.8);
   });
 
   it("extractMemoryCandidates() returns response candidates", async () => {
-    const provider = new CloudProvider(config);
+    const provider = new AnthropicProvider(config);
     const candidates: MemoryCandidate[] = await provider.extractMemoryCandidates({
       text: "test",
       confidence: 0.8,

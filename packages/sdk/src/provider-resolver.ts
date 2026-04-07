@@ -140,7 +140,7 @@ export type ProviderSpec =
  *
  * The `wireProtocol` discriminates between Anthropic's messages API and
  * OpenAI's chat completions API. The surface uses this to pick the right
- * `provider` field on its `CloudProviderConfig` constructor argument.
+ * concrete class (`AnthropicProvider` or `OpenAIProvider`) to instantiate.
  */
 export interface CloudProviderSpec {
   kind: "cloud";

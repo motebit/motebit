@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { MotebitRuntime, NullRenderer, PLANNING_TASK_ROUTER } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
 import type { StorageAdapters } from "@motebit/runtime";
-import { CloudProvider, OpenAIProvider } from "@motebit/ai-core";
+import { AnthropicProvider, OpenAIProvider } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { openMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import {
@@ -214,7 +214,7 @@ function specToCliProvider(
 ): StreamingProvider {
   switch (spec.kind) {
     case "cloud":
-      // Cloud kind dispatches on wireProtocol: anthropic → CloudProvider
+      // Cloud kind dispatches on wireProtocol: anthropic → AnthropicProvider
       // (Anthropic /v1/messages); openai → OpenAIProvider (OpenAI
       // /v1/chat/completions, also used for Google's OpenAI-compat endpoint
       // and any local-server inference via the OpenAI-compat shim).
@@ -229,7 +229,7 @@ function specToCliProvider(
           personalityConfig,
         });
       }
-      return new CloudProvider({
+      return new AnthropicProvider({
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,
