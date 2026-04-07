@@ -48,7 +48,6 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
-import { PairingClient } from "@motebit/sync-engine";
 import type { McpServerConfig } from "@motebit/mcp-client";
 export type { McpServerConfig } from "@motebit/mcp-client";
 export type { MemoryNode } from "@motebit/sdk";
@@ -96,6 +95,7 @@ export type { GoalCompleteEvent, GoalApprovalEvent } from "./goal-scheduler";
 import { MobileSyncController, type SyncStatus } from "./sync-controller";
 export type { SyncStatus } from "./sync-controller";
 import { MobileMcpManager } from "./mcp-manager";
+import { MobilePairingManager } from "./pairing-manager";
 
 // === Color Presets (same 7 as desktop) ===
 
@@ -568,6 +568,18 @@ export class MobileApp {
   // MCP — class extracted to ./mcp-manager.ts.
   private mcp = new MobileMcpManager({
     getRuntime: () => this.runtime,
+  });
+
+  // Pairing — class extracted to ./pairing-manager.ts.
+  private pairing = new MobilePairingManager({
+    getKeyring: () => this.keyring,
+    getPublicKey: () => this.publicKey,
+    createSyncToken: (aud) => this.createSyncToken(aud),
+    setIdentity: (motebitId, deviceId) => {
+      this.motebitId = motebitId;
+      this.deviceId = deviceId;
+    },
+    setSyncUrl: (url) => this.setSyncUrl(url),
   });
 
   // Plan engine
@@ -1555,7 +1567,7 @@ export class MobileApp {
     return JSON.stringify(data, null, 2);
   }
 
-  // === Pairing: Device A (existing device) ===
+  // === Identity helpers (used by pairing, sync, rotate) ===
 
   /** Load device private key bytes from secure store. Caller must secureErase() when done. */
   async getPrivKeyBytes(): Promise<Uint8Array> {
@@ -1588,63 +1600,37 @@ export class MobileApp {
     }
   }
 
-  async initiatePairing(syncUrl: string): Promise<{ pairingCode: string; pairingId: string }> {
-    const token = await this.createSyncToken("device:auth");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    const result = await client.initiate(token);
-    return { pairingCode: result.pairingCode, pairingId: result.pairingId };
+  // === Pairing (delegates to MobilePairingManager in ./pairing-manager.ts) ===
+
+  initiatePairing(syncUrl: string): Promise<{ pairingCode: string; pairingId: string }> {
+    return this.pairing.initiatePairing(syncUrl);
   }
 
-  async getPairingSession(syncUrl: string, pairingId: string): Promise<PairingSession> {
-    const token = await this.createSyncToken("device:auth");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    return client.getSession(pairingId, token);
+  getPairingSession(syncUrl: string, pairingId: string): Promise<PairingSession> {
+    return this.pairing.getPairingSession(syncUrl, pairingId);
   }
 
-  async approvePairing(syncUrl: string, pairingId: string): Promise<{ deviceId: string }> {
-    const token = await this.createSyncToken("device:auth");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    const result = await client.approve(pairingId, token);
-    return { deviceId: result.deviceId };
+  approvePairing(syncUrl: string, pairingId: string): Promise<{ deviceId: string }> {
+    return this.pairing.approvePairing(syncUrl, pairingId);
   }
 
-  async denyPairing(syncUrl: string, pairingId: string): Promise<void> {
-    const token = await this.createSyncToken("device:auth");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    await client.deny(pairingId, token);
+  denyPairing(syncUrl: string, pairingId: string): Promise<void> {
+    return this.pairing.denyPairing(syncUrl, pairingId);
   }
 
-  // === Pairing: Device B (new device) ===
-
-  async claimPairing(
-    syncUrl: string,
-    code: string,
-  ): Promise<{ pairingId: string; motebitId: string }> {
-    if (!this.publicKey) throw new Error("No public key available — bootstrap first");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    return client.claim(code.toUpperCase(), "Mobile", this.publicKey);
+  claimPairing(syncUrl: string, code: string): Promise<{ pairingId: string; motebitId: string }> {
+    return this.pairing.claimPairing(syncUrl, code);
   }
 
-  async pollPairingStatus(syncUrl: string, pairingId: string): Promise<PairingStatus> {
-    const client = new PairingClient({ relayUrl: syncUrl });
-    return client.pollStatus(pairingId);
+  pollPairingStatus(syncUrl: string, pairingId: string): Promise<PairingStatus> {
+    return this.pairing.pollPairingStatus(syncUrl, pairingId);
   }
 
-  async completePairing(
+  completePairing(
     result: { motebitId: string; deviceId: string },
     syncUrl?: string,
   ): Promise<void> {
-    await this.keyring.set(KEYRING_KEYS.motebitId, result.motebitId);
-    await this.keyring.set("device_id", result.deviceId);
-
-    // Auth uses signed JWTs — no device_token storage needed
-
-    this.motebitId = result.motebitId;
-    this.deviceId = result.deviceId;
-
-    if (syncUrl != null && syncUrl !== "") {
-      await this.setSyncUrl(syncUrl);
-    }
+    return this.pairing.completePairing(result, syncUrl);
   }
 
   // === Push Token Lifecycle ===
