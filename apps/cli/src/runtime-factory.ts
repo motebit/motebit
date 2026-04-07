@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { MotebitRuntime, NullRenderer, PLANNING_TASK_ROUTER } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
 import type { StorageAdapters } from "@motebit/runtime";
-import { CloudProvider, OllamaProvider } from "@motebit/ai-core";
+import { CloudProvider, OpenAIProvider } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { openMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import {
@@ -135,7 +135,7 @@ const CLI_RESOLVER_ENV: ResolverEnv = {
  */
 function cliConfigToUnified(config: CliConfig): UnifiedProviderConfig {
   switch (config.provider) {
-    case "ollama":
+    case "local-server":
       return {
         mode: "on-device",
         backend: "local-server",
@@ -187,22 +187,28 @@ function specToCliProvider(
 ): StreamingProvider {
   switch (spec.kind) {
     case "cloud":
+      // Cloud kind dispatches on wireProtocol: anthropic → CloudProvider
+      // (Anthropic /v1/messages); openai → OpenAIProvider (OpenAI
+      // /v1/chat/completions, also used for Google's OpenAI-compat endpoint
+      // and any local-server inference via the OpenAI-compat shim).
+      if (spec.wireProtocol === "openai") {
+        return new OpenAIProvider({
+          api_key: spec.apiKey,
+          model: spec.model,
+          base_url: spec.baseUrl,
+          max_tokens: spec.maxTokens,
+          temperature: spec.temperature ?? temperature,
+          extra_headers: spec.extraHeaders,
+          personalityConfig,
+        });
+      }
       return new CloudProvider({
-        provider: spec.wireProtocol,
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,
         max_tokens: spec.maxTokens,
         temperature: spec.temperature ?? temperature,
         extra_headers: spec.extraHeaders,
-        personalityConfig,
-      });
-    case "ollama":
-      return new OllamaProvider({
-        model: spec.model,
-        base_url: spec.baseUrl,
-        max_tokens: spec.maxTokens,
-        temperature: spec.temperature ?? temperature,
         personalityConfig,
       });
     case "webllm":

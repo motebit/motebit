@@ -6,7 +6,7 @@
  *   mlx: MLX via mlx-swift-lm. Any open model, requires download.
  *
  * Implements StreamingProvider so it's a drop-in replacement for
- * CloudProvider / OllamaProvider in the runtime.
+ * CloudProvider / OpenAIProvider in the runtime.
  */
 import type { StreamingProvider } from "@motebit/ai-core";
 import { extractMemoryTags, extractStateTags, stripTags } from "@motebit/ai-core/browser";

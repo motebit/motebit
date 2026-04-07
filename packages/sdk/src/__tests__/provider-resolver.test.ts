@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveProviderSpec,
-  isOllamaNativeEndpoint,
+  normalizeLocalServerEndpoint,
   defaultModelForVendor,
   canonicalVendorBaseUrl,
   GOOGLE_OPENAI_COMPAT_URL,
@@ -31,28 +31,6 @@ function makeEnv(overrides: Partial<ResolverEnv> = {}): ResolverEnv {
     ...overrides,
   };
 }
-
-// === isOllamaNativeEndpoint ===
-
-describe("isOllamaNativeEndpoint", () => {
-  it("matches the default Ollama port", () => {
-    expect(isOllamaNativeEndpoint("http://127.0.0.1:11434")).toBe(true);
-    expect(isOllamaNativeEndpoint("http://localhost:11434")).toBe(true);
-    expect(isOllamaNativeEndpoint("http://192.168.1.42:11434/")).toBe(true);
-    expect(isOllamaNativeEndpoint("https://ollama.example.com:11434")).toBe(true);
-  });
-  it("rejects other common local-inference ports", () => {
-    // LM Studio, llama.cpp, Jan, vLLM, generic OpenAI-compat
-    expect(isOllamaNativeEndpoint("http://localhost:1234")).toBe(false);
-    expect(isOllamaNativeEndpoint("http://localhost:8080")).toBe(false);
-    expect(isOllamaNativeEndpoint("http://localhost:1337")).toBe(false);
-    expect(isOllamaNativeEndpoint("http://localhost:8000")).toBe(false);
-  });
-  it("requires the literal :11434 port — not a substring match", () => {
-    expect(isOllamaNativeEndpoint("http://localhost:114340")).toBe(false);
-    expect(isOllamaNativeEndpoint("http://localhost:111434")).toBe(false);
-  });
-});
 
 // === defaultModelForVendor ===
 
@@ -286,8 +264,8 @@ describe("resolveProviderSpec — on-device mlx", () => {
   });
 });
 
-describe("resolveProviderSpec — on-device local-server (the dispatch heuristic)", () => {
-  it("dispatches port 11434 as Ollama native", () => {
+describe("resolveProviderSpec — on-device local-server (always OpenAI-compat)", () => {
+  it("dispatches Ollama as OpenAI-compat with /v1 appended", () => {
     const spec = resolveProviderSpec(
       {
         mode: "on-device",
@@ -297,13 +275,15 @@ describe("resolveProviderSpec — on-device local-server (the dispatch heuristic
       },
       makeEnv(),
     );
-    expect(spec.kind).toBe("ollama");
-    if (spec.kind === "ollama") {
-      expect(spec.baseUrl).toBe("http://localhost:11434");
+    expect(spec.kind).toBe("cloud");
+    if (spec.kind === "cloud") {
+      expect(spec.wireProtocol).toBe("openai");
+      expect(spec.baseUrl).toBe("http://localhost:11434/v1");
       expect(spec.model).toBe("llama3.2");
+      expect(spec.apiKey).toBe("local"); // sentinel for local servers
     }
   });
-  it("dispatches LM Studio (port 1234) as OpenAI-compat cloud", () => {
+  it("dispatches LM Studio (port 1234) as OpenAI-compat with /v1", () => {
     const spec = resolveProviderSpec(
       {
         mode: "on-device",
@@ -316,9 +296,8 @@ describe("resolveProviderSpec — on-device local-server (the dispatch heuristic
     expect(spec.kind).toBe("cloud");
     if (spec.kind === "cloud") {
       expect(spec.wireProtocol).toBe("openai");
-      expect(spec.baseUrl).toBe("http://localhost:1234");
+      expect(spec.baseUrl).toBe("http://localhost:1234/v1");
       expect(spec.model).toBe("phi-3");
-      expect(spec.apiKey).toBe("local"); // sentinel for local servers
     }
   });
   it("dispatches llama.cpp (port 8080) as OpenAI-compat", () => {
@@ -327,6 +306,7 @@ describe("resolveProviderSpec — on-device local-server (the dispatch heuristic
       makeEnv(),
     );
     expect(spec.kind).toBe("cloud");
+    if (spec.kind === "cloud") expect(spec.baseUrl).toBe("http://localhost:8080/v1");
   });
   it("dispatches Jan (port 1337) as OpenAI-compat", () => {
     const spec = resolveProviderSpec(
@@ -334,14 +314,22 @@ describe("resolveProviderSpec — on-device local-server (the dispatch heuristic
       makeEnv(),
     );
     expect(spec.kind).toBe("cloud");
+    if (spec.kind === "cloud") expect(spec.baseUrl).toBe("http://localhost:1337/v1");
+  });
+  it("does not double-append /v1 when the user already includes it", () => {
+    const spec = resolveProviderSpec(
+      { mode: "on-device", backend: "local-server", endpoint: "http://localhost:11434/v1" },
+      makeEnv(),
+    );
+    if (spec.kind === "cloud") expect(spec.baseUrl).toBe("http://localhost:11434/v1");
   });
   it("falls back to env.defaultLocalServerUrl when no endpoint specified", () => {
     const spec = resolveProviderSpec(
       { mode: "on-device", backend: "local-server" },
       makeEnv({ defaultLocalServerUrl: "http://192.168.1.50:11434" }),
     );
-    expect(spec.kind).toBe("ollama");
-    if (spec.kind === "ollama") expect(spec.baseUrl).toBe("http://192.168.1.50:11434");
+    expect(spec.kind).toBe("cloud");
+    if (spec.kind === "cloud") expect(spec.baseUrl).toBe("http://192.168.1.50:11434/v1");
   });
   it("preserves LAN endpoints (not just localhost)", () => {
     const spec = resolveProviderSpec(
@@ -352,23 +340,21 @@ describe("resolveProviderSpec — on-device local-server (the dispatch heuristic
       },
       makeEnv(),
     );
-    if (spec.kind === "ollama") {
-      expect(spec.baseUrl).toBe("http://192.168.1.42:11434");
+    if (spec.kind === "cloud") {
+      expect(spec.baseUrl).toBe("http://192.168.1.42:11434/v1");
     }
   });
-  it("falls back to DEFAULT_OLLAMA_MODEL when no model specified for Ollama", () => {
+  it("falls back to DEFAULT_OLLAMA_MODEL when no model specified", () => {
     const spec = resolveProviderSpec(
       { mode: "on-device", backend: "local-server", endpoint: "http://localhost:11434" },
       makeEnv(),
     );
-    if (spec.kind === "ollama") expect(spec.model).toBe(DEFAULT_OLLAMA_MODEL);
+    if (spec.kind === "cloud") expect(spec.model).toBe(DEFAULT_OLLAMA_MODEL);
   });
-  it("dispatch decision uses LOGICAL URL; spec carries ACTUAL URL after env substitution", () => {
-    // Desktop dev-mode pattern: logical URL is canonical Ollama
-    // (http://127.0.0.1:11434, recognized by the heuristic), but actual
-    // transport URL is a Vite proxy path (/api/ollama) that doesn't itself
-    // match the heuristic. Both should work — Ollama dispatch on logical,
-    // proxy path in spec.baseUrl.
+  it("env.localServerBaseUrl substitution applied before /v1 normalization", () => {
+    // Desktop dev-mode pattern: env rewrites the endpoint to a Vite proxy
+    // path. The resolver still appends /v1 to that path so the upstream
+    // proxy delivers requests to {ollama}/v1/chat/completions.
     const spec = resolveProviderSpec(
       { mode: "on-device", backend: "local-server", model: "llama3.2" },
       makeEnv({
@@ -376,31 +362,43 @@ describe("resolveProviderSpec — on-device local-server (the dispatch heuristic
         localServerBaseUrl: () => "/api/ollama",
       }),
     );
-    expect(spec.kind).toBe("ollama");
-    if (spec.kind === "ollama") {
-      expect(spec.baseUrl).toBe("/api/ollama");
-      expect(spec.model).toBe("llama3.2");
-    }
-  });
-  it("user-supplied LM Studio endpoint stays as OpenAI-compat even with env.localServerBaseUrl substitution", () => {
-    // If the user explicitly types an LM Studio URL, the dispatch must
-    // honor that intent. The substitution still applies for proxying.
-    const spec = resolveProviderSpec(
-      {
-        mode: "on-device",
-        backend: "local-server",
-        endpoint: "http://localhost:1234",
-        model: "phi-3",
-      },
-      makeEnv({
-        localServerBaseUrl: (logical) => `/proxy${new URL(logical).pathname}`,
-      }),
-    );
     expect(spec.kind).toBe("cloud");
     if (spec.kind === "cloud") {
       expect(spec.wireProtocol).toBe("openai");
-      expect(spec.baseUrl).toBe("/proxy/");
+      expect(spec.baseUrl).toBe("/api/ollama/v1");
+      expect(spec.model).toBe("llama3.2");
     }
+  });
+});
+
+describe("normalizeLocalServerEndpoint", () => {
+  it("appends /v1 to a bare host", () => {
+    expect(normalizeLocalServerEndpoint("http://localhost:11434")).toBe(
+      "http://localhost:11434/v1",
+    );
+  });
+  it("strips trailing slash before appending", () => {
+    expect(normalizeLocalServerEndpoint("http://localhost:11434/")).toBe(
+      "http://localhost:11434/v1",
+    );
+  });
+  it("is idempotent — preserves existing /v1", () => {
+    expect(normalizeLocalServerEndpoint("http://localhost:11434/v1")).toBe(
+      "http://localhost:11434/v1",
+    );
+    expect(normalizeLocalServerEndpoint("http://localhost:11434/v1/")).toBe(
+      "http://localhost:11434/v1",
+    );
+  });
+  it("preserves longer /v1 paths", () => {
+    expect(
+      normalizeLocalServerEndpoint("https://generativelanguage.googleapis.com/v1beta/openai"),
+    ).toBe("https://generativelanguage.googleapis.com/v1beta/openai/v1");
+    // Note: Google's URL is special — surfaces should pass it untransformed,
+    // not through this normalizer. The normalizer is for local-server only.
+  });
+  it("works on dev proxy paths", () => {
+    expect(normalizeLocalServerEndpoint("/api/ollama")).toBe("/api/ollama/v1");
   });
 });
 
@@ -464,7 +462,7 @@ describe("resolveProviderSpec — surface scenarios", () => {
         { mode: "on-device", backend: "local-server", endpoint: "http://localhost:11434" },
         cliEnv,
       ).kind,
-    ).toBe("ollama");
+    ).toBe("cloud");
   });
 });
 

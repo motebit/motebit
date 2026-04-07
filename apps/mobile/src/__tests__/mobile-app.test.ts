@@ -333,7 +333,7 @@ describe("MobileApp.initAI", () => {
   });
 
   it("returns true for ollama without API key", async () => {
-    const result = await app.initAI({ provider: "ollama" });
+    const result = await app.initAI({ provider: "local-server" });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
   });
@@ -351,12 +351,12 @@ describe("MobileApp.initAI", () => {
   });
 
   it("uses custom model", async () => {
-    await app.initAI({ provider: "ollama", model: "mistral" });
+    await app.initAI({ provider: "local-server", model: "mistral" });
     expect(app.currentModel).toBe("mistral");
   });
 
-  it("defaults to llama3.2 for ollama", async () => {
-    await app.initAI({ provider: "ollama" });
+  it("defaults to llama3.2 for local-server", async () => {
+    await app.initAI({ provider: "local-server" });
     expect(app.currentModel).toBe("llama3.2");
   });
 
@@ -385,7 +385,7 @@ describe("MobileApp.settings", () => {
 
   it("returns defaults when no settings stored", async () => {
     const settings = await app.loadSettings();
-    expect(settings.provider).toBe("ollama");
+    expect(settings.provider).toBe("local-server");
     expect(settings.model).toBe("llama3.2");
     expect(settings.colorPreset).toBe("moonlight");
     expect(settings.approvalPreset).toBe("balanced");
@@ -426,7 +426,7 @@ describe("MobileApp.settings", () => {
     asyncStoreData.set("@motebit/settings", JSON.stringify({ colorPreset: "rose" }));
     const loaded = await app.loadSettings();
     expect(loaded.colorPreset).toBe("rose");
-    expect(loaded.provider).toBe("ollama"); // default
+    expect(loaded.provider).toBe("local-server"); // default
   });
 });
 
@@ -472,11 +472,17 @@ describe("MobileApp.initAI with custom endpoint", () => {
 
   it("accepts custom ollamaEndpoint", async () => {
     const result = await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       ollamaEndpoint: "http://192.168.1.50:11434",
     });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
+  });
+
+  it("migrates legacy provider:'ollama' on settings load to local-server", async () => {
+    asyncStoreData.set("@motebit/settings", JSON.stringify({ provider: "ollama" }));
+    const loaded = await app.loadSettings();
+    expect(loaded.provider).toBe("local-server");
   });
 });
 
@@ -502,7 +508,7 @@ describe("MobileApp.getConversationHistory", () => {
   });
 
   it("returns empty array after initAI with no history", async () => {
-    await app.initAI({ provider: "ollama" });
+    await app.initAI({ provider: "local-server" });
     expect(app.getConversationHistory()).toEqual([]);
   });
 });
@@ -593,7 +599,7 @@ describe("MobileApp.governanceStatus", () => {
 
   it("returns ungoverned when no identity file", async () => {
     const app = new MobileApp();
-    await app.initAI({ provider: "ollama" });
+    await app.initAI({ provider: "local-server" });
     expect(app.governanceStatus.governed).toBe(false);
     expect(app.governanceStatus.reason).toBe("no identity file");
     app.stop();

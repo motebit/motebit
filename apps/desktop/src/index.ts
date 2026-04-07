@@ -30,7 +30,7 @@ import type {
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
-  OllamaProvider,
+  OpenAIProvider,
   detectOllama,
   resolveConfig,
   DEFAULT_OLLAMA_URL,
@@ -226,9 +226,13 @@ export interface TauriCommands {
  * Maps onto the three-mode architecture in `@motebit/sdk`:
  *   motebit-cloud → "proxy"
  *   byok          → "anthropic" | "openai" | "google"
- *   on-device     → "ollama" (local-server under the hood)
+ *   on-device     → "local-server"  (Ollama, LM Studio, llama.cpp, etc.)
+ *
+ * The historical value `"ollama"` was renamed to `"local-server"` for vendor
+ * neutrality. `loadDesktopConfig` migrates persisted Tauri config values
+ * transparently so existing installs continue to work.
  */
-export type DesktopProvider = "anthropic" | "ollama" | "openai" | "google" | "proxy";
+export type DesktopProvider = "anthropic" | "local-server" | "openai" | "google" | "proxy";
 
 export interface DesktopAIConfig {
   provider: DesktopProvider;
@@ -262,7 +266,7 @@ export interface DesktopAIConfig {
  */
 function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig {
   switch (config.provider) {
-    case "ollama":
+    case "local-server":
       return {
         mode: "on-device",
         backend: "local-server",
@@ -315,24 +319,29 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
 function desktopSpecToProvider(
   spec: ProviderSpec,
   temperature: number | undefined,
-): CloudProvider | OllamaProvider {
+): CloudProvider | OpenAIProvider {
   switch (spec.kind) {
     case "cloud":
+      // Cloud kind dispatches on wireProtocol: anthropic → CloudProvider,
+      // openai → OpenAIProvider (used for BYOK OpenAI/Google and local-server
+      // inference via the OpenAI-compat shim).
+      if (spec.wireProtocol === "openai") {
+        return new OpenAIProvider({
+          api_key: spec.apiKey,
+          model: spec.model,
+          base_url: spec.baseUrl,
+          max_tokens: spec.maxTokens,
+          temperature: spec.temperature ?? temperature,
+          extra_headers: spec.extraHeaders,
+        });
+      }
       return new CloudProvider({
-        provider: spec.wireProtocol,
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,
         max_tokens: spec.maxTokens,
         temperature: spec.temperature ?? temperature,
         extra_headers: spec.extraHeaders,
-      });
-    case "ollama":
-      return new OllamaProvider({
-        model: spec.model,
-        base_url: spec.baseUrl,
-        max_tokens: spec.maxTokens,
-        temperature: spec.temperature ?? temperature,
       });
     case "webllm":
     case "apple-fm":

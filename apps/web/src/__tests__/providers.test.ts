@@ -9,7 +9,7 @@ vi.mock("@motebit/ai-core/browser", () => ({
   CloudProvider: class MockCloudProvider {
     constructor(public config: Record<string, unknown>) {}
   },
-  OllamaProvider: class MockOllamaProvider {
+  OpenAIProvider: class MockOpenAIProvider {
     constructor(public config: Record<string, unknown>) {}
   },
   DEFAULT_OLLAMA_URL: "http://127.0.0.1:11434",
@@ -141,11 +141,11 @@ describe("createProvider", () => {
       apiKey: "sk-test",
     });
     expect(provider).toBeDefined();
-    expect(cfg(provider).provider).toBe("anthropic");
     expect(cfg(provider).api_key).toBe("sk-test");
+    expect(cfg(provider).model).toBe("claude-sonnet-4-20250514");
   });
 
-  it("creates BYOK openai via CloudProvider", () => {
+  it("creates BYOK openai via OpenAIProvider (real OpenAI wire protocol)", () => {
     const provider = createProvider({
       mode: "byok",
       vendor: "openai",
@@ -154,10 +154,13 @@ describe("createProvider", () => {
       baseUrl: "https://api.openai.com/v1",
     });
     expect(provider).toBeDefined();
-    expect(cfg(provider).provider).toBe("openai");
+    // OpenAIProvider config has api_key (not provider field).
+    expect(cfg(provider).api_key).toBe("sk-openai");
+    expect(cfg(provider).model).toBe("gpt-4o");
+    expect(cfg(provider).base_url).toBe("https://api.openai.com/v1");
   });
 
-  it("creates on-device local-server via OllamaProvider when endpoint looks like Ollama", () => {
+  it("creates on-device local-server via OpenAIProvider with /v1 appended", () => {
     const provider = createProvider({
       mode: "on-device",
       backend: "local-server",
@@ -166,18 +169,22 @@ describe("createProvider", () => {
     });
     expect(provider).toBeDefined();
     expect(cfg(provider).model).toBe("llama3");
-    expect(cfg(provider).base_url).toBe("http://127.0.0.1:11434");
+    // Resolver auto-appends /v1 for the OpenAI-compat shim path.
+    expect(cfg(provider).base_url).toBe("http://127.0.0.1:11434/v1");
+    // Sentinel api_key for local servers (most don't validate it).
+    expect(cfg(provider).api_key).toBe("local");
   });
 
-  it("creates on-device local-server via OpenAI-compat when endpoint is non-ollama", () => {
+  it("creates on-device local-server via OpenAIProvider for non-ollama endpoints", () => {
     const provider = createProvider({
       mode: "on-device",
       backend: "local-server",
       model: "phi-3",
       endpoint: "http://localhost:1234",
     });
-    expect(cfg(provider).provider).toBe("openai");
-    expect(cfg(provider).base_url).toBe("http://localhost:1234");
+    expect(cfg(provider).api_key).toBe("local");
+    expect(cfg(provider).base_url).toBe("http://localhost:1234/v1");
+    expect(cfg(provider).model).toBe("phi-3");
   });
 
   it("creates on-device webllm provider", () => {
@@ -198,7 +205,9 @@ describe("createProvider", () => {
       proxyToken: "tok_abc",
     });
     expect(provider).toBeDefined();
-    expect(cfg(provider).provider).toBe("anthropic");
+    // motebit-cloud routes through CloudProvider (Anthropic protocol) with
+    // an empty api_key — the relay injects the real key server-side.
+    expect(cfg(provider).api_key).toBe("");
     expect((cfg(provider).extra_headers as Record<string, string>)?.["x-proxy-token"]).toBe(
       "tok_abc",
     );

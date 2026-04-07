@@ -372,7 +372,7 @@ export default function App(): React.ReactElement {
         model: s.model,
         apiKey,
         ollamaEndpoint:
-          s.provider === "ollama" ||
+          s.provider === "local-server" ||
           (s.provider === "on-device" && s.localBackend === "local-server")
             ? s.ollamaEndpoint
             : undefined,

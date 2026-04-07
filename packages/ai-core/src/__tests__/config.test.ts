@@ -27,7 +27,7 @@ describe("resolveConfig", () => {
     const full = {
       name: "Spark",
       personality_notes: "Witty and sharp.",
-      default_provider: "ollama" as const,
+      default_provider: "local-server" as const,
       default_model: "mistral",
       temperature: 0.9,
     };

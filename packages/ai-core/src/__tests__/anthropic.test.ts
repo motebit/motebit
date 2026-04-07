@@ -239,7 +239,6 @@ describe("actionsToStateUpdates", () => {
 
 describe("CloudProvider Anthropic integration", () => {
   const config: CloudProviderConfig = {
-    provider: "anthropic",
     api_key: "test-api-key",
     model: "claude-sonnet-4-5-20250929",
     max_tokens: 2048,

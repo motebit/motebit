@@ -40,7 +40,7 @@ import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import type { InteriorColor } from "@motebit/render-engine";
 import {
   CloudProvider,
-  OllamaProvider,
+  OpenAIProvider,
   resolveConfig,
   DEFAULT_OLLAMA_URL,
   type MotebitPersonalityConfig,
@@ -522,7 +522,6 @@ export class SpatialApp {
       const extraHeaders: Record<string, string> = {};
       if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
       provider = new CloudProvider({
-        provider: "anthropic",
         api_key: "",
         model,
         base_url: proxyUrl,
@@ -531,11 +530,16 @@ export class SpatialApp {
         extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
       });
     } else if (config.provider === "ollama") {
+      // Local inference via Ollama's OpenAI-compatible shim. The previous
+      // OllamaProvider class was deleted (2026-04-06) — every local server
+      // (Ollama, LM Studio, llama.cpp, Jan, vLLM) now goes through
+      // OpenAIProvider against the /v1 endpoint.
       const model =
         config.model != null && config.model !== "" ? config.model : DEFAULT_OLLAMA_MODEL;
-      provider = new OllamaProvider({
+      provider = new OpenAIProvider({
+        api_key: "local",
         model,
-        base_url: DEFAULT_OLLAMA_URL,
+        base_url: `${DEFAULT_OLLAMA_URL}/v1`,
         max_tokens: config.maxTokens,
         temperature,
       });
@@ -543,8 +547,10 @@ export class SpatialApp {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model =
         config.model != null && config.model !== "" ? config.model : DEFAULT_OPENAI_MODEL;
-      provider = new CloudProvider({
-        provider: "openai",
+      // Use the real OpenAI HTTP client. The previous code constructed
+      // CloudProvider with `provider: "openai"`, which produced
+      // Anthropic-format requests against OpenAI's endpoint and 404'd.
+      provider = new OpenAIProvider({
         api_key: config.apiKey,
         model,
         base_url: "https://api.openai.com/v1",
@@ -556,7 +562,6 @@ export class SpatialApp {
       const model =
         config.model != null && config.model !== "" ? config.model : DEFAULT_ANTHROPIC_MODEL;
       provider = new CloudProvider({
-        provider: "anthropic",
         api_key: config.apiKey,
         model,
         max_tokens: config.maxTokens,

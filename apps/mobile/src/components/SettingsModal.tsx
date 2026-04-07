@@ -282,7 +282,7 @@ export function SettingsModal({
                 ? googleKey
                 : undefined,
         ollamaEndpoint:
-          draft.provider === "ollama" ||
+          draft.provider === "local-server" ||
           (draft.provider === "on-device" && draft.localBackend === "local-server")
             ? draft.ollamaEndpoint
             : undefined,
@@ -386,7 +386,7 @@ export function SettingsModal({
                     model:
                       p === "on-device"
                         ? "on-device"
-                        : p === "ollama"
+                        : p === "local-server"
                           ? DEFAULT_OLLAMA_MODEL
                           : p === "openai"
                             ? DEFAULT_OPENAI_MODEL
@@ -924,7 +924,7 @@ function OnDeviceSection({
 
 // === Intelligence Tab ===
 
-type ProviderType = "ollama" | "anthropic" | "openai" | "google" | "proxy" | "on-device";
+type ProviderType = "local-server" | "anthropic" | "openai" | "google" | "proxy" | "on-device";
 
 function IntelligenceTab({
   provider,
@@ -989,7 +989,7 @@ function IntelligenceTab({
       ? "motebit-cloud"
       : provider === "anthropic" || provider === "openai" || provider === "google"
         ? "byok"
-        : "on-device"; // "ollama" and "on-device" both land here
+        : "on-device"; // "local-server" and "on-device" both land here
 
   // The active BYOK vendor mirrors the flat provider when in byok mode.
   const activeByokVendor: "anthropic" | "openai" | "google" =
@@ -1009,8 +1009,8 @@ function IntelligenceTab({
         onChangeProvider("anthropic");
       }
     } else {
-      // on-device — snap to the canonical shape regardless of old "ollama"
-      // historical value.
+      // on-device — snap to the canonical shape regardless of legacy
+      // "local-server" or "ollama" historical values.
       onChangeProvider("on-device");
     }
   }

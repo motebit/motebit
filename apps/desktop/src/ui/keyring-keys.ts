@@ -57,7 +57,7 @@ export function byokKeyringKey(provider: DesktopProvider): string | null {
       return OPENAI_API_KEY_SLOT;
     case "google":
       return GOOGLE_API_KEY_SLOT;
-    case "ollama":
+    case "local-server":
     case "proxy":
       return null;
   }

@@ -6,6 +6,10 @@
 // Core: providers, tag parsing, context packing (browser-safe)
 export * from "./core.js";
 
+// OpenAI provider — real OpenAI wire protocol client (browser-safe)
+export { OpenAIProvider } from "./openai-provider.js";
+export type { OpenAIProviderConfig, OpenAIStreamChunk } from "./openai-provider.js";
+
 // Loop: agentic turn execution (requires memory-graph → onnxruntime-node)
 export { runTurn, runTurnStreaming } from "./loop.js";
 export type {

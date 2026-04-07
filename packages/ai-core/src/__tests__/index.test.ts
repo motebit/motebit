@@ -246,7 +246,6 @@ describe("packContext — memory injection defense boundaries", () => {
 
 describe("CloudProvider", () => {
   const config: CloudProviderConfig = {
-    provider: "anthropic",
     api_key: "test-key",
     model: "claude-sonnet-4-5-20250929",
   };

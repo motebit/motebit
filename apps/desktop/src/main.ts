@@ -213,8 +213,8 @@ async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
   if (config.provider === "anthropic" && (config.apiKey == null || config.apiKey === "")) {
     const detection = await app.detectOllama();
     if (detection.available && detection.bestModel !== "") {
-      // Switch to Ollama transparently
-      config.provider = "ollama";
+      // Switch to local inference transparently
+      config.provider = "local-server";
       config.model = detection.bestModel;
       currentConfig = config;
       const success = await app.initAI(config);

@@ -84,7 +84,7 @@ describe("DesktopApp.initAI", () => {
   it("ollama provider initializes without an API key", async () => {
     app = new DesktopApp();
     const result = await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       isTauri: false,
     });
     expect(result).toBe(true);
@@ -116,7 +116,7 @@ describe("DesktopApp.initAI", () => {
     app = new DesktopApp();
     // This should not throw — the resolved config propagates to the provider
     const result = await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       personalityConfig: { temperature: 0.2 },
       isTauri: false,
     });
@@ -127,7 +127,7 @@ describe("DesktopApp.initAI", () => {
   it("ollama uses custom model when specified", async () => {
     app = new DesktopApp();
     const result = await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       model: "mistral",
       isTauri: false,
     });
@@ -203,13 +203,13 @@ describe("DesktopApp.currentModel", () => {
 
   it("returns the model after ollama initAI", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     expect(app.currentModel).toBe("llama3.2");
   });
 
   it("returns custom model when specified", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", model: "mistral", isTauri: false });
+    await app.initAI({ provider: "local-server", model: "mistral", isTauri: false });
     expect(app.currentModel).toBe("mistral");
   });
 
@@ -234,7 +234,7 @@ describe("DesktopApp.setModel", () => {
 
   it("switches model in-place for ollama", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     expect(app.currentModel).toBe("llama3.2");
     app.setModel("mistral");
     expect(app.currentModel).toBe("mistral");
@@ -267,7 +267,7 @@ describe("DesktopApp.sendMessageStreaming", () => {
 
   it("throws when already processing", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
 
     // Start a blocking sendMessage that we never await to completion
     // to set _isProcessing = true. We use sendMessage since it also sets the flag.
@@ -282,7 +282,7 @@ describe("DesktopApp.sendMessageStreaming", () => {
 
   it("returns an async generator", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const gen = app.sendMessageStreaming("hello");
     expect(typeof gen[Symbol.asyncIterator]).toBe("function");
     // Return without consuming to avoid hitting the real provider
@@ -303,7 +303,7 @@ describe("DesktopApp.initAI storage selection", () => {
 
   it("uses in-memory storage when isTauri is false", async () => {
     app = new DesktopApp();
-    const result = await app.initAI({ provider: "ollama", isTauri: false });
+    const result = await app.initAI({ provider: "local-server", isTauri: false });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
   });
@@ -313,7 +313,7 @@ describe("DesktopApp.initAI storage selection", () => {
     // Provide a mock invoke that returns empty results for preload queries
     const mockInvoke: InvokeFn = () => Promise.resolve([] as never);
     const result = await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       isTauri: true,
       invoke: mockInvoke,
     });
@@ -324,7 +324,7 @@ describe("DesktopApp.initAI storage selection", () => {
   it("falls back to in-memory when isTauri is true but invoke is missing", async () => {
     app = new DesktopApp();
     const result = await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       isTauri: true,
       // invoke intentionally omitted
     });
@@ -346,7 +346,7 @@ describe("DesktopApp.initAI tools", () => {
 
   it("registers browser-safe builtin tools in dev mode", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
 
     // The runtime should have the 4 browser-safe tools registered
     const toolNames = (
@@ -369,7 +369,7 @@ describe("DesktopApp.initAI tools", () => {
       if (cmd === "read_config") return Promise.resolve("{}" as never);
       return Promise.resolve([] as never);
     };
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: mockInvoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: mockInvoke });
 
     const toolNames = (
       app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } }
@@ -402,7 +402,7 @@ describe("DesktopApp.initAI memoryGovernance", () => {
   it("passes memoryGovernance through to runtime (not defaults)", async () => {
     app = new DesktopApp();
     await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       isTauri: false,
       memoryGovernance: { persistenceThreshold: 0.9, rejectSecrets: false },
     });
@@ -416,7 +416,7 @@ describe("DesktopApp.initAI memoryGovernance", () => {
   it("uses defaults when memoryGovernance is omitted", async () => {
     app = new DesktopApp();
     await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       isTauri: false,
     });
 
@@ -429,7 +429,7 @@ describe("DesktopApp.initAI memoryGovernance", () => {
   it("partial config merges with defaults (only persistenceThreshold)", async () => {
     app = new DesktopApp();
     await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       isTauri: false,
       memoryGovernance: { persistenceThreshold: 0.8 },
     });
@@ -442,7 +442,7 @@ describe("DesktopApp.initAI memoryGovernance", () => {
   it("partial config merges with defaults (only rejectSecrets)", async () => {
     app = new DesktopApp();
     await app.initAI({
-      provider: "ollama",
+      provider: "local-server",
       isTauri: false,
       memoryGovernance: { rejectSecrets: false },
     });
@@ -466,7 +466,7 @@ describe("DesktopApp.governanceStatus", () => {
 
   it("reports dev mode when isTauri is false", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     expect(app.governanceStatus.governed).toBe(false);
     expect((app.governanceStatus as { reason: string }).reason).toBe("dev mode");
   });
@@ -477,7 +477,7 @@ describe("DesktopApp.governanceStatus", () => {
       if (cmd === "read_config") return Promise.resolve("{}" as never);
       return Promise.resolve([] as never);
     };
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: mockInvoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: mockInvoke });
     expect(app.governanceStatus.governed).toBe(false);
     expect((app.governanceStatus as { reason: string }).reason).toContain(
       "missing or invalid governance",
@@ -498,7 +498,7 @@ describe("DesktopApp goal tools", () => {
 
   it("goal tools are NOT registered in dev mode (non-Tauri)", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
 
     const toolNames = (
       app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } }
@@ -515,7 +515,7 @@ describe("DesktopApp goal tools", () => {
     app = new DesktopApp();
     const db = emptyDb();
     const invoke = createMockInvoke(db);
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     const toolNames = (
       app as unknown as { runtime: { getToolRegistry(): { list(): { name: string }[] } } }
@@ -533,7 +533,7 @@ describe("DesktopApp goal tools", () => {
     app = new DesktopApp();
     const db = emptyDb();
     const invoke = createMockInvoke(db);
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     const registry = (
       app as unknown as {
@@ -557,7 +557,7 @@ describe("DesktopApp goal tools", () => {
     app = new DesktopApp();
     const db = emptyDb();
     const invoke = createMockInvoke(db);
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     const registry = (
       app as unknown as {
@@ -581,7 +581,7 @@ describe("DesktopApp goal tools", () => {
     app = new DesktopApp();
     const db = emptyDb();
     const invoke = createMockInvoke(db);
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     const registry = (
       app as unknown as {
@@ -623,7 +623,7 @@ describe("DesktopApp.exportAllData", () => {
 
   it("includes state and memories when runtime is initialized", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const json = await app.exportAllData();
     const data = JSON.parse(json) as Record<string, unknown>;
     expect(data.state).toBeDefined();
@@ -783,7 +783,7 @@ describe("DesktopApp.listConversationsAsync", () => {
 
   it("returns empty array without Tauri store", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const result = await app.listConversationsAsync();
     expect(result).toEqual([]);
   });
@@ -800,7 +800,7 @@ describe("DesktopApp.listConversationsAsync", () => {
       message_count: 5,
     });
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
 
     const result = await app.listConversationsAsync();
     expect(result).toHaveLength(1);
@@ -825,7 +825,7 @@ describe("DesktopApp.loadConversationById", () => {
 
   it("returns empty array without Tauri store", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const result = await app.loadConversationById("conv-1");
     expect(result).toEqual([]);
   });
@@ -867,7 +867,7 @@ describe("DesktopApp.loadConversationById", () => {
     );
 
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
 
     const messages = await app.loadConversationById("conv-1");
     expect(messages).toHaveLength(2);
@@ -892,7 +892,7 @@ describe("DesktopApp.startNewConversation", () => {
 
   it("resets conversation (sets conversationId to null)", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     // Before any messages, conversationId is null
     app.startNewConversation();
     // After reset, conversationId is null (no conversation until first message)
@@ -914,7 +914,7 @@ describe("DesktopApp.currentConversationId", () => {
 
   it("returns null after initAI (no conversation until first message)", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     // Conversation is lazily created on first message
     expect(app.currentConversationId).toBeNull();
   });
@@ -929,7 +929,7 @@ describe("DesktopApp.syncConversations", () => {
 
   it("returns zeros when no conversation store", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const result = await app.syncConversations("http://localhost:3000");
     expect(result).toEqual({
       conversations_pushed: 0,
@@ -954,7 +954,7 @@ describe("DesktopApp.stopSync", () => {
 
   it("does not throw after initAI", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     expect(() => app.stopSync()).not.toThrow();
   });
 });
@@ -979,7 +979,7 @@ describe("DesktopApp.startGoalScheduler / stopGoalScheduler", () => {
     app = new DesktopApp();
     const db = emptyDb();
     const invoke = createMockInvoke(db);
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     app.startGoalScheduler(invoke);
     app.startGoalScheduler(invoke); // Second call should be a no-op
@@ -995,7 +995,7 @@ describe("DesktopApp.startGoalScheduler / stopGoalScheduler", () => {
     app = new DesktopApp();
     const db = emptyDb();
     const invoke = vi.fn(createMockInvoke(db)) as unknown as InvokeFn & ReturnType<typeof vi.fn>;
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     app.startGoalScheduler(invoke);
     app.stopGoalScheduler();
@@ -1043,7 +1043,7 @@ describe("DesktopApp goal callbacks", () => {
 
   it("onGoalStatus and onGoalComplete accept callbacks", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
 
     const statusCalls: boolean[] = [];
     const completeCalls: Array<{ status: string }> = [];
@@ -1077,7 +1077,7 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
     app = new DesktopApp();
     const db = emptyDb();
     const invoke = vi.fn(createMockInvoke(db)) as unknown as InvokeFn & ReturnType<typeof vi.fn>;
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     app.startGoalScheduler(invoke);
 
@@ -1107,7 +1107,7 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
     });
 
     const invoke = vi.fn(createMockInvoke(db)) as unknown as InvokeFn & ReturnType<typeof vi.fn>;
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     const completeCalls: Array<{ goalId: string; status: string; error: string | null }> = [];
     app.onGoalComplete((event) =>
@@ -1169,7 +1169,7 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
     });
 
     const invoke = vi.fn(createMockInvoke(db)) as unknown as InvokeFn & ReturnType<typeof vi.fn>;
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     app.startGoalScheduler(invoke);
     await vi.advanceTimersByTimeAsync(6_000);
@@ -1202,7 +1202,7 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
     });
 
     const invoke = vi.fn(createMockInvoke(db)) as unknown as InvokeFn & ReturnType<typeof vi.fn>;
-    await app.initAI({ provider: "ollama", isTauri: true, invoke });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
     const statusCalls: boolean[] = [];
     app.onGoalStatus((executing) => statusCalls.push(executing));
@@ -1233,7 +1233,7 @@ describe("DesktopApp.resumeGoalAfterApproval", () => {
 
   it("throws without pending approval", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const gen = app.resumeGoalAfterApproval(true);
     await expect(gen.next()).rejects.toThrow("No pending goal approval");
   });
@@ -1295,7 +1295,7 @@ async function setupAppWithConversation(opts: {
   }
 
   const app = new DesktopApp();
-  await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+  await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
 
   // Set up the runtime's internal conversation state to match
   const internals = appInternals(app);
@@ -1325,7 +1325,7 @@ describe("DesktopApp.maybeAutoTitle", () => {
 
   it("returns null without conversation store (in-memory mode)", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const result = await app.maybeAutoTitle();
     expect(result).toBeNull();
   });
@@ -1341,7 +1341,7 @@ describe("DesktopApp.maybeAutoTitle", () => {
   it("returns null when runtime has no conversation ID", async () => {
     app = new DesktopApp();
     const db = emptyDb();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
     // runtime exists but conversationId is null (no conversation started)
     const result = await app.maybeAutoTitle();
     expect(result).toBeNull();
@@ -1402,7 +1402,7 @@ describe("DesktopApp.generateTitleInBackground", () => {
 
   it("returns null without conversation store (in-memory mode)", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const result = await app.generateTitleInBackground();
     expect(result).toBeNull();
   });
@@ -1410,7 +1410,7 @@ describe("DesktopApp.generateTitleInBackground", () => {
   it("returns null when runtime has no conversation ID", async () => {
     app = new DesktopApp();
     const db = emptyDb();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
     const result = await app.generateTitleInBackground();
     expect(result).toBeNull();
   });
@@ -1583,7 +1583,7 @@ describe("DesktopApp.getConversationSummary", () => {
 
   it("returns null without conversation store", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const result = await app.getConversationSummary("conv-1");
     expect(result).toBeNull();
   });
@@ -1600,7 +1600,7 @@ describe("DesktopApp.getConversationSummary", () => {
       message_count: 5,
     });
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
 
     const result = await app.getConversationSummary("conv-1");
     expect(result).toBeNull();
@@ -1618,7 +1618,7 @@ describe("DesktopApp.getConversationSummary", () => {
       message_count: 10,
     });
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
 
     const result = await app.getConversationSummary("conv-1");
     expect(result).toBe("Discussed testing strategies for TypeScript apps.");
@@ -1627,7 +1627,7 @@ describe("DesktopApp.getConversationSummary", () => {
   it("returns null for non-existent conversation", async () => {
     const db = emptyDb();
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
 
     const result = await app.getConversationSummary("non-existent");
     expect(result).toBeNull();
@@ -1653,7 +1653,7 @@ describe("DesktopApp.summarizeConversation", () => {
 
   it("returns null without conversation store (in-memory mode)", async () => {
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: false });
+    await app.initAI({ provider: "local-server", isTauri: false });
     const result = await app.summarizeConversation();
     expect(result).toBeNull();
   });
@@ -1661,7 +1661,7 @@ describe("DesktopApp.summarizeConversation", () => {
   it("returns null when no active conversation", async () => {
     const db = emptyDb();
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
     const result = await app.summarizeConversation();
     expect(result).toBeNull();
   });
@@ -1739,7 +1739,7 @@ describe("DesktopApp.summarizeConversation", () => {
     }
 
     app = new DesktopApp();
-    await app.initAI({ provider: "ollama", isTauri: true, invoke: createMockInvoke(db) });
+    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
 
     const internals = appInternals(app);
     const rt = internals.runtime!;

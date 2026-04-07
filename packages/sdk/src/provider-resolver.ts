@@ -68,25 +68,28 @@ export const DEFAULT_WEBLLM_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 // === Helpers ===
 
 /**
- * Heuristic: does this endpoint URL look like an Ollama-native server?
+ * Normalize a local-inference server URL so that it points at the
+ * OpenAI-compatible chat completions base path. Auto-appends `/v1` if
+ * the URL doesn't already contain it. Idempotent.
  *
- * Ollama listens on port 11434 by default and exposes its own HTTP API
- * (`/api/chat`, `/api/tags`) which is NOT OpenAI-compatible. Other local
- * inference servers (LM Studio, llama.cpp, Jan, vLLM, text-generation-webui)
- * use OpenAI-compatible endpoints (`/v1/chat/completions`).
+ * Every supported local server (Ollama via its OpenAI shim, LM Studio,
+ * llama.cpp, Jan, vLLM, text-generation-webui) exposes
+ * `{base}/v1/chat/completions`. Users typically type just the host
+ * (`http://localhost:11434`) — this helper completes the path so the
+ * client can call `{normalized}/chat/completions` directly.
  *
- * The detection is intentionally simple — port-based — because:
- *   1. Ollama's default port is 11434 with overwhelming convention
- *   2. Users running Ollama on a non-default port can also run it through
- *      its own OpenAI-compat shim, which works either way
- *   3. The alternative (probing /api/tags) requires async I/O, defeating
- *      the purpose of a pure resolver
- *
- * The cost of misclassification is small: a wrong call to `/api/chat` on
- * an OpenAI-compat server returns 404 with a clear error.
+ * Examples:
+ *   "http://localhost:11434"      → "http://localhost:11434/v1"
+ *   "http://localhost:11434/v1"   → "http://localhost:11434/v1"
+ *   "http://localhost:1234/"      → "http://localhost:1234/v1"
+ *   "http://192.168.1.42:11434"   → "http://192.168.1.42:11434/v1"
+ *   "/api/ollama"                 → "/api/ollama/v1"  (dev proxy path)
  */
-export function isOllamaNativeEndpoint(url: string): boolean {
-  return /:11434(\b|\/|$)/.test(url);
+export function normalizeLocalServerEndpoint(url: string): string {
+  const stripped = url.replace(/\/+$/, "");
+  // Already contains a /v1 path segment? Leave it alone.
+  if (/\/v1(\/|$)/.test(stripped)) return stripped;
+  return `${stripped}/v1`;
 }
 
 /** Default chat model for a BYOK vendor. */
@@ -126,7 +129,6 @@ export function canonicalVendorBaseUrl(vendor: ByokVendor): string {
  */
 export type ProviderSpec =
   | CloudProviderSpec
-  | OllamaProviderSpec
   | WebLLMProviderSpec
   | AppleFoundationModelsSpec
   | MlxProviderSpec;
@@ -153,15 +155,6 @@ export interface CloudProviderSpec {
   temperature?: number;
   /** Extra HTTP headers (e.g., x-proxy-token for motebit-cloud). */
   extraHeaders?: Record<string, string>;
-}
-
-/** Ollama-native HTTP provider — uses /api/chat, not OpenAI-compat. */
-export interface OllamaProviderSpec {
-  kind: "ollama";
-  baseUrl: string;
-  model: string;
-  maxTokens?: number;
-  temperature?: number;
 }
 
 /** Browser-only WebLLM provider — runs in-browser via WebGPU. */
@@ -211,14 +204,11 @@ export interface ResolverEnv {
   cloudBaseUrl(wireProtocol: "anthropic" | "openai", canonical: string): string;
 
   /**
-   * Default LOGICAL URL for the on-device local-server backend when the
-   * user hasn't supplied an endpoint. The dispatch heuristic
-   * (`isOllamaNativeEndpoint`) runs on this logical URL — surfaces should
-   * provide the canonical Ollama form (`http://127.0.0.1:11434`) here even
-   * when their actual transport URL differs (e.g., Vite proxy path).
-   *
-   * Use `localServerBaseUrl` to translate the logical URL into the actual
-   * URL the constructed provider should call.
+   * Default URL for the on-device local-server backend when the user
+   * hasn't supplied an endpoint. The resolver auto-appends `/v1` via
+   * `normalizeLocalServerEndpoint`, so this can be a bare host. Use
+   * `localServerBaseUrl` to translate the user-supplied URL into a
+   * surface-specific transport URL (e.g., a Vite dev proxy path).
    */
   defaultLocalServerUrl: string;
 
@@ -357,38 +347,28 @@ export function resolveProviderSpec(config: UnifiedProviderConfig, env: Resolver
             maxTokens: config.maxTokens,
           };
         case "local-server": {
-          // The dispatch heuristic: port 11434 → Ollama native API,
-          // anything else → OpenAI-compat (LM Studio, llama.cpp, Jan,
-          // vLLM, text-generation-webui, …).
+          // Every supported local inference server (Ollama, LM Studio,
+          // llama.cpp, Jan, vLLM, text-generation-webui, …) exposes an
+          // OpenAI-compatible chat completions endpoint at /v1. We dispatch
+          // them all through the OpenAI wire protocol with a single client
+          // (`OpenAIProvider`). The previous Ollama-vs-OpenAI port heuristic
+          // is gone — there's only one code path now.
           //
-          // The DECISION is made on the logical endpoint (the canonical URL
-          // form). The spec carries the ACTUAL endpoint (after surface URL
-          // rewriting), which may be a proxy path that doesn't itself match
-          // the heuristic. This separation lets desktop dev mode use
-          // `/api/ollama` as the transport URL while still being recognized
-          // as Ollama for dispatch purposes.
-          //
-          // This is the line of logic that used to live only in web's
-          // providers.ts and was missing from mobile, desktop, and CLI.
-          // After this extraction, every surface gets it for free.
+          // `normalizeLocalServerEndpoint` auto-appends `/v1` so users who
+          // type the bare host (`http://localhost:11434`) still work. Users
+          // who type the full path (`http://localhost:11434/v1`) are
+          // unaffected. Surfaces may further substitute the URL via
+          // `localServerBaseUrl` (e.g. desktop dev mode → `/api/ollama`).
           const logicalEndpoint = config.endpoint ?? env.defaultLocalServerUrl;
-          const actualEndpoint = env.localServerBaseUrl?.(logicalEndpoint) ?? logicalEndpoint;
-          if (isOllamaNativeEndpoint(logicalEndpoint)) {
-            return {
-              kind: "ollama",
-              baseUrl: actualEndpoint,
-              model: config.model ?? DEFAULT_OLLAMA_MODEL,
-              maxTokens: config.maxTokens,
-              temperature: config.temperature,
-            };
-          }
+          const surfaceTransformed = env.localServerBaseUrl?.(logicalEndpoint) ?? logicalEndpoint;
+          const actualEndpoint = normalizeLocalServerEndpoint(surfaceTransformed);
           return {
             kind: "cloud",
             wireProtocol: "openai",
             // Local OpenAI-compat servers don't validate the API key, but
             // most clients require a non-empty string. Use a sentinel.
             apiKey: "local",
-            model: config.model ?? "local",
+            model: config.model ?? DEFAULT_OLLAMA_MODEL,
             baseUrl: actualEndpoint,
             maxTokens: config.maxTokens,
             temperature: config.temperature,

@@ -3,9 +3,22 @@
  * files on disk. Maps onto `UnifiedProviderConfig` in `@motebit/sdk`:
  *   motebit-cloud → "proxy"
  *   byok          → "anthropic" | "openai" | "google"
- *   on-device     → "ollama" (local-server)
+ *   on-device     → "local-server"
+ *
+ * The historical value `"ollama"` was renamed to `"local-server"` to honor
+ * vendor neutrality. CLI accepts `--provider ollama` as an ergonomic alias,
+ * and `extractPersonality` (in `apps/cli/src/config.ts`) migrates persisted
+ * `"ollama"` values transparently. New code must not write `"ollama"`.
  */
-export type PersonalityProvider = "anthropic" | "openai" | "google" | "ollama" | "proxy";
+export type PersonalityProvider = "anthropic" | "openai" | "google" | "local-server" | "proxy";
+
+/**
+ * Wider on-disk representation that accepts the legacy `"ollama"` value
+ * alongside the modern `PersonalityProvider` shape. Read from `config.json`
+ * directly; narrow to `PersonalityProvider` via the migration in
+ * `extractPersonality`. Do not write this shape — only read.
+ */
+export type PersistedPersonalityProvider = PersonalityProvider | "ollama";
 
 export interface MotebitPersonalityConfig {
   name?: string;

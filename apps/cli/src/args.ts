@@ -8,9 +8,13 @@ import { bold, dim, cyan, green, command } from "./colors.js";
  * CLI provider flag union. Flat shape mapped onto the three-mode architecture:
  *   motebit-cloud → "proxy"
  *   byok          → "anthropic" | "openai" | "google"
- *   on-device     → "ollama" (local-server)
+ *   on-device     → "local-server"  (Ollama, LM Studio, llama.cpp, etc.)
+ *
+ * `--provider ollama` is accepted as an ergonomic alias for `local-server`
+ * and silently normalized at parse time. The historical name persists in the
+ * legacy migration path (`migrateLegacyProvider`) for old saved configs.
  */
-export type CliProvider = "anthropic" | "openai" | "google" | "ollama" | "proxy";
+export type CliProvider = "anthropic" | "openai" | "google" | "local-server" | "proxy";
 
 export interface CliConfig {
   provider: CliProvider;
@@ -96,21 +100,27 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     allowPositionals: true,
   });
 
-  const provider = values.provider;
+  // Accept "ollama" as an ergonomic alias for "local-server" — old muscle
+  // memory + the de-facto-standard local inference server. The internal
+  // representation is always "local-server" so the rest of the system stays
+  // vendor-agnostic.
+  const rawProvider = values.provider === "ollama" ? "local-server" : values.provider;
   const VALID_PROVIDERS: readonly CliProvider[] = [
     "anthropic",
     "openai",
     "google",
-    "ollama",
+    "local-server",
     "proxy",
   ];
-  if (!VALID_PROVIDERS.includes(provider as CliProvider)) {
-    throw new Error(`Unknown provider "${provider}". Use one of: ${VALID_PROVIDERS.join(", ")}.`);
+  if (!VALID_PROVIDERS.includes(rawProvider as CliProvider)) {
+    throw new Error(
+      `Unknown provider "${values.provider}". Use one of: ${VALID_PROVIDERS.join(", ")} (or the alias "ollama" for local-server).`,
+    );
   }
-  const cliProvider = provider as CliProvider;
+  const cliProvider = rawProvider as CliProvider;
 
   const defaultModel =
-    cliProvider === "ollama"
+    cliProvider === "local-server"
       ? "llama3.2"
       : cliProvider === "openai"
         ? "gpt-5.4-mini"
@@ -306,8 +316,10 @@ Providers:
                           Default model: gpt-5.4-mini
   google                  Uses Google API (requires GOOGLE_API_KEY)
                           Default model: gemini-2.5-flash
-  ollama                  Uses local Ollama server (no API key needed)
-                          Default model: llama3.2
+  local-server            Uses a local inference server — Ollama, LM Studio,
+                          llama.cpp, Jan, vLLM, or any OpenAI-compatible
+                          endpoint (no API key needed). Default model: llama3.2.
+                          Alias: --provider ollama
   proxy                   Motebit Cloud (subscription via the relay)
 
 Routing strategies (--routing-strategy):

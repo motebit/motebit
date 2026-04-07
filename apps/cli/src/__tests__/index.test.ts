@@ -25,15 +25,22 @@ describe("parseCliArgs", () => {
     expect(config.model).toBe("claude-sonnet-4-6");
   });
 
-  it("parses --provider ollama with default model", () => {
+  it("parses --provider local-server with default model", () => {
+    const config = parseCliArgs(["--provider", "local-server"]);
+    expect(config.provider).toBe("local-server");
+    expect(config.model).toBe("llama3.2");
+  });
+
+  it("accepts --provider ollama as an ergonomic alias for local-server", () => {
     const config = parseCliArgs(["--provider", "ollama"]);
-    expect(config.provider).toBe("ollama");
+    // Internal representation is always the vendor-agnostic name.
+    expect(config.provider).toBe("local-server");
     expect(config.model).toBe("llama3.2");
   });
 
   it("--model overrides provider default", () => {
-    const config = parseCliArgs(["--provider", "ollama", "--model", "mistral"]);
-    expect(config.provider).toBe("ollama");
+    const config = parseCliArgs(["--provider", "local-server", "--model", "mistral"]);
+    expect(config.provider).toBe("local-server");
     expect(config.model).toBe("mistral");
   });
 

@@ -58,7 +58,6 @@ function mockFetchError(status: number, body: string): void {
 
 function makeDeps(): MotebitLoopDependencies {
   const cloudConfig: CloudProviderConfig = {
-    provider: "anthropic",
     api_key: "test-key",
     model: "claude-sonnet-4-5-20250929",
   };

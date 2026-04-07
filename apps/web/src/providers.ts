@@ -1,9 +1,9 @@
 import {
   CloudProvider,
-  OllamaProvider,
+  OpenAIProvider,
   DEFAULT_OLLAMA_URL,
   type CloudProviderConfig,
-  type OllamaProviderConfig,
+  type OpenAIProviderConfig,
   type StreamingProvider,
   extractMemoryTags,
   extractStateTags,
@@ -18,7 +18,7 @@ import {
 } from "@motebit/sdk";
 import type { ProviderConfig } from "./storage";
 
-export { CloudProvider, OllamaProvider, DEFAULT_OLLAMA_URL };
+export { CloudProvider, OpenAIProvider, DEFAULT_OLLAMA_URL };
 export type { StreamingProvider };
 
 // === Utility Functions ===
@@ -292,16 +292,34 @@ const WEB_RESOLVER_ENV: ResolverEnv = {
  * default model) lives in `resolveProviderSpec`; this function is just the
  * transport switch — given a spec, return an instance.
  *
- * Per-surface code stays small: each surface only needs to know about its
- * own physically-available transports. Web supports cloud, ollama, and
- * webllm; apple-fm and mlx throw at this layer because the resolver was
- * told (via `supportedBackends`) not to produce them.
+ * Two cloud transport classes:
+ *   - `CloudProvider` speaks the Anthropic wire protocol (`/v1/messages`).
+ *     Used for `wireProtocol === "anthropic"` (BYOK Anthropic + motebit-cloud
+ *     via the relay, which the relay translates to other vendors server-side).
+ *   - `OpenAIProvider` speaks the OpenAI wire protocol (`/v1/chat/completions`).
+ *     Used for `wireProtocol === "openai"` (BYOK OpenAI, BYOK Google via the
+ *     OpenAI-compat endpoint, and any local-server inference via the OpenAI
+ *     shim that Ollama / LM Studio / llama.cpp / Jan / vLLM all expose).
+ *
+ * Web supports `cloud` and `webllm`. Apple FM and MLX are mobile-only — the
+ * resolver gates them via `supportedBackends` and they should never reach
+ * this function on web.
  */
 function specToProvider(spec: ProviderSpec): StreamingProvider | IntelligenceProvider {
   switch (spec.kind) {
     case "cloud": {
+      if (spec.wireProtocol === "openai") {
+        const openaiConfig: OpenAIProviderConfig = {
+          api_key: spec.apiKey,
+          model: spec.model,
+          base_url: spec.baseUrl,
+          max_tokens: spec.maxTokens,
+          temperature: spec.temperature,
+          extra_headers: spec.extraHeaders,
+        };
+        return new OpenAIProvider(openaiConfig);
+      }
       const cloudConfig: CloudProviderConfig = {
-        provider: spec.wireProtocol,
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,
@@ -310,15 +328,6 @@ function specToProvider(spec: ProviderSpec): StreamingProvider | IntelligencePro
         extra_headers: spec.extraHeaders,
       };
       return new CloudProvider(cloudConfig);
-    }
-    case "ollama": {
-      const ollamaConfig: OllamaProviderConfig = {
-        model: spec.model,
-        base_url: spec.baseUrl,
-        max_tokens: spec.maxTokens,
-        temperature: spec.temperature,
-      };
-      return new OllamaProvider(ollamaConfig);
     }
     case "webllm":
       return new WebLLMProvider(spec.model, {

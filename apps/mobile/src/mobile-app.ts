@@ -34,7 +34,7 @@ import type {
   ProxySessionAdapter,
 } from "@motebit/runtime";
 import type { GradientSnapshot } from "@motebit/runtime";
-import { CloudProvider, OllamaProvider, DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
+import { CloudProvider, OpenAIProvider, DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import {
   resolveProviderSpec,
   UnsupportedBackendError,
@@ -169,12 +169,21 @@ export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
  * convert to `UnifiedProviderConfig` via `mobileSettingsToUnifiedProvider()`.
  *
  * The three-mode mental model maps onto this flat union as:
- *   on-device   → "on-device"                (with localBackend picker)
+ *   on-device     → "on-device" (apple-fm/mlx) or "local-server" (LAN inference)
  *   motebit-cloud → "proxy"
- *   byok        → "anthropic" | "openai" | "google"
- *   on-device   → "on-device" (apple-fm/mlx) or "ollama" (legacy local-server alias)
+ *   byok          → "anthropic" | "openai" | "google"
+ *
+ * The historical value `"ollama"` was renamed to `"local-server"` for vendor
+ * neutrality. `migrateLegacyMobileSettings` rewrites old persisted settings
+ * on load so existing installs continue to work.
  */
-export type MobileProvider = "ollama" | "anthropic" | "openai" | "google" | "proxy" | "on-device";
+export type MobileProvider =
+  | "local-server"
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "proxy"
+  | "on-device";
 
 /** On-device backend sub-selector. `"local-server"` is for users running their own LAN server. */
 export type MobileLocalBackend = "apple-fm" | "mlx" | "local-server";
@@ -202,7 +211,7 @@ export interface MobileSettings {
 }
 
 const DEFAULT_SETTINGS: MobileSettings = {
-  provider: "ollama",
+  provider: "local-server",
   model: DEFAULT_OLLAMA_MODEL,
   ollamaEndpoint: DEFAULT_OLLAMA_URL,
   colorPreset: "moonlight",
@@ -281,7 +290,7 @@ export function mobileSettingsToUnifiedProvider(
         baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
         maxTokens: settings.maxTokens,
       };
-    case "ollama":
+    case "local-server":
       return {
         mode: "on-device",
         backend: "local-server",
@@ -301,8 +310,11 @@ export function mobileSettingsToUnifiedProvider(
 }
 
 /**
- * Reverse migration: collapse an old persisted settings object (which may have
- * `provider: "local"`) onto the new union. Called from `loadSettings`.
+ * Reverse migration: collapse an old persisted settings object onto the
+ * current `MobileProvider` union. Called from `loadSettings`. Two historical
+ * renames are honored:
+ *   - `"local"`  → `"on-device"`  (renamed when the three-mode UI shipped)
+ *   - `"ollama"` → `"local-server"`  (renamed for vendor neutrality)
  */
 function migrateLegacyMobileSettings(
   raw: (Partial<MobileSettings> & { provider?: string }) | Record<string, unknown>,
@@ -310,21 +322,22 @@ function migrateLegacyMobileSettings(
   const obj = raw as { provider?: string };
   if (obj.provider === "local") {
     obj.provider = "on-device";
+  } else if (obj.provider === "ollama") {
+    obj.provider = "local-server";
   }
 }
 
 /**
  * Map a mobile flat `MobileAIConfig` to the unified shape the SDK resolver
- * speaks. Hybrid is excluded — it's a composite that doesn't reduce to a
- * single ProviderSpec and is built directly in `initAI`.
+ * speaks.
  *
- * The mobile UI's "ollama" provider value is a historical alias for the
- * on-device local-server backend. Both map to the same unified shape so the
- * resolver dispatches them through `isOllamaNativeEndpoint`.
+ * The mobile UI's "local-server" provider value is the canonical name for
+ * the on-device LAN inference backend. The legacy "ollama" name is migrated
+ * on settings load by `migrateLegacyMobileSettings`.
  */
 function mobileConfigToUnified(config: MobileAIConfig): UnifiedProviderConfig {
   switch (config.provider) {
-    case "ollama":
+    case "local-server":
       return {
         mode: "on-device",
         backend: "local-server",
@@ -382,25 +395,30 @@ async function mobileSpecToProvider(
   spec: ProviderSpec,
   maxTokensFromConfig?: number,
 ): Promise<
-  CloudProvider | OllamaProvider | import("./adapters/local-inference.js").LocalInferenceProvider
+  CloudProvider | OpenAIProvider | import("./adapters/local-inference.js").LocalInferenceProvider
 > {
   switch (spec.kind) {
     case "cloud":
+      // Cloud kind dispatches on wireProtocol: anthropic → CloudProvider,
+      // openai → OpenAIProvider (used for BYOK OpenAI/Google and any local
+      // server via the OpenAI-compat shim).
+      if (spec.wireProtocol === "openai") {
+        return new OpenAIProvider({
+          api_key: spec.apiKey,
+          model: spec.model,
+          base_url: spec.baseUrl,
+          max_tokens: spec.maxTokens,
+          temperature: spec.temperature,
+          extra_headers: spec.extraHeaders,
+        });
+      }
       return new CloudProvider({
-        provider: spec.wireProtocol,
         api_key: spec.apiKey,
         model: spec.model,
         base_url: spec.baseUrl,
         max_tokens: spec.maxTokens,
         temperature: spec.temperature,
         extra_headers: spec.extraHeaders,
-      });
-    case "ollama":
-      return new OllamaProvider({
-        model: spec.model,
-        base_url: spec.baseUrl,
-        max_tokens: spec.maxTokens,
-        temperature: spec.temperature,
       });
     case "apple-fm":
     case "mlx": {

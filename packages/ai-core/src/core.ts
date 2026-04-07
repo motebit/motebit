@@ -22,7 +22,11 @@ export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from ".
 export { trimConversation } from "./context-window.js";
 export type { ContextBudget } from "./context-window.js";
 export { resolveConfig, DEFAULT_CONFIG } from "./config.js";
-export type { MotebitPersonalityConfig, PersonalityProvider } from "./config.js";
+export type {
+  MotebitPersonalityConfig,
+  PersonalityProvider,
+  PersistedPersonalityProvider,
+} from "./config.js";
 export { summarizeConversation, shouldSummarize } from "./summarizer.js";
 export type { SummarizerConfig } from "./summarizer.js";
 export { reflect, parseReflectionResponse } from "./reflection.js";
@@ -32,10 +36,26 @@ export type { TaskType, TaskProfile, TaskRouterConfig, ResolvedTaskConfig } from
 
 // === Provider Configuration ===
 
+/**
+ * Configuration for `CloudProvider` — the Anthropic-protocol HTTP client.
+ *
+ * Despite the historical name, `CloudProvider` only speaks the Anthropic
+ * Messages API (`POST /v1/messages` with `x-api-key` and the Anthropic SSE
+ * event format). The OpenAI wire protocol lives in `OpenAIProvider`
+ * (`./openai-provider.ts`). Until 2026-04-06 this config carried a
+ * `provider: "openai" | "anthropic" | "custom"` field that suggested
+ * polyglot wire-protocol support, but the field only changed the default
+ * base URL — every other code path was hardcoded to Anthropic. Constructing
+ * with `provider: "openai"` produced Anthropic-format requests against the
+ * OpenAI base URL, which 404'd. The field is removed.
+ *
+ * Used for: BYOK Anthropic (direct), Motebit Cloud (via the relay, which
+ * translates Anthropic format to OpenAI/Google server-side for upstream).
+ */
 export interface CloudProviderConfig {
-  provider: "openai" | "anthropic" | "custom";
   api_key: string;
   model: string;
+  /** Defaults to `https://api.anthropic.com`. */
   base_url?: string;
   max_tokens?: number;
   temperature?: number;
@@ -838,314 +858,22 @@ export class CloudProvider implements StreamingProvider {
   }
 
   private getDefaultBaseUrl(): string {
-    switch (this.config.provider) {
-      case "openai":
-        return "https://api.openai.com";
-      case "anthropic":
-        return "https://api.anthropic.com";
-      default:
-        return this.config.base_url ?? "";
-    }
+    return "https://api.anthropic.com";
   }
 }
 
 // === Ollama Provider ===
-
-export interface OllamaProviderConfig {
-  model: string;
-  base_url?: string;
-  max_tokens?: number;
-  temperature?: number;
-  personalityConfig?: import("./config.js").MotebitPersonalityConfig;
-}
-
-export class OllamaProvider implements StreamingProvider {
-  private config: OllamaProviderConfig;
-
-  constructor(config: OllamaProviderConfig) {
-    this.config = config;
-  }
-
-  get model(): string {
-    return this.config.model;
-  }
-
-  get temperature(): number | undefined {
-    return this.config.temperature;
-  }
-
-  get maxTokens(): number | undefined {
-    return this.config.max_tokens;
-  }
-
-  setModel(model: string): void {
-    this.config.model = model;
-  }
-
-  setTemperature(temperature: number): void {
-    this.config.temperature = temperature;
-  }
-
-  setMaxTokens(maxTokens: number): void {
-    this.config.max_tokens = maxTokens;
-  }
-
-  async generate(contextPack: ContextPack): Promise<AIResponse> {
-    const baseUrl = this.config.base_url ?? DEFAULT_OLLAMA_URL;
-    const messages = this.buildMessages(contextPack);
-
-    const body: Record<string, unknown> = {
-      model: this.config.model,
-      messages,
-      stream: false,
-      options: {
-        temperature: this.config.temperature ?? 0.7,
-        num_predict: this.config.max_tokens ?? 4096,
-      },
-    };
-
-    if (contextPack.tools && contextPack.tools.length > 0) {
-      body.tools = contextPack.tools.map((t) => ({
-        type: "function",
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.inputSchema,
-        },
-      }));
-    }
-
-    let res: Response;
-    try {
-      res = await fetch(`${baseUrl}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
-        throw new Error(
-          `Cannot connect to Ollama at ${baseUrl}. Is Ollama running? Start it with: ollama serve`,
-          { cause: err },
-        );
-      }
-      throw err;
-    }
-
-    if (!res.ok) {
-      let errorText: string;
-      try {
-        errorText = await Promise.race([
-          res.text(),
-          new Promise<string>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
-        ]);
-      } catch {
-        errorText = `(status ${res.status})`;
-      }
-      if (res.status === 404) {
-        throw new Error(
-          `Ollama model "${this.config.model}" not found. Run: ollama pull ${this.config.model}`,
-        );
-      }
-      throw new Error(`Ollama API error ${res.status}: ${errorText}`);
-    }
-
-    const data = (await res.json()) as {
-      message: {
-        content: string;
-        tool_calls?: Array<{
-          function: { name: string; arguments: Record<string, unknown> };
-        }>;
-      };
-    };
-
-    const response = this.parseResponse(data.message.content);
-    if (data.message.tool_calls && data.message.tool_calls.length > 0) {
-      response.tool_calls = data.message.tool_calls.map((tc) => ({
-        id: crypto.randomUUID(),
-        name: tc.function.name,
-        args: tc.function.arguments,
-      }));
-    }
-    return response;
-  }
-
-  async *generateStream(
-    contextPack: ContextPack,
-  ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
-    const baseUrl = this.config.base_url ?? DEFAULT_OLLAMA_URL;
-    const messages = this.buildMessages(contextPack);
-
-    const body: Record<string, unknown> = {
-      model: this.config.model,
-      messages,
-      stream: true,
-      options: {
-        temperature: this.config.temperature ?? 0.7,
-        num_predict: this.config.max_tokens ?? 4096,
-      },
-    };
-
-    if (contextPack.tools && contextPack.tools.length > 0) {
-      body.tools = contextPack.tools.map((t) => ({
-        type: "function",
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.inputSchema,
-        },
-      }));
-    }
-
-    let res: Response;
-    try {
-      res = await fetch(`${baseUrl}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
-        throw new Error(
-          `Cannot connect to Ollama at ${baseUrl}. Is Ollama running? Start it with: ollama serve`,
-          { cause: err },
-        );
-      }
-      throw err;
-    }
-
-    if (!res.ok) {
-      let errorText: string;
-      try {
-        errorText = await Promise.race([
-          res.text(),
-          new Promise<string>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
-        ]);
-      } catch {
-        errorText = `(status ${res.status})`;
-      }
-      if (res.status === 404) {
-        throw new Error(
-          `Ollama model "${this.config.model}" not found. Run: ollama pull ${this.config.model}`,
-        );
-      }
-      throw new Error(`Ollama API error ${res.status}: ${errorText}`);
-    }
-
-    let accumulated = "";
-    const collectedToolCalls: ToolCall[] = [];
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (line.trim() === "") continue;
-
-          try {
-            const chunk = JSON.parse(line) as {
-              message?: {
-                content: string;
-                tool_calls?: Array<{
-                  function: { name: string; arguments: Record<string, unknown> };
-                }>;
-              };
-              done: boolean;
-            };
-            if (chunk.message?.content != null && chunk.message.content !== "") {
-              accumulated += chunk.message.content;
-              yield { type: "text", text: chunk.message.content };
-            }
-            if (chunk.message?.tool_calls) {
-              for (const tc of chunk.message.tool_calls) {
-                collectedToolCalls.push({
-                  id: crypto.randomUUID(),
-                  name: tc.function.name,
-                  args: tc.function.arguments,
-                });
-              }
-            }
-          } catch {
-            // Skip unparseable NDJSON lines
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    const memoryCandidates = extractMemoryTags(accumulated);
-    const stateUpdates = extractStateTags(accumulated);
-    const displayText = stripTags(accumulated);
-
-    yield {
-      type: "done",
-      response: {
-        text: displayText,
-        confidence: 0.8,
-        memory_candidates: memoryCandidates,
-        state_updates: stateUpdates,
-        ...(collectedToolCalls.length > 0 ? { tool_calls: collectedToolCalls } : {}),
-      },
-    };
-  }
-
-  estimateConfidence(): Promise<number> {
-    return Promise.resolve(0.8);
-  }
-
-  extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
-    return Promise.resolve(response.memory_candidates);
-  }
-
-  private buildMessages(contextPack: ContextPack): Record<string, unknown>[] {
-    const systemPrompt = this.buildSystemPrompt(contextPack);
-    const history = contextPack.conversation_history ?? [];
-    const messages: Record<string, unknown>[] = [{ role: "system", content: systemPrompt }];
-
-    for (const msg of history) {
-      if (msg.role === "tool") {
-        messages.push({ role: "tool", content: msg.content });
-      } else {
-        messages.push({ role: msg.role, content: msg.content });
-      }
-    }
-
-    if (contextPack.activationPrompt) {
-      messages.push({ role: "user", content: "[listening]" });
-    } else {
-      messages.push({ role: "user", content: contextPack.user_message });
-    }
-    return messages;
-  }
-
-  private buildSystemPrompt(contextPack: ContextPack): string {
-    return buildPrompt(contextPack, this.config.personalityConfig);
-  }
-
-  private parseResponse(rawText: string): AIResponse {
-    const memoryCandidates = extractMemoryTags(rawText);
-    const stateUpdates = extractStateTags(rawText);
-    const displayText = stripTags(rawText);
-
-    return {
-      text: displayText,
-      confidence: 0.8,
-      memory_candidates: memoryCandidates,
-      state_updates: stateUpdates,
-    };
-  }
-}
+//
+// (Removed 2026-04-06.) Ollama is now reached via its OpenAI-compatible
+// `/v1/chat/completions` shim through `OpenAIProvider` (in
+// `./openai-provider.ts`). Same goes for every other local inference server
+// (LM Studio, llama.cpp, Jan, vLLM, …) — they all use the same OpenAI wire
+// protocol, so a single client class is sufficient.
+//
+// The dedicated Ollama-native client (`/api/chat`, line-delimited JSON
+// streaming) was deleted as part of the rule-of-three extraction once it was
+// confirmed redundant with the OpenAI shim path. The legacy `OLLAMA_*` model
+// constants remain in `@motebit/sdk` as suggestions for the on-device UI.
 
 // === Ollama Auto-Detection ===
 

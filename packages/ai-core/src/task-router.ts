@@ -152,7 +152,7 @@ export function resolveModelTier(tier: ModelTier, currentModel: string): string 
 
 /**
  * A provider that supports runtime model/temperature/maxTokens switching.
- * CloudProvider and OllamaProvider both implement this interface.
+ * CloudProvider and OpenAIProvider both implement this interface.
  */
 interface ConfigurableProvider extends IntelligenceProvider {
   readonly model: string;

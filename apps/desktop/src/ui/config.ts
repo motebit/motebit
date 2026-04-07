@@ -8,14 +8,20 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
     const { invoke } = await import("@tauri-apps/api/core");
     const raw = await invoke<string>("read_config");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    // Migrate the legacy `"ollama"` value transparently. Old config.json
+    // files persist `default_provider: "ollama"`; we read them as the new
+    // vendor-agnostic `"local-server"` name. New saves write the new value.
+    const rawProvider = parsed.default_provider as string | undefined;
     const provider: DesktopAIConfig["provider"] =
-      (parsed.default_provider as DesktopAIConfig["provider"] | undefined) ?? "ollama";
+      rawProvider === "ollama"
+        ? "local-server"
+        : ((rawProvider as DesktopAIConfig["provider"] | undefined) ?? "local-server");
     const model = (parsed.default_model as string | undefined) ?? undefined;
 
     // Per-vendor keyring slot for the active provider. Falls back to the
     // legacy single-slot `api_key` if the per-vendor slot is empty — this
     // transparently migrates users who pre-date the per-vendor split.
-    // Providers with no BYOK key (ollama, proxy) skip lookup entirely.
+    // Providers with no BYOK key (local-server, proxy) skip lookup entirely.
     let apiKey: string | undefined;
     const slot = byokKeyringKey(provider);
     if (slot) {
@@ -43,9 +49,10 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       apiKey = (parsed.api_key as string | undefined) ?? undefined;
     }
 
-    // Ollama endpoint (optional) — user's LAN/localhost inference server.
-    // Used by on-device (ollama) and hybrid providers. Falls back to the
-    // runtime default inside initAI when absent.
+    // Local-server endpoint (optional) — user's LAN/localhost inference
+    // server (Ollama, LM Studio, llama.cpp, etc.). Falls back to the
+    // runtime default inside initAI when absent. The field is named
+    // `ollamaEndpoint` for historical compat with the Tauri config schema.
     const ollamaEndpoint = (parsed.ollama_endpoint as string | undefined) ?? undefined;
 
     // Sync relay config (optional)
@@ -75,7 +82,11 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
   }
 
   // Vite dev mode — read from env vars
-  const provider = (import.meta.env.VITE_AI_PROVIDER as DesktopAIConfig["provider"]) || "ollama";
+  const envProvider = import.meta.env.VITE_AI_PROVIDER as string | undefined;
+  const provider: DesktopAIConfig["provider"] =
+    envProvider === "ollama"
+      ? "local-server"
+      : ((envProvider as DesktopAIConfig["provider"] | undefined) ?? "local-server");
   const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY || undefined;
 
   return { provider, apiKey, isTauri: false };

@@ -58,7 +58,7 @@ type ProviderMode = "motebit-cloud" | "byok" | "on-device";
 function modeForProvider(p: DesktopAIConfig["provider"]): ProviderMode {
   if (p === "proxy") return "motebit-cloud";
   if (p === "anthropic" || p === "openai" || p === "google") return "byok";
-  return "on-device"; // ollama
+  return "on-device"; // local-server
 }
 
 let activeMode: ProviderMode = "motebit-cloud";
@@ -206,16 +206,16 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         ? OPENAI_MODELS
         : provider === "google"
           ? GOOGLE_MODELS
-          : provider === "ollama"
+          : provider === "local-server"
             ? OLLAMA_MODELS
             : provider === "proxy"
               ? PROXY_MODELS
               : ANTHROPIC_MODELS;
 
-    // Show/hide API key field based on provider (hidden for ollama and proxy)
+    // Show/hide API key field based on provider (hidden for local-server and proxy)
     const apiKeyField = settingsApiKey.closest<HTMLElement>(".settings-field");
     if (apiKeyField != null) {
-      apiKeyField.style.display = provider === "ollama" || provider === "proxy" ? "none" : "";
+      apiKeyField.style.display = provider === "local-server" || provider === "proxy" ? "none" : "";
     }
 
     for (const model of models) {
@@ -225,7 +225,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       settingsModelSelect.appendChild(opt);
     }
 
-    if (provider === "ollama") {
+    if (provider === "local-server") {
       const customOpt = document.createElement("option");
       customOpt.value = "__custom__";
       customOpt.textContent = "Custom...";
@@ -238,7 +238,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       if (hasModel) {
         settingsModelSelect.value = currentModel;
         settingsModelCustom.style.display = "none";
-      } else if (provider === "ollama") {
+      } else if (provider === "local-server") {
         settingsModelSelect.value = "__custom__";
         settingsModelCustom.value = currentModel;
         settingsModelCustom.style.display = "block";
@@ -402,7 +402,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       case "byok":
         return activeByokVendor;
       case "on-device":
-        return "ollama";
+        return "local-server";
     }
   }
 
@@ -434,10 +434,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     // Update provider status in settings panel
     providerDot.className = "provider-dot";
-    if (provider === "ollama" && model) {
+    if (provider === "local-server" && model) {
       providerStatusEl.style.display = "flex";
       providerDot.classList.add("green");
-      providerText.textContent = `Local (Ollama: ${model})`;
+      providerText.textContent = `Local (${model})`;
     } else if (provider === "anthropic" && model) {
       providerStatusEl.style.display = "flex";
       providerDot.classList.add("blue");
@@ -1592,7 +1592,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       if (settingsMaxTokens) settingsMaxTokens.value = String(config.maxTokens ?? 4096);
       populateModelSelect(config.provider, currentModel);
     } else {
-      populateModelSelect("ollama");
+      populateModelSelect("local-server");
     }
 
     // Derive three-mode state from the flat provider and populate each
