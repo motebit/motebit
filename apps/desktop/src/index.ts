@@ -18,9 +18,7 @@ import type {
   TurnResult,
   StorageAdapters,
   StreamChunk,
-  KeyringAdapter,
   OperatorModeResult,
-  AuditLogSink,
   InteriorColor,
   McpServerConfig,
   ServerVerifier,
@@ -37,16 +35,9 @@ import {
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
 export type { LocalInferenceDetectionResult, OllamaDetectionResult } from "@motebit/ai-core";
-import type {
-  ToolAuditEntry,
-  MemoryNode,
-  MemoryEdge,
-  AgentTask,
-  ExecutionReceipt,
-} from "@motebit/sdk";
+import type { MemoryNode, MemoryEdge, AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import {
   EventType,
-  SensitivityLevel,
   DeviceCapability,
   resolveProviderSpec,
   UnsupportedBackendError,
@@ -58,7 +49,7 @@ import {
 } from "@motebit/sdk";
 import type { UnifiedProviderConfig, ProviderSpec, ResolverEnv } from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
-import { InMemoryMemoryStorage, computeDecayedConfidence, embedText } from "@motebit/memory-graph";
+import { InMemoryMemoryStorage } from "@motebit/memory-graph";
 import {
   InMemoryIdentityStorage,
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -94,21 +85,7 @@ import {
   EncryptedEventStoreAdapter,
   decryptEventPayload,
 } from "@motebit/sync-engine";
-import type {
-  PairingSession,
-  PairingStatus,
-  ConversationSyncStoreAdapter,
-  PlanSyncStoreAdapter,
-  SyncStatus,
-} from "@motebit/sync-engine";
-import type {
-  SyncConversation,
-  SyncConversationMessage,
-  SyncPlan,
-  SyncPlanStep,
-  Plan,
-  PlanStep,
-} from "@motebit/sdk";
+import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import type { PlanChunk, PlanStoreAdapter } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
@@ -130,6 +107,13 @@ import {
   TauriApprovalStore,
   type InvokeFn,
 } from "./tauri-storage.js";
+import { TauriKeyringAdapter, TauriToolAuditSink } from "./tauri-system-adapters.js";
+import {
+  TauriConversationSyncStoreAdapter,
+  TauriPlanSyncStoreAdapter,
+} from "./tauri-sync-adapters.js";
+import * as memoryCommands from "./memory-commands.js";
+import * as rendererCommands from "./renderer-commands.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 import {
   createSubGoalDefinition,
@@ -371,72 +355,6 @@ function desktopSpecToProvider(
   }
 }
 
-// === Tauri Keyring Adapter ===
-
-class TauriKeyringAdapter implements KeyringAdapter {
-  constructor(private invoke: InvokeFn) {}
-
-  async get(key: string): Promise<string | null> {
-    return this.invoke<string | null>("keyring_get", { key });
-  }
-
-  async set(key: string, value: string): Promise<void> {
-    await this.invoke<void>("keyring_set", { key, value });
-  }
-
-  async delete(key: string): Promise<void> {
-    await this.invoke<void>("keyring_delete", { key });
-  }
-}
-
-// === Tauri Tool Audit Sink ===
-
-class TauriToolAuditSink implements AuditLogSink {
-  constructor(private invoke: InvokeFn) {}
-
-  append(entry: ToolAuditEntry): void {
-    // Fire-and-forget — audit writes are best-effort
-    void this.invoke("db_execute", {
-      sql: `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      params: [
-        entry.callId,
-        entry.turnId,
-        entry.runId ?? null,
-        entry.tool,
-        JSON.stringify(entry.args),
-        JSON.stringify(entry.decision),
-        entry.result ? JSON.stringify(entry.result) : null,
-        entry.injection ? JSON.stringify(entry.injection) : null,
-        entry.costUnits ?? 0,
-        entry.timestamp,
-      ],
-    });
-  }
-
-  query(_turnId: string): ToolAuditEntry[] {
-    // Sync interface — return empty. The Tauri version is async-backed but
-    // the AuditLogSink interface is sync. Writes persist; reads use db_query.
-    return [];
-  }
-
-  getAll(): ToolAuditEntry[] {
-    return [];
-  }
-
-  queryStatsSince(_afterTimestamp: number): {
-    distinctTurns: number;
-    totalToolCalls: number;
-    succeeded: number;
-    blocked: number;
-    failed: number;
-  } {
-    // Sync interface — return empty. Desktop gradient computation falls back
-    // to the in-memory behavioral stats accumulator.
-    return { distinctTurns: 0, totalToolCalls: 0, succeeded: 0, blocked: 0, failed: 0 };
-  }
-}
-
 // === Storage Factory ===
 
 function createTauriStorage(
@@ -481,16 +399,12 @@ function createDesktopStorage(
 }
 
 // === Color Presets ===
-
-export const COLOR_PRESETS: Record<string, InteriorColor> = {
-  moonlight: { tint: [0.95, 0.95, 1.0], glow: [0.8, 0.85, 1.0] },
-  amber: { tint: [1.0, 0.85, 0.6], glow: [0.9, 0.7, 0.3] },
-  rose: { tint: [1.0, 0.82, 0.88], glow: [0.9, 0.5, 0.6] },
-  violet: { tint: [0.88, 0.8, 1.0], glow: [0.6, 0.4, 0.9] },
-  cyan: { tint: [0.8, 0.95, 1.0], glow: [0.3, 0.8, 0.9] },
-  ember: { tint: [1.0, 0.75, 0.65], glow: [0.9, 0.35, 0.2] },
-  sage: { tint: [0.82, 0.95, 0.85], glow: [0.4, 0.75, 0.5] },
-};
+// Defined in `./color-presets.ts` so renderer-commands can import them
+// without taking a dep on this index file. Re-exported here for backwards
+// compat with every external consumer that still does
+// `import { COLOR_PRESETS } from "@motebit/desktop"` (or the relative
+// equivalent inside the desktop surface).
+export { COLOR_PRESETS } from "./color-presets.js";
 
 // === MCP Server Status ===
 
@@ -754,10 +668,14 @@ export class DesktopApp {
     }
   }
 
-  async init(canvas: unknown): Promise<void> {
-    await this.renderer.init(canvas);
-    this.renderer.setLightEnvironment();
-    this.renderer.enableOrbitControls();
+  // === Renderer lifecycle ===
+  // Pure render ops live in `./renderer-commands.ts`. The methods below
+  // are one-line delegates that preserve the public DesktopApp API.
+  // Lifecycle methods (start, stop) stay here because they coordinate the
+  // runtime + renderer together.
+
+  init(canvas: unknown): Promise<void> {
+    return rendererCommands.initRenderer(this.renderer, canvas);
   }
 
   start(): void {
@@ -770,26 +688,11 @@ export class DesktopApp {
   }
 
   resize(width: number, height: number): void {
-    this.renderer.resize(width, height);
+    rendererCommands.resizeRenderer(this.renderer, width, height);
   }
 
   renderFrame(deltaTime: number, time: number): void {
-    if (this.runtime) {
-      this.runtime.renderFrame(deltaTime, time);
-    } else {
-      this.renderer.render({
-        cues: {
-          hover_distance: 0.4,
-          drift_amplitude: 0.02,
-          glow_intensity: 0.3,
-          eye_dilation: 0.3,
-          smile_curvature: 0,
-          speaking_activity: 0,
-        },
-        delta_time: deltaTime,
-        time,
-      });
-    }
+    rendererCommands.renderFrame(this.renderer, this.runtime, deltaTime, time);
   }
 
   // === AI Integration ===
@@ -944,6 +847,9 @@ export class DesktopApp {
     if (envRelayUrl == null || envRelayUrl === "") {
       const legacy = viteEnv?.VITE_PROXY_URL;
       if (legacy != null && legacy !== "") {
+        // One-shot deprecation diagnostic — fires at most once per build,
+        // when an older `.env` file is read for the first time.
+        // eslint-disable-next-line no-console -- one-shot deprecation warning
         console.warn("[motebit] VITE_PROXY_URL is deprecated, use VITE_MOTEBIT_RELAY_URL instead");
         envRelayUrl = legacy;
       }
@@ -1279,28 +1185,27 @@ export class DesktopApp {
   }
 
   // === Appearance ===
+  // Implementations in `./renderer-commands.ts`. One-line delegates here.
 
   setInteriorColor(presetName: string): void {
-    const preset = COLOR_PRESETS[presetName];
-    if (!preset) return;
-    this.renderer.setInteriorColor(preset);
+    rendererCommands.setInteriorColor(this.renderer, presetName);
   }
 
   /** Apply an arbitrary interior color directly (bypasses preset lookup). Used for custom color picker live preview. */
   setInteriorColorDirect(color: InteriorColor): void {
-    this.renderer.setInteriorColor(color);
+    rendererCommands.setInteriorColorDirect(this.renderer, color);
   }
 
   setDarkEnvironment(): void {
-    this.renderer.setDarkEnvironment();
+    rendererCommands.setDarkEnvironment(this.renderer);
   }
 
   setLightEnvironment(): void {
-    this.renderer.setLightEnvironment();
+    rendererCommands.setLightEnvironment(this.renderer);
   }
 
   setAudioReactivity(energy: { rms: number; low: number; mid: number; high: number } | null): void {
-    this.renderer.setAudioReactivity(energy);
+    rendererCommands.setAudioReactivity(this.renderer, energy);
   }
 
   // === MCP Lifecycle ===
@@ -1823,93 +1728,43 @@ export class DesktopApp {
   }
 
   // === Memory Browser ===
+  // Implementations live in `./memory-commands.ts`. The methods here are
+  // one-line delegates that preserve the public DesktopApp API contract.
 
   /** List all non-tombstoned memories, sorted by created_at DESC. */
-  async listMemories(): Promise<MemoryNode[]> {
-    if (!this.runtime) return [];
-    try {
-      const { nodes } = await this.runtime.memory.exportAll();
-      const now = Date.now();
-      return nodes
-        .filter((n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now))
-        .sort((a, b) => b.created_at - a.created_at);
-    } catch {
-      return [];
-    }
+  listMemories(): Promise<MemoryNode[]> {
+    return memoryCommands.listMemories(this.runtime);
   }
 
   /** List all edges for the current motebit. */
-  async listMemoryEdges(): Promise<MemoryEdge[]> {
-    if (!this.runtime) return [];
-    try {
-      const { edges } = await this.runtime.memory.exportAll();
-      return edges;
-    } catch {
-      return [];
-    }
+  listMemoryEdges(): Promise<MemoryEdge[]> {
+    return memoryCommands.listMemoryEdges(this.runtime);
+  }
+
+  /** Internal: form a memory directly, bypassing the agentic loop.
+   * Used only for first-run greeting fallback. Local embeddings (no network). */
+  formMemoryDirect(content: string, confidence: number): Promise<MemoryNode | null> {
+    return memoryCommands.formMemoryDirect(this.runtime, content, confidence);
   }
 
   /** Soft-delete a memory with audit trail. */
-  /** Internal: form a memory directly, bypassing the agentic loop.
-   * Used only for first-run greeting fallback. Local embeddings (no network). */
-  async formMemoryDirect(content: string, confidence: number): Promise<MemoryNode | null> {
-    if (!this.runtime) return null;
-    const embedding = await embedText(content);
-    return this.runtime.memory.formMemory(
-      { content, confidence, sensitivity: SensitivityLevel.None },
-      embedding,
-    );
-  }
-
-  async deleteMemory(
-    nodeId: string,
-  ): Promise<import("@motebit/crypto").DeletionCertificate | null> {
-    if (!this.runtime) return null;
-    try {
-      return await this.runtime.privacy.deleteMemory(nodeId, this.motebitId);
-    } catch {
-      // Fall back to direct deletion if privacy layer fails
-      await this.runtime.memory.deleteMemory(nodeId);
-      return null;
-    }
+  deleteMemory(nodeId: string): Promise<import("@motebit/crypto").DeletionCertificate | null> {
+    return memoryCommands.deleteMemory(this.runtime, this.motebitId, nodeId);
   }
 
   /** List deletion certificates from the audit log. */
-  async listDeletionCertificates(): Promise<
-    Array<{
-      auditId: string;
-      timestamp: number;
-      targetId: string;
-      tombstoneHash: string;
-      deletedBy: string;
-    }>
-  > {
-    if (!this.runtime) return [];
-    try {
-      const records = await this.runtime.auditLog.query(this.motebitId);
-      return records
-        .filter((r) => r.action === "delete_memory")
-        .map((r) => ({
-          auditId: r.audit_id,
-          timestamp: r.timestamp,
-          targetId: r.target_id,
-          tombstoneHash: (r.details as Record<string, string>).tombstone_hash ?? "",
-          deletedBy: (r.details as Record<string, string>).deleted_by ?? "",
-        }));
-    } catch {
-      return [];
-    }
+  listDeletionCertificates(): ReturnType<typeof memoryCommands.listDeletionCertificates> {
+    return memoryCommands.listDeletionCertificates(this.runtime, this.motebitId);
   }
 
   /** Pin or unpin a memory. */
-  async pinMemory(nodeId: string, pinned: boolean): Promise<void> {
-    if (!this.runtime) return;
-    await this.runtime.memory.pinMemory(nodeId, pinned);
+  pinMemory(nodeId: string, pinned: boolean): Promise<void> {
+    return memoryCommands.pinMemory(this.runtime, nodeId, pinned);
   }
 
   /** Compute effective confidence after half-life decay. */
   getDecayedConfidence(node: MemoryNode): number {
-    return computeDecayedConfidence(node.confidence, node.half_life, Date.now() - node.created_at);
+    return memoryCommands.getDecayedConfidence(node);
   }
 
   // === Pairing: Device A (existing device) ===
@@ -2623,7 +2478,8 @@ export class DesktopApp {
           const agentId = rc?.selected_agent ?? chunk.task_id?.slice(0, 8) ?? "network";
           const agentShort = agentId.length > 12 ? agentId.slice(0, 8) + "…" : agentId;
           let desc = `→ agent ${agentShort}: ${chunk.step.description}`;
-          if (rc?.alternatives_considered) desc += ` (${rc.alternatives_considered + 1} evaluated)`;
+          if (rc?.alternatives_considered != null && rc.alternatives_considered > 0)
+            desc += ` (${rc.alternatives_considered + 1} evaluated)`;
           this._goalPlanProgressCallback?.({
             goalId: goal.goal_id,
             planTitle: planTitle ?? "",
@@ -3397,6 +3253,11 @@ export class DesktopApp {
           }
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
+          // Task-handler diagnostic — surface failures to the desktop log so
+          // operators can see why a delegation didn't complete. The serving
+          // path runs detached from the chat UI, so there's no other place
+          // for this to land.
+          // eslint-disable-next-line no-console -- task-handler diagnostic
           console.error(`Task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
         } finally {
           this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
@@ -3608,187 +3469,6 @@ export class DesktopApp {
     }
     this.runtime?.sync.stop();
     this.emitSyncStatus({ status: "disconnected" });
-  }
-}
-
-// === Tauri Conversation Sync Store Adapter ===
-
-/**
- * Bridges TauriConversationStore (camelCase, async) to ConversationSyncStoreAdapter (snake_case, sync).
- * Uses blocking-style approach: pre-fetches data before sync cycle.
- */
-class TauriConversationSyncStoreAdapter implements ConversationSyncStoreAdapter {
-  private _conversations: SyncConversation[] = [];
-  private _messages: Map<string, SyncConversationMessage[]> = new Map();
-
-  constructor(
-    private store: TauriConversationStore,
-    private motebitId: string,
-  ) {}
-
-  getConversationsSince(motebitId: string, since: number): SyncConversation[] {
-    // Return from pre-fetched data. The sync() call pre-loads before use.
-    return this._conversations.filter(
-      (c) => c.motebit_id === motebitId && c.last_active_at > since,
-    );
-  }
-
-  getMessagesSince(conversationId: string, since: number): SyncConversationMessage[] {
-    const msgs = this._messages.get(conversationId) ?? [];
-    return msgs.filter((m) => m.created_at > since);
-  }
-
-  upsertConversation(conv: SyncConversation): void {
-    void this.store.upsertConversation(conv);
-  }
-
-  upsertMessage(msg: SyncConversationMessage): void {
-    void this.store.upsertMessage(msg);
-  }
-
-  /** Pre-fetch data from async Tauri store. Must be called before sync(). */
-  async prefetch(since: number): Promise<void> {
-    const convRows = await this.store.getConversationsSince(this.motebitId, since);
-    this._conversations = convRows;
-    for (const conv of convRows) {
-      const msgRows = await this.store.getMessagesSince(conv.conversation_id, since);
-      this._messages.set(conv.conversation_id, msgRows);
-    }
-  }
-}
-
-/**
- * Bridges TauriPlanStore (async, in-memory cache) to PlanSyncStoreAdapter (sync).
- * Pre-fetches plans and steps before sync cycle.
- */
-class TauriPlanSyncStoreAdapter implements PlanSyncStoreAdapter {
-  private _plans: Plan[] = [];
-  private _steps: PlanStep[] = [];
-
-  constructor(
-    private store: TauriPlanStore | PlanStoreAdapter,
-    private motebitId: string,
-  ) {}
-
-  getPlansSince(_motebitId: string, since: number): SyncPlan[] {
-    return this._plans
-      .filter((p) => p.updated_at > since)
-      .map((p) => ({
-        plan_id: p.plan_id,
-        goal_id: p.goal_id,
-        motebit_id: p.motebit_id,
-        title: p.title,
-        status: p.status,
-        created_at: p.created_at,
-        updated_at: p.updated_at,
-        current_step_index: p.current_step_index,
-        total_steps: p.total_steps,
-        proposal_id: p.proposal_id ?? null,
-        collaborative: p.collaborative ? 1 : 0,
-      }));
-  }
-
-  getStepsSince(_motebitId: string, since: number): SyncPlanStep[] {
-    return this._steps
-      .filter((s) => s.updated_at > since)
-      .map((s) => ({
-        step_id: s.step_id,
-        plan_id: s.plan_id,
-        motebit_id: this.motebitId,
-        ordinal: s.ordinal,
-        description: s.description,
-        prompt: s.prompt,
-        depends_on: JSON.stringify(s.depends_on),
-        optional: s.optional,
-        status: s.status,
-        required_capabilities:
-          s.required_capabilities != null ? JSON.stringify(s.required_capabilities) : null,
-        delegation_task_id: s.delegation_task_id ?? null,
-        assigned_motebit_id: s.assigned_motebit_id ?? null,
-        result_summary: s.result_summary,
-        error_message: s.error_message,
-        tool_calls_made: s.tool_calls_made,
-        started_at: s.started_at,
-        completed_at: s.completed_at,
-        retry_count: s.retry_count,
-        updated_at: s.updated_at,
-      }));
-  }
-
-  upsertPlan(plan: SyncPlan): void {
-    const existing = this.store.getPlan(plan.plan_id);
-    if (!existing || plan.updated_at >= existing.updated_at) {
-      this.store.savePlan({
-        plan_id: plan.plan_id,
-        goal_id: plan.goal_id,
-        motebit_id: plan.motebit_id,
-        title: plan.title,
-        status: plan.status,
-        created_at: plan.created_at,
-        updated_at: plan.updated_at,
-        current_step_index: plan.current_step_index,
-        total_steps: plan.total_steps,
-        proposal_id: plan.proposal_id ?? undefined,
-        collaborative: plan.collaborative === 1,
-      });
-    }
-  }
-
-  upsertStep(step: SyncPlanStep): void {
-    const existing = this.store.getStep(step.step_id);
-    if (existing) {
-      const STATUS_ORDER: Record<string, number> = {
-        pending: 0,
-        running: 1,
-        completed: 2,
-        failed: 2,
-        skipped: 2,
-      };
-      const incomingOrder = STATUS_ORDER[step.status] ?? 0;
-      const existingOrder = STATUS_ORDER[existing.status] ?? 0;
-      if (incomingOrder < existingOrder) return;
-    }
-    this.store.saveStep({
-      step_id: step.step_id,
-      plan_id: step.plan_id,
-      ordinal: step.ordinal,
-      description: step.description,
-      prompt: step.prompt,
-      depends_on:
-        typeof step.depends_on === "string" ? (JSON.parse(step.depends_on) as string[]) : [],
-      optional: step.optional,
-      status: step.status,
-      required_capabilities:
-        step.required_capabilities != null
-          ? (JSON.parse(step.required_capabilities) as PlanStep["required_capabilities"])
-          : undefined,
-      delegation_task_id: step.delegation_task_id ?? undefined,
-      assigned_motebit_id: step.assigned_motebit_id ?? undefined,
-      result_summary: step.result_summary,
-      error_message: step.error_message,
-      tool_calls_made: step.tool_calls_made,
-      started_at: step.started_at,
-      completed_at: step.completed_at,
-      retry_count: step.retry_count,
-      updated_at: step.updated_at,
-    });
-  }
-
-  // eslint-disable-next-line @typescript-eslint/require-await -- implements async interface
-  async prefetch(_since: number): Promise<void> {
-    if ("listAllPlans" in this.store && typeof this.store.listAllPlans === "function") {
-      this._plans = this.store.listAllPlans(this.motebitId);
-    } else if (
-      "listActivePlans" in this.store &&
-      typeof this.store.listActivePlans === "function"
-    ) {
-      this._plans = this.store.listActivePlans(this.motebitId);
-    }
-    const allSteps: PlanStep[] = [];
-    for (const plan of this._plans) {
-      allSteps.push(...this.store.getStepsForPlan(plan.plan_id));
-    }
-    this._steps = allSteps;
   }
 }
 
