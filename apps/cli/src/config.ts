@@ -10,7 +10,11 @@ import type {
   PersistedPersonalityProvider,
 } from "@motebit/ai-core";
 import type { connectMcpServers } from "@motebit/mcp-client";
-import { migrateLegacyProvider, type UnifiedProviderConfig } from "@motebit/sdk";
+import {
+  migrateLegacyProvider,
+  type UnifiedProviderConfig,
+  type GovernanceConfig,
+} from "@motebit/sdk";
 
 declare const __PKG_VERSION__: string;
 export const VERSION: string =
@@ -57,6 +61,37 @@ export interface FullConfig {
   mcp_trusted_servers?: string[];
   // Sync relay URL saved by `motebit register`
   sync_url?: string;
+  /**
+   * Optional governance config. If present, drives PolicyGate budget,
+   * approval thresholds (via APPROVAL_PRESET_CONFIGS), and MemoryGovernor
+   * settings at runtime construction. Absent means runtime defaults apply.
+   *
+   * Stored verbatim as camelCase (matching the canonical `GovernanceConfig`
+   * shape from `@motebit/sdk`). Other nested objects in FullConfig
+   * (e.g. `provider`) already use camelCase internally.
+   */
+  governance?: GovernanceConfig;
+}
+
+/**
+ * Runtime validator for a persisted GovernanceConfig blob. Used on load so
+ * malformed JSON does not crash the CLI — invalid shapes are dropped and
+ * runtime defaults apply instead.
+ */
+function isValidGovernanceConfig(value: unknown): value is GovernanceConfig {
+  if (value == null || typeof value !== "object") return false;
+  const g = value as Record<string, unknown>;
+  const presetOk =
+    g.approvalPreset === "cautious" ||
+    g.approvalPreset === "balanced" ||
+    g.approvalPreset === "autonomous";
+  return (
+    presetOk &&
+    typeof g.persistenceThreshold === "number" &&
+    typeof g.rejectSecrets === "boolean" &&
+    typeof g.maxCallsPerTurn === "number" &&
+    typeof g.maxMemoriesPerTurn === "number"
+  );
 }
 
 export function loadFullConfig(): FullConfig {
@@ -72,6 +107,11 @@ export function loadFullConfig(): FullConfig {
         default_model: parsed.default_model,
       });
       if (migrated) parsed.provider = migrated;
+    }
+    // Governance: validate the persisted blob. Drop invalid shapes — runtime
+    // construction falls back to DEFAULT_GOVERNANCE_CONFIG when absent.
+    if (parsed.governance !== undefined && !isValidGovernanceConfig(parsed.governance)) {
+      delete parsed.governance;
     }
     return parsed;
   } catch {

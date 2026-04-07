@@ -53,6 +53,7 @@ import {
   createProvider,
   buildToolRegistry,
   buildStorageAdapters,
+  deriveGovernanceForRuntime,
 } from "./runtime-factory.js";
 
 /**
@@ -177,10 +178,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
     trusted: (fullConfig.mcp_trusted_servers ?? []).includes(s.name),
   }));
 
-  // Create runtime with governance-derived policy
+  // Create runtime with governance-derived policy. The signed identity file
+  // is the source of truth for approval thresholds (maxRiskAuto /
+  // requireApprovalAbove / denyAbove). The config.json `governance` block
+  // fills in the memory-governance and budget slices that the identity file
+  // does not carry — absent means DEFAULT_GOVERNANCE_CONFIG.
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
   const provider = createProvider(config, personalityConfig);
+  const governance = deriveGovernanceForRuntime(fullConfig.governance);
 
   const runtime = new MotebitRuntime(
     {
@@ -192,7 +198,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
         requireApprovalAbove: policyConfig.requireApprovalAbove,
         denyAbove: policyConfig.denyAbove,
         pathAllowList: config.allowedPaths,
+        budget: governance.policyBudget,
       },
+      memoryGovernance: governance.memoryGovernance,
       taskRouter: PLANNING_TASK_ROUTER,
     },
     {
@@ -734,11 +742,16 @@ export async function handleServe(config: CliConfig): Promise<void> {
     trusted: (fullConfig.mcp_trusted_servers ?? []).includes(s.name),
   }));
 
-  // Create runtime
+  // Create runtime. Approval thresholds come from the signed identity file
+  // via `policyOverrides` when available; the config.json `governance` block
+  // supplies memory-governance + budget slices. When no identity file is
+  // provided, `governance` also drives approval thresholds.
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
   // Direct mode doesn't need an LLM — skip provider creation to avoid requiring an API key
   const provider = config.direct ? undefined : createProvider(config, personalityConfig);
+  const governance = deriveGovernanceForRuntime(fullConfig.governance);
+  const hasIdentityPolicy = policyOverrides.maxRiskLevel !== undefined;
 
   const runtime = new MotebitRuntime(
     {
@@ -747,8 +760,18 @@ export async function handleServe(config: CliConfig): Promise<void> {
       policy: {
         operatorMode: config.operator,
         pathAllowList: config.allowedPaths,
+        // When no identity file governs policy, fall back to config governance.
+        ...(hasIdentityPolicy
+          ? {}
+          : {
+              maxRiskLevel: governance.policyApproval.maxRiskLevel,
+              requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
+              denyAbove: governance.policyApproval.denyAbove,
+            }),
+        budget: governance.policyBudget,
         ...policyOverrides,
       },
+      memoryGovernance: governance.memoryGovernance,
       taskRouter: PLANNING_TASK_ROUTER,
     },
     {

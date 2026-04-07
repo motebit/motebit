@@ -403,11 +403,13 @@ describe("MobileApp.settings", () => {
       rejectSecrets: false,
       maxMemoriesPerTurn: 3,
       maxCallsPerTurn: 10,
-      voiceEnabled: false,
-      ttsVoice: "nova",
-      voiceAutoSend: false,
-      voiceResponseEnabled: true,
-      neuralVadEnabled: true,
+      voice: {
+        enabled: false,
+        ttsVoice: "nova",
+        autoSend: false,
+        speakResponses: true,
+        neuralVad: true,
+      },
       maxTokens: 4096,
       customHue: 220,
       customSaturation: 0.7,
@@ -493,6 +495,32 @@ describe("MobileApp.initAI with custom endpoint", () => {
     const loaded = await app.loadSettings();
     expect(loaded.localServerEndpoint).toBe("http://192.168.9.9:11434");
     expect((loaded as unknown as { ollamaEndpoint?: string }).ollamaEndpoint).toBeUndefined();
+  });
+
+  it("migrates legacy flat voice fields into nested voice config on load", async () => {
+    asyncStoreData.set(
+      "@motebit/settings",
+      JSON.stringify({
+        voiceEnabled: true,
+        voiceAutoSend: false,
+        voiceResponseEnabled: false,
+        ttsVoice: "shimmer",
+        neuralVadEnabled: false,
+      }),
+    );
+    const loaded = await app.loadSettings();
+    expect(loaded.voice.enabled).toBe(true);
+    expect(loaded.voice.autoSend).toBe(false);
+    expect(loaded.voice.speakResponses).toBe(false);
+    expect(loaded.voice.ttsVoice).toBe("shimmer");
+    expect(loaded.voice.neuralVad).toBe(false);
+    // Legacy flat fields are stripped.
+    const raw = loaded as unknown as Record<string, unknown>;
+    expect(raw.voiceEnabled).toBeUndefined();
+    expect(raw.voiceAutoSend).toBeUndefined();
+    expect(raw.voiceResponseEnabled).toBeUndefined();
+    expect(raw.ttsVoice).toBeUndefined();
+    expect(raw.neuralVadEnabled).toBeUndefined();
   });
 });
 

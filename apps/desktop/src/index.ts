@@ -50,6 +50,9 @@ import {
   DeviceCapability,
   resolveProviderSpec,
   UnsupportedBackendError,
+  APPROVAL_PRESET_CONFIGS,
+  DEFAULT_GOVERNANCE_CONFIG,
+  type GovernanceConfig,
 } from "@motebit/sdk";
 import type { UnifiedProviderConfig, ProviderSpec, ResolverEnv } from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
@@ -252,7 +255,12 @@ export interface DesktopAIConfig {
   invoke?: InvokeFn;
   syncUrl?: string;
   syncMasterToken?: string;
-  memoryGovernance?: { persistenceThreshold?: number; rejectSecrets?: boolean };
+  /**
+   * Canonical governance config. Single source of truth for approval preset,
+   * memory persistence threshold, secret rejection, and per-turn budget caps.
+   * Missing fields fall back to `DEFAULT_GOVERNANCE_CONFIG` at initAI time.
+   */
+  governance?: GovernanceConfig;
 }
 
 // === Provider unification + spec mapping ===
@@ -1007,12 +1015,40 @@ export class DesktopApp {
       }
     }
 
+    // Canonical governance → runtime config. Precedence:
+    //   1. `config.governance` (canonical, from settings UI / config file)
+    //   2. `policyConfig` from motebit.md identity file (Tauri-only, for
+    //      max_risk / require_approval / deny bounds — these override preset)
+    //   3. `DEFAULT_GOVERNANCE_CONFIG` for anything still missing
+    const gov: GovernanceConfig = {
+      ...DEFAULT_GOVERNANCE_CONFIG,
+      ...(config.governance ?? {}),
+    };
+    const presetPolicy = APPROVAL_PRESET_CONFIGS[gov.approvalPreset];
+    const mergedPolicy: Partial<PolicyConfig> = {
+      ...(presetPolicy != null
+        ? {
+            maxRiskLevel: presetPolicy.maxRiskLevel,
+            requireApprovalAbove: presetPolicy.requireApprovalAbove,
+            denyAbove: presetPolicy.denyAbove,
+          }
+        : {}),
+      // Identity-file governance (if present) wins over preset — it's
+      // cryptographically anchored in motebit.md and is the declared bound.
+      ...(policyConfig ?? {}),
+      budget: { maxCallsPerTurn: gov.maxCallsPerTurn },
+    };
+
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
         tickRateHz: 2,
-        policy: policyConfig,
-        memoryGovernance: config.memoryGovernance,
+        policy: mergedPolicy,
+        memoryGovernance: {
+          persistenceThreshold: gov.persistenceThreshold,
+          rejectSecrets: gov.rejectSecrets,
+          maxMemoriesPerTurn: gov.maxMemoriesPerTurn,
+        },
         taskRouter: PLANNING_TASK_ROUTER,
       },
       { storage, renderer: this.renderer, ai: provider, keyring },
@@ -1355,6 +1391,45 @@ export class DesktopApp {
     this.runtime.updatePolicyConfig(config);
   }
 
+  /**
+   * Update the full canonical `GovernanceConfig`. The `approvalPreset` field
+   * (if present) drives the policy gate via `APPROVAL_PRESET_CONFIGS`; the
+   * memory-related fields flow to `MemoryGovernor`; `maxCallsPerTurn` updates
+   * the runtime's budget cap via `updatePolicyConfig`.
+   */
+  updateGovernance(config: Partial<GovernanceConfig>): void {
+    if (!this.runtime) return;
+    const memoryPatch: Partial<MemoryGovernanceConfig> = {};
+    if (config.persistenceThreshold !== undefined)
+      memoryPatch.persistenceThreshold = config.persistenceThreshold;
+    if (config.rejectSecrets !== undefined) memoryPatch.rejectSecrets = config.rejectSecrets;
+    if (config.maxMemoriesPerTurn !== undefined)
+      memoryPatch.maxMemoriesPerTurn = config.maxMemoriesPerTurn;
+    if (Object.keys(memoryPatch).length > 0) {
+      this.runtime.updateMemoryGovernance(memoryPatch);
+    }
+    const policyPatch: Partial<PolicyConfig> = {};
+    if (config.approvalPreset !== undefined) {
+      const preset = APPROVAL_PRESET_CONFIGS[config.approvalPreset];
+      if (preset != null) {
+        policyPatch.maxRiskLevel = preset.maxRiskLevel;
+        policyPatch.requireApprovalAbove = preset.requireApprovalAbove;
+        policyPatch.denyAbove = preset.denyAbove;
+      }
+    }
+    if (config.maxCallsPerTurn !== undefined) {
+      policyPatch.budget = { maxCallsPerTurn: config.maxCallsPerTurn };
+    }
+    if (Object.keys(policyPatch).length > 0) {
+      this.runtime.updatePolicyConfig(policyPatch);
+    }
+  }
+
+  /**
+   * Back-compat: update only the memory-governance subset. New callers should
+   * prefer `updateGovernance`. Kept so existing callers (settings.ts legacy
+   * path) continue to work during migration.
+   */
   updateMemoryGovernance(config: Partial<MemoryGovernanceConfig>): void {
     if (!this.runtime) return;
     this.runtime.updateMemoryGovernance(config);

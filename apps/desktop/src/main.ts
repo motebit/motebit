@@ -703,38 +703,25 @@ async function bootstrap(): Promise<void> {
         app.setInteriorColor(parsed.interior_color_preset);
       }
     }
-    if (typeof parsed.approval_preset === "string") {
-      settings.setSelectedApprovalPreset(parsed.approval_preset);
-    }
     if (Array.isArray(parsed.mcp_servers)) {
       settings.setMcpServersConfig(parsed.mcp_servers as McpServerConfig[]);
     }
-    if (parsed.memory_governance != null && typeof parsed.memory_governance === "object") {
-      const mg = parsed.memory_governance as Record<string, unknown>;
+
+    // Hydrate governance UI + selected-preset state from the canonical
+    // `config.governance` record populated by `loadDesktopConfig`. That
+    // loader already handles legacy migration (top-level `approval_preset`,
+    // `memory_governance`, `budget`), so main.ts doesn't need to re-parse.
+    if (config.governance != null) {
+      settings.setSelectedApprovalPreset(config.governance.approvalPreset);
       const pt = document.getElementById("settings-persistence-threshold") as HTMLInputElement;
       const ptv = document.getElementById("persistence-threshold-value") as HTMLSpanElement;
-      if (typeof mg.persistence_threshold === "number") {
-        pt.value = String(mg.persistence_threshold);
-        ptv.textContent = mg.persistence_threshold.toFixed(2);
-      }
-      if (typeof mg.reject_secrets === "boolean") {
-        (document.getElementById("settings-reject-secrets") as HTMLInputElement).checked =
-          mg.reject_secrets;
-      }
-      // Pass persisted governance to config so initAI forwards it to MotebitRuntime
-      config.memoryGovernance = {
-        persistenceThreshold:
-          typeof mg.persistence_threshold === "number" ? mg.persistence_threshold : undefined,
-        rejectSecrets: typeof mg.reject_secrets === "boolean" ? mg.reject_secrets : undefined,
-      };
-    }
-    if (parsed.budget != null && typeof parsed.budget === "object") {
-      const b = parsed.budget as Record<string, unknown>;
-      if (typeof b.maxCallsPerTurn === "number") {
-        (document.getElementById("settings-max-calls") as HTMLInputElement).value = String(
-          b.maxCallsPerTurn,
-        );
-      }
+      pt.value = String(config.governance.persistenceThreshold);
+      ptv.textContent = config.governance.persistenceThreshold.toFixed(2);
+      (document.getElementById("settings-reject-secrets") as HTMLInputElement).checked =
+        config.governance.rejectSecrets;
+      (document.getElementById("settings-max-calls") as HTMLInputElement).value = String(
+        config.governance.maxCallsPerTurn,
+      );
     }
 
     // Voice settings

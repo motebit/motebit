@@ -64,8 +64,13 @@ interface CredentialLike {
 /**
  * Provides access to stored credentials about remote agents.
  * Returns reputation VCs where the credentialSubject.id matches the remote agent.
+ *
+ * This is NOT the same as `CredentialStoreAdapter` in `@motebit/protocol`. It is
+ * intentionally narrower — a per-call source, not a persistent store — and is
+ * inlined here to avoid a transitive dependency on `@motebit/market`. Do not
+ * merge with the protocol type.
  */
-interface CredentialStoreAdapter {
+interface AgentGraphCredentialSource {
   getCredentialsForSubject(subjectMotebitId: string): CredentialLike[] | Promise<CredentialLike[]>;
 }
 
@@ -148,7 +153,7 @@ export class AgentGraphManager {
     private readonly trustStore: AgentTrustStoreAdapter | null,
     private readonly listingStore: ServiceListingStoreAdapter | null,
     _latencyStore: LatencyStatsStoreAdapter | null,
-    private readonly credentialStore: CredentialStoreAdapter | null = null,
+    private readonly credentialStore: AgentGraphCredentialSource | null = null,
   ) {}
 
   /** Mark the graph as stale. Next query triggers a rebuild. */

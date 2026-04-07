@@ -25,7 +25,15 @@ import type {
   ProviderSpec,
   ResolverEnv,
 } from "@motebit/sdk";
-import { EventType, resolveProviderSpec, UnsupportedBackendError } from "@motebit/sdk";
+import {
+  EventType,
+  RiskLevel,
+  resolveProviderSpec,
+  UnsupportedBackendError,
+  DEFAULT_GOVERNANCE_CONFIG,
+  APPROVAL_PRESET_CONFIGS,
+  type GovernanceConfig,
+} from "@motebit/sdk";
 import {
   InMemoryToolRegistry,
   readFileDefinition,
@@ -464,6 +472,54 @@ export class SqlitePlanSyncStoreAdapter implements PlanSyncStoreAdapter {
   }
 }
 
+/**
+ * Derive runtime governance wiring from an optional persisted
+ * `GovernanceConfig`. Absent fields fall back to `DEFAULT_GOVERNANCE_CONFIG`,
+ * so existing config files without `governance` behave exactly as before.
+ *
+ * Returns three parallel slices:
+ *  - `policyBudget` — feeds `policy.budget` (maxCallsPerTurn)
+ *  - `policyApproval` — feeds `policy.maxRiskLevel` / `requireApprovalAbove` /
+ *    `denyAbove` via `APPROVAL_PRESET_CONFIGS`
+ *  - `memoryGovernance` — feeds `MemoryGovernor` construction
+ *
+ * This is the single canonical mapping used by all CLI command entry points
+ * that construct a `MotebitRuntime` directly from `config.json` (REPL and
+ * `motebit delegate --plan`). The `handleRun` / `handleServe` daemon paths
+ * derive their policy from the signed identity file instead — this helper
+ * fills in the memory-governance + budget slices that the identity file does
+ * not carry, so both paths end up with complete governance wiring.
+ */
+export function deriveGovernanceForRuntime(governance: GovernanceConfig | undefined): {
+  policyBudget: { maxCallsPerTurn: number };
+  policyApproval: {
+    maxRiskLevel: RiskLevel;
+    requireApprovalAbove: RiskLevel;
+    denyAbove: RiskLevel;
+  };
+  memoryGovernance: {
+    persistenceThreshold: number;
+    rejectSecrets: boolean;
+    maxMemoriesPerTurn: number;
+  };
+} {
+  const g = governance ?? DEFAULT_GOVERNANCE_CONFIG;
+  const preset = APPROVAL_PRESET_CONFIGS[g.approvalPreset] ?? APPROVAL_PRESET_CONFIGS["balanced"]!;
+  return {
+    policyBudget: { maxCallsPerTurn: g.maxCallsPerTurn },
+    policyApproval: {
+      maxRiskLevel: preset.maxRiskLevel as RiskLevel,
+      requireApprovalAbove: preset.requireApprovalAbove as RiskLevel,
+      denyAbove: preset.denyAbove as RiskLevel,
+    },
+    memoryGovernance: {
+      persistenceThreshold: g.persistenceThreshold,
+      rejectSecrets: g.rejectSecrets,
+      maxMemoriesPerTurn: g.maxMemoriesPerTurn,
+    },
+  };
+}
+
 export async function createRuntime(
   config: CliConfig,
   motebitId: string,
@@ -484,6 +540,11 @@ export async function createRuntime(
 
   const storage = buildStorageAdapters(moteDb);
 
+  // Governance: if config.json carries a `governance` block, drive
+  // PolicyGate budget + approval thresholds + MemoryGovernor from it.
+  // Absent → DEFAULT_GOVERNANCE_CONFIG, preserving prior behavior.
+  const governance = deriveGovernanceForRuntime(loadFullConfig().governance);
+
   const runtime = new MotebitRuntime(
     {
       motebitId,
@@ -491,7 +552,12 @@ export async function createRuntime(
       policy: {
         operatorMode: config.operator,
         pathAllowList: config.allowedPaths,
+        maxRiskLevel: governance.policyApproval.maxRiskLevel,
+        requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
+        denyAbove: governance.policyApproval.denyAbove,
+        budget: governance.policyBudget,
       },
+      memoryGovernance: governance.memoryGovernance,
       taskRouter: PLANNING_TASK_ROUTER,
     },
     {

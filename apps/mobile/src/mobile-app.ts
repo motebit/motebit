@@ -38,9 +38,12 @@ import { CloudProvider, OpenAIProvider, DEFAULT_OLLAMA_URL } from "@motebit/ai-c
 import {
   resolveProviderSpec,
   UnsupportedBackendError,
+  DEFAULT_VOICE_CONFIG,
+  migrateVoiceConfig,
   type ProviderSpec,
   type ResolverEnv,
   type UnifiedProviderConfig,
+  type VoiceConfig,
 } from "@motebit/sdk";
 import {
   createSignedToken,
@@ -208,11 +211,13 @@ export interface MobileSettings {
   rejectSecrets: boolean;
   maxMemoriesPerTurn: number;
   maxCallsPerTurn: number;
-  voiceEnabled: boolean;
-  ttsVoice: string;
-  voiceAutoSend: boolean;
-  voiceResponseEnabled: boolean;
-  neuralVadEnabled: boolean;
+  /**
+   * Voice settings — nested under the canonical `@motebit/sdk` `VoiceConfig`
+   * shape. Historical flat fields (`voiceEnabled`, `voiceAutoSend`,
+   * `voiceResponseEnabled`, `ttsVoice`, `neuralVadEnabled`) are accepted on
+   * load via `migrateLegacyMobileSettings` → `migrateVoiceConfig`.
+   */
+  voice: VoiceConfig;
   maxTokens: number;
 }
 
@@ -229,11 +234,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   rejectSecrets: true,
   maxMemoriesPerTurn: 5,
   maxCallsPerTurn: 20,
-  voiceEnabled: false,
-  ttsVoice: "alloy",
-  voiceAutoSend: true,
-  voiceResponseEnabled: true,
-  neuralVadEnabled: true,
+  voice: { ...DEFAULT_VOICE_CONFIG },
   maxTokens: 4096,
 };
 
@@ -318,12 +319,15 @@ export function mobileSettingsToUnifiedProvider(
 
 /**
  * Reverse migration: collapse an old persisted settings object onto the
- * current `MobileProvider` union. Called from `loadSettings`. Historical
+ * current `MobileSettings` shape. Called from `loadSettings`. Historical
  * renames honored:
  *   - `"local"`  → `"on-device"`  (renamed when the three-mode UI shipped)
  *   - `"ollama"` → `"local-server"`  (renamed for vendor neutrality)
  *   - `ollamaEndpoint` → `localServerEndpoint`  (field rename, same reason)
  *   - `budgetMaxCalls`  → `maxCallsPerTurn`     (align with sdk GovernanceConfig)
+ *   - flat `voiceEnabled`/`voiceAutoSend`/`voiceResponseEnabled`/`ttsVoice`/
+ *     `neuralVadEnabled`  →  nested `voice: VoiceConfig` (align with sdk
+ *     VoiceConfig; canonical shape uses `enabled`/`autoSend`/`speakResponses`).
  */
 function migrateLegacyMobileSettings(
   raw: (Partial<MobileSettings> & { provider?: string }) | Record<string, unknown>,
@@ -334,6 +338,12 @@ function migrateLegacyMobileSettings(
     localServerEndpoint?: string;
     budgetMaxCalls?: number;
     maxCallsPerTurn?: number;
+    voice?: VoiceConfig;
+    voiceEnabled?: boolean;
+    voiceAutoSend?: boolean;
+    voiceResponseEnabled?: boolean;
+    ttsVoice?: string;
+    neuralVadEnabled?: boolean;
   };
   if (obj.provider === "local") {
     obj.provider = "on-device";
@@ -348,6 +358,30 @@ function migrateLegacyMobileSettings(
     obj.maxCallsPerTurn = obj.budgetMaxCalls;
   }
   delete obj.budgetMaxCalls;
+
+  // Voice: if any legacy flat fields exist and no nested `voice` yet,
+  // normalize through the canonical `migrateVoiceConfig` helper which
+  // knows every legacy shape. Drop the flat fields afterwards.
+  const hasLegacyVoice =
+    obj.voiceEnabled !== undefined ||
+    obj.voiceAutoSend !== undefined ||
+    obj.voiceResponseEnabled !== undefined ||
+    obj.ttsVoice !== undefined ||
+    obj.neuralVadEnabled !== undefined;
+  if (obj.voice === undefined && hasLegacyVoice) {
+    obj.voice = migrateVoiceConfig({
+      voiceEnabled: obj.voiceEnabled,
+      voiceAutoSend: obj.voiceAutoSend,
+      voiceResponseEnabled: obj.voiceResponseEnabled,
+      ttsVoice: obj.ttsVoice,
+      neuralVadEnabled: obj.neuralVadEnabled,
+    });
+  }
+  delete obj.voiceEnabled;
+  delete obj.voiceAutoSend;
+  delete obj.voiceResponseEnabled;
+  delete obj.ttsVoice;
+  delete obj.neuralVadEnabled;
 }
 
 /**
@@ -1378,9 +1412,16 @@ export class MobileApp {
     if (raw == null || raw === "") return { ...DEFAULT_SETTINGS };
     try {
       const parsed = JSON.parse(raw) as Partial<MobileSettings> & { provider?: string };
-      // Migrate provider union renames before merging (e.g., "local" → "on-device").
+      // Migrate provider union renames and legacy flat fields (e.g.,
+      // "local" → "on-device", voiceEnabled → voice.enabled) before merging.
       migrateLegacyMobileSettings(parsed);
-      const loaded = { ...DEFAULT_SETTINGS, ...(parsed as Partial<MobileSettings>) };
+      const loaded: MobileSettings = {
+        ...DEFAULT_SETTINGS,
+        ...(parsed as Partial<MobileSettings>),
+        // Deep-merge the nested `voice` object so partial saves don't
+        // clobber defaults for fields the UI didn't touch.
+        voice: { ...DEFAULT_SETTINGS.voice, ...(parsed.voice ?? {}) },
+      };
       // Migration: borosilicate was removed — remap to moonlight
       if (loaded.colorPreset === "borosilicate") loaded.colorPreset = "moonlight";
       return loaded;

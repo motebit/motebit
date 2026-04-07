@@ -7,7 +7,7 @@ import {
   jsonSchemaToZodShape,
   StaticTokenVerifier,
 } from "../index.js";
-import type { MotebitServerDeps, McpServerConfig, CredentialVerifier } from "../index.js";
+import type { MotebitServerDeps, McpServerConfig, InboundCredentialVerifier } from "../index.js";
 import { RiskLevel } from "@motebit/sdk";
 import type { ToolResult, ToolDefinition } from "@motebit/sdk";
 
@@ -1344,7 +1344,7 @@ describe("McpServerAdapter — HTTP auth", () => {
 });
 
 // ============================================================
-// CredentialVerifier
+// InboundCredentialVerifier
 // ============================================================
 
 describe("StaticTokenVerifier", () => {
@@ -1361,7 +1361,7 @@ describe("StaticTokenVerifier", () => {
 
 describe("McpServerAdapter — credentialVerifier", () => {
   it("accepts token when custom verifier returns true", async () => {
-    const verifier: CredentialVerifier = { verify: async () => true };
+    const verifier: InboundCredentialVerifier = { verify: async () => true };
     const adapter = new McpServerAdapter(
       makeConfig({ transport: "http", port: 0, credentialVerifier: verifier }),
       makeDeps(),
@@ -1382,7 +1382,7 @@ describe("McpServerAdapter — credentialVerifier", () => {
   });
 
   it("rejects token when custom verifier returns false", async () => {
-    const verifier: CredentialVerifier = { verify: async () => false };
+    const verifier: InboundCredentialVerifier = { verify: async () => false };
     const adapter = new McpServerAdapter(
       makeConfig({ transport: "http", port: 0, credentialVerifier: verifier }),
       makeDeps(),
@@ -1402,7 +1402,7 @@ describe("McpServerAdapter — credentialVerifier", () => {
   });
 
   it("rejects when custom verifier throws (fail-closed)", async () => {
-    const verifier: CredentialVerifier = {
+    const verifier: InboundCredentialVerifier = {
       verify: async () => {
         throw new Error("verifier broken");
       },
@@ -1427,7 +1427,7 @@ describe("McpServerAdapter — credentialVerifier", () => {
 
   it("credentialVerifier takes precedence over authToken", async () => {
     // verifier rejects everything; authToken would accept "static-secret"
-    const verifier: CredentialVerifier = { verify: async () => false };
+    const verifier: InboundCredentialVerifier = { verify: async () => false };
     const adapter = new McpServerAdapter(
       makeConfig({
         transport: "http",
@@ -1453,7 +1453,7 @@ describe("McpServerAdapter — credentialVerifier", () => {
   });
 
   it("rejects when no bearer token and credentialVerifier is set", async () => {
-    const verifier: CredentialVerifier = { verify: async () => true };
+    const verifier: InboundCredentialVerifier = { verify: async () => true };
     const adapter = new McpServerAdapter(
       makeConfig({ transport: "http", port: 0, credentialVerifier: verifier }),
       makeDeps(),

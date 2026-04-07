@@ -389,31 +389,38 @@ describe("DesktopApp.initAI tools", () => {
 });
 
 // ---------------------------------------------------------------------------
-// DesktopApp.initAI — memoryGovernance config passthrough
+// DesktopApp.initAI — canonical governance config passthrough
 // ---------------------------------------------------------------------------
 
-describe("DesktopApp.initAI memoryGovernance", () => {
+describe("DesktopApp.initAI governance", () => {
   let app: DesktopApp;
 
   afterEach(() => {
     if (app != null) app.stop();
   });
 
-  it("passes memoryGovernance through to runtime (not defaults)", async () => {
+  it("passes full canonical GovernanceConfig through to runtime", async () => {
     app = new DesktopApp();
     await app.initAI({
       provider: "local-server",
       isTauri: false,
-      memoryGovernance: { persistenceThreshold: 0.9, rejectSecrets: false },
+      governance: {
+        approvalPreset: "autonomous",
+        persistenceThreshold: 0.9,
+        rejectSecrets: false,
+        maxCallsPerTurn: 25,
+        maxMemoriesPerTurn: 8,
+      },
     });
 
     const gov = app.getMemoryGovernance();
     expect(gov).not.toBeNull();
     expect(gov!.persistenceThreshold).toBe(0.9);
     expect(gov!.rejectSecrets).toBe(false);
+    expect(gov!.maxMemoriesPerTurn).toBe(8);
   });
 
-  it("uses defaults when memoryGovernance is omitted", async () => {
+  it("uses DEFAULT_GOVERNANCE_CONFIG when governance is omitted", async () => {
     app = new DesktopApp();
     await app.initAI({
       provider: "local-server",
@@ -424,32 +431,34 @@ describe("DesktopApp.initAI memoryGovernance", () => {
     expect(gov).not.toBeNull();
     expect(gov!.persistenceThreshold).toBe(0.5);
     expect(gov!.rejectSecrets).toBe(true);
+    expect(gov!.maxMemoriesPerTurn).toBe(5);
   });
 
-  it("partial config merges with defaults (only persistenceThreshold)", async () => {
+  it("updateGovernance updates memory + policy fields in place", async () => {
     app = new DesktopApp();
-    await app.initAI({
-      provider: "local-server",
-      isTauri: false,
-      memoryGovernance: { persistenceThreshold: 0.8 },
+    await app.initAI({ provider: "local-server", isTauri: false });
+
+    app.updateGovernance({
+      approvalPreset: "cautious",
+      persistenceThreshold: 0.7,
+      rejectSecrets: false,
+      maxCallsPerTurn: 3,
     });
+
+    const gov = app.getMemoryGovernance();
+    expect(gov!.persistenceThreshold).toBe(0.7);
+    expect(gov!.rejectSecrets).toBe(false);
+  });
+
+  it("legacy updateMemoryGovernance still works (back-compat)", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "local-server", isTauri: false });
+
+    app.updateMemoryGovernance({ persistenceThreshold: 0.8 });
 
     const gov = app.getMemoryGovernance();
     expect(gov!.persistenceThreshold).toBe(0.8);
     expect(gov!.rejectSecrets).toBe(true); // default preserved
-  });
-
-  it("partial config merges with defaults (only rejectSecrets)", async () => {
-    app = new DesktopApp();
-    await app.initAI({
-      provider: "local-server",
-      isTauri: false,
-      memoryGovernance: { rejectSecrets: false },
-    });
-
-    const gov = app.getMemoryGovernance();
-    expect(gov!.persistenceThreshold).toBe(0.5); // default preserved
-    expect(gov!.rejectSecrets).toBe(false);
   });
 });
 

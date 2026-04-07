@@ -1,5 +1,59 @@
 import type { DesktopAIConfig, InvokeFn } from "../index";
+import {
+  DEFAULT_GOVERNANCE_CONFIG,
+  type ApprovalPreset,
+  type GovernanceConfig,
+} from "@motebit/sdk";
 import { byokKeyringKey, LEGACY_API_KEY_SLOT, SYNC_MASTER_TOKEN_SLOT } from "./keyring-keys";
+
+/**
+ * Read a canonical `GovernanceConfig` from the Tauri JSON blob.
+ *
+ * Accepts two shapes:
+ *   1. Canonical: `governance: { approvalPreset, persistenceThreshold, rejectSecrets,
+ *      maxCallsPerTurn, maxMemoriesPerTurn }`
+ *   2. Legacy: top-level `approval_preset` + `memory_governance: { persistence_threshold,
+ *      reject_secrets }` + `budget: { maxCallsPerTurn }`
+ *
+ * Missing fields fall back to `DEFAULT_GOVERNANCE_CONFIG`. The return value
+ * is always a fully-populated canonical record, never partial.
+ */
+function parseGovernanceFromConfig(parsed: Record<string, unknown>): GovernanceConfig | undefined {
+  const canonical = parsed.governance as Partial<GovernanceConfig> | undefined;
+  const legacyPreset = parsed.approval_preset as string | undefined;
+  const legacyMemory = parsed.memory_governance as
+    | { persistence_threshold?: number; reject_secrets?: boolean }
+    | undefined;
+  const legacyBudget = parsed.budget as { maxCallsPerTurn?: number } | undefined;
+
+  if (canonical == null && legacyPreset == null && legacyMemory == null && legacyBudget == null) {
+    return undefined;
+  }
+
+  const rawPreset = canonical?.approvalPreset ?? legacyPreset;
+  const approvalPreset: ApprovalPreset =
+    rawPreset === "cautious" || rawPreset === "balanced" || rawPreset === "autonomous"
+      ? rawPreset
+      : DEFAULT_GOVERNANCE_CONFIG.approvalPreset;
+
+  return {
+    approvalPreset,
+    persistenceThreshold:
+      canonical?.persistenceThreshold ??
+      legacyMemory?.persistence_threshold ??
+      DEFAULT_GOVERNANCE_CONFIG.persistenceThreshold,
+    rejectSecrets:
+      canonical?.rejectSecrets ??
+      legacyMemory?.reject_secrets ??
+      DEFAULT_GOVERNANCE_CONFIG.rejectSecrets,
+    maxCallsPerTurn:
+      canonical?.maxCallsPerTurn ??
+      legacyBudget?.maxCallsPerTurn ??
+      DEFAULT_GOVERNANCE_CONFIG.maxCallsPerTurn,
+    maxMemoriesPerTurn:
+      canonical?.maxMemoriesPerTurn ?? DEFAULT_GOVERNANCE_CONFIG.maxMemoriesPerTurn,
+  };
+}
 
 export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
   const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
@@ -73,6 +127,8 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       }
     }
 
+    const governance = parseGovernanceFromConfig(parsed);
+
     return {
       provider,
       model,
@@ -82,6 +138,7 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       invoke: invoke as InvokeFn,
       syncUrl,
       syncMasterToken,
+      governance,
     };
   }
 

@@ -28,6 +28,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   DEFAULT_GOOGLE_MODEL,
   DEFAULT_OLLAMA_MODEL,
+  type VoiceConfig,
 } from "@motebit/sdk";
 import { BillingPanel } from "./BillingPanel";
 
@@ -374,12 +375,8 @@ export function SettingsModal({
                 googleKey={googleKey}
                 localServerEndpoint={draft.localServerEndpoint}
                 localBackend={draft.localBackend ?? "apple-fm"}
-                voiceEnabled={draft.voiceEnabled}
-                voiceResponseEnabled={draft.voiceResponseEnabled}
-                voiceAutoSend={draft.voiceAutoSend}
-                ttsVoice={draft.ttsVoice}
+                voice={draft.voice}
                 openaiKey={openaiKey}
-                neuralVadEnabled={draft.neuralVadEnabled}
                 onChangeProvider={(p) =>
                   updateDraft({
                     provider: p,
@@ -400,12 +397,8 @@ export function SettingsModal({
                 onChangeGoogleKey={setGoogleKey}
                 onChangeLocalServerEndpoint={(e) => updateDraft({ localServerEndpoint: e })}
                 onChangeLocalBackend={(b) => updateDraft({ localBackend: b })}
-                onChangeVoiceEnabled={(v) => updateDraft({ voiceEnabled: v })}
-                onChangeVoiceResponseEnabled={(v) => updateDraft({ voiceResponseEnabled: v })}
-                onChangeVoiceAutoSend={(v) => updateDraft({ voiceAutoSend: v })}
-                onChangeTtsVoice={(v) => updateDraft({ ttsVoice: v })}
+                onChangeVoice={(patch) => updateDraft({ voice: { ...draft.voice, ...patch } })}
                 onChangeOpenaiKey={setOpenaiKey}
-                onChangeNeuralVadEnabled={(v) => updateDraft({ neuralVadEnabled: v })}
               />
               <ToolsTab
                 servers={mcpServers ?? []}
@@ -933,24 +926,16 @@ function IntelligenceTab({
   googleKey,
   localServerEndpoint,
   localBackend,
-  voiceEnabled,
-  voiceResponseEnabled,
-  voiceAutoSend,
-  ttsVoice,
+  voice,
   openaiKey,
-  neuralVadEnabled,
   onChangeProvider,
   onChangeModel,
   onChangeApiKey,
   onChangeGoogleKey,
   onChangeLocalServerEndpoint,
   onChangeLocalBackend,
-  onChangeVoiceEnabled,
-  onChangeVoiceResponseEnabled,
-  onChangeVoiceAutoSend,
-  onChangeTtsVoice,
+  onChangeVoice,
   onChangeOpenaiKey,
-  onChangeNeuralVadEnabled,
 }: {
   provider: ProviderType;
   model: string;
@@ -958,24 +943,18 @@ function IntelligenceTab({
   googleKey: string;
   localServerEndpoint: string;
   localBackend: LocalBackend;
-  voiceEnabled: boolean;
-  voiceResponseEnabled: boolean;
-  voiceAutoSend: boolean;
-  ttsVoice: string;
+  /** Canonical voice config from `@motebit/sdk`. */
+  voice: VoiceConfig;
   openaiKey: string;
-  neuralVadEnabled: boolean;
   onChangeProvider: (p: ProviderType) => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeGoogleKey: (k: string) => void;
   onChangeLocalServerEndpoint: (e: string) => void;
   onChangeLocalBackend: (b: LocalBackend) => void;
-  onChangeVoiceEnabled: (v: boolean) => void;
-  onChangeVoiceResponseEnabled: (v: boolean) => void;
-  onChangeVoiceAutoSend: (v: boolean) => void;
-  onChangeTtsVoice: (v: string) => void;
+  /** Patch-style update for the nested `voice` config. */
+  onChangeVoice: (patch: Partial<VoiceConfig>) => void;
   onChangeOpenaiKey: (k: string) => void;
-  onChangeNeuralVadEnabled: (v: boolean) => void;
 }) {
   const colors = useTheme();
   const styles = useMemo(() => createSettingsStyles(colors), [colors]);
@@ -1204,23 +1183,23 @@ function IntelligenceTab({
       <View style={styles.switchRow}>
         <Text style={styles.switchLabel}>Voice mode</Text>
         <Switch
-          value={voiceEnabled}
-          onValueChange={onChangeVoiceEnabled}
+          value={voice.enabled}
+          onValueChange={(v) => onChangeVoice({ enabled: v })}
           trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
-          thumbColor={voiceEnabled ? colors.textPrimary : colors.textMuted}
+          thumbColor={voice.enabled ? colors.textPrimary : colors.textMuted}
         />
       </View>
       <Text style={styles.voiceHint}>Enable mic button for voice input and spoken responses</Text>
 
-      {voiceEnabled && (
+      {voice.enabled && (
         <>
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Speak responses</Text>
             <Switch
-              value={voiceResponseEnabled}
-              onValueChange={onChangeVoiceResponseEnabled}
+              value={voice.speakResponses}
+              onValueChange={(v) => onChangeVoice({ speakResponses: v })}
               trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
-              thumbColor={voiceResponseEnabled ? colors.textPrimary : colors.textMuted}
+              thumbColor={voice.speakResponses ? colors.textPrimary : colors.textMuted}
             />
           </View>
           <Text style={styles.voiceHint}>Read assistant replies aloud via TTS</Text>
@@ -1228,10 +1207,10 @@ function IntelligenceTab({
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Auto-send transcript</Text>
             <Switch
-              value={voiceAutoSend}
-              onValueChange={onChangeVoiceAutoSend}
+              value={voice.autoSend}
+              onValueChange={(v) => onChangeVoice({ autoSend: v })}
               trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
-              thumbColor={voiceAutoSend ? colors.textPrimary : colors.textMuted}
+              thumbColor={voice.autoSend ? colors.textPrimary : colors.textMuted}
             />
           </View>
           <Text style={styles.voiceHint}>
@@ -1243,10 +1222,10 @@ function IntelligenceTab({
               <View style={styles.switchRow}>
                 <Text style={styles.switchLabel}>Neural VAD (Silero)</Text>
                 <Switch
-                  value={neuralVadEnabled}
-                  onValueChange={onChangeNeuralVadEnabled}
+                  value={voice.neuralVad ?? true}
+                  onValueChange={(v) => onChangeVoice({ neuralVad: v })}
                   trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
-                  thumbColor={neuralVadEnabled ? colors.textPrimary : colors.textMuted}
+                  thumbColor={(voice.neuralVad ?? true) ? colors.textPrimary : colors.textMuted}
                 />
               </View>
               <Text style={styles.voiceHint}>
@@ -1261,12 +1240,15 @@ function IntelligenceTab({
             {TTS_VOICE_OPTIONS.map((opt) => (
               <TouchableOpacity
                 key={opt.key}
-                style={[styles.voiceChip, ttsVoice === opt.key && styles.voiceChipActive]}
-                onPress={() => onChangeTtsVoice(opt.key)}
+                style={[styles.voiceChip, voice.ttsVoice === opt.key && styles.voiceChipActive]}
+                onPress={() => onChangeVoice({ ttsVoice: opt.key })}
                 activeOpacity={0.7}
               >
                 <Text
-                  style={[styles.voiceChipText, ttsVoice === opt.key && styles.voiceChipTextActive]}
+                  style={[
+                    styles.voiceChipText,
+                    voice.ttsVoice === opt.key && styles.voiceChipTextActive,
+                  ]}
                 >
                   {opt.label}
                 </Text>

@@ -14,6 +14,8 @@ import {
   GOOGLE_MODELS,
   OLLAMA_SUGGESTED_MODELS,
   PROXY_MODELS,
+  type ApprovalPreset,
+  type GovernanceConfig,
 } from "@motebit/sdk";
 import { byokKeyringKey, WHISPER_API_KEY_SLOT } from "./keyring-keys";
 
@@ -126,6 +128,7 @@ interface PendingSave {
   model?: string;
   apiKey?: string;
   isTauri: boolean;
+  governance?: GovernanceConfig;
 }
 let pendingSettingsSave: PendingSave | null = null;
 
@@ -1645,6 +1648,16 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     renderMcpServerList();
 
+    // Hydrate governance UI from canonical `config.governance`. This is the
+    // single source of truth: the approval preset, persistence threshold,
+    // reject-secrets toggle, and max-calls cap all derive from it.
+    if (config?.governance != null) {
+      selectedApprovalPreset = config.governance.approvalPreset;
+      persistenceThreshold.value = String(config.governance.persistenceThreshold);
+      persistenceThresholdValue.textContent = config.governance.persistenceThreshold.toFixed(2);
+      rejectSecrets.checked = config.governance.rejectSecrets;
+      maxCalls.value = String(config.governance.maxCallsPerTurn);
+    }
     selectApprovalPreset(selectedApprovalPreset);
 
     switchTab("appearance");
@@ -1692,6 +1705,18 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     voice.setVoiceResponseEnabled(settingsVoiceResponse.checked);
     voice.setTtsVoice(settingsTtsVoice.value);
 
+    // Canonical governance record — single source of truth. Legacy keys
+    // (`approval_preset`, `memory_governance`, `budget`) are no longer
+    // written; `loadDesktopConfig` still reads them for migration from
+    // older config files.
+    const governanceRecord: GovernanceConfig = {
+      approvalPreset: selectedApprovalPreset as ApprovalPreset,
+      persistenceThreshold: parseFloat(persistenceThreshold.value),
+      rejectSecrets: rejectSecrets.checked,
+      maxCallsPerTurn: parseInt(maxCalls.value, 10) || 10,
+      maxMemoriesPerTurn: 5,
+    };
+
     if (isTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
 
@@ -1709,15 +1734,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
               },
             }
           : {}),
-        approval_preset: selectedApprovalPreset,
+        governance: governanceRecord,
         mcp_servers: mcpServersConfig,
-        memory_governance: {
-          persistence_threshold: parseFloat(persistenceThreshold.value),
-          reject_secrets: rejectSecrets.checked,
-        },
-        budget: {
-          maxCallsPerTurn: parseInt(maxCalls.value, 10) || 10,
-        },
         voice: {
           auto_send: voice.getVoiceAutoSend(),
           voice_response: voice.getVoiceResponseEnabled(),
@@ -1754,18 +1772,18 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       voice.rebuildTtsProvider(invoke as InvokeFn);
     }
 
+    // Operator mode is orthogonal to governance — it's a runtime-only
+    // policy flag, not part of the canonical GovernanceConfig. Push it
+    // through updatePolicyConfig directly, then the canonical governance
+    // record through updateGovernance.
     const approvalConfig = APPROVAL_PRESET_CONFIGS[selectedApprovalPreset];
     if (approvalConfig) {
       ctx.app.updatePolicyConfig({
         ...approvalConfig,
         operatorMode: settingsOperatorMode.checked,
-        budget: { maxCallsPerTurn: parseInt(maxCalls.value, 10) || 10 },
       });
     }
-    ctx.app.updateMemoryGovernance({
-      persistenceThreshold: parseFloat(persistenceThreshold.value),
-      rejectSecrets: rejectSecrets.checked,
-    });
+    ctx.app.updateGovernance(governanceRecord);
 
     const wantsOperator = settingsOperatorMode.checked;
     if (wantsOperator && !ctx.app.isOperatorMode) {
@@ -1776,14 +1794,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         } else {
           showPinDialog("verify");
         }
-        pendingSettingsSave = { provider, model, apiKey, isTauri };
+        pendingSettingsSave = { provider, model, apiKey, isTauri, governance: governanceRecord };
         return;
       }
     } else if (!wantsOperator && ctx.app.isOperatorMode) {
       await ctx.app.setOperatorMode(false);
     }
 
-    await finishSaveSettings(provider, model, apiKey, isTauri);
+    await finishSaveSettings(provider, model, apiKey, isTauri, governanceRecord);
   }
 
   async function finishSaveSettings(
@@ -1791,13 +1809,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     model?: string,
     apiKey?: string,
     isTauri = false,
+    governance?: GovernanceConfig,
   ): Promise<void> {
     const currentConfig = ctx.getConfig();
     const maxTokens = settingsMaxTokens
       ? parseInt(settingsMaxTokens.value, 10) || undefined
       : undefined;
     // Spread the previous config so fields that aren't explicitly edited
-    // (syncUrl, syncMasterToken, personalityConfig, memoryGovernance, …)
+    // (syncUrl, syncMasterToken, personalityConfig, governance, …)
     // survive the save. The old code only carried over `apiKey` and
     // `invoke`, silently dropping everything else.
     const localServerEndpointValue = settingsOnDeviceEndpoint.value.trim();
@@ -1810,6 +1829,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       isTauri,
       maxTokens,
       invoke: currentConfig?.invoke,
+      governance: governance ?? currentConfig?.governance,
     };
     ctx.setConfig(newConfig);
 
@@ -1918,7 +1938,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     if (pendingSettingsSave) {
       const s = pendingSettingsSave;
       pendingSettingsSave = null;
-      await finishSaveSettings(s.provider, s.model, s.apiKey, s.isTauri);
+      await finishSaveSettings(s.provider, s.model, s.apiKey, s.isTauri, s.governance);
     }
   }
 

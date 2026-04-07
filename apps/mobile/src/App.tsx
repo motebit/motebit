@@ -316,7 +316,7 @@ export default function App(): React.ReactElement {
   const initVoice = useCallback(
     async (voiceSettings?: { ttsVoice?: string }) => {
       const openaiKey = await SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiVoiceKey);
-      const voice = voiceSettings?.ttsVoice ?? settings?.ttsVoice ?? "alloy";
+      const voice = voiceSettings?.ttsVoice ?? settings?.voice.ttsVoice ?? "alloy";
 
       // Build TTS chain: OpenAI (if key available) → system TTS fallback
       const systemTts = new ExpoSpeechTTSProvider();
@@ -338,7 +338,7 @@ export default function App(): React.ReactElement {
         }
       }
     },
-    [settings?.ttsVoice],
+    [settings?.voice.ttsVoice],
   );
 
   const applyThemeEnvironment = useCallback((a: MobileApp, theme: "light" | "dark" | "system") => {
@@ -602,7 +602,7 @@ export default function App(): React.ReactElement {
   const startAmbientMonitor = useCallback(() => {
     if (audioMonitorRef.current?.isRunning === true) return;
     const monitor = new AudioMonitor();
-    monitor.neuralVadEnabled = settings?.neuralVadEnabled ?? true;
+    monitor.neuralVadEnabled = settings?.voice.neuralVad ?? true;
     monitor.onAudio = (energy) => {
       app.current.setAudioReactivity(energy ?? null);
       setAudioLevel(energy?.rms ?? 0);
@@ -614,7 +614,7 @@ export default function App(): React.ReactElement {
     };
     audioMonitorRef.current = monitor;
     void monitor.start();
-  }, [settings?.neuralVadEnabled]);
+  }, [settings?.voice.neuralVad]);
 
   const stopAudioMonitor = useCallback(() => {
     if (audioMonitorRef.current) {
@@ -1278,11 +1278,11 @@ export default function App(): React.ReactElement {
   // --- Streaming TTS helpers ---
   const pushTTSChunk = useCallback(
     (delta: string) => {
-      if (!settings?.voiceResponseEnabled || !settings?.voiceEnabled || !ttsQueueRef.current)
+      if (!settings?.voice.speakResponses || !settings?.voice.enabled || !ttsQueueRef.current)
         return;
       ttsQueueRef.current.push(delta);
     },
-    [settings?.voiceResponseEnabled, settings?.voiceEnabled],
+    [settings?.voice.speakResponses, settings?.voice.enabled],
   );
 
   const flushTTS = useCallback(() => {
@@ -1338,13 +1338,13 @@ export default function App(): React.ReactElement {
   useEffect(() => {
     // Detect transition from transcribing→ambient with text in the input (voice result arrived)
     if (prevMicStateRef.current === "transcribing" && micState === "ambient" && inputText.trim()) {
-      if (settings?.voiceAutoSend !== false) {
+      if (settings?.voice.autoSend !== false) {
         void handleSend();
       }
       // If auto-send disabled, text stays in input for user review
     }
     prevMicStateRef.current = micState;
-  }, [micState, inputText, handleSend, settings?.voiceAutoSend]);
+  }, [micState, inputText, handleSend, settings?.voice.autoSend]);
 
   // === Stream consumer ===
   const consumeStream = useCallback(
@@ -1443,7 +1443,7 @@ export default function App(): React.ReactElement {
         flushTTS();
       }
     },
-    [settings?.voiceEnabled, micState, pushTTSChunk, flushTTS],
+    [settings?.voice.enabled, micState, pushTTSChunk, flushTTS],
   );
 
   // === Approval handler ===
@@ -1535,7 +1535,7 @@ export default function App(): React.ReactElement {
 
       // Re-init voice providers (user may have added/changed OpenAI key or TTS voice)
       sttRef.current = null;
-      await initVoice({ ttsVoice: newSettings.ttsVoice });
+      await initVoice({ ttsVoice: newSettings.voice.ttsVoice });
 
       setShowSettings(false);
     },

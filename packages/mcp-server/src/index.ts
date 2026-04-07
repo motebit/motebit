@@ -9,7 +9,7 @@ import { hexPublicKeyToDidKey, hexToBytes, verifyDelegation, parseScopeSet } fro
 import type { DelegationToken } from "@motebit/crypto";
 
 // Re-export for consumers
-export type { MotebitServerDeps, McpServerConfig, CredentialVerifier };
+export type { MotebitServerDeps, McpServerConfig, InboundCredentialVerifier };
 export { AgentTrustLevel } from "@motebit/sdk";
 export { StaticTokenVerifier };
 
@@ -34,14 +34,27 @@ export interface CallerIdentity {
   trustLevel: AgentTrustLevel;
 }
 
-/** Pluggable credential verifier for non-motebit bearer tokens. */
-interface CredentialVerifier {
+/**
+ * Pluggable verifier for inbound non-motebit bearer tokens (when this
+ * process IS the MCP server and a third party is calling us).
+ *
+ * Distinct from the outbound-direction types in `@motebit/mcp-client`:
+ * - `CredentialSource` supplies credentials when WE call a third-party server.
+ * - `ServerVerifier` checks the identity/integrity of a third-party server
+ *   we are connecting to.
+ * - `InboundCredentialVerifier` (this type) checks tokens presented TO us
+ *   by inbound callers.
+ *
+ * Motebit-to-motebit auth (signed tokens) is handled separately and is
+ * unaffected by this verifier.
+ */
+interface InboundCredentialVerifier {
   /** Verify a non-motebit bearer token. Return true if valid, false to reject. */
   verify(token: string): Promise<boolean>;
 }
 
 /** Default verifier: constant-time-ish string comparison against a static token. */
-class StaticTokenVerifier implements CredentialVerifier {
+class StaticTokenVerifier implements InboundCredentialVerifier {
   constructor(private readonly expectedToken: string) {}
   verify(token: string): Promise<boolean> {
     return Promise.resolve(token === this.expectedToken);
@@ -137,7 +150,7 @@ interface McpServerConfig {
   exposeMemories?: boolean;
   authToken?: string;
   /** Pluggable verifier for non-motebit bearer tokens. Takes precedence over authToken. */
-  credentialVerifier?: CredentialVerifier;
+  credentialVerifier?: InboundCredentialVerifier;
   /** Known callers: motebit_id -> { publicKey hex, trustLevel } */
   knownCallers?: Map<string, { publicKey: string; trustLevel: AgentTrustLevel }>;
   /** What type of motebit this server represents. Affects default inbound policy. */

@@ -2275,9 +2275,10 @@ async function handleDelegatePlan(
   const authHeaders = await getRelayAuthHeaders(config, { aud: "task:submit", json: true });
 
   // Initialize runtime with AI provider for plan decomposition
-  const { createProvider, buildToolRegistry, buildStorageAdapters } =
+  const { createProvider, buildToolRegistry, buildStorageAdapters, deriveGovernanceForRuntime } =
     await import("./runtime-factory.js");
   const { MotebitRuntime, NullRenderer, PLANNING_TASK_ROUTER } = await import("@motebit/runtime");
+  const { loadFullConfig } = await import("./config.js");
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -2286,9 +2287,20 @@ async function handleDelegatePlan(
   const provider = createProvider(config);
   const registry = buildToolRegistry(config, runtimeRef, motebitId);
   const storage = buildStorageAdapters(moteDb);
+  const governance = deriveGovernanceForRuntime(loadFullConfig().governance);
 
   const runtime = new MotebitRuntime(
-    { motebitId, policy: {}, taskRouter: PLANNING_TASK_ROUTER },
+    {
+      motebitId,
+      policy: {
+        maxRiskLevel: governance.policyApproval.maxRiskLevel,
+        requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
+        denyAbove: governance.policyApproval.denyAbove,
+        budget: governance.policyBudget,
+      },
+      memoryGovernance: governance.memoryGovernance,
+      taskRouter: PLANNING_TASK_ROUTER,
+    },
     { storage, renderer: new NullRenderer(), tools: registry },
   );
   runtimeRef.current = runtime;
