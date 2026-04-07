@@ -7,7 +7,6 @@
 
 import {
   MotebitRuntime,
-  SimpleToolRegistry,
   executeCommand,
   ProxySession,
   cmdSelfTest,
@@ -21,7 +20,6 @@ import type {
   OperatorModeResult,
   InteriorColor,
   McpServerConfig,
-  ServerVerifier,
   PolicyConfig,
   MemoryGovernanceConfig,
 } from "@motebit/runtime";
@@ -96,6 +94,7 @@ import {
 import * as memoryCommands from "./memory-commands.js";
 import * as rendererCommands from "./renderer-commands.js";
 import { IdentityManager } from "./identity-manager.js";
+import { McpManager } from "./mcp-manager.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 import {
   createSubGoalDefinition,
@@ -389,17 +388,13 @@ function createDesktopStorage(
 export { COLOR_PRESETS } from "./color-presets.js";
 
 // === MCP Server Status ===
-
-export interface McpServerStatus {
-  name: string;
-  transport: string;
-  trusted: boolean;
-  connected: boolean;
-  toolCount: number;
-  manifestChanged?: boolean;
-  /** If manifest changed, tools added/removed since last pin. */
-  manifestDiff?: { added: string[]; removed: string[] };
-}
+// Interface lives alongside the MCP manager in `./mcp-manager.ts`.
+// Imported into local scope so DesktopApp's MCP delegate methods can
+// use it as a return type, and re-exported so every existing consumer
+// that imported it from `@motebit/desktop` (or the relative equivalent)
+// keeps working.
+import type { McpServerStatus } from "./mcp-manager.js";
+export type { McpServerStatus };
 
 // === Desktop App (platform shell) ===
 
@@ -414,9 +409,13 @@ export type GovernanceStatus = { governed: true } | { governed: false; reason: s
 export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
   private renderer: ThreeJSAdapter;
-  private mcpAdapters = new Map<string, { disconnect(): Promise<void> }>();
-  private mcpConfigs = new Map<string, McpServerConfig>();
-  private mcpToolCounts = new Map<string, number>();
+  /**
+   * The MCP manager owns the mcpAdapters / mcpConfigs / mcpToolCounts
+   * maps + the connect / disconnect / tool-dispatch lifecycle. It reads
+   * the runtime lazily via a getter so DesktopApp can swap the runtime
+   * without re-binding the manager.
+   */
+  private mcp = new McpManager(() => this.runtime);
   /**
    * The identity manager owns motebitId/deviceId/publicKey state + all
    * identity operations (bootstrap, key rotation, identity file, pairing).
@@ -1048,103 +1047,19 @@ export class DesktopApp {
   // === MCP Lifecycle ===
   // @motebit/mcp-client is Node-only (stdio/child_process) — dynamic import only.
 
-  async addMcpServer(config: McpServerConfig): Promise<McpServerStatus> {
-    // Dynamic import to avoid bundling Node-only dependencies into the webview
-    const mcpModule = await (import("@motebit/mcp-client") as Promise<{
-      McpClientAdapter: new (config: McpServerConfig) => {
-        connect(): Promise<void>;
-        disconnect(): Promise<void>;
-        getTools(): unknown[];
-        registerInto(registry: unknown): void;
-        readonly isMotebit: boolean;
-        readonly verifiedIdentity: {
-          verified: boolean;
-          motebit_id?: string;
-          public_key?: string;
-        } | null;
-        readonly serverConfig: McpServerConfig;
-      };
-      AdvisoryManifestVerifier: new () => ServerVerifier;
-    }>);
-    // Attach advisory verifier: always accepts, revokes trust on manifest change
-    config.serverVerifier = new mcpModule.AdvisoryManifestVerifier();
-    const adapter = new mcpModule.McpClientAdapter(config);
-    await adapter.connect();
+  // === MCP server lifecycle ===
+  // Implementations live in `./mcp-manager.ts`. One-line delegates here.
 
-    // Read verifier-applied config updates
-    const manifestChanged = adapter.serverConfig.trusted === false && config.trusted !== false;
-    let manifestDiff: { added: string[]; removed: string[] } | undefined;
-    if (manifestChanged) {
-      const prevSet = new Set(config.pinnedToolNames ?? []);
-      const currNames = adapter.serverConfig.pinnedToolNames ?? [];
-      const added = currNames.filter((n: string) => !prevSet.has(n));
-      const removed = (config.pinnedToolNames ?? []).filter(
-        (n: string) => !new Set(currNames).has(n),
-      );
-      manifestDiff = { added, removed };
-    }
-    // Persist updated manifest hash and tool names from verifier
-    config.toolManifestHash = adapter.serverConfig.toolManifestHash;
-    config.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
-    config.trusted = adapter.serverConfig.trusted;
-
-    // Pin motebit public key on first verified connect
-    if (adapter.isMotebit && adapter.verifiedIdentity?.verified === true) {
-      const verifiedKey = adapter.verifiedIdentity.public_key;
-      if (verifiedKey && !config.motebitPublicKey) {
-        config.motebitPublicKey = verifiedKey;
-      }
-    }
-
-    // Register tools into a temporary registry, then merge into runtime
-    const tempRegistry = new SimpleToolRegistry();
-    adapter.registerInto(tempRegistry);
-
-    if (this.runtime) {
-      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
-    }
-
-    this.mcpAdapters.set(config.name, adapter);
-    this.mcpConfigs.set(config.name, config);
-    const toolCount = adapter.getTools().length;
-    this.mcpToolCounts.set(config.name, toolCount);
-
-    return {
-      name: config.name,
-      transport: config.transport,
-      trusted: config.trusted ?? false,
-      connected: true,
-      toolCount,
-      manifestChanged,
-      manifestDiff,
-    };
+  addMcpServer(config: McpServerConfig): Promise<McpServerStatus> {
+    return this.mcp.addMcpServer(config);
   }
 
-  async removeMcpServer(name: string): Promise<void> {
-    const adapter = this.mcpAdapters.get(name);
-    if (adapter) {
-      await adapter.disconnect();
-      this.mcpAdapters.delete(name);
-    }
-    this.mcpConfigs.delete(name);
-    this.mcpToolCounts.delete(name);
-    if (this.runtime) {
-      this.runtime.unregisterExternalTools(`mcp:${name}`);
-    }
+  removeMcpServer(name: string): Promise<void> {
+    return this.mcp.removeMcpServer(name);
   }
 
   getMcpStatus(): McpServerStatus[] {
-    const result: McpServerStatus[] = [];
-    for (const [name, config] of this.mcpConfigs) {
-      result.push({
-        name,
-        transport: config.transport,
-        trusted: config.trusted ?? false,
-        connected: this.mcpAdapters.has(name),
-        toolCount: this.mcpToolCounts.get(name) ?? 0,
-      });
-    }
-    return result;
+    return this.mcp.getMcpStatus();
   }
 
   // === Policy ===
@@ -2157,200 +2072,13 @@ export class DesktopApp {
    * of @motebit/mcp-client. If that fails (expected in webview), it falls back
    * to a Tauri IPC bridge approach.
    */
-  async connectMcpServerViaTauri(
-    config: McpServerConfig,
-    invoke: InvokeFn,
-  ): Promise<McpServerStatus> {
-    // First try the existing dynamic import approach (works in Tauri sidecar context)
-    try {
-      return await this.addMcpServer(config);
-    } catch {
-      // Dynamic import failed (expected in pure webview) — use Tauri IPC bridge
-    }
-
-    // Tauri IPC bridge: spawn MCP server, discover tools, register as proxied tools
-    if (config.transport !== "stdio" || config.command == null || config.command === "") {
-      this.mcpConfigs.set(config.name, config);
-      return {
-        name: config.name,
-        transport: config.transport,
-        trusted: config.trusted ?? false,
-        connected: false,
-        toolCount: 0,
-      };
-    }
-
-    try {
-      // Discover tools by running the MCP server and listing tools
-      // We use shell_exec to start the server with a tools/list request
-      const args = config.args ?? [];
-      const fullCommand = [config.command, ...args].join(" ");
-
-      // Try to spawn and get tool list via MCP init + tools/list
-      // This is a simplified approach — full MCP stdio protocol would need a Rust command
-      const initPayload = JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "motebit-desktop", version: "0.1.0" },
-        },
-      });
-      const listPayload = JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/list",
-        params: {},
-      });
-
-      // Combine payloads, escape for safe shell interpolation (single quotes → '\'' break-and-rejoin)
-      const stdinData = `${initPayload}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n${listPayload}`;
-      const escaped = stdinData.replace(/'/g, "'\\''");
-
-      // Send init + initialized notification + tools/list through stdin
-      const shellResult = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
-        "shell_exec_tool",
-        {
-          command: `printf '%s' '${escaped}' | ${fullCommand}`,
-          cwd: null,
-        },
-      );
-
-      if (shellResult.exit_code === 0 && shellResult.stdout) {
-        // Parse JSON-RPC responses from stdout
-        const lines = shellResult.stdout.split("\n").filter((l) => l.trim());
-        let toolCount = 0;
-
-        for (const line of lines) {
-          try {
-            const response = JSON.parse(line) as {
-              id?: number;
-              result?: {
-                tools?: Array<{
-                  name: string;
-                  description?: string;
-                  inputSchema?: Record<string, unknown>;
-                }>;
-              };
-            };
-            if (response.id === 2 && response.result?.tools) {
-              const tempRegistry = new SimpleToolRegistry();
-              for (const mcpTool of response.result.tools) {
-                const qualifiedName = `${config.name}__${mcpTool.name}`;
-                const definition = {
-                  name: qualifiedName,
-                  description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
-                  inputSchema: mcpTool.inputSchema ?? { type: "object" as const, properties: {} },
-                  ...(config.trusted === true ? {} : { requiresApproval: true as const }),
-                };
-
-                // Create a handler that calls the tool via Tauri shell
-                const toolHandler = this.createMcpToolHandler(config, mcpTool.name, invoke);
-                tempRegistry.register(definition, toolHandler);
-                toolCount++;
-              }
-
-              if (this.runtime) {
-                this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
-              }
-            }
-          } catch {
-            // Skip unparseable lines
-          }
-        }
-
-        this.mcpConfigs.set(config.name, config);
-        this.mcpToolCounts.set(config.name, toolCount);
-        return {
-          name: config.name,
-          transport: config.transport,
-          trusted: config.trusted ?? false,
-          connected: true,
-          toolCount,
-        };
-      }
-    } catch {
-      // MCP connection failed — store config but mark as disconnected
-    }
-
-    this.mcpConfigs.set(config.name, config);
-    return {
-      name: config.name,
-      transport: config.transport,
-      trusted: config.trusted ?? false,
-      connected: false,
-      toolCount: 0,
-    };
-  }
-
-  /** Create a tool handler that calls an MCP tool by spawning the server via Tauri. */
-  private createMcpToolHandler(
-    config: McpServerConfig,
-    mcpToolName: string,
-    invoke: InvokeFn,
-  ): (args: Record<string, unknown>) => Promise<{ ok: boolean; data?: unknown; error?: string }> {
-    return async (args) => {
-      try {
-        const fullCommand = [config.command!, ...(config.args ?? [])].join(" ");
-        const callPayload = [
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "initialize",
-            params: {
-              protocolVersion: "2024-11-05",
-              capabilities: {},
-              clientInfo: { name: "motebit-desktop", version: "0.1.0" },
-            },
-          }),
-          JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: 2,
-            method: "tools/call",
-            params: { name: mcpToolName, arguments: args },
-          }),
-        ].join("\n");
-
-        const escapedPayload = callPayload.replace(/'/g, "'\\''");
-        const result = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
-          "shell_exec_tool",
-          { command: `printf '%s' '${escapedPayload}' | ${fullCommand}`, cwd: null },
-        );
-
-        if (result.stdout) {
-          const lines = result.stdout.split("\n").filter((l) => l.trim());
-          for (const line of lines) {
-            try {
-              const response = JSON.parse(line) as {
-                id?: number;
-                result?: { content?: Array<{ type: string; text?: string }>; isError?: boolean };
-              };
-              if (response.id === 2 && response.result) {
-                const textContent = (response.result.content ?? [])
-                  .filter((c) => c.type === "text")
-                  .map((c) => c.text ?? "")
-                  .join("\n");
-                return {
-                  ok: response.result.isError !== true,
-                  data: textContent !== "" ? textContent : response.result.content,
-                  error: response.result.isError === true ? textContent : undefined,
-                };
-              }
-            } catch {
-              /* skip */
-            }
-          }
-        }
-
-        return { ok: false, error: `MCP tool ${mcpToolName} returned no result` };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: msg };
-      }
-    };
+  /**
+   * Connect to an MCP server with Tauri IPC fallback. See
+   * `McpManager.connectMcpServerViaTauri` for the two-path semantics
+   * (native dynamic import, then shell-exec bridge).
+   */
+  connectMcpServerViaTauri(config: McpServerConfig, invoke: InvokeFn): Promise<McpServerStatus> {
+    return this.mcp.connectMcpServerViaTauri(config, invoke);
   }
 
   // === Conversation Browsing ===
