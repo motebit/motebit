@@ -31,6 +31,7 @@ import { initMemory } from "./ui/memory";
 import { initPairing } from "./ui/pairing";
 import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
+import { byokKeyringKey, LEGACY_API_KEY_SLOT, WHISPER_API_KEY_SLOT } from "./ui/keyring-keys";
 import { initSovereign } from "./ui/sovereign";
 import { initTheme } from "./ui/theme";
 import { initKeyboard } from "./ui/keyboard";
@@ -754,15 +755,24 @@ async function bootstrap(): Promise<void> {
 
     voice.rebuildTtsProvider(invoke);
 
-    // Check keyring for API key indicators
+    // Check keyring for API key indicators. Uses the per-vendor slot for
+    // the currently-active provider, falling back to the legacy single slot
+    // so pre-migration installs still show "API key stored".
     try {
-      const keyVal = await invoke<string | null>("keyring_get", { key: "api_key" });
-      settings.setHasApiKeyInKeyring(keyVal != null && keyVal !== "");
+      const slot = byokKeyringKey(config.provider);
+      let vendorVal: string | null = null;
+      if (slot) {
+        vendorVal = await invoke<string | null>("keyring_get", { key: slot });
+      }
+      if (vendorVal == null || vendorVal === "") {
+        vendorVal = await invoke<string | null>("keyring_get", { key: LEGACY_API_KEY_SLOT });
+      }
+      settings.setHasApiKeyInKeyring(vendorVal != null && vendorVal !== "");
     } catch {
       /* Keyring unavailable */
     }
     try {
-      const whisperVal = await invoke<string | null>("keyring_get", { key: "whisper_api_key" });
+      const whisperVal = await invoke<string | null>("keyring_get", { key: WHISPER_API_KEY_SLOT });
       settings.setHasWhisperKeyInKeyring(whisperVal != null && whisperVal !== "");
     } catch {
       /* Keyring unavailable */

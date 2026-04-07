@@ -1,4 +1,5 @@
 import type { DesktopAIConfig, InvokeFn } from "../index";
+import { byokKeyringKey, LEGACY_API_KEY_SLOT, SYNC_MASTER_TOKEN_SLOT } from "./keyring-keys";
 
 export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
   const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
@@ -11,13 +12,32 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       (parsed.default_provider as DesktopAIConfig["provider"] | undefined) ?? "ollama";
     const model = (parsed.default_model as string | undefined) ?? undefined;
 
-    // Try keyring first, fall back to config file
+    // Per-vendor keyring slot for the active provider. Falls back to the
+    // legacy single-slot `api_key` if the per-vendor slot is empty — this
+    // transparently migrates users who pre-date the per-vendor split.
+    // Providers with no BYOK key (ollama, proxy) skip lookup entirely.
     let apiKey: string | undefined;
-    try {
-      const keyringVal = await invoke<string | null>("keyring_get", { key: "api_key" });
-      apiKey = keyringVal ?? undefined;
-    } catch {
-      // Keyring unavailable — fall through
+    const slot = byokKeyringKey(provider);
+    if (slot) {
+      try {
+        const vendorVal = await invoke<string | null>("keyring_get", { key: slot });
+        apiKey = vendorVal ?? undefined;
+      } catch {
+        // Keyring unavailable — fall through
+      }
+      if (apiKey == null || apiKey === "") {
+        // Legacy single-slot fallback. We don't write-back here: the next
+        // save will populate the per-vendor slot, and the legacy slot stays
+        // readable until the user explicitly rotates.
+        try {
+          const legacyVal = await invoke<string | null>("keyring_get", {
+            key: LEGACY_API_KEY_SLOT,
+          });
+          apiKey = legacyVal ?? undefined;
+        } catch {
+          /* keyring unavailable */
+        }
+      }
     }
     if (apiKey == null || apiKey === "") {
       apiKey = (parsed.api_key as string | undefined) ?? undefined;
@@ -28,7 +48,9 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
     let syncMasterToken: string | undefined;
     if (syncUrl != null && syncUrl !== "") {
       try {
-        const keyringVal = await invoke<string | null>("keyring_get", { key: "sync_master_token" });
+        const keyringVal = await invoke<string | null>("keyring_get", {
+          key: SYNC_MASTER_TOKEN_SLOT,
+        });
         syncMasterToken = keyringVal ?? undefined;
       } catch {
         // Keyring unavailable
