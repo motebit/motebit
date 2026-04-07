@@ -49,11 +49,9 @@ import {
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
 import { PairingClient } from "@motebit/sync-engine";
-import { McpClientAdapter, AdvisoryManifestVerifier } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
 export type { McpServerConfig } from "@motebit/mcp-client";
 export type { MemoryNode } from "@motebit/sdk";
-import { InMemoryToolRegistry } from "@motebit/tools";
 import { PlanEngine } from "@motebit/planner";
 import { DeviceCapability, DEFAULT_OLLAMA_MODEL, DEFAULT_MOTEBIT_CLOUD_URL } from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
@@ -97,6 +95,7 @@ import {
 export type { GoalCompleteEvent, GoalApprovalEvent } from "./goal-scheduler";
 import { MobileSyncController, type SyncStatus } from "./sync-controller";
 export type { SyncStatus } from "./sync-controller";
+import { MobileMcpManager } from "./mcp-manager";
 
 // === Color Presets (same 7 as desktop) ===
 
@@ -566,11 +565,10 @@ export class MobileApp {
     stopPushLifecycle: () => this.stopPushLifecycle(),
   });
 
-  // MCP state
-  private mcpAdapters: Map<string, McpClientAdapter> = new Map();
-  private _mcpServers: McpServerConfig[] = [];
-  private _toolsChangedCallback: (() => void) | null = null;
-  private static readonly MCP_SERVERS_KEY = ASYNC_STORAGE_KEYS.mcpServers;
+  // MCP — class extracted to ./mcp-manager.ts.
+  private mcp = new MobileMcpManager({
+    getRuntime: () => this.runtime,
+  });
 
   // Plan engine
   private planEngine: PlanEngine | null = null;
@@ -1158,63 +1156,14 @@ export class MobileApp {
     this.renderer.setLightEnvironment();
   }
 
-  // === MCP ===
+  // === MCP (delegates to MobileMcpManager in ./mcp-manager.ts) ===
 
-  async addMcpServer(config: McpServerConfig): Promise<void> {
-    if (config.transport !== "http") {
-      throw new Error(
-        "Mobile only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.",
-      );
-    }
-    if (config.url == null || config.url === "") {
-      throw new Error("HTTP MCP server requires a url");
-    }
-
-    // Attach advisory verifier: always accepts, revokes trust on manifest change
-    config.serverVerifier = new AdvisoryManifestVerifier();
-    const adapter = new McpClientAdapter(config);
-    await adapter.connect();
-
-    // Persist verifier-applied config updates
-    config.toolManifestHash = adapter.serverConfig.toolManifestHash;
-    config.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
-    if (adapter.serverConfig.trusted === false) {
-      config.trusted = false;
-    }
-
-    // Persist motebit public key if newly pinned during connect
-    if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
-      const pinnedKey = adapter.serverConfig.motebitPublicKey;
-      if (pinnedKey && !config.motebitPublicKey) {
-        config.motebitPublicKey = pinnedKey;
-      }
-    }
-
-    // Register tools with trust-aware approval flags
-    this.registerMcpTools(adapter, config);
-
-    this.mcpAdapters.set(config.name, adapter);
-    this._mcpServers = this._mcpServers.filter((s) => s.name !== config.name);
-    this._mcpServers.push(config);
-
-    // Persist
-    await AsyncStorage.setItem(MobileApp.MCP_SERVERS_KEY, JSON.stringify(this._mcpServers));
-    this._toolsChangedCallback?.();
+  addMcpServer(config: McpServerConfig): Promise<void> {
+    return this.mcp.addMcpServer(config);
   }
 
-  async removeMcpServer(name: string): Promise<void> {
-    const adapter = this.mcpAdapters.get(name);
-    if (adapter) {
-      await adapter.disconnect();
-      this.mcpAdapters.delete(name);
-    }
-    if (this.runtime) {
-      this.runtime.unregisterExternalTools(`mcp:${name}`);
-    }
-
-    this._mcpServers = this._mcpServers.filter((s) => s.name !== name);
-    await AsyncStorage.setItem(MobileApp.MCP_SERVERS_KEY, JSON.stringify(this._mcpServers));
-    this._toolsChangedCallback?.();
+  removeMcpServer(name: string): Promise<void> {
+    return this.mcp.removeMcpServer(name);
   }
 
   getMcpServers(): Array<{
@@ -1226,105 +1175,19 @@ export class MobileApp {
     motebit: boolean;
     motebitPublicKey?: string;
   }> {
-    return this._mcpServers.map((config) => {
-      const adapter = this.mcpAdapters.get(config.name);
-      return {
-        name: config.name,
-        url: config.url ?? "",
-        connected: adapter?.isConnected ?? false,
-        toolCount: adapter?.getTools().length ?? 0,
-        trusted: config.trusted ?? false,
-        motebit: config.motebit ?? false,
-        motebitPublicKey: config.motebitPublicKey,
-      };
-    });
+    return this.mcp.getMcpServers();
   }
 
-  /** Toggle trust for an MCP server. Re-registers tools with updated approval requirements. */
-  async setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
-    const config = this._mcpServers.find((s) => s.name === name);
-    if (!config) return;
-    config.trusted = trusted;
-
-    // Re-register tools with updated approval flags
-    const adapter = this.mcpAdapters.get(name);
-    if (adapter && this.runtime) {
-      this.runtime.unregisterExternalTools(`mcp:${name}`);
-      this.registerMcpTools(adapter, config);
-    }
-
-    await AsyncStorage.setItem(MobileApp.MCP_SERVERS_KEY, JSON.stringify(this._mcpServers));
-    this._toolsChangedCallback?.();
+  setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
+    return this.mcp.setMcpServerTrust(name, trusted);
   }
 
   onToolsChanged(callback: () => void): void {
-    this._toolsChangedCallback = callback;
+    this.mcp.onToolsChanged(callback);
   }
 
-  /** Register MCP tools into the runtime with trust-aware approval flags. */
-  private registerMcpTools(adapter: McpClientAdapter, config: McpServerConfig): void {
-    const tempRegistry = new InMemoryToolRegistry();
-    for (const mcpTool of adapter.getTools()) {
-      const def = {
-        name: mcpTool.name,
-        description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
-        inputSchema: mcpTool.inputSchema ?? { type: "object", properties: {} },
-        ...(config.trusted === true ? {} : { requiresApproval: true as const }),
-      };
-      tempRegistry.register(def, (args: Record<string, unknown>) =>
-        adapter.executeTool(mcpTool.name, args),
-      );
-    }
-    if (this.runtime) {
-      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
-    }
-  }
-
-  private async reconnectMcpServers(): Promise<void> {
-    const raw = await AsyncStorage.getItem(MobileApp.MCP_SERVERS_KEY);
-    if (raw == null || raw === "") return;
-    try {
-      const configs = JSON.parse(raw) as McpServerConfig[];
-      this._mcpServers = configs;
-      let changed = false;
-      for (const config of configs) {
-        try {
-          config.serverVerifier = new AdvisoryManifestVerifier();
-          const adapter = new McpClientAdapter(config);
-          await adapter.connect();
-
-          // Persist verifier-applied config updates
-          config.toolManifestHash = adapter.serverConfig.toolManifestHash;
-          config.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
-          if (adapter.serverConfig.trusted === false) {
-            config.trusted = false;
-          }
-
-          // Persist motebit public key if newly pinned during connect
-          if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
-            const pinnedKey = adapter.serverConfig.motebitPublicKey;
-            if (pinnedKey && !config.motebitPublicKey) {
-              config.motebitPublicKey = pinnedKey;
-            }
-          }
-
-          this.registerMcpTools(adapter, config);
-          this.mcpAdapters.set(config.name, adapter);
-          changed = true;
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // eslint-disable-next-line no-console
-          console.warn(`Failed to reconnect MCP server "${config.name}": ${msg}`);
-        }
-      }
-      if (changed) {
-        // Persist any manifest hash / trust updates
-        await AsyncStorage.setItem(MobileApp.MCP_SERVERS_KEY, JSON.stringify(this._mcpServers));
-        this._toolsChangedCallback?.();
-      }
-    } catch {
-      // Non-fatal — corrupted storage
-    }
+  private reconnectMcpServers(): Promise<void> {
+    return this.mcp.reconnectMcpServers();
   }
 
   // === Observability ===
