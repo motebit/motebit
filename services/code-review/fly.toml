@@ -10,6 +10,7 @@ kill_timeout = 5
   NODE_ENV = "production"
   MOTEBIT_PORT = "3300"
   MOTEBIT_DB_PATH = "/data/code-review.db"
+  MOTEBIT_DATA_DIR = "/data"
 
 [http_service]
   internal_port = 3300

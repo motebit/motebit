@@ -12,8 +12,11 @@ export function loadConfig() {
   return {
     port: parseInt(process.env["MOTEBIT_PORT"] ?? "3300", 10),
     dbPath: process.env["MOTEBIT_DB_PATH"] ?? "./data/code-review.db",
-    identityPath: process.env["MOTEBIT_IDENTITY_PATH"] ?? "./motebit.md",
-    privateKeyHex: process.env["MOTEBIT_PRIVATE_KEY_HEX"],
+    // Persistent volume root for bootstrapServiceIdentity(). On Fly
+    // this is `/data`; locally, ./data. Identity (motebit.json,
+    // motebit.key, motebit.md) is generated here on first boot and
+    // reloaded on every subsequent boot. Survives deploys.
+    dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],

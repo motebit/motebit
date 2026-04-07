@@ -17,11 +17,8 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import {
-  verifyIdentityFile,
-  governanceToPolicyConfig,
-  parseRiskLevel,
-} from "@motebit/identity-file";
+import { bootstrapServiceIdentity } from "@motebit/core-identity";
+import { generate, parseRiskLevel } from "@motebit/identity-file";
 import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";
 import { loadConfig, fromHex } from "./helpers.js";
@@ -126,24 +123,45 @@ async function main(): Promise<void> {
     log("GitHub auth: none (public rate limit)");
   }
 
-  // 1. Load and verify identity
-  const identityPath = path.resolve(config.identityPath);
-  if (!fs.existsSync(identityPath)) {
-    console.error(
-      `No identity file found at ${identityPath}. Generate one: npx create-motebit . --service`,
-    );
-    process.exit(1);
-  }
-  const identityContent = fs.readFileSync(identityPath, "utf-8");
-  const verifyResult = await verifyIdentityFile(identityContent);
-  if (!verifyResult.valid || !verifyResult.identity) {
-    console.error(`Identity verification failed: ${verifyResult.error ?? "unknown error"}`);
-    process.exit(1);
-  }
-  const identity = verifyResult.identity;
-  const motebitId = identity.motebit_id;
-  const publicKeyHex = identity.identity.public_key;
-  log(`Identity verified: ${motebitId}`);
+  // 1. Bootstrap identity from the persistent data dir (generates on
+  //    first boot, reloads on subsequent boots). Shared protocol —
+  //    same bootstrap path every other surface uses.
+  const serviceName = "motebit-code-review";
+  const bootstrap = await bootstrapServiceIdentity({
+    dataDir: path.resolve(config.dataDir),
+    serviceName,
+  });
+  const { motebitId, deviceId, publicKeyHex, privateKeyHex } = bootstrap;
+  log(
+    `Identity ${bootstrap.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
+      `(data dir: ${config.dataDir})`,
+  );
+
+  // 2. Emit the canonical signed motebit.md from the bootstrapped state.
+  const privateKey = fromHex(privateKeyHex);
+  const identityContent = await generate(
+    {
+      motebitId,
+      ownerId: serviceName,
+      publicKeyHex,
+      devices: [
+        {
+          device_id: deviceId,
+          name: serviceName,
+          public_key: publicKeyHex,
+          registered_at: new Date().toISOString(),
+        },
+      ],
+      service: {
+        type: "service",
+        service_name: "Code Review",
+        service_description: "LLM-powered GitHub PR review with signed execution receipts",
+        capabilities: ["review_pr"],
+      },
+    },
+    privateKey,
+  );
+  fs.writeFileSync(bootstrap.suggestedIdentityPath, identityContent, "utf-8");
 
   // 2. Build tool registry
   const registry = new InMemoryToolRegistry();
@@ -176,11 +194,9 @@ async function main(): Promise<void> {
     approvalStore: moteDb.approvalStore,
   };
 
-  const govConfig =
-    identity.governance != null ? governanceToPolicyConfig(identity.governance) : null;
-
+  // Service motebit: auto-approve its own tools — review_pr is a
+  // pre-approved network read with no side effects.
   const policyOverrides = {
-    ...(govConfig ?? {}),
     maxRiskAuto: parseRiskLevel("R3_EXECUTE"),
     requireApprovalAbove: parseRiskLevel("R3_EXECUTE"),
   };
@@ -192,87 +208,73 @@ async function main(): Promise<void> {
   await runtime.init();
   log("Runtime initialized (code review service)");
 
-  // 4. Wire handleAgentTask — fetch PR, analyze with Claude, sign receipt
-  let handleAgentTask:
-    | ((
-        prompt: string,
-        options?: { delegatedScope?: string },
-      ) => AsyncGenerator<
-        | { type: "text"; text: string }
-        | { type: "task_result"; receipt: Record<string, unknown> }
-        | { type: string; [key: string]: unknown }
-      >)
-    | undefined;
+  // 4. Wire handleAgentTask — fetch PR, analyze with Claude, sign receipt.
+  //    privateKey is unconditional (every bootstrapped service has one).
+  const handleAgentTask = async function* (
+    prompt: string,
+    options?: { delegatedScope?: string; relayTaskId?: string },
+  ) {
+    const taskId = crypto.randomUUID();
+    const submittedAt = Date.now();
 
-  if (config.privateKeyHex) {
-    const privateKey = fromHex(config.privateKeyHex);
-    handleAgentTask = async function* (
-      prompt: string,
-      options?: { delegatedScope?: string; relayTaskId?: string },
-    ) {
-      const taskId = crypto.randomUUID();
-      const submittedAt = Date.now();
+    const prRef = parsePrReference(prompt);
+    let result: { ok: boolean; data?: string; error?: string };
 
-      const prRef = parsePrReference(prompt);
-      let result: { ok: boolean; data?: string; error?: string };
-
-      if (!prRef) {
-        result = {
-          ok: false,
-          error:
-            "Could not parse PR reference. Use: owner/repo#123 or https://github.com/owner/repo/pull/123",
-        };
-      } else {
-        try {
-          const token = await resolveGithubToken();
-          const pr = await fetchPullRequest(prRef.owner, prRef.repo, prRef.number, token);
-          log(
-            `PR ${prRef.owner}/${prRef.repo}#${prRef.number}: "${pr.title}" (${pr.changed_files} files)`,
-          );
-
-          const review = await reviewPullRequest(pr, config.anthropicApiKey!);
-          log(`review complete: ${review.length} chars`);
-
-          result = { ok: true, data: review };
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          result = { ok: false, error: msg };
-        }
-      }
-
-      const resultStr = result.ok ? (result.data ?? "") : (result.error ?? "error");
-      const enc = new TextEncoder();
-      const promptHash = await sha256(enc.encode(prompt));
-      const resultHash = await sha256(enc.encode(resultStr));
-
-      const receipt: Record<string, unknown> = {
-        task_id: taskId,
-        motebit_id: motebitId,
-        device_id: "code-review-service",
-        submitted_at: submittedAt,
-        completed_at: Date.now(),
-        status: result.ok ? ("completed" as const) : ("failed" as const),
-        result: resultStr,
-        tools_used: ["review_pr"],
-        memories_formed: 0,
-        prompt_hash: promptHash,
-        result_hash: resultHash,
-        ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
-        ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
+    if (!prRef) {
+      result = {
+        ok: false,
+        error:
+          "Could not parse PR reference. Use: owner/repo#123 or https://github.com/owner/repo/pull/123",
       };
+    } else {
+      try {
+        const token = await resolveGithubToken();
+        const pr = await fetchPullRequest(prRef.owner, prRef.repo, prRef.number, token);
+        log(
+          `PR ${prRef.owner}/${prRef.repo}#${prRef.number}: "${pr.title}" (${pr.changed_files} files)`,
+        );
 
-      const signed = await signExecutionReceipt(
-        receipt as Parameters<typeof signExecutionReceipt>[0],
-        privateKey,
-        fromHex(publicKeyHex),
-      );
-      log(
-        `receipt=${signed.signature.slice(0, 12)}… pr=${prRef ? `${prRef.owner}/${prRef.repo}#${prRef.number}` : "none"}`,
-      );
-      yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
+        const review = await reviewPullRequest(pr, config.anthropicApiKey!);
+        log(`review complete: ${review.length} chars`);
+
+        result = { ok: true, data: review };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result = { ok: false, error: msg };
+      }
+    }
+
+    const resultStr = result.ok ? (result.data ?? "") : (result.error ?? "error");
+    const enc = new TextEncoder();
+    const promptHash = await sha256(enc.encode(prompt));
+    const resultHash = await sha256(enc.encode(resultStr));
+
+    const receipt: Record<string, unknown> = {
+      task_id: taskId,
+      motebit_id: motebitId,
+      device_id: "code-review-service",
+      submitted_at: submittedAt,
+      completed_at: Date.now(),
+      status: result.ok ? ("completed" as const) : ("failed" as const),
+      result: resultStr,
+      tools_used: ["review_pr"],
+      memories_formed: 0,
+      prompt_hash: promptHash,
+      result_hash: resultHash,
+      ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
+      ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
     };
-    log("Agent task handler enabled (receipts will be signed)");
-  }
+
+    const signed = await signExecutionReceipt(
+      receipt as Parameters<typeof signExecutionReceipt>[0],
+      privateKey,
+      fromHex(publicKeyHex),
+    );
+    log(
+      `receipt=${signed.signature.slice(0, 12)}… pr=${prRef ? `${prRef.owner}/${prRef.repo}#${prRef.number}` : "none"}`,
+    );
+    yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
+  };
 
   // 5. Wire deps + start server
   const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.50");
