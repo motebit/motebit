@@ -84,6 +84,7 @@ export type {
 } from "./goal-scheduler.js";
 import { SyncController, type SyncStatusEvent } from "./sync-controller.js";
 export type { SyncStatusEvent, SyncIndicatorStatus } from "./sync-controller.js";
+import { ConversationManager } from "./conversation-manager.js";
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
@@ -376,7 +377,11 @@ export class DesktopApp {
   private planEngine: PlanEngine | null = null;
   private planStoreRef: TauriPlanStore | PlanStoreAdapter | null = null;
   private conversationStoreRef: TauriConversationStore | null = null;
-  private _autoTitlePending = false;
+  private conversations = new ConversationManager({
+    getRuntime: () => this.runtime,
+    getMotebitId: () => this.motebitId,
+    getConversationStore: () => this.conversationStoreRef,
+  });
   private _localEventStore: EventStoreAdapter | null = null;
   private sync = new SyncController({
     getRuntime: () => this.runtime,
@@ -1272,10 +1277,9 @@ export class DesktopApp {
     return this.mcp.connectMcpServerViaTauri(config, invoke);
   }
 
-  // === Conversation Browsing ===
+  // === Conversation Browsing (delegates to ConversationManager) ===
 
-  /** List recent conversations (async, for UI). Returns empty array if no conversation store. */
-  async listConversationsAsync(limit = 20): Promise<
+  listConversationsAsync(limit = 20): Promise<
     Array<{
       conversationId: string;
       startedAt: number;
@@ -1285,205 +1289,35 @@ export class DesktopApp {
       messageCount: number;
     }>
   > {
-    if (!this.conversationStoreRef) return [];
-    return this.conversationStoreRef.listConversationsAsync(this.motebitId, limit);
+    return this.conversations.listConversationsAsync(limit);
   }
 
-  /** Load a past conversation by ID — replaces the current chat. Returns the message list. */
-  async loadConversationById(
-    conversationId: string,
-  ): Promise<Array<{ role: string; content: string }>> {
-    if (!this.runtime || !this.conversationStoreRef) return [];
-
-    // Load messages asynchronously into the cache
-    await this.conversationStoreRef.loadMessagesAsync(conversationId);
-
-    // Now the sync loadMessages() call inside runtime will work from cache
-    this.runtime.loadConversation(conversationId);
-
-    return this.runtime.getConversationHistory();
+  loadConversationById(conversationId: string): Promise<Array<{ role: string; content: string }>> {
+    return this.conversations.loadConversationById(conversationId);
   }
 
-  /** Start a new conversation (clears current). */
   startNewConversation(): void {
-    if (this.runtime) {
-      this.runtime.resetConversation();
-    }
+    this.conversations.startNewConversation();
   }
 
-  /** Get the current conversation ID. */
   get currentConversationId(): string | null {
-    return this.runtime?.getConversationId() ?? null;
+    return this.conversations.getCurrentConversationId();
   }
 
-  /**
-   * Get the summary for a specific conversation by ID.
-   * Returns null if no summary exists or conversation store is unavailable.
-   */
-  async getConversationSummary(conversationId: string): Promise<string | null> {
-    if (!this.conversationStoreRef) return null;
-    const conversations = await this.conversationStoreRef.listConversationsAsync(
-      this.motebitId,
-      100,
-    );
-    const conv = conversations.find((c) => c.conversationId === conversationId);
-    return conv?.summary ?? null;
+  getConversationSummary(conversationId: string): Promise<string | null> {
+    return this.conversations.getConversationSummary(conversationId);
   }
 
-  /**
-   * Manually trigger summarization of the current conversation.
-   * Uses the AI provider via a side-channel call (no conversation pollution).
-   * Returns the generated summary, or null if there's nothing to summarize.
-   */
-  async summarizeConversation(): Promise<string | null> {
-    if (!this.runtime || !this.conversationStoreRef) return null;
-
-    const conversationId = this.runtime.getConversationId();
-    if (conversationId == null || conversationId === "") return null;
-
-    const history = this.runtime.getConversationHistory();
-    if (history.length < 2) return null;
-
-    // Get existing summary if any
-    const existingSummary = await this.getConversationSummary(conversationId);
-
-    // Use the ai-core summarizeConversation via generateCompletion (side-channel)
-    const formatted = history.map((m) => `${m.role}: ${m.content}`).join("\n");
-
-    const prompt =
-      existingSummary != null && existingSummary !== ""
-        ? `Update this conversation summary with the new messages.\n\nExisting summary:\n${existingSummary}\n\nNew messages:\n${formatted}\n\nReturn ONLY the updated summary (2-4 sentences). No quotes, no explanation.`
-        : `Summarize this conversation in 2-4 concise sentences. Return ONLY the summary, no quotes, no explanation.\n\n${formatted}`;
-
-    const summary = await this.runtime.generateCompletion(prompt);
-    const cleaned = summary.trim();
-
-    if (cleaned.length > 0) {
-      this.conversationStoreRef.updateSummary(conversationId, cleaned);
-      return cleaned;
-    }
-
-    return null;
+  summarizeConversation(): Promise<string | null> {
+    return this.conversations.summarizeConversation();
   }
 
-  // === Auto-Title ===
-
-  /**
-   * Generate a title for the current conversation when it reaches 4+ messages.
-   * Uses the AI provider to produce a short (5-7 word) title from the first messages.
-   * Non-blocking, fires in the background.
-   */
-  async maybeAutoTitle(): Promise<string | null> {
-    if (!this.runtime || !this.conversationStoreRef || this._autoTitlePending) return null;
-
-    const conversationId = this.runtime.getConversationId();
-    if (conversationId == null || conversationId === "") return null;
-
-    const history = this.runtime.getConversationHistory();
-    if (history.length < 4) return null;
-
-    // Check if already titled
-    const convos = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 50);
-    const current = convos.find((c) => c.conversationId === conversationId);
-    if (current?.title != null && current.title !== "") return current.title;
-
-    this._autoTitlePending = true;
-
-    try {
-      // Use a focused prompt to generate a short title
-      const firstMessages = history
-        .slice(0, 6)
-        .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
-        .join("\n");
-      const titlePrompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${firstMessages}`;
-
-      const result = await this.runtime.sendMessage(titlePrompt);
-      const title = result.response
-        .trim()
-        .replace(/^["']|["']$/g, "")
-        .slice(0, 100);
-
-      if (title && title.length > 0 && title.length < 100) {
-        this.conversationStoreRef.updateTitle(conversationId, title);
-        // Reset conversation to remove the title generation exchange
-        // We actually need a different approach — send via provider directly
-        // For now, store the title and don't pollute chat history
-        return title;
-      }
-    } catch {
-      // Auto-titling is best-effort
-    } finally {
-      this._autoTitlePending = false;
-    }
-
-    return null;
+  maybeAutoTitle(): Promise<string | null> {
+    return this.conversations.maybeAutoTitle();
   }
 
-  /**
-   * Generate a title using a lightweight AI call that doesn't affect conversation history.
-   * Uses runtime.generateCompletion() (side-channel) so the title prompt never enters
-   * the conversation. Falls back to heuristic (first 7 words) if the AI call fails.
-   * Called after pushToHistory when message count crosses 4.
-   */
-  async generateTitleInBackground(): Promise<string | null> {
-    if (!this.runtime || !this.conversationStoreRef) return null;
-
-    const conversationId = this.runtime.getConversationId();
-    if (conversationId == null || conversationId === "") return null;
-
-    // Check message count
-    const count = await this.conversationStoreRef.getMessageCount(conversationId);
-    if (count < 4) return null;
-
-    // Check if already titled
-    const convos = await this.conversationStoreRef.listConversationsAsync(this.motebitId, 50);
-    const current = convos.find((c) => c.conversationId === conversationId);
-    if (current?.title != null && current.title !== "") return null; // Already has a title
-
-    if (this._autoTitlePending) return null;
-    this._autoTitlePending = true;
-
-    try {
-      const history = this.runtime.getConversationHistory();
-      const firstMessages = history
-        .slice(0, 6)
-        .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
-        .join("\n");
-
-      // Try AI-generated title via side-channel (no conversation pollution)
-      try {
-        const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${firstMessages}`;
-        const raw = await this.runtime.generateCompletion(prompt);
-        const title = raw
-          .trim()
-          .replace(/^["']|["']$/g, "")
-          .slice(0, 100);
-        if (title.length > 0 && title.length < 100) {
-          this.conversationStoreRef.updateTitle(conversationId, title);
-          return title;
-        }
-      } catch {
-        // AI title generation failed — fall through to heuristic
-      }
-
-      // Heuristic fallback: first 7 words of first user message
-      const firstUserMsg = history.find((m) => m.role === "user");
-      if (firstUserMsg) {
-        const words = firstUserMsg.content.split(/\s+/);
-        let title = words.slice(0, 7).join(" ");
-        if (words.length > 7) title += "...";
-        if (title.length > 0) {
-          this.conversationStoreRef.updateTitle(conversationId, title);
-          return title;
-        }
-      }
-    } catch {
-      // Best-effort
-    } finally {
-      this._autoTitlePending = false;
-    }
-
-    return null;
+  generateTitleInBackground(): Promise<string | null> {
+    return this.conversations.generateTitleInBackground();
   }
 
   // === Sync / Serving (delegates to SyncController) ===

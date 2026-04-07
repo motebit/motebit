@@ -1259,10 +1259,32 @@ type RuntimeInternals = {
 
 /** Cast to access DesktopApp private fields */
 function appInternals(app: DesktopApp) {
-  return app as unknown as {
+  // _autoTitlePending now lives on the ConversationManager; expose it as a
+  // top-level getter/setter so existing tests read/write through the proxy.
+  const appAny = app as unknown as {
     runtime: RuntimeInternals | null;
     conversationStoreRef: unknown;
-    _autoTitlePending: boolean;
+    conversations: { _autoTitlePending: boolean };
+  };
+  return {
+    get runtime() {
+      return appAny.runtime;
+    },
+    set runtime(v) {
+      appAny.runtime = v;
+    },
+    get conversationStoreRef() {
+      return appAny.conversationStoreRef;
+    },
+    set conversationStoreRef(v) {
+      appAny.conversationStoreRef = v;
+    },
+    get _autoTitlePending() {
+      return appAny.conversations._autoTitlePending;
+    },
+    set _autoTitlePending(v) {
+      appAny.conversations._autoTitlePending = v;
+    },
   };
 }
 
