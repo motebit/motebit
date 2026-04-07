@@ -10,7 +10,6 @@
  * Modeled on DesktopApp / SpatialApp — same pattern, different adapters.
  */
 
-import { AppState, type AppStateStatus } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
@@ -96,6 +95,7 @@ import { MobileSyncController, type SyncStatus } from "./sync-controller";
 export type { SyncStatus } from "./sync-controller";
 import { MobileMcpManager } from "./mcp-manager";
 import { MobilePairingManager } from "./pairing-manager";
+import { MobilePushTokenManager } from "./push-token-manager";
 
 // === Color Presets (same 7 as desktop) ===
 
@@ -580,6 +580,13 @@ export class MobileApp {
       this.deviceId = deviceId;
     },
     setSyncUrl: (url) => this.setSyncUrl(url),
+  });
+
+  // Push token lifecycle — class extracted to ./push-token-manager.ts.
+  private pushTokens = new MobilePushTokenManager({
+    getDeviceId: () => this.deviceId,
+    createSyncToken: (aud) => this.createSyncToken(aud),
+    getSyncUrl: () => this.getSyncUrl(),
   });
 
   // Plan engine
@@ -1633,107 +1640,22 @@ export class MobileApp {
     return this.pairing.completePairing(result, syncUrl);
   }
 
-  // === Push Token Lifecycle ===
+  // === Push Token Lifecycle (delegates to MobilePushTokenManager) ===
 
-  private static readonly PUSH_TOKEN_KEY = "@motebit/push_token";
-  private _pushTokenListener: Notifications.Subscription | null = null;
-  private _appStateListener: ReturnType<typeof AppState.addEventListener> | null = null;
-
-  /**
-   * Register push token with the relay for wake-on-demand task execution.
-   * Called during startSync() after WebSocket connects.
-   */
-  async registerPushToken(syncUrl: string): Promise<void> {
-    try {
-      const { status } = await Notifications.getPermissionsAsync();
-      let finalStatus: string = status;
-      if (finalStatus !== "granted") {
-        const { status: asked } = await Notifications.requestPermissionsAsync();
-        finalStatus = asked;
-      }
-      if (finalStatus !== "granted") return;
-
-      const tokenData = await Notifications.getExpoPushTokenAsync();
-      const pushToken = tokenData.data;
-      if (!pushToken) return;
-
-      // Skip if token hasn't changed
-      const stored = await AsyncStorage.getItem(MobileApp.PUSH_TOKEN_KEY);
-      if (stored === pushToken) return;
-
-      const authToken = await this.createSyncToken("push:register");
-      if (!authToken) return;
-
-      const res = await fetch(`${syncUrl}/api/v1/agents/push-token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          device_id: this.deviceId,
-          push_token: pushToken,
-          platform: "expo",
-        }),
-      });
-
-      if (res.ok) {
-        await AsyncStorage.setItem(MobileApp.PUSH_TOKEN_KEY, pushToken);
-      }
-    } catch {
-      // Push registration is best-effort — sync still works without it
-    }
+  registerPushToken(syncUrl: string): Promise<void> {
+    return this.pushTokens.registerPushToken(syncUrl);
   }
 
-  /** Remove push token from relay (app logout / identity deregister). */
-  async removePushToken(syncUrl: string): Promise<void> {
-    try {
-      const authToken = await this.createSyncToken("push:register");
-      if (!authToken) return;
-      await fetch(`${syncUrl}/api/v1/agents/push-token`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({ device_id: this.deviceId }),
-      });
-      await AsyncStorage.removeItem(MobileApp.PUSH_TOKEN_KEY);
-    } catch {
-      // Best-effort cleanup
-    }
+  removePushToken(syncUrl: string): Promise<void> {
+    return this.pushTokens.removePushToken(syncUrl);
   }
 
-  /** Start listening for push token rotation and app state changes. */
   startPushLifecycle(): void {
-    // Token rotation: FCM/APNs may rotate tokens at any time
-    this._pushTokenListener = Notifications.addPushTokenListener((_token) => {
-      void (async () => {
-        const syncUrl = await this.getSyncUrl();
-        if (syncUrl) {
-          await AsyncStorage.removeItem(MobileApp.PUSH_TOKEN_KEY); // Force re-register
-          await this.registerPushToken(syncUrl);
-        }
-      })();
-    });
-
-    // AppState: refresh push token on foreground return
-    this._appStateListener = AppState.addEventListener("change", (state: AppStateStatus) => {
-      if (state === "active") {
-        void (async () => {
-          const syncUrl = await this.getSyncUrl();
-          if (syncUrl) await this.registerPushToken(syncUrl);
-        })();
-      }
-    });
+    this.pushTokens.startPushLifecycle();
   }
 
-  /** Clean up push lifecycle listeners. */
   stopPushLifecycle(): void {
-    this._pushTokenListener?.remove();
-    this._pushTokenListener = null;
-    this._appStateListener?.remove();
-    this._appStateListener = null;
+    this.pushTokens.stopPushLifecycle();
   }
 
   // === Credentials ===
