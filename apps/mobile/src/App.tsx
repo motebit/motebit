@@ -36,8 +36,6 @@ const Feather = require("@expo/vector-icons/Feather").default as React.Component
 
 import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
-import type { StreamChunk } from "@motebit/runtime";
-import { stripTags, stripPartialActionTag } from "@motebit/ai-core";
 import type { TTSProvider, STTProvider } from "@motebit/voice";
 import { FallbackTTSProvider, StreamingTTSQueue, computeSpeechEnergy } from "@motebit/voice";
 import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
@@ -68,6 +66,7 @@ import { SlashAutocomplete } from "./components/SlashAutocomplete";
 import { Banner } from "./components/Banner";
 import { ThemeContext, resolveTheme, type ThemeColors } from "./theme";
 import { runSlashCommand } from "./slash-commands";
+import { useChatStream } from "./use-chat-stream";
 
 // === Types ===
 
@@ -813,144 +812,20 @@ export default function App(): React.ReactElement {
     prevMicStateRef.current = micState;
   }, [micState, inputText, handleSend, settings?.voice.autoSend]);
 
-  // === Stream consumer ===
-  const consumeStream = useCallback(
-    async (stream: AsyncGenerator<StreamChunk>) => {
-      let assistantContent = "";
-      const assistantId = crypto.randomUUID();
-
-      // Add placeholder
-      setMessages((prev) => [
-        ...prev,
-        { id: assistantId, role: "assistant", content: "...", timestamp: Date.now() },
-      ]);
-
-      for await (const chunk of stream) {
-        switch (chunk.type) {
-          case "text":
-            assistantContent += chunk.text;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: stripPartialActionTag(assistantContent) }
-                  : m,
-              ),
-            );
-            pushTTSChunk(chunk.text);
-            break;
-
-          case "tool_status":
-            if (chunk.status === "calling") {
-              addSystemMessage(`Calling ${chunk.name}...`);
-            }
-            break;
-
-          case "approval_request": {
-            const approvalId = crypto.randomUUID();
-            pendingApprovalRef.current = approvalId;
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: approvalId,
-                role: "approval",
-                content: "",
-                timestamp: Date.now(),
-                toolName: chunk.name,
-                toolArgs: chunk.args,
-                riskLevel: chunk.risk_level,
-                approvalResolved: false,
-              },
-            ]);
-            // Stream pauses here — will resume via handleApproval
-            return;
-          }
-
-          case "delegation_start":
-            addSystemMessage(`Delegating to ${chunk.server}...`);
-            break;
-
-          case "delegation_complete": {
-            const status =
-              chunk.receipt != null && chunk.receipt.status === "failed" ? "\u2717" : "\u2713";
-            const toolInfo =
-              chunk.receipt != null
-                ? ` (${chunk.receipt.tools_used.length} tool${chunk.receipt.tools_used.length !== 1 ? "s" : ""})`
-                : "";
-            addSystemMessage(`Delegated to ${chunk.server} ${status}${toolInfo}`);
-            break;
-          }
-
-          case "injection_warning":
-            addSystemMessage(`Warning: injection patterns detected in ${chunk.tool_name}`);
-            break;
-
-          case "result":
-            // Final update
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: stripTags(assistantContent) || "...", timestamp: Date.now() }
-                  : m,
-              ),
-            );
-            break;
-        }
-      }
-
-      // Ensure final content is set and speak via TTS if voice enabled
-      if (assistantContent) {
-        const finalText = stripTags(assistantContent);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: finalText, timestamp: Date.now() } : m,
-          ),
-        );
-
-        // TTS — flush remaining streamed speech
-        flushTTS();
-      }
-    },
-    [settings?.voice.enabled, micState, pushTTSChunk, flushTTS],
-  );
-
-  // === Approval handler ===
-  const handleApproval = useCallback(
-    async (messageId: string, approved: boolean) => {
-      // Mark card as resolved
-      setMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? { ...m, approvalResolved: true } : m)),
-      );
-
-      const a = app.current;
-      const isGoalApproval = pendingGoalApprovalRef.current;
-
-      if (isGoalApproval) {
-        // Goal approval: stream the continuation via resumeGoalAfterApproval
-        pendingGoalApprovalRef.current = false;
-        try {
-          await consumeStream(a.resumeGoalAfterApproval(approved));
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          addSystemMessage(`[Goal error: ${errMsg}]`);
-        } finally {
-          pendingApprovalRef.current = null;
-        }
-      } else {
-        // Regular chat approval
-        setIsProcessing(true);
-        try {
-          await consumeStream(a.resolveApprovalVote(approved, a.motebitId));
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          addSystemMessage(`[Error: ${errMsg}]`);
-        } finally {
-          setIsProcessing(false);
-          pendingApprovalRef.current = null;
-        }
-      }
-    },
-    [consumeStream],
-  );
+  // Stream consumer + approval handler (owns logic in ./use-chat-stream.ts).
+  // The pendingApprovalRef and pendingGoalApprovalRef are declared earlier in
+  // this component so the goals scheduler callback can capture them. The
+  // hook reads the same refs through the deps object.
+  const { consumeStream, handleApproval } = useChatStream({
+    app: app.current,
+    setMessages,
+    addSystemMessage,
+    pushTTSChunk,
+    flushTTS,
+    setIsProcessing,
+    pendingApprovalRef,
+    pendingGoalApprovalRef,
+  });
 
   // === Settings save ===
   const handleSettingsSave = useCallback(
