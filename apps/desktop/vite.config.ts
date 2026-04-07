@@ -1,6 +1,45 @@
 import { defineConfig } from "vite";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 
+/**
+ * Manual chunk strategy — see apps/web/vite.config.ts for the full
+ * rationale. Desktop uses a FLATTER split than web/spatial because
+ * desktop's `index.ts` reaches more entry points in the dependency
+ * graph (Tauri-specific code paths, identity-file integration, the
+ * full keyring + sync surface). Splitting motebit/* into runtime /
+ * core / network on desktop produces circular chunk errors:
+ *   `motebit-runtime → motebit-core → motebit-runtime`
+ *   `motebit-runtime → motebit-network → motebit-runtime`
+ * The cycles exist because runtime, mcp-client, sdk/protocol, and
+ * crypto all reference each other across what would otherwise be
+ * three separate chunks. Merging them into a single `motebit-platform`
+ * chunk eliminates the cycles. The combined size (~318 kB) is well
+ * under the 900 kB threshold and roughly equals the sum of web's
+ * three motebit-* chunks, so the cache + parallel-fetch story is
+ * comparable on desktop's typical install path.
+ *
+ * Desktop-specific notes:
+ *   - Tauri webview is Chromium, so the same browser-target split applies.
+ *   - VAD model + ONNX runtime files are copied as static assets via
+ *     viteStaticCopy (see plugins below) — they're not bundled, they're
+ *     fetched at runtime from `/`.
+ */
+function manualChunks(id: string): string | undefined {
+  if (id.includes("node_modules")) {
+    if (id.includes("/three/") || id.includes("\\three\\")) return "vendor-three";
+    if (id.includes("@modelcontextprotocol/sdk")) return "vendor-mcp";
+    if (id.includes("@noble/") || id.includes("@scure/")) return "vendor-crypto";
+    return undefined;
+  }
+  // Render-engine stays separate because nothing else imports from it
+  // and it's the largest single domain that can be cleanly isolated.
+  if (id.includes("/packages/render-engine/")) return "motebit-render";
+  // Everything else from packages/ goes into one platform chunk to
+  // avoid circular chunks under desktop's wider entry-point graph.
+  if (id.includes("/packages/")) return "motebit-platform";
+  return undefined;
+}
+
 export default defineConfig({
   plugins: [
     viteStaticCopy({
@@ -18,6 +57,8 @@ export default defineConfig({
   build: {
     target: "esnext",
     outDir: "dist",
+    // See apps/web/vite.config.ts for the calibration rationale.
+    chunkSizeWarningLimit: 900,
     rollupOptions: {
       // Externalize Node-only MCP SDK paths and their transitive Node deps.
       // The MCP SDK ships transports for both client and server roles, and
@@ -35,6 +76,9 @@ export default defineConfig({
         "cross-spawn",
         /^node:/,
       ],
+      output: {
+        manualChunks,
+      },
     },
   },
   server: {

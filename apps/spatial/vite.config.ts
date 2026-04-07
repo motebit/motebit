@@ -1,5 +1,66 @@
 import { defineConfig } from "vite";
 
+/**
+ * Manual chunk strategy — see apps/web/vite.config.ts for the full
+ * rationale. Spatial uses an identical motebit/* split because the
+ * surface graph is the same shape (every motebit package is reachable
+ * from spatial-app.ts the same way it is from web-app.ts).
+ *
+ * Spatial-specific notes:
+ *   - Three.js is even more critical here than on web (the entire
+ *     surface IS a WebXR scene), so vendor-three stays in the initial
+ *     path.
+ *   - onnxruntime-web is dynamic-imported by @ricky0123/vad-web for
+ *     neural VAD; falls through to vite's auto-chunking and lands in
+ *     its own file.
+ *   - The WebLLM CDN import (esm.run/@mlc-ai/web-llm) is also dynamic
+ *     and gets its own chunk via vite's default behavior.
+ */
+function manualChunks(id: string): string | undefined {
+  if (id.includes("node_modules")) {
+    if (id.includes("/three/") || id.includes("\\three\\")) return "vendor-three";
+    if (id.includes("@modelcontextprotocol/sdk")) return "vendor-mcp";
+    if (id.includes("@noble/") || id.includes("@scure/")) return "vendor-crypto";
+    return undefined;
+  }
+  if (id.includes("/packages/render-engine/")) return "motebit-render";
+  if (
+    id.includes("/packages/runtime/") ||
+    id.includes("/packages/policy/") ||
+    id.includes("/packages/memory-graph/") ||
+    id.includes("/packages/state-vector/") ||
+    id.includes("/packages/behavior-engine/") ||
+    id.includes("/packages/event-log/") ||
+    id.includes("/packages/planner/") ||
+    id.includes("/packages/gradient/") ||
+    id.includes("/packages/reflection/") ||
+    id.includes("/packages/ai-core/")
+  ) {
+    return "motebit-runtime";
+  }
+  if (
+    id.includes("/packages/mcp-client/") ||
+    id.includes("/packages/tools/") ||
+    id.includes("/packages/sync-engine/") ||
+    id.includes("/packages/browser-persistence/") ||
+    id.includes("/packages/core-identity/") ||
+    id.includes("/packages/identity-file/")
+  ) {
+    return "motebit-network";
+  }
+  if (
+    id.includes("/packages/sdk/") ||
+    id.includes("/packages/protocol/") ||
+    id.includes("/packages/crypto/") ||
+    id.includes("/packages/semiring/") ||
+    id.includes("/packages/policy-invariants/") ||
+    id.includes("/packages/privacy-layer/")
+  ) {
+    return "motebit-core";
+  }
+  return undefined;
+}
+
 export default defineConfig({
   server: {
     port: 5175,
@@ -8,6 +69,11 @@ export default defineConfig({
   },
   build: {
     target: "esnext",
+    // See apps/web/vite.config.ts for the calibration rationale. Spatial
+    // ships the same ML / 3D dependency floor as web, plus onnxruntime-web
+    // for neural VAD (~557 kB, dynamic-imported only when iOS Silero VAD
+    // engages).
+    chunkSizeWarningLimit: 900,
     rollupOptions: {
       // Externalize Node-only MCP SDK paths and their transitive Node deps.
       // The MCP SDK ships transports for both client and server roles, and
@@ -32,6 +98,9 @@ export default defineConfig({
         // Anything from the `node:` namespace
         /^node:/,
       ],
+      output: {
+        manualChunks,
+      },
     },
   },
   optimizeDeps: {
