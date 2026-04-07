@@ -17,6 +17,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@motebit/core-identity": "workspace:*",
     "@motebit/crypto": "workspace:*",
     "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-client": "workspace:*",

@@ -19,7 +19,8 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { McpClientAdapter } from "@motebit/mcp-client";
-import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
+import { bootstrapServiceIdentity } from "@motebit/core-identity";
+import { generate } from "@motebit/identity-file";
 import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";
 import { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.js";
@@ -32,8 +33,11 @@ function loadConfig() {
   return {
     port: parseInt(process.env["MOTEBIT_PORT"] ?? "3201", 10),
     dbPath: process.env["MOTEBIT_DB_PATH"] ?? "./data/summarize.db",
-    identityPath: process.env["MOTEBIT_IDENTITY_PATH"] ?? "./motebit.md",
-    privateKeyHex: process.env["MOTEBIT_PRIVATE_KEY_HEX"],
+    // Persistent volume root for bootstrapServiceIdentity(). On Fly
+    // this is `/data`; locally, ./data. Identity (motebit.json,
+    // motebit.key, motebit.md) is generated here on first boot and
+    // reloaded on every subsequent boot. Survives deploys.
+    dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],
@@ -67,25 +71,47 @@ export { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const serviceName = "motebit-summarize";
 
-  // 1. Load and verify identity
-  const identityPath = path.resolve(config.identityPath);
-  if (!fs.existsSync(identityPath)) {
-    console.error(
-      `No identity file found at ${identityPath}. Generate one: npx create-motebit . --service`,
-    );
-    process.exit(1);
-  }
-  const identityContent = fs.readFileSync(identityPath, "utf-8");
-  const verifyResult = await verifyIdentityFile(identityContent);
-  if (!verifyResult.valid || !verifyResult.identity) {
-    console.error(`Identity verification failed: ${verifyResult.error ?? "unknown error"}`);
-    process.exit(1);
-  }
-  const identity = verifyResult.identity;
-  const motebitId = identity.motebit_id;
-  const publicKeyHex = identity.identity.public_key;
-  log(`Identity verified: ${motebitId}`);
+  // 1. Bootstrap identity from the persistent data dir (generates on
+  //    first boot, reloads on subsequent boots). Shared protocol —
+  //    same bootstrap path every other surface uses.
+  const bootstrap = await bootstrapServiceIdentity({
+    dataDir: path.resolve(config.dataDir),
+    serviceName,
+  });
+  const { motebitId, deviceId, publicKeyHex, privateKeyHex } = bootstrap;
+  log(
+    `Identity ${bootstrap.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
+      `(data dir: ${config.dataDir})`,
+  );
+
+  // 2. Emit the canonical signed motebit.md from the bootstrapped state.
+  const privateKey = fromHex(privateKeyHex);
+  const identityContent = await generate(
+    {
+      motebitId,
+      ownerId: serviceName,
+      publicKeyHex,
+      devices: [
+        {
+          device_id: deviceId,
+          name: serviceName,
+          public_key: publicKeyHex,
+          registered_at: new Date().toISOString(),
+        },
+      ],
+      service: {
+        type: "service",
+        service_name: "Summarize",
+        service_description:
+          "Multi-hop delegating service: summarize_search delegates to web-search",
+        capabilities: ["summarize_search"],
+      },
+    },
+    privateKey,
+  );
+  fs.writeFileSync(bootstrap.suggestedIdentityPath, identityContent, "utf-8");
 
   // 2. Open database + create runtime
   const dbDir = path.dirname(path.resolve(config.dbPath));
@@ -103,8 +129,8 @@ async function main(): Promise<void> {
     agentTrustStore: moteDb.agentTrustStore,
   };
 
-  const policyOverrides =
-    identity.governance != null ? governanceToPolicyConfig(identity.governance) : {};
+  // Service motebit: minimal policy — summarize_search is read-only.
+  const policyOverrides = {};
 
   // 3. Build tool registry with summarize_search
   const registry = new InMemoryToolRegistry();
@@ -128,75 +154,61 @@ async function main(): Promise<void> {
   await runtime.init();
   log("Runtime initialized (delegating tool server — no LLM)");
 
-  // 5. Wire handleAgentTask — execute summarize_search, nest delegation receipts
-  let handleAgentTask:
-    | ((
-        prompt: string,
-        options?: { delegatedScope?: string },
-      ) => AsyncGenerator<
-        | { type: "text"; text: string }
-        | { type: "task_result"; receipt: Record<string, unknown> }
-        | { type: string; [key: string]: unknown }
-      >)
-    | undefined;
+  // 5. Wire handleAgentTask — execute summarize_search, nest delegation receipts.
+  //    privateKey is unconditional (every bootstrapped service has one).
+  const handleAgentTask = async function* (prompt: string, _options?: { delegatedScope?: string }) {
+    const taskId = crypto.randomUUID();
+    const submittedAt = Date.now();
 
-  if (config.privateKeyHex) {
-    const privateKey = fromHex(config.privateKeyHex);
-    handleAgentTask = async function* (prompt: string, _options?: { delegatedScope?: string }) {
-      const taskId = crypto.randomUUID();
-      const submittedAt = Date.now();
+    let result: ToolResult;
+    try {
+      result = await runtime.getToolRegistry().execute("summarize_search", { query: prompt });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { ok: false, error: msg };
+    }
+    const completedAt = Date.now();
 
-      let result: ToolResult;
-      try {
-        result = await runtime.getToolRegistry().execute("summarize_search", { query: prompt });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        result = { ok: false, error: msg };
-      }
-      const completedAt = Date.now();
+    // Drain delegation receipts from web-search adapter
+    const delegationReceipts: ExecutionReceipt[] = [];
+    if (webSearchAdapter.getAndResetDelegationReceipts != null) {
+      delegationReceipts.push(...webSearchAdapter.getAndResetDelegationReceipts());
+    }
 
-      // Drain delegation receipts from web-search adapter
-      const delegationReceipts: ExecutionReceipt[] = [];
-      if (webSearchAdapter.getAndResetDelegationReceipts != null) {
-        delegationReceipts.push(...webSearchAdapter.getAndResetDelegationReceipts());
-      }
+    const resultStr = result.ok
+      ? typeof result.data === "string"
+        ? result.data
+        : JSON.stringify(result.data ?? null)
+      : (result.error ?? "error");
 
-      const resultStr = result.ok
-        ? typeof result.data === "string"
-          ? result.data
-          : JSON.stringify(result.data ?? null)
-        : (result.error ?? "error");
+    const enc = new TextEncoder();
+    const promptHash = await sha256(enc.encode(prompt));
+    const resultHash = await sha256(enc.encode(resultStr));
 
-      const enc = new TextEncoder();
-      const promptHash = await sha256(enc.encode(prompt));
-      const resultHash = await sha256(enc.encode(resultStr));
-
-      const receiptBody: Record<string, unknown> = {
-        task_id: taskId,
-        motebit_id: motebitId,
-        device_id: "summarize-service",
-        submitted_at: submittedAt,
-        completed_at: completedAt,
-        status: result.ok ? "completed" : "failed",
-        result: resultStr,
-        tools_used: ["summarize_search"],
-        memories_formed: 0,
-        prompt_hash: promptHash,
-        result_hash: resultHash,
-      };
-      if (delegationReceipts.length > 0) {
-        receiptBody["delegation_receipts"] = delegationReceipts;
-      }
-
-      const signed = await signExecutionReceipt(
-        receiptBody as Omit<ExecutionReceipt, "signature">,
-        privateKey,
-      );
-      log(`receipt=${signed.signature.slice(0, 12)}… query="${prompt.slice(0, 60)}"`);
-      yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
+    const receiptBody: Record<string, unknown> = {
+      task_id: taskId,
+      motebit_id: motebitId,
+      device_id: "summarize-service",
+      submitted_at: submittedAt,
+      completed_at: completedAt,
+      status: result.ok ? "completed" : "failed",
+      result: resultStr,
+      tools_used: ["summarize_search"],
+      memories_formed: 0,
+      prompt_hash: promptHash,
+      result_hash: resultHash,
     };
-    log("Agent task handler enabled (receipts will be signed, delegation receipts nested)");
-  }
+    if (delegationReceipts.length > 0) {
+      receiptBody["delegation_receipts"] = delegationReceipts;
+    }
+
+    const signed = await signExecutionReceipt(
+      receiptBody as Omit<ExecutionReceipt, "signature">,
+      privateKey,
+    );
+    log(`receipt=${signed.signature.slice(0, 12)}… query="${prompt.slice(0, 60)}"`);
+    yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
+  };
 
   // 6. Wire deps + start server
   const deps = wireServerDeps(runtime, {

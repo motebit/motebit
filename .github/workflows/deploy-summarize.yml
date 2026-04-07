@@ -23,24 +23,14 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@63da3ecc5e2793b98a3f2519b3d75d4f4c11cec2 # master
 
-      # Graceful bootstrap: check whether the Fly app exists before deploying.
-      # If it doesn't, the job annotates and exits green instead of failing —
-      # the moment `fly apps create motebit-summarize` runs, the next push
-      # auto-deploys without needing to touch this workflow.
-      - name: Check if Fly app exists
-        id: fly_app
-        run: |
-          if flyctl status --app motebit-summarize > /dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Fly app not created::motebit-summarize does not exist on Fly.io. Skipping deploy. Run 'fly apps create motebit-summarize' + set MOTEBIT_PRIVATE_KEY_HEX, MOTEBIT_SYNC_URL, WEB_SEARCH_URL secrets to enable auto-deploy."
-          fi
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
+      # The service self-bootstraps its identity from the persistent /data
+      # volume on first boot — no out-of-band ceremony. Required one-time
+      # setup before the first deploy:
+      #   fly apps create motebit-summarize
+      #   fly volumes create summarize_data --size 1 --region sjc
+      #   fly secrets set MOTEBIT_SYNC_URL=... MOTEBIT_API_TOKEN=... \
+      #                   WEB_SEARCH_URL=...
       - name: Deploy to Fly.io
-        if: steps.fly_app.outputs.exists == 'true'
         run: flyctl deploy --config services/summarize/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
