@@ -23,13 +23,7 @@
  * - Token refresh every 4.5 minutes (tokens expire at 5 min)
  */
 
-import {
-  MotebitRuntime,
-  executeCommand,
-  PlanExecutionVM,
-  ProxySession,
-  PLANNING_TASK_ROUTER,
-} from "@motebit/runtime";
+import { MotebitRuntime, ProxySession, PLANNING_TASK_ROUTER } from "@motebit/runtime";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
 import type { StreamChunk, KeyringAdapter, StorageAdapters, RelayConfig } from "@motebit/runtime";
@@ -71,6 +65,7 @@ import { spatialSpecToProvider } from "./providers";
 export { WebLLMProvider } from "./providers";
 import { SpatialSyncController } from "./sync-controller";
 import { SpatialMcpManager } from "./mcp-manager";
+import { tryVoiceCommand } from "./voice-commands";
 
 // === Configuration ===
 
@@ -845,7 +840,7 @@ export class SpatialApp {
     return this.sync.disconnectRelay();
   }
 
-  // === Voice Commands ===
+  // === Voice Commands (delegates to ./voice-commands.ts) ===
 
   /**
    * Try to handle a voice transcript as a command. Routes natural-language voice
@@ -853,54 +848,22 @@ export class SpatialApp {
    *
    * Returns spoken response if handled, or null to fall through to AI conversation.
    */
-  private async tryVoiceCommand(text: string): Promise<string | null> {
-    if (!this.runtime) return null;
-
-    const lower = text.toLowerCase().trim();
-
-    // Map natural-language patterns to shared command names + args
-    const command = this.matchVoicePattern(lower);
-    if (!command) return null;
-
-    const { name, args } = command;
-
-    // Surface-specific commands that can't go through the shared layer
-    if (name === "clear") {
-      this.resetConversation();
-      return "Conversation cleared.";
-    }
-    if (name === "mcp") {
-      const servers = this.getMcpServers();
-      if (servers.length === 0) return "No MCP servers connected.";
-      return `${servers.length} MCP servers: ${servers.map((s) => s.name).join(", ")}.`;
-    }
-    if (name === "serve") {
-      return "Serving is configured through the relay. Use the CLI to start serving with a price.";
-    }
-    if (name === "load_conversation") {
-      return this.handleLoadConversation(lower);
-    }
-    if (name === "delete_conversation") {
-      return this.handleDeleteConversation(lower);
-    }
-    if (name === "goal") {
-      return this.handleGoalExecution(text);
-    }
-
-    // Shared command layer — same data extraction and formatting as all surfaces
-    const relay = this.getRelayConfig();
-    try {
-      const result = await executeCommand(this.runtime, name, args, relay ?? undefined);
-      if (!result) return null;
-
-      // For TTS: speak summary, include detail if short enough
-      if (result.detail && result.detail.length < 200) {
-        return `${result.summary}. ${result.detail}`;
-      }
-      return result.summary;
-    } catch (err: unknown) {
-      return `${name} failed: ${err instanceof Error ? err.message : String(err)}`;
-    }
+  private tryVoiceCommand(text: string): Promise<string | null> {
+    return tryVoiceCommand(text, {
+      getRuntime: () => this.runtime,
+      getRelayConfig: () => this.getRelayConfig(),
+      voicePipeline: this.voicePipeline,
+      resetConversation: () => this.resetConversation(),
+      getMcpServers: () => this.getMcpServers(),
+      listConversations: () => this.listConversations(),
+      loadConversationById: (id) => {
+        this.loadConversationById(id);
+      },
+      deleteConversation: (id) => {
+        this.deleteConversation(id);
+      },
+      executeGoal: (goalId, prompt) => this.executeGoal(goalId, prompt),
+    });
   }
 
   /** Build RelayConfig from current connection state, or null if not connected. */
@@ -909,143 +872,6 @@ export class SpatialApp {
     const authToken = this.sync.lastAuthToken;
     if (!relayUrl || !authToken) return null;
     return { relayUrl, authToken, motebitId: this.motebitId };
-  }
-
-  /**
-   * Match natural-language voice input to a command name.
-   * Returns null if no pattern matches (fall through to AI).
-   */
-  private matchVoicePattern(lower: string): { name: string; args?: string } | null {
-    // State
-    if (/^(what('?s| is) my )?state/.test(lower) || /^show ?(me )?(the )?state/.test(lower))
-      return { name: "state" };
-
-    // Balance
-    if (/^(what('?s| is) my )?balance/.test(lower) || /^show ?(me )?(the )?balance/.test(lower))
-      return { name: "balance" };
-
-    // Memories
-    if (/^(show |list |what are )?(my )?memories/.test(lower)) return { name: "memories" };
-
-    // Graph
-    if (/^(memory )?graph/.test(lower)) return { name: "graph" };
-
-    // Curiosity
-    if (/^(what('?s| is) )?(my )?curios/.test(lower)) return { name: "curious" };
-
-    // Gradient
-    if (/^(what('?s| is) )?(my )?gradient/.test(lower) || /^how am i doing/.test(lower))
-      return { name: "gradient" };
-
-    // Reflect
-    if (/^reflect/.test(lower) || /^self.?reflect/.test(lower)) return { name: "reflect" };
-
-    // Discover
-    if (
-      /^(discover|find|search for) agent/.test(lower) ||
-      /^who('?s| is) (on|available)/.test(lower)
-    )
-      return { name: "discover" };
-
-    // Approvals
-    if (/^(show |any |pending )?approval/.test(lower)) return { name: "approvals" };
-
-    // Forget
-    if (/^forget (about |memory )?(.+)/i.test(lower)) {
-      const keyword = lower.replace(/^forget (about |memory )?/i, "").trim();
-      return { name: "forget", args: keyword };
-    }
-
-    // Audit
-    if (/^audit (my )?(memory|memories)/.test(lower)) return { name: "audit" };
-
-    // Summarize
-    if (/^summarize/.test(lower) || /^sum up/.test(lower)) return { name: "summarize" };
-
-    // Conversations list
-    if (/^(list |show |my )?(previous |past )?(conversation|chat|session)s/.test(lower))
-      return { name: "conversations" };
-
-    // Load conversation (surface-specific — needs state mutation)
-    if (/^(load|open|resume) (conversation|chat) /.test(lower))
-      return { name: "load_conversation" };
-
-    // Delete conversation (surface-specific — needs state mutation)
-    if (/^delete (conversation|chat) /.test(lower)) return { name: "delete_conversation" };
-
-    // Goal execution (surface-specific — streaming)
-    if (/^(goal|plan|do|execute|run):? (.+)/i.test(lower)) return { name: "goal" };
-
-    // Deposits
-    if (/^(show |my )?deposit/.test(lower)) return { name: "deposits" };
-
-    // Proposals
-    if (/^(show |my |list )?proposal/.test(lower)) return { name: "proposals" };
-
-    // Clear
-    if (/^(clear|reset|new) (conversation|chat|session)/.test(lower)) return { name: "clear" };
-
-    // Model
-    if (/^(what |which )?(model|ai)/.test(lower)) return { name: "model" };
-
-    // MCP
-    if (/^(list |show )?(mcp|servers)/.test(lower)) return { name: "mcp" };
-
-    // Tools
-    if (/^(list |show |what )?(my )?tools/.test(lower)) return { name: "tools" };
-
-    // Serve
-    if (/^(start |begin )?serv(e|ing)/.test(lower) || /^accept (task|delegation)/.test(lower))
-      return { name: "serve" };
-
-    return null;
-  }
-
-  // --- Surface-specific command handlers (state mutations, streaming) ---
-
-  private handleLoadConversation(lower: string): string {
-    const convs = this.listConversations();
-    if (convs.length === 0) return "No conversations to load.";
-    const keyword = lower.replace(/^(load|open|resume) (conversation|chat) ?/i, "").trim();
-    const match = keyword ? convs.find((c) => c.title?.toLowerCase().includes(keyword)) : convs[0];
-    if (!match) return `No conversation matching "${keyword}".`;
-    this.loadConversationById(match.conversationId);
-    return `Loaded: ${match.title ?? "untitled conversation"}.`;
-  }
-
-  private handleDeleteConversation(lower: string): string {
-    const convs = this.listConversations();
-    const keyword = lower.replace(/^delete (conversation|chat) ?/i, "").trim();
-    const match = keyword ? convs.find((c) => c.title?.toLowerCase().includes(keyword)) : null;
-    if (!match) return `No conversation matching "${keyword}".`;
-    this.deleteConversation(match.conversationId);
-    return `Deleted: ${match.title ?? "untitled conversation"}.`;
-  }
-
-  private async handleGoalExecution(text: string): Promise<string> {
-    const prompt = text.replace(/^(goal|plan|do|execute|run):?\s*/i, "").trim();
-    if (!prompt) return "What should the goal be?";
-    const goalId = crypto.randomUUID();
-    const evm = new PlanExecutionVM();
-    try {
-      for await (const chunk of this.executeGoal(goalId, prompt)) {
-        evm.apply(chunk);
-        // Announce step completions via TTS as they happen
-        const snap = evm.snapshot();
-        if (chunk.type === "step_completed" && snap.progress.total > 1) {
-          await this.voicePipeline.speak(
-            `Step ${snap.progress.completed} of ${snap.progress.total}: ${chunk.step.description}.`,
-          );
-        }
-      }
-      const snap = evm.snapshot();
-      if (snap.status === "completed") {
-        return snap.reflection ?? `Goal complete: ${snap.title}.`;
-      }
-      return `Goal ${snap.status}: ${snap.failureReason ?? snap.title}.`;
-    } catch (err: unknown) {
-      return `Goal failed: ${err instanceof Error ? err.message : String(err)}.`;
-    }
   }
 
   // === Messaging ===
