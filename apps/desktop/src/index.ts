@@ -50,30 +50,11 @@ import {
 import type { UnifiedProviderConfig, ProviderSpec, ResolverEnv } from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage } from "@motebit/memory-graph";
-import {
-  InMemoryIdentityStorage,
-  bootstrapIdentity as sharedBootstrapIdentity,
-  rotateIdentityKeys,
-  type BootstrapConfigStore,
-  type BootstrapKeyStore,
-} from "@motebit/core-identity";
+import { InMemoryIdentityStorage } from "@motebit/core-identity";
 import { InMemoryAuditLog } from "@motebit/privacy-layer";
+import { deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
+import { parse as parseIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import {
-  createSignedToken,
-  deriveSyncEncryptionKey,
-  hexPublicKeyToDidKey,
-  secureErase,
-  bytesToHex,
-} from "@motebit/crypto";
-import {
-  generate as generateIdentityFile,
-  parse as parseIdentityFile,
-  verifyIdentityFile as verifyIdentity,
-  governanceToPolicyConfig,
-  rotate as rotateIdentityFile,
-} from "@motebit/identity-file";
-import {
-  PairingClient,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
   EncryptedConversationSyncAdapter,
@@ -114,6 +95,7 @@ import {
 } from "./tauri-sync-adapters.js";
 import * as memoryCommands from "./memory-commands.js";
 import * as rendererCommands from "./renderer-commands.js";
+import { IdentityManager } from "./identity-manager.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 import {
   createSubGoalDefinition,
@@ -357,7 +339,7 @@ function desktopSpecToProvider(
 
 // === Storage Factory ===
 
-function createTauriStorage(
+export function createTauriStorage(
   invoke: InvokeFn,
   stateSnapshot?: TauriStateSnapshotStorage,
   conversationStore?: TauriConversationStore,
@@ -435,9 +417,23 @@ export class DesktopApp {
   private mcpAdapters = new Map<string, { disconnect(): Promise<void> }>();
   private mcpConfigs = new Map<string, McpServerConfig>();
   private mcpToolCounts = new Map<string, number>();
-  motebitId: string = "desktop-local";
-  deviceId: string = "desktop-local";
-  publicKey: string = "";
+  /**
+   * The identity manager owns motebitId/deviceId/publicKey state + all
+   * identity operations (bootstrap, key rotation, identity file, pairing).
+   * The three public fields below are getters that read from it so every
+   * existing `this.motebitId` / `this.deviceId` / `this.publicKey` read
+   * in the rest of DesktopApp works unchanged.
+   */
+  private identity = new IdentityManager();
+  get motebitId(): string {
+    return this.identity.motebitId;
+  }
+  get deviceId(): string {
+    return this.identity.deviceId;
+  }
+  get publicKey(): string {
+    return this.identity.publicKey;
+  }
   private _governanceStatus: GovernanceStatus = { governed: false, reason: "not initialized" };
   private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   private _goalExecuting = false;
@@ -485,187 +481,28 @@ export class DesktopApp {
     this.renderer = new ThreeJSAdapter();
   }
 
-  /**
-   * Bootstrap identity on first launch or load existing identity.
-   * Must be called before initAI() when running in Tauri.
-   */
-  async bootstrap(invoke: InvokeFn): Promise<BootstrapResult> {
-    const configStore: BootstrapConfigStore = {
-      async read() {
-        const raw = await invoke<string>("read_config");
-        const config = JSON.parse(raw) as Record<string, unknown>;
-        if (config.motebit_id == null || typeof config.motebit_id !== "string") return null;
-        return {
-          motebit_id: config.motebit_id,
-          device_id: (config.device_id as string) ?? "",
-          device_public_key: (config.device_public_key as string) ?? "",
-        };
-      },
-      async write(state) {
-        const raw = await invoke<string>("read_config");
-        const config = { ...(JSON.parse(raw) as Record<string, unknown>), ...state };
-        await invoke<void>("write_config", { json: JSON.stringify(config) });
-      },
-    };
+  // === Identity bootstrap + keypair + relay registration ===
+  // Implementations live in `./identity-manager.ts`. The methods below
+  // are one-line delegates that preserve the public DesktopApp API.
 
-    const keyStore: BootstrapKeyStore = {
-      async storePrivateKey(privKeyHex) {
-        await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
-      },
-    };
-
-    const storage = createTauriStorage(invoke);
-    const result = await sharedBootstrapIdentity({
-      surfaceName: "Desktop",
-      identityStorage: storage.identityStorage,
-      eventStoreAdapter: storage.eventStore,
-      configStore,
-      keyStore,
-    });
-
-    this.motebitId = result.motebitId;
-    this.deviceId = result.deviceId;
-    this.publicKey = result.publicKeyHex;
-
-    // Generate motebit.md identity file on first launch (best-effort, desktop-specific)
-    if (result.isFirstLaunch) {
-      try {
-        const keypair = await this.getDeviceKeypair(invoke);
-        if (keypair) {
-          const privKeyBytes = new Uint8Array(keypair.privateKey.length / 2);
-          for (let i = 0; i < keypair.privateKey.length; i += 2) {
-            privKeyBytes[i / 2] = parseInt(keypair.privateKey.slice(i, i + 2), 16);
-          }
-          try {
-            const identityFileContent = await generateIdentityFile(
-              {
-                motebitId: result.motebitId,
-                ownerId: result.motebitId,
-                publicKeyHex: result.publicKeyHex,
-                devices: [
-                  {
-                    device_id: result.deviceId,
-                    name: "Desktop",
-                    public_key: result.publicKeyHex,
-                    registered_at: new Date().toISOString(),
-                  },
-                ],
-              },
-              privKeyBytes,
-            );
-            const raw = await invoke<string>("read_config");
-            const config = {
-              ...(JSON.parse(raw) as Record<string, unknown>),
-              _identity_file: identityFileContent,
-            };
-            await invoke<void>("write_config", { json: JSON.stringify(config) });
-          } finally {
-            secureErase(privKeyBytes);
-          }
-        }
-      } catch {
-        // Non-fatal — identity file generation is best-effort on desktop
-      }
-    }
-
-    return {
-      isFirstLaunch: result.isFirstLaunch,
-      motebitId: result.motebitId,
-      deviceId: result.deviceId,
-    };
+  bootstrap(invoke: InvokeFn): Promise<BootstrapResult> {
+    return this.identity.bootstrap(invoke);
   }
 
-  /**
-   * Get the device keypair from keyring + config. Returns null if not available.
-   */
-  async getDeviceKeypair(
-    invoke: InvokeFn,
-  ): Promise<{ publicKey: string; privateKey: string } | null> {
-    const raw = await invoke<string>("read_config");
-    const config = JSON.parse(raw) as Record<string, unknown>;
-    const publicKey = config.device_public_key as string | undefined;
-    if (publicKey == null || publicKey === "") return null;
-
-    let privateKey: string | null = null;
-    try {
-      privateKey = await invoke<string | null>("keyring_get", { key: "device_private_key" });
-    } catch {
-      return null;
-    }
-    if (privateKey == null || privateKey === "") return null;
-
-    return { publicKey, privateKey };
+  getDeviceKeypair(invoke: InvokeFn): Promise<{ publicKey: string; privateKey: string } | null> {
+    return this.identity.getDeviceKeypair(invoke);
   }
 
-  /**
-   * Register this device with a sync relay. Creates the identity server-side
-   * if needed, then registers the device with its public key.
-   * Returns a signed auth token for sync requests.
-   */
-  async registerWithRelay(
+  registerWithRelay(
     invoke: InvokeFn,
     syncUrl: string,
     masterToken: string,
   ): Promise<string | null> {
-    const keypair = await this.getDeviceKeypair(invoke);
-    if (!keypair) return null;
-
-    const headers = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${masterToken}`,
-    };
-
-    // Check if identity exists server-side
-    const identityRes = await fetch(`${syncUrl}/identity/${this.motebitId}`, { headers });
-    if (identityRes.status === 404) {
-      // Create identity on server
-      await fetch(`${syncUrl}/identity`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ owner_id: this.motebitId }),
-      });
-    }
-
-    // Register device with public key
-    await fetch(`${syncUrl}/device/register`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        motebit_id: this.motebitId,
-        device_name: "Desktop",
-        public_key: keypair.publicKey,
-      }),
-    });
-
-    // Generate signed token for ongoing sync
-    return this.createSyncToken(keypair.privateKey);
+    return this.identity.registerWithRelay(invoke, syncUrl, masterToken);
   }
 
-  /**
-   * Create a signed token for sync authentication. Tokens expire after 5 minutes.
-   * @param aud — audience claim binding token to a specific endpoint (default: "sync")
-   */
-  async createSyncToken(privateKeyHex: string, aud: string = "sync"): Promise<string> {
-    const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
-    for (let i = 0; i < privateKeyHex.length; i += 2) {
-      privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
-    }
-
-    try {
-      return await createSignedToken(
-        {
-          mid: this.motebitId,
-          did: this.deviceId,
-          iat: Date.now(),
-          exp: Date.now() + 5 * 60 * 1000,
-          jti: crypto.randomUUID(),
-          aud,
-        },
-        privKeyBytes,
-      );
-    } finally {
-      secureErase(privKeyBytes);
-    }
+  createSyncToken(privateKeyHex: string, aud: string = "sync"): Promise<string> {
+    return this.identity.createSyncToken(privateKeyHex, aud);
   }
 
   // === Renderer lifecycle ===
@@ -1481,213 +1318,35 @@ export class DesktopApp {
     return this.runtime?.pendingApprovalInfo ?? null;
   }
 
-  // === Identity ===
+  // === Identity (info, file, rotation) ===
+  // Implementations live in `./identity-manager.ts`.
 
   getIdentityInfo(): { motebitId: string; deviceId: string; publicKey: string; did: string } {
-    let did = "";
-    try {
-      if (this.publicKey) did = hexPublicKeyToDidKey(this.publicKey);
-    } catch {
-      // Non-fatal
-    }
-    return {
-      motebitId: this.motebitId,
-      deviceId: this.deviceId,
-      publicKey: this.publicKey,
-      did,
-    };
+    return this.identity.getIdentityInfo();
   }
 
   /**
    * Generate a signed motebit.md identity file from live config.
    * Returns the file content string, or null if the keypair is unavailable.
    */
-  async exportIdentityFile(invoke: InvokeFn): Promise<string | null> {
-    const keypair = await this.getDeviceKeypair(invoke);
-    if (!keypair) return null;
+  exportIdentityFile(invoke: InvokeFn): Promise<string | null> {
+    return this.identity.exportIdentityFile(invoke);
+  }
 
-    // Read live config for governance/memory settings
-    const raw = await invoke<string>("read_config");
-    const configData = JSON.parse(raw) as Record<string, unknown>;
-
-    // Map approval_preset → identity-file governance fields
-    const RISK_NAMES = ["R0_READ", "R1_DRAFT", "R2_WRITE", "R3_EXECUTE", "R4_MONEY"];
-    const preset = configData.approval_preset as string | undefined;
-    const PRESET_GOV: Record<string, { require: number; deny: number }> = {
-      cautious: { require: 0, deny: 3 },
-      balanced: { require: 1, deny: 3 },
-      autonomous: { require: 3, deny: 4 },
-    };
-    const presetGov = PRESET_GOV[preset ?? "balanced"] ?? PRESET_GOV.balanced!;
-    const governance = {
-      trust_mode: (preset === "autonomous" ? "full" : "guarded") as "full" | "guarded" | "minimal",
-      max_risk_auto: RISK_NAMES[presetGov.require]!,
-      require_approval_above: RISK_NAMES[presetGov.require]!,
-      deny_above: RISK_NAMES[presetGov.deny]!,
-      operator_mode: false,
-    };
-
-    // Map memory_governance config → identity-file memory fields
-    const memGov = configData.memory_governance as
-      | { persistence_threshold?: number; reject_secrets?: boolean }
-      | undefined;
-    const memory = {
-      confidence_threshold: memGov?.persistence_threshold ?? 0.3,
-      half_life_days: 7,
-      per_turn_limit: 5,
-    };
-
-    // Build device list from current device
-    const devices = [
-      {
-        device_id: this.deviceId,
-        name: "Desktop",
-        public_key: this.publicKey,
-        registered_at: new Date().toISOString(),
-      },
-    ];
-
-    // Convert hex private key to Uint8Array
-    const privHex = keypair.privateKey;
-    const privKeyBytes = new Uint8Array(privHex.length / 2);
-    for (let i = 0; i < privHex.length; i += 2) {
-      privKeyBytes[i / 2] = parseInt(privHex.slice(i, i + 2), 16);
-    }
-
-    try {
-      return await generateIdentityFile(
-        {
-          motebitId: this.motebitId,
-          ownerId: this.motebitId,
-          publicKeyHex: this.publicKey,
-          governance,
-          memory,
-          devices,
-        },
-        privKeyBytes,
-      );
-    } finally {
-      secureErase(privKeyBytes);
-    }
+  /** Verify a motebit.md identity file's Ed25519 signature. */
+  verifyIdentityFile(content: string): Promise<{ valid: boolean; error?: string }> {
+    return this.identity.verifyIdentityFile(content);
   }
 
   /**
-   * Verify a motebit.md identity file's Ed25519 signature.
+   * Rotate the Ed25519 keypair with signed succession record. See
+   * `IdentityManager.rotateKey` for full semantics.
    */
-  async verifyIdentityFile(content: string): Promise<{ valid: boolean; error?: string }> {
-    const result = await verifyIdentity(content);
-    return { valid: result.valid, error: result.error };
-  }
-
-  /**
-   * Rotate the Ed25519 keypair: generate a new keypair, create a signed succession
-   * record (both old and new keys sign), update the identity file, store the new
-   * private key in keyring, and update the config with the new public key.
-   * Returns the old and new public key fingerprints and the rotation count.
-   */
-  async rotateKey(
+  rotateKey(
     invoke: InvokeFn,
     reason?: string,
   ): Promise<{ oldKeyFingerprint: string; newKeyFingerprint: string; rotationCount: number }> {
-    const oldKeypair = await this.getDeviceKeypair(invoke);
-    if (!oldKeypair) throw new Error("No device keypair available");
-
-    // Parse old keys from hex
-    const oldPrivKeyBytes = new Uint8Array(oldKeypair.privateKey.length / 2);
-    for (let i = 0; i < oldKeypair.privateKey.length; i += 2) {
-      oldPrivKeyBytes[i / 2] = parseInt(oldKeypair.privateKey.slice(i, i + 2), 16);
-    }
-    const oldPubKeyBytes = new Uint8Array(oldKeypair.publicKey.length / 2);
-    for (let i = 0; i < oldKeypair.publicKey.length; i += 2) {
-      oldPubKeyBytes[i / 2] = parseInt(oldKeypair.publicKey.slice(i, i + 2), 16);
-    }
-
-    try {
-      // Read config and identity file
-      const raw = await invoke<string>("read_config");
-      const configData = JSON.parse(raw) as Record<string, unknown>;
-      const existingIdentityFile = configData._identity_file as string | undefined;
-
-      // Generate new keypair, sign succession, rotate identity file
-      let newPubKeyHex: string;
-      let newPrivKeyHex: string;
-      if (existingIdentityFile != null && existingIdentityFile !== "") {
-        const rotateResult = await rotateIdentityKeys({
-          oldPrivateKey: oldPrivKeyBytes,
-          oldPublicKey: oldPubKeyBytes,
-          reason,
-        });
-        const rotatedContent = await rotateIdentityFile({
-          existingContent: existingIdentityFile,
-          newPublicKey: rotateResult.newPublicKey,
-          newPrivateKey: rotateResult.newPrivateKey,
-          successionRecord: rotateResult.successionRecord,
-        });
-        configData._identity_file = rotatedContent;
-        newPubKeyHex = rotateResult.newPublicKeyHex;
-        newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
-        secureErase(rotateResult.newPrivateKey);
-      } else {
-        // No identity file — generate raw keypair for device key rotation only
-        const { generateKeypair } = await import("@motebit/crypto");
-        const newKeypair = await generateKeypair();
-        newPubKeyHex = bytesToHex(newKeypair.publicKey);
-        newPrivKeyHex = bytesToHex(newKeypair.privateKey);
-        secureErase(newKeypair.privateKey);
-      }
-
-      // Store new private key in keyring
-      await invoke<void>("keyring_set", { key: "device_private_key", value: newPrivKeyHex });
-
-      // Update config with new public key
-      configData.device_public_key = newPubKeyHex;
-      await invoke<void>("write_config", { json: JSON.stringify(configData) });
-
-      // Update in-memory state
-      const oldKeyFingerprint = this.publicKey.slice(0, 16);
-      this.publicKey = newPubKeyHex;
-      const newKeyFingerprint = newPubKeyHex.slice(0, 16);
-
-      // Count rotations from identity file succession chain
-      let rotationCount = 1;
-      if (configData._identity_file != null && typeof configData._identity_file === "string") {
-        try {
-          const parsed = parseIdentityFile(configData._identity_file);
-          const chain = (parsed.frontmatter as unknown as Record<string, unknown>).succession;
-          if (Array.isArray(chain)) rotationCount = chain.length;
-        } catch {
-          // Non-fatal
-        }
-      }
-
-      // Update relay if configured
-      const syncUrl = configData.sync_url as string | undefined;
-      const masterToken = configData.sync_master_token as string | undefined;
-      if (syncUrl != null && syncUrl !== "") {
-        try {
-          const headers: Record<string, string> = {
-            "Content-Type": "application/json",
-          };
-          if (masterToken) headers["Authorization"] = `Bearer ${masterToken}`;
-
-          await fetch(`${syncUrl}/device/register`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-              motebit_id: this.motebitId,
-              device_name: "Desktop",
-              public_key: newPubKeyHex,
-            }),
-          });
-        } catch {
-          // Non-fatal — relay update is best-effort
-        }
-      }
-
-      return { oldKeyFingerprint, newKeyFingerprint, rotationCount };
-    } finally {
-      secureErase(oldPrivKeyBytes);
-    }
+    return this.identity.rotateKey(invoke, reason);
   }
 
   async exportAllData(): Promise<string> {
@@ -1767,113 +1426,48 @@ export class DesktopApp {
     return memoryCommands.getDecayedConfidence(node);
   }
 
-  // === Pairing: Device A (existing device) ===
+  // === Pairing ===
+  // Device A (existing device) initiates and approves. Device B (new
+  // device) claims and completes. Both halves live in the IdentityManager
+  // because they share keypair access, sync token creation, and — on
+  // Device B — write-back of motebitId/deviceId. One-line delegates here.
 
-  /**
-   * Initiate a pairing session. Returns a 6-char code to display to the user.
-   */
-  async initiatePairing(
+  initiatePairing(
     invoke: InvokeFn,
     syncUrl: string,
   ): Promise<{ pairingCode: string; pairingId: string }> {
-    const keypair = await this.getDeviceKeypair(invoke);
-    if (!keypair) throw new Error("No device keypair available");
-
-    const token = await this.createSyncToken(keypair.privateKey, "device:auth");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    const result = await client.initiate(token);
-    return { pairingCode: result.pairingCode, pairingId: result.pairingId };
+    return this.identity.initiatePairing(invoke, syncUrl);
   }
 
-  /**
-   * Get the current state of a pairing session (Device A polls for claim).
-   */
-  async getPairingSession(
-    invoke: InvokeFn,
-    syncUrl: string,
-    pairingId: string,
-  ): Promise<PairingSession> {
-    const keypair = await this.getDeviceKeypair(invoke);
-    if (!keypair) throw new Error("No device keypair available");
-
-    const token = await this.createSyncToken(keypair.privateKey, "device:auth");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    return client.getSession(pairingId, token);
+  getPairingSession(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<PairingSession> {
+    return this.identity.getPairingSession(invoke, syncUrl, pairingId);
   }
 
-  /**
-   * Approve a claimed pairing session, registering Device B.
-   */
-  async approvePairing(
+  approvePairing(
     invoke: InvokeFn,
     syncUrl: string,
     pairingId: string,
   ): Promise<{ deviceId: string }> {
-    const keypair = await this.getDeviceKeypair(invoke);
-    if (!keypair) throw new Error("No device keypair available");
-
-    const token = await this.createSyncToken(keypair.privateKey, "device:auth");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    const result = await client.approve(pairingId, token);
-    return { deviceId: result.deviceId };
+    return this.identity.approvePairing(invoke, syncUrl, pairingId);
   }
 
-  /**
-   * Deny a claimed pairing session.
-   */
-  async denyPairing(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<void> {
-    const keypair = await this.getDeviceKeypair(invoke);
-    if (!keypair) throw new Error("No device keypair available");
-
-    const token = await this.createSyncToken(keypair.privateKey, "device:auth");
-    const client = new PairingClient({ relayUrl: syncUrl });
-    await client.deny(pairingId, token);
+  denyPairing(invoke: InvokeFn, syncUrl: string, pairingId: string): Promise<void> {
+    return this.identity.denyPairing(invoke, syncUrl, pairingId);
   }
 
-  // === Pairing: Device B (new device) ===
-
-  /**
-   * Claim a pairing session using a code from Device A.
-   */
-  async claimPairing(
-    syncUrl: string,
-    code: string,
-  ): Promise<{ pairingId: string; motebitId: string }> {
-    if (!this.publicKey) throw new Error("No public key available — bootstrap first");
-
-    const client = new PairingClient({ relayUrl: syncUrl });
-    return client.claim(code.toUpperCase(), "Desktop", this.publicKey);
+  claimPairing(syncUrl: string, code: string): Promise<{ pairingId: string; motebitId: string }> {
+    return this.identity.claimPairing(syncUrl, code);
   }
 
-  /**
-   * Poll for pairing approval status (Device B).
-   */
-  async pollPairingStatus(syncUrl: string, pairingId: string): Promise<PairingStatus> {
-    const client = new PairingClient({ relayUrl: syncUrl });
-    return client.pollStatus(pairingId);
+  pollPairingStatus(syncUrl: string, pairingId: string): Promise<PairingStatus> {
+    return this.identity.pollPairingStatus(syncUrl, pairingId);
   }
 
-  /**
-   * Complete pairing by storing the received identity (Device B).
-   */
-  async completePairing(
+  completePairing(
     invoke: InvokeFn,
     result: { motebitId: string; deviceId: string },
   ): Promise<void> {
-    const raw = await invoke<string>("read_config");
-    const config = JSON.parse(raw) as Record<string, unknown>;
-
-    const updatedConfig = {
-      ...config,
-      motebit_id: result.motebitId,
-      device_id: result.deviceId,
-    };
-    await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
-
-    // Auth uses signed JWTs — no device_token storage needed
-
-    this.motebitId = result.motebitId;
-    this.deviceId = result.deviceId;
+    return this.identity.completePairing(invoke, result);
   }
 
   // === Goal Scheduling ===
