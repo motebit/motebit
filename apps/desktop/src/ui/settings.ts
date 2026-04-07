@@ -27,6 +27,42 @@ const settingsModelSelect = document.getElementById("settings-model-select") as 
 const settingsModelCustom = document.getElementById("settings-model-custom") as HTMLInputElement;
 const settingsApiKey = document.getElementById("settings-apikey") as HTMLInputElement;
 const settingsApiKeyToggle = document.getElementById("settings-apikey-toggle") as HTMLButtonElement;
+
+// === Three-mode provider refs ===
+// See feedback_sovereignty_orthogonal: the three modes (motebit-cloud / byok
+// / on-device) are equally-accessible top-level choices, never gated by
+// subscription tier. The flat `settings-provider` select still exists as a
+// hidden legacy ref so the save path's provider-derivation stays terse.
+const modeTabs = document.querySelectorAll<HTMLButtonElement>(
+  "#settings-mode-tabs .provider-mode-tab",
+);
+const modeSectionCloud = document.getElementById("mode-section-cloud") as HTMLDivElement;
+const modeSectionByok = document.getElementById("mode-section-byok") as HTMLDivElement;
+const modeSectionOnDevice = document.getElementById("mode-section-on-device") as HTMLDivElement;
+const settingsCloudModel = document.getElementById("settings-cloud-model") as HTMLSelectElement;
+const settingsByokVendor = document.getElementById("settings-byok-vendor") as HTMLSelectElement;
+const settingsByokModel = document.getElementById("settings-byok-model") as HTMLSelectElement;
+const settingsOnDeviceEndpoint = document.getElementById(
+  "settings-ondevice-endpoint",
+) as HTMLInputElement;
+const settingsOnDeviceModel = document.getElementById(
+  "settings-ondevice-model",
+) as HTMLSelectElement;
+const settingsOnDeviceModelCustom = document.getElementById(
+  "settings-ondevice-model-custom",
+) as HTMLInputElement;
+
+type ProviderMode = "motebit-cloud" | "byok" | "on-device";
+
+/** Map a flat `DesktopProvider` to its top-level UI mode. */
+function modeForProvider(p: DesktopAIConfig["provider"]): ProviderMode {
+  if (p === "proxy") return "motebit-cloud";
+  if (p === "anthropic" || p === "openai" || p === "google") return "byok";
+  return "on-device"; // ollama
+}
+
+let activeMode: ProviderMode = "motebit-cloud";
+let activeByokVendor: "anthropic" | "openai" | "google" = "anthropic";
 const settingsMaxTokens = document.getElementById(
   "settings-max-tokens",
 ) as HTMLSelectElement | null;
@@ -244,6 +280,145 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   settingsProvider.addEventListener("change", () => {
     populateModelSelect(settingsProvider.value);
   });
+
+  // === Three-mode provider wiring ===
+
+  /** Fill a <select> element with model options, optionally pre-selecting. */
+  function fillModelSelect(
+    select: HTMLSelectElement,
+    models: readonly string[],
+    currentModel?: string,
+  ): void {
+    select.innerHTML = "";
+    for (const model of models) {
+      const opt = document.createElement("option");
+      opt.value = model;
+      opt.textContent = model;
+      select.appendChild(opt);
+    }
+    if (currentModel != null && currentModel !== "") {
+      if (models.includes(currentModel)) {
+        select.value = currentModel;
+      } else {
+        // Unknown model — prepend it so the user sees what's currently selected.
+        const opt = document.createElement("option");
+        opt.value = currentModel;
+        opt.textContent = currentModel;
+        select.insertBefore(opt, select.firstChild);
+        select.value = currentModel;
+      }
+    }
+  }
+
+  function populateCloudModeModels(currentModel?: string): void {
+    fillModelSelect(settingsCloudModel, PROXY_MODELS, currentModel);
+  }
+
+  function populateByokModeModels(
+    vendor: "anthropic" | "openai" | "google",
+    currentModel?: string,
+  ): void {
+    const models: readonly string[] =
+      vendor === "openai" ? OPENAI_MODELS : vendor === "google" ? GOOGLE_MODELS : ANTHROPIC_MODELS;
+    fillModelSelect(settingsByokModel, models, currentModel);
+  }
+
+  function populateOnDeviceModeModels(currentModel?: string): void {
+    settingsOnDeviceModel.innerHTML = "";
+    for (const model of OLLAMA_MODELS) {
+      const opt = document.createElement("option");
+      opt.value = model;
+      opt.textContent = model;
+      settingsOnDeviceModel.appendChild(opt);
+    }
+    const customOpt = document.createElement("option");
+    customOpt.value = "__custom__";
+    customOpt.textContent = "Custom...";
+    settingsOnDeviceModel.appendChild(customOpt);
+    if (currentModel != null && currentModel !== "") {
+      if (OLLAMA_MODELS.includes(currentModel)) {
+        settingsOnDeviceModel.value = currentModel;
+        settingsOnDeviceModelCustom.style.display = "none";
+      } else {
+        settingsOnDeviceModel.value = "__custom__";
+        settingsOnDeviceModelCustom.value = currentModel;
+        settingsOnDeviceModelCustom.style.display = "block";
+      }
+    } else {
+      settingsOnDeviceModelCustom.style.display = "none";
+    }
+  }
+
+  /** Show exactly one mode section and highlight its tab. */
+  function switchProviderMode(mode: ProviderMode): void {
+    activeMode = mode;
+    modeTabs.forEach((tab) => {
+      tab.classList.toggle("active", tab.dataset.mode === mode);
+    });
+    modeSectionCloud.classList.toggle("active", mode === "motebit-cloud");
+    modeSectionByok.classList.toggle("active", mode === "byok");
+    modeSectionOnDevice.classList.toggle("active", mode === "on-device");
+  }
+
+  modeTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const mode = tab.dataset.mode as ProviderMode | undefined;
+      if (!mode) return;
+      switchProviderMode(mode);
+      // Populate the newly-active mode's model list lazily so the defaults
+      // are visible even when the user hasn't configured anything yet.
+      if (mode === "motebit-cloud" && settingsCloudModel.options.length === 0) {
+        populateCloudModeModels();
+      } else if (mode === "byok" && settingsByokModel.options.length === 0) {
+        populateByokModeModels(activeByokVendor);
+      } else if (mode === "on-device" && settingsOnDeviceModel.options.length === 0) {
+        populateOnDeviceModeModels();
+      }
+    });
+  });
+
+  settingsByokVendor.addEventListener("change", () => {
+    activeByokVendor = settingsByokVendor.value as "anthropic" | "openai" | "google";
+    populateByokModeModels(activeByokVendor);
+  });
+
+  settingsOnDeviceModel.addEventListener("change", () => {
+    settingsOnDeviceModelCustom.style.display =
+      settingsOnDeviceModel.value === "__custom__" ? "block" : "none";
+    if (settingsOnDeviceModel.value === "__custom__") {
+      settingsOnDeviceModelCustom.focus();
+    }
+  });
+
+  /**
+   * Derive the flat DesktopProvider from the current mode + sub-selection.
+   * This is called on save to hydrate the legacy `settingsProvider.value`
+   * that the existing save path reads.
+   */
+  function deriveFlatProvider(): DesktopAIConfig["provider"] {
+    switch (activeMode) {
+      case "motebit-cloud":
+        return "proxy";
+      case "byok":
+        return activeByokVendor;
+      case "on-device":
+        return "ollama";
+    }
+  }
+
+  /** Active model for the currently-visible mode section. */
+  function deriveActiveModel(): string {
+    switch (activeMode) {
+      case "motebit-cloud":
+        return settingsCloudModel.value;
+      case "byok":
+        return settingsByokModel.value;
+      case "on-device":
+        return settingsOnDeviceModel.value === "__custom__"
+          ? settingsOnDeviceModelCustom.value.trim()
+          : settingsOnDeviceModel.value;
+    }
+  }
 
   // === Model Indicator + Provider Status ===
 
@@ -1405,17 +1580,50 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     saveFocus();
 
     const config = ctx.getConfig();
+    const currentModel =
+      config != null
+        ? ((ctx.app.currentModel != null && ctx.app.currentModel !== ""
+            ? ctx.app.currentModel
+            : config.model) ?? "")
+        : "";
+
     if (config) {
       settingsProvider.value = config.provider;
       if (settingsMaxTokens) settingsMaxTokens.value = String(config.maxTokens ?? 4096);
-      const currentModel =
-        (ctx.app.currentModel != null && ctx.app.currentModel !== ""
-          ? ctx.app.currentModel
-          : config.model) ?? "";
       populateModelSelect(config.provider, currentModel);
     } else {
       populateModelSelect("ollama");
     }
+
+    // Derive three-mode state from the flat provider and populate each
+    // section's controls. All three sections are pre-populated so switching
+    // between modes is instant — BYOK is always accessible regardless of
+    // which mode is currently active.
+    const activeProvider: DesktopAIConfig["provider"] = config?.provider ?? "proxy";
+    const mode = modeForProvider(activeProvider);
+    activeMode = mode;
+
+    // Motebit Cloud section
+    populateCloudModeModels(mode === "motebit-cloud" ? currentModel : undefined);
+
+    // BYOK section — seed the vendor from the active provider if it's a byok vendor
+    if (
+      activeProvider === "anthropic" ||
+      activeProvider === "openai" ||
+      activeProvider === "google"
+    ) {
+      activeByokVendor = activeProvider;
+    }
+    settingsByokVendor.value = activeByokVendor;
+    populateByokModeModels(activeByokVendor, mode === "byok" ? currentModel : undefined);
+
+    // On-Device section — endpoint pulls from config.ollamaEndpoint with a
+    // sane placeholder default. Persisted via the Tauri write_config path.
+    settingsOnDeviceEndpoint.value = config?.ollamaEndpoint ?? "";
+    populateOnDeviceModeModels(mode === "on-device" ? currentModel : undefined);
+
+    switchProviderMode(mode);
+
     settingsApiKey.value = "";
     settingsApiKey.type = "password";
     settingsApiKeyToggle.textContent = "Show";
@@ -1466,8 +1674,15 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   // === Save Settings ===
 
   async function saveSettings(): Promise<void> {
-    const provider = settingsProvider.value as DesktopAIConfig["provider"];
-    const model = settingsModel.value.trim() || undefined;
+    // Hydrate the legacy hidden refs from the three-mode UI state so the
+    // existing save/dispatch path downstream sees a flat provider + model.
+    const derivedProvider = deriveFlatProvider();
+    const derivedModel = deriveActiveModel();
+    settingsProvider.value = derivedProvider;
+    settingsModel.value = derivedModel;
+
+    const provider = derivedProvider;
+    const model = derivedModel.trim() || undefined;
     const apiKey = settingsApiKey.value.trim() || undefined;
     const whisperApiKey = settingsWhisperApiKey.value.trim() || undefined;
     const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
@@ -1509,6 +1724,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         },
       };
       if (model != null && model !== "") configData.default_model = model;
+      // Persist user-supplied Ollama endpoint. Empty string means "use the
+      // runtime default" — don't write the key so we don't lock users into
+      // the current default URL.
+      const ollamaEndpointValue = settingsOnDeviceEndpoint.value.trim();
+      if (ollamaEndpointValue !== "") {
+        configData.ollama_endpoint = ollamaEndpointValue;
+      }
       await invoke("write_config", { json: JSON.stringify(configData) });
 
       if (apiKey != null && apiKey !== "") {
@@ -1571,10 +1793,17 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const maxTokens = settingsMaxTokens
       ? parseInt(settingsMaxTokens.value, 10) || undefined
       : undefined;
+    // Spread the previous config so fields that aren't explicitly edited
+    // (syncUrl, syncMasterToken, personalityConfig, memoryGovernance, …)
+    // survive the save. The old code only carried over `apiKey` and
+    // `invoke`, silently dropping everything else.
+    const ollamaEndpointValue = settingsOnDeviceEndpoint.value.trim();
     const newConfig: DesktopAIConfig = {
+      ...(currentConfig ?? { isTauri, provider }),
       provider,
       model,
       apiKey: apiKey != null && apiKey !== "" ? apiKey : currentConfig?.apiKey,
+      ollamaEndpoint: ollamaEndpointValue !== "" ? ollamaEndpointValue : undefined,
       isTauri,
       maxTokens,
       invoke: currentConfig?.invoke,

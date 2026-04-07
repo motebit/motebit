@@ -6,11 +6,11 @@ import { bold, dim, cyan, green, command } from "./colors.js";
 
 /**
  * CLI provider flag union. Flat shape mapped onto the three-mode architecture:
- *   motebit-cloud → "proxy" | "hybrid"
+ *   motebit-cloud → "proxy"
  *   byok          → "anthropic" | "openai" | "google"
  *   on-device     → "ollama" (local-server)
  */
-export type CliProvider = "anthropic" | "openai" | "google" | "ollama" | "hybrid" | "proxy";
+export type CliProvider = "anthropic" | "openai" | "google" | "ollama" | "proxy";
 
 export interface CliConfig {
   provider: CliProvider;
@@ -102,7 +102,6 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     "openai",
     "google",
     "ollama",
-    "hybrid",
     "proxy",
   ];
   if (!VALID_PROVIDERS.includes(provider as CliProvider)) {
@@ -305,10 +304,11 @@ Providers:
                           Default model: claude-sonnet-4-6
   openai                  Uses OpenAI API (requires OPENAI_API_KEY)
                           Default model: gpt-5.4-mini
+  google                  Uses Google API (requires GOOGLE_API_KEY)
+                          Default model: gemini-2.5-flash
   ollama                  Uses local Ollama server (no API key needed)
                           Default model: llama3.2
-  hybrid                  Anthropic with Ollama fallback (requires ANTHROPIC_API_KEY)
-                          Cloud-first, falls back to local on failure
+  proxy                   Motebit Cloud (subscription via the relay)
 
 Routing strategies (--routing-strategy):
   cost                    Cheapest agent first (cost-primary lexicographic)

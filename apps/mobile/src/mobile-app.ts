@@ -34,12 +34,14 @@ import type {
   ProxySessionAdapter,
 } from "@motebit/runtime";
 import type { GradientSnapshot } from "@motebit/runtime";
+import { CloudProvider, OllamaProvider, DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import {
-  CloudProvider,
-  OllamaProvider,
-  HybridProvider,
-  DEFAULT_OLLAMA_URL,
-} from "@motebit/ai-core";
+  resolveProviderSpec,
+  UnsupportedBackendError,
+  type ProviderSpec,
+  type ResolverEnv,
+  type UnifiedProviderConfig,
+} from "@motebit/sdk";
 import {
   createSignedToken,
   deriveSyncEncryptionKey,
@@ -74,15 +76,7 @@ export type { MemoryNode } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import { PlanEngine } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
-import {
-  PlanStatus,
-  DeviceCapability,
-  DEFAULT_ANTHROPIC_MODEL,
-  DEFAULT_OPENAI_MODEL,
-  DEFAULT_GOOGLE_MODEL,
-  DEFAULT_OLLAMA_MODEL,
-  DEFAULT_PROXY_MODEL,
-} from "@motebit/sdk";
+import { PlanStatus, DeviceCapability, DEFAULT_OLLAMA_MODEL } from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type {
@@ -176,17 +170,11 @@ export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
  *
  * The three-mode mental model maps onto this flat union as:
  *   on-device   → "on-device"                (with localBackend picker)
- *   motebit-cloud → "proxy" | "hybrid"
- *   byok        → "anthropic" | "openai" | "google" | "ollama" (LAN)
+ *   motebit-cloud → "proxy"
+ *   byok        → "anthropic" | "openai" | "google"
+ *   on-device   → "on-device" (apple-fm/mlx) or "ollama" (legacy local-server alias)
  */
-export type MobileProvider =
-  | "ollama"
-  | "anthropic"
-  | "openai"
-  | "google"
-  | "hybrid"
-  | "proxy"
-  | "on-device";
+export type MobileProvider = "ollama" | "anthropic" | "openai" | "google" | "proxy" | "on-device";
 
 /** On-device backend sub-selector. `"local-server"` is for users running their own LAN server. */
 export type MobileLocalBackend = "apple-fm" | "mlx" | "local-server";
@@ -263,7 +251,6 @@ export function mobileSettingsToUnifiedProvider(
 ): import("@motebit/sdk").UnifiedProviderConfig {
   switch (settings.provider) {
     case "proxy":
-    case "hybrid":
       return {
         mode: "motebit-cloud",
         model: settings.model,
@@ -323,6 +310,112 @@ function migrateLegacyMobileSettings(
   const obj = raw as { provider?: string };
   if (obj.provider === "local") {
     obj.provider = "on-device";
+  }
+}
+
+/**
+ * Map a mobile flat `MobileAIConfig` to the unified shape the SDK resolver
+ * speaks. Hybrid is excluded — it's a composite that doesn't reduce to a
+ * single ProviderSpec and is built directly in `initAI`.
+ *
+ * The mobile UI's "ollama" provider value is a historical alias for the
+ * on-device local-server backend. Both map to the same unified shape so the
+ * resolver dispatches them through `isOllamaNativeEndpoint`.
+ */
+function mobileConfigToUnified(config: MobileAIConfig): UnifiedProviderConfig {
+  switch (config.provider) {
+    case "ollama":
+      return {
+        mode: "on-device",
+        backend: "local-server",
+        model: config.model,
+        endpoint: config.ollamaEndpoint,
+        maxTokens: config.maxTokens,
+      };
+    case "anthropic":
+      return {
+        mode: "byok",
+        vendor: "anthropic",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "openai":
+      return {
+        mode: "byok",
+        vendor: "openai",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "google":
+      return {
+        mode: "byok",
+        vendor: "google",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "proxy":
+      return {
+        mode: "motebit-cloud",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "on-device":
+      return {
+        mode: "on-device",
+        backend: config.localBackend ?? "apple-fm",
+        model: config.model,
+        endpoint: config.localBackend === "local-server" ? config.ollamaEndpoint : undefined,
+        maxTokens: config.maxTokens,
+      };
+  }
+}
+
+/**
+ * Map a resolved `ProviderSpec` to a mobile-side concrete provider instance.
+ * This is async because the native on-device backends (Apple FM, MLX) require
+ * an async init step to bind to the underlying iOS/Apple Silicon runtimes.
+ */
+async function mobileSpecToProvider(
+  spec: ProviderSpec,
+  maxTokensFromConfig?: number,
+): Promise<
+  CloudProvider | OllamaProvider | import("./adapters/local-inference.js").LocalInferenceProvider
+> {
+  switch (spec.kind) {
+    case "cloud":
+      return new CloudProvider({
+        provider: spec.wireProtocol,
+        api_key: spec.apiKey,
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature,
+        extra_headers: spec.extraHeaders,
+      });
+    case "ollama":
+      return new OllamaProvider({
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature,
+      });
+    case "apple-fm":
+    case "mlx": {
+      const { LocalInferenceProvider } = await import("./adapters/local-inference.js");
+      const localProvider = new LocalInferenceProvider({
+        backend: spec.kind,
+        maxTokens: spec.maxTokens ?? maxTokensFromConfig,
+      });
+      await localProvider.init();
+      return localProvider;
+    }
+    case "webllm":
+      // Mobile's env doesn't list webllm in supportedBackends, so the
+      // resolver should never return this. Defensive throw.
+      throw new UnsupportedBackendError(spec.kind);
   }
 }
 
@@ -612,94 +705,44 @@ export class MobileApp {
   // === AI ===
 
   async initAI(config: MobileAIConfig): Promise<boolean> {
-    let provider;
-    if (config.provider === "ollama") {
-      const model = config.model ?? DEFAULT_OLLAMA_MODEL;
-      const base_url = config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL;
-      provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens });
-    } else if (config.provider === "openai") {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model ?? DEFAULT_OPENAI_MODEL;
-      provider = new CloudProvider({
-        provider: "openai",
-        api_key: config.apiKey,
-        model,
-        base_url: "https://api.openai.com/v1",
-        max_tokens: config.maxTokens,
-      });
-    } else if (config.provider === "proxy") {
-      const pc = this._proxyConfig;
-      const model = pc?.model ?? DEFAULT_PROXY_MODEL;
-      const proxyUrl =
-        pc?.baseUrl ??
-        (await AsyncStorage.getItem(ASYNC_STORAGE_KEYS.proxyUrl)) ??
-        "https://api.motebit.com";
-      const extraHeaders: Record<string, string> = {};
-      if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
-      provider = new CloudProvider({
-        provider: "anthropic",
-        api_key: "",
-        model,
-        base_url: proxyUrl,
-        max_tokens: config.maxTokens,
-        extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
-      });
-    } else if (config.provider === "hybrid") {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model ?? DEFAULT_ANTHROPIC_MODEL;
-      provider = new HybridProvider({
-        cloud: {
-          provider: "anthropic",
-          api_key: config.apiKey,
-          model,
-          base_url: "https://api.anthropic.com",
-          max_tokens: config.maxTokens,
-        },
-        ollama: {
-          model: DEFAULT_OLLAMA_MODEL,
-          base_url: config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL,
-          max_tokens: config.maxTokens,
-        },
-        fallback_to_local: true,
-      });
-    } else if (config.provider === "google") {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model ?? DEFAULT_GOOGLE_MODEL;
-      provider = new CloudProvider({
-        provider: "openai",
-        api_key: config.apiKey,
-        model,
-        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
-        max_tokens: config.maxTokens,
-      });
-    } else if (config.provider === "on-device") {
-      const backend = config.localBackend ?? "apple-fm";
-      if (backend === "local-server") {
-        // LAN / LM Studio / Ollama running on user's own server.
-        const base_url = config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL;
-        const model = config.model ?? DEFAULT_OLLAMA_MODEL;
-        provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens });
-      } else {
-        // apple-fm or mlx — native on-device inference.
-        const { LocalInferenceProvider } = await import("./adapters/local-inference.js");
-        const localProvider = new LocalInferenceProvider({
-          backend,
-          maxTokens: config.maxTokens,
-        });
-        await localProvider.init();
-        provider = localProvider;
-      }
-    } else {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model = config.model ?? DEFAULT_ANTHROPIC_MODEL;
-      provider = new CloudProvider({
-        provider: "anthropic",
-        api_key: config.apiKey,
-        model,
-        base_url: "https://api.anthropic.com",
-        max_tokens: config.maxTokens,
-      });
+    // BYOK validation: surfaces decide whether they have credentials before
+    // calling the resolver. The resolver assumes its inputs are well-formed.
+    const needsByokKey =
+      config.provider === "anthropic" ||
+      config.provider === "openai" ||
+      config.provider === "google";
+    if (needsByokKey && (config.apiKey == null || config.apiKey === "")) {
+      return false;
     }
+
+    // Resolve the relay base URL from session state, with AsyncStorage as
+    // a persisted fallback. Mobile's proxy config and proxy URL live on
+    // different paths, so we resolve here rather than inside the env.
+    const pc = this._proxyConfig;
+    const motebitCloudBaseUrl =
+      pc?.baseUrl ??
+      (await AsyncStorage.getItem(ASYNC_STORAGE_KEYS.proxyUrl)) ??
+      "https://api.motebit.com";
+    const motebitCloudHeaders =
+      pc?.proxyToken !== undefined ? { "x-proxy-token": pc.proxyToken } : undefined;
+    const motebitCloudDefaultModel = pc?.model;
+
+    // Mobile supports the full set of on-device backends — Apple Foundation
+    // Models on iOS 26+, MLX on Apple Silicon, and a LAN local-server.
+    // Native on-device backends require an async init step (model load,
+    // module bind), so the spec→provider mapper below is async.
+    const env: ResolverEnv = {
+      cloudBaseUrl: (_wireProtocol, canonical) => canonical,
+      defaultLocalServerUrl: DEFAULT_OLLAMA_URL,
+      supportedBackends: new Set(["apple-fm", "mlx", "local-server"]),
+      motebitCloudBaseUrl,
+      motebitCloudHeaders,
+      motebitCloudDefaultModel,
+    };
+
+    const unified = mobileConfigToUnified(config);
+    const spec = resolveProviderSpec(unified, env);
+    const provider = await mobileSpecToProvider(spec, config.maxTokens);
 
     const storage = this.storage ?? createExpoStorage("motebit.db");
 

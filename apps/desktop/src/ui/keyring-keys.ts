@@ -47,14 +47,11 @@ export const LEGACY_API_KEY_SLOT = "api_key";
 
 /**
  * Return the keyring slot name for the BYOK API key of a given provider,
- * or `null` if the provider doesn't use a BYOK key (ollama, proxy, hybrid).
- *
- * Hybrid uses Anthropic as its cloud side, so it reads/writes the anthropic slot.
+ * or `null` if the provider doesn't use a BYOK key (ollama, proxy).
  */
 export function byokKeyringKey(provider: DesktopProvider): string | null {
   switch (provider) {
     case "anthropic":
-    case "hybrid":
       return ANTHROPIC_API_KEY_SLOT;
     case "openai":
       return OPENAI_API_KEY_SLOT;

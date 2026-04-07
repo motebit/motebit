@@ -44,13 +44,6 @@ export interface CloudProviderConfig {
   extra_headers?: Record<string, string>;
 }
 
-export interface HybridProviderConfig {
-  cloud: CloudProviderConfig;
-  /** Ollama config for streaming-capable local fallback. */
-  ollama?: OllamaProviderConfig;
-  fallback_to_local: boolean;
-}
-
 // === Context Packing ===
 
 export function packContext(contextPack: ContextPack): string {
@@ -853,84 +846,6 @@ export class CloudProvider implements StreamingProvider {
       default:
         return this.config.base_url ?? "";
     }
-  }
-}
-
-// === Hybrid Provider ===
-
-export class HybridProvider implements StreamingProvider {
-  private cloud: CloudProvider;
-  private local: OllamaProvider | null;
-  private config: HybridProviderConfig;
-
-  constructor(config: HybridProviderConfig) {
-    this.config = config;
-    this.cloud = new CloudProvider(config.cloud);
-    this.local = config.ollama ? new OllamaProvider(config.ollama) : null;
-  }
-
-  get model(): string {
-    return this.cloud.model;
-  }
-
-  get temperature(): number | undefined {
-    return this.cloud.temperature;
-  }
-
-  get maxTokens(): number | undefined {
-    return this.cloud.maxTokens;
-  }
-
-  setModel(model: string): void {
-    this.cloud.setModel(model);
-  }
-
-  setTemperature(temperature: number): void {
-    this.cloud.setTemperature(temperature);
-  }
-
-  setMaxTokens(maxTokens: number): void {
-    this.cloud.setMaxTokens(maxTokens);
-  }
-
-  async generate(contextPack: ContextPack): Promise<AIResponse> {
-    try {
-      return await this.cloud.generate(contextPack);
-    } catch (err: unknown) {
-      if (this.config.fallback_to_local && this.local !== null) {
-        return this.local.generate(contextPack);
-      }
-      throw new Error("Cloud provider failed and no local fallback available", { cause: err });
-    }
-  }
-
-  async *generateStream(
-    contextPack: ContextPack,
-  ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
-    try {
-      yield* this.cloud.generateStream(contextPack);
-    } catch (err: unknown) {
-      if (this.config.fallback_to_local && this.local !== null) {
-        yield* this.local.generateStream(contextPack);
-      } else {
-        throw new Error("Cloud provider failed and no local fallback available", { cause: err });
-      }
-    }
-  }
-
-  async estimateConfidence(): Promise<number> {
-    try {
-      return await this.cloud.estimateConfidence();
-    } catch {
-      if (this.local !== null) {
-        return this.local.estimateConfidence();
-      }
-      return 0;
-    }
-  }
-
-  extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
-    return this.cloud.extractMemoryCandidates(response);
   }
 }
 

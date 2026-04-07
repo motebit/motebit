@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { MotebitRuntime, NullRenderer, PLANNING_TASK_ROUTER } from "@motebit/runtime";
 import { embedText } from "@motebit/memory-graph";
 import type { StorageAdapters } from "@motebit/runtime";
-import { CloudProvider, OllamaProvider, HybridProvider } from "@motebit/ai-core";
+import { CloudProvider, OllamaProvider } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { openMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import {
@@ -21,8 +21,11 @@ import type {
   SyncPlan,
   SyncPlanStep,
   PlanStep,
+  UnifiedProviderConfig,
+  ProviderSpec,
+  ResolverEnv,
 } from "@motebit/sdk";
-import { EventType } from "@motebit/sdk";
+import { EventType, resolveProviderSpec, UnsupportedBackendError } from "@motebit/sdk";
 import {
   InMemoryToolRegistry,
   readFileDefinition,
@@ -111,90 +114,114 @@ export function getDbPath(override?: string): string {
   return path.join(CONFIG_DIR, "motebit.db");
 }
 
+/**
+ * CLI's `ResolverEnv`. Node-side direct calls to vendor APIs (no CORS proxy
+ * needed). Only `local-server` is supported as an on-device backend — CLI
+ * doesn't ship native bindings for Apple FM, MLX, or WebGPU.
+ */
+const CLI_RESOLVER_ENV: ResolverEnv = {
+  cloudBaseUrl: (_wireProtocol, canonical) => canonical,
+  defaultLocalServerUrl: "http://127.0.0.1:11434",
+  supportedBackends: new Set(["local-server"]),
+  motebitCloudBaseUrl: process.env.MOTEBIT_PROXY_URL ?? "https://api.motebit.com",
+};
+
+/**
+ * Convert the CLI's flat `--provider` flag value to the unified shape the
+ * resolver speaks.
+ *
+ * API keys come from environment variables via `getApiKey()` — that's the
+ * CLI's I/O boundary for credentials, distinct from mobile/desktop's keyring.
+ */
+function cliConfigToUnified(config: CliConfig): UnifiedProviderConfig {
+  switch (config.provider) {
+    case "ollama":
+      return {
+        mode: "on-device",
+        backend: "local-server",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "anthropic":
+      return {
+        mode: "byok",
+        vendor: "anthropic",
+        apiKey: getApiKey("anthropic"),
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "openai":
+      return {
+        mode: "byok",
+        vendor: "openai",
+        apiKey: getApiKey("openai"),
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "google":
+      return {
+        mode: "byok",
+        vendor: "google",
+        apiKey: getApiKey("google"),
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "proxy":
+      return {
+        mode: "motebit-cloud",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+  }
+}
+
+/**
+ * Map a resolved `ProviderSpec` to a CLI-side concrete provider instance.
+ * `personalityConfig` and `temperature` are CLI-specific concerns the
+ * resolver doesn't know about — they're threaded through the constructor here.
+ */
+function specToCliProvider(
+  spec: ProviderSpec,
+  personalityConfig: MotebitPersonalityConfig | undefined,
+  temperature: number,
+): StreamingProvider {
+  switch (spec.kind) {
+    case "cloud":
+      return new CloudProvider({
+        provider: spec.wireProtocol,
+        api_key: spec.apiKey,
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature ?? temperature,
+        extra_headers: spec.extraHeaders,
+        personalityConfig,
+      });
+    case "ollama":
+      return new OllamaProvider({
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature ?? temperature,
+        personalityConfig,
+      });
+    case "webllm":
+    case "apple-fm":
+    case "mlx":
+      // The resolver gates these via supportedBackends; reaching them here
+      // means the env was misconfigured.
+      throw new UnsupportedBackendError(spec.kind);
+  }
+}
+
 export function createProvider(
   config: CliConfig,
   personalityConfig?: MotebitPersonalityConfig,
 ): StreamingProvider {
   const temperature = personalityConfig?.temperature ?? 0.7;
-
-  if (config.provider === "ollama") {
-    return new OllamaProvider({
-      model: config.model,
-      max_tokens: config.maxTokens,
-      temperature,
-      personalityConfig,
-    });
-  }
-
-  if (config.provider === "openai") {
-    const apiKey = getApiKey("openai");
-    return new CloudProvider({
-      provider: "openai",
-      api_key: apiKey,
-      model: config.model,
-      max_tokens: config.maxTokens,
-      temperature,
-      personalityConfig,
-    });
-  }
-
-  if (config.provider === "google") {
-    const apiKey = getApiKey("google");
-    // Google exposes an OpenAI-compatible endpoint.
-    return new CloudProvider({
-      provider: "openai",
-      api_key: apiKey,
-      model: config.model,
-      base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
-      max_tokens: config.maxTokens,
-      temperature,
-      personalityConfig,
-    });
-  }
-
-  if (config.provider === "proxy") {
-    // Motebit Cloud — anonymous proxy; the relay attaches the real key server-side.
-    return new CloudProvider({
-      provider: "anthropic",
-      api_key: "",
-      model: config.model,
-      base_url: process.env.MOTEBIT_PROXY_URL ?? "https://api.motebit.com",
-      max_tokens: config.maxTokens,
-      temperature,
-      personalityConfig,
-    });
-  }
-
-  if (config.provider === "hybrid") {
-    const apiKey = getApiKey("anthropic");
-    return new HybridProvider({
-      cloud: {
-        provider: "anthropic",
-        api_key: apiKey,
-        model: config.model,
-        max_tokens: config.maxTokens,
-        temperature,
-        personalityConfig,
-      },
-      ollama: {
-        model: "llama3.2",
-        max_tokens: config.maxTokens,
-        temperature,
-        personalityConfig,
-      },
-      fallback_to_local: true,
-    });
-  }
-
-  const apiKey = getApiKey("anthropic");
-  return new CloudProvider({
-    provider: "anthropic",
-    api_key: apiKey,
-    model: config.model,
-    max_tokens: config.maxTokens,
-    temperature,
-    personalityConfig,
-  });
+  const unified = cliConfigToUnified(config);
+  const spec = resolveProviderSpec(unified, CLI_RESOLVER_ENV);
+  return specToCliProvider(spec, personalityConfig, temperature);
 }
 
 export function buildToolRegistry(

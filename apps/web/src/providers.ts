@@ -10,6 +10,12 @@ import {
   stripTags,
 } from "@motebit/ai-core/browser";
 import type { AIResponse, ContextPack, IntelligenceProvider, MemoryCandidate } from "@motebit/sdk";
+import {
+  resolveProviderSpec,
+  UnsupportedBackendError,
+  type ProviderSpec,
+  type ResolverEnv,
+} from "@motebit/sdk";
 import type { ProviderConfig } from "./storage";
 
 export { CloudProvider, OllamaProvider, DEFAULT_OLLAMA_URL };
@@ -253,100 +259,85 @@ export class WebLLMProvider implements StreamingProvider {
 
 // === Factory ===
 
-import { DEFAULT_PROXY_MODEL, DEFAULT_OLLAMA_MODEL } from "@motebit/sdk";
-
-/**
- * Dispatch a `UnifiedProviderConfig` to the correct concrete provider.
- * Web supports three on-device backends today (webllm, local-server, and
- * local-server-over-Ollama). Apple FM / MLX are mobile-only.
- */
-export function createProvider(config: ProviderConfig): StreamingProvider | IntelligenceProvider {
-  switch (config.mode) {
-    case "motebit-cloud": {
-      // The product: proxied cloud inference behind a signed token.
-      const extraHeaders: Record<string, string> = {};
-      if (config.proxyToken) {
-        extraHeaders["x-proxy-token"] = config.proxyToken;
-      }
-      const proxyConfig: CloudProviderConfig = {
-        provider: "anthropic",
-        api_key: "", // proxy supplies the key server-side
-        model: config.model ?? DEFAULT_PROXY_MODEL,
-        base_url: config.baseUrl ?? PROXY_BASE_URL,
-        max_tokens: config.maxTokens,
-        temperature: config.temperature,
-        extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
-      };
-      return new CloudProvider(proxyConfig);
-    }
-    case "byok": {
-      if (config.vendor === "anthropic") {
-        // Browser can't call api.anthropic.com directly — route through CORS proxy.
-        const anthropicConfig: CloudProviderConfig = {
-          provider: "anthropic",
-          api_key: config.apiKey,
-          model: config.model ?? "claude-sonnet-4-6",
-          base_url: config.baseUrl ?? PROXY_BASE_URL,
-          max_tokens: config.maxTokens,
-          temperature: config.temperature,
-        };
-        return new CloudProvider(anthropicConfig);
-      }
-      // openai and google (google uses OpenAI-compatible endpoint via baseUrl).
-      const cloudConfig: CloudProviderConfig = {
-        provider: "openai",
-        api_key: config.apiKey,
-        model: config.model ?? "gpt-5.4-mini",
-        base_url: config.baseUrl,
-        max_tokens: config.maxTokens,
-        temperature: config.temperature,
-      };
-      return new CloudProvider(cloudConfig);
-    }
-    case "on-device": {
-      switch (config.backend) {
-        case "webllm":
-          return new WebLLMProvider(config.model ?? "Llama-3.1-8B-Instruct-q4f16_1-MLC", {
-            temperature: config.temperature,
-            maxTokens: config.maxTokens,
-          });
-        case "local-server": {
-          // Vendor-agnostic: a local OpenAI-compatible server, or Ollama's
-          // native API. Ollama's /api/chat endpoint is only used by
-          // OllamaProvider; any endpoint that doesn't look like Ollama gets
-          // routed through the OpenAI-compat provider.
-          const endpoint = config.endpoint ?? DEFAULT_OLLAMA_URL;
-          const looksLikeOllama = /:11434(\b|\/)/.test(endpoint);
-          if (looksLikeOllama) {
-            const ollamaConfig: OllamaProviderConfig = {
-              model: config.model ?? DEFAULT_OLLAMA_MODEL,
-              base_url: endpoint,
-              max_tokens: config.maxTokens,
-              temperature: config.temperature,
-            };
-            return new OllamaProvider(ollamaConfig);
-          }
-          const cloudConfig: CloudProviderConfig = {
-            provider: "openai",
-            api_key: "local",
-            model: config.model ?? "local",
-            base_url: endpoint,
-            max_tokens: config.maxTokens,
-            temperature: config.temperature,
-          };
-          return new CloudProvider(cloudConfig);
-        }
-        case "apple-fm":
-        case "mlx":
-          throw new Error(
-            `On-device backend "${config.backend}" is not available on the web surface`,
-          );
-      }
-    }
-  }
-}
-
 /** LLM proxy / embed / fetch base URL. Override at build time via VITE_PROXY_URL. */
 export const PROXY_BASE_URL: string =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
     ?.VITE_PROXY_URL ?? "https://api.motebit.com";
+
+/**
+ * Web's ResolverEnv. The browser can't call vendor APIs directly because of
+ * CORS — anthropic in particular blocks direct browser calls and must be
+ * proxied through `PROXY_BASE_URL` (which is also the motebit-cloud relay).
+ *
+ * Web supports two on-device backends: `webllm` (in-browser via WebGPU) and
+ * `local-server` (a LAN inference server the user runs themselves). Apple FM
+ * and MLX are mobile-only.
+ */
+const WEB_RESOLVER_ENV: ResolverEnv = {
+  cloudBaseUrl: (wireProtocol, canonical) => {
+    // The browser can't reach api.anthropic.com directly without CORS support;
+    // route anthropic through the motebit proxy. OpenAI's CORS policy allows
+    // direct browser calls, so we leave the canonical URL alone.
+    if (wireProtocol === "anthropic") return PROXY_BASE_URL;
+    return canonical;
+  },
+  defaultLocalServerUrl: DEFAULT_OLLAMA_URL,
+  supportedBackends: new Set(["webllm", "local-server"]),
+  motebitCloudBaseUrl: PROXY_BASE_URL,
+};
+
+/**
+ * Construct a concrete `@motebit/ai-core` provider from a normalized
+ * `ProviderSpec`. The decision logic (which kind, which baseUrl, which
+ * default model) lives in `resolveProviderSpec`; this function is just the
+ * transport switch — given a spec, return an instance.
+ *
+ * Per-surface code stays small: each surface only needs to know about its
+ * own physically-available transports. Web supports cloud, ollama, and
+ * webllm; apple-fm and mlx throw at this layer because the resolver was
+ * told (via `supportedBackends`) not to produce them.
+ */
+function specToProvider(spec: ProviderSpec): StreamingProvider | IntelligenceProvider {
+  switch (spec.kind) {
+    case "cloud": {
+      const cloudConfig: CloudProviderConfig = {
+        provider: spec.wireProtocol,
+        api_key: spec.apiKey,
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature,
+        extra_headers: spec.extraHeaders,
+      };
+      return new CloudProvider(cloudConfig);
+    }
+    case "ollama": {
+      const ollamaConfig: OllamaProviderConfig = {
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature,
+      };
+      return new OllamaProvider(ollamaConfig);
+    }
+    case "webllm":
+      return new WebLLMProvider(spec.model, {
+        temperature: spec.temperature,
+        maxTokens: spec.maxTokens,
+      });
+    case "apple-fm":
+    case "mlx":
+      // The resolver is supposed to gate these via supportedBackends — if we
+      // see one here, the env is misconfigured.
+      throw new UnsupportedBackendError(spec.kind);
+  }
+}
+
+/**
+ * Public entry point. Resolves the user's `UnifiedProviderConfig` against
+ * the web env, then instantiates the matching provider class.
+ */
+export function createProvider(config: ProviderConfig): StreamingProvider | IntelligenceProvider {
+  const spec = resolveProviderSpec(config, WEB_RESOLVER_ENV);
+  return specToProvider(spec);
+}

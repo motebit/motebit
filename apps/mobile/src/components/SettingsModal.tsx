@@ -232,7 +232,7 @@ export function SettingsModal({
 
   const handleSave = useCallback(async () => {
     // Store API keys securely (not in AsyncStorage)
-    if ((draft.provider === "anthropic" || draft.provider === "hybrid") && apiKey) {
+    if (draft.provider === "anthropic" && apiKey) {
       await SecureStore.setItemAsync(SECURE_STORE_KEYS.anthropicApiKey, apiKey);
     }
     if (draft.provider === "openai" && apiKey) {
@@ -274,7 +274,7 @@ export function SettingsModal({
         localBackend: draft.localBackend,
         model: draft.model,
         apiKey:
-          draft.provider === "anthropic" || draft.provider === "hybrid"
+          draft.provider === "anthropic"
             ? apiKey
             : draft.provider === "openai"
               ? apiKey
@@ -283,7 +283,6 @@ export function SettingsModal({
                 : undefined,
         ollamaEndpoint:
           draft.provider === "ollama" ||
-          draft.provider === "hybrid" ||
           (draft.provider === "on-device" && draft.localBackend === "local-server")
             ? draft.ollamaEndpoint
             : undefined,
@@ -925,7 +924,7 @@ function OnDeviceSection({
 
 // === Intelligence Tab ===
 
-type ProviderType = "ollama" | "anthropic" | "openai" | "google" | "hybrid" | "proxy" | "on-device";
+type ProviderType = "ollama" | "anthropic" | "openai" | "google" | "proxy" | "on-device";
 
 function IntelligenceTab({
   provider,
@@ -980,98 +979,84 @@ function IntelligenceTab({
 }) {
   const colors = useTheme();
   const styles = useMemo(() => createSettingsStyles(colors), [colors]);
+
+  // Derive the top-level mode from the flat provider. The three modes are
+  // orthogonal to subscription tier — BYOK is always accessible, even to
+  // Motebit Cloud subscribers who want to use a model we don't offer.
+  // See feedback_sovereignty_orthogonal.
+  const uiMode: "motebit-cloud" | "byok" | "on-device" =
+    provider === "proxy"
+      ? "motebit-cloud"
+      : provider === "anthropic" || provider === "openai" || provider === "google"
+        ? "byok"
+        : "on-device"; // "ollama" and "on-device" both land here
+
+  // The active BYOK vendor mirrors the flat provider when in byok mode.
+  const activeByokVendor: "anthropic" | "openai" | "google" =
+    provider === "openai" || provider === "google" || provider === "anthropic"
+      ? provider
+      : "anthropic";
+
+  function selectMode(mode: "motebit-cloud" | "byok" | "on-device"): void {
+    if (mode === "motebit-cloud") {
+      if (provider !== "proxy") {
+        onChangeProvider("proxy");
+      }
+    } else if (mode === "byok") {
+      // Keep the current vendor if they're already in byok; otherwise default
+      // to anthropic so the key input has a concrete target.
+      if (provider !== "anthropic" && provider !== "openai" && provider !== "google") {
+        onChangeProvider("anthropic");
+      }
+    } else {
+      // on-device — snap to the canonical shape regardless of old "ollama"
+      // historical value.
+      onChangeProvider("on-device");
+    }
+  }
+
   return (
     <View>
       <Text style={styles.sectionTitle}>Provider</Text>
+      {/* Three top-level modes, equal visual weight. BYOK is never hidden. */}
       <View style={styles.radioGroup}>
         <TouchableOpacity
-          style={[styles.radioItem, provider === "ollama" && styles.radioActive]}
-          onPress={() => onChangeProvider("ollama")}
+          style={[styles.radioItem, uiMode === "motebit-cloud" && styles.radioActive]}
+          onPress={() => selectMode("motebit-cloud")}
           activeOpacity={0.7}
         >
-          <Text style={[styles.radioText, provider === "ollama" && styles.radioTextActive]}>
-            Ollama (Local)
+          <Text style={[styles.radioText, uiMode === "motebit-cloud" && styles.radioTextActive]}>
+            Motebit Cloud
+          </Text>
+          <Text style={styles.radioDesc}>
+            The product — subscription-backed inference, no API key required.
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.radioItem, provider === "anthropic" && styles.radioActive]}
-          onPress={() => onChangeProvider("anthropic")}
+          style={[styles.radioItem, uiMode === "byok" && styles.radioActive]}
+          onPress={() => selectMode("byok")}
           activeOpacity={0.7}
         >
-          <Text style={[styles.radioText, provider === "anthropic" && styles.radioTextActive]}>
-            Anthropic (Cloud)
+          <Text style={[styles.radioText, uiMode === "byok" && styles.radioTextActive]}>
+            API Key
           </Text>
+          <Text style={styles.radioDesc}>Bring your own key for Anthropic, OpenAI, or Google.</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.radioItem, provider === "openai" && styles.radioActive]}
-          onPress={() => onChangeProvider("openai")}
+          style={[styles.radioItem, uiMode === "on-device" && styles.radioActive]}
+          onPress={() => selectMode("on-device")}
           activeOpacity={0.7}
         >
-          <Text style={[styles.radioText, provider === "openai" && styles.radioTextActive]}>
-            OpenAI (Cloud)
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.radioItem, provider === "google" && styles.radioActive]}
-          onPress={() => onChangeProvider("google")}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.radioText, provider === "google" && styles.radioTextActive]}>
-            Google (Cloud)
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.radioItem, provider === "hybrid" && styles.radioActive]}
-          onPress={() => onChangeProvider("hybrid")}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.radioText, provider === "hybrid" && styles.radioTextActive]}>
-            Hybrid (Cloud + Ollama fallback)
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.radioItem, provider === "proxy" && styles.radioActive]}
-          onPress={() => onChangeProvider("proxy")}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.radioText, provider === "proxy" && styles.radioTextActive]}>
-            Motebit (free)
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.radioItem, provider === "on-device" && styles.radioActive]}
-          onPress={() => onChangeProvider("on-device")}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.radioText, provider === "on-device" && styles.radioTextActive]}>
+          <Text style={[styles.radioText, uiMode === "on-device" && styles.radioTextActive]}>
             On-Device
           </Text>
+          <Text style={styles.radioDesc}>Runs entirely on your phone or a server on your LAN.</Text>
         </TouchableOpacity>
       </View>
 
-      {provider === "on-device" && (
-        <OnDeviceSection localBackend={localBackend} onChangeBackend={onChangeLocalBackend} />
-      )}
-
-      {/* local-server backend under On-Device also needs the endpoint field */}
-      {provider === "on-device" && localBackend === "local-server" && (
-        <>
-          <Text style={styles.sectionTitle}>Server Endpoint</Text>
-          <TextInput
-            style={styles.textField}
-            value={ollamaEndpoint}
-            onChangeText={onChangeOllamaEndpoint}
-            placeholder="http://localhost:11434"
-            placeholderTextColor={colors.inputPlaceholder}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-          />
-        </>
-      )}
-
-      {provider !== "on-device" && (
-        <>
+      {/* === Motebit Cloud mode === */}
+      {uiMode === "motebit-cloud" && (
+        <View style={{ marginTop: 12 }}>
           <Text style={styles.sectionTitle}>Model</Text>
           <TextInput
             style={styles.textField}
@@ -1080,71 +1065,137 @@ function IntelligenceTab({
             placeholder="Model name"
             placeholderTextColor={colors.inputPlaceholder}
           />
-        </>
+        </View>
       )}
 
-      {(provider === "ollama" || provider === "hybrid") && (
-        <>
-          <Text style={styles.sectionTitle}>Ollama Endpoint</Text>
+      {/* === BYOK mode === */}
+      {uiMode === "byok" && (
+        <View style={{ marginTop: 12 }}>
+          <Text style={styles.sectionTitle}>Vendor</Text>
+          <View style={styles.radioGroup}>
+            <TouchableOpacity
+              style={[styles.radioItem, activeByokVendor === "anthropic" && styles.radioActive]}
+              onPress={() => onChangeProvider("anthropic")}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.radioText,
+                  activeByokVendor === "anthropic" && styles.radioTextActive,
+                ]}
+              >
+                Anthropic
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.radioItem, activeByokVendor === "openai" && styles.radioActive]}
+              onPress={() => onChangeProvider("openai")}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[styles.radioText, activeByokVendor === "openai" && styles.radioTextActive]}
+              >
+                OpenAI
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.radioItem, activeByokVendor === "google" && styles.radioActive]}
+              onPress={() => onChangeProvider("google")}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[styles.radioText, activeByokVendor === "google" && styles.radioTextActive]}
+              >
+                Google
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.sectionTitle}>Model</Text>
           <TextInput
             style={styles.textField}
-            value={ollamaEndpoint}
-            onChangeText={onChangeOllamaEndpoint}
-            placeholder="http://localhost:11434"
+            value={model}
+            onChangeText={onChangeModel}
+            placeholder="Model name"
             placeholderTextColor={colors.inputPlaceholder}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
           />
-        </>
+
+          {activeByokVendor === "anthropic" && (
+            <>
+              <Text style={styles.sectionTitle}>Anthropic API Key</Text>
+              <TextInput
+                style={styles.textField}
+                value={apiKey}
+                onChangeText={onChangeApiKey}
+                placeholder="sk-ant-..."
+                placeholderTextColor={colors.inputPlaceholder}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </>
+          )}
+          {activeByokVendor === "openai" && (
+            <>
+              <Text style={styles.sectionTitle}>OpenAI API Key</Text>
+              <TextInput
+                style={styles.textField}
+                value={apiKey}
+                onChangeText={onChangeApiKey}
+                placeholder="sk-..."
+                placeholderTextColor={colors.inputPlaceholder}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </>
+          )}
+          {activeByokVendor === "google" && (
+            <>
+              <Text style={styles.sectionTitle}>Google API Key</Text>
+              <TextInput
+                style={styles.textField}
+                value={googleKey}
+                onChangeText={onChangeGoogleKey}
+                placeholder="AIza..."
+                placeholderTextColor={colors.inputPlaceholder}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </>
+          )}
+        </View>
       )}
 
-      {(provider === "anthropic" || provider === "hybrid") && (
-        <>
-          <Text style={styles.sectionTitle}>Anthropic API Key</Text>
-          <TextInput
-            style={styles.textField}
-            value={apiKey}
-            onChangeText={onChangeApiKey}
-            placeholder="sk-ant-..."
-            placeholderTextColor={colors.inputPlaceholder}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-        </>
-      )}
-
-      {provider === "openai" && (
-        <>
-          <Text style={styles.sectionTitle}>OpenAI API Key</Text>
-          <TextInput
-            style={styles.textField}
-            value={apiKey}
-            onChangeText={onChangeApiKey}
-            placeholder="sk-..."
-            placeholderTextColor={colors.inputPlaceholder}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-        </>
-      )}
-
-      {provider === "google" && (
-        <>
-          <Text style={styles.sectionTitle}>Google API Key</Text>
-          <TextInput
-            style={styles.textField}
-            value={googleKey}
-            onChangeText={onChangeGoogleKey}
-            placeholder="AIza..."
-            placeholderTextColor={colors.inputPlaceholder}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-        </>
+      {/* === On-Device mode === */}
+      {uiMode === "on-device" && (
+        <View style={{ marginTop: 12 }}>
+          <OnDeviceSection localBackend={localBackend} onChangeBackend={onChangeLocalBackend} />
+          {localBackend === "local-server" && (
+            <>
+              <Text style={styles.sectionTitle}>Server Endpoint</Text>
+              <TextInput
+                style={styles.textField}
+                value={ollamaEndpoint}
+                onChangeText={onChangeOllamaEndpoint}
+                placeholder="http://localhost:11434"
+                placeholderTextColor={colors.inputPlaceholder}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+              />
+              <Text style={styles.sectionTitle}>Model</Text>
+              <TextInput
+                style={styles.textField}
+                value={model}
+                onChangeText={onChangeModel}
+                placeholder="Model name"
+                placeholderTextColor={colors.inputPlaceholder}
+              />
+            </>
+          )}
+        </View>
       )}
 
       {/* Response length removed: the creature reads the room. */}

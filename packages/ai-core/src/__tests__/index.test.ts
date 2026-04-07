@@ -1,12 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  packContext,
-  CloudProvider,
-  HybridProvider,
-  stripPartialActionTag,
-  getImpulsesForAction,
-} from "../index";
-import type { CloudProviderConfig, HybridProviderConfig } from "../index";
+import { packContext, CloudProvider, stripPartialActionTag, getImpulsesForAction } from "../index";
+import type { CloudProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel, EventType, MemoryType } from "@motebit/sdk";
 import type {
   AIResponse,
@@ -98,11 +92,6 @@ function mockFetchSuccess(text: string): void {
 function mockFetchError(status: number, body: string): void {
   const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
   mockFn.mockResolvedValueOnce(new Response(body, { status }));
-}
-
-function mockFetchReject(error: Error): void {
-  const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-  mockFn.mockRejectedValueOnce(error);
 }
 
 function getFetchMock(): ReturnType<typeof vi.fn> {
@@ -328,117 +317,6 @@ describe("CloudProvider", () => {
     });
     expect(candidates).toHaveLength(1);
     expect(candidates[0]!.content).toBe("User birthday is Jan 1");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// HybridProvider
-// ---------------------------------------------------------------------------
-
-describe("HybridProvider", () => {
-  const originalFetch = globalThis.fetch;
-
-  beforeEach(() => {
-    globalThis.fetch = vi.fn();
-  });
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  it("uses cloud provider by default", async () => {
-    mockFetchSuccess("Cloud response");
-
-    const config: HybridProviderConfig = {
-      cloud: {
-        provider: "anthropic",
-        api_key: "test-key",
-        model: "claude-sonnet-4-5-20250929",
-      },
-      fallback_to_local: false,
-    };
-    const provider = new HybridProvider(config);
-    const response: AIResponse = await provider.generate(makeContextPack());
-    expect(response.text).toBe("Cloud response");
-  });
-
-  it("falls back to ollama on cloud failure when configured", async () => {
-    // First call (cloud) fails, second call (Ollama) succeeds
-    const fetchMock = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Network error"))
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ message: { content: "Ollama fallback response" } }),
-      } as unknown as Response);
-    globalThis.fetch = fetchMock;
-
-    const config: HybridProviderConfig = {
-      cloud: {
-        provider: "anthropic",
-        api_key: "test-key",
-        model: "claude-sonnet-4-5-20250929",
-      },
-      ollama: {
-        model: "llama3.2",
-        base_url: "http://localhost:11434",
-      },
-      fallback_to_local: true,
-    };
-    const provider = new HybridProvider(config);
-    const response: AIResponse = await provider.generate(makeContextPack());
-    expect(response.text).toBe("Ollama fallback response");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("throws when cloud fails and no local fallback", async () => {
-    mockFetchReject(new Error("Network error"));
-
-    const config: HybridProviderConfig = {
-      cloud: {
-        provider: "anthropic",
-        api_key: "test-key",
-        model: "claude-sonnet-4-5-20250929",
-      },
-      fallback_to_local: false,
-    };
-    const provider = new HybridProvider(config);
-
-    await expect(provider.generate(makeContextPack())).rejects.toThrow(
-      "Cloud provider failed and no local fallback available",
-    );
-  });
-
-  it("throws when cloud fails and fallback_to_local is true but no ollama config", async () => {
-    mockFetchReject(new Error("Network error"));
-
-    const config: HybridProviderConfig = {
-      cloud: {
-        provider: "anthropic",
-        api_key: "test-key",
-        model: "claude-sonnet-4-5-20250929",
-      },
-      fallback_to_local: true,
-    };
-    const provider = new HybridProvider(config);
-
-    await expect(provider.generate(makeContextPack())).rejects.toThrow(
-      "Cloud provider failed and no local fallback available",
-    );
-  });
-
-  it("estimateConfidence() delegates to cloud", async () => {
-    const config: HybridProviderConfig = {
-      cloud: {
-        provider: "anthropic",
-        api_key: "key",
-        model: "claude-sonnet-4-5-20250929",
-      },
-      fallback_to_local: false,
-    };
-    const provider = new HybridProvider(config);
-    const confidence: number = await provider.estimateConfidence();
-    expect(confidence).toBe(0.8);
   });
 });
 

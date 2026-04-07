@@ -358,7 +358,7 @@ export default function App(): React.ReactElement {
 
       // Pull the per-vendor API key from secure storage based on the active provider.
       let apiKey: string | undefined;
-      if (s.provider === "anthropic" || s.provider === "hybrid") {
+      if (s.provider === "anthropic") {
         apiKey = (await SecureStore.getItemAsync(SECURE_STORE_KEYS.anthropicApiKey)) ?? undefined;
       } else if (s.provider === "openai") {
         apiKey = (await SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiChatKey)) ?? undefined;
@@ -373,7 +373,6 @@ export default function App(): React.ReactElement {
         apiKey,
         ollamaEndpoint:
           s.provider === "ollama" ||
-          s.provider === "hybrid" ||
           (s.provider === "on-device" && s.localBackend === "local-server")
             ? s.ollamaEndpoint
             : undefined,

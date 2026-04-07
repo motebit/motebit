@@ -31,7 +31,6 @@ import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
   OllamaProvider,
-  HybridProvider,
   detectOllama,
   resolveConfig,
   DEFAULT_OLLAMA_URL,
@@ -49,12 +48,10 @@ import {
   EventType,
   SensitivityLevel,
   DeviceCapability,
-  DEFAULT_ANTHROPIC_MODEL,
-  DEFAULT_OPENAI_MODEL,
-  DEFAULT_GOOGLE_MODEL,
-  DEFAULT_OLLAMA_MODEL,
-  DEFAULT_PROXY_MODEL,
+  resolveProviderSpec,
+  UnsupportedBackendError,
 } from "@motebit/sdk";
+import type { UnifiedProviderConfig, ProviderSpec, ResolverEnv } from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage, computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import {
@@ -227,16 +224,22 @@ export interface TauriCommands {
 /**
  * Desktop provider union — flat shape driving the settings dropdown.
  * Maps onto the three-mode architecture in `@motebit/sdk`:
- *   motebit-cloud → "proxy" | "hybrid"
+ *   motebit-cloud → "proxy"
  *   byok          → "anthropic" | "openai" | "google"
  *   on-device     → "ollama" (local-server under the hood)
  */
-export type DesktopProvider = "anthropic" | "ollama" | "openai" | "google" | "proxy" | "hybrid";
+export type DesktopProvider = "anthropic" | "ollama" | "openai" | "google" | "proxy";
 
 export interface DesktopAIConfig {
   provider: DesktopProvider;
   model?: string;
   apiKey?: string;
+  /**
+   * Ollama HTTP endpoint for on-device / hybrid providers. Defaults to
+   * `DEFAULT_OLLAMA_URL` (http://127.0.0.1:11434). Users running Ollama on
+   * a LAN machine can point at that host here.
+   */
+  ollamaEndpoint?: string;
   personalityConfig?: MotebitPersonalityConfig;
   isTauri: boolean;
   maxTokens?: number;
@@ -244,6 +247,98 @@ export interface DesktopAIConfig {
   syncUrl?: string;
   syncMasterToken?: string;
   memoryGovernance?: { persistenceThreshold?: number; rejectSecrets?: boolean };
+}
+
+// === Provider unification + spec mapping ===
+
+/**
+ * Map a desktop flat `DesktopAIConfig` to the unified shape the SDK resolver
+ * speaks. Hybrid is excluded — it's a composite that doesn't reduce to a
+ * single ProviderSpec and is built directly in `initAI`.
+ *
+ * The Tauri config field `ollamaEndpoint` (typed at `DesktopAIConfig`) maps
+ * to the unified `endpoint` for on-device local-server. The resolver applies
+ * the Ollama-vs-OpenAI-compat dispatch heuristic from there.
+ */
+function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig {
+  switch (config.provider) {
+    case "ollama":
+      return {
+        mode: "on-device",
+        backend: "local-server",
+        model: config.model,
+        endpoint: config.ollamaEndpoint,
+        maxTokens: config.maxTokens,
+      };
+    case "anthropic":
+      return {
+        mode: "byok",
+        vendor: "anthropic",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "openai":
+      return {
+        mode: "byok",
+        vendor: "openai",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "google":
+      return {
+        mode: "byok",
+        vendor: "google",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "proxy":
+      return {
+        mode: "motebit-cloud",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+  }
+}
+
+/**
+ * Map a resolved `ProviderSpec` to a desktop-side concrete provider instance.
+ * Desktop only supports cloud and ollama transports — apple-fm/mlx/webllm
+ * are gated by `supportedBackends` in the env, so reaching them here is a
+ * misconfiguration.
+ *
+ * `temperature` is a desktop-side concern (pulled from `personalityConfig`)
+ * and is merged with the spec's value, with the spec winning when set.
+ */
+function desktopSpecToProvider(
+  spec: ProviderSpec,
+  temperature: number | undefined,
+): CloudProvider | OllamaProvider {
+  switch (spec.kind) {
+    case "cloud":
+      return new CloudProvider({
+        provider: spec.wireProtocol,
+        api_key: spec.apiKey,
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature ?? temperature,
+        extra_headers: spec.extraHeaders,
+      });
+    case "ollama":
+      return new OllamaProvider({
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature ?? temperature,
+      });
+    case "webllm":
+    case "apple-fm":
+    case "mlx":
+      throw new UnsupportedBackendError(spec.kind);
+  }
 }
 
 // === Tauri Keyring Adapter ===
@@ -795,96 +890,57 @@ export class DesktopApp {
     const resolved = config.personalityConfig ? resolveConfig(config.personalityConfig) : undefined;
     const temperature = resolved?.temperature;
 
-    let provider;
-    if (config.provider === "ollama") {
-      const model =
-        config.model != null && config.model !== "" ? config.model : DEFAULT_OLLAMA_MODEL;
-      const base_url = config.isTauri ? DEFAULT_OLLAMA_URL : "/api/ollama";
-      provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens, temperature });
-      this._activeProvider = "ollama";
-    } else if (config.provider === "openai") {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model =
-        config.model != null && config.model !== "" ? config.model : DEFAULT_OPENAI_MODEL;
-      const base_url = config.isTauri ? "https://api.openai.com/v1" : "/api/openai";
-      provider = new CloudProvider({
-        provider: "openai",
-        api_key: config.apiKey,
-        model,
-        base_url,
-        max_tokens: config.maxTokens,
-        temperature,
-      });
-      this._activeProvider = "openai";
-    } else if (config.provider === "google") {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model =
-        config.model != null && config.model !== "" ? config.model : DEFAULT_GOOGLE_MODEL;
-      // Google exposes an OpenAI-compatible endpoint.
-      provider = new CloudProvider({
-        provider: "openai",
-        api_key: config.apiKey,
-        model,
-        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
-        max_tokens: config.maxTokens,
-        temperature,
-      });
-      this._activeProvider = "google";
-    } else if (config.provider === "hybrid") {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model =
-        config.model != null && config.model !== "" ? config.model : DEFAULT_ANTHROPIC_MODEL;
-      const base_url = config.isTauri ? "https://api.anthropic.com" : "/api/anthropic";
-      provider = new HybridProvider({
-        cloud: {
-          provider: "anthropic",
-          api_key: config.apiKey,
-          model,
-          base_url,
-          max_tokens: config.maxTokens,
-          temperature,
-        },
-        ollama: {
-          model: DEFAULT_OLLAMA_MODEL,
-          base_url: config.isTauri ? DEFAULT_OLLAMA_URL : "/api/ollama",
-          max_tokens: config.maxTokens,
-          temperature,
-        },
-        fallback_to_local: true,
-      });
-      this._activeProvider = "hybrid";
-    } else if (config.provider === "proxy") {
-      const pc = this._proxyConfig;
-      const model = pc?.model ?? DEFAULT_PROXY_MODEL;
-      const proxyUrl =
-        pc?.baseUrl ?? (import.meta.env?.VITE_PROXY_URL as string) ?? "https://api.motebit.com";
-      const extraHeaders: Record<string, string> = {};
-      if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
-      provider = new CloudProvider({
-        provider: "anthropic",
-        api_key: "",
-        model,
-        base_url: proxyUrl,
-        max_tokens: config.maxTokens,
-        temperature,
-        extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
-      });
-      this._activeProvider = "proxy";
-    } else {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model =
-        config.model != null && config.model !== "" ? config.model : DEFAULT_ANTHROPIC_MODEL;
-      const base_url = config.isTauri ? "https://api.anthropic.com" : "/api/anthropic";
-      provider = new CloudProvider({
-        provider: "anthropic",
-        api_key: config.apiKey,
-        model,
-        base_url,
-        max_tokens: config.maxTokens,
-        temperature,
-      });
-      this._activeProvider = "anthropic";
+    // BYOK validation: surfaces decide whether they have credentials before
+    // calling the resolver. The resolver assumes inputs are well-formed.
+    const needsByokKey =
+      config.provider === "anthropic" ||
+      config.provider === "openai" ||
+      config.provider === "google";
+    if (needsByokKey && (config.apiKey == null || config.apiKey === "")) {
+      return false;
     }
+
+    // All providers go through the unified resolver. The desktop env captures
+    // Tauri vs dev-mode URL routing: Tauri builds talk to vendor APIs directly;
+    // dev builds go through Vite's proxy routes (`/api/anthropic`, `/api/openai`,
+    // `/api/ollama`) because the dev server can't bypass browser CORS for
+    // arbitrary vendor URLs.
+    const pc = this._proxyConfig;
+    const motebitCloudBaseUrl =
+      pc?.baseUrl ?? (import.meta.env?.VITE_PROXY_URL as string) ?? "https://api.motebit.com";
+    const motebitCloudHeaders =
+      pc?.proxyToken !== undefined ? { "x-proxy-token": pc.proxyToken } : undefined;
+
+    const env: ResolverEnv = {
+      cloudBaseUrl: (wireProtocol, canonical) => {
+        if (config.isTauri) return canonical;
+        // Dev mode — Vite proxy paths configured in vite.config
+        return wireProtocol === "anthropic" ? "/api/anthropic" : "/api/openai";
+      },
+      // Logical URL for local-server. Always the canonical Ollama form so
+      // the dispatch heuristic recognizes it. The actual transport URL is
+      // substituted by `localServerBaseUrl` below.
+      defaultLocalServerUrl:
+        config.ollamaEndpoint != null && config.ollamaEndpoint !== ""
+          ? config.ollamaEndpoint
+          : DEFAULT_OLLAMA_URL,
+      // Tauri builds talk to Ollama directly. Dev builds go through Vite's
+      // `/api/ollama` proxy because the dev server can't bypass browser
+      // CORS for arbitrary local ports. Either way, the dispatch decision
+      // already happened on the logical URL — this is pure transport.
+      localServerBaseUrl: (logical) => (config.isTauri ? logical : "/api/ollama"),
+      supportedBackends: new Set(["local-server"]),
+      motebitCloudBaseUrl,
+      motebitCloudHeaders,
+      motebitCloudDefaultModel: pc?.model,
+    };
+
+    const unified = desktopConfigToUnified(config);
+    const spec = resolveProviderSpec(unified, env);
+    const provider = desktopSpecToProvider(spec, temperature);
+
+    // Track the active provider on the surface for the model indicator.
+    this._activeProvider = config.provider;
 
     // State snapshot + conversation persistence — preload before runtime construction
     let stateSnapshot: TauriStateSnapshotStorage | undefined;

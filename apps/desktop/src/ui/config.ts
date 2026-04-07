@@ -43,6 +43,11 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       apiKey = (parsed.api_key as string | undefined) ?? undefined;
     }
 
+    // Ollama endpoint (optional) — user's LAN/localhost inference server.
+    // Used by on-device (ollama) and hybrid providers. Falls back to the
+    // runtime default inside initAI when absent.
+    const ollamaEndpoint = (parsed.ollama_endpoint as string | undefined) ?? undefined;
+
     // Sync relay config (optional)
     const syncUrl = (parsed.sync_url as string | undefined) ?? undefined;
     let syncMasterToken: string | undefined;
@@ -61,6 +66,7 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       provider,
       model,
       apiKey,
+      ollamaEndpoint,
       isTauri: true,
       invoke: invoke as InvokeFn,
       syncUrl,
