@@ -50,10 +50,14 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
     }
 
     // Local-server endpoint (optional) — user's LAN/localhost inference
-    // server (Ollama, LM Studio, llama.cpp, etc.). Falls back to the
-    // runtime default inside initAI when absent. The field is named
-    // `ollamaEndpoint` for historical compat with the Tauri config schema.
-    const ollamaEndpoint = (parsed.ollama_endpoint as string | undefined) ?? undefined;
+    // server (Ollama, LM Studio, llama.cpp, Jan, vLLM, …). Falls back to
+    // the runtime default inside initAI when absent. Canonical JSON key
+    // is `local_server_endpoint`; the historical key `ollama_endpoint`
+    // is still read for migration.
+    const localServerEndpoint =
+      (parsed.local_server_endpoint as string | undefined) ??
+      (parsed.ollama_endpoint as string | undefined) ??
+      undefined;
 
     // Sync relay config (optional)
     const syncUrl = (parsed.sync_url as string | undefined) ?? undefined;
@@ -73,7 +77,7 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       provider,
       model,
       apiKey,
-      ollamaEndpoint,
+      localServerEndpoint,
       isTauri: true,
       invoke: invoke as InvokeFn,
       syncUrl,

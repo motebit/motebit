@@ -1617,9 +1617,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     settingsByokVendor.value = activeByokVendor;
     populateByokModeModels(activeByokVendor, mode === "byok" ? currentModel : undefined);
 
-    // On-Device section — endpoint pulls from config.ollamaEndpoint with a
-    // sane placeholder default. Persisted via the Tauri write_config path.
-    settingsOnDeviceEndpoint.value = config?.ollamaEndpoint ?? "";
+    // On-Device section — endpoint pulls from config.localServerEndpoint
+    // with a sane placeholder default. Persisted via the Tauri write_config
+    // path under the canonical key `local_server_endpoint`.
+    settingsOnDeviceEndpoint.value = config?.localServerEndpoint ?? "";
     populateOnDeviceModeModels(mode === "on-device" ? currentModel : undefined);
 
     switchProviderMode(mode);
@@ -1724,12 +1725,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         },
       };
       if (model != null && model !== "") configData.default_model = model;
-      // Persist user-supplied Ollama endpoint. Empty string means "use the
-      // runtime default" — don't write the key so we don't lock users into
-      // the current default URL.
-      const ollamaEndpointValue = settingsOnDeviceEndpoint.value.trim();
-      if (ollamaEndpointValue !== "") {
-        configData.ollama_endpoint = ollamaEndpointValue;
+      // Persist user-supplied local inference server endpoint. Empty string
+      // means "use the runtime default" — don't write the key so we don't
+      // lock users into the current default URL. Writes the canonical key
+      // `local_server_endpoint`; the loader still reads `ollama_endpoint`
+      // for migration from older config files.
+      const localServerEndpointValue = settingsOnDeviceEndpoint.value.trim();
+      if (localServerEndpointValue !== "") {
+        configData.local_server_endpoint = localServerEndpointValue;
       }
       await invoke("write_config", { json: JSON.stringify(configData) });
 
@@ -1797,13 +1800,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     // (syncUrl, syncMasterToken, personalityConfig, memoryGovernance, …)
     // survive the save. The old code only carried over `apiKey` and
     // `invoke`, silently dropping everything else.
-    const ollamaEndpointValue = settingsOnDeviceEndpoint.value.trim();
+    const localServerEndpointValue = settingsOnDeviceEndpoint.value.trim();
     const newConfig: DesktopAIConfig = {
       ...(currentConfig ?? { isTauri, provider }),
       provider,
       model,
       apiKey: apiKey != null && apiKey !== "" ? apiKey : currentConfig?.apiKey,
-      ollamaEndpoint: ollamaEndpointValue !== "" ? ollamaEndpointValue : undefined,
+      localServerEndpoint: localServerEndpointValue !== "" ? localServerEndpointValue : undefined,
       isTauri,
       maxTokens,
       invoke: currentConfig?.invoke,

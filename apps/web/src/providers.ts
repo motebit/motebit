@@ -22,17 +22,11 @@ export { CloudProvider, OpenAIProvider, DEFAULT_OLLAMA_URL };
 export type { StreamingProvider };
 
 // === Utility Functions ===
-
-export async function detectOllamaModels(baseUrl: string): Promise<string[]> {
-  try {
-    const res = await fetch(`${baseUrl}/api/tags`);
-    if (!res.ok) return [];
-    const data = (await res.json()) as { models?: Array<{ name: string }> };
-    return (data.models ?? []).map((m) => m.name);
-  } catch {
-    return [];
-  }
-}
+//
+// `detectOllamaModels` was deleted 2026-04-06 as part of the Ollama privilege
+// audit. Use `detectLocalInference` from `./bootstrap` for any local-server
+// model probing — it's vendor-agnostic and speaks the OpenAI-compat
+// /v1/models endpoint that every supported local server exposes.
 
 export function checkWebGPU(): boolean {
   return "gpu" in navigator;

@@ -74,6 +74,7 @@ import { IdentityManager } from "@motebit/core-identity";
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
+import { parseBoolEnv, parseIntEnv, parseFloatEnv } from "./env.js";
 import { createRelaySchema } from "./schema.js";
 import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
@@ -185,6 +186,17 @@ export interface SyncRelayConfig {
   };
   /** Platform fee rate for settlement (0–1). Default: 0.05 (5%). Protocol supports any value. */
   platformFeeRate?: number;
+  /**
+   * Passphrase for encrypting the relay's identity key at rest. When set,
+   * the relay's Ed25519 private key is AES-GCM encrypted with a key derived
+   * via PBKDF2-600K from this passphrase. Omit for plaintext storage.
+   *
+   * Passed explicitly rather than read from env at call-site so library
+   * embedders, tests, and multi-tenant deployments can inject it.
+   * Standalone `createSyncRelayStandalone` reads `MOTEBIT_RELAY_KEY_PASSPHRASE`
+   * from the environment and sets this field.
+   */
+  relayKeyPassphrase?: string;
   /** Stripe Checkout configuration. Omit to disable Stripe deposits. */
   stripe?: {
     secretKey: string;
@@ -251,12 +263,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     corsOrigin = "*",
     enableDeviceAuth = true,
     x402: x402Config,
-    issueCredentials = process.env.MOTEBIT_RELAY_ISSUE_CREDENTIALS === "true",
+    // Note: this fallback-to-env read exists for library-mode embedders
+    // (tests, programmatic use) that don't go through the standalone boot
+    // path. The standalone boot path in `createSyncRelayStandalone` reads
+    // every env var explicitly and passes them as config fields, so this
+    // branch is never taken from production.
+    issueCredentials = parseBoolEnv("MOTEBIT_RELAY_ISSUE_CREDENTIALS", false),
     federation: federationConfig,
     stripe: stripeConfig,
     bridge: bridgeConfig,
     directAsset: directAssetConfig,
-    platformFeeRate = parseFloat(process.env.MOTEBIT_PLATFORM_FEE_RATE ?? "0.05"),
+    platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
   } = config;
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
@@ -454,7 +471,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Relay Identity: persistent Ed25519 keypair ---
   const relayIdentity: RelayIdentity = await initRelayIdentity(
     moteDb.db,
-    process.env.MOTEBIT_RELAY_KEY_PASSPHRASE,
+    config.relayKeyPassphrase,
   );
 
   // --- Task routing & federation query cache ---
@@ -1007,19 +1024,25 @@ if (process.env.VITEST != null) {
     dbPath: process.env.MOTEBIT_DB_PATH,
     apiToken: process.env.MOTEBIT_API_TOKEN,
     corsOrigin: process.env.MOTEBIT_CORS_ORIGIN,
-    enableDeviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
-    emergencyFreeze: process.env.MOTEBIT_EMERGENCY_FREEZE === "true",
+    // Opt-out booleans: default on, explicit "false" to disable.
+    enableDeviceAuth: parseBoolEnv("MOTEBIT_ENABLE_DEVICE_AUTH", true),
+    // Opt-in boolean: default off, explicit "true" to enable.
+    emergencyFreeze: parseBoolEnv("MOTEBIT_EMERGENCY_FREEZE", false),
     getShuttingDown: () => shuttingDown,
     x402: x402Env,
+    // Relay identity encryption passphrase. Read from env once, here, into
+    // the config object — no more direct process.env access downstream.
+    relayKeyPassphrase: process.env.MOTEBIT_RELAY_KEY_PASSPHRASE,
+    platformFeeRate: parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
     federation: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL
       ? {
           endpointUrl: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL,
           displayName: process.env.MOTEBIT_FEDERATION_DISPLAY_NAME,
-          enabled: process.env.MOTEBIT_FEDERATION_ENABLED !== "false",
+          enabled: parseBoolEnv("MOTEBIT_FEDERATION_ENABLED", true),
           maxPeers: process.env.MOTEBIT_FEDERATION_MAX_PEERS
-            ? parseInt(process.env.MOTEBIT_FEDERATION_MAX_PEERS, 10)
+            ? parseIntEnv("MOTEBIT_FEDERATION_MAX_PEERS", 50)
             : undefined,
-          autoAcceptPeers: process.env.MOTEBIT_FEDERATION_AUTO_ACCEPT === "true",
+          autoAcceptPeers: parseBoolEnv("MOTEBIT_FEDERATION_AUTO_ACCEPT", false),
           allowedPeers: process.env.MOTEBIT_FEDERATION_ALLOWED_PEERS
             ? process.env.MOTEBIT_FEDERATION_ALLOWED_PEERS.split(",").map((s) => s.trim())
             : undefined,
@@ -1065,7 +1088,7 @@ if (process.env.VITEST != null) {
   const bootLogger = createLogger({ service: "relay" });
   bootLogger.info("relay.starting", {
     db: process.env.MOTEBIT_DB_PATH ?? ":memory:",
-    deviceAuth: process.env.MOTEBIT_ENABLE_DEVICE_AUTH !== "false",
+    deviceAuth: parseBoolEnv("MOTEBIT_ENABLE_DEVICE_AUTH", true),
     federation: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL ?? "disabled",
     keyEncryption: process.env.MOTEBIT_RELAY_KEY_PASSPHRASE ? "active" : "disabled",
   });

@@ -395,14 +395,14 @@ describe("MobileApp.settings", () => {
     const custom: MobileSettings = {
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
-      ollamaEndpoint: "http://192.168.1.100:11434",
+      localServerEndpoint: "http://192.168.1.100:11434",
       colorPreset: "amber",
       theme: "dark",
       approvalPreset: "cautious",
       persistenceThreshold: 0.8,
       rejectSecrets: false,
       maxMemoriesPerTurn: 3,
-      budgetMaxCalls: 10,
+      maxCallsPerTurn: 10,
       voiceEnabled: false,
       ttsVoice: "nova",
       voiceAutoSend: false,
@@ -417,9 +417,9 @@ describe("MobileApp.settings", () => {
     expect(loaded).toEqual(custom);
   });
 
-  it("defaults ollamaEndpoint when not set", async () => {
+  it("defaults localServerEndpoint when not set", async () => {
     const settings = await app.loadSettings();
-    expect(settings.ollamaEndpoint).toBe("http://localhost:11434");
+    expect(settings.localServerEndpoint).toBe("http://localhost:11434");
   });
 
   it("merges partial saved settings with defaults", async () => {
@@ -470,10 +470,10 @@ describe("MobileApp.initAI with custom endpoint", () => {
     app.stop();
   });
 
-  it("accepts custom ollamaEndpoint", async () => {
+  it("accepts custom localServerEndpoint", async () => {
     const result = await app.initAI({
       provider: "local-server",
-      ollamaEndpoint: "http://192.168.1.50:11434",
+      localServerEndpoint: "http://192.168.1.50:11434",
     });
     expect(result).toBe(true);
     expect(app.isAIReady).toBe(true);
@@ -483,6 +483,16 @@ describe("MobileApp.initAI with custom endpoint", () => {
     asyncStoreData.set("@motebit/settings", JSON.stringify({ provider: "ollama" }));
     const loaded = await app.loadSettings();
     expect(loaded.provider).toBe("local-server");
+  });
+
+  it("migrates legacy ollamaEndpoint field to localServerEndpoint on load", async () => {
+    asyncStoreData.set(
+      "@motebit/settings",
+      JSON.stringify({ ollamaEndpoint: "http://192.168.9.9:11434" }),
+    );
+    const loaded = await app.loadSettings();
+    expect(loaded.localServerEndpoint).toBe("http://192.168.9.9:11434");
+    expect((loaded as unknown as { ollamaEndpoint?: string }).ollamaEndpoint).toBeUndefined();
   });
 });
 

@@ -211,7 +211,7 @@ async function tryBootstrapIdentity(
 async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
   // If Anthropic is selected but no key is present, try Ollama auto-detection
   if (config.provider === "anthropic" && (config.apiKey == null || config.apiKey === "")) {
-    const detection = await app.detectOllama();
+    const detection = await app.detectLocalInference();
     if (detection.available && detection.bestModel !== "") {
       // Switch to local inference transparently
       config.provider = "local-server";

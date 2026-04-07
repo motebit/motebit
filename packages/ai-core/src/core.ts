@@ -875,31 +875,100 @@ export class CloudProvider implements StreamingProvider {
 // confirmed redundant with the OpenAI shim path. The legacy `OLLAMA_*` model
 // constants remain in `@motebit/sdk` as suggestions for the on-device UI.
 
-// === Ollama Auto-Detection ===
+// === Local-Inference Auto-Detection ===
+//
+// Vendor-agnostic probe for any OpenAI-compatible local inference server.
+// Ollama (via its `/v1` shim), LM Studio, llama.cpp, Jan, vLLM, and
+// text-generation-webui all expose `GET /v1/models` returning an
+// OpenAI-format `{data: [{id, ...}]}` list. This function tries a curated
+// list of common ports and returns the first one that responds with models.
+//
+// Previously this was `detectOllama()` probing Ollama's native `/api/tags`
+// endpoint — vendor-specific and invisible to every other local server.
+// The rename is part of the 2026-04-06 Ollama privilege audit.
 
-/** Preferred model order for auto-detection. */
-const PREFERRED_OLLAMA_MODELS = ["llama3.1", "llama3", "mistral", "gemma2"];
+/**
+ * Default local-inference endpoints to probe, in priority order.
+ *
+ * 11434 — Ollama default
+ *  1234 — LM Studio default
+ *  8080 — llama.cpp server default
+ *  1337 — Jan default
+ *  8000 — vLLM default, text-generation-webui
+ */
+export const DEFAULT_LOCAL_INFERENCE_PORTS = [11434, 1234, 8080, 1337, 8000] as const;
 
-export interface OllamaDetectionResult {
+/** Preferred model order for auto-detection (substring match, case-insensitive). */
+const PREFERRED_LOCAL_MODELS = ["llama-3", "llama3", "phi-3", "qwen", "mistral", "gemma"] as const;
+
+export interface LocalInferenceDetectionResult {
   available: boolean;
+  /** List of model identifiers returned by the server's `/v1/models`. */
   models: string[];
+  /** Base URL that responded (includes `/v1`). Empty if nothing found. */
   url: string;
   /** Best available model based on preference order, or empty string. */
   bestModel: string;
 }
 
+/** @deprecated use `LocalInferenceDetectionResult`. Retained for one release cycle. */
+export type OllamaDetectionResult = LocalInferenceDetectionResult;
+
 /**
- * Probe a local Ollama instance and return available models.
- * Never throws — returns `{ available: false }` on any error.
- * Times out after 2 seconds to avoid blocking startup.
+ * Probe common local-inference ports on 127.0.0.1 via the OpenAI-compat
+ * `/v1/models` endpoint and return the first server that responds.
+ *
+ * Never throws — returns `{ available: false }` on any error or if no
+ * server responds. Individual probes time out after 2 seconds each to
+ * avoid blocking startup.
+ *
+ * When `baseUrl` is supplied, probes only that URL (for users who've
+ * persisted a custom endpoint). Otherwise probes the default port list.
  */
-export async function detectOllama(baseUrl = DEFAULT_OLLAMA_URL): Promise<OllamaDetectionResult> {
-  const empty: OllamaDetectionResult = { available: false, models: [], url: "", bestModel: "" };
+export async function detectLocalInference(
+  baseUrl?: string,
+): Promise<LocalInferenceDetectionResult> {
+  const empty: LocalInferenceDetectionResult = {
+    available: false,
+    models: [],
+    url: "",
+    bestModel: "",
+  };
+
+  const candidates = baseUrl
+    ? [baseUrl]
+    : DEFAULT_LOCAL_INFERENCE_PORTS.map((port) => `http://127.0.0.1:${port}`);
+
+  for (const candidate of candidates) {
+    const normalized = normalizeCandidate(candidate);
+    const result = await probeOneEndpoint(normalized);
+    if (result.available) return result;
+  }
+  return empty;
+}
+
+/** @deprecated use `detectLocalInference`. Retained for one release cycle. */
+export const detectOllama = detectLocalInference;
+
+/** Append `/v1` if missing (mirrors sdk's `normalizeLocalServerEndpoint`). */
+function normalizeCandidate(url: string): string {
+  const stripped = url.replace(/\/+$/, "");
+  if (/\/v1(\/|$)/.test(stripped)) return stripped;
+  return `${stripped}/v1`;
+}
+
+async function probeOneEndpoint(baseUrl: string): Promise<LocalInferenceDetectionResult> {
+  const empty: LocalInferenceDetectionResult = {
+    available: false,
+    models: [],
+    url: "",
+    bestModel: "",
+  };
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2000);
 
-    const res = await fetch(`${baseUrl}/api/tags`, {
+    const res = await fetch(`${baseUrl}/models`, {
       method: "GET",
       signal: controller.signal,
     });
@@ -907,20 +976,20 @@ export async function detectOllama(baseUrl = DEFAULT_OLLAMA_URL): Promise<Ollama
 
     if (!res.ok) return empty;
 
-    const data = (await res.json()) as { models?: Array<{ name: string }> };
-    const models = (data.models ?? []).map((m) => m.name);
+    // OpenAI-format response: { data: [{id: string}, ...] }
+    const data = (await res.json()) as { data?: Array<{ id: string }> };
+    const models = (data.data ?? []).map((m) => m.id);
     if (models.length === 0) return { ...empty, available: true, url: baseUrl };
 
-    // Pick best model: try preferred list first (match base name ignoring :tag)
+    // Pick best model: case-insensitive substring match against preference list.
     let bestModel = "";
-    for (const preferred of PREFERRED_OLLAMA_MODELS) {
-      const match = models.find((m) => m === preferred || m.startsWith(`${preferred}:`));
+    for (const preferred of PREFERRED_LOCAL_MODELS) {
+      const match = models.find((m) => m.toLowerCase().includes(preferred));
       if (match != null) {
         bestModel = match;
         break;
       }
     }
-    // Fall back to first available model
     if (bestModel === "") bestModel = models[0]!;
 
     return { available: true, models, url: baseUrl, bestModel };

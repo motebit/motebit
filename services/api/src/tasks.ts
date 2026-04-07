@@ -18,7 +18,7 @@ import {
   asAllocationId,
   asSettlementId,
   asGoalId,
-  PLATFORM_FEE_RATE as DEFAULT_PLATFORM_FEE_RATE,
+  PLATFORM_FEE_RATE as SDK_DEFAULT_PLATFORM_FEE_RATE,
   AgentTrustLevel,
   EventType,
 } from "@motebit/sdk";
@@ -93,12 +93,11 @@ export type TaskQueueEntry = {
   settled?: boolean;
 };
 
-/**
- * Platform fee rate — configurable per-relay deployment.
- * Defaults to SDK constant (0.05 / 5%). Set by registerTaskRoutes from config.
- * The protocol supports any fee structure; this is the reference deployment setting.
- */
-let PLATFORM_FEE_RATE = DEFAULT_PLATFORM_FEE_RATE;
+// Platform fee rate is no longer a module-level variable. It lives in the
+// closure of `registerTaskRoutes` (see the function body below), guaranteeing
+// every registered handler sees the same rate and different relay instances
+// don't clobber each other's state. SDK_DEFAULT_PLATFORM_FEE_RATE is the
+// fallback when `deps.platformFeeRate` is omitted.
 
 export interface TasksDeps {
   app: Hono;
@@ -214,6 +213,14 @@ export async function handleReceiptIngestion(
     connections: Map<string, ConnectedDevice[]>;
     taskQueue: Map<string, TaskQueueEntry>;
     issueCredentials: boolean;
+    /**
+     * Platform fee rate (0–1) for this relay instance. Passed explicitly
+     * so there is no module-level global state — every caller provides the
+     * rate, every handler sees the one it was called with. Previous code
+     * used a module-level `let PLATFORM_FEE_RATE` which could be clobbered
+     * by concurrent relay instantiations.
+     */
+    platformFeeRate: number;
     /** Maximum delegation chain depth for multi-hop settlement. Default: 10. */
     maxSettlementDepth?: number;
   },
@@ -229,6 +236,7 @@ export async function handleReceiptIngestion(
     connections,
     taskQueue,
     issueCredentials,
+    platformFeeRate,
   } = deps;
 
   // --- Idempotency: settled flag (persisted in durable queue) ---
@@ -553,7 +561,7 @@ export async function handleReceiptIngestion(
         const subUnitCost = getListingUnitCost(moteDb, sub.motebit_id as string);
         const subGross =
           subEntry.price_snapshot ??
-          (subUnitCost > 0 ? toMicro(computeGrossAmount(subUnitCost, PLATFORM_FEE_RATE)) : 0);
+          (subUnitCost > 0 ? toMicro(computeGrossAmount(subUnitCost, platformFeeRate)) : 0);
         if (subGross <= 0) {
           // No cost — still recurse into nested receipts
           const nestedReceipts = sub.delegation_receipts ?? [];
@@ -690,9 +698,7 @@ export async function handleReceiptIngestion(
       const grossAmount =
         entry.price_snapshot ??
         persistentAlloc?.amount_locked ??
-        (fallbackUnitCost > 0
-          ? toMicro(computeGrossAmount(fallbackUnitCost, PLATFORM_FEE_RATE))
-          : 0);
+        (fallbackUnitCost > 0 ? toMicro(computeGrossAmount(fallbackUnitCost, platformFeeRate)) : 0);
 
       const settlementId = asSettlementId(crypto.randomUUID());
       const allocationId = persistentAlloc
@@ -1023,10 +1029,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     pushAdapter,
   } = deps;
 
-  // Apply configured fee rate (affects module-level PLATFORM_FEE_RATE used by handleReceiptIngestion)
-  if (deps.platformFeeRate != null) {
-    PLATFORM_FEE_RATE = deps.platformFeeRate;
-  }
+  // Platform fee rate lives in this function's closure — every handler
+  // registered below sees the same rate for its lifetime. No module-level
+  // mutation; independent relay instances are fully isolated.
+  const platformFeeRate = deps.platformFeeRate ?? SDK_DEFAULT_PLATFORM_FEE_RATE;
 
   const ingestionDeps = {
     moteDb,
@@ -1036,6 +1042,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     connections,
     taskQueue,
     issueCredentials,
+    platformFeeRate,
   };
 
   // Capture x402 settlement proof so the task handler can link it to the task queue entry.
@@ -1078,7 +1085,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           network,
           price: () => {
             if (!currentPricing) return "$0";
-            const gross = computeGrossAmount(currentPricing.unitCost, PLATFORM_FEE_RATE);
+            const gross = computeGrossAmount(currentPricing.unitCost, platformFeeRate);
             return `$${gross.toFixed(6)}`;
           },
           payTo: () => {
@@ -1096,7 +1103,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               message: "Task submission requires USDC payment via x402",
               agent: agentId,
               estimated_cost: currentPricing?.unitCost ?? 0,
-              platform_fee_rate: PLATFORM_FEE_RATE,
+              platform_fee_rate: platformFeeRate,
               network: x402Config.network,
             },
           };
@@ -1178,9 +1185,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         }
 
         if (delegatorId) {
-          const grossMicro = toMicro(
-            computeGrossAmount(currentPricing.unitCost, PLATFORM_FEE_RATE),
-          );
+          const grossMicro = toMicro(computeGrossAmount(currentPricing.unitCost, platformFeeRate));
           const account = getAccountBalance(moteDb.db, delegatorId);
           if (account && account.balance >= grossMicro) {
             return next();
@@ -1203,7 +1208,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               message:
                 "Payment facilitator unavailable — deposit to virtual account or retry later",
               estimated_cost: currentPricing?.unitCost ?? 0,
-              platform_fee_rate: PLATFORM_FEE_RATE,
+              platform_fee_rate: platformFeeRate,
               network: x402Config.network,
             },
             402,
@@ -1299,7 +1304,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     const unitCostAtSubmission = getListingUnitCost(moteDb, motebitId);
     const priceSnapshot =
       unitCostAtSubmission > 0
-        ? toMicro(computeGrossAmount(unitCostAtSubmission, PLATFORM_FEE_RATE)) // gross in micro-units
+        ? toMicro(computeGrossAmount(unitCostAtSubmission, platformFeeRate)) // gross in micro-units
         : undefined;
 
     // Capture x402 payment proof from the settlement hook (set during middleware).

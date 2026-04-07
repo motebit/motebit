@@ -5,6 +5,7 @@ export * from "./provider-resolver.js";
 export * from "./color-presets.js";
 export * from "./approval-presets.js";
 export * from "./governance-config.js";
+export * from "./voice-config.js";
 
 import type {
   SensitivityLevel,

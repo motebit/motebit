@@ -371,10 +371,10 @@ export default function App(): React.ReactElement {
         localBackend: s.localBackend,
         model: s.model,
         apiKey,
-        ollamaEndpoint:
+        localServerEndpoint:
           s.provider === "local-server" ||
           (s.provider === "on-device" && s.localBackend === "local-server")
-            ? s.ollamaEndpoint
+            ? s.localServerEndpoint
             : undefined,
       });
 
@@ -385,7 +385,7 @@ export default function App(): React.ReactElement {
           requireApprovalAbove: preset.requireApprovalAbove,
           denyAbove: preset.denyAbove,
           operatorMode: wasOperatorMode,
-          budget: { maxCallsPerTurn: s.budgetMaxCalls },
+          budget: { maxCallsPerTurn: s.maxCallsPerTurn },
         });
       }
       a.updateMemoryGovernance({
@@ -1516,7 +1516,7 @@ export default function App(): React.ReactElement {
             requireApprovalAbove: preset.requireApprovalAbove,
             denyAbove: preset.denyAbove,
             operatorMode: wasOperatorMode,
-            budget: { maxCallsPerTurn: newSettings.budgetMaxCalls },
+            budget: { maxCallsPerTurn: newSettings.maxCallsPerTurn },
           });
         }
         a.updateMemoryGovernance({

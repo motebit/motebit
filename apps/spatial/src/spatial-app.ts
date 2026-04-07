@@ -52,7 +52,7 @@ import {
 } from "@motebit/core-identity";
 import { createSignedToken, deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
-import type { MotebitState, BehaviorCues } from "@motebit/sdk";
+import type { MotebitState, BehaviorCues, GovernanceConfig } from "@motebit/sdk";
 import {
   DeviceCapability,
   DEFAULT_ANTHROPIC_MODEL,
@@ -92,15 +92,21 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 
 // === Configuration ===
 
-export interface SpatialGovernanceConfig {
-  approvalPreset: "cautious" | "balanced" | "autonomous";
-  persistenceThreshold: number;
-  rejectSecrets: boolean;
-  maxCallsPerTurn: number;
-}
+/**
+ * Canonical `GovernanceConfig` lives in `@motebit/sdk`. The spatial surface
+ * re-exports it under its historical alias for source-compat with any
+ * external consumer that imported `SpatialGovernanceConfig`.
+ */
+export type SpatialGovernanceConfig = GovernanceConfig;
 
 export interface SpatialAIConfig {
-  provider: "anthropic" | "ollama" | "openai" | "proxy";
+  /**
+   * Provider. `local-server` is the canonical name for on-device LAN
+   * inference (Ollama, LM Studio, llama.cpp, Jan, vLLM, …) via the
+   * OpenAI-compat shim. The historical name `ollama` is migrated in
+   * `migrateLegacySpatialAIConfig` on load.
+   */
+  provider: "anthropic" | "local-server" | "openai" | "proxy";
   model?: string;
   apiKey?: string;
   baseUrl?: string;
@@ -508,6 +514,13 @@ export class SpatialApp {
    * Returns false if the provider needs an API key that wasn't provided.
    */
   async initAI(config: SpatialAIConfig): Promise<boolean> {
+    // Honor the historical `"ollama"` provider name on inbound configs
+    // (e.g. from persisted IndexedDB state or old callers) by rewriting
+    // to `"local-server"`. Vendor-neutral name, same runtime behavior.
+    const legacyProvider = (config as unknown as { provider?: string }).provider;
+    if (legacyProvider === "ollama") {
+      config = { ...config, provider: "local-server" };
+    }
     const resolved = config.personalityConfig ? resolveConfig(config.personalityConfig) : undefined;
     const temperature = resolved?.temperature;
 
@@ -529,7 +542,7 @@ export class SpatialApp {
         temperature,
         extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
       });
-    } else if (config.provider === "ollama") {
+    } else if (config.provider === "local-server") {
       // Local inference via Ollama's OpenAI-compatible shim. The previous
       // OllamaProvider class was deleted (2026-04-06) — every local server
       // (Ollama, LM Studio, llama.cpp, Jan, vLLM) now goes through
@@ -600,6 +613,7 @@ export class SpatialApp {
           ? {
               persistenceThreshold: gov.persistenceThreshold,
               rejectSecrets: gov.rejectSecrets,
+              maxMemoriesPerTurn: gov.maxMemoriesPerTurn,
             }
           : undefined,
         taskRouter: PLANNING_TASK_ROUTER,

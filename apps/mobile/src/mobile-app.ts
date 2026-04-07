@@ -192,7 +192,13 @@ export interface MobileSettings {
   provider: MobileProvider;
   localBackend?: MobileLocalBackend;
   model: string;
-  ollamaEndpoint: string;
+  /**
+   * URL of the local inference server (Ollama, LM Studio, llama.cpp, Jan,
+   * vLLM, …). Persisted as `localServerEndpoint` in JSON settings. The
+   * historical name `ollamaEndpoint` is accepted on load via
+   * `migrateLegacyMobileSettings`.
+   */
+  localServerEndpoint: string;
   colorPreset: string;
   customHue: number;
   customSaturation: number;
@@ -201,7 +207,7 @@ export interface MobileSettings {
   persistenceThreshold: number;
   rejectSecrets: boolean;
   maxMemoriesPerTurn: number;
-  budgetMaxCalls: number;
+  maxCallsPerTurn: number;
   voiceEnabled: boolean;
   ttsVoice: string;
   voiceAutoSend: boolean;
@@ -213,7 +219,7 @@ export interface MobileSettings {
 const DEFAULT_SETTINGS: MobileSettings = {
   provider: "local-server",
   model: DEFAULT_OLLAMA_MODEL,
-  ollamaEndpoint: DEFAULT_OLLAMA_URL,
+  localServerEndpoint: DEFAULT_OLLAMA_URL,
   colorPreset: "moonlight",
   customHue: 220,
   customSaturation: 0.7,
@@ -222,7 +228,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   persistenceThreshold: 0.5,
   rejectSecrets: true,
   maxMemoriesPerTurn: 5,
-  budgetMaxCalls: 20,
+  maxCallsPerTurn: 20,
   voiceEnabled: false,
   ttsVoice: "alloy",
   voiceAutoSend: true,
@@ -243,7 +249,7 @@ export interface MobileAIConfig {
   localBackend?: MobileLocalBackend;
   model?: string;
   apiKey?: string;
-  ollamaEndpoint?: string;
+  localServerEndpoint?: string;
   maxTokens?: number;
 }
 
@@ -254,7 +260,7 @@ export interface MobileAIConfig {
 export function mobileSettingsToUnifiedProvider(
   settings: Pick<
     MobileSettings,
-    "provider" | "localBackend" | "model" | "ollamaEndpoint" | "maxTokens"
+    "provider" | "localBackend" | "model" | "localServerEndpoint" | "maxTokens"
   >,
   apiKey?: string,
 ): import("@motebit/sdk").UnifiedProviderConfig {
@@ -295,7 +301,7 @@ export function mobileSettingsToUnifiedProvider(
         mode: "on-device",
         backend: "local-server",
         model: settings.model,
-        endpoint: settings.ollamaEndpoint,
+        endpoint: settings.localServerEndpoint,
         maxTokens: settings.maxTokens,
       };
     case "on-device":
@@ -303,7 +309,8 @@ export function mobileSettingsToUnifiedProvider(
         mode: "on-device",
         backend: settings.localBackend ?? "apple-fm",
         model: settings.model,
-        endpoint: settings.localBackend === "local-server" ? settings.ollamaEndpoint : undefined,
+        endpoint:
+          settings.localBackend === "local-server" ? settings.localServerEndpoint : undefined,
         maxTokens: settings.maxTokens,
       };
   }
@@ -311,20 +318,36 @@ export function mobileSettingsToUnifiedProvider(
 
 /**
  * Reverse migration: collapse an old persisted settings object onto the
- * current `MobileProvider` union. Called from `loadSettings`. Two historical
- * renames are honored:
+ * current `MobileProvider` union. Called from `loadSettings`. Historical
+ * renames honored:
  *   - `"local"`  → `"on-device"`  (renamed when the three-mode UI shipped)
  *   - `"ollama"` → `"local-server"`  (renamed for vendor neutrality)
+ *   - `ollamaEndpoint` → `localServerEndpoint`  (field rename, same reason)
+ *   - `budgetMaxCalls`  → `maxCallsPerTurn`     (align with sdk GovernanceConfig)
  */
 function migrateLegacyMobileSettings(
   raw: (Partial<MobileSettings> & { provider?: string }) | Record<string, unknown>,
 ): void {
-  const obj = raw as { provider?: string };
+  const obj = raw as {
+    provider?: string;
+    ollamaEndpoint?: string;
+    localServerEndpoint?: string;
+    budgetMaxCalls?: number;
+    maxCallsPerTurn?: number;
+  };
   if (obj.provider === "local") {
     obj.provider = "on-device";
   } else if (obj.provider === "ollama") {
     obj.provider = "local-server";
   }
+  if (obj.ollamaEndpoint !== undefined && obj.localServerEndpoint === undefined) {
+    obj.localServerEndpoint = obj.ollamaEndpoint;
+  }
+  delete obj.ollamaEndpoint;
+  if (obj.budgetMaxCalls !== undefined && obj.maxCallsPerTurn === undefined) {
+    obj.maxCallsPerTurn = obj.budgetMaxCalls;
+  }
+  delete obj.budgetMaxCalls;
 }
 
 /**
@@ -342,7 +365,7 @@ function mobileConfigToUnified(config: MobileAIConfig): UnifiedProviderConfig {
         mode: "on-device",
         backend: "local-server",
         model: config.model,
-        endpoint: config.ollamaEndpoint,
+        endpoint: config.localServerEndpoint,
         maxTokens: config.maxTokens,
       };
     case "anthropic":
@@ -380,7 +403,7 @@ function mobileConfigToUnified(config: MobileAIConfig): UnifiedProviderConfig {
         mode: "on-device",
         backend: config.localBackend ?? "apple-fm",
         model: config.model,
-        endpoint: config.localBackend === "local-server" ? config.ollamaEndpoint : undefined,
+        endpoint: config.localBackend === "local-server" ? config.localServerEndpoint : undefined,
         maxTokens: config.maxTokens,
       };
   }

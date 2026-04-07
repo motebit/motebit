@@ -202,6 +202,7 @@ describe("GovernanceConfig persistence", () => {
       persistenceThreshold: 0.7,
       rejectSecrets: true,
       maxCallsPerTurn: 10,
+      maxMemoriesPerTurn: 5,
     };
     saveGovernanceConfig(gov);
     expect(loadGovernanceConfig()).toEqual(gov);
@@ -219,7 +220,13 @@ describe("GovernanceConfig persistence", () => {
 
 describe("VoiceConfig persistence", () => {
   it("round-trips voice config", () => {
-    const voice: VoiceConfig = { ttsVoice: "Samantha", autoSend: true, voiceResponse: false };
+    const voice: VoiceConfig = {
+      enabled: true,
+      ttsVoice: "Samantha",
+      autoSend: true,
+      speakResponses: false,
+      neuralVad: true,
+    };
     saveVoiceConfig(voice);
     expect(loadVoiceConfig()).toEqual(voice);
   });
@@ -231,6 +238,20 @@ describe("VoiceConfig persistence", () => {
   it("returns null on corrupt JSON", () => {
     localStorage.setItem("motebit-voice", "[broken");
     expect(loadVoiceConfig()).toBeNull();
+  });
+
+  it("migrates legacy voiceResponse field to speakResponses", () => {
+    // Legacy web shape from before the canonical VoiceConfig existed.
+    localStorage.setItem(
+      "motebit-voice",
+      JSON.stringify({ ttsVoice: "alloy", autoSend: true, voiceResponse: true }),
+    );
+    const loaded = loadVoiceConfig();
+    expect(loaded?.speakResponses).toBe(true);
+    expect(loaded?.autoSend).toBe(true);
+    expect(loaded?.ttsVoice).toBe("alloy");
+    // Legacy blob had no `enabled` field — defaults to false.
+    expect(loaded?.enabled).toBe(false);
   });
 });
 

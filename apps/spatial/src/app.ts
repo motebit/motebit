@@ -70,10 +70,15 @@ let lastGazeHit = false;
 
 // === Settings persistence ===
 
-import type { GovernanceConfig } from "@motebit/sdk";
+import { DEFAULT_GOVERNANCE_CONFIG, type GovernanceConfig } from "@motebit/sdk";
 
 interface SpatialSettings {
-  provider: "anthropic" | "ollama" | "openai" | "proxy";
+  /**
+   * Provider. `local-server` is the canonical name for LAN/localhost
+   * inference (Ollama, LM Studio, llama.cpp, Jan, vLLM, …). Legacy
+   * persisted value `"ollama"` is migrated on load.
+   */
+  provider: "anthropic" | "local-server" | "openai" | "proxy";
   apiKey: string;
   model: string;
   voiceEnabled: boolean;
@@ -95,14 +100,14 @@ function loadSettings(): SpatialSettings {
     const raw = localStorage.getItem("motebit:spatial_settings");
     if (raw != null && raw !== "") {
       const parsed = JSON.parse(raw) as Partial<SpatialSettings>;
-      const defaultGov: GovernanceConfig = {
-        approvalPreset: "balanced",
-        persistenceThreshold: 0.5,
-        rejectSecrets: true,
-        maxCallsPerTurn: 10,
-      };
+      const defaultGov: GovernanceConfig = { ...DEFAULT_GOVERNANCE_CONFIG };
+      // Migrate legacy provider value "ollama" → "local-server".
+      const migratedProvider =
+        (parsed.provider as string | undefined) === "ollama"
+          ? "local-server"
+          : (parsed.provider ?? "anthropic");
       return {
-        provider: parsed.provider ?? "anthropic",
+        provider: migratedProvider,
         apiKey: parsed.apiKey ?? "",
         model: parsed.model ?? "",
         voiceEnabled: parsed.voiceEnabled ?? true,
@@ -137,12 +142,7 @@ function loadSettings(): SpatialSettings {
     customHue: 220,
     customSaturation: 0.7,
     maxTokens: 4096,
-    governance: {
-      approvalPreset: "balanced",
-      persistenceThreshold: 0.5,
-      rejectSecrets: true,
-      maxCallsPerTurn: 10,
-    },
+    governance: { ...DEFAULT_GOVERNANCE_CONFIG },
   };
 }
 
@@ -202,7 +202,7 @@ async function autoInitLocalInference(): Promise<boolean> {
         models[0]!;
       const localSettings: SpatialSettings = {
         ...loadSettings(),
-        provider: type === "ollama" ? "ollama" : "openai",
+        provider: type === "ollama" ? "local-server" : "openai",
         model,
       };
       saveSettings(localSettings);
@@ -325,7 +325,7 @@ function showMainOverlay(): void {
 // === Settings UI ===
 
 providerSelect?.addEventListener("change", () => {
-  updateProviderUI(providerSelect.value as "anthropic" | "ollama" | "openai");
+  updateProviderUI(providerSelect.value as "anthropic" | "local-server" | "openai");
 });
 
 function updateProviderUI(provider: string): void {
@@ -495,7 +495,7 @@ settingsSave?.addEventListener(
     void (async (e: Event) => {
       e.preventDefault();
       const settings: SpatialSettings = {
-        provider: providerSelect.value as "anthropic" | "ollama" | "openai" | "proxy",
+        provider: providerSelect.value as "anthropic" | "local-server" | "openai" | "proxy",
         apiKey: apiKeyInput.value.trim(),
         model: modelInput.value.trim(),
         voiceEnabled: voiceToggle.checked,

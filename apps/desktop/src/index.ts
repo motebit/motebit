@@ -31,12 +31,12 @@ import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
   CloudProvider,
   OpenAIProvider,
-  detectOllama,
+  detectLocalInference,
   resolveConfig,
   DEFAULT_OLLAMA_URL,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
-export type { OllamaDetectionResult } from "@motebit/ai-core";
+export type { LocalInferenceDetectionResult, OllamaDetectionResult } from "@motebit/ai-core";
 import type {
   ToolAuditEntry,
   MemoryNode,
@@ -239,11 +239,13 @@ export interface DesktopAIConfig {
   model?: string;
   apiKey?: string;
   /**
-   * Ollama HTTP endpoint for on-device / hybrid providers. Defaults to
-   * `DEFAULT_OLLAMA_URL` (http://127.0.0.1:11434). Users running Ollama on
-   * a LAN machine can point at that host here.
+   * Local inference server URL (Ollama, LM Studio, llama.cpp, Jan, vLLM, …).
+   * Defaults to `DEFAULT_OLLAMA_URL` (http://127.0.0.1:11434). Users running
+   * the server on a LAN machine can point at that host here. Persisted as
+   * `local_server_endpoint` in the Tauri JSON config; the historical key
+   * `ollama_endpoint` is still accepted on load for migration.
    */
-  ollamaEndpoint?: string;
+  localServerEndpoint?: string;
   personalityConfig?: MotebitPersonalityConfig;
   isTauri: boolean;
   maxTokens?: number;
@@ -260,9 +262,10 @@ export interface DesktopAIConfig {
  * speaks. Hybrid is excluded — it's a composite that doesn't reduce to a
  * single ProviderSpec and is built directly in `initAI`.
  *
- * The Tauri config field `ollamaEndpoint` (typed at `DesktopAIConfig`) maps
- * to the unified `endpoint` for on-device local-server. The resolver applies
- * the Ollama-vs-OpenAI-compat dispatch heuristic from there.
+ * The field `localServerEndpoint` on `DesktopAIConfig` maps to the unified
+ * `endpoint` for on-device local-server. The resolver then normalizes the
+ * URL and dispatches to the OpenAI-compat shim every supported local server
+ * exposes.
  */
 function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig {
   switch (config.provider) {
@@ -271,7 +274,7 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
         mode: "on-device",
         backend: "local-server",
         model: config.model,
-        endpoint: config.ollamaEndpoint,
+        endpoint: config.localServerEndpoint,
         maxTokens: config.maxTokens,
       };
     case "anthropic":
@@ -800,8 +803,8 @@ export class DesktopApp {
    * Detect a local Ollama instance. Never throws.
    * Times out after 2 seconds.
    */
-  detectOllama(): ReturnType<typeof detectOllama> {
-    return detectOllama();
+  detectLocalInference(): ReturnType<typeof detectLocalInference> {
+    return detectLocalInference();
   }
 
   setModel(model: string): void {
@@ -930,8 +933,8 @@ export class DesktopApp {
       // the dispatch heuristic recognizes it. The actual transport URL is
       // substituted by `localServerBaseUrl` below.
       defaultLocalServerUrl:
-        config.ollamaEndpoint != null && config.ollamaEndpoint !== ""
-          ? config.ollamaEndpoint
+        config.localServerEndpoint != null && config.localServerEndpoint !== ""
+          ? config.localServerEndpoint
           : DEFAULT_OLLAMA_URL,
       // Tauri builds talk to Ollama directly. Dev builds go through Vite's
       // `/api/ollama` proxy because the dev server can't bypass browser

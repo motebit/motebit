@@ -250,7 +250,7 @@ export function SettingsModal({
       requireApprovalAbove: APPROVAL_PRESET_CONFIGS[draft.approvalPreset]?.requireApprovalAbove,
       denyAbove: APPROVAL_PRESET_CONFIGS[draft.approvalPreset]?.denyAbove,
       operatorMode: app.isOperatorMode,
-      budget: { maxCallsPerTurn: draft.budgetMaxCalls },
+      budget: { maxCallsPerTurn: draft.maxCallsPerTurn },
     });
     app.updateMemoryGovernance({
       persistenceThreshold: draft.persistenceThreshold,
@@ -266,7 +266,7 @@ export function SettingsModal({
     if (
       draft.provider !== settings.provider ||
       draft.model !== settings.model ||
-      draft.ollamaEndpoint !== settings.ollamaEndpoint ||
+      draft.localServerEndpoint !== settings.localServerEndpoint ||
       draft.maxTokens !== settings.maxTokens
     ) {
       aiConfig = {
@@ -281,10 +281,10 @@ export function SettingsModal({
               : draft.provider === "google"
                 ? googleKey
                 : undefined,
-        ollamaEndpoint:
+        localServerEndpoint:
           draft.provider === "local-server" ||
           (draft.provider === "on-device" && draft.localBackend === "local-server")
-            ? draft.ollamaEndpoint
+            ? draft.localServerEndpoint
             : undefined,
         maxTokens: draft.maxTokens,
       };
@@ -372,7 +372,7 @@ export function SettingsModal({
                 model={draft.model}
                 apiKey={apiKey}
                 googleKey={googleKey}
-                ollamaEndpoint={draft.ollamaEndpoint}
+                localServerEndpoint={draft.localServerEndpoint}
                 localBackend={draft.localBackend ?? "apple-fm"}
                 voiceEnabled={draft.voiceEnabled}
                 voiceResponseEnabled={draft.voiceResponseEnabled}
@@ -398,7 +398,7 @@ export function SettingsModal({
                 onChangeModel={(m) => updateDraft({ model: m })}
                 onChangeApiKey={setApiKey}
                 onChangeGoogleKey={setGoogleKey}
-                onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
+                onChangeLocalServerEndpoint={(e) => updateDraft({ localServerEndpoint: e })}
                 onChangeLocalBackend={(b) => updateDraft({ localBackend: b })}
                 onChangeVoiceEnabled={(v) => updateDraft({ voiceEnabled: v })}
                 onChangeVoiceResponseEnabled={(v) => updateDraft({ voiceResponseEnabled: v })}
@@ -931,7 +931,7 @@ function IntelligenceTab({
   model,
   apiKey,
   googleKey,
-  ollamaEndpoint,
+  localServerEndpoint,
   localBackend,
   voiceEnabled,
   voiceResponseEnabled,
@@ -943,7 +943,7 @@ function IntelligenceTab({
   onChangeModel,
   onChangeApiKey,
   onChangeGoogleKey,
-  onChangeOllamaEndpoint,
+  onChangeLocalServerEndpoint,
   onChangeLocalBackend,
   onChangeVoiceEnabled,
   onChangeVoiceResponseEnabled,
@@ -956,7 +956,7 @@ function IntelligenceTab({
   model: string;
   apiKey: string;
   googleKey: string;
-  ollamaEndpoint: string;
+  localServerEndpoint: string;
   localBackend: LocalBackend;
   voiceEnabled: boolean;
   voiceResponseEnabled: boolean;
@@ -968,7 +968,7 @@ function IntelligenceTab({
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeGoogleKey: (k: string) => void;
-  onChangeOllamaEndpoint: (e: string) => void;
+  onChangeLocalServerEndpoint: (e: string) => void;
   onChangeLocalBackend: (b: LocalBackend) => void;
   onChangeVoiceEnabled: (v: boolean) => void;
   onChangeVoiceResponseEnabled: (v: boolean) => void;
@@ -1177,8 +1177,8 @@ function IntelligenceTab({
               <Text style={styles.sectionTitle}>Server Endpoint</Text>
               <TextInput
                 style={styles.textField}
-                value={ollamaEndpoint}
-                onChangeText={onChangeOllamaEndpoint}
+                value={localServerEndpoint}
+                onChangeText={onChangeLocalServerEndpoint}
                 placeholder="http://localhost:11434"
                 placeholderTextColor={colors.inputPlaceholder}
                 autoCapitalize="none"
@@ -1375,10 +1375,10 @@ function GovernanceTab({
         <Text style={styles.fieldLabel}>Max tool calls / turn</Text>
         <TextInput
           style={styles.numberField}
-          value={String(draft.budgetMaxCalls)}
+          value={String(draft.maxCallsPerTurn)}
           onChangeText={(v) => {
             const n = parseInt(v, 10);
-            if (!isNaN(n) && n > 0) onUpdate({ budgetMaxCalls: n });
+            if (!isNaN(n) && n > 0) onUpdate({ maxCallsPerTurn: n });
           }}
           keyboardType="number-pad"
           placeholderTextColor={colors.inputPlaceholder}

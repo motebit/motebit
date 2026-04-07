@@ -60,8 +60,18 @@ export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
 /** Default Google model. */
 export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";
 
-/** Default Ollama model. */
+/** Default Ollama model — used as the `local-server` default too. */
 export const DEFAULT_OLLAMA_MODEL = "llama3.2";
+
+/**
+ * Canonical default model for the on-device `local-server` backend.
+ * Currently aliased to `DEFAULT_OLLAMA_MODEL` — Ollama's `llama3.2` is
+ * the sensible first-run default even for users who end up running
+ * LM Studio / llama.cpp / vLLM. Prefer this name in new code; the
+ * Ollama-specific alias is retained for places that genuinely mean
+ * the Ollama model identifier.
+ */
+export const DEFAULT_LOCAL_SERVER_MODEL = DEFAULT_OLLAMA_MODEL;
 
 /** Default proxy model (used when no model is specified). */
 export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";

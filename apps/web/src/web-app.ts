@@ -237,6 +237,7 @@ export class WebApp {
           ? {
               persistenceThreshold: govConfig.persistenceThreshold,
               rejectSecrets: govConfig.rejectSecrets,
+              maxMemoriesPerTurn: govConfig.maxMemoriesPerTurn,
             }
           : undefined,
         taskRouter: PLANNING_TASK_ROUTER,

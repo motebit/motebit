@@ -128,7 +128,7 @@ export function clearSyncUrl(): void {
 
 // === Governance Config ===
 
-import type { GovernanceConfig } from "@motebit/sdk";
+import { DEFAULT_GOVERNANCE_CONFIG, type GovernanceConfig } from "@motebit/sdk";
 export type { GovernanceConfig } from "@motebit/sdk";
 
 const GOVERNANCE_KEY = "motebit-governance";
@@ -144,9 +144,11 @@ export function saveGovernanceConfig(config: GovernanceConfig): void {
 export function loadGovernanceConfig(): GovernanceConfig | null {
   try {
     const raw = localStorage.getItem(GOVERNANCE_KEY);
-    if (raw) {
-      return JSON.parse(raw) as GovernanceConfig;
-    }
+    if (raw == null || raw === "") return null;
+    const parsed = JSON.parse(raw) as Partial<GovernanceConfig>;
+    // Fill in any fields missing from legacy blobs (e.g. older persisted
+    // data written before `maxMemoriesPerTurn` was promoted to canonical).
+    return { ...DEFAULT_GOVERNANCE_CONFIG, ...parsed };
   } catch {
     // localStorage unavailable or corrupt
   }
@@ -154,12 +156,14 @@ export function loadGovernanceConfig(): GovernanceConfig | null {
 }
 
 // === Voice Config ===
+//
+// The authoritative `VoiceConfig` shape lives in `@motebit/sdk`. Web persists
+// it as-is; legacy localStorage blobs (with `voiceResponse` instead of
+// `speakResponses`, and no `enabled` field) are normalized on load via the
+// canonical `migrateVoiceConfig` helper.
 
-export interface VoiceConfig {
-  ttsVoice: string;
-  autoSend: boolean;
-  voiceResponse: boolean;
-}
+import { migrateVoiceConfig, type VoiceConfig } from "@motebit/sdk";
+export type { VoiceConfig };
 
 const VOICE_KEY = "motebit-voice";
 
@@ -174,9 +178,8 @@ export function saveVoiceConfig(config: VoiceConfig): void {
 export function loadVoiceConfig(): VoiceConfig | null {
   try {
     const raw = localStorage.getItem(VOICE_KEY);
-    if (raw) {
-      return JSON.parse(raw) as VoiceConfig;
-    }
+    if (raw == null || raw === "") return null;
+    return migrateVoiceConfig(JSON.parse(raw));
   } catch {
     // localStorage unavailable or corrupt
   }

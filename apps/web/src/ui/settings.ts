@@ -1,5 +1,6 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, GovernanceConfig, VoiceConfig } from "../storage";
+import { DEFAULT_GOVERNANCE_CONFIG } from "@motebit/sdk";
 import {
   saveProviderConfig,
   saveSoulColor,
@@ -671,7 +672,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const voiceConfig = loadVoiceConfig();
     if (voiceConfig) {
       voiceAutoSend.checked = voiceConfig.autoSend;
-      voiceResponse.checked = voiceConfig.voiceResponse;
+      voiceResponse.checked = voiceConfig.speakResponses;
       // Voice select populated async — set after voices load
       if (voiceConfig.ttsVoice) ttsVoiceSelect.value = voiceConfig.ttsVoice;
     }
@@ -911,20 +912,30 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const selectedPreset =
       document.querySelector<HTMLInputElement>('input[name="approval-preset"]:checked')?.value ??
       "balanced";
+    const prevGov = loadGovernanceConfig();
     const govCfg: GovernanceConfig = {
       approvalPreset: selectedPreset as GovernanceConfig["approvalPreset"],
       persistenceThreshold: parseInt(govPersistenceThreshold.value, 10) / 100,
       rejectSecrets: govRejectSecrets.checked,
       maxCallsPerTurn: parseInt(govMaxCalls.value, 10) || 10,
+      // Web UI doesn't expose a max-memories slider yet; preserve whatever
+      // was stored, default from the canonical sdk config.
+      maxMemoriesPerTurn:
+        prevGov?.maxMemoriesPerTurn ?? DEFAULT_GOVERNANCE_CONFIG.maxMemoriesPerTurn,
     };
     saveGovernanceConfig(govCfg);
     applyGovernanceToRuntime(ctx, govCfg);
 
-    // Save voice config
+    // Save voice config. `enabled` stays whatever the stored config said —
+    // the web surface doesn't expose a master voice on/off toggle yet; when
+    // it does, wire it here. Defaults flow through `migrateVoiceConfig`.
+    const prevVoiceCfg = loadVoiceConfig();
     const voiceCfg: VoiceConfig = {
+      enabled: prevVoiceCfg?.enabled ?? false,
       ttsVoice: ttsVoiceSelect.value,
       autoSend: voiceAutoSend.checked,
-      voiceResponse: voiceResponse.checked,
+      speakResponses: voiceResponse.checked,
+      neuralVad: prevVoiceCfg?.neuralVad,
     };
     saveVoiceConfig(voiceCfg);
     setTTSVoice(voiceCfg.ttsVoice);

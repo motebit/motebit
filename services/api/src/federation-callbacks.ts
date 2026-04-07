@@ -14,7 +14,7 @@ import type { IdentityManager } from "@motebit/core-identity";
 import {
   AgentTaskStatus,
   asMotebitId,
-  PLATFORM_FEE_RATE as DEFAULT_PLATFORM_FEE_RATE,
+  PLATFORM_FEE_RATE as SDK_DEFAULT_PLATFORM_FEE_RATE,
   AgentTrustLevel,
 } from "@motebit/sdk";
 import { evaluateTrustTransition, trustLevelToScore } from "@motebit/market";
@@ -52,9 +52,6 @@ export interface FederationCallbackDeps {
   platformFeeRate?: number;
 }
 
-/** Configurable platform fee rate — set by createFederationCallbacks from deps. */
-let PLATFORM_FEE_RATE = DEFAULT_PLATFORM_FEE_RATE;
-
 /**
  * Build the three federation callback functions that registerFederationRoutes expects.
  * These close over the shared relay state (taskQueue, connections, moteDb, etc.)
@@ -74,9 +71,12 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
     taskTtlMs,
   } = deps;
 
-  if (deps.platformFeeRate != null) {
-    PLATFORM_FEE_RATE = deps.platformFeeRate;
-  }
+  // Platform fee rate lives in closure over the callback set — NOT in a
+  // module-level variable. This guarantees every callback returned from
+  // this factory sees the same rate for its entire lifetime, and different
+  // relay instances (in tests or in a multi-tenant deployment) can have
+  // different rates without clobbering each other's module state.
+  const platformFeeRate = deps.platformFeeRate ?? SDK_DEFAULT_PLATFORM_FEE_RATE;
 
   return {
     onTaskForwarded(verified: {
@@ -300,7 +300,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       try {
         if (entry.price_snapshot != null && entry.price_snapshot > 0) {
           const grossAmount = entry.price_snapshot;
-          const feeAmount = Math.round(grossAmount * PLATFORM_FEE_RATE);
+          const feeAmount = Math.round(grossAmount * platformFeeRate);
           const netAmount = grossAmount - feeAmount;
           const receiptHash = verified.receipt.result_hash ?? verified.receipt.signature ?? "";
           const settlementId = crypto.randomUUID();
@@ -318,7 +318,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               grossAmount,
               feeAmount,
               netAmount,
-              PLATFORM_FEE_RATE,
+              platformFeeRate,
               Date.now(),
               receiptHash,
               entry.x402_tx_hash ?? null,
@@ -390,7 +390,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       x402TxHash?: string;
       x402Network?: string;
     }) {
-      const feeAmount = Math.round(verified.grossAmount * PLATFORM_FEE_RATE);
+      const feeAmount = Math.round(verified.grossAmount * platformFeeRate);
       const netAmount = verified.grossAmount - feeAmount;
       moteDb.db
         .prepare(
@@ -405,7 +405,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           verified.grossAmount,
           feeAmount,
           netAmount,
-          PLATFORM_FEE_RATE,
+          platformFeeRate,
           Date.now(),
           verified.receiptHash,
           verified.x402TxHash ?? null,
