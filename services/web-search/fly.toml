@@ -10,6 +10,7 @@ kill_timeout = 5
   NODE_ENV = "production"
   MOTEBIT_PORT = "3200"
   MOTEBIT_DB_PATH = "/data/web-search.db"
+  MOTEBIT_DATA_DIR = "/data"
 
 [http_service]
   internal_port = 3200

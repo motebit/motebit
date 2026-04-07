@@ -20,11 +20,6 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @motebit/web-search... build
 RUN pnpm --filter @motebit/web-search deploy --prod /app/deployed
 
-# Ensure identity file exists for COPY (gitignored — contains encrypted keys).
-# Real file comes from local build context; CI gets an empty placeholder.
-# Production identity is injected via Fly volume mount.
-RUN test -f services/web-search/motebit.md || touch services/web-search/motebit.md
-
 # --- Runtime: lean image with only production deps ---
 FROM node:22-alpine AS runtime
 WORKDIR /app
@@ -34,19 +29,19 @@ RUN apk add --no-cache libstdc++
 
 COPY --from=build /app/deployed ./
 
-# Identity file — not included by pnpm deploy (not a source dep)
-COPY --from=build /app/services/web-search/motebit.md ./motebit.md
-
-# Create data directory for SQLite
+# Create the persistent data directory. On Fly, /data is the volume
+# mount point from fly.toml; here we just ensure it exists for local
+# docker runs. The motebit identity (motebit.json / motebit.key /
+# motebit.md) is generated on first boot via bootstrapServiceIdentity()
+# — no identity file baked into the image.
 RUN mkdir -p /data
 
 ENV NODE_ENV=production
 ENV MOTEBIT_PORT=3200
 ENV MOTEBIT_DB_PATH=/data/web-search.db
+ENV MOTEBIT_DATA_DIR=/data
 EXPOSE 3200
 
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:3200/health || exit 1
 
-# Seed identity file to volume on first boot (CI builds have a placeholder;
-# local builds have the real file). Once on the volume it persists across deploys.
-CMD ["sh", "-c", "test -s /data/motebit.md || cp /app/motebit.md /data/motebit.md; node dist/index.js"]
+CMD ["node", "dist/index.js"]

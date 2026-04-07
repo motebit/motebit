@@ -24,11 +24,8 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import {
-  verifyIdentityFile,
-  governanceToPolicyConfig,
-  parseRiskLevel,
-} from "@motebit/identity-file";
+import { bootstrapServiceIdentity } from "@motebit/core-identity";
+import { generate, parseRiskLevel } from "@motebit/identity-file";
 import {
   verifySignedToken,
   signExecutionReceipt,
@@ -189,25 +186,46 @@ async function subDelegate(
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const serviceName = "motebit-web-search";
 
-  // 1. Load and verify identity
-  const identityPath = path.resolve(config.identityPath);
-  if (!fs.existsSync(identityPath)) {
-    console.error(
-      `No identity file found at ${identityPath}. Generate one: npx create-motebit . --service`,
-    );
-    process.exit(1);
-  }
-  const identityContent = fs.readFileSync(identityPath, "utf-8");
-  const verifyResult = await verifyIdentityFile(identityContent);
-  if (!verifyResult.valid || !verifyResult.identity) {
-    console.error(`Identity verification failed: ${verifyResult.error ?? "unknown error"}`);
-    process.exit(1);
-  }
-  const identity = verifyResult.identity;
-  const motebitId = identity.motebit_id;
-  const publicKeyHex = identity.identity.public_key;
-  log(`Identity verified: ${motebitId}`);
+  // 1. Bootstrap identity from the persistent data dir (generates on
+  //    first boot, reloads on subsequent boots). Shared protocol —
+  //    same bootstrap path every other surface uses.
+  const bootstrap = await bootstrapServiceIdentity({
+    dataDir: path.resolve(config.dataDir),
+    serviceName,
+  });
+  const { motebitId, deviceId, publicKeyHex, privateKeyHex } = bootstrap;
+  log(
+    `Identity ${bootstrap.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
+      `(data dir: ${config.dataDir})`,
+  );
+
+  // 2. Emit the canonical signed motebit.md from the bootstrapped state.
+  const privateKey = fromHex(privateKeyHex);
+  const identityContent = await generate(
+    {
+      motebitId,
+      ownerId: serviceName,
+      publicKeyHex,
+      devices: [
+        {
+          device_id: deviceId,
+          name: serviceName,
+          public_key: publicKeyHex,
+          registered_at: new Date().toISOString(),
+        },
+      ],
+      service: {
+        type: "service",
+        service_name: "Web Search",
+        service_description: "Brave/DuckDuckGo web search + multi-hop delegation to read-url",
+        capabilities: ["web_search", "read_url"],
+      },
+    },
+    privateKey,
+  );
+  fs.writeFileSync(bootstrap.suggestedIdentityPath, identityContent, "utf-8");
 
   // 2. Build tool registry — two tools only (read-only, R0)
   const registry = new InMemoryToolRegistry();
@@ -245,14 +263,10 @@ async function main(): Promise<void> {
     approvalStore: moteDb.approvalStore,
   };
 
-  const govConfig =
-    identity.governance != null ? governanceToPolicyConfig(identity.governance) : null;
-
-  // Service motebit: auto-approve its own tools (web_search, read_url, motebit_task)
-  // The identity file may have conservative personal governance defaults — override
-  // for service mode where all registered tools are pre-approved read-only operations.
+  // Service motebit: auto-approve its own tools (web_search, read_url, motebit_task).
+  // All registered tools are pre-approved read-only operations — the service
+  // doesn't need per-call approval for its own exposed capabilities.
   const policyOverrides = {
-    ...(govConfig ?? {}),
     maxRiskAuto: parseRiskLevel("R3_EXECUTE"),
     requireApprovalAbove: parseRiskLevel("R3_EXECUTE"),
   };
@@ -264,125 +278,111 @@ async function main(): Promise<void> {
   await runtime.init();
   log("Runtime initialized (tool server mode — no LLM)");
 
-  // 4. Wire handleAgentTask — direct tool execution with signed receipts
-  let handleAgentTask:
-    | ((
-        prompt: string,
-        options?: { delegatedScope?: string },
-      ) => AsyncGenerator<
-        | { type: "text"; text: string }
-        | { type: "task_result"; receipt: Record<string, unknown> }
-        | { type: string; [key: string]: unknown }
-      >)
-    | undefined;
+  // 4. Wire handleAgentTask — direct tool execution with signed receipts.
+  //    privateKey is unconditional (every service bootstrapped identity has one).
+  const handleAgentTask = async function* (
+    prompt: string,
+    options?: { delegatedScope?: string; relayTaskId?: string },
+  ) {
+    const taskId = crypto.randomUUID();
+    const submittedAt = Date.now();
 
-  if (config.privateKeyHex) {
-    const privateKey = fromHex(config.privateKeyHex);
-    handleAgentTask = async function* (
-      prompt: string,
-      options?: { delegatedScope?: string; relayTaskId?: string },
-    ) {
-      const taskId = crypto.randomUUID();
-      const submittedAt = Date.now();
+    let result: { ok: boolean; data?: unknown; error?: string };
+    try {
+      // The prompt from delegation is often a full sentence ("Search for the current
+      // Bitcoin price in USD"). Brave Search works best with keywords, not natural
+      // language. Strip common filler to extract the core query.
+      const query = prompt
+        .replace(
+          /\b(search\s+(for|the)?|find\s+(me\s+)?|look\s+up|what\s+is\s+(the\s+)?|tell\s+me\s+(about\s+)?|get\s+(me\s+)?|can\s+you|please|right\s+now|currently?|latest|return\s+the\s+result)\b/gi,
+          " ",
+        )
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      result = await runtime.getToolRegistry().execute("web_search", { query: query || prompt });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { ok: false, error: msg };
+    }
+    const searchCompletedAt = Date.now();
 
-      let result: { ok: boolean; data?: unknown; error?: string };
+    // Use data on success, error message on failure — never undefined
+    const resultStr = result.ok
+      ? typeof result.data === "string"
+        ? result.data
+        : JSON.stringify(result.data ?? null)
+      : (result.error ?? "error");
+    const canonical = canonicalizeResults(resultStr);
+    const enc = new TextEncoder();
+    const promptHash = await sha256(enc.encode(prompt));
+    const resultHash = await sha256(enc.encode(canonical));
+
+    // Multi-hop: sub-delegate URL reading to Charlie if configured
+    let delegationReceipts: Record<string, unknown>[] | undefined;
+    if (config.delegateReadUrl && result.ok) {
       try {
-        // The prompt from delegation is often a full sentence ("Search for the current
-        // Bitcoin price in USD"). Brave Search works best with keywords, not natural
-        // language. Strip common filler to extract the core query.
-        const query = prompt
-          .replace(
-            /\b(search\s+(for|the)?|find\s+(me\s+)?|look\s+up|what\s+is\s+(the\s+)?|tell\s+me\s+(about\s+)?|get\s+(me\s+)?|can\s+you|please|right\s+now|currently?|latest|return\s+the\s+result)\b/gi,
-            " ",
-          )
-          .replace(/\s{2,}/g, " ")
-          .trim();
-        result = await runtime.getToolRegistry().execute("web_search", { query: query || prompt });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        result = { ok: false, error: msg };
-      }
-      const searchCompletedAt = Date.now();
-
-      // Use data on success, error message on failure — never undefined
-      const resultStr = result.ok
-        ? typeof result.data === "string"
-          ? result.data
-          : JSON.stringify(result.data ?? null)
-        : (result.error ?? "error");
-      const canonical = canonicalizeResults(resultStr);
-      const enc = new TextEncoder();
-      const promptHash = await sha256(enc.encode(prompt));
-      const resultHash = await sha256(enc.encode(canonical));
-
-      // Multi-hop: sub-delegate URL reading to Charlie if configured
-      let delegationReceipts: Record<string, unknown>[] | undefined;
-      if (config.delegateReadUrl && result.ok) {
+        // Extract a URL to sub-delegate: from search results, or from the prompt itself
+        let firstUrl: string | undefined;
         try {
-          // Extract a URL to sub-delegate: from search results, or from the prompt itself
-          let firstUrl: string | undefined;
-          try {
-            const parsed = JSON.parse(resultStr) as Array<{ url?: string; link?: string }>;
-            firstUrl = parsed[0]?.url ?? parsed[0]?.link;
-          } catch {
-            // Results aren't JSON — try extracting URL from prompt or result
-            const urlMatch = (prompt + " " + resultStr).match(/https?:\/\/[^\s"<>]+/);
-            if (urlMatch) firstUrl = urlMatch[0];
-          }
-          if (firstUrl) {
-            log(`sub-delegating read_url to ${config.delegateReadUrl}: ${firstUrl.slice(0, 60)}`);
-            const charlieReceipt = await subDelegate(
-              config.delegateReadUrl,
-              firstUrl,
-              motebitId,
-              "web-search-service",
-              privateKey,
-              config.syncUrl,
-              config.apiToken,
-              config.delegateTargetId,
-            );
-            if (charlieReceipt) {
-              delegationReceipts = [charlieReceipt];
-              log(`sub-delegation receipt: ${(charlieReceipt.signature as string)?.slice(0, 12)}…`);
-            }
-          }
-        } catch (subErr: unknown) {
-          // Sub-delegation is best-effort — don't block the main receipt
-          const subMsg = subErr instanceof Error ? subErr.message : String(subErr);
-          log(`sub-delegation skipped: ${subMsg}`);
+          const parsed = JSON.parse(resultStr) as Array<{ url?: string; link?: string }>;
+          firstUrl = parsed[0]?.url ?? parsed[0]?.link;
+        } catch {
+          // Results aren't JSON — try extracting URL from prompt or result
+          const urlMatch = (prompt + " " + resultStr).match(/https?:\/\/[^\s"<>]+/);
+          if (urlMatch) firstUrl = urlMatch[0];
         }
+        if (firstUrl) {
+          log(`sub-delegating read_url to ${config.delegateReadUrl}: ${firstUrl.slice(0, 60)}`);
+          const charlieReceipt = await subDelegate(
+            config.delegateReadUrl,
+            firstUrl,
+            motebitId,
+            "web-search-service",
+            privateKey,
+            config.syncUrl,
+            config.apiToken,
+            config.delegateTargetId,
+          );
+          if (charlieReceipt) {
+            delegationReceipts = [charlieReceipt];
+            log(`sub-delegation receipt: ${(charlieReceipt.signature as string)?.slice(0, 12)}…`);
+          }
+        }
+      } catch (subErr: unknown) {
+        // Sub-delegation is best-effort — don't block the main receipt
+        const subMsg = subErr instanceof Error ? subErr.message : String(subErr);
+        log(`sub-delegation skipped: ${subMsg}`);
       }
+    }
 
-      const receipt: Record<string, unknown> = {
-        task_id: taskId,
-        motebit_id: motebitId,
-        device_id: "web-search-service",
-        submitted_at: submittedAt,
-        completed_at: delegationReceipts ? Date.now() : searchCompletedAt,
-        status: result.ok ? ("completed" as const) : ("failed" as const),
-        result: canonical,
-        tools_used: ["web_search", ...(delegationReceipts ? ["read_url(delegated)"] : [])],
-        memories_formed: 0,
-        prompt_hash: promptHash,
-        result_hash: resultHash,
-        // Cryptographic binding to the relay's economic identity for this task.
-        ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
-        // Delegated scope — must be included before signing so it's in the canonical form
-        ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
-        // Nested receipts from sub-delegated work — chain of custody proof
-        ...(delegationReceipts ? { delegation_receipts: delegationReceipts } : {}),
-      };
-
-      const signed = await signExecutionReceipt(
-        receipt as Parameters<typeof signExecutionReceipt>[0],
-        privateKey,
-        fromHex(publicKeyHex),
-      );
-      log(`receipt=${signed.signature.slice(0, 12)}… query="${prompt.slice(0, 60)}"`);
-      yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
+    const receipt: Record<string, unknown> = {
+      task_id: taskId,
+      motebit_id: motebitId,
+      device_id: "web-search-service",
+      submitted_at: submittedAt,
+      completed_at: delegationReceipts ? Date.now() : searchCompletedAt,
+      status: result.ok ? ("completed" as const) : ("failed" as const),
+      result: canonical,
+      tools_used: ["web_search", ...(delegationReceipts ? ["read_url(delegated)"] : [])],
+      memories_formed: 0,
+      prompt_hash: promptHash,
+      result_hash: resultHash,
+      // Cryptographic binding to the relay's economic identity for this task.
+      ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
+      // Delegated scope — must be included before signing so it's in the canonical form
+      ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
+      // Nested receipts from sub-delegated work — chain of custody proof
+      ...(delegationReceipts ? { delegation_receipts: delegationReceipts } : {}),
     };
-    log("Agent task handler enabled (receipts will be signed)");
-  }
+
+    const signed = await signExecutionReceipt(
+      receipt as Parameters<typeof signExecutionReceipt>[0],
+      privateKey,
+      fromHex(publicKeyHex),
+    );
+    log(`receipt=${signed.signature.slice(0, 12)}… query="${prompt.slice(0, 60)}"`);
+    yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
+  };
 
   // 5. Wire deps + start server (scaffold handles MCP, relay, shutdown)
   const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.05");

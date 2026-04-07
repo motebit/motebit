@@ -116,9 +116,27 @@ describe("fromHex", () => {
 
 describe("loadConfig", () => {
   it("returns default values when env vars are not set", () => {
-    const config = loadConfig();
-    expect(config.port).toBe(3200);
-    expect(config.dbPath).toBe("./data/web-search.db");
-    expect(config.identityPath).toBe("./motebit.md");
+    const savedDataDir = process.env["MOTEBIT_DATA_DIR"];
+    delete process.env["MOTEBIT_DATA_DIR"];
+    try {
+      const config = loadConfig();
+      expect(config.port).toBe(3200);
+      expect(config.dbPath).toBe("./data/web-search.db");
+      expect(config.dataDir).toBe("./data");
+    } finally {
+      if (savedDataDir !== undefined) process.env["MOTEBIT_DATA_DIR"] = savedDataDir;
+    }
+  });
+
+  it("reads dataDir from MOTEBIT_DATA_DIR", () => {
+    const saved = process.env["MOTEBIT_DATA_DIR"];
+    process.env["MOTEBIT_DATA_DIR"] = "/data";
+    try {
+      const config = loadConfig();
+      expect(config.dataDir).toBe("/data");
+    } finally {
+      if (saved !== undefined) process.env["MOTEBIT_DATA_DIR"] = saved;
+      else delete process.env["MOTEBIT_DATA_DIR"];
+    }
   });
 });
