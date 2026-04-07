@@ -36,12 +36,7 @@ const Feather = require("@expo/vector-icons/Feather").default as React.Component
 
 import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
-import type { TTSProvider, STTProvider } from "@motebit/voice";
-import { FallbackTTSProvider, StreamingTTSQueue, computeSpeechEnergy } from "@motebit/voice";
-import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
-import { OpenAITTSProvider } from "./adapters/openai-tts";
-import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
-import { AudioMonitor } from "./adapters/audio-monitor";
+import { computeSpeechEnergy } from "@motebit/voice";
 import { MobileApp, APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, setBackgroundApp } from "./mobile-app";
 import { SECURE_STORE_KEYS } from "./storage-keys";
 import type {
@@ -68,6 +63,7 @@ import { ThemeContext, resolveTheme, type ThemeColors } from "./theme";
 import { runSlashCommand } from "./slash-commands";
 import { useChatStream } from "./use-chat-stream";
 import { usePairing } from "./use-pairing";
+import { useVoice } from "./use-voice";
 
 // === Types ===
 
@@ -150,26 +146,9 @@ export default function App(): React.ReactElement {
     setBanner(null);
   }, []);
 
-  // Voice state — 5-state machine:
-  //   off → ambient (mic listening, creature breathes, VAD armed)
-  //   ambient → voice (VAD triggered or manual tap, STT recording)
-  //   voice → transcribing (recording stopped, Whisper API call)
-  //   transcribing → ambient (result received, auto-send, return to listening)
-  //   speaking → ambient (TTS finished or cancelled)
-  //   Any → off (explicit stop)
-  const [micState, setMicState] = useState<
-    "off" | "ambient" | "voice" | "transcribing" | "speaking"
-  >("off");
-  const ttsRef = useRef<TTSProvider | null>(null);
-  const sttRef = useRef<STTProvider | null>(null);
-  const audioMonitorRef = useRef<AudioMonitor | null>(null);
-  const ttsPulseRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Streaming TTS queue (shared state machine from @motebit/voice)
-  const ttsQueueRef = useRef<StreamingTTSQueue | null>(null);
-  // Track whether voice was auto-triggered by VAD (vs manual tap from ambient)
-  const vadTriggeredRef = useRef(false);
-  // Audio level for VoiceIndicator visualization
-  const [audioLevel, setAudioLevel] = useState(0);
+  // Voice state + handlers live in ./use-voice.ts. The hook is called
+  // later in this component (once `settings` is declared and the
+  // banner/setShowSettings callbacks are defined).
 
   // Sync state
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error" | "offline">("offline");
@@ -238,6 +217,34 @@ export default function App(): React.ReactElement {
     renderLoopTokenRef.current += 1;
   }, []);
 
+  // Voice state machine, TTS/STT providers, audio monitor with VAD.
+  // Hook returns: mic state, audio level, the mic-press state machine,
+  // streaming TTS controls, the isTTSDraining getter used by the render
+  // loop, and a dispose() called from the init-effect cleanup.
+  const {
+    micState,
+    audioLevel,
+    handleMicPress,
+    initVoice,
+    pushTTSChunk,
+    flushTTS,
+    cancelStreamingTTS,
+    isTTSDraining,
+    dispose: voiceDispose,
+  } = useVoice({
+    app: app.current,
+    voiceSettings: settings?.voice,
+    addSystemMessage: (content) => {
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: "system", content, timestamp: Date.now() },
+      ]);
+    },
+    setInputText,
+    showBanner,
+    setShowSettings,
+  });
+
   // === Initialization ===
   useEffect(() => {
     void (async () => {
@@ -303,41 +310,9 @@ export default function App(): React.ReactElement {
       app.current.stopSync();
       app.current.stop();
       app.current.disposeProxySession();
-      if (audioMonitorRef.current) void audioMonitorRef.current.stop();
-      if (ttsPulseRef.current) clearInterval(ttsPulseRef.current);
-      ttsRef.current?.cancel();
-      sttRef.current?.stop();
+      voiceDispose();
     };
   }, [stopRenderLoop]);
-
-  // Initialize voice providers — TTS chain: OpenAI TTS → expo-speech fallback
-  const initVoice = useCallback(
-    async (voiceSettings?: { ttsVoice?: string }) => {
-      const openaiKey = await SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiVoiceKey);
-      const voice = voiceSettings?.ttsVoice ?? settings?.voice.ttsVoice ?? "alloy";
-
-      // Build TTS chain: OpenAI (if key available) → system TTS fallback
-      const systemTts = new ExpoSpeechTTSProvider();
-      if (openaiKey != null && openaiKey !== "") {
-        const openaiTts = new OpenAITTSProvider({ apiKey: openaiKey, voice });
-        ttsRef.current = new FallbackTTSProvider([openaiTts, systemTts]);
-      } else {
-        ttsRef.current = systemTts;
-      }
-      // Wire streaming queue to the active TTS provider
-      ttsQueueRef.current = new StreamingTTSQueue(
-        (text) => ttsRef.current?.speak(text) ?? Promise.resolve(),
-      );
-
-      if (!sttRef.current) {
-        // STT needs an OpenAI API key for Whisper
-        if (openaiKey != null && openaiKey !== "") {
-          sttRef.current = new ExpoAVSTTProvider({ apiKey: openaiKey });
-        }
-      }
-    },
-    [settings?.voice.ttsVoice],
-  );
 
   const applyThemeEnvironment = useCallback((a: MobileApp, theme: "light" | "dark" | "system") => {
     const effective = theme === "system" ? (Appearance.getColorScheme() ?? "dark") : theme;
@@ -568,7 +543,7 @@ export default function App(): React.ReactElement {
           lastTime = time;
 
           const runtime = a.getRuntime();
-          const isSpeaking = ttsQueueRef.current?.draining ?? false;
+          const isSpeaking = isTTSDraining();
           if (runtime) {
             runtime.behavior.setSpeaking(isSpeaking);
           }
@@ -596,122 +571,6 @@ export default function App(): React.ReactElement {
     app.current.getRenderer().setWebViewRef(ref);
   }, []);
 
-  // === Audio monitor helpers ===
-
-  /** Start ambient listening — AudioMonitor with VAD that auto-triggers voice recording. */
-  const startAmbientMonitor = useCallback(() => {
-    if (audioMonitorRef.current?.isRunning === true) return;
-    const monitor = new AudioMonitor();
-    monitor.neuralVadEnabled = settings?.voice.neuralVad ?? true;
-    monitor.onAudio = (energy) => {
-      app.current.setAudioReactivity(energy ?? null);
-      setAudioLevel(energy?.rms ?? 0);
-    };
-    monitor.onSpeechStart = () => {
-      // VAD triggered — transition ambient → voice
-      vadTriggeredRef.current = true;
-      setMicState("voice");
-    };
-    audioMonitorRef.current = monitor;
-    void monitor.start();
-  }, [settings?.voice.neuralVad]);
-
-  const stopAudioMonitor = useCallback(() => {
-    if (audioMonitorRef.current) {
-      void audioMonitorRef.current.stop();
-      audioMonitorRef.current = null;
-    }
-    app.current.setAudioReactivity(null);
-    setAudioLevel(0);
-  }, []);
-
-  /** Start STT recording (stops AudioMonitor first — expo-av single-recording constraint on iOS). */
-  const startVoiceRecording = useCallback(() => {
-    const stt = sttRef.current;
-    if (!stt) {
-      showBanner("Voice input requires an OpenAI API key", "Settings", () => setShowSettings(true));
-      setMicState("ambient");
-      return;
-    }
-
-    // Stop ambient monitor before starting STT recording
-    stopAudioMonitor();
-
-    stt.onResult = (transcript: string, isFinal: boolean) => {
-      if (isFinal && transcript.trim()) {
-        setInputText(transcript.trim());
-        // Return to ambient after transcription completes
-        setMicState("ambient");
-      }
-    };
-    stt.onError = (error: string) => {
-      addSystemMessage(`Mic error: ${error}`);
-      setMicState("ambient");
-    };
-    stt.onEnd = () => {
-      // Transition handled by onResult or onError
-    };
-
-    stt.start({ language: "en-US" });
-  }, [addSystemMessage, stopAudioMonitor]);
-
-  // Auto-start STT when VAD triggers voice state
-  const prevMicStateForVADRef = useRef(micState);
-  useEffect(() => {
-    if (
-      prevMicStateForVADRef.current === "ambient" &&
-      micState === "voice" &&
-      vadTriggeredRef.current
-    ) {
-      vadTriggeredRef.current = false;
-      startVoiceRecording();
-    }
-    prevMicStateForVADRef.current = micState;
-  }, [micState, startVoiceRecording]);
-
-  // Auto-restart ambient monitor when returning from transcribing/speaking
-  useEffect(() => {
-    if (micState === "ambient" && audioMonitorRef.current?.isRunning !== true) {
-      startAmbientMonitor();
-    }
-  }, [micState, startAmbientMonitor]);
-
-  // === Mic button handler — 5-state machine ===
-  const handleMicPress = useCallback(() => {
-    switch (micState) {
-      case "off": {
-        // off → ambient: start listening with VAD
-        setMicState("ambient");
-        startAmbientMonitor();
-        break;
-      }
-      case "ambient": {
-        // ambient → off: stop listening
-        stopAudioMonitor();
-        setMicState("off");
-        break;
-      }
-      case "voice": {
-        // voice → transcribing: stop recording, send to Whisper
-        setMicState("transcribing");
-        sttRef.current?.stop();
-        break;
-      }
-      case "speaking": {
-        // speaking → ambient: cancel TTS, return to ambient
-        ttsRef.current?.cancel();
-        if (ttsPulseRef.current) {
-          clearInterval(ttsPulseRef.current);
-          ttsPulseRef.current = null;
-        }
-        app.current.setAudioReactivity(null);
-        setMicState("ambient");
-        break;
-      }
-      // transcribing: button disabled, no action
-    }
-  }, [micState, startAmbientMonitor, stopAudioMonitor]);
-
   // === Slash commands ===
   // Implementation lives in ./slash-commands.ts. This wrapper binds the
   // deps closure (state setters + app ref) so the slash-commands module
@@ -734,25 +593,6 @@ export default function App(): React.ReactElement {
   );
 
   // === Send message ===
-  // --- Streaming TTS helpers ---
-  const pushTTSChunk = useCallback(
-    (delta: string) => {
-      if (!settings?.voice.speakResponses || !settings?.voice.enabled || !ttsQueueRef.current)
-        return;
-      ttsQueueRef.current.push(delta);
-    },
-    [settings?.voice.speakResponses, settings?.voice.enabled],
-  );
-
-  const flushTTS = useCallback(() => {
-    ttsQueueRef.current?.flush();
-  }, []);
-
-  const cancelStreamingTTS = useCallback(() => {
-    ttsQueueRef.current?.cancel();
-    ttsRef.current?.cancel();
-  }, []);
-
   const handleSend = useCallback(async () => {
     const text = inputText.trim();
     if (!text || isProcessing) return;
@@ -871,8 +711,8 @@ export default function App(): React.ReactElement {
         }
       }
 
-      // Re-init voice providers (user may have added/changed OpenAI key or TTS voice)
-      sttRef.current = null;
+      // Re-init voice providers (user may have added/changed OpenAI key or TTS voice).
+      // initVoice unconditionally replaces the STT provider so a fresh key is picked up.
       await initVoice({ ttsVoice: newSettings.voice.ttsVoice });
 
       setShowSettings(false);
