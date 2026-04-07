@@ -1,5 +1,5 @@
 import type { WebContext } from "../types";
-import type { ProviderConfig, GovernanceConfig, VoiceConfig } from "../storage";
+import type { ProviderConfig, GovernanceConfig, VoiceConfig, AppearanceConfig } from "../storage";
 import { DEFAULT_GOVERNANCE_CONFIG } from "@motebit/sdk";
 import {
   saveProviderConfig,
@@ -879,16 +879,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       }
     }
 
-    // Save soul color
-    const preset = colorPicker.getSelectedPreset();
-    const soulColor =
-      preset === "custom"
+    // Save appearance (soul color preset). The on-disk shape is the
+    // canonical `AppearanceConfig` from `@motebit/sdk` — `colorPreset`,
+    // not the legacy `preset` web used to write.
+    const colorPreset = colorPicker.getSelectedPreset();
+    const soulColor: AppearanceConfig =
+      colorPreset === "custom"
         ? {
-            preset: "custom",
+            colorPreset: "custom",
             customHue: colorPicker.getCustomHue(),
             customSaturation: colorPicker.getCustomSaturation(),
           }
-        : { preset };
+        : { colorPreset };
     saveSoulColor(soulColor);
 
     // Only reconnect provider if the provider config actually changed.

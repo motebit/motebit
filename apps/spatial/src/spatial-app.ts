@@ -43,7 +43,14 @@ import {
   OpenAIProvider,
   resolveConfig,
   DEFAULT_OLLAMA_URL,
+  extractMemoryTags,
+  extractStateTags,
+  stripTags,
+  buildSystemPrompt,
   type MotebitPersonalityConfig,
+  type StreamingProvider,
+  type CloudProviderConfig,
+  type OpenAIProviderConfig,
 } from "@motebit/ai-core";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
@@ -52,13 +59,23 @@ import {
 } from "@motebit/core-identity";
 import { createSignedToken, deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
-import type { MotebitState, BehaviorCues, GovernanceConfig } from "@motebit/sdk";
+import type {
+  MotebitState,
+  BehaviorCues,
+  GovernanceConfig,
+  UnifiedProviderConfig,
+  ProviderSpec,
+  ResolverEnv,
+  AIResponse,
+  ContextPack,
+  MemoryCandidate,
+} from "@motebit/sdk";
 import {
   DeviceCapability,
-  DEFAULT_ANTHROPIC_MODEL,
-  DEFAULT_OPENAI_MODEL,
-  DEFAULT_OLLAMA_MODEL,
-  DEFAULT_PROXY_MODEL,
+  resolveProviderSpec,
+  UnsupportedBackendError,
+  migrateLegacyProvider,
+  type LegacyProviderConfig,
 } from "@motebit/sdk";
 import { McpClientAdapter, AdvisoryManifestVerifier } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
@@ -99,25 +116,291 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
  */
 export type SpatialGovernanceConfig = GovernanceConfig;
 
+/**
+ * Spatial uses the canonical `UnifiedProviderConfig` from `@motebit/sdk` like
+ * the other surfaces. Web is the closest analog because both run in a browser:
+ * `SPATIAL_RESOLVER_ENV` mirrors web's — anthropic must go through the proxy
+ * (CORS), openai is direct, and the on-device backends are `webllm` and
+ * `local-server` (no apple-fm/mlx, those are mobile-only).
+ *
+ * `SpatialAIConfig` is a thin wrapper around `UnifiedProviderConfig` that
+ * carries the spatial-specific surface concerns (`personalityConfig`,
+ * `governance`, `maxTokens` override). The `provider` field replaces the
+ * legacy flat discriminator. Old persisted shapes flow through
+ * `migrateLegacyProvider` from sdk on load.
+ */
 export interface SpatialAIConfig {
-  /**
-   * Provider. `local-server` is the canonical name for on-device LAN
-   * inference (Ollama, LM Studio, llama.cpp, Jan, vLLM, …) via the
-   * OpenAI-compat shim. The historical name `ollama` is migrated in
-   * `migrateLegacySpatialAIConfig` on load.
-   */
-  provider: "anthropic" | "local-server" | "openai" | "proxy";
-  model?: string;
-  apiKey?: string;
-  baseUrl?: string;
+  provider: UnifiedProviderConfig;
+  /** Optional surface-level max-tokens override propagated to the provider. */
   maxTokens?: number;
   personalityConfig?: MotebitPersonalityConfig;
   governance?: SpatialGovernanceConfig;
 }
 
+/** LLM proxy / cloud relay base URL. Override at build time via VITE_PROXY_URL. */
+const SPATIAL_PROXY_BASE_URL: string =
+  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
+    ?.VITE_PROXY_URL ?? "https://api.motebit.com";
+
+/**
+ * Spatial's `ResolverEnv`. Mirrors web: the browser can't reach
+ * `api.anthropic.com` directly (CORS), so anthropic routes through the
+ * motebit proxy. OpenAI's CORS allows direct browser calls. The two on-device
+ * backends are `webllm` (in-browser via WebGPU) and `local-server` (a LAN
+ * inference server the user runs themselves).
+ */
+export const SPATIAL_RESOLVER_ENV: ResolverEnv = {
+  cloudBaseUrl: (wireProtocol, canonical) => {
+    if (wireProtocol === "anthropic") return SPATIAL_PROXY_BASE_URL;
+    return canonical;
+  },
+  defaultLocalServerUrl: DEFAULT_OLLAMA_URL,
+  supportedBackends: new Set(["webllm", "local-server"]),
+  motebitCloudBaseUrl: SPATIAL_PROXY_BASE_URL,
+};
+
 export interface SpatialNetworkSettings {
   relayUrl: string;
   showNetwork: boolean;
+}
+
+// === WebLLM Provider (in-browser inference via WebGPU) ===
+//
+// Inlined from apps/web/src/providers.ts. The web surface and spatial both
+// need an in-browser inference path; ai-core stays vendor-agnostic and does
+// not bundle WebLLM (metabolic principle — @mlc-ai/web-llm is glucose,
+// downloaded from CDN at runtime only when the user activates this backend).
+
+interface WebLLMEngine {
+  reload(model: string): Promise<void>;
+  chat: {
+    completions: {
+      create(opts: {
+        messages: Array<{ role: string; content: string }>;
+        temperature?: number;
+        max_tokens?: number;
+        stream: boolean;
+      }): Promise<AsyncIterable<{ choices: Array<{ delta: { content?: string } }> }>>;
+    };
+  };
+}
+
+interface WebLLMModule {
+  CreateMLCEngine(
+    model: string,
+    opts?: { initProgressCallback?: (report: { text: string; progress: number }) => void },
+  ): Promise<WebLLMEngine>;
+  CreateWebWorkerMLCEngine(
+    worker: Worker,
+    model: string,
+    opts?: { initProgressCallback?: (report: { text: string; progress: number }) => void },
+  ): Promise<WebLLMEngine>;
+}
+
+export class WebLLMProvider implements StreamingProvider {
+  private engine: WebLLMEngine | null = null;
+  private worker: Worker | null = null;
+  private _model: string;
+  private _temperature: number;
+  private _maxTokens: number;
+  private onProgress?: (text: string, progress: number) => void;
+
+  constructor(
+    model: string,
+    opts?: {
+      temperature?: number;
+      maxTokens?: number;
+      onProgress?: (text: string, progress: number) => void;
+    },
+  ) {
+    this._model = model;
+    this._temperature = opts?.temperature ?? 0.7;
+    this._maxTokens = opts?.maxTokens ?? 4096;
+    this.onProgress = opts?.onProgress;
+  }
+
+  get model(): string {
+    return this._model;
+  }
+  get temperature(): number {
+    return this._temperature;
+  }
+  get maxTokens(): number {
+    return this._maxTokens;
+  }
+
+  setModel(model: string): void {
+    this._model = model;
+    this.engine = null;
+    this.worker?.terminate();
+    this.worker = null;
+  }
+  setTemperature(temperature: number): void {
+    this._temperature = temperature;
+  }
+  setMaxTokens(maxTokens: number): void {
+    this._maxTokens = maxTokens;
+  }
+
+  async init(onProgress?: (report: { progress: number; text: string }) => void): Promise<void> {
+    this.engine = await this.createEngine(onProgress);
+  }
+
+  private async createEngine(
+    onProgress?: (report: { progress: number; text: string }) => void,
+  ): Promise<WebLLMEngine> {
+    const progressCb = onProgress
+      ? (report: { text: string; progress: number }) => {
+          onProgress({ progress: report.progress, text: report.text });
+        }
+      : this.onProgress
+        ? (report: { text: string; progress: number }) => {
+            this.onProgress!(report.text, report.progress);
+          }
+        : undefined;
+
+    // @ts-expect-error — CDN dynamic import, typed via WebLLMModule interface
+    const webllm = (await import("https://esm.run/@mlc-ai/web-llm")) as unknown as WebLLMModule;
+
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- runtime check
+    if (typeof Worker !== "undefined" && webllm.CreateWebWorkerMLCEngine) {
+      try {
+        this.worker = new Worker(new URL("./webllm-worker.ts", import.meta.url), {
+          type: "module",
+        });
+        const workerEngine = webllm.CreateWebWorkerMLCEngine(this.worker, this._model, {
+          initProgressCallback: progressCb,
+        });
+        const timeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Worker init timeout")), 15_000),
+        );
+        const engine = await Promise.race([workerEngine, timeout]);
+        return engine;
+      } catch {
+        this.worker?.terminate();
+        this.worker = null;
+      }
+    }
+
+    return webllm.CreateMLCEngine(this._model, { initProgressCallback: progressCb });
+  }
+
+  private async getEngine(): Promise<WebLLMEngine> {
+    if (this.engine) return this.engine;
+    this.engine = await this.createEngine();
+    return this.engine;
+  }
+
+  async generate(contextPack: ContextPack): Promise<AIResponse> {
+    let accumulated = "";
+    for await (const chunk of this.generateStream(contextPack)) {
+      if (chunk.type === "text") {
+        accumulated += chunk.text;
+      } else if (chunk.type === "done") {
+        return chunk.response;
+      }
+    }
+    return {
+      text: stripTags(accumulated),
+      confidence: 0.7,
+      memory_candidates: extractMemoryTags(accumulated),
+      state_updates: extractStateTags(accumulated),
+    };
+  }
+
+  async *generateStream(
+    contextPack: ContextPack,
+  ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
+    const engine = await this.getEngine();
+    const messages: Array<{ role: string; content: string }> = [];
+
+    messages.push({ role: "system", content: buildSystemPrompt(contextPack) });
+
+    const history = contextPack.conversation_history ?? [];
+    for (const msg of history) {
+      messages.push({ role: msg.role, content: msg.content });
+    }
+    messages.push({ role: "user", content: contextPack.user_message });
+
+    const stream = await engine.chat.completions.create({
+      messages,
+      temperature: this._temperature,
+      max_tokens: this._maxTokens,
+      stream: true,
+    });
+
+    let accumulated = "";
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta != null && delta !== "") {
+        accumulated += delta;
+        yield { type: "text", text: delta };
+      }
+    }
+
+    yield {
+      type: "done",
+      response: {
+        text: stripTags(accumulated),
+        confidence: 0.7,
+        memory_candidates: extractMemoryTags(accumulated),
+        state_updates: extractStateTags(accumulated),
+      },
+    };
+  }
+
+  estimateConfidence(): Promise<number> {
+    return Promise.resolve(0.7);
+  }
+
+  extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
+    return Promise.resolve(response.memory_candidates);
+  }
+}
+
+// === Spec → Provider transport switch ===
+//
+// All decision logic lives in `resolveProviderSpec` from sdk. This function
+// is the transport switch — given a normalized spec, return a concrete
+// `@motebit/ai-core` (or in-browser WebLLM) provider instance. Mirrors
+// `specToProvider` from apps/web/src/providers.ts. Spatial does not support
+// apple-fm or mlx — those are mobile-only and the resolver gates them via
+// `supportedBackends`.
+function spatialSpecToProvider(spec: ProviderSpec): StreamingProvider {
+  switch (spec.kind) {
+    case "cloud": {
+      if (spec.wireProtocol === "openai") {
+        const cfg: OpenAIProviderConfig = {
+          api_key: spec.apiKey,
+          model: spec.model,
+          base_url: spec.baseUrl,
+          max_tokens: spec.maxTokens,
+          temperature: spec.temperature,
+          extra_headers: spec.extraHeaders,
+        };
+        return new OpenAIProvider(cfg);
+      }
+      const cfg: CloudProviderConfig = {
+        api_key: spec.apiKey,
+        model: spec.model,
+        base_url: spec.baseUrl,
+        max_tokens: spec.maxTokens,
+        temperature: spec.temperature,
+        extra_headers: spec.extraHeaders,
+      };
+      return new CloudProvider(cfg);
+    }
+    case "webllm":
+      return new WebLLMProvider(spec.model, {
+        temperature: spec.temperature,
+        maxTokens: spec.maxTokens,
+      });
+    case "apple-fm":
+    case "mlx":
+      // The resolver should never return these — `supportedBackends` excludes
+      // them. Defensive throw if env is misconfigured.
+      throw new UnsupportedBackendError(spec.kind);
+  }
 }
 
 // === Presence State Machine ===
@@ -514,73 +797,56 @@ export class SpatialApp {
    * Returns false if the provider needs an API key that wasn't provided.
    */
   async initAI(config: SpatialAIConfig): Promise<boolean> {
-    // Honor the historical `"ollama"` provider name on inbound configs
-    // (e.g. from persisted IndexedDB state or old callers) by rewriting
-    // to `"local-server"`. Vendor-neutral name, same runtime behavior.
-    const legacyProvider = (config as unknown as { provider?: string }).provider;
-    if (legacyProvider === "ollama") {
-      config = { ...config, provider: "local-server" };
-    }
-    const resolved = config.personalityConfig ? resolveConfig(config.personalityConfig) : undefined;
-    const temperature = resolved?.temperature;
+    const resolvedPersonality = config.personalityConfig
+      ? resolveConfig(config.personalityConfig)
+      : undefined;
+    const temperature = resolvedPersonality?.temperature;
 
-    let provider;
-    if (config.provider === "proxy") {
-      const pc = this._proxyConfig;
-      const model =
-        config.model != null && config.model !== ""
-          ? config.model
-          : (pc?.model ?? DEFAULT_PROXY_MODEL);
-      const proxyUrl = pc?.baseUrl ?? config.baseUrl ?? "https://api.motebit.com";
-      const extraHeaders: Record<string, string> = {};
-      if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
-      provider = new CloudProvider({
-        api_key: "",
-        model,
-        base_url: proxyUrl,
-        max_tokens: config.maxTokens,
-        temperature,
-        extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
-      });
-    } else if (config.provider === "local-server") {
-      // Local inference via Ollama's OpenAI-compatible shim. The previous
-      // OllamaProvider class was deleted (2026-04-06) — every local server
-      // (Ollama, LM Studio, llama.cpp, Jan, vLLM) now goes through
-      // OpenAIProvider against the /v1 endpoint.
-      const model =
-        config.model != null && config.model !== "" ? config.model : DEFAULT_OLLAMA_MODEL;
-      provider = new OpenAIProvider({
-        api_key: "local",
-        model,
-        base_url: `${DEFAULT_OLLAMA_URL}/v1`,
-        max_tokens: config.maxTokens,
-        temperature,
-      });
-    } else if (config.provider === "openai") {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model =
-        config.model != null && config.model !== "" ? config.model : DEFAULT_OPENAI_MODEL;
-      // Use the real OpenAI HTTP client. The previous code constructed
-      // CloudProvider with `provider: "openai"`, which produced
-      // Anthropic-format requests against OpenAI's endpoint and 404'd.
-      provider = new OpenAIProvider({
-        api_key: config.apiKey,
-        model,
-        base_url: "https://api.openai.com/v1",
-        max_tokens: config.maxTokens,
-        temperature,
-      });
-    } else {
-      if (config.apiKey == null || config.apiKey === "") return false;
-      const model =
-        config.model != null && config.model !== "" ? config.model : DEFAULT_ANTHROPIC_MODEL;
-      provider = new CloudProvider({
-        api_key: config.apiKey,
-        model,
-        max_tokens: config.maxTokens,
-        temperature,
-      });
+    // Migrate legacy persisted shapes (`{provider: "ollama" | "anthropic" | ...}`)
+    // through the sdk's canonical migration. Already-unified configs pass
+    // through unchanged. Spatial users have persisted state from before the
+    // three-mode refactor, so this path is required.
+    const unified: UnifiedProviderConfig =
+      "mode" in config.provider
+        ? config.provider
+        : (migrateLegacyProvider(config.provider as unknown as LegacyProviderConfig) ?? {
+            mode: "motebit-cloud",
+          });
+
+    // Layer in proxy session state, temperature, and the surface-level
+    // maxTokens override before resolving. The proxy session (when present)
+    // supplies the signed token and may override the default model.
+    const env: ResolverEnv = {
+      ...SPATIAL_RESOLVER_ENV,
+      motebitCloudHeaders:
+        this._proxyConfig?.proxyToken !== undefined
+          ? { "x-proxy-token": this._proxyConfig.proxyToken }
+          : undefined,
+      motebitCloudBaseUrl: this._proxyConfig?.baseUrl ?? SPATIAL_RESOLVER_ENV.motebitCloudBaseUrl,
+      motebitCloudDefaultModel: this._proxyConfig?.model,
+    };
+
+    // Apply temperature + surface-level maxTokens to the unified config so
+    // the resolver propagates them into the spec.
+    const enriched: UnifiedProviderConfig = {
+      ...unified,
+      temperature: unified.temperature ?? temperature,
+      maxTokens: unified.maxTokens ?? config.maxTokens,
+    } as UnifiedProviderConfig;
+
+    // BYOK requires an API key. Fail closed before constructing anything.
+    if (enriched.mode === "byok" && (enriched.apiKey == null || enriched.apiKey === "")) {
+      return false;
     }
+
+    let spec: ProviderSpec;
+    try {
+      spec = resolveProviderSpec(enriched, env);
+    } catch (err) {
+      if (err instanceof UnsupportedBackendError) return false;
+      throw err;
+    }
+    const provider = spatialSpecToProvider(spec);
 
     const storage = this.storage ?? (await createBrowserStorage());
 

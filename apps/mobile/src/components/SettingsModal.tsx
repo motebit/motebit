@@ -260,7 +260,7 @@ export function SettingsModal({
     });
 
     // Apply color preset
-    app.setInteriorColor(draft.colorPreset);
+    app.setInteriorColor(draft.appearance.colorPreset);
 
     // Build AI config if provider, model, or endpoint changed
     let aiConfig: MobileAIConfig | undefined;
@@ -334,20 +334,23 @@ export function SettingsModal({
           )}
           {tab === "appearance" && (
             <AppearanceTab
-              selected={draft.colorPreset}
+              selected={draft.appearance.colorPreset}
               onSelect={(preset) => {
-                updateDraft({ colorPreset: preset });
+                updateDraft({ appearance: { ...draft.appearance, colorPreset: preset } });
                 // Live preview
                 if (preset === "custom") {
-                  const color = deriveInteriorColor(draft.customHue, draft.customSaturation);
+                  const color = deriveInteriorColor(
+                    draft.appearance.customHue ?? 220,
+                    draft.appearance.customSaturation ?? 0.7,
+                  );
                   app.setInteriorColorDirect(color);
                 } else {
                   app.setInteriorColor(preset);
                 }
               }}
-              theme={draft.theme}
+              theme={draft.appearance.theme ?? "dark"}
               onThemeChange={(t) => {
-                updateDraft({ theme: t });
+                updateDraft({ appearance: { ...draft.appearance, theme: t } });
                 // Live preview — switch 3D environment
                 const effective = t === "system" ? (Appearance.getColorScheme() ?? "dark") : t;
                 if (effective === "dark") {
@@ -356,10 +359,12 @@ export function SettingsModal({
                   app.setLightEnvironment();
                 }
               }}
-              customHue={draft.customHue}
-              customSaturation={draft.customSaturation}
+              customHue={draft.appearance.customHue ?? 220}
+              customSaturation={draft.appearance.customSaturation ?? 0.7}
               onCustomColorChange={(hue, sat) => {
-                updateDraft({ customHue: hue, customSaturation: sat });
+                updateDraft({
+                  appearance: { ...draft.appearance, customHue: hue, customSaturation: sat },
+                });
                 const color = deriveInteriorColor(hue, sat);
                 app.setInteriorColorDirect(color);
                 onCustomColorChange?.(hue, sat);

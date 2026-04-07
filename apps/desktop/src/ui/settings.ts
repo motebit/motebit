@@ -17,6 +17,7 @@ import {
   APPROVAL_PRESET_CONFIGS,
   type ApprovalPreset,
   type GovernanceConfig,
+  type AppearanceConfig,
 } from "@motebit/sdk";
 import { byokKeyringKey, WHISPER_API_KEY_SLOT } from "./keyring-keys";
 
@@ -1713,20 +1714,24 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     if (isTauri) {
       const { invoke } = await import("@tauri-apps/api/core");
 
-      const customColor = colorPicker.getCustomInteriorColor();
-      const configData: Record<string, unknown> = {
-        default_provider: provider,
-        interior_color_preset: colorPicker.getSelectedPreset(),
-        ...(colorPicker.getSelectedPreset() === "custom" && customColor
+      // Build the canonical AppearanceConfig record. The on-disk shape is
+      // the same camelCase nested object the sdk type uses; the legacy
+      // snake_case top-level keys (`interior_color_preset`, `custom_soul_color`)
+      // are still readable via `parseAppearanceFromConfig` but no longer
+      // written.
+      const selectedPreset = colorPicker.getSelectedPreset();
+      const appearanceRecord: AppearanceConfig = {
+        colorPreset: selectedPreset,
+        ...(selectedPreset === "custom"
           ? {
-              custom_soul_color: {
-                hue: colorPicker.getCustomHue(),
-                saturation: colorPicker.getCustomSaturation(),
-                tint: customColor.tint,
-                glow: customColor.glow,
-              },
+              customHue: colorPicker.getCustomHue(),
+              customSaturation: colorPicker.getCustomSaturation(),
             }
           : {}),
+      };
+      const configData: Record<string, unknown> = {
+        default_provider: provider,
+        appearance: appearanceRecord,
         governance: governanceRecord,
         mcp_servers: mcpServersConfig,
         voice: {

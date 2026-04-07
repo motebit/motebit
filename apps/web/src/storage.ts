@@ -68,17 +68,23 @@ export function clearProviderConfig(): void {
   }
 }
 
-// === Soul Color ===
+// === Soul Color (Appearance) ===
+//
+// The authoritative `AppearanceConfig` shape lives in `@motebit/sdk`. Web
+// persists it as-is; legacy localStorage blobs (with `preset` instead of
+// `colorPreset`) are normalized on load via the canonical
+// `migrateAppearanceConfig` helper. The legacy type alias `SoulColorConfig`
+// is kept as a re-export of `AppearanceConfig` for source-compat with any
+// existing internal callers.
 
-export interface SoulColorConfig {
-  preset: string;
-  customHue?: number;
-  customSaturation?: number;
-}
+import { migrateAppearanceConfig, type AppearanceConfig } from "@motebit/sdk";
+export type { AppearanceConfig };
+/** @deprecated Use `AppearanceConfig` from `@motebit/sdk`. Kept as alias. */
+export type SoulColorConfig = AppearanceConfig;
 
 const SOUL_COLOR_KEY = "motebit-soul-color";
 
-export function saveSoulColor(config: SoulColorConfig): void {
+export function saveSoulColor(config: AppearanceConfig): void {
   try {
     localStorage.setItem(SOUL_COLOR_KEY, JSON.stringify(config));
   } catch {
@@ -86,12 +92,11 @@ export function saveSoulColor(config: SoulColorConfig): void {
   }
 }
 
-export function loadSoulColor(): SoulColorConfig | null {
+export function loadSoulColor(): AppearanceConfig | null {
   try {
     const raw = localStorage.getItem(SOUL_COLOR_KEY);
-    if (raw) {
-      return JSON.parse(raw) as SoulColorConfig;
-    }
+    if (raw == null || raw === "") return null;
+    return migrateAppearanceConfig(JSON.parse(raw));
   } catch {
     // localStorage unavailable or corrupt
   }

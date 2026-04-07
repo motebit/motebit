@@ -52,7 +52,9 @@ import {
   UnsupportedBackendError,
   APPROVAL_PRESET_CONFIGS,
   DEFAULT_GOVERNANCE_CONFIG,
+  DEFAULT_MOTEBIT_CLOUD_URL,
   type GovernanceConfig,
+  type AppearanceConfig,
 } from "@motebit/sdk";
 import type { UnifiedProviderConfig, ProviderSpec, ResolverEnv } from "@motebit/sdk";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
@@ -261,6 +263,14 @@ export interface DesktopAIConfig {
    * Missing fields fall back to `DEFAULT_GOVERNANCE_CONFIG` at initAI time.
    */
   governance?: GovernanceConfig;
+  /**
+   * Canonical appearance config. Single source of truth for color preset,
+   * custom hue/saturation, and theme. Missing fields fall back to
+   * `DEFAULT_APPEARANCE_CONFIG` at hydration time. Loaded from the
+   * canonical `appearance` JSON key OR legacy `interior_color_preset` +
+   * `custom_soul_color` keys via `parseAppearanceFromConfig`.
+   */
+  appearance?: AppearanceConfig;
 }
 
 // === Provider unification + spec mapping ===
@@ -926,8 +936,19 @@ export class DesktopApp {
     // `/api/ollama`) because the dev server can't bypass browser CORS for
     // arbitrary vendor URLs.
     const pc = this._proxyConfig;
-    const motebitCloudBaseUrl =
-      pc?.baseUrl ?? (import.meta.env?.VITE_PROXY_URL as string) ?? "https://api.motebit.com";
+    // Resolve the motebit cloud relay URL. Canonical env var:
+    // `VITE_MOTEBIT_RELAY_URL`. Legacy `VITE_PROXY_URL` still works for one
+    // release cycle. Falls back to `DEFAULT_MOTEBIT_CLOUD_URL`.
+    const viteEnv = import.meta.env as Record<string, string | undefined> | undefined;
+    let envRelayUrl = viteEnv?.VITE_MOTEBIT_RELAY_URL;
+    if (envRelayUrl == null || envRelayUrl === "") {
+      const legacy = viteEnv?.VITE_PROXY_URL;
+      if (legacy != null && legacy !== "") {
+        console.warn("[motebit] VITE_PROXY_URL is deprecated, use VITE_MOTEBIT_RELAY_URL instead");
+        envRelayUrl = legacy;
+      }
+    }
+    const motebitCloudBaseUrl = pc?.baseUrl ?? envRelayUrl ?? DEFAULT_MOTEBIT_CLOUD_URL;
     const motebitCloudHeaders =
       pc?.proxyToken !== undefined ? { "x-proxy-token": pc.proxyToken } : undefined;
 

@@ -677,30 +677,24 @@ async function bootstrap(): Promise<void> {
       void trySyncRegistration(invoke, config.syncUrl, config.syncMasterToken);
     }
 
-    // Load persisted settings from config
-    if (typeof parsed.interior_color_preset === "string") {
-      if (
-        parsed.interior_color_preset === "custom" &&
-        parsed.custom_soul_color != null &&
-        typeof parsed.custom_soul_color === "object"
-      ) {
-        const csc = parsed.custom_soul_color as Record<string, unknown>;
-        if (typeof csc.hue === "number" && typeof csc.saturation === "number") {
-          colorPicker.setCustomHue(csc.hue);
-          colorPicker.setCustomSaturation(csc.saturation);
-          colorPicker.setCustomInteriorColor(deriveInteriorColor(csc.hue, csc.saturation));
-          colorPicker.setSelectedPreset("custom");
-          app.setInteriorColorDirect(colorPicker.getCustomInteriorColor()!);
-        }
-      } else if (
-        parsed.interior_color_preset === "borosilicate" ||
-        !COLOR_PRESETS[parsed.interior_color_preset]
-      ) {
+    // Hydrate the color picker from the canonical `config.appearance`
+    // populated by `loadDesktopConfig`. The loader handles legacy migration
+    // (snake_case `interior_color_preset` + `custom_soul_color`), so main.ts
+    // doesn't need to re-parse the raw Tauri JSON.
+    if (config.appearance != null) {
+      const ap = config.appearance;
+      if (ap.colorPreset === "custom" && ap.customHue != null && ap.customSaturation != null) {
+        colorPicker.setCustomHue(ap.customHue);
+        colorPicker.setCustomSaturation(ap.customSaturation);
+        colorPicker.setCustomInteriorColor(deriveInteriorColor(ap.customHue, ap.customSaturation));
+        colorPicker.setSelectedPreset("custom");
+        app.setInteriorColorDirect(colorPicker.getCustomInteriorColor()!);
+      } else if (ap.colorPreset === "borosilicate" || !COLOR_PRESETS[ap.colorPreset]) {
         colorPicker.setSelectedPreset("moonlight");
         app.setInteriorColor("moonlight");
       } else {
-        colorPicker.setSelectedPreset(parsed.interior_color_preset);
-        app.setInteriorColor(parsed.interior_color_preset);
+        colorPicker.setSelectedPreset(ap.colorPreset);
+        app.setInteriorColor(ap.colorPreset);
       }
     }
     if (Array.isArray(parsed.mcp_servers)) {

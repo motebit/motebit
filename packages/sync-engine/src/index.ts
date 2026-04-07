@@ -32,7 +32,7 @@ export type {
   ConversationSyncStatus,
   ConversationSyncStoreAdapter,
   ConversationSyncRemoteAdapter,
-  HttpConversationSyncConfig,
+  HttpConversationAdapterConfig,
 } from "./conversation-sync.js";
 export { PlanSyncEngine, HttpPlanSyncAdapter, InMemoryPlanSyncStore } from "./plan-sync.js";
 export type {
@@ -40,7 +40,7 @@ export type {
   PlanSyncStatus,
   PlanSyncStoreAdapter,
   PlanSyncRemoteAdapter,
-  HttpPlanSyncConfig,
+  HttpPlanAdapterConfig,
 } from "./plan-sync.js";
 export { EncryptedPlanSyncAdapter } from "./encrypted-plan-adapter.js";
 export type { EncryptedPlanAdapterConfig } from "./encrypted-plan-adapter.js";

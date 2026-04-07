@@ -40,7 +40,7 @@ export interface ConversationSyncRemoteAdapter {
 
 // === HTTP Conversation Sync Adapter ===
 
-export interface HttpConversationSyncConfig {
+export interface HttpConversationAdapterConfig {
   baseUrl: string;
   motebitId: string;
   authToken?: string;
@@ -56,7 +56,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
   private authToken: string | undefined;
   private credentialSource: CredentialSource | undefined;
 
-  constructor(config: HttpConversationSyncConfig) {
+  constructor(config: HttpConversationAdapterConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.authToken = config.authToken;
     this.credentialSource = config.credentialSource;

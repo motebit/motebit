@@ -428,20 +428,73 @@
           </div>
         </div>
 
-        <!-- AI Provider -->
+        <!-- AI Provider — three-mode picker -->
         <div class="settings-section">Intelligence</div>
         <div class="form-group">
-          <label for="provider-select">Provider</label>
-          <select id="provider-select">
-            <option value="anthropic">Anthropic</option>
-            <option value="openai">OpenAI</option>
-            <option value="local-server">Local server</option>
-          </select>
+          <label>Mode</label>
+          <div class="mode-radios" style="display:flex;gap:6px;">
+            <label class="mode-radio" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-size:12px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;">
+              <input type="radio" name="provider-mode" value="on-device" style="margin:0;" /> On-device
+            </label>
+            <label class="mode-radio" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-size:12px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;">
+              <input type="radio" name="provider-mode" value="motebit-cloud" checked style="margin:0;" /> Motebit cloud
+            </label>
+            <label class="mode-radio" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-size:12px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;">
+              <input type="radio" name="provider-mode" value="byok" style="margin:0;" /> BYOK
+            </label>
+          </div>
         </div>
-        <div class="form-group" id="api-key-group">
-          <label for="api-key-input">API Key</label>
-          <input type="password" id="api-key-input" placeholder="sk-ant-..." autocomplete="off" />
+
+        <!-- Mode: On-device -->
+        <div id="mode-on-device" style="display:none;">
+          <div class="form-group">
+            <label>Backend</label>
+            <div style="display:flex;gap:6px;">
+              <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-size:12px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;">
+                <input type="radio" name="on-device-backend" value="local-server" checked style="margin:0;" /> Local server
+              </label>
+              <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-size:12px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;">
+                <input type="radio" name="on-device-backend" value="webllm" style="margin:0;" /> WebLLM
+              </label>
+            </div>
+          </div>
+          <div class="form-group" id="local-server-endpoint-group">
+            <label for="local-server-endpoint">Endpoint</label>
+            <input type="text" id="local-server-endpoint" placeholder="http://localhost:11434" autocomplete="off" />
+          </div>
         </div>
+
+        <!-- Mode: Motebit cloud -->
+        <div id="mode-motebit-cloud">
+          <div class="form-group">
+            <div style="font-size:12px;opacity:0.55;line-height:1.5;">
+              Connects through the Motebit relay. The relay holds the keys, picks the model, and handles routing.
+            </div>
+          </div>
+        </div>
+
+        <!-- Mode: BYOK -->
+        <div id="mode-byok" style="display:none;">
+          <div class="form-group">
+            <label>Vendor</label>
+            <div style="display:flex;gap:6px;">
+              <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-size:12px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;">
+                <input type="radio" name="byok-vendor" value="anthropic" checked style="margin:0;" /> Anthropic
+              </label>
+              <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-size:12px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;">
+                <input type="radio" name="byok-vendor" value="openai" style="margin:0;" /> OpenAI
+              </label>
+              <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-size:12px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;">
+                <input type="radio" name="byok-vendor" value="google" style="margin:0;" /> Google
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="api-key-input">API Key</label>
+            <input type="password" id="api-key-input" placeholder="sk-ant-..." autocomplete="off" />
+          </div>
+        </div>
+
         <div class="form-group">
           <label for="model-input">Model (optional)</label>
           <input type="text" id="model-input" placeholder="Default" />

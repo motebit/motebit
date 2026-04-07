@@ -387,7 +387,7 @@ describe("MobileApp.settings", () => {
     const settings = await app.loadSettings();
     expect(settings.provider).toBe("local-server");
     expect(settings.model).toBe("llama3.2");
-    expect(settings.colorPreset).toBe("moonlight");
+    expect(settings.appearance.colorPreset).toBe("moonlight");
     expect(settings.approvalPreset).toBe("balanced");
   });
 
@@ -396,8 +396,12 @@ describe("MobileApp.settings", () => {
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
       localServerEndpoint: "http://192.168.1.100:11434",
-      colorPreset: "amber",
-      theme: "dark",
+      appearance: {
+        colorPreset: "amber",
+        customHue: 220,
+        customSaturation: 0.7,
+        theme: "dark",
+      },
       approvalPreset: "cautious",
       persistenceThreshold: 0.8,
       rejectSecrets: false,
@@ -411,8 +415,6 @@ describe("MobileApp.settings", () => {
         neuralVad: true,
       },
       maxTokens: 4096,
-      customHue: 220,
-      customSaturation: 0.7,
     };
     await app.saveSettings(custom);
     const loaded = await app.loadSettings();
@@ -424,10 +426,10 @@ describe("MobileApp.settings", () => {
     expect(settings.localServerEndpoint).toBe("http://localhost:11434");
   });
 
-  it("merges partial saved settings with defaults", async () => {
+  it("merges partial saved settings with defaults — legacy flat colorPreset migrates", async () => {
     asyncStoreData.set("@motebit/settings", JSON.stringify({ colorPreset: "rose" }));
     const loaded = await app.loadSettings();
-    expect(loaded.colorPreset).toBe("rose");
+    expect(loaded.appearance.colorPreset).toBe("rose");
     expect(loaded.provider).toBe("local-server"); // default
   });
 });
@@ -495,6 +497,29 @@ describe("MobileApp.initAI with custom endpoint", () => {
     const loaded = await app.loadSettings();
     expect(loaded.localServerEndpoint).toBe("http://192.168.9.9:11434");
     expect((loaded as unknown as { ollamaEndpoint?: string }).ollamaEndpoint).toBeUndefined();
+  });
+
+  it("migrates legacy flat appearance fields into nested appearance config on load", async () => {
+    asyncStoreData.set(
+      "@motebit/settings",
+      JSON.stringify({
+        colorPreset: "violet",
+        customHue: 270,
+        customSaturation: 0.85,
+        theme: "light",
+      }),
+    );
+    const loaded = await app.loadSettings();
+    expect(loaded.appearance.colorPreset).toBe("violet");
+    expect(loaded.appearance.customHue).toBe(270);
+    expect(loaded.appearance.customSaturation).toBe(0.85);
+    expect(loaded.appearance.theme).toBe("light");
+    // Legacy flat fields are stripped.
+    const raw = loaded as unknown as Record<string, unknown>;
+    expect(raw.colorPreset).toBeUndefined();
+    expect(raw.customHue).toBeUndefined();
+    expect(raw.customSaturation).toBeUndefined();
+    expect(raw.theme).toBeUndefined();
   });
 
   it("migrates legacy flat voice fields into nested voice config on load", async () => {

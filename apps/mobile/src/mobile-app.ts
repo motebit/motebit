@@ -39,11 +39,14 @@ import {
   resolveProviderSpec,
   UnsupportedBackendError,
   DEFAULT_VOICE_CONFIG,
+  DEFAULT_APPEARANCE_CONFIG,
   migrateVoiceConfig,
+  migrateAppearanceConfig,
   type ProviderSpec,
   type ResolverEnv,
   type UnifiedProviderConfig,
   type VoiceConfig,
+  type AppearanceConfig,
 } from "@motebit/sdk";
 import {
   createSignedToken,
@@ -79,7 +82,12 @@ export type { MemoryNode } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import { PlanEngine } from "@motebit/planner";
 import type { PlanChunk } from "@motebit/planner";
-import { PlanStatus, DeviceCapability, DEFAULT_OLLAMA_MODEL } from "@motebit/sdk";
+import {
+  PlanStatus,
+  DeviceCapability,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_MOTEBIT_CLOUD_URL,
+} from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import type {
@@ -202,10 +210,13 @@ export interface MobileSettings {
    * `migrateLegacyMobileSettings`.
    */
   localServerEndpoint: string;
-  colorPreset: string;
-  customHue: number;
-  customSaturation: number;
-  theme: "light" | "dark" | "system";
+  /**
+   * Appearance settings — nested under the canonical `@motebit/sdk`
+   * `AppearanceConfig` shape. Historical flat fields (`colorPreset`,
+   * `customHue`, `customSaturation`, `theme`) are accepted on load via
+   * `migrateLegacyMobileSettings` → `migrateAppearanceConfig`.
+   */
+  appearance: AppearanceConfig;
   approvalPreset: string;
   persistenceThreshold: number;
   rejectSecrets: boolean;
@@ -225,10 +236,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   provider: "local-server",
   model: DEFAULT_OLLAMA_MODEL,
   localServerEndpoint: DEFAULT_OLLAMA_URL,
-  colorPreset: "moonlight",
-  customHue: 220,
-  customSaturation: 0.7,
-  theme: "dark",
+  appearance: { ...DEFAULT_APPEARANCE_CONFIG, theme: "dark" },
   approvalPreset: "balanced",
   persistenceThreshold: 0.5,
   rejectSecrets: true,
@@ -328,6 +336,8 @@ export function mobileSettingsToUnifiedProvider(
  *   - flat `voiceEnabled`/`voiceAutoSend`/`voiceResponseEnabled`/`ttsVoice`/
  *     `neuralVadEnabled`  →  nested `voice: VoiceConfig` (align with sdk
  *     VoiceConfig; canonical shape uses `enabled`/`autoSend`/`speakResponses`).
+ *   - flat `colorPreset`/`customHue`/`customSaturation`/`theme`  →  nested
+ *     `appearance: AppearanceConfig` (align with sdk AppearanceConfig).
  */
 function migrateLegacyMobileSettings(
   raw: (Partial<MobileSettings> & { provider?: string }) | Record<string, unknown>,
@@ -344,6 +354,11 @@ function migrateLegacyMobileSettings(
     voiceResponseEnabled?: boolean;
     ttsVoice?: string;
     neuralVadEnabled?: boolean;
+    appearance?: AppearanceConfig;
+    colorPreset?: string;
+    customHue?: number;
+    customSaturation?: number;
+    theme?: "light" | "dark" | "system";
   };
   if (obj.provider === "local") {
     obj.provider = "on-device";
@@ -382,6 +397,26 @@ function migrateLegacyMobileSettings(
   delete obj.voiceResponseEnabled;
   delete obj.ttsVoice;
   delete obj.neuralVadEnabled;
+
+  // Appearance: same shape as voice — if any legacy flat field exists and
+  // no nested `appearance` yet, normalize through the canonical helper.
+  const hasLegacyAppearance =
+    obj.colorPreset !== undefined ||
+    obj.customHue !== undefined ||
+    obj.customSaturation !== undefined ||
+    obj.theme !== undefined;
+  if (obj.appearance === undefined && hasLegacyAppearance) {
+    obj.appearance = migrateAppearanceConfig({
+      colorPreset: obj.colorPreset,
+      customHue: obj.customHue,
+      customSaturation: obj.customSaturation,
+      theme: obj.theme,
+    });
+  }
+  delete obj.colorPreset;
+  delete obj.customHue;
+  delete obj.customSaturation;
+  delete obj.theme;
 }
 
 /**
@@ -790,14 +825,37 @@ export class MobileApp {
       return false;
     }
 
-    // Resolve the relay base URL from session state, with AsyncStorage as
-    // a persisted fallback. Mobile's proxy config and proxy URL live on
-    // different paths, so we resolve here rather than inside the env.
+    // Resolve the motebit cloud relay base URL from session state, with
+    // AsyncStorage as a persisted user override. Mobile's proxy config and
+    // relay URL live on different paths, so we resolve here rather than
+    // inside the env.
+    //
+    // Resolution order:
+    //   1. session-state proxyConfig.baseUrl
+    //   2. AsyncStorage canonical key `@motebit/relay_url`
+    //   3. AsyncStorage legacy key `@motebit/proxy_url` (one-shot migration:
+    //      copy → canonical key, then continue using it)
+    //   4. EXPO_PUBLIC_MOTEBIT_RELAY_URL build-time env (Expo public env)
+    //   5. DEFAULT_MOTEBIT_CLOUD_URL
     const pc = this._proxyConfig;
-    const motebitCloudBaseUrl =
+    let asyncStoredRelayUrl = await AsyncStorage.getItem(ASYNC_STORAGE_KEYS.relayUrl);
+    if (asyncStoredRelayUrl == null || asyncStoredRelayUrl === "") {
+      const legacy = await AsyncStorage.getItem(ASYNC_STORAGE_KEYS.legacyRelayUrl);
+      if (legacy != null && legacy !== "") {
+        console.warn("[motebit] migrating @motebit/proxy_url → @motebit/relay_url");
+        await AsyncStorage.setItem(ASYNC_STORAGE_KEYS.relayUrl, legacy);
+        asyncStoredRelayUrl = legacy;
+      }
+    }
+    // `process.env` on React Native is typed loosely; coerce to a precise
+    // string-or-undefined for the strict-boolean-expression rule.
+    const expoEnvRelayUrl: string | undefined = (process.env as Record<string, string | undefined>)
+      .EXPO_PUBLIC_MOTEBIT_RELAY_URL;
+    const motebitCloudBaseUrl: string =
       pc?.baseUrl ??
-      (await AsyncStorage.getItem(ASYNC_STORAGE_KEYS.proxyUrl)) ??
-      "https://api.motebit.com";
+      asyncStoredRelayUrl ??
+      (expoEnvRelayUrl != null && expoEnvRelayUrl !== "" ? expoEnvRelayUrl : null) ??
+      DEFAULT_MOTEBIT_CLOUD_URL;
     const motebitCloudHeaders =
       pc?.proxyToken !== undefined ? { "x-proxy-token": pc.proxyToken } : undefined;
     const motebitCloudDefaultModel = pc?.model;
@@ -1418,12 +1476,15 @@ export class MobileApp {
       const loaded: MobileSettings = {
         ...DEFAULT_SETTINGS,
         ...(parsed as Partial<MobileSettings>),
-        // Deep-merge the nested `voice` object so partial saves don't
-        // clobber defaults for fields the UI didn't touch.
+        // Deep-merge the nested `voice` and `appearance` objects so partial
+        // saves don't clobber defaults for fields the UI didn't touch.
         voice: { ...DEFAULT_SETTINGS.voice, ...(parsed.voice ?? {}) },
+        appearance: { ...DEFAULT_SETTINGS.appearance, ...(parsed.appearance ?? {}) },
       };
       // Migration: borosilicate was removed — remap to moonlight
-      if (loaded.colorPreset === "borosilicate") loaded.colorPreset = "moonlight";
+      if (loaded.appearance.colorPreset === "borosilicate") {
+        loaded.appearance = { ...loaded.appearance, colorPreset: "moonlight" };
+      }
       return loaded;
     } catch {
       return { ...DEFAULT_SETTINGS };

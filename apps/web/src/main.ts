@@ -326,7 +326,7 @@ async function bootstrap(): Promise<void> {
   const soulColor = loadSoulColor();
   if (soulColor != null) {
     if (
-      soulColor.preset === "custom" &&
+      soulColor.colorPreset === "custom" &&
       soulColor.customHue != null &&
       soulColor.customSaturation != null
     ) {
@@ -337,9 +337,9 @@ async function bootstrap(): Promise<void> {
       );
       colorPicker.setSelectedPreset("custom");
       app.setInteriorColorDirect(colorPicker.getCustomInteriorColor()!);
-    } else if (soulColor.preset !== "moonlight") {
-      colorPicker.setSelectedPreset(soulColor.preset);
-      app.setInteriorColor(soulColor.preset);
+    } else if (soulColor.colorPreset !== "moonlight") {
+      colorPicker.setSelectedPreset(soulColor.colorPreset);
+      app.setInteriorColor(soulColor.colorPreset);
     }
   }
 

@@ -204,25 +204,25 @@ export default function App(): React.ReactElement {
 
   // Derive theme colors from settings
   const themeColors = useMemo<ThemeColors>(
-    () => resolveTheme(settings?.theme ?? "dark"),
-    [settings?.theme],
+    () => resolveTheme(settings?.appearance.theme ?? "dark"),
+    [settings?.appearance.theme],
   );
 
   // Listen for system appearance changes to re-resolve "system" theme
   useEffect(() => {
-    if (settings?.theme !== "system") return undefined;
+    if (settings?.appearance.theme !== "system") return undefined;
     const sub = Appearance.addChangeListener(() => {
       // Force re-render by updating settings reference
       setSettings((prev) => (prev ? { ...prev } : prev));
     });
     return () => sub.remove();
-  }, [settings?.theme]);
+  }, [settings?.appearance.theme]);
 
   // Derive voice glow color from creature preset
   const activeGlow = useMemo((): [number, number, number] | undefined => {
-    const preset = COLOR_PRESETS[settings?.colorPreset ?? "moonlight"];
+    const preset = COLOR_PRESETS[settings?.appearance.colorPreset ?? "moonlight"];
     return preset?.glow;
-  }, [settings?.colorPreset]);
+  }, [settings?.appearance.colorPreset]);
 
   // Dynamic mic button background from glow color
   const micButtonActiveStyle = useMemo(() => {
@@ -395,12 +395,14 @@ export default function App(): React.ReactElement {
       });
 
       // Apply color preset and theme environment
-      if (s.colorPreset === "custom") {
-        a.setInteriorColorDirect(deriveInteriorColor(s.customHue, s.customSaturation));
+      if (s.appearance.colorPreset === "custom") {
+        a.setInteriorColorDirect(
+          deriveInteriorColor(s.appearance.customHue ?? 220, s.appearance.customSaturation ?? 0.7),
+        );
       } else {
-        a.setInteriorColor(s.colorPreset);
+        a.setInteriorColor(s.appearance.colorPreset);
       }
-      applyThemeEnvironment(a, s.theme);
+      applyThemeEnvironment(a, s.appearance.theme ?? "dark");
     },
     [applyThemeEnvironment],
   );
@@ -1524,12 +1526,15 @@ export default function App(): React.ReactElement {
           rejectSecrets: newSettings.rejectSecrets,
           maxMemoriesPerTurn: newSettings.maxMemoriesPerTurn,
         });
-        if (newSettings.colorPreset === "custom") {
+        if (newSettings.appearance.colorPreset === "custom") {
           a.setInteriorColorDirect(
-            deriveInteriorColor(newSettings.customHue, newSettings.customSaturation),
+            deriveInteriorColor(
+              newSettings.appearance.customHue ?? 220,
+              newSettings.appearance.customSaturation ?? 0.7,
+            ),
           );
         } else {
-          a.setInteriorColor(newSettings.colorPreset);
+          a.setInteriorColor(newSettings.appearance.colorPreset);
         }
       }
 
@@ -2072,8 +2077,8 @@ export default function App(): React.ReactElement {
             onToggleMcpTrust={handleToggleMcpTrust}
             onSave={(s, ai) => void handleSettingsSave(s, ai)}
             onClose={() => setShowSettings(false)}
-            customHue={settings.customHue}
-            customSaturation={settings.customSaturation}
+            customHue={settings.appearance.customHue ?? 220}
+            customSaturation={settings.appearance.customSaturation ?? 0.7}
             onRequestPin={(mode) => void handleRequestPin(mode)}
             onLinkDevice={() => void handleInitiatePairing()}
           />

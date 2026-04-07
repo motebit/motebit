@@ -31,6 +31,7 @@ import {
   resolveProviderSpec,
   UnsupportedBackendError,
   DEFAULT_GOVERNANCE_CONFIG,
+  DEFAULT_MOTEBIT_CLOUD_URL,
   APPROVAL_PRESET_CONFIGS,
   type GovernanceConfig,
 } from "@motebit/sdk";
@@ -127,11 +128,29 @@ export function getDbPath(override?: string): string {
  * needed). Only `local-server` is supported as an on-device backend — CLI
  * doesn't ship native bindings for Apple FM, MLX, or WebGPU.
  */
+/**
+ * Resolve the motebit cloud relay URL for the CLI.
+ *
+ * Canonical env: `MOTEBIT_RELAY_URL`. Legacy alias `MOTEBIT_PROXY_URL`
+ * still works for one release cycle. Falls back to the canonical default
+ * `DEFAULT_MOTEBIT_CLOUD_URL` from `@motebit/sdk`.
+ */
+function resolveCliMotebitRelayUrl(): string {
+  const canonical = process.env.MOTEBIT_RELAY_URL;
+  if (canonical != null && canonical !== "") return canonical;
+  const legacy = process.env.MOTEBIT_PROXY_URL;
+  if (legacy != null && legacy !== "") {
+    console.warn("[motebit] MOTEBIT_PROXY_URL is deprecated, use MOTEBIT_RELAY_URL instead");
+    return legacy;
+  }
+  return DEFAULT_MOTEBIT_CLOUD_URL;
+}
+
 const CLI_RESOLVER_ENV: ResolverEnv = {
   cloudBaseUrl: (_wireProtocol, canonical) => canonical,
   defaultLocalServerUrl: "http://127.0.0.1:11434",
   supportedBackends: new Set(["local-server"]),
-  motebitCloudBaseUrl: process.env.MOTEBIT_PROXY_URL ?? "https://api.motebit.com",
+  motebitCloudBaseUrl: resolveCliMotebitRelayUrl(),
 };
 
 /**

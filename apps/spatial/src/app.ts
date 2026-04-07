@@ -13,6 +13,9 @@
 
 import { SpatialApp, COLOR_PRESETS, deriveInteriorColor } from "./spatial-app";
 import type { SpatialAIConfig } from "./spatial-app";
+import type { UnifiedProviderConfig, OnDeviceBackend } from "@motebit/sdk";
+import { migrateLegacyProvider } from "@motebit/sdk";
+import { DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import { SpatialVoicePipeline } from "./voice-pipeline";
 import type { OpenAITTSVoice } from "@motebit/voice";
@@ -24,11 +27,23 @@ const overlay = document.getElementById("overlay") as HTMLElement;
 const enterButton = document.getElementById("enter-ar") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLElement;
 
-// Settings elements
+// Settings elements — three-mode provider UI
 const settingsOverlay = document.getElementById("settings-overlay") as HTMLElement;
-const providerSelect = document.getElementById("provider-select") as HTMLSelectElement;
+const modeRadios = document.querySelectorAll<HTMLInputElement>('input[name="provider-mode"]');
+const onDeviceSection = document.getElementById("mode-on-device") as HTMLElement;
+const motebitCloudSection = document.getElementById("mode-motebit-cloud") as HTMLElement;
+const byokSection = document.getElementById("mode-byok") as HTMLElement;
+const onDeviceBackendRadios = document.querySelectorAll<HTMLInputElement>(
+  'input[name="on-device-backend"]',
+);
+const localServerEndpointInput = document.getElementById(
+  "local-server-endpoint",
+) as HTMLInputElement;
+const localServerEndpointGroup = document.getElementById(
+  "local-server-endpoint-group",
+) as HTMLElement;
+const byokVendorRadios = document.querySelectorAll<HTMLInputElement>('input[name="byok-vendor"]');
 const apiKeyInput = document.getElementById("api-key-input") as HTMLInputElement;
-const apiKeyGroup = document.getElementById("api-key-group") as HTMLElement;
 const modelInput = document.getElementById("model-input") as HTMLInputElement;
 const voiceToggle = document.getElementById("voice-toggle") as HTMLInputElement;
 const settingsSave = document.getElementById("settings-save") as HTMLButtonElement;
@@ -70,15 +85,35 @@ let lastGazeHit = false;
 
 // === Settings persistence ===
 
-import { DEFAULT_GOVERNANCE_CONFIG, type GovernanceConfig } from "@motebit/sdk";
+import {
+  DEFAULT_GOVERNANCE_CONFIG,
+  DEFAULT_APPEARANCE_CONFIG,
+  migrateAppearanceConfig,
+  type GovernanceConfig,
+  type AppearanceConfig,
+} from "@motebit/sdk";
+
+/**
+ * Spatial's three-mode provider settings — flat shape that drives the
+ * settings form. The mental model maps onto sdk's `UnifiedProviderConfig`:
+ *
+ *   on-device     → backend ∈ { "webllm", "local-server" }
+ *   motebit-cloud → no sub-picker (relay handles vendor server-side)
+ *   byok          → vendor ∈ { "anthropic", "openai", "google" }
+ *
+ * Mirrors the mobile pattern: the form keeps a flat shape; we convert to
+ * `UnifiedProviderConfig` in `tryInitAI` via `spatialSettingsToUnified`.
+ * Legacy persisted shapes flow through `migrateLegacyProvider` from sdk.
+ */
+type SpatialProviderMode = "on-device" | "motebit-cloud" | "byok";
+type SpatialOnDeviceBackend = Extract<OnDeviceBackend, "webllm" | "local-server">;
+type SpatialByokVendor = "anthropic" | "openai" | "google";
 
 interface SpatialSettings {
-  /**
-   * Provider. `local-server` is the canonical name for LAN/localhost
-   * inference (Ollama, LM Studio, llama.cpp, Jan, vLLM, …). Legacy
-   * persisted value `"ollama"` is migrated on load.
-   */
-  provider: "anthropic" | "local-server" | "openai" | "proxy";
+  mode: SpatialProviderMode;
+  onDeviceBackend: SpatialOnDeviceBackend;
+  byokVendor: SpatialByokVendor;
+  localServerEndpoint: string;
   apiKey: string;
   model: string;
   voiceEnabled: boolean;
@@ -88,73 +123,167 @@ interface SpatialSettings {
   proactiveEnabled: boolean;
   relayUrl: string;
   showNetwork: boolean;
-  colorPreset: string;
-  customHue: number;
-  customSaturation: number;
+  /**
+   * Appearance settings — nested under the canonical `@motebit/sdk`
+   * `AppearanceConfig` shape. Historical flat fields (`colorPreset`,
+   * `customHue`, `customSaturation`) are accepted on load via
+   * `migrateLegacySpatialSettings` → `migrateAppearanceConfig`.
+   */
+  appearance: AppearanceConfig;
   maxTokens: number;
   governance: GovernanceConfig;
+}
+
+const DEFAULT_SPATIAL_SETTINGS: SpatialSettings = {
+  mode: "motebit-cloud",
+  onDeviceBackend: "local-server",
+  byokVendor: "anthropic",
+  localServerEndpoint: DEFAULT_OLLAMA_URL,
+  apiKey: "",
+  model: "",
+  voiceEnabled: true,
+  openaiApiKey: "",
+  ttsVoice: "nova",
+  vadSensitivity: 0.5,
+  proactiveEnabled: true,
+  relayUrl: "https://motebit-sync.fly.dev",
+  showNetwork: true,
+  appearance: { ...DEFAULT_APPEARANCE_CONFIG },
+  maxTokens: 4096,
+  governance: { ...DEFAULT_GOVERNANCE_CONFIG },
+};
+
+/**
+ * Reverse migration: collapse an old persisted spatial settings object onto
+ * the current `SpatialSettings` shape. Pre-three-mode persisted state used a
+ * flat `provider: "anthropic" | "local-server" | "openai" | "proxy"`
+ * discriminator (and historically `"ollama"`). Run it through the sdk's
+ * canonical migration so the surface inherits any future legacy renames for
+ * free, then unpack the unified shape back onto the form's flat fields.
+ */
+function migrateLegacySpatialSettings(
+  raw: Partial<SpatialSettings> & {
+    provider?: string;
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  },
+): void {
+  if (raw.mode !== undefined) return; // already three-mode
+  if (raw.provider == null || raw.provider === "") return;
+
+  const unified = migrateLegacyProvider({
+    provider: raw.provider,
+    apiKey: raw.apiKey,
+    model: raw.model,
+    baseUrl: raw.baseUrl,
+  });
+  if (!unified) return;
+
+  raw.mode = unified.mode;
+  if (unified.mode === "byok") {
+    raw.byokVendor = unified.vendor;
+    raw.apiKey = unified.apiKey;
+    raw.model = unified.model ?? "";
+  } else if (unified.mode === "on-device") {
+    // sdk can return apple-fm/mlx for legacy `local`/`hybrid` shapes; spatial
+    // doesn't support those. Coerce to local-server (the closest analog the
+    // surface can actually run).
+    raw.onDeviceBackend = unified.backend === "webllm" ? "webllm" : "local-server";
+    raw.model = unified.model ?? "";
+    if (unified.endpoint != null && unified.endpoint !== "") {
+      raw.localServerEndpoint = unified.endpoint;
+    }
+  } else {
+    // motebit-cloud — nothing more to unpack
+    raw.model = unified.model ?? "";
+  }
+  delete raw.provider;
 }
 
 function loadSettings(): SpatialSettings {
   try {
     const raw = localStorage.getItem("motebit:spatial_settings");
     if (raw != null && raw !== "") {
-      const parsed = JSON.parse(raw) as Partial<SpatialSettings>;
+      const parsed = JSON.parse(raw) as Partial<SpatialSettings> & {
+        provider?: string;
+        baseUrl?: string;
+      };
+      migrateLegacySpatialSettings(parsed);
       const defaultGov: GovernanceConfig = { ...DEFAULT_GOVERNANCE_CONFIG };
-      // Migrate legacy provider value "ollama" → "local-server".
-      const migratedProvider =
-        (parsed.provider as string | undefined) === "ollama"
-          ? "local-server"
-          : (parsed.provider ?? "anthropic");
+      // Appearance: nest legacy flat fields if present, else deep-merge
+      // any partial nested record on top of defaults.
+      const legacyParsed = parsed as Record<string, unknown>;
+      const hasLegacyAppearance =
+        legacyParsed.colorPreset !== undefined ||
+        legacyParsed.customHue !== undefined ||
+        legacyParsed.customSaturation !== undefined;
+      const appearance: AppearanceConfig =
+        parsed.appearance != null
+          ? { ...DEFAULT_APPEARANCE_CONFIG, ...parsed.appearance }
+          : hasLegacyAppearance
+            ? migrateAppearanceConfig({
+                colorPreset: legacyParsed.colorPreset,
+                customHue: legacyParsed.customHue,
+                customSaturation: legacyParsed.customSaturation,
+              })
+            : { ...DEFAULT_APPEARANCE_CONFIG };
       return {
-        provider: migratedProvider,
-        apiKey: parsed.apiKey ?? "",
-        model: parsed.model ?? "",
-        voiceEnabled: parsed.voiceEnabled ?? true,
-        openaiApiKey: parsed.openaiApiKey ?? "",
-        ttsVoice: parsed.ttsVoice ?? "nova",
-        vadSensitivity: parsed.vadSensitivity ?? 0.5,
-        proactiveEnabled: parsed.proactiveEnabled ?? true,
-        relayUrl: parsed.relayUrl ?? "https://motebit-sync.fly.dev",
-        showNetwork: parsed.showNetwork ?? true,
-        colorPreset: parsed.colorPreset ?? "moonlight",
-        customHue: parsed.customHue ?? 220,
-        customSaturation: parsed.customSaturation ?? 0.7,
-        maxTokens: parsed.maxTokens ?? 4096,
+        ...DEFAULT_SPATIAL_SETTINGS,
+        ...(parsed as Partial<SpatialSettings>),
+        appearance,
         governance: parsed.governance ? { ...defaultGov, ...parsed.governance } : defaultGov,
       };
     }
   } catch {
     /* ignore */
   }
-  return {
-    provider: "anthropic",
-    apiKey: "",
-    model: "",
-    voiceEnabled: true,
-    openaiApiKey: "",
-    ttsVoice: "nova",
-    vadSensitivity: 0.5,
-    proactiveEnabled: true,
-    relayUrl: "https://motebit-sync.fly.dev",
-    showNetwork: true,
-    colorPreset: "moonlight",
-    customHue: 220,
-    customSaturation: 0.7,
-    maxTokens: 4096,
-    governance: { ...DEFAULT_GOVERNANCE_CONFIG },
-  };
+  return { ...DEFAULT_SPATIAL_SETTINGS, governance: { ...DEFAULT_GOVERNANCE_CONFIG } };
 }
 
 function saveSettings(s: SpatialSettings): void {
   localStorage.setItem("motebit:spatial_settings", JSON.stringify(s));
 }
 
-// === Proxy auto-connect ===
+/**
+ * Convert spatial's flat settings shape into the canonical
+ * `UnifiedProviderConfig` consumed by the sdk resolver. Mirrors mobile's
+ * `mobileSettingsToUnifiedProvider`.
+ */
+function spatialSettingsToUnified(s: SpatialSettings): UnifiedProviderConfig {
+  switch (s.mode) {
+    case "motebit-cloud":
+      return {
+        mode: "motebit-cloud",
+        model: s.model || undefined,
+        maxTokens: s.maxTokens,
+      };
+    case "byok": {
+      const baseUrl =
+        s.byokVendor === "google"
+          ? "https://generativelanguage.googleapis.com/v1beta/openai"
+          : undefined;
+      return {
+        mode: "byok",
+        vendor: s.byokVendor,
+        apiKey: s.apiKey,
+        model: s.model || undefined,
+        baseUrl,
+        maxTokens: s.maxTokens,
+      };
+    }
+    case "on-device":
+      return {
+        mode: "on-device",
+        backend: s.onDeviceBackend,
+        model: s.model || undefined,
+        endpoint: s.onDeviceBackend === "local-server" ? s.localServerEndpoint : undefined,
+        maxTokens: s.maxTokens,
+      };
+  }
+}
 
-const PROXY_BASE_URL =
-  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
-    ?.VITE_PROXY_URL ?? "https://api.motebit.com";
+// === Local inference probe ===
 
 /** Detect any local inference server — same probe as web surface. */
 const LOCAL_INFERENCE_ENDPOINTS = [
@@ -194,15 +323,20 @@ async function autoInitLocalInference(): Promise<boolean> {
   const results = await Promise.allSettled(probes);
   for (const result of results) {
     if (result.status === "fulfilled" && result.value) {
-      const { type, models } = result.value;
+      const { baseUrl, models } = result.value;
       const model =
         models.find((m) => m.includes("70b")) ??
         models.find((m) => m.includes("32b")) ??
         models.find((m) => m.includes("8b")) ??
         models[0]!;
+      // Every supported local server (Ollama, LM Studio, llama.cpp, Jan,
+      // vLLM) speaks OpenAI-compat at /v1 — `local-server` is the canonical
+      // name for the on-device backend, regardless of which engine answered.
       const localSettings: SpatialSettings = {
         ...loadSettings(),
-        provider: type === "ollama" ? "local-server" : "openai",
+        mode: "on-device",
+        onDeviceBackend: "local-server",
+        localServerEndpoint: baseUrl,
         model,
       };
       saveSettings(localSettings);
@@ -230,7 +364,10 @@ async function init(): Promise<void> {
 
   // Load saved settings and populate form
   const settings = loadSettings();
-  providerSelect.value = settings.provider === "proxy" ? "anthropic" : settings.provider;
+  setModeRadio(settings.mode);
+  setBackendRadio(settings.onDeviceBackend);
+  setVendorRadio(settings.byokVendor);
+  localServerEndpointInput.value = settings.localServerEndpoint;
   apiKeyInput.value = settings.apiKey;
   modelInput.value = settings.model;
   voiceToggle.checked = settings.voiceEnabled;
@@ -244,7 +381,7 @@ async function init(): Promise<void> {
     "settings-max-tokens",
   ) as HTMLSelectElement | null;
   if (maxTokensSelect) maxTokensSelect.value = String(settings.maxTokens);
-  updateProviderUI(settings.provider === "proxy" ? "anthropic" : settings.provider);
+  updateProviderUI();
   buildColorSwatches(settings);
 
   // Apply network settings (best-effort relay — does not block boot)
@@ -276,10 +413,7 @@ async function init(): Promise<void> {
 
 async function tryInitAI(settings: SpatialSettings): Promise<boolean> {
   const config: SpatialAIConfig = {
-    provider: settings.provider,
-    model: settings.model || undefined,
-    apiKey: settings.apiKey || undefined,
-    baseUrl: settings.provider === "proxy" ? `${PROXY_BASE_URL}/v1` : undefined,
+    provider: spatialSettingsToUnified(settings),
     maxTokens: settings.maxTokens,
     governance: settings.governance,
   };
@@ -322,22 +456,74 @@ function showMainOverlay(): void {
   });
 }
 
-// === Settings UI ===
+// === Settings UI: three-mode provider picker ===
 
-providerSelect?.addEventListener("change", () => {
-  updateProviderUI(providerSelect.value as "anthropic" | "local-server" | "openai");
-});
-
-function updateProviderUI(provider: string): void {
-  if (apiKeyGroup != null) {
-    apiKeyGroup.style.display =
-      provider === "anthropic" || provider === "openai" ? "block" : "none";
-  }
-  // Update placeholder text based on provider
-  if (apiKeyInput != null) {
-    apiKeyInput.placeholder = provider === "openai" ? "sk-..." : "sk-ant-...";
-  }
+function getSelectedMode(): SpatialProviderMode {
+  let selected: SpatialProviderMode = "motebit-cloud";
+  modeRadios.forEach((r) => {
+    if (r.checked) selected = r.value as SpatialProviderMode;
+  });
+  return selected;
 }
+
+function getSelectedBackend(): SpatialOnDeviceBackend {
+  let selected: SpatialOnDeviceBackend = "local-server";
+  onDeviceBackendRadios.forEach((r) => {
+    if (r.checked) selected = r.value as SpatialOnDeviceBackend;
+  });
+  return selected;
+}
+
+function getSelectedVendor(): SpatialByokVendor {
+  let selected: SpatialByokVendor = "anthropic";
+  byokVendorRadios.forEach((r) => {
+    if (r.checked) selected = r.value as SpatialByokVendor;
+  });
+  return selected;
+}
+
+function setModeRadio(mode: SpatialProviderMode): void {
+  modeRadios.forEach((r) => {
+    r.checked = r.value === mode;
+  });
+}
+function setBackendRadio(backend: SpatialOnDeviceBackend): void {
+  onDeviceBackendRadios.forEach((r) => {
+    r.checked = r.value === backend;
+  });
+}
+function setVendorRadio(vendor: SpatialByokVendor): void {
+  byokVendorRadios.forEach((r) => {
+    r.checked = r.value === vendor;
+  });
+}
+
+/**
+ * Show only the section for the currently-selected mode, and within
+ * `on-device` toggle the local-server endpoint group based on the backend
+ * sub-pick. Also adjusts the api-key input placeholder for the selected
+ * BYOK vendor.
+ */
+function updateProviderUI(): void {
+  const mode = getSelectedMode();
+  onDeviceSection.style.display = mode === "on-device" ? "" : "none";
+  motebitCloudSection.style.display = mode === "motebit-cloud" ? "" : "none";
+  byokSection.style.display = mode === "byok" ? "" : "none";
+
+  // on-device sub-state
+  const backend = getSelectedBackend();
+  localServerEndpointGroup.style.display =
+    mode === "on-device" && backend === "local-server" ? "" : "none";
+
+  // byok placeholder
+  const vendor = getSelectedVendor();
+  apiKeyInput.placeholder =
+    vendor === "openai" ? "sk-..." : vendor === "google" ? "AIza..." : "sk-ant-...";
+}
+
+modeRadios.forEach((r) => r.addEventListener("change", updateProviderUI));
+onDeviceBackendRadios.forEach((r) => r.addEventListener("change", updateProviderUI));
+byokVendorRadios.forEach((r) => r.addEventListener("change", updateProviderUI));
 
 // === Soul Color Picker ===
 
@@ -356,7 +542,7 @@ function swatchGradient(tint: [number, number, number], glow: [number, number, n
 function buildColorSwatches(settings: SpatialSettings): void {
   if (!colorSwatches) return;
   colorSwatches.innerHTML = "";
-  activeColorPreset = settings.colorPreset;
+  activeColorPreset = settings.appearance.colorPreset;
 
   // Preset swatches
   for (const [name, color] of Object.entries(COLOR_PRESETS)) {
@@ -391,13 +577,14 @@ function buildColorSwatches(settings: SpatialSettings): void {
   colorSwatches.appendChild(custom);
 
   // Apply saved color
-  if (settings.colorPreset === "custom") {
+  if (settings.appearance.colorPreset === "custom") {
     if (customColorPicker) customColorPicker.style.display = "block";
-    if (hueSlider) hueSlider.value = String(settings.customHue);
-    if (satSlider) satSlider.value = String(Math.round(settings.customSaturation * 100));
+    if (hueSlider) hueSlider.value = String(settings.appearance.customHue ?? 220);
+    if (satSlider)
+      satSlider.value = String(Math.round((settings.appearance.customSaturation ?? 0.7) * 100));
     applyCustomColor();
   } else {
-    app.setInteriorColor(settings.colorPreset);
+    app.setInteriorColor(settings.appearance.colorPreset);
   }
 }
 
@@ -495,7 +682,10 @@ settingsSave?.addEventListener(
     void (async (e: Event) => {
       e.preventDefault();
       const settings: SpatialSettings = {
-        provider: providerSelect.value as "anthropic" | "local-server" | "openai" | "proxy",
+        mode: getSelectedMode(),
+        onDeviceBackend: getSelectedBackend(),
+        byokVendor: getSelectedVendor(),
+        localServerEndpoint: localServerEndpointInput.value.trim() || DEFAULT_OLLAMA_URL,
         apiKey: apiKeyInput.value.trim(),
         model: modelInput.value.trim(),
         voiceEnabled: voiceToggle.checked,
@@ -505,9 +695,11 @@ settingsSave?.addEventListener(
         proactiveEnabled: proactiveToggle?.checked ?? true,
         relayUrl: relayUrlInput?.value.trim() ?? "https://motebit-sync.fly.dev",
         showNetwork: showNetworkToggle?.checked ?? true,
-        colorPreset: activeColorPreset,
-        customHue: hueSlider ? parseFloat(hueSlider.value) : 220,
-        customSaturation: satSlider ? parseFloat(satSlider.value) / 100 : 0.7,
+        appearance: {
+          colorPreset: activeColorPreset,
+          customHue: hueSlider ? parseFloat(hueSlider.value) : 220,
+          customSaturation: satSlider ? parseFloat(satSlider.value) / 100 : 0.7,
+        },
         maxTokens: parseInt(
           (document.getElementById("settings-max-tokens") as HTMLSelectElement)?.value ?? "4096",
           10,
@@ -521,7 +713,14 @@ settingsSave?.addEventListener(
       app.setNetworkSettings({ relayUrl: settings.relayUrl, showNetwork: settings.showNetwork });
 
       if (!(await tryInitAI(settings))) {
-        statusEl.textContent = `API key required for ${settings.provider === "openai" ? "OpenAI" : "Anthropic"}`;
+        const vendorLabel =
+          settings.byokVendor === "openai"
+            ? "OpenAI"
+            : settings.byokVendor === "google"
+              ? "Google"
+              : "Anthropic";
+        statusEl.textContent =
+          settings.mode === "byok" ? `API key required for ${vendorLabel}` : "Provider unavailable";
         return;
       }
 

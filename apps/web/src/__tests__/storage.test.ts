@@ -30,6 +30,7 @@ import {
   type ProviderConfig,
   type GovernanceConfig,
   type VoiceConfig,
+  type AppearanceConfig,
   type ProxyTokenData,
 } from "../storage.js";
 
@@ -165,9 +166,14 @@ describe("ProviderConfig persistence (UnifiedProviderConfig)", () => {
   });
 });
 
-describe("SoulColor persistence", () => {
-  it("saves and loads soul color", () => {
-    const config = { preset: "violet", customHue: 270, customSaturation: 0.8 };
+describe("SoulColor / AppearanceConfig persistence", () => {
+  it("round-trips canonical AppearanceConfig", () => {
+    const config: AppearanceConfig = {
+      colorPreset: "violet",
+      customHue: 270,
+      customSaturation: 0.8,
+      theme: "dark",
+    };
     saveSoulColor(config);
     expect(loadSoulColor()).toEqual(config);
   });
@@ -179,6 +185,20 @@ describe("SoulColor persistence", () => {
   it("returns null on corrupt JSON", () => {
     localStorage.setItem("motebit-soul-color", "not-json");
     expect(loadSoulColor()).toBeNull();
+  });
+
+  it("migrates legacy `preset` field to canonical `colorPreset`", () => {
+    // Legacy web shape from before AppearanceConfig was canonicalized.
+    localStorage.setItem(
+      "motebit-soul-color",
+      JSON.stringify({ preset: "amber", customHue: 30, customSaturation: 0.9 }),
+    );
+    const loaded = loadSoulColor();
+    expect(loaded?.colorPreset).toBe("amber");
+    expect(loaded?.customHue).toBe(30);
+    expect(loaded?.customSaturation).toBe(0.9);
+    // Legacy `preset` field is dropped from the canonical shape.
+    expect((loaded as unknown as { preset?: string }).preset).toBeUndefined();
   });
 });
 

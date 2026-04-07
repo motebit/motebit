@@ -13,6 +13,7 @@ import type { AIResponse, ContextPack, IntelligenceProvider, MemoryCandidate } f
 import {
   resolveProviderSpec,
   UnsupportedBackendError,
+  DEFAULT_MOTEBIT_CLOUD_URL,
   type ProviderSpec,
   type ResolverEnv,
 } from "@motebit/sdk";
@@ -253,10 +254,31 @@ export class WebLLMProvider implements StreamingProvider {
 
 // === Factory ===
 
-/** LLM proxy / embed / fetch base URL. Override at build time via VITE_PROXY_URL. */
-export const PROXY_BASE_URL: string =
-  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
-    ?.VITE_PROXY_URL ?? "https://api.motebit.com";
+/**
+ * Resolve the motebit cloud relay URL for the web build.
+ *
+ * Canonical env: `VITE_MOTEBIT_RELAY_URL`. Legacy alias `VITE_PROXY_URL`
+ * still works for one release cycle (existing `.env` files keep building).
+ * Falls back to the canonical default `DEFAULT_MOTEBIT_CLOUD_URL` from
+ * `@motebit/sdk`.
+ *
+ * Export name `PROXY_BASE_URL` is preserved — internal callers and test
+ * mocks already reference it. Only the resolution path changed.
+ */
+function resolveMotebitRelayUrl(): string {
+  const env = (import.meta as unknown as Record<string, Record<string, string> | undefined>).env;
+  const canonical = env?.VITE_MOTEBIT_RELAY_URL;
+  if (canonical != null && canonical !== "") return canonical;
+  const legacy = env?.VITE_PROXY_URL;
+  if (legacy != null && legacy !== "") {
+    console.warn("[motebit] VITE_PROXY_URL is deprecated, use VITE_MOTEBIT_RELAY_URL instead");
+    return legacy;
+  }
+  return DEFAULT_MOTEBIT_CLOUD_URL;
+}
+
+/** LLM proxy / embed / fetch base URL. Override at build time via VITE_MOTEBIT_RELAY_URL. */
+export const PROXY_BASE_URL: string = resolveMotebitRelayUrl();
 
 /**
  * Web's ResolverEnv. The browser can't call vendor APIs directly because of

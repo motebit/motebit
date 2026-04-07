@@ -32,7 +32,7 @@ export interface PlanSyncRemoteAdapter {
 
 // === HTTP Plan Sync Adapter ===
 
-export interface HttpPlanSyncConfig {
+export interface HttpPlanAdapterConfig {
   baseUrl: string;
   motebitId: string;
   authToken?: string;
@@ -48,7 +48,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
   private authToken: string | undefined;
   private credentialSource: CredentialSource | undefined;
 
-  constructor(config: HttpPlanSyncConfig) {
+  constructor(config: HttpPlanAdapterConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.authToken = config.authToken;
     this.credentialSource = config.credentialSource;

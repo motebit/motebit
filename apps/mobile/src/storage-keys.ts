@@ -56,8 +56,17 @@ export const ASYNC_STORAGE_KEYS = {
   mcpServers: "@motebit/mcp_servers",
   /** Cached proxy token for Motebit Cloud mode. */
   proxyToken: "@motebit/proxy_token",
-  /** User-configured proxy/relay base URL override. */
-  proxyUrl: "@motebit/proxy_url",
+  /**
+   * User-configured motebit cloud relay base URL override.
+   *
+   * The canonical key is `@motebit/relay_url`. The historical name
+   * `@motebit/proxy_url` is preserved as `legacyRelayUrl` and read as a
+   * fallback during the migration window. Do not delete `legacyRelayUrl`
+   * — installs upgrading from older releases still have data there.
+   */
+  relayUrl: "@motebit/relay_url",
+  /** Legacy key for relay URL. Read-only fallback during migration. */
+  legacyRelayUrl: "@motebit/proxy_url",
 } as const;
 
 // === Keyring (cross-device identity via expo keyring adapter) ===

@@ -1,10 +1,45 @@
 import type { DesktopAIConfig, InvokeFn } from "../index";
 import {
   DEFAULT_GOVERNANCE_CONFIG,
+  DEFAULT_APPEARANCE_CONFIG,
+  migrateAppearanceConfig,
   type ApprovalPreset,
   type GovernanceConfig,
+  type AppearanceConfig,
 } from "@motebit/sdk";
 import { byokKeyringKey, LEGACY_API_KEY_SLOT, SYNC_MASTER_TOKEN_SLOT } from "./keyring-keys";
+
+/**
+ * Read a canonical `AppearanceConfig` from the Tauri JSON blob.
+ *
+ * Accepts two shapes:
+ *   1. Canonical: `appearance: { colorPreset, customHue?, customSaturation?, theme? }`
+ *   2. Legacy: top-level `interior_color_preset` + `custom_soul_color: { hue, saturation }`
+ *
+ * Missing fields fall back to `DEFAULT_APPEARANCE_CONFIG`. Returns undefined
+ * only when neither the canonical key nor any legacy field is present, so
+ * callers can distinguish "user has never set appearance" from "user picked
+ * the defaults".
+ */
+function parseAppearanceFromConfig(parsed: Record<string, unknown>): AppearanceConfig | undefined {
+  const canonical = parsed.appearance;
+  const legacyPreset = parsed.interior_color_preset;
+  const legacyCustom = parsed.custom_soul_color;
+
+  if (canonical == null && legacyPreset == null && legacyCustom == null) {
+    return undefined;
+  }
+
+  // `migrateAppearanceConfig` already accepts the snake_case
+  // `interior_color_preset` + `custom_soul_color: {hue, saturation}` shape,
+  // so we can pass the raw blob as-is and let it normalize.
+  return migrateAppearanceConfig({
+    ...DEFAULT_APPEARANCE_CONFIG,
+    ...(canonical as Partial<AppearanceConfig> | undefined),
+    interior_color_preset: legacyPreset,
+    custom_soul_color: legacyCustom,
+  });
+}
 
 /**
  * Read a canonical `GovernanceConfig` from the Tauri JSON blob.
@@ -128,6 +163,7 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
     }
 
     const governance = parseGovernanceFromConfig(parsed);
+    const appearance = parseAppearanceFromConfig(parsed);
 
     return {
       provider,
@@ -139,6 +175,7 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       syncUrl,
       syncMasterToken,
       governance,
+      appearance,
     };
   }
 
