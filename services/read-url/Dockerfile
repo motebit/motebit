@@ -29,12 +29,17 @@ RUN apk add --no-cache libstdc++
 
 COPY --from=build /app/deployed ./
 
-# Create data directory for SQLite
+# Create the persistent data directory. On Fly, /data is the volume
+# mount point from fly.toml; here we just ensure it exists for local
+# docker runs. The motebit identity (motebit.json / motebit.key /
+# motebit.md) is generated on first boot via bootstrapServiceIdentity()
+# — no identity file baked into the image.
 RUN mkdir -p /data
 
 ENV NODE_ENV=production
 ENV MOTEBIT_PORT=3200
 ENV MOTEBIT_DB_PATH=/data/read-url.db
+ENV MOTEBIT_DATA_DIR=/data
 EXPOSE 3200
 
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:3200/health || exit 1

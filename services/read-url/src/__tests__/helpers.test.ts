@@ -35,8 +35,7 @@ describe("loadConfig", () => {
   const envKeys = [
     "MOTEBIT_PORT",
     "MOTEBIT_DB_PATH",
-    "MOTEBIT_IDENTITY_PATH",
-    "MOTEBIT_PRIVATE_KEY_HEX",
+    "MOTEBIT_DATA_DIR",
     "MOTEBIT_SYNC_URL",
     "MOTEBIT_API_TOKEN",
     "MOTEBIT_PUBLIC_URL",
@@ -63,8 +62,7 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.port).toBe(3200);
     expect(config.dbPath).toBe("./data/read-url.db");
-    expect(config.identityPath).toBe("./motebit.md");
-    expect(config.privateKeyHex).toBeUndefined();
+    expect(config.dataDir).toBe("./data");
     expect(config.syncUrl).toBeUndefined();
     expect(config.apiToken).toBeUndefined();
     expect(config.publicUrl).toBeUndefined();
@@ -76,18 +74,22 @@ describe("loadConfig", () => {
     expect(config.port).toBe(4500);
   });
 
+  it("reads dataDir from MOTEBIT_DATA_DIR", () => {
+    process.env["MOTEBIT_DATA_DIR"] = "/data";
+    const config = loadConfig();
+    expect(config.dataDir).toBe("/data");
+  });
+
   it("reads all optional env vars", () => {
     process.env["MOTEBIT_DB_PATH"] = "/tmp/test.db";
-    process.env["MOTEBIT_IDENTITY_PATH"] = "/etc/motebit.md";
-    process.env["MOTEBIT_PRIVATE_KEY_HEX"] = "abcd";
+    process.env["MOTEBIT_DATA_DIR"] = "/data";
     process.env["MOTEBIT_SYNC_URL"] = "https://relay.example.com";
     process.env["MOTEBIT_API_TOKEN"] = "tok_123";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://agent.example.com";
 
     const config = loadConfig();
     expect(config.dbPath).toBe("/tmp/test.db");
-    expect(config.identityPath).toBe("/etc/motebit.md");
-    expect(config.privateKeyHex).toBe("abcd");
+    expect(config.dataDir).toBe("/data");
     expect(config.syncUrl).toBe("https://relay.example.com");
     expect(config.apiToken).toBe("tok_123");
     expect(config.publicUrl).toBe("https://agent.example.com");

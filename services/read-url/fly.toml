@@ -10,6 +10,10 @@ kill_timeout = 5
   NODE_ENV = "production"
   MOTEBIT_PORT = "3200"
   MOTEBIT_DB_PATH = "/data/read-url.db"
+  # Persistent volume — bootstrapServiceIdentity() generates the motebit
+  # identity (motebit.json, motebit.key, motebit.md) here on first boot
+  # and reloads it on every subsequent boot. The volume survives deploys.
+  MOTEBIT_DATA_DIR = "/data"
 
 [http_service]
   internal_port = 3200
