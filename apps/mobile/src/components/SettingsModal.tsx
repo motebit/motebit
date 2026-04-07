@@ -17,12 +17,18 @@ import {
 import * as SecureStore from "expo-secure-store";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system";
-import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
+import type { MobileApp, MobileSettings, MobileAIConfig, MobileLocalBackend } from "../mobile-app";
+import { SECURE_STORE_KEYS } from "../storage-keys";
 import type { InteriorColor } from "@motebit/runtime";
 import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
-import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OLLAMA_MODEL } from "@motebit/sdk";
+import {
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_GOOGLE_MODEL,
+  DEFAULT_OLLAMA_MODEL,
+} from "@motebit/sdk";
 import { BillingPanel } from "./BillingPanel";
 
 // === Pure Color Math (copied from desktop color-picker.ts) ===
@@ -184,6 +190,7 @@ export function SettingsModal({
   const [tab, setTab] = useState<Tab>("appearance");
   const [draft, setDraft] = useState<MobileSettings>(settings);
   const [apiKey, setApiKey] = useState("");
+  const [googleKey, setGoogleKey] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
   const [billingRelayUrl, setBillingRelayUrl] = useState<string | null>(null);
 
@@ -197,15 +204,24 @@ export function SettingsModal({
     setDraft(settings);
     // Load stored API keys
     if (settings.provider === "openai") {
-      void SecureStore.getItemAsync("motebit_openai_provider_key").then((k) => {
+      void SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiChatKey).then((k) => {
         if (k != null && k !== "") setApiKey(k);
       });
+    } else if (settings.provider === "google") {
+      void SecureStore.getItemAsync(SECURE_STORE_KEYS.googleApiKey).then((k) => {
+        if (k != null && k !== "") setGoogleKey(k);
+      });
     } else {
-      void SecureStore.getItemAsync("motebit_anthropic_api_key").then((k) => {
+      void SecureStore.getItemAsync(SECURE_STORE_KEYS.anthropicApiKey).then((k) => {
         if (k != null && k !== "") setApiKey(k);
       });
     }
-    void SecureStore.getItemAsync("motebit_openai_api_key").then((k) => {
+    // Pre-load google key independently so the Google section shows the stored value
+    // even when the active provider is something else.
+    void SecureStore.getItemAsync(SECURE_STORE_KEYS.googleApiKey).then((k) => {
+      if (k != null && k !== "") setGoogleKey(k);
+    });
+    void SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiVoiceKey).then((k) => {
       if (k != null && k !== "") setOpenaiKey(k);
     });
   }, [settings, visible]);
@@ -217,13 +233,16 @@ export function SettingsModal({
   const handleSave = useCallback(async () => {
     // Store API keys securely (not in AsyncStorage)
     if ((draft.provider === "anthropic" || draft.provider === "hybrid") && apiKey) {
-      await SecureStore.setItemAsync("motebit_anthropic_api_key", apiKey);
+      await SecureStore.setItemAsync(SECURE_STORE_KEYS.anthropicApiKey, apiKey);
     }
     if (draft.provider === "openai" && apiKey) {
-      await SecureStore.setItemAsync("motebit_openai_provider_key", apiKey);
+      await SecureStore.setItemAsync(SECURE_STORE_KEYS.openaiChatKey, apiKey);
+    }
+    if (draft.provider === "google" && googleKey) {
+      await SecureStore.setItemAsync(SECURE_STORE_KEYS.googleApiKey, googleKey);
     }
     if (openaiKey) {
-      await SecureStore.setItemAsync("motebit_openai_api_key", openaiKey);
+      await SecureStore.setItemAsync(SECURE_STORE_KEYS.openaiVoiceKey, openaiKey);
     }
 
     // Apply governance settings to runtime (include current operator mode to preserve it)
@@ -252,15 +271,20 @@ export function SettingsModal({
     ) {
       aiConfig = {
         provider: draft.provider,
+        localBackend: draft.localBackend,
         model: draft.model,
         apiKey:
           draft.provider === "anthropic" || draft.provider === "hybrid"
             ? apiKey
             : draft.provider === "openai"
               ? apiKey
-              : undefined,
+              : draft.provider === "google"
+                ? googleKey
+                : undefined,
         ollamaEndpoint:
-          draft.provider === "ollama" || draft.provider === "hybrid"
+          draft.provider === "ollama" ||
+          draft.provider === "hybrid" ||
+          (draft.provider === "on-device" && draft.localBackend === "local-server")
             ? draft.ollamaEndpoint
             : undefined,
         maxTokens: draft.maxTokens,
@@ -268,7 +292,7 @@ export function SettingsModal({
     }
 
     onSave(draft, aiConfig);
-  }, [draft, apiKey, openaiKey, app, settings, onSave]);
+  }, [draft, apiKey, googleKey, openaiKey, app, settings, onSave]);
 
   const identity = app.getIdentityInfo();
 
@@ -348,6 +372,7 @@ export function SettingsModal({
                 provider={draft.provider}
                 model={draft.model}
                 apiKey={apiKey}
+                googleKey={googleKey}
                 ollamaEndpoint={draft.ollamaEndpoint}
                 localBackend={draft.localBackend ?? "apple-fm"}
                 voiceEnabled={draft.voiceEnabled}
@@ -360,17 +385,20 @@ export function SettingsModal({
                   updateDraft({
                     provider: p,
                     model:
-                      p === "local"
+                      p === "on-device"
                         ? "on-device"
                         : p === "ollama"
                           ? DEFAULT_OLLAMA_MODEL
                           : p === "openai"
                             ? DEFAULT_OPENAI_MODEL
-                            : DEFAULT_ANTHROPIC_MODEL,
+                            : p === "google"
+                              ? DEFAULT_GOOGLE_MODEL
+                              : DEFAULT_ANTHROPIC_MODEL,
                   })
                 }
                 onChangeModel={(m) => updateDraft({ model: m })}
                 onChangeApiKey={setApiKey}
+                onChangeGoogleKey={setGoogleKey}
                 onChangeOllamaEndpoint={(e) => updateDraft({ ollamaEndpoint: e })}
                 onChangeLocalBackend={(b) => updateDraft({ localBackend: b })}
                 onChangeVoiceEnabled={(v) => updateDraft({ voiceEnabled: v })}
@@ -710,12 +738,17 @@ const TTS_VOICE_OPTIONS = [
 
 // === On-Device Section ===
 
+// Re-export the canonical type name under a shorter local alias so the
+// existing prop shapes don't have to be renamed. Source of truth lives in
+// mobile-app.ts so the three-mode wire format and the UI agree.
+type LocalBackend = MobileLocalBackend;
+
 function OnDeviceSection({
   localBackend,
   onChangeBackend,
 }: {
-  localBackend: "apple-fm" | "mlx";
-  onChangeBackend: (b: "apple-fm" | "mlx") => void;
+  localBackend: LocalBackend;
+  onChangeBackend: (b: LocalBackend) => void;
 }) {
   const colors = useTheme();
   const styles = useMemo(() => createSettingsStyles(colors), [colors]);
@@ -861,9 +894,23 @@ function OnDeviceSection({
         </View>
       )}
 
+      {/* Local server — LAN / user-hosted Ollama or LM Studio. Always available. */}
+      <TouchableOpacity
+        style={[styles.radioItem, localBackend === "local-server" && styles.radioActive]}
+        onPress={() => onChangeBackend("local-server")}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.radioText, localBackend === "local-server" && styles.radioTextActive]}>
+          Local Server
+        </Text>
+        <Text style={styles.radioDesc}>
+          Ollama, LM Studio, llama.cpp, or any OpenAI-compatible server on your LAN.
+        </Text>
+      </TouchableOpacity>
+
       {!capabilities.appleFM && !capabilities.mlx && (
         <Text style={styles.radioDesc}>
-          On-device inference requires iOS 26 (Apple Intelligence) or 3GB+ RAM (MLX).
+          Apple Intelligence requires iOS 26, MLX requires 3GB+ RAM. Local Server works anywhere.
         </Text>
       )}
 
@@ -878,12 +925,13 @@ function OnDeviceSection({
 
 // === Intelligence Tab ===
 
-type ProviderType = "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local";
+type ProviderType = "ollama" | "anthropic" | "openai" | "google" | "hybrid" | "proxy" | "on-device";
 
 function IntelligenceTab({
   provider,
   model,
   apiKey,
+  googleKey,
   ollamaEndpoint,
   localBackend,
   voiceEnabled,
@@ -895,6 +943,7 @@ function IntelligenceTab({
   onChangeProvider,
   onChangeModel,
   onChangeApiKey,
+  onChangeGoogleKey,
   onChangeOllamaEndpoint,
   onChangeLocalBackend,
   onChangeVoiceEnabled,
@@ -907,8 +956,9 @@ function IntelligenceTab({
   provider: ProviderType;
   model: string;
   apiKey: string;
+  googleKey: string;
   ollamaEndpoint: string;
-  localBackend: "apple-fm" | "mlx";
+  localBackend: LocalBackend;
   voiceEnabled: boolean;
   voiceResponseEnabled: boolean;
   voiceAutoSend: boolean;
@@ -918,8 +968,9 @@ function IntelligenceTab({
   onChangeProvider: (p: ProviderType) => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
+  onChangeGoogleKey: (k: string) => void;
   onChangeOllamaEndpoint: (e: string) => void;
-  onChangeLocalBackend: (b: "apple-fm" | "mlx") => void;
+  onChangeLocalBackend: (b: LocalBackend) => void;
   onChangeVoiceEnabled: (v: boolean) => void;
   onChangeVoiceResponseEnabled: (v: boolean) => void;
   onChangeVoiceAutoSend: (v: boolean) => void;
@@ -961,6 +1012,15 @@ function IntelligenceTab({
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
+          style={[styles.radioItem, provider === "google" && styles.radioActive]}
+          onPress={() => onChangeProvider("google")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, provider === "google" && styles.radioTextActive]}>
+            Google (Cloud)
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           style={[styles.radioItem, provider === "hybrid" && styles.radioActive]}
           onPress={() => onChangeProvider("hybrid")}
           activeOpacity={0.7}
@@ -978,24 +1038,39 @@ function IntelligenceTab({
             Motebit (free)
           </Text>
         </TouchableOpacity>
-        {Platform.OS === "ios" && (
-          <TouchableOpacity
-            style={[styles.radioItem, provider === "local" && styles.radioActive]}
-            onPress={() => onChangeProvider("local")}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.radioText, provider === "local" && styles.radioTextActive]}>
-              On-Device
-            </Text>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          style={[styles.radioItem, provider === "on-device" && styles.radioActive]}
+          onPress={() => onChangeProvider("on-device")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.radioText, provider === "on-device" && styles.radioTextActive]}>
+            On-Device
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      {provider === "local" && (
+      {provider === "on-device" && (
         <OnDeviceSection localBackend={localBackend} onChangeBackend={onChangeLocalBackend} />
       )}
 
-      {provider !== "local" && (
+      {/* local-server backend under On-Device also needs the endpoint field */}
+      {provider === "on-device" && localBackend === "local-server" && (
+        <>
+          <Text style={styles.sectionTitle}>Server Endpoint</Text>
+          <TextInput
+            style={styles.textField}
+            value={ollamaEndpoint}
+            onChangeText={onChangeOllamaEndpoint}
+            placeholder="http://localhost:11434"
+            placeholderTextColor={colors.inputPlaceholder}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+        </>
+      )}
+
+      {provider !== "on-device" && (
         <>
           <Text style={styles.sectionTitle}>Model</Text>
           <TextInput
@@ -1048,6 +1123,22 @@ function IntelligenceTab({
             value={apiKey}
             onChangeText={onChangeApiKey}
             placeholder="sk-..."
+            placeholderTextColor={colors.inputPlaceholder}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </>
+      )}
+
+      {provider === "google" && (
+        <>
+          <Text style={styles.sectionTitle}>Google API Key</Text>
+          <TextInput
+            style={styles.textField}
+            value={googleKey}
+            onChangeText={onChangeGoogleKey}
+            placeholder="AIza..."
             placeholderTextColor={colors.inputPlaceholder}
             secureTextEntry
             autoCapitalize="none"

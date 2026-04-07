@@ -1,5 +1,5 @@
 import type { WebContext } from "../types";
-import type { ProviderConfig, ProviderType, GovernanceConfig, VoiceConfig } from "../storage";
+import type { ProviderConfig, GovernanceConfig, VoiceConfig } from "../storage";
 import {
   saveProviderConfig,
   saveSoulColor,
@@ -13,8 +13,11 @@ import { detectLocalInference, probeLocalModels, DEFAULT_LOCAL_ENDPOINTS } from 
 import { setTTSVoice } from "./chat";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import type { ColorPickerAPI } from "./color-picker";
-import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL } from "@motebit/sdk";
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
 import { PROXY_BASE_URL } from "../providers";
+
+/** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
+type ProviderTab = "proxy" | "anthropic" | "openai" | "ollama" | "webllm";
 
 // === Live Model Discovery ===
 
@@ -108,12 +111,10 @@ const voiceResponse = document.getElementById("settings-voice-response") as HTML
 
 // === State ===
 
-let activeProviderTab: ProviderType | "proxy" = "proxy";
+let activeProviderTab: ProviderTab = "proxy";
 let activeByokProvider: "anthropic" | "openai" | "google" = "anthropic";
 /** On-Device backend: browser (WebLLM) or auto-detected local server. */
 let activeLocalBackend: "webllm" | "server" = "webllm";
-/** Detected server type when user picks "Local Server" — drives ProviderConfig.type on save. */
-let detectedServerType: "ollama" | "openai" = "ollama";
 
 // === Settings API ===
 
@@ -389,9 +390,88 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     });
   });
 
+  // === WebLLM Model List ===
+  // Fetched from @mlc-ai/web-llm's prebuiltAppConfig.model_list on first demand.
+  // Curated subset: the most useful general-purpose chat models, ordered by
+  // memory footprint (smallest first). Avoids dumping 80+ exotic variants.
+
+  let webllmModelsPopulated = false;
+
+  async function populateWebLLMModels(): Promise<void> {
+    if (webllmModelsPopulated) return;
+    try {
+      // @ts-expect-error — CDN dynamic import, same path used by WebLLMProvider
+      const webllm = (await import("https://esm.run/@mlc-ai/web-llm")) as {
+        prebuiltAppConfig?: {
+          model_list?: Array<{
+            model_id: string;
+            vram_required_MB?: number;
+            model_type?: number;
+          }>;
+        };
+      };
+      const list = webllm.prebuiltAppConfig?.model_list;
+      if (!list || list.length === 0) return;
+
+      // Curated families: general-purpose instruction-tuned chat models only.
+      // Skip embedding/function-calling-only variants.
+      const CURATED_FAMILIES = [
+        "Llama-3.2-1B-Instruct",
+        "Llama-3.2-3B-Instruct",
+        "Llama-3.1-8B-Instruct",
+        "Phi-3.5-mini-instruct",
+        "Qwen2.5-0.5B-Instruct",
+        "Qwen2.5-1.5B-Instruct",
+        "Qwen2.5-3B-Instruct",
+        "Qwen2.5-7B-Instruct",
+        "gemma-2-2b-it",
+        "gemma-2-9b-it",
+        "Mistral-7B-Instruct-v0.3",
+        "SmolLM2-1.7B-Instruct",
+        "SmolLM2-360M-Instruct",
+      ];
+
+      const seenFamilies = new Set<string>();
+      const curated: Array<{ id: string; label: string; vramMB: number }> = [];
+      for (const entry of list) {
+        const family = CURATED_FAMILIES.find((f) => entry.model_id.includes(f));
+        if (!family) continue;
+        // Prefer q4f16 quantizations; skip duplicates of the same family.
+        if (seenFamilies.has(family)) continue;
+        if (!entry.model_id.includes("q4f16")) continue;
+        seenFamilies.add(family);
+        curated.push({
+          id: entry.model_id,
+          label: family.replace(/-Instruct|-it/g, ""),
+          vramMB: entry.vram_required_MB ?? 9999,
+        });
+      }
+
+      if (curated.length === 0) return;
+      curated.sort((a, b) => a.vramMB - b.vramMB);
+
+      // Preserve current selection if possible
+      const current = webllmModel.value;
+      webllmModel.innerHTML = "";
+      for (const m of curated) {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        const vramGb = (m.vramMB / 1024).toFixed(1);
+        opt.textContent = `${m.label} (${vramGb} GB)`;
+        webllmModel.appendChild(opt);
+      }
+      if (current && curated.some((m) => m.id === current)) {
+        webllmModel.value = current;
+      }
+      webllmModelsPopulated = true;
+    } catch {
+      // Network failure, CDN offline, etc. — silently fall back to the static list in index.html
+    }
+  }
+
   // === Provider Tab Switching ===
 
-  function switchProviderTab(provider: ProviderType | "proxy"): void {
+  function switchProviderTab(provider: ProviderTab): void {
     activeProviderTab = provider;
     providerTabs.forEach((tab) => {
       tab.classList.toggle("active", tab.dataset.provider === provider);
@@ -414,13 +494,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         webllmStatus.textContent = "WebGPU not available in this browser";
         webllmStatus.className = "webllm-status error";
       }
+      void populateWebLLMModels();
+    }
+    // On-Device tab with WebLLM sub-backend also needs the populated list.
+    if (provider === "ollama" && activeLocalBackend === "webllm") {
+      void populateWebLLMModels();
     }
   }
 
   providerTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       const provider = tab.dataset.provider;
-      if (provider) switchProviderTab(provider as ProviderType);
+      if (provider) switchProviderTab(provider as ProviderTab);
     });
   });
 
@@ -462,6 +547,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       if (webllmSection) webllmSection.style.display = backend === "webllm" ? "" : "none";
       if (serverSection) serverSection.style.display = backend === "server" ? "" : "none";
       if (backend === "server") void detectAndPopulateLocalServer();
+      if (backend === "webllm") void populateWebLLMModels();
     });
   });
 
@@ -505,13 +591,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       ollamaStatus.textContent =
         "No local server detected. Start Ollama, LM Studio, or llama.cpp on localhost.";
       ollamaStatus.className = "ollama-status error";
-      detectedServerType = "ollama";
       if (!ollamaBaseUrl.value) ollamaBaseUrl.value = DEFAULT_OLLAMA_URL;
       populateModelList([]);
       return;
     }
 
-    detectedServerType = result.type;
     ollamaBaseUrl.value = result.baseUrl;
     const name = friendlyServerName(result.baseUrl, result.type);
     ollamaStatus.textContent = `${name} — ${result.models.length} model${result.models.length !== 1 ? "s" : ""}`;
@@ -533,12 +617,10 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     if (!result) {
       ollamaStatus.textContent = "No server found at this endpoint";
       ollamaStatus.className = "ollama-status error";
-      detectedServerType = "ollama";
       populateModelList([]);
       return;
     }
 
-    detectedServerType = result.type;
     const name = friendlyServerName(result.baseUrl, result.type);
     ollamaStatus.textContent = `${name} — ${result.models.length} model${result.models.length !== 1 ? "s" : ""}`;
     ollamaStatus.className = "ollama-status connected";
@@ -597,47 +679,80 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     // Pre-fill from current provider config
     const config = ctx.getConfig();
     if (config) {
-      // Determine if this is an on-device config (webllm or local server with localhost URL)
-      const isLocalServerUrl =
-        config.baseUrl != null &&
-        /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)/.test(config.baseUrl);
-      const isOnDevice =
-        config.type === "webllm" ||
-        config.type === "ollama" ||
-        (config.type === "openai" && isLocalServerUrl);
-
-      // On-Device configs use the "ollama" tab key (label is "On-Device" in UI)
-      const tabKey = isOnDevice ? "ollama" : config.type;
-      switchProviderTab(tabKey);
       if (maxTokensSelect) maxTokensSelect.value = String(config.maxTokens ?? 4096);
 
-      if (config.type === "proxy") {
-        const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
-        if (cloudModelEl) cloudModelEl.value = config.model;
-      } else if (config.type === "anthropic") {
-        anthropicApiKey.value = config.apiKey ?? "";
-        anthropicModel.value = config.model;
-        if (config.apiKey) fetchModelsForProvider("anthropic", config.apiKey, "anthropic-models");
-      } else if (config.type === "openai" && !isLocalServerUrl) {
-        // BYOK OpenAI (cloud, not a local server)
-        openaiApiKey.value = config.apiKey ?? "";
-        openaiModel.value = config.model;
-        if (config.apiKey) fetchModelsForProvider("openai", config.apiKey, "openai-models");
-      } else if (config.type === "webllm") {
-        activeLocalBackend = "webllm";
-        setLocalBackendUI("webllm");
-        webllmModel.value = config.model;
-      } else if (config.type === "ollama" || (config.type === "openai" && isLocalServerUrl)) {
-        // Local server — either Ollama API or OpenAI-compatible localhost
-        activeLocalBackend = "server";
-        detectedServerType = config.type;
-        setLocalBackendUI("server");
-        ollamaBaseUrl.value = config.baseUrl ?? DEFAULT_OLLAMA_URL;
-        void detectAndPopulateLocalServer().then(() => {
-          if (config.model) ollamaModel.value = config.model;
-        });
+      switch (config.mode) {
+        case "motebit-cloud": {
+          switchProviderTab("proxy");
+          const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
+          if (cloudModelEl && config.model) cloudModelEl.value = config.model;
+          break;
+        }
+        case "byok": {
+          // The "API Key" tab uses the "anthropic" tab key historically.
+          switchProviderTab("anthropic");
+          activeByokProvider = config.vendor;
+          setByokProviderUI(config.vendor);
+          if (config.vendor === "anthropic") {
+            anthropicApiKey.value = config.apiKey;
+            if (config.model) anthropicModel.value = config.model;
+            if (config.apiKey)
+              fetchModelsForProvider("anthropic", config.apiKey, "anthropic-models");
+          } else if (config.vendor === "openai") {
+            openaiApiKey.value = config.apiKey;
+            if (config.model) openaiModel.value = config.model;
+            if (config.apiKey) fetchModelsForProvider("openai", config.apiKey, "openai-models");
+          } else if (config.vendor === "google") {
+            const googleApiKey = document.getElementById(
+              "google-api-key",
+            ) as HTMLInputElement | null;
+            const googleModel = document.getElementById("google-model") as HTMLInputElement | null;
+            if (googleApiKey) googleApiKey.value = config.apiKey;
+            if (googleModel) googleModel.value = config.model ?? DEFAULT_GOOGLE_MODEL;
+            if (config.apiKey) fetchModelsForProvider("google", config.apiKey, "google-models");
+          }
+          break;
+        }
+        case "on-device": {
+          // On-Device tab (historically keyed as "ollama" in the tab registry).
+          switchProviderTab("ollama");
+          if (config.backend === "webllm") {
+            activeLocalBackend = "webllm";
+            setLocalBackendUI("webllm");
+            if (config.model) webllmModel.value = config.model;
+          } else if (config.backend === "local-server") {
+            activeLocalBackend = "server";
+            setLocalBackendUI("server");
+            ollamaBaseUrl.value = config.endpoint ?? DEFAULT_OLLAMA_URL;
+            // Hint: warn if the saved endpoint doesn't look local (LAN, etc. is still ok).
+            if (config.endpoint && !isLocalServerUrl(config.endpoint)) {
+              // No toast — just leave the field; user can re-probe.
+            }
+            void detectAndPopulateLocalServer().then(() => {
+              if (config.model) ollamaModel.value = config.model;
+            });
+          }
+          // apple-fm / mlx are mobile-only — no UI on web.
+          break;
+        }
       }
     }
+  }
+
+  /** Visually sync the BYOK sub-provider buttons + sections to `vendor`. */
+  function setByokProviderUI(vendor: "anthropic" | "openai" | "google"): void {
+    document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
+      const isActive = b.dataset.byok === vendor;
+      b.classList.toggle("active", isActive);
+      b.style.background = isActive ? "var(--accent-bg)" : "transparent";
+      b.style.color = isActive ? "var(--text-heading)" : "var(--text-muted)";
+    });
+    const anthropicSection = document.getElementById("byok-anthropic");
+    const openaiSection = document.getElementById("byok-openai");
+    const googleSection = document.getElementById("byok-google");
+    if (anthropicSection) anthropicSection.style.display = vendor === "anthropic" ? "" : "none";
+    if (openaiSection) openaiSection.style.display = vendor === "openai" ? "" : "none";
+    if (googleSection) googleSection.style.display = vendor === "google" ? "" : "none";
   }
 
   function setLocalBackendUI(backend: "webllm" | "server"): void {
@@ -691,70 +806,76 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       : undefined;
     let config: ProviderConfig;
     switch (activeProviderTab) {
-      case "proxy":
-        {
-          // Proxy tab — read model from the cloud model selector
-          const cloudModel =
-            (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ??
-            DEFAULT_ANTHROPIC_MODEL;
-          config = { type: "proxy", model: cloudModel, maxTokens };
-        }
+      case "proxy": {
+        // Motebit Cloud — read model from the cloud model selector
+        const cloudModel =
+          (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ??
+          DEFAULT_ANTHROPIC_MODEL;
+        config = { mode: "motebit-cloud", model: cloudModel, maxTokens };
         break;
-      case "anthropic":
-        // API Key tab — check which BYOK sub-provider is active
+      }
+      case "anthropic": {
+        // BYOK tab — branch on the active sub-provider
         if (activeByokProvider === "google") {
           const googleApiKey = document.getElementById("google-api-key") as HTMLInputElement | null;
-          const googleModel = document.getElementById("google-model") as HTMLInputElement | null;
+          const googleModelEl = document.getElementById("google-model") as HTMLInputElement | null;
           config = {
-            type: "openai", // Google uses OpenAI-compatible API format
+            mode: "byok",
+            vendor: "google",
             apiKey: googleApiKey?.value.trim() ?? "",
-            model: googleModel?.value ?? DEFAULT_GOOGLE_MODEL,
+            model: googleModelEl?.value ?? DEFAULT_GOOGLE_MODEL,
+            // Google via OpenAI-compatible endpoint
             baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
             maxTokens,
           };
         } else if (activeByokProvider === "openai") {
           config = {
-            type: "openai",
+            mode: "byok",
+            vendor: "openai",
             apiKey: openaiApiKey.value.trim(),
             model: openaiModel.value,
             maxTokens,
           };
         } else {
           config = {
-            type: "anthropic",
+            mode: "byok",
+            vendor: "anthropic",
             apiKey: anthropicApiKey.value.trim(),
             model: anthropicModel.value,
             maxTokens,
           };
         }
         break;
-      case "openai":
+      }
+      case "openai": {
         config = {
-          type: "openai",
+          mode: "byok",
+          vendor: "openai",
           apiKey: openaiApiKey.value.trim(),
           model: openaiModel.value,
           maxTokens,
         };
         break;
-      case "ollama":
-        // "On-Device" tab — branches on active backend picker
+      }
+      case "ollama": {
+        // On-Device tab — branch on the selected backend picker
         if (activeLocalBackend === "webllm") {
-          config = { type: "webllm", model: webllmModel.value, maxTokens };
+          config = { mode: "on-device", backend: "webllm", model: webllmModel.value, maxTokens };
         } else {
-          // Local Server — use detected type (ollama or openai-compatible)
           config = {
-            type: detectedServerType,
+            mode: "on-device",
+            backend: "local-server",
             model: ollamaModel.value,
-            baseUrl: ollamaBaseUrl.value.trim(),
+            endpoint: ollamaBaseUrl.value.trim(),
             maxTokens,
           };
         }
         break;
-      case "webllm":
-        config = { type: "webllm", model: webllmModel.value, maxTokens };
+      }
+      case "webllm": {
+        config = { mode: "on-device", backend: "webllm", model: webllmModel.value, maxTokens };
         break;
-      default:
-        config = { type: "anthropic", model: DEFAULT_ANTHROPIC_MODEL };
+      }
     }
 
     // Save soul color
@@ -769,18 +890,14 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         : { preset };
     saveSoulColor(soulColor);
 
-    // Only reconnect provider if the provider config actually changed
+    // Only reconnect provider if the provider config actually changed.
+    // Compare shallow — good enough to avoid a needless model reload.
     const prev = ctx.getConfig();
-    const providerChanged =
-      !prev ||
-      prev.type !== config.type ||
-      prev.model !== config.model ||
-      prev.apiKey !== config.apiKey ||
-      prev.baseUrl !== config.baseUrl ||
-      prev.maxTokens !== config.maxTokens;
+    const providerChanged = !prev || JSON.stringify(prev) !== JSON.stringify(config);
 
+    const isWebLLMConfig = config.mode === "on-device" && config.backend === "webllm";
     if (providerChanged) {
-      if (activeProviderTab === "webllm") {
+      if (isWebLLMConfig) {
         void initWebLLM(config);
       } else {
         ctx.app.connectProvider(config);
@@ -820,12 +937,15 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // === WebLLM Init ===
 
   async function initWebLLM(config: ProviderConfig): Promise<void> {
+    if (config.mode !== "on-device" || config.backend !== "webllm") {
+      throw new Error("initWebLLM called with non-webllm config");
+    }
     webllmProgress.style.display = "block";
     webllmProgressText.textContent = "Loading model...";
     webllmProgressFill.style.width = "0%";
 
     try {
-      const provider = new WebLLMProvider(config.model);
+      const provider = new WebLLMProvider(config.model ?? "Llama-3.1-8B-Instruct-q4f16_1-MLC");
       await provider.init((progress) => {
         webllmProgressFill.style.width = `${Math.round(progress.progress * 100)}%`;
         webllmProgressText.textContent = progress.text;

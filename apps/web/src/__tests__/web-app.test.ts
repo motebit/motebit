@@ -176,7 +176,8 @@ describe("Provider management", () => {
     const runtime = app.getRuntime()!;
     const spy = vi.spyOn(runtime, "setProvider");
     app.connectProvider({
-      type: "anthropic",
+      mode: "byok",
+      vendor: "anthropic",
       model: "claude-sonnet-4-6",
       apiKey: "sk-test",
     });

@@ -233,9 +233,9 @@ async function main(): Promise<void> {
   };
 
   if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
-    const validProviders = ["anthropic", "openai", "ollama"] as const;
+    const validProviders = ["anthropic", "openai", "google", "ollama", "proxy"] as const;
     if (validProviders.includes(personalityConfig.default_provider)) {
-      config.provider = personalityConfig.default_provider!;
+      config.provider = personalityConfig.default_provider;
     }
   }
   if (

@@ -46,6 +46,7 @@ import { OpenAITTSProvider } from "./adapters/openai-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
 import { AudioMonitor } from "./adapters/audio-monitor";
 import { MobileApp, APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, setBackgroundApp } from "./mobile-app";
+import { SECURE_STORE_KEYS } from "./storage-keys";
 import type {
   MobileSettings,
   MobileAIConfig,
@@ -314,7 +315,7 @@ export default function App(): React.ReactElement {
   // Initialize voice providers — TTS chain: OpenAI TTS → expo-speech fallback
   const initVoice = useCallback(
     async (voiceSettings?: { ttsVoice?: string }) => {
-      const openaiKey = await SecureStore.getItemAsync("motebit_openai_api_key");
+      const openaiKey = await SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiVoiceKey);
       const voice = voiceSettings?.ttsVoice ?? settings?.ttsVoice ?? "alloy";
 
       // Build TTS chain: OpenAI (if key available) → system TTS fallback
@@ -355,10 +356,15 @@ export default function App(): React.ReactElement {
       // that resets to default operatorMode: false)
       const wasOperatorMode = a.isOperatorMode;
 
-      const apiKey =
-        s.provider === "anthropic" || s.provider === "hybrid"
-          ? ((await SecureStore.getItemAsync("motebit_anthropic_api_key")) ?? undefined)
-          : undefined;
+      // Pull the per-vendor API key from secure storage based on the active provider.
+      let apiKey: string | undefined;
+      if (s.provider === "anthropic" || s.provider === "hybrid") {
+        apiKey = (await SecureStore.getItemAsync(SECURE_STORE_KEYS.anthropicApiKey)) ?? undefined;
+      } else if (s.provider === "openai") {
+        apiKey = (await SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiChatKey)) ?? undefined;
+      } else if (s.provider === "google") {
+        apiKey = (await SecureStore.getItemAsync(SECURE_STORE_KEYS.googleApiKey)) ?? undefined;
+      }
 
       await a.initAI({
         provider: s.provider,
@@ -366,7 +372,11 @@ export default function App(): React.ReactElement {
         model: s.model,
         apiKey,
         ollamaEndpoint:
-          s.provider === "ollama" || s.provider === "hybrid" ? s.ollamaEndpoint : undefined,
+          s.provider === "ollama" ||
+          s.provider === "hybrid" ||
+          (s.provider === "on-device" && s.localBackend === "local-server")
+            ? s.ollamaEndpoint
+            : undefined,
       });
 
       // Apply governance (restore operator mode captured before re-init)

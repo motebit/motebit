@@ -79,6 +79,7 @@ import {
   DeviceCapability,
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_OPENAI_MODEL,
+  DEFAULT_GOOGLE_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_PROXY_MODEL,
 } from "@motebit/sdk";
@@ -121,6 +122,7 @@ import {
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { WebViewGLAdapter } from "./adapters/webview-gl";
+import { ASYNC_STORAGE_KEYS, KEYRING_KEYS } from "./storage-keys";
 import { SecureStoreAdapter } from "./adapters/secure-store";
 
 // === Color Presets (same 7 as desktop) ===
@@ -167,9 +169,31 @@ export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
 
 // === Settings ===
 
+/**
+ * Mobile provider union — surface-specific flat shape that drives the settings
+ * UI's radio buttons. At the package boundary (cross-surface wire format) we
+ * convert to `UnifiedProviderConfig` via `mobileSettingsToUnifiedProvider()`.
+ *
+ * The three-mode mental model maps onto this flat union as:
+ *   on-device   → "on-device"                (with localBackend picker)
+ *   motebit-cloud → "proxy" | "hybrid"
+ *   byok        → "anthropic" | "openai" | "google" | "ollama" (LAN)
+ */
+export type MobileProvider =
+  | "ollama"
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "hybrid"
+  | "proxy"
+  | "on-device";
+
+/** On-device backend sub-selector. `"local-server"` is for users running their own LAN server. */
+export type MobileLocalBackend = "apple-fm" | "mlx" | "local-server";
+
 export interface MobileSettings {
-  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local";
-  localBackend?: "apple-fm" | "mlx";
+  provider: MobileProvider;
+  localBackend?: MobileLocalBackend;
   model: string;
   ollamaEndpoint: string;
   colorPreset: string;
@@ -210,18 +234,96 @@ const DEFAULT_SETTINGS: MobileSettings = {
   maxTokens: 4096,
 };
 
-const SETTINGS_KEY = "@motebit/settings";
-const IDENTITY_FILE_KEY = "@motebit/identity_file";
+// Legacy module-level constants kept for call-site compatibility. The
+// canonical source of truth is `./storage-keys.ts`.
+const SETTINGS_KEY = ASYNC_STORAGE_KEYS.settings;
+const IDENTITY_FILE_KEY = ASYNC_STORAGE_KEYS.identityFile;
 
 // === AI Config ===
 
 export interface MobileAIConfig {
-  provider: "ollama" | "anthropic" | "openai" | "hybrid" | "proxy" | "local";
-  localBackend?: "apple-fm" | "mlx";
+  provider: MobileProvider;
+  localBackend?: MobileLocalBackend;
   model?: string;
   apiKey?: string;
   ollamaEndpoint?: string;
   maxTokens?: number;
+}
+
+/**
+ * Convert mobile-native settings to the surface-agnostic `UnifiedProviderConfig`.
+ * Used when mobile needs to hand the config off to a package (sync, relay, tests).
+ */
+export function mobileSettingsToUnifiedProvider(
+  settings: Pick<
+    MobileSettings,
+    "provider" | "localBackend" | "model" | "ollamaEndpoint" | "maxTokens"
+  >,
+  apiKey?: string,
+): import("@motebit/sdk").UnifiedProviderConfig {
+  switch (settings.provider) {
+    case "proxy":
+    case "hybrid":
+      return {
+        mode: "motebit-cloud",
+        model: settings.model,
+        maxTokens: settings.maxTokens,
+      };
+    case "anthropic":
+      return {
+        mode: "byok",
+        vendor: "anthropic",
+        apiKey: apiKey ?? "",
+        model: settings.model,
+        maxTokens: settings.maxTokens,
+      };
+    case "openai":
+      return {
+        mode: "byok",
+        vendor: "openai",
+        apiKey: apiKey ?? "",
+        model: settings.model,
+        maxTokens: settings.maxTokens,
+      };
+    case "google":
+      return {
+        mode: "byok",
+        vendor: "google",
+        apiKey: apiKey ?? "",
+        model: settings.model,
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        maxTokens: settings.maxTokens,
+      };
+    case "ollama":
+      return {
+        mode: "on-device",
+        backend: "local-server",
+        model: settings.model,
+        endpoint: settings.ollamaEndpoint,
+        maxTokens: settings.maxTokens,
+      };
+    case "on-device":
+      return {
+        mode: "on-device",
+        backend: settings.localBackend ?? "apple-fm",
+        model: settings.model,
+        endpoint: settings.localBackend === "local-server" ? settings.ollamaEndpoint : undefined,
+        maxTokens: settings.maxTokens,
+      };
+  }
+}
+
+/**
+ * Reverse migration: collapse an old persisted settings object (which may have
+ * `provider: "local"`) onto the new union. Called from `loadSettings`.
+ */
+function migrateLegacyMobileSettings(
+  raw: (Partial<MobileSettings> & { provider?: string }) | Record<string, unknown>,
+): void {
+  const obj = raw as { provider?: string };
+  if (obj.provider === "local") {
+    obj.provider = "on-device";
+  }
 }
 
 // === Bootstrap Result ===
@@ -314,7 +416,7 @@ export class MobileApp {
   private mcpAdapters: Map<string, McpClientAdapter> = new Map();
   private _mcpServers: McpServerConfig[] = [];
   private _toolsChangedCallback: (() => void) | null = null;
-  private static readonly MCP_SERVERS_KEY = "@motebit/mcp_servers";
+  private static readonly MCP_SERVERS_KEY = ASYNC_STORAGE_KEYS.mcpServers;
 
   // Plan engine
   private planEngine: PlanEngine | null = null;
@@ -354,7 +456,7 @@ export class MobileApp {
 
     const configStore: BootstrapConfigStore = {
       async read() {
-        const mid = await keyring.get("motebit_id");
+        const mid = await keyring.get(KEYRING_KEYS.motebitId);
         if (mid == null || mid === "") return null;
         return {
           motebit_id: mid,
@@ -363,7 +465,7 @@ export class MobileApp {
         };
       },
       async write(state) {
-        await keyring.set("motebit_id", state.motebit_id);
+        await keyring.set(KEYRING_KEYS.motebitId, state.motebit_id);
         await keyring.set("device_id", state.device_id);
         await keyring.set("device_public_key", state.device_public_key);
       },
@@ -436,7 +538,7 @@ export class MobileApp {
 
   // === Proxy Bootstrap ===
 
-  private static readonly PROXY_TOKEN_KEY = "@motebit/proxy_token";
+  private static readonly PROXY_TOKEN_KEY = ASYNC_STORAGE_KEYS.proxyToken;
 
   /**
    * Attempt proxy bootstrap before requiring an API key.
@@ -530,7 +632,7 @@ export class MobileApp {
       const model = pc?.model ?? DEFAULT_PROXY_MODEL;
       const proxyUrl =
         pc?.baseUrl ??
-        (await AsyncStorage.getItem("@motebit/proxy_url")) ??
+        (await AsyncStorage.getItem(ASYNC_STORAGE_KEYS.proxyUrl)) ??
         "https://api.motebit.com";
       const extraHeaders: Record<string, string> = {};
       if (pc?.proxyToken) extraHeaders["x-proxy-token"] = pc.proxyToken;
@@ -560,14 +662,33 @@ export class MobileApp {
         },
         fallback_to_local: true,
       });
-    } else if (config.provider === "local") {
-      const { LocalInferenceProvider } = await import("./adapters/local-inference.js");
-      const localProvider = new LocalInferenceProvider({
-        backend: config.localBackend ?? "apple-fm",
-        maxTokens: config.maxTokens,
+    } else if (config.provider === "google") {
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model = config.model ?? DEFAULT_GOOGLE_MODEL;
+      provider = new CloudProvider({
+        provider: "openai",
+        api_key: config.apiKey,
+        model,
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        max_tokens: config.maxTokens,
       });
-      await localProvider.init();
-      provider = localProvider;
+    } else if (config.provider === "on-device") {
+      const backend = config.localBackend ?? "apple-fm";
+      if (backend === "local-server") {
+        // LAN / LM Studio / Ollama running on user's own server.
+        const base_url = config.ollamaEndpoint ?? DEFAULT_OLLAMA_URL;
+        const model = config.model ?? DEFAULT_OLLAMA_MODEL;
+        provider = new OllamaProvider({ model, base_url, max_tokens: config.maxTokens });
+      } else {
+        // apple-fm or mlx — native on-device inference.
+        const { LocalInferenceProvider } = await import("./adapters/local-inference.js");
+        const localProvider = new LocalInferenceProvider({
+          backend,
+          maxTokens: config.maxTokens,
+        });
+        await localProvider.init();
+        provider = localProvider;
+      }
     } else {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model = config.model ?? DEFAULT_ANTHROPIC_MODEL;
@@ -1172,7 +1293,10 @@ export class MobileApp {
     const raw = await AsyncStorage.getItem(SETTINGS_KEY);
     if (raw == null || raw === "") return { ...DEFAULT_SETTINGS };
     try {
-      const loaded = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<MobileSettings>) };
+      const parsed = JSON.parse(raw) as Partial<MobileSettings> & { provider?: string };
+      // Migrate provider union renames before merging (e.g., "local" → "on-device").
+      migrateLegacyMobileSettings(parsed);
+      const loaded = { ...DEFAULT_SETTINGS, ...(parsed as Partial<MobileSettings>) };
       // Migration: borosilicate was removed — remap to moonlight
       if (loaded.colorPreset === "borosilicate") loaded.colorPreset = "moonlight";
       return loaded;
@@ -1509,7 +1633,7 @@ export class MobileApp {
     result: { motebitId: string; deviceId: string },
     syncUrl?: string,
   ): Promise<void> {
-    await this.keyring.set("motebit_id", result.motebitId);
+    await this.keyring.set(KEYRING_KEYS.motebitId, result.motebitId);
     await this.keyring.set("device_id", result.deviceId);
 
     // Auth uses signed JWTs — no device_token storage needed

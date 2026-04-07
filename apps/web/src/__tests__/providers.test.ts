@@ -133,9 +133,10 @@ describe("detectOllamaModels", () => {
 const cfg = (p: unknown): Record<string, any> => (p as { config: Record<string, unknown> }).config;
 
 describe("createProvider", () => {
-  it("creates anthropic provider via CloudProvider", () => {
+  it("creates BYOK anthropic via CloudProvider", () => {
     const provider = createProvider({
-      type: "anthropic",
+      mode: "byok",
+      vendor: "anthropic",
       model: "claude-sonnet-4-20250514",
       apiKey: "sk-test",
     });
@@ -144,9 +145,10 @@ describe("createProvider", () => {
     expect(cfg(provider).api_key).toBe("sk-test");
   });
 
-  it("creates openai provider via CloudProvider", () => {
+  it("creates BYOK openai via CloudProvider", () => {
     const provider = createProvider({
-      type: "openai",
+      mode: "byok",
+      vendor: "openai",
       model: "gpt-4o",
       apiKey: "sk-openai",
       baseUrl: "https://api.openai.com/v1",
@@ -155,19 +157,33 @@ describe("createProvider", () => {
     expect(cfg(provider).provider).toBe("openai");
   });
 
-  it("creates ollama provider via OllamaProvider", () => {
+  it("creates on-device local-server via OllamaProvider when endpoint looks like Ollama", () => {
     const provider = createProvider({
-      type: "ollama",
+      mode: "on-device",
+      backend: "local-server",
       model: "llama3",
+      endpoint: "http://127.0.0.1:11434",
     });
     expect(provider).toBeDefined();
     expect(cfg(provider).model).toBe("llama3");
     expect(cfg(provider).base_url).toBe("http://127.0.0.1:11434");
   });
 
-  it("creates webllm provider", () => {
+  it("creates on-device local-server via OpenAI-compat when endpoint is non-ollama", () => {
     const provider = createProvider({
-      type: "webllm",
+      mode: "on-device",
+      backend: "local-server",
+      model: "phi-3",
+      endpoint: "http://localhost:1234",
+    });
+    expect(cfg(provider).provider).toBe("openai");
+    expect(cfg(provider).base_url).toBe("http://localhost:1234");
+  });
+
+  it("creates on-device webllm provider", () => {
+    const provider = createProvider({
+      mode: "on-device",
+      backend: "webllm",
       model: "Llama-3-8B-Instruct-q4f32_1",
       temperature: 0.5,
       maxTokens: 2048,
@@ -175,9 +191,9 @@ describe("createProvider", () => {
     expect(provider).toBeInstanceOf(WebLLMProvider);
   });
 
-  it("creates proxy provider via CloudProvider", () => {
+  it("creates motebit-cloud provider with proxy token", () => {
     const provider = createProvider({
-      type: "proxy",
+      mode: "motebit-cloud",
       model: "claude-sonnet-4-20250514",
       proxyToken: "tok_abc",
     });
@@ -188,13 +204,19 @@ describe("createProvider", () => {
     );
   });
 
-  it("creates proxy provider without token", () => {
+  it("creates motebit-cloud provider without token", () => {
     const provider = createProvider({
-      type: "proxy",
+      mode: "motebit-cloud",
       model: "claude-sonnet-4-20250514",
     });
     expect(provider).toBeDefined();
     expect(cfg(provider).extra_headers).toBeUndefined();
+  });
+
+  it("throws when on-device backend is apple-fm (mobile only)", () => {
+    expect(() =>
+      createProvider({ mode: "on-device", backend: "apple-fm", model: "foundation" }),
+    ).toThrow(/apple-fm/);
   });
 });
 

@@ -40,9 +40,9 @@ describe("pickBestModel", () => {
 // === resolveProviderFromSaved ===
 
 describe("resolveProviderFromSaved", () => {
-  it("returns source proxy for proxy configs (needs fresh token)", () => {
+  it("returns source proxy for motebit-cloud (needs fresh token)", () => {
     const config: ProviderConfig = {
-      type: "proxy",
+      mode: "motebit-cloud",
       model: "claude-sonnet-4-6",
       proxyToken: "tok",
     };
@@ -51,92 +51,99 @@ describe("resolveProviderFromSaved", () => {
     expect(result.config).toBe(config);
   });
 
-  it("returns saved for webllm configs", () => {
-    const config: ProviderConfig = { type: "webllm", model: "Llama-3.2-3B" };
+  it("returns saved for on-device webllm", () => {
+    const config: ProviderConfig = { mode: "on-device", backend: "webllm", model: "Llama-3.2-3B" };
     expect(resolveProviderFromSaved(config).source).toBe("saved");
   });
 
-  it("returns saved for anthropic config with API key", () => {
+  it("returns saved for on-device local-server", () => {
     const config: ProviderConfig = {
-      type: "anthropic",
-      model: "claude-sonnet-4-6",
+      mode: "on-device",
+      backend: "local-server",
+      model: "llama3",
+      endpoint: "http://localhost:11434",
+    };
+    expect(resolveProviderFromSaved(config).source).toBe("saved");
+  });
+
+  it("returns saved for BYOK with api key", () => {
+    const config: ProviderConfig = {
+      mode: "byok",
+      vendor: "anthropic",
       apiKey: "sk-test",
+      model: "claude-sonnet-4-6",
     };
     expect(resolveProviderFromSaved(config).source).toBe("saved");
   });
 
-  it("returns none for anthropic config without API key or baseUrl", () => {
-    const config: ProviderConfig = { type: "anthropic", model: "claude-sonnet-4-6" };
-    expect(resolveProviderFromSaved(config).source).toBe("none");
-  });
-
-  it("returns saved for openai config with baseUrl (local compatible server)", () => {
+  it("returns none for BYOK without api key", () => {
     const config: ProviderConfig = {
-      type: "openai",
-      model: "gpt-4",
-      baseUrl: "http://localhost:1234",
+      mode: "byok",
+      vendor: "anthropic",
+      apiKey: "",
+      model: "claude-sonnet-4-6",
     };
-    expect(resolveProviderFromSaved(config).source).toBe("saved");
-  });
-
-  it("returns none for openai config with no key and no baseUrl", () => {
-    const config: ProviderConfig = { type: "openai", model: "gpt-4" };
     expect(resolveProviderFromSaved(config).source).toBe("none");
-  });
-
-  it("returns saved for ollama config (always has default URL)", () => {
-    const config: ProviderConfig = { type: "ollama", model: "llama3" };
-    expect(resolveProviderFromSaved(config).source).toBe("saved");
   });
 });
 
 // === isConfigValid ===
 
 describe("isConfigValid", () => {
-  it("anthropic with API key is valid", () => {
+  it("BYOK anthropic with API key is valid", () => {
     expect(
-      isConfigValid({ type: "anthropic", model: "claude-sonnet-4-6", apiKey: "sk-test" }),
+      isConfigValid({
+        mode: "byok",
+        vendor: "anthropic",
+        apiKey: "sk-test",
+        model: "claude-sonnet-4-6",
+      }),
     ).toBe(true);
   });
 
-  it("anthropic without API key is invalid", () => {
-    expect(isConfigValid({ type: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
-  });
-
-  it("openai with API key is valid", () => {
-    expect(isConfigValid({ type: "openai", model: "gpt-4", apiKey: "sk-test" })).toBe(true);
-  });
-
-  it("openai with baseUrl (no key) is valid", () => {
+  it("BYOK without API key is invalid", () => {
     expect(
-      isConfigValid({ type: "openai", model: "gpt-4", baseUrl: "http://localhost:1234" }),
+      isConfigValid({
+        mode: "byok",
+        vendor: "anthropic",
+        apiKey: "",
+        model: "claude-sonnet-4-6",
+      }),
+    ).toBe(false);
+  });
+
+  it("on-device local-server with endpoint is valid", () => {
+    expect(
+      isConfigValid({
+        mode: "on-device",
+        backend: "local-server",
+        endpoint: "http://localhost:11434",
+      }),
     ).toBe(true);
   });
 
-  it("openai without key or baseUrl is invalid", () => {
-    expect(isConfigValid({ type: "openai", model: "gpt-4" })).toBe(false);
-  });
-
-  it("ollama is always valid with a model", () => {
-    expect(isConfigValid({ type: "ollama", model: "llama3" })).toBe(true);
-  });
-
-  it("webllm is always valid with a model", () => {
-    expect(isConfigValid({ type: "webllm", model: "Llama-3.2-3B" })).toBe(true);
-  });
-
-  it("proxy with token is valid", () => {
-    expect(isConfigValid({ type: "proxy", model: "claude-sonnet-4-6", proxyToken: "tok" })).toBe(
+  it("on-device webllm with model is valid", () => {
+    expect(isConfigValid({ mode: "on-device", backend: "webllm", model: "Llama-3.2-3B" })).toBe(
       true,
     );
   });
 
-  it("proxy without token is invalid", () => {
-    expect(isConfigValid({ type: "proxy", model: "claude-sonnet-4-6" })).toBe(false);
+  it("on-device webllm without model is invalid", () => {
+    expect(isConfigValid({ mode: "on-device", backend: "webllm" })).toBe(false);
   });
 
-  it("any type with empty model is invalid", () => {
-    expect(isConfigValid({ type: "webllm", model: "" })).toBe(false);
+  it("motebit-cloud with token is valid", () => {
+    expect(
+      isConfigValid({
+        mode: "motebit-cloud",
+        model: "claude-sonnet-4-6",
+        proxyToken: "tok",
+      }),
+    ).toBe(true);
+  });
+
+  it("motebit-cloud without token is invalid", () => {
+    expect(isConfigValid({ mode: "motebit-cloud", model: "claude-sonnet-4-6" })).toBe(false);
   });
 });
 
@@ -311,28 +318,34 @@ describe("detectLocalInference", () => {
 // === configFromProbeResult ===
 
 describe("configFromProbeResult", () => {
-  it("builds ollama config from ollama probe", () => {
+  it("builds on-device/local-server from ollama probe", () => {
     const probe: ProbeResult = {
       baseUrl: "http://localhost:11434",
       type: "ollama",
       models: ["llama3:8b", "llama3:70b"],
     };
     const config = configFromProbeResult(probe);
-    expect(config.type).toBe("ollama");
-    expect(config.model).toBe("llama3:70b");
-    expect(config.baseUrl).toBe("http://localhost:11434");
+    expect(config.mode).toBe("on-device");
+    if (config.mode === "on-device") {
+      expect(config.backend).toBe("local-server");
+      expect(config.model).toBe("llama3:70b");
+      expect(config.endpoint).toBe("http://localhost:11434");
+    }
   });
 
-  it("builds openai config from openai-compatible probe", () => {
+  it("builds on-device/local-server from openai-compatible probe", () => {
     const probe: ProbeResult = {
       baseUrl: "http://localhost:1234",
       type: "openai",
       models: ["phi-3"],
     };
     const config = configFromProbeResult(probe);
-    expect(config.type).toBe("openai");
-    expect(config.model).toBe("phi-3");
-    expect(config.baseUrl).toBe("http://localhost:1234");
+    expect(config.mode).toBe("on-device");
+    if (config.mode === "on-device") {
+      expect(config.backend).toBe("local-server");
+      expect(config.model).toBe("phi-3");
+      expect(config.endpoint).toBe("http://localhost:1234");
+    }
   });
 });
 
@@ -346,16 +359,24 @@ describe("isConfigReachable", () => {
   });
 
   it("webllm is always reachable", async () => {
-    expect(await isConfigReachable({ type: "webllm", model: "Llama-3.2-3B" }, mockFetch)).toBe(
-      true,
-    );
+    expect(
+      await isConfigReachable(
+        { mode: "on-device", backend: "webllm", model: "Llama-3.2-3B" },
+        mockFetch,
+      ),
+    ).toBe(true);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("ollama with reachable URL returns true", async () => {
+  it("local-server with reachable URL returns true", async () => {
     mockFetch.mockResolvedValueOnce({ ok: true });
     const result = await isConfigReachable(
-      { type: "ollama", model: "llama3", baseUrl: "http://localhost:11434" },
+      {
+        mode: "on-device",
+        backend: "local-server",
+        model: "llama3",
+        endpoint: "http://localhost:11434",
+      },
       mockFetch,
     );
     expect(result).toBe(true);
@@ -365,40 +386,53 @@ describe("isConfigReachable", () => {
     );
   });
 
-  it("ollama with unreachable URL returns false", async () => {
+  it("local-server with unreachable URL returns false", async () => {
     mockFetch.mockRejectedValueOnce(new Error("Connection refused"));
     const result = await isConfigReachable(
-      { type: "ollama", model: "llama3", baseUrl: "http://localhost:11434" },
+      {
+        mode: "on-device",
+        backend: "local-server",
+        model: "llama3",
+        endpoint: "http://localhost:11434",
+      },
       mockFetch,
     );
     expect(result).toBe(false);
   });
 
-  it("ollama uses default URL when baseUrl is missing", async () => {
+  it("local-server uses default URL when endpoint is missing", async () => {
     mockFetch.mockResolvedValueOnce({ ok: true });
-    await isConfigReachable({ type: "ollama", model: "llama3" }, mockFetch);
+    await isConfigReachable(
+      { mode: "on-device", backend: "local-server", model: "llama3" },
+      mockFetch,
+    );
     expect(mockFetch).toHaveBeenCalledWith("http://localhost:11434/api/tags", expect.any(Object));
   });
 
-  it("proxy with token is reachable", async () => {
+  it("motebit-cloud with token is reachable", async () => {
     expect(
       await isConfigReachable(
-        { type: "proxy", model: "claude-sonnet-4-6", proxyToken: "tok" },
+        { mode: "motebit-cloud", model: "claude-sonnet-4-6", proxyToken: "tok" },
         mockFetch,
       ),
     ).toBe(true);
   });
 
-  it("proxy without token is not reachable", async () => {
-    expect(await isConfigReachable({ type: "proxy", model: "claude-sonnet-4-6" }, mockFetch)).toBe(
-      false,
-    );
+  it("motebit-cloud without token is not reachable", async () => {
+    expect(
+      await isConfigReachable({ mode: "motebit-cloud", model: "claude-sonnet-4-6" }, mockFetch),
+    ).toBe(false);
   });
 
-  it("anthropic with API key is reachable (no network probe)", async () => {
+  it("BYOK anthropic with API key is reachable (no network probe)", async () => {
     expect(
       await isConfigReachable(
-        { type: "anthropic", model: "claude-sonnet-4-6", apiKey: "sk-test" },
+        {
+          mode: "byok",
+          vendor: "anthropic",
+          apiKey: "sk-test",
+          model: "claude-sonnet-4-6",
+        },
         mockFetch,
       ),
     ).toBe(true);

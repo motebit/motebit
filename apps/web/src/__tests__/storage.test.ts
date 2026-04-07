@@ -38,16 +38,16 @@ beforeEach(() => {
   sessionStorage.clear();
 });
 
-describe("ProviderConfig persistence", () => {
-  it("saves and loads provider config", () => {
-    const config = {
-      type: "anthropic" as const,
-      model: "claude-sonnet-4-6",
+describe("ProviderConfig persistence (UnifiedProviderConfig)", () => {
+  it("saves and loads BYOK anthropic config", () => {
+    const config: ProviderConfig = {
+      mode: "byok",
+      vendor: "anthropic",
       apiKey: "sk-test",
+      model: "claude-sonnet-4-6",
     };
     saveProviderConfig(config);
-    const loaded = loadProviderConfig();
-    expect(loaded).toEqual(config);
+    expect(loadProviderConfig()).toEqual(config);
   });
 
   it("returns null when no config saved", () => {
@@ -55,7 +55,7 @@ describe("ProviderConfig persistence", () => {
   });
 
   it("clears provider config", () => {
-    saveProviderConfig({ type: "anthropic" as const, model: "claude-sonnet-4-6" });
+    saveProviderConfig({ mode: "byok", vendor: "anthropic", apiKey: "k" });
     clearProviderConfig();
     expect(loadProviderConfig()).toBeNull();
   });
@@ -65,31 +65,41 @@ describe("ProviderConfig persistence", () => {
     expect(loadProviderConfig()).toBeNull();
   });
 
-  it("round-trips openai config", () => {
-    const config: ProviderConfig = { type: "openai", apiKey: "sk-openai", model: "gpt-5.4-mini" };
-    saveProviderConfig(config);
-    expect(loadProviderConfig()).toEqual(config);
-  });
-
-  it("round-trips ollama config with baseUrl", () => {
+  it("round-trips BYOK openai config", () => {
     const config: ProviderConfig = {
-      type: "ollama",
-      model: "llama3",
-      baseUrl: "http://localhost:11434",
+      mode: "byok",
+      vendor: "openai",
+      apiKey: "sk-openai",
+      model: "gpt-5.4-mini",
     };
     saveProviderConfig(config);
     expect(loadProviderConfig()).toEqual(config);
   });
 
-  it("round-trips webllm config", () => {
-    const config: ProviderConfig = { type: "webllm", model: "Llama-3-8B-Instruct-q4f16_1" };
+  it("round-trips on-device/local-server config", () => {
+    const config: ProviderConfig = {
+      mode: "on-device",
+      backend: "local-server",
+      model: "llama3",
+      endpoint: "http://localhost:11434",
+    };
     saveProviderConfig(config);
     expect(loadProviderConfig()).toEqual(config);
   });
 
-  it("round-trips proxy config with proxyToken", () => {
+  it("round-trips on-device/webllm config", () => {
     const config: ProviderConfig = {
-      type: "proxy",
+      mode: "on-device",
+      backend: "webllm",
+      model: "Llama-3-8B-Instruct-q4f16_1",
+    };
+    saveProviderConfig(config);
+    expect(loadProviderConfig()).toEqual(config);
+  });
+
+  it("round-trips motebit-cloud config with proxyToken", () => {
+    const config: ProviderConfig = {
+      mode: "motebit-cloud",
       model: "claude-sonnet-4-6",
       proxyToken: "tok_abc",
     };
@@ -97,9 +107,53 @@ describe("ProviderConfig persistence", () => {
     expect(loadProviderConfig()).toEqual(config);
   });
 
+  it("migrates legacy web proxy config on load", () => {
+    localStorage.setItem(
+      "motebit-provider",
+      JSON.stringify({ type: "proxy", model: "claude-sonnet-4-6", proxyToken: "tok_abc" }),
+    );
+    const loaded = loadProviderConfig();
+    expect(loaded?.mode).toBe("motebit-cloud");
+    if (loaded?.mode === "motebit-cloud") {
+      expect(loaded.model).toBe("claude-sonnet-4-6");
+      expect(loaded.proxyToken).toBe("tok_abc");
+    }
+  });
+
+  it("migrates legacy ollama config to on-device/local-server", () => {
+    localStorage.setItem(
+      "motebit-provider",
+      JSON.stringify({
+        type: "ollama",
+        model: "llama3.2",
+        baseUrl: "http://localhost:11434",
+      }),
+    );
+    const loaded = loadProviderConfig();
+    expect(loaded?.mode).toBe("on-device");
+    if (loaded?.mode === "on-device") {
+      expect(loaded.backend).toBe("local-server");
+      expect(loaded.endpoint).toBe("http://localhost:11434");
+    }
+  });
+
+  it("migrates legacy anthropic BYOK config", () => {
+    localStorage.setItem(
+      "motebit-provider",
+      JSON.stringify({ type: "anthropic", apiKey: "sk-xxx", model: "claude-opus-4-6" }),
+    );
+    const loaded = loadProviderConfig();
+    expect(loaded?.mode).toBe("byok");
+    if (loaded?.mode === "byok") {
+      expect(loaded.vendor).toBe("anthropic");
+      expect(loaded.apiKey).toBe("sk-xxx");
+    }
+  });
+
   it("preserves optional fields (maxTokens, temperature, baseUrl)", () => {
     const config: ProviderConfig = {
-      type: "openai",
+      mode: "byok",
+      vendor: "openai",
       apiKey: "k",
       model: "gpt-5.4-mini",
       baseUrl: "https://custom.api",

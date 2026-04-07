@@ -205,7 +205,7 @@ const proxySession = new ProxySession(
     clearToken: () => clearProxyToken(),
     onProviderReady: (proxyConfig: ProxyProviderConfig) => {
       const config: ProviderConfig = {
-        type: "proxy",
+        mode: "motebit-cloud",
         model: proxyConfig.model,
         proxyToken: proxyConfig.proxyToken,
       };
@@ -233,10 +233,17 @@ async function autoInitLocalInference(): Promise<boolean> {
   // Find the first successful probe
   for (const result of results) {
     if (result.status === "fulfilled" && result.value) {
-      const { baseUrl, type, models } = result.value;
+      const { baseUrl, models } = result.value;
       const model = pickBestModel(models);
-      const config: ProviderConfig =
-        type === "ollama" ? { type: "ollama", model, baseUrl } : { type: "openai", model, baseUrl };
+      // Both "ollama" and generic OpenAI-compat local servers collapse to the
+      // same user-intent mode: on-device via local-server. createProvider()
+      // picks the concrete transport from the endpoint shape.
+      const config: ProviderConfig = {
+        mode: "on-device",
+        backend: "local-server",
+        model,
+        endpoint: baseUrl,
+      };
       app.connectProvider(config);
       currentConfig = config;
       saveProviderConfig(config);
@@ -276,7 +283,7 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
     });
 
     app.setProviderDirect(provider);
-    const config = { type: "webllm" as const, model };
+    const config: ProviderConfig = { mode: "on-device", backend: "webllm", model };
     currentConfig = config;
     saveProviderConfig(config);
     settings.updateModelIndicator();
@@ -339,14 +346,14 @@ async function bootstrap(): Promise<void> {
   // Restore provider config and auto-connect
   const savedConfig = loadProviderConfig();
   if (savedConfig != null) {
-    if (savedConfig.type === "proxy") {
-      // For proxy users, always go through autoInitProxy to handle token refresh
+    if (savedConfig.mode === "motebit-cloud") {
+      // For cloud users, always go through autoInitProxy to handle token refresh
       void autoInitProxy().then(async (ok) => {
         if (!ok) ok = await autoInitLocalInference();
         if (!ok && checkWebGPU()) await autoInitWebLLM();
         settings.updateConnectPrompt();
       });
-    } else if (savedConfig.type === "webllm") {
+    } else if (savedConfig.mode === "on-device" && savedConfig.backend === "webllm") {
       currentConfig = savedConfig;
       void autoInitWebLLM(savedConfig.model);
     } else {

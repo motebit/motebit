@@ -4,8 +4,16 @@ import { parseArgs } from "node:util";
 import { VERSION } from "./config.js";
 import { bold, dim, cyan, green, command } from "./colors.js";
 
+/**
+ * CLI provider flag union. Flat shape mapped onto the three-mode architecture:
+ *   motebit-cloud → "proxy" | "hybrid"
+ *   byok          → "anthropic" | "openai" | "google"
+ *   on-device     → "ollama" (local-server)
+ */
+export type CliProvider = "anthropic" | "openai" | "google" | "ollama" | "hybrid" | "proxy";
+
 export interface CliConfig {
-  provider: "anthropic" | "openai" | "ollama" | "hybrid";
+  provider: CliProvider;
   model: string;
   dbPath: string | undefined;
   noStream: boolean;
@@ -89,30 +97,34 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   });
 
   const provider = values.provider;
-  if (
-    provider !== "anthropic" &&
-    provider !== "openai" &&
-    provider !== "ollama" &&
-    provider !== "hybrid"
-  ) {
-    throw new Error(
-      `Unknown provider "${provider}". Use "anthropic", "openai", "ollama", or "hybrid".`,
-    );
+  const VALID_PROVIDERS: readonly CliProvider[] = [
+    "anthropic",
+    "openai",
+    "google",
+    "ollama",
+    "hybrid",
+    "proxy",
+  ];
+  if (!VALID_PROVIDERS.includes(provider as CliProvider)) {
+    throw new Error(`Unknown provider "${provider}". Use one of: ${VALID_PROVIDERS.join(", ")}.`);
   }
+  const cliProvider = provider as CliProvider;
 
   const defaultModel =
-    provider === "ollama"
+    cliProvider === "ollama"
       ? "llama3.2"
-      : provider === "openai"
+      : cliProvider === "openai"
         ? "gpt-5.4-mini"
-        : "claude-sonnet-4-6";
+        : cliProvider === "google"
+          ? "gemini-2.5-flash"
+          : "claude-sonnet-4-6";
   const allowedPaths =
     values["allowed-paths"] != null && values["allowed-paths"] !== ""
       ? values["allowed-paths"].split(",").map((p) => p.trim())
       : [process.cwd()];
 
   return {
-    provider,
+    provider: cliProvider,
     model: values.model ?? defaultModel,
     dbPath: values["db-path"],
     noStream: values["no-stream"],

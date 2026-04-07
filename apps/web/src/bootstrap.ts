@@ -121,61 +121,55 @@ export interface ResolvedProvider {
  * - Invalid configs return source "none"
  */
 export function resolveProviderFromSaved(saved: ProviderConfig): ResolvedProvider {
-  if (saved.type === "proxy") {
-    return { config: saved, source: "proxy" };
-  }
-  if (saved.type === "webllm") {
-    return { config: saved, source: "saved" };
-  }
-  // Cloud providers need an API key (or a baseUrl for local openai-compatible)
-  if (saved.type === "anthropic" || saved.type === "openai") {
-    if (saved.apiKey || saved.baseUrl) {
+  switch (saved.mode) {
+    case "motebit-cloud":
+      // Always needs fresh token bootstrap, even if a stale token is persisted.
+      return { config: saved, source: "proxy" };
+    case "on-device":
+      // On-device configs don't need any external state to be considered "saved".
       return { config: saved, source: "saved" };
-    }
-    return { config: saved, source: "none" };
+    case "byok":
+      // BYOK needs an API key — without it we can't connect.
+      return { config: saved, source: saved.apiKey ? "saved" : "none" };
   }
-  // Ollama needs a URL (defaults exist, so always valid if type is ollama)
-  if (saved.type === "ollama") {
-    return { config: saved, source: "saved" };
-  }
-  return { config: saved, source: "none" };
 }
 
 /**
- * Build a ProviderConfig from a local probe result.
+ * Build a `UnifiedProviderConfig` from a local probe result.
+ * Always collapses to `on-device/local-server` regardless of the probe type —
+ * the runtime factory picks Ollama vs. OpenAI-compat transport from the endpoint shape.
  */
 export function configFromProbeResult(probe: ProbeResult): ProviderConfig {
-  const model = pickBestModel(probe.models);
-  return probe.type === "ollama"
-    ? { type: "ollama", model, baseUrl: probe.baseUrl }
-    : { type: "openai", model, baseUrl: probe.baseUrl };
+  return {
+    mode: "on-device",
+    backend: "local-server",
+    model: pickBestModel(probe.models),
+    endpoint: probe.baseUrl,
+  };
 }
 
 // === Config Validation ===
 
 /**
- * Synchronous validity check for a ProviderConfig.
- * Returns true if the config has the minimum required fields.
+ * Synchronous validity check for a `UnifiedProviderConfig`.
+ * Returns true if the config has the minimum required fields to attempt a connection.
  */
 export function isConfigValid(config: ProviderConfig): boolean {
-  if (!config.model) return false;
-
-  switch (config.type) {
-    case "anthropic":
-      return Boolean(config.apiKey);
-    case "openai":
-      // OpenAI-compatible can work with just a baseUrl (local servers) or an API key
-      return Boolean(config.apiKey || config.baseUrl);
-    case "ollama":
-      // Ollama always has a default URL, so type + model is sufficient
-      return true;
-    case "webllm":
-      // Runs in-browser, always valid if model is set
-      return true;
-    case "proxy":
+  switch (config.mode) {
+    case "motebit-cloud":
       return Boolean(config.proxyToken);
-    default:
-      return false;
+    case "byok":
+      return Boolean(config.apiKey);
+    case "on-device":
+      switch (config.backend) {
+        case "webllm":
+        case "apple-fm":
+        case "mlx":
+          return Boolean(config.model);
+        case "local-server":
+          // An endpoint alone is enough — the server may not have a "default" model.
+          return Boolean(config.endpoint ?? config.model);
+      }
   }
 }
 
@@ -188,15 +182,22 @@ export async function isConfigReachable(
   fetchFn: typeof fetch = globalThis.fetch,
   timeoutMs: number = 2000,
 ): Promise<boolean> {
-  if (config.type === "webllm") return true;
-
-  if (config.type === "ollama") {
-    const baseUrl = config.baseUrl ?? "http://localhost:11434";
+  if (config.mode === "on-device") {
+    if (config.backend === "webllm" || config.backend === "apple-fm" || config.backend === "mlx") {
+      return true;
+    }
+    // local-server — probe it.
+    const baseUrl = config.endpoint ?? "http://localhost:11434";
     try {
       const res = await fetchFn(`${baseUrl}/api/tags`, {
         signal: AbortSignal.timeout(timeoutMs),
       });
-      return res.ok;
+      if (res.ok) return true;
+      // Fallback: OpenAI-compat /v1/models
+      const res2 = await fetchFn(`${baseUrl}/v1/models`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return res2.ok;
     } catch (err) {
       if (err instanceof TypeError || err instanceof SyntaxError) {
         console.warn(`reachability check ${baseUrl}: unexpected error:`, err.message); // eslint-disable-line no-console -- runtime diagnostic for reachability probe
@@ -205,12 +206,12 @@ export async function isConfigReachable(
     }
   }
 
-  if (config.type === "proxy") {
+  if (config.mode === "motebit-cloud") {
     // Proxy reachability is determined by token bootstrap, not a simple probe
     return Boolean(config.proxyToken);
   }
 
-  // Cloud providers — we can't really probe without burning a request,
+  // BYOK — we can't really probe without burning a request,
   // so we just validate the config has the required fields
   return isConfigValid(config);
 }

@@ -1,5 +1,6 @@
 export * from "@motebit/protocol";
 export * from "./models.js";
+export * from "./provider-mode.js";
 export * from "./color-presets.js";
 export * from "./approval-presets.js";
 export * from "./governance-config.js";

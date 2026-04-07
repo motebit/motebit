@@ -253,46 +253,17 @@ export class WebLLMProvider implements StreamingProvider {
 
 // === Factory ===
 
+import { DEFAULT_PROXY_MODEL, DEFAULT_OLLAMA_MODEL } from "@motebit/sdk";
+
+/**
+ * Dispatch a `UnifiedProviderConfig` to the correct concrete provider.
+ * Web supports three on-device backends today (webllm, local-server, and
+ * local-server-over-Ollama). Apple FM / MLX are mobile-only.
+ */
 export function createProvider(config: ProviderConfig): StreamingProvider | IntelligenceProvider {
-  switch (config.type) {
-    case "anthropic": {
-      // Route through CORS proxy — browser can't call api.anthropic.com directly
-      const anthropicConfig: CloudProviderConfig = {
-        provider: "anthropic",
-        api_key: config.apiKey ?? "",
-        model: config.model,
-        base_url: PROXY_BASE_URL,
-        max_tokens: config.maxTokens,
-        temperature: config.temperature,
-      };
-      return new CloudProvider(anthropicConfig);
-    }
-    case "openai": {
-      const cloudConfig: CloudProviderConfig = {
-        provider: config.type,
-        api_key: config.apiKey ?? "",
-        model: config.model,
-        base_url: config.baseUrl,
-        max_tokens: config.maxTokens,
-        temperature: config.temperature,
-      };
-      return new CloudProvider(cloudConfig);
-    }
-    case "ollama": {
-      const ollamaConfig: OllamaProviderConfig = {
-        model: config.model,
-        base_url: config.baseUrl ?? DEFAULT_OLLAMA_URL,
-        max_tokens: config.maxTokens,
-        temperature: config.temperature,
-      };
-      return new OllamaProvider(ollamaConfig);
-    }
-    case "webllm":
-      return new WebLLMProvider(config.model, {
-        temperature: config.temperature,
-        maxTokens: config.maxTokens,
-      });
-    case "proxy": {
+  switch (config.mode) {
+    case "motebit-cloud": {
+      // The product: proxied cloud inference behind a signed token.
       const extraHeaders: Record<string, string> = {};
       if (config.proxyToken) {
         extraHeaders["x-proxy-token"] = config.proxyToken;
@@ -300,13 +271,77 @@ export function createProvider(config: ProviderConfig): StreamingProvider | Inte
       const proxyConfig: CloudProviderConfig = {
         provider: "anthropic",
         api_key: "", // proxy supplies the key server-side
-        model: config.model,
+        model: config.model ?? DEFAULT_PROXY_MODEL,
         base_url: config.baseUrl ?? PROXY_BASE_URL,
         max_tokens: config.maxTokens,
         temperature: config.temperature,
         extra_headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
       };
       return new CloudProvider(proxyConfig);
+    }
+    case "byok": {
+      if (config.vendor === "anthropic") {
+        // Browser can't call api.anthropic.com directly — route through CORS proxy.
+        const anthropicConfig: CloudProviderConfig = {
+          provider: "anthropic",
+          api_key: config.apiKey,
+          model: config.model ?? "claude-sonnet-4-6",
+          base_url: config.baseUrl ?? PROXY_BASE_URL,
+          max_tokens: config.maxTokens,
+          temperature: config.temperature,
+        };
+        return new CloudProvider(anthropicConfig);
+      }
+      // openai and google (google uses OpenAI-compatible endpoint via baseUrl).
+      const cloudConfig: CloudProviderConfig = {
+        provider: "openai",
+        api_key: config.apiKey,
+        model: config.model ?? "gpt-5.4-mini",
+        base_url: config.baseUrl,
+        max_tokens: config.maxTokens,
+        temperature: config.temperature,
+      };
+      return new CloudProvider(cloudConfig);
+    }
+    case "on-device": {
+      switch (config.backend) {
+        case "webllm":
+          return new WebLLMProvider(config.model ?? "Llama-3.1-8B-Instruct-q4f16_1-MLC", {
+            temperature: config.temperature,
+            maxTokens: config.maxTokens,
+          });
+        case "local-server": {
+          // Vendor-agnostic: a local OpenAI-compatible server, or Ollama's
+          // native API. Ollama's /api/chat endpoint is only used by
+          // OllamaProvider; any endpoint that doesn't look like Ollama gets
+          // routed through the OpenAI-compat provider.
+          const endpoint = config.endpoint ?? DEFAULT_OLLAMA_URL;
+          const looksLikeOllama = /:11434(\b|\/)/.test(endpoint);
+          if (looksLikeOllama) {
+            const ollamaConfig: OllamaProviderConfig = {
+              model: config.model ?? DEFAULT_OLLAMA_MODEL,
+              base_url: endpoint,
+              max_tokens: config.maxTokens,
+              temperature: config.temperature,
+            };
+            return new OllamaProvider(ollamaConfig);
+          }
+          const cloudConfig: CloudProviderConfig = {
+            provider: "openai",
+            api_key: "local",
+            model: config.model ?? "local",
+            base_url: endpoint,
+            max_tokens: config.maxTokens,
+            temperature: config.temperature,
+          };
+          return new CloudProvider(cloudConfig);
+        }
+        case "apple-fm":
+        case "mlx":
+          throw new Error(
+            `On-device backend "${config.backend}" is not available on the web surface`,
+          );
+      }
     }
   }
 }

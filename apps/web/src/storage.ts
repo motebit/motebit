@@ -1,17 +1,42 @@
+// === Storage Key Conventions ===
+//
+// The web app uses two intentional localStorage prefix namespaces. Do not mix
+// them — pick the right one based on what the value represents. Renaming
+// existing keys breaks saved user state, so only add new keys to the
+// appropriate namespace.
+//
+//   "motebit-*"  (dash)  — User preferences and cached UI state.
+//                          Examples: motebit-provider, motebit-soul-color,
+//                          motebit-governance, motebit-voice, motebit-proxy-token,
+//                          motebit-balance, motebit-conv-*.
+//                          Defined below in this file (storage.ts).
+//
+//   "motebit:*"  (colon) — Identity and system-level state managed by WebApp.
+//                          Examples: motebit:motebit_id, motebit:device_id,
+//                          motebit:device_public_key, motebit:mcp_servers,
+//                          motebit:goals. Defined in web-app.ts / main.ts.
+//
+// Rule of thumb: if a new key is a user preference a user would toggle in
+// settings, it belongs in the dash namespace (this file). If it's cryptographic
+// identity material or internal system state the runtime manages, it belongs
+// in the colon namespace.
+//
 // === Provider Config ===
+//
+// Uses the three-mode architecture from @motebit/sdk:
+//   - "on-device"   (webllm, local-server, future apple-fm/mlx)
+//   - "motebit-cloud" (the product — proxy + subscription)
+//   - "byok"        (user's own API key for anthropic/openai/google)
+//
+// `loadProviderConfig` transparently migrates old flat-union configs.
 
-export type ProviderType = "anthropic" | "openai" | "ollama" | "webllm" | "proxy";
+import {
+  migrateLegacyProvider,
+  type UnifiedProviderConfig,
+  type LegacyProviderConfig,
+} from "@motebit/sdk";
 
-export interface ProviderConfig {
-  type: ProviderType;
-  apiKey?: string;
-  model: string;
-  baseUrl?: string;
-  maxTokens?: number;
-  temperature?: number;
-  /** Proxy auth token — injected as x-proxy-token header for authenticated proxy requests. */
-  proxyToken?: string;
-}
+export type ProviderConfig = UnifiedProviderConfig;
 
 const PROVIDER_KEY = "motebit-provider";
 
@@ -26,9 +51,9 @@ export function saveProviderConfig(config: ProviderConfig): void {
 export function loadProviderConfig(): ProviderConfig | null {
   try {
     const raw = localStorage.getItem(PROVIDER_KEY);
-    if (raw) {
-      return JSON.parse(raw) as ProviderConfig;
-    }
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LegacyProviderConfig;
+    return migrateLegacyProvider(parsed);
   } catch {
     // localStorage unavailable or corrupt
   }

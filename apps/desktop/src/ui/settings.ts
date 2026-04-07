@@ -11,9 +11,11 @@ import { saveFocus, restoreFocus, focusFirst } from "./focus";
 import {
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
+  GOOGLE_MODELS,
   OLLAMA_SUGGESTED_MODELS,
   PROXY_MODELS,
 } from "@motebit/sdk";
+import { byokKeyringKey, WHISPER_API_KEY_SLOT } from "./keyring-keys";
 
 // === DOM Refs ===
 
@@ -166,11 +168,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const models: readonly string[] =
       provider === "openai"
         ? OPENAI_MODELS
-        : provider === "ollama"
-          ? OLLAMA_MODELS
-          : provider === "proxy"
-            ? PROXY_MODELS
-            : ANTHROPIC_MODELS;
+        : provider === "google"
+          ? GOOGLE_MODELS
+          : provider === "ollama"
+            ? OLLAMA_MODELS
+            : provider === "proxy"
+              ? PROXY_MODELS
+              : ANTHROPIC_MODELS;
 
     // Show/hide API key field based on provider (hidden for ollama and proxy)
     const apiKeyField = settingsApiKey.closest<HTMLElement>(".settings-field");
@@ -1508,12 +1512,17 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       await invoke("write_config", { json: JSON.stringify(configData) });
 
       if (apiKey != null && apiKey !== "") {
-        await invoke("keyring_set", { key: "api_key", value: apiKey });
-        hasApiKeyInKeyring = true;
+        const slot = byokKeyringKey(provider);
+        if (slot) {
+          // Per-vendor slot keeps Anthropic / OpenAI / Google keys from
+          // clobbering each other when the user switches providers.
+          await invoke("keyring_set", { key: slot, value: apiKey });
+          hasApiKeyInKeyring = true;
+        }
       }
 
       if (whisperApiKey != null && whisperApiKey !== "") {
-        await invoke("keyring_set", { key: "whisper_api_key", value: whisperApiKey });
+        await invoke("keyring_set", { key: WHISPER_API_KEY_SLOT, value: whisperApiKey });
         hasWhisperKeyInKeyring = true;
       }
 

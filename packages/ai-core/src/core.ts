@@ -22,7 +22,7 @@ export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from ".
 export { trimConversation } from "./context-window.js";
 export type { ContextBudget } from "./context-window.js";
 export { resolveConfig, DEFAULT_CONFIG } from "./config.js";
-export type { MotebitPersonalityConfig } from "./config.js";
+export type { MotebitPersonalityConfig, PersonalityProvider } from "./config.js";
 export { summarizeConversation, shouldSummarize } from "./summarizer.js";
 export type { SummarizerConfig } from "./summarizer.js";
 export { reflect, parseReflectionResponse } from "./reflection.js";

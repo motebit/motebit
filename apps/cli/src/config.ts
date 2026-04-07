@@ -4,8 +4,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { McpServerConfig } from "@motebit/mcp-client";
-import type { MotebitPersonalityConfig } from "@motebit/ai-core";
+import type { MotebitPersonalityConfig, PersonalityProvider } from "@motebit/ai-core";
 import type { connectMcpServers } from "@motebit/mcp-client";
+import { migrateLegacyProvider, type UnifiedProviderConfig } from "@motebit/sdk";
 
 declare const __PKG_VERSION__: string;
 export const VERSION: string =
@@ -17,8 +18,18 @@ export interface FullConfig {
   // Personality (existing)
   name?: string;
   personality_notes?: string;
-  default_provider?: "anthropic" | "openai" | "ollama";
+  /**
+   * Legacy flat provider field. Still read and written for backwards compat;
+   * if `provider` (the unified shape) is present, that wins.
+   */
+  default_provider?: PersonalityProvider;
   default_model?: string;
+  /**
+   * Canonical three-mode provider config. Populated on load from legacy fields
+   * if missing. Persisted alongside `default_provider` so older CLI versions
+   * still understand the file.
+   */
+  provider?: UnifiedProviderConfig;
   temperature?: number;
   max_tokens?: number;
   // Identity (written on first launch)
@@ -44,7 +55,18 @@ export interface FullConfig {
 export function loadFullConfig(): FullConfig {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-    return JSON.parse(raw) as FullConfig;
+    const parsed = JSON.parse(raw) as FullConfig;
+    // Migration: if the unified `provider` shape is missing but the legacy
+    // `default_provider` is present, derive the unified shape from it.
+    // Keeps older config files readable without a manual edit.
+    if (!parsed.provider && parsed.default_provider) {
+      const migrated = migrateLegacyProvider({
+        default_provider: parsed.default_provider,
+        default_model: parsed.default_model,
+      });
+      if (migrated) parsed.provider = migrated;
+    }
+    return parsed;
   } catch {
     return {};
   }

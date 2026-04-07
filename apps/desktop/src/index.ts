@@ -51,6 +51,7 @@ import {
   DeviceCapability,
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_OPENAI_MODEL,
+  DEFAULT_GOOGLE_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_PROXY_MODEL,
 } from "@motebit/sdk";
@@ -223,8 +224,17 @@ export interface TauriCommands {
 
 // === Desktop AI Config ===
 
+/**
+ * Desktop provider union — flat shape driving the settings dropdown.
+ * Maps onto the three-mode architecture in `@motebit/sdk`:
+ *   motebit-cloud → "proxy" | "hybrid"
+ *   byok          → "anthropic" | "openai" | "google"
+ *   on-device     → "ollama" (local-server under the hood)
+ */
+export type DesktopProvider = "anthropic" | "ollama" | "openai" | "google" | "proxy" | "hybrid";
+
 export interface DesktopAIConfig {
-  provider: "anthropic" | "ollama" | "openai" | "proxy" | "hybrid";
+  provider: DesktopProvider;
   model?: string;
   apiKey?: string;
   personalityConfig?: MotebitPersonalityConfig;
@@ -676,9 +686,9 @@ export class DesktopApp {
   }
 
   /** The active provider type or null if not initialized. */
-  private _activeProvider: "anthropic" | "ollama" | "openai" | "proxy" | "hybrid" | null = null;
+  private _activeProvider: DesktopProvider | null = null;
 
-  get currentProvider(): "anthropic" | "ollama" | "openai" | "proxy" | "hybrid" | null {
+  get currentProvider(): DesktopProvider | null {
     return this._activeProvider;
   }
 
@@ -806,6 +816,20 @@ export class DesktopApp {
         temperature,
       });
       this._activeProvider = "openai";
+    } else if (config.provider === "google") {
+      if (config.apiKey == null || config.apiKey === "") return false;
+      const model =
+        config.model != null && config.model !== "" ? config.model : DEFAULT_GOOGLE_MODEL;
+      // Google exposes an OpenAI-compatible endpoint.
+      provider = new CloudProvider({
+        provider: "openai",
+        api_key: config.apiKey,
+        model,
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        max_tokens: config.maxTokens,
+        temperature,
+      });
+      this._activeProvider = "google";
     } else if (config.provider === "hybrid") {
       if (config.apiKey == null || config.apiKey === "") return false;
       const model =

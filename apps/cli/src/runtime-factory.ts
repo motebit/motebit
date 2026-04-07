@@ -53,14 +53,21 @@ import { dim } from "./colors.js";
 import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
 
-export function getApiKey(provider: "anthropic" | "openai" = "anthropic"): string {
-  const envVar = provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+export function getApiKey(provider: "anthropic" | "openai" | "google" = "anthropic"): string {
+  const envVar =
+    provider === "openai"
+      ? "OPENAI_API_KEY"
+      : provider === "google"
+        ? "GOOGLE_API_KEY"
+        : "ANTHROPIC_API_KEY";
   const key = process.env[envVar];
   if (key == null || key === "") {
     const hint =
       provider === "openai"
         ? "Set it with: export OPENAI_API_KEY=sk-..."
-        : "Set it with: export ANTHROPIC_API_KEY=sk-ant-...";
+        : provider === "google"
+          ? "Set it with: export GOOGLE_API_KEY=AIza..."
+          : "Set it with: export ANTHROPIC_API_KEY=sk-ant-...";
     console.error(`Error: ${envVar} environment variable is not set.\n${hint}`);
     process.exit(1);
   }
@@ -125,6 +132,33 @@ export function createProvider(
       provider: "openai",
       api_key: apiKey,
       model: config.model,
+      max_tokens: config.maxTokens,
+      temperature,
+      personalityConfig,
+    });
+  }
+
+  if (config.provider === "google") {
+    const apiKey = getApiKey("google");
+    // Google exposes an OpenAI-compatible endpoint.
+    return new CloudProvider({
+      provider: "openai",
+      api_key: apiKey,
+      model: config.model,
+      base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+      max_tokens: config.maxTokens,
+      temperature,
+      personalityConfig,
+    });
+  }
+
+  if (config.provider === "proxy") {
+    // Motebit Cloud — anonymous proxy; the relay attaches the real key server-side.
+    return new CloudProvider({
+      provider: "anthropic",
+      api_key: "",
+      model: config.model,
+      base_url: process.env.MOTEBIT_PROXY_URL ?? "https://api.motebit.com",
       max_tokens: config.maxTokens,
       temperature,
       personalityConfig,
