@@ -167,7 +167,7 @@ async function fetchTransferLogs(
 
   if (!res.ok) return [];
   const json = (await res.json()) as { result?: Array<Record<string, unknown>>; error?: unknown };
-  if (!json.result || json.error) return [];
+  if (json.result == null || json.error != null) return [];
 
   return parseTransferLogs(
     json.result as Array<{
@@ -252,7 +252,7 @@ export async function detectDeposits(config: {
     const existing = db
       .prepare("SELECT 1 FROM relay_deposit_log WHERE tx_hash = ? AND log_index = ?")
       .get(log.txHash, log.logIndex);
-    if (existing) continue;
+    if (existing != null) continue;
 
     const microAmount = Number(log.value) * USDC_ONCHAIN_TO_MICRO;
     if (microAmount <= 0) continue;

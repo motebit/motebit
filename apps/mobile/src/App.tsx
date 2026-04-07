@@ -292,7 +292,13 @@ export default function App(): React.ReactElement {
 
         setInitialized(true);
       } catch (err) {
+        // Init-failure diagnostics: surface the error to Metro / device logs so
+        // the user can report it. The no-console rule is suppressed deliberately
+        // here because (a) this is a one-shot init failure path, not hot code,
+        // and (b) there's no logger adapter wired up before init completes.
+        // eslint-disable-next-line no-console -- init-failure diagnostics
         console.error("[motebit] Init failed:", err instanceof Error ? err.message : String(err));
+        // eslint-disable-next-line no-console -- init-failure diagnostics
         console.error("[motebit] Stack:", err instanceof Error ? err.stack : "");
         // Still mark initialized so the user sees the UI and can report the error
         setInitialized(true);

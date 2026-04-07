@@ -844,6 +844,9 @@ export class MobileApp {
     if (asyncStoredRelayUrl == null || asyncStoredRelayUrl === "") {
       const legacy = await AsyncStorage.getItem(ASYNC_STORAGE_KEYS.legacyRelayUrl);
       if (legacy != null && legacy !== "") {
+        // One-shot deprecation diagnostic — fires at most once per install,
+        // when an older AsyncStorage key is read for the first time.
+        // eslint-disable-next-line no-console -- one-shot migration warning
         console.warn("[motebit] migrating @motebit/proxy_url → @motebit/relay_url");
         await AsyncStorage.setItem(ASYNC_STORAGE_KEYS.relayUrl, legacy);
         asyncStoredRelayUrl = legacy;

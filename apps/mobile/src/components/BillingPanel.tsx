@@ -228,7 +228,10 @@ export function BillingPanel({
           {subscriptionStatus === "cancelling" ? (
             <View style={styles.cancelArea}>
               <Text style={styles.muted}>
-                Plan cancels{activeUntil ? ` on ${new Date(activeUntil).toLocaleDateString()}` : ""}
+                Plan cancels
+                {activeUntil != null && activeUntil > 0
+                  ? ` on ${new Date(activeUntil).toLocaleDateString()}`
+                  : ""}
                 . Credits remain until used.
               </Text>
               <TouchableOpacity

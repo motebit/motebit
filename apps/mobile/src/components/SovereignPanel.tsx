@@ -398,7 +398,9 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
                           <Text style={styles.ledgerStepText}>{step.summary}</Text>
                           <Text style={styles.credentialMeta}>
                             {step.status}
-                            {step.completed_at ? ` — ${formatTimeAgo(step.completed_at)}` : ""}
+                            {step.completed_at != null && step.completed_at > 0
+                              ? ` — ${formatTimeAgo(step.completed_at)}`
+                              : ""}
                           </Text>
                         </View>
                       ))}

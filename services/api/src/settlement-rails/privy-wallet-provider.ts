@@ -106,7 +106,7 @@ async function queryErc20Balance(
 
     if (!res.ok) return null;
     const json = (await res.json()) as { result?: string; error?: unknown };
-    if (!json.result || json.error) return null;
+    if (json.result == null || json.error != null) return null;
 
     // Result is hex-encoded uint256
     return BigInt(json.result);
