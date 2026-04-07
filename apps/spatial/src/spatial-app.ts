@@ -59,9 +59,7 @@ import {
   migrateLegacyProvider,
   type LegacyProviderConfig,
 } from "@motebit/sdk";
-import { McpClientAdapter, AdvisoryManifestVerifier } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
-import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { IdbConversationStore, IdbPlanStore, IdbGradientStore } from "@motebit/browser-persistence";
 import { OrbitalDynamics, estimateBodyAnchors, getAnchorForReference } from "./index";
 import { SpatialVoicePipeline, type VoicePipelineConfig } from "./voice-pipeline";
@@ -72,6 +70,7 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 import { spatialSpecToProvider } from "./providers";
 export { WebLLMProvider } from "./providers";
 import { SpatialSyncController } from "./sync-controller";
+import { SpatialMcpManager } from "./mcp-manager";
 
 // === Configuration ===
 
@@ -249,9 +248,8 @@ export class SpatialApp {
   // constructor so its deps getters can close over `this`.
   private sync!: SpatialSyncController;
 
-  // MCP servers
-  private mcpAdapters = new Map<string, McpClientAdapter>();
-  private _mcpServers: McpServerConfig[] = [];
+  // MCP — class extracted to ./mcp-manager.ts. State lives inside.
+  private mcp!: SpatialMcpManager;
 
   // Proxy session state
   private _proxySession: ProxySession | null = null;
@@ -271,6 +269,10 @@ export class SpatialApp {
     this.gestures = new GestureRecognizer();
     this.heartbeat = new AmbientHeartbeat();
     this.keyring = new LocalStorageKeyringAdapter();
+
+    this.mcp = new SpatialMcpManager({
+      getRuntime: () => this.runtime,
+    });
 
     // Sync controller — reads runtime/identity/keypair through getters so
     // the constructor can wire it before initAI, bootstrap, or any relay
@@ -712,57 +714,14 @@ export class SpatialApp {
     return this._interiorColor;
   }
 
-  // === MCP Management ===
+  // === MCP Management (delegates to SpatialMcpManager in ./mcp-manager.ts) ===
 
-  async addMcpServer(config: McpServerConfig): Promise<void> {
-    if (config.transport !== "http") {
-      throw new Error(
-        "Spatial only supports HTTP MCP servers. Use the desktop or CLI app for stdio servers.",
-      );
-    }
-    if (config.url == null || config.url === "") {
-      throw new Error("HTTP MCP server requires a url");
-    }
-
-    // Attach advisory verifier: always accepts, revokes trust on manifest change
-    config.serverVerifier = new AdvisoryManifestVerifier();
-    const adapter = new McpClientAdapter(config);
-    await adapter.connect();
-
-    // Persist verifier-applied config updates
-    config.toolManifestHash = adapter.serverConfig.toolManifestHash;
-    config.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
-    if (adapter.serverConfig.trusted === false) {
-      config.trusted = false;
-    }
-
-    // Persist motebit public key if newly pinned during connect
-    if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
-      const pinnedKey = adapter.serverConfig.motebitPublicKey;
-      if (pinnedKey && !config.motebitPublicKey) {
-        config.motebitPublicKey = pinnedKey;
-      }
-    }
-
-    this.registerMcpTools(adapter, config);
-
-    this.mcpAdapters.set(config.name, adapter);
-    this._mcpServers = this._mcpServers.filter((s) => s.name !== config.name);
-    this._mcpServers.push(config);
-    this.persistMcpServers();
+  addMcpServer(config: McpServerConfig): Promise<void> {
+    return this.mcp.addMcpServer(config);
   }
 
-  async removeMcpServer(name: string): Promise<void> {
-    const adapter = this.mcpAdapters.get(name);
-    if (adapter) {
-      await adapter.disconnect();
-      this.mcpAdapters.delete(name);
-    }
-    if (this.runtime) {
-      this.runtime.unregisterExternalTools(`mcp:${name}`);
-    }
-    this._mcpServers = this._mcpServers.filter((s) => s.name !== name);
-    this.persistMcpServers();
+  removeMcpServer(name: string): Promise<void> {
+    return this.mcp.removeMcpServer(name);
   }
 
   getMcpServers(): Array<{
@@ -773,96 +732,15 @@ export class SpatialApp {
     trusted: boolean;
     motebit: boolean;
   }> {
-    return this._mcpServers.map((config) => {
-      const adapter = this.mcpAdapters.get(config.name);
-      return {
-        name: config.name,
-        url: config.url ?? "",
-        connected: adapter?.isConnected ?? false,
-        toolCount: adapter?.getTools().length ?? 0,
-        trusted: config.trusted ?? false,
-        motebit: config.motebit ?? false,
-      };
-    });
+    return this.mcp.getMcpServers();
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- implements async interface
-  async setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
-    const config = this._mcpServers.find((s) => s.name === name);
-    if (!config) return;
-    config.trusted = trusted;
-
-    const adapter = this.mcpAdapters.get(name);
-    if (adapter && this.runtime) {
-      this.runtime.unregisterExternalTools(`mcp:${name}`);
-      this.registerMcpTools(adapter, config);
-    }
-
-    this.persistMcpServers();
+  setMcpServerTrust(name: string, trusted: boolean): Promise<void> {
+    return this.mcp.setMcpServerTrust(name, trusted);
   }
 
-  private registerMcpTools(adapter: McpClientAdapter, config: McpServerConfig): void {
-    const tempRegistry = new InMemoryToolRegistry();
-    for (const mcpTool of adapter.getTools()) {
-      const def = {
-        name: mcpTool.name,
-        description: `[${config.name}] ${mcpTool.description ?? mcpTool.name}`,
-        inputSchema: mcpTool.inputSchema ?? { type: "object", properties: {} },
-        ...(config.trusted === true ? {} : { requiresApproval: true as const }),
-      };
-      tempRegistry.register(def, (args: Record<string, unknown>) =>
-        adapter.executeTool(mcpTool.name, args),
-      );
-    }
-    if (this.runtime) {
-      this.runtime.registerExternalTools(`mcp:${config.name}`, tempRegistry);
-    }
-  }
-
-  private async reconnectMcpServers(): Promise<void> {
-    const raw = localStorage.getItem("motebit:mcp_servers");
-    if (raw == null || raw === "") return;
-    try {
-      const configs = JSON.parse(raw) as McpServerConfig[];
-      this._mcpServers = configs;
-      let changed = false;
-      for (const config of configs) {
-        try {
-          config.serverVerifier = new AdvisoryManifestVerifier();
-          const adapter = new McpClientAdapter(config);
-          await adapter.connect();
-
-          // Persist verifier-applied config updates
-          config.toolManifestHash = adapter.serverConfig.toolManifestHash;
-          config.pinnedToolNames = adapter.serverConfig.pinnedToolNames;
-          if (adapter.serverConfig.trusted === false) {
-            config.trusted = false;
-          }
-
-          if (adapter.isMotebit && adapter.verifiedIdentity?.verified) {
-            const pinnedKey = adapter.serverConfig.motebitPublicKey;
-            if (pinnedKey && !config.motebitPublicKey) {
-              config.motebitPublicKey = pinnedKey;
-            }
-          }
-
-          this.registerMcpTools(adapter, config);
-          this.mcpAdapters.set(config.name, adapter);
-          changed = true;
-        } catch {
-          // Non-fatal — server may be offline
-        }
-      }
-      if (changed) {
-        this.persistMcpServers();
-      }
-    } catch {
-      // Non-fatal — corrupted localStorage
-    }
-  }
-
-  private persistMcpServers(): void {
-    localStorage.setItem("motebit:mcp_servers", JSON.stringify(this._mcpServers));
+  private reconnectMcpServers(): Promise<void> {
+    return this.mcp.reconnectMcpServers();
   }
 
   // === Conversation Management ===
@@ -1382,10 +1260,7 @@ export class SpatialApp {
     this.runtime?.stop();
 
     // Clean up MCP adapters
-    for (const adapter of this.mcpAdapters.values()) {
-      void adapter.disconnect();
-    }
-    this.mcpAdapters.clear();
+    this.mcp.dispose();
 
     // Clean up proxy session
     this.disposeProxySession();
