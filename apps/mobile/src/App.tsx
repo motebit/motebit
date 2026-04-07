@@ -67,6 +67,7 @@ import { Banner } from "./components/Banner";
 import { ThemeContext, resolveTheme, type ThemeColors } from "./theme";
 import { runSlashCommand } from "./slash-commands";
 import { useChatStream } from "./use-chat-stream";
+import { usePairing } from "./use-pairing";
 
 // === Types ===
 
@@ -123,16 +124,9 @@ export default function App(): React.ReactElement {
   const [showCredentialsPanel, setShowCredentialsPanel] = useState(false);
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
 
-  // Pairing state
-  const [showPairing, setShowPairing] = useState(false);
-  const [pairingMode, setPairingMode] = useState<"initiate" | "claim">("claim");
-  const [pairingCode, setPairingCode] = useState("");
-  const [pairingCodeInput, setPairingCodeInput] = useState("");
-  const [pairingStatus, setPairingStatusText] = useState("");
-  const [pairingId, setPairingId] = useState<string | null>(null);
-  const [pairingClaimName, setPairingClaimName] = useState("");
-  const [pairingSyncUrlInput, setPairingSyncUrlInput] = useState("");
-  const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Pairing state + handlers live in ./use-pairing.ts — the hook is
+  // called later in this component after initializeAI/subscribeToState
+  // are defined, since the onPaired callback needs them.
 
   // Toast state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -180,7 +174,6 @@ export default function App(): React.ReactElement {
   // Sync state
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error" | "offline">("offline");
   const [_lastSyncTime, setLastSyncTime] = useState(0);
-  const pairingSyncUrlRef = useRef("");
 
   // MCP state
   const [mcpServers, setMcpServers] = useState<
@@ -950,187 +943,45 @@ export default function App(): React.ReactElement {
     [pinMode],
   );
 
-  // === Pairing helpers ===
-
-  const stopPairingPoll = useCallback(() => {
-    if (pairingPollRef.current) {
-      clearInterval(pairingPollRef.current);
-      pairingPollRef.current = null;
-    }
-  }, []);
-
-  const closePairingDialog = useCallback(() => {
-    stopPairingPoll();
-    setShowPairing(false);
-    setPairingId(null);
-    setPairingCode("");
-    setPairingCodeInput("");
-    setPairingClaimName("");
-    setPairingSyncUrlInput("");
-  }, [stopPairingPoll]);
-
-  // Device A: initiate from settings — show pairing modal with sync URL input
-  const handleInitiatePairing = useCallback(() => {
-    setPairingMode("initiate");
-    setPairingSyncUrlInput("");
-    setPairingStatusText("Enter your sync relay URL");
-    setShowSettings(false);
-    setShowPairing(true);
-  }, []);
-
-  // Device A: after entering sync URL, generate pairing code
-  const handleInitiateConnect = useCallback(async () => {
-    const url = pairingSyncUrlInput.trim();
-    if (!url) {
-      setPairingStatusText("Sync relay URL required");
-      return;
-    }
-    const a = app.current;
-    pairingSyncUrlRef.current = url;
-    setPairingStatusText("Generating code...");
-    try {
-      const { pairingCode: code, pairingId: pid } = await a.initiatePairing(url);
-      setPairingCode(code);
-      setPairingId(pid);
-      setPairingStatusText("Enter this code on the other device");
-
-      // Poll for claim
-      pairingPollRef.current = setInterval(() => {
-        void (async () => {
-          try {
-            const session = await a.getPairingSession(url, pid);
-            if (session.status === "claimed") {
-              stopPairingPoll();
-              setPairingClaimName(session.claiming_device_name ?? "Unknown device");
-              setPairingStatusText(`"${session.claiming_device_name}" wants to join`);
-            }
-          } catch {
-            // Non-fatal
-          }
-        })();
-      }, 2000);
-    } catch (err: unknown) {
-      setPairingStatusText(err instanceof Error ? err.message : String(err));
-    }
-  }, [pairingSyncUrlInput, stopPairingPoll]);
-
-  // Device B: submit claim code
-  const handlePairingClaimSubmit = useCallback(async () => {
-    const code = pairingCodeInput.trim().toUpperCase();
-    if (code.length !== 6) {
-      setPairingStatusText("Code must be 6 characters");
-      return;
-    }
-
-    const a = app.current;
-
-    const syncUrl = pairingSyncUrlInput.trim();
-    if (!syncUrl) {
-      setPairingStatusText("Sync relay URL required");
-      return;
-    }
-
-    pairingSyncUrlRef.current = syncUrl;
-    setPairingStatusText("Claiming...");
-    try {
-      const { pairingId: pid } = await a.claimPairing(syncUrl, code);
-      setPairingId(pid);
-      setPairingStatusText("Waiting for approval...");
-
-      // Poll for approval
-      pairingPollRef.current = setInterval(() => {
-        void (async () => {
-          try {
-            const status = await a.pollPairingStatus(syncUrl, pid);
-            if (
-              status.status === "approved" &&
-              status.device_id != null &&
-              status.device_id !== "" &&
-              status.motebit_id != null &&
-              status.motebit_id !== ""
-            ) {
-              stopPairingPoll();
-              await a.completePairing(
-                {
-                  motebitId: status.motebit_id,
-                  deviceId: status.device_id,
-                },
-                syncUrl,
-              );
-              closePairingDialog();
-              addSystemMessage("Linked to existing motebit");
-
-              // Initialize AI and start
-              const s = settings || (await a.loadSettings());
-              await initializeAI(a, s);
-              a.start();
-              subscribeToState(a);
-
-              // Start sync
-              a.onSyncStatus((st, lastSync) => {
-                setSyncStatus(st);
-                setLastSyncTime(lastSync);
-              });
-              void a.startSync(syncUrl);
-
-              setInitialized(true);
-            } else if (status.status === "denied") {
-              stopPairingPoll();
-              setPairingStatusText("Pairing was denied by the other device");
-            }
-          } catch {
-            // Non-fatal
-          }
-        })();
-      }, 2000);
-    } catch (err: unknown) {
-      setPairingStatusText(err instanceof Error ? err.message : String(err));
-    }
-  }, [
+  // === Pairing (state + handlers in ./use-pairing.ts) ===
+  const {
+    showPairing,
+    pairingMode,
+    pairingCode,
     pairingCodeInput,
+    pairingStatus,
+    pairingId,
+    pairingClaimName,
     pairingSyncUrlInput,
-    settings,
-    initializeAI,
-    subscribeToState,
-    stopPairingPoll,
+    setPairingCodeInput,
+    setPairingSyncUrlInput,
+    handleInitiatePairing,
+    handleInitiateConnect,
+    handlePairingClaimSubmit,
+    handlePairingApprove,
+    handlePairingDeny,
     closePairingDialog,
+  } = usePairing({
+    app: app.current,
     addSystemMessage,
-  ]);
-
-  // Device A: approve
-  const handlePairingApprove = useCallback(async () => {
-    if (pairingId == null || pairingId === "") return;
-    const a = app.current;
-
-    const syncUrl = pairingSyncUrlRef.current;
-    setPairingStatusText("Approving...");
-    try {
-      const result = await a.approvePairing(syncUrl, pairingId);
-      closePairingDialog();
-      addSystemMessage(`Device linked (${result.deviceId.slice(0, 8)}...)`);
-    } catch (err: unknown) {
-      setPairingStatusText(err instanceof Error ? err.message : String(err));
-    }
-  }, [pairingId, closePairingDialog, addSystemMessage]);
-
-  // Device A: deny
-  const handlePairingDeny = useCallback(async () => {
-    if (pairingId == null || pairingId === "") return;
-    const a = app.current;
-    const syncUrl = pairingSyncUrlRef.current;
-    try {
-      await a.denyPairing(syncUrl, pairingId);
-      closePairingDialog();
-      addSystemMessage("Pairing denied");
-    } catch (err: unknown) {
-      setPairingStatusText(err instanceof Error ? err.message : String(err));
-    }
-  }, [pairingId, closePairingDialog, addSystemMessage]);
-
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => stopPairingPoll();
-  }, [stopPairingPoll]);
+    setShowSettings,
+    onPaired: useCallback(
+      async (syncUrl: string) => {
+        const a = app.current;
+        const s = settings ?? (await a.loadSettings());
+        await initializeAI(a, s);
+        a.start();
+        subscribeToState(a);
+        a.onSyncStatus((st, lastSync) => {
+          setSyncStatus(st);
+          setLastSyncTime(lastSync);
+        });
+        void a.startSync(syncUrl);
+        setInitialized(true);
+      },
+      [settings, initializeAI, subscribeToState],
+    ),
+  });
 
   // === Scroll to bottom ===
   useEffect(() => {
