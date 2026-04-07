@@ -4,6 +4,8 @@ export * from "./provider-mode.js";
 export * from "./provider-resolver.js";
 export * from "./color-presets.js";
 export * from "./approval-presets.js";
+export * from "./risk-labels.js";
+export * from "./surface-options.js";
 export * from "./governance-config.js";
 export * from "./voice-config.js";
 export * from "./appearance-config.js";

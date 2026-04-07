@@ -20,6 +20,8 @@ import { View, Text, StyleSheet, Platform } from "react-native";
 import type { InteriorColor } from "@motebit/runtime";
 import type { MobileLocalBackend } from "../../mobile-app";
 import { APPROVAL_PRESET_CONFIGS } from "../../mobile-app";
+import { RISK_LABELS } from "@motebit/sdk";
+export { RISK_LABELS, THEME_OPTIONS, TTS_VOICE_OPTIONS, type ThemePreference } from "@motebit/sdk";
 import { useTheme, type ThemeColors } from "../../theme";
 
 // === Tab identity ===
@@ -36,13 +38,7 @@ export const TABS: { key: Tab; label: string }[] = [
 
 // === Appearance ===
 
-export type ThemePreference = "light" | "dark" | "system";
-
-export const THEME_OPTIONS: { key: ThemePreference; label: string }[] = [
-  { key: "light", label: "Light" },
-  { key: "dark", label: "Dark" },
-  { key: "system", label: "System" },
-];
+// ThemePreference + THEME_OPTIONS are re-exported from @motebit/sdk above.
 
 /** Hex colors for preview circles (same 7 as desktop, moonlight first). */
 export const PRESET_COLORS: Record<string, string> = {
@@ -72,24 +68,11 @@ export type ProviderType =
  */
 export type LocalBackend = MobileLocalBackend;
 
-export const TTS_VOICE_OPTIONS = [
-  { key: "alloy", label: "Alloy" },
-  { key: "echo", label: "Echo" },
-  { key: "fable", label: "Fable" },
-  { key: "onyx", label: "Onyx" },
-  { key: "nova", label: "Nova" },
-  { key: "shimmer", label: "Shimmer" },
-];
+// TTS_VOICE_OPTIONS re-exported from @motebit/sdk above.
 
 // === Governance ===
 
-export const RISK_LABELS: Record<number, string> = {
-  0: "R0 Read",
-  1: "R1 Draft",
-  2: "R2 Write",
-  3: "R3 Execute",
-  4: "R4 Money",
-};
+// RISK_LABELS re-exported from @motebit/sdk above.
 
 export function PolicySummary({
   preset,

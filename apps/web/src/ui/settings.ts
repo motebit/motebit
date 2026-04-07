@@ -1,6 +1,6 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, GovernanceConfig, VoiceConfig, AppearanceConfig } from "../storage";
-import { DEFAULT_GOVERNANCE_CONFIG } from "@motebit/sdk";
+import { DEFAULT_GOVERNANCE_CONFIG, RISK_LABELS } from "@motebit/sdk";
 import {
   saveProviderConfig,
   saveSoulColor,
@@ -138,14 +138,6 @@ const APPROVAL_PRESET_CONFIGS: Record<
   cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
   balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
   autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
-};
-
-const RISK_LABELS: Record<number, string> = {
-  0: "R0 Read",
-  1: "R1 Draft",
-  2: "R2 Write",
-  3: "R3 Execute",
-  4: "R4 Money",
 };
 
 const policySummary = document.getElementById("governance-policy-summary") as HTMLDivElement;
