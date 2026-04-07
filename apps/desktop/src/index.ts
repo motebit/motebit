@@ -35,7 +35,6 @@ import {
 export type { LocalInferenceDetectionResult, OllamaDetectionResult } from "@motebit/ai-core";
 import type { MemoryNode, MemoryEdge, AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import {
-  EventType,
   DeviceCapability,
   resolveProviderSpec,
   UnsupportedBackendError,
@@ -66,8 +65,7 @@ import {
 } from "@motebit/sync-engine";
 import type { PairingSession, PairingStatus, SyncStatus } from "@motebit/sync-engine";
 import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
-import type { PlanChunk, PlanStoreAdapter } from "@motebit/planner";
-import { PlanStatus } from "@motebit/sdk";
+import type { PlanStoreAdapter } from "@motebit/planner";
 import {
   TauriEventStore,
   TauriMemoryStorage,
@@ -97,10 +95,16 @@ import { IdentityManager } from "./identity-manager.js";
 import { McpManager } from "./mcp-manager.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 import {
-  createSubGoalDefinition,
-  completeGoalDefinition,
-  reportProgressDefinition,
-} from "@motebit/tools/web-safe";
+  GoalScheduler,
+  type GoalCompleteEvent,
+  type GoalPlanProgressEvent,
+  type GoalApprovalEvent,
+} from "./goal-scheduler.js";
+export type {
+  GoalCompleteEvent,
+  GoalPlanProgressEvent,
+  GoalApprovalEvent,
+} from "./goal-scheduler.js";
 export type { InvokeFn } from "./tauri-storage.js";
 
 // Re-export runtime types for main.ts consumption
@@ -136,39 +140,7 @@ export interface SyncStatusEvent {
   error: string | null;
 }
 
-export interface GoalCompleteEvent {
-  goalId: string;
-  prompt: string;
-  status: "completed" | "failed";
-  summary: string | null;
-  error: string | null;
-  /** Plan title if the goal used plan-based execution. */
-  planTitle?: string;
-  /** Number of plan steps completed. */
-  stepsCompleted?: number;
-  /** Total plan steps. */
-  totalSteps?: number;
-}
-
-/** Maximum tool calls across all turns in a single goal run (default 50). */
-const MAX_TOOL_CALLS_PER_RUN = 50;
-
-export interface GoalPlanProgressEvent {
-  goalId: string;
-  planTitle: string;
-  stepIndex: number;
-  totalSteps: number;
-  stepDescription: string;
-  type: "plan_created" | "step_started" | "step_completed" | "step_failed";
-}
-
-export interface GoalApprovalEvent {
-  goalId: string;
-  goalPrompt: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  riskLevel?: number;
-}
+// Goal event types live in ./goal-scheduler.ts and are re-exported from the top of this file.
 
 // === Tauri Command Interface ===
 
@@ -434,21 +406,12 @@ export class DesktopApp {
     return this.identity.publicKey;
   }
   private _governanceStatus: GovernanceStatus = { governed: false, reason: "not initialized" };
-  private goalSchedulerTimer: ReturnType<typeof setInterval> | null = null;
-  private _goalExecuting = false;
-  private _currentGoalId: string | null = null;
-  private _goalStatusCallback: ((executing: boolean) => void) | null = null;
-  private _goalCompleteCallback: ((event: GoalCompleteEvent) => void) | null = null;
-  private _goalApprovalCallback: ((event: GoalApprovalEvent) => void) | null = null;
-  private _goalPlanProgressCallback: ((event: GoalPlanProgressEvent) => void) | null = null;
-  private _pendingGoalApproval: {
-    goalId: string;
-    prompt: string;
-    invoke: InvokeFn;
-    mode: string;
-    planId?: string;
-    runId?: string;
-  } | null = null;
+  private goals = new GoalScheduler({
+    getRuntime: () => this.runtime,
+    getMotebitId: () => this.motebitId,
+    getPlanEngine: () => this.planEngine,
+    getPlanStore: () => this.planStoreRef,
+  });
   private planEngine: PlanEngine | null = null;
   private planStoreRef: TauriPlanStore | PlanStoreAdapter | null = null;
   private conversationStoreRef: TauriConversationStore | null = null;
@@ -860,116 +823,9 @@ export class DesktopApp {
     return true;
   }
 
-  /**
-   * Register goal-management tools that the agent can use during goal execution.
-   * These tools let the agent create sub-goals, complete goals, and report progress.
-   * They are no-ops when called outside of an active goal context.
-   */
+  /** Register goal-management tools on the runtime registry. */
   private registerGoalTools(invoke: InvokeFn): void {
-    const registry = this.runtime!.getToolRegistry();
-
-    // Helper: parse interval strings like "1h", "30m", "1d" to milliseconds
-    const parseInterval = (s: string): number => {
-      const match = s.match(/^(\d+)\s*(s|m|h|d)$/i);
-      if (!match) return 3_600_000; // default 1h
-      const n = parseInt(match[1]!, 10);
-      switch (match[2]!.toLowerCase()) {
-        case "s":
-          return n * 1_000;
-        case "m":
-          return n * 60_000;
-        case "h":
-          return n * 3_600_000;
-        case "d":
-          return n * 86_400_000;
-        default:
-          return 3_600_000;
-      }
-    };
-
-    registry.register(createSubGoalDefinition, async (args: Record<string, unknown>) => {
-      if (this._currentGoalId == null || this._currentGoalId === "") {
-        return { ok: false, error: "No active goal context" };
-      }
-      const prompt = args.prompt as string;
-      const interval = args.interval as string | undefined;
-      const once = args.once as boolean | undefined;
-      const intervalMs = interval != null && interval !== "" ? parseInterval(interval) : 3_600_000;
-      const mode = once === true ? "once" : "recurring";
-      const subGoalId = crypto.randomUUID();
-
-      try {
-        await invoke("goals_create", {
-          motebit_id: this.motebitId,
-          goal_id: subGoalId,
-          prompt,
-          interval_ms: intervalMs,
-          mode,
-        });
-        // Set parent_goal_id
-        await invoke<number>("db_execute", {
-          sql: "UPDATE goals SET parent_goal_id = ? WHERE goal_id = ?",
-          params: [this._currentGoalId, subGoalId],
-        });
-        return { ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: msg };
-      }
-    });
-
-    registry.register(completeGoalDefinition, async (args: Record<string, unknown>) => {
-      if (this._currentGoalId == null || this._currentGoalId === "") {
-        return { ok: false, error: "No active goal context" };
-      }
-      const reason = args.reason as string;
-      try {
-        await invoke<number>("db_execute", {
-          sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
-          params: [this._currentGoalId],
-        });
-        // Best-effort event log
-        try {
-          await this.runtime!.events.append({
-            event_id: crypto.randomUUID(),
-            motebit_id: this.motebitId,
-            event_type: EventType.GoalCompleted,
-            payload: { goal_id: this._currentGoalId, reason },
-            version_clock: (await this.runtime!.events.getLatestClock(this.motebitId)) + 1,
-            timestamp: Date.now(),
-            tombstoned: false,
-          });
-        } catch {
-          /* best-effort */
-        }
-        return { ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: msg };
-      }
-    });
-
-    registry.register(reportProgressDefinition, async (args: Record<string, unknown>) => {
-      if (this._currentGoalId == null || this._currentGoalId === "") {
-        return { ok: false, error: "No active goal context" };
-      }
-      const note = args.note as string;
-      try {
-        await this.runtime!.events.append({
-          event_id: crypto.randomUUID(),
-          motebit_id: this.motebitId,
-          event_type: EventType.GoalProgress,
-          payload: { goal_id: this._currentGoalId, note },
-          version_clock: (await this.runtime!.events.getLatestClock(this.motebitId)) + 1,
-          timestamp: Date.now(),
-          tombstoned: false,
-        });
-        return { ok: true, data: { goal_id: this._currentGoalId, note } };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: msg };
-      }
-    });
+    this.goals.registerGoalTools(invoke);
   }
 
   get isOperatorMode(): boolean {
@@ -1386,25 +1242,27 @@ export class DesktopApp {
   }
 
   // === Goal Scheduling ===
+  // Implementations live in `./goal-scheduler.ts`. The methods below
+  // are thin delegates preserving the public DesktopApp API.
 
   /** Subscribe to goal execution status changes (for UI indicator). */
   onGoalStatus(callback: (executing: boolean) => void): void {
-    this._goalStatusCallback = callback;
+    this.goals.onGoalStatus(callback);
   }
 
   /** Subscribe to goal completion events (success or failure, for chat surfacing). */
   onGoalComplete(callback: (event: GoalCompleteEvent) => void): void {
-    this._goalCompleteCallback = callback;
+    this.goals.onGoalComplete(callback);
   }
 
   /** Subscribe to goal approval requests (tool needs user approval during background goal). */
   onGoalApproval(callback: (event: GoalApprovalEvent) => void): void {
-    this._goalApprovalCallback = callback;
+    this.goals.onGoalApproval(callback);
   }
 
   /** Subscribe to plan progress events (step started/completed/failed during goal execution). */
   onGoalPlanProgress(callback: (event: GoalPlanProgressEvent) => void): void {
-    this._goalPlanProgressCallback = callback;
+    this.goals.onGoalPlanProgress(callback);
   }
 
   /** Subscribe to sync status changes (for UI indicator). */
@@ -1430,635 +1288,22 @@ export class DesktopApp {
     this._syncStatusCallback?.(this._lastSyncStatus);
   }
 
-  /**
-   * Resume a goal after the user approves/denies a tool call.
-   * Streams the continuation back so main.ts can render it into chat.
-   * After streaming completes, records the goal outcome and cleans up.
-   *
-   * If the goal was executing a plan (planId is set), this method:
-   * 1. Completes the current step via runtime.resumeAfterApproval()
-   * 2. Resumes the remaining plan steps via planEngine.resumePlan()
-   */
+  /** Resume a goal after the user approves/denies a tool call. */
   async *resumeGoalAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
-    if (!this.runtime) throw new Error("AI not initialized");
-    if (!this._pendingGoalApproval) throw new Error("No pending goal approval");
-
-    const { goalId, prompt, invoke, mode, planId, runId } = this._pendingGoalApproval;
-    this._currentGoalId = goalId;
-
-    try {
-      let accumulated = "";
-      let toolCallsMade = 0;
-      let planTitle: string | undefined;
-      let stepsCompleted: number | undefined;
-      let totalSteps: number | undefined;
-
-      // Phase 1: Complete the current tool call / step via runtime approval
-      for await (const chunk of this.runtime.resumeAfterApproval(approved)) {
-        if (chunk.type === "text") {
-          accumulated += chunk.text;
-        } else if (chunk.type === "tool_status" && chunk.status === "calling") {
-          toolCallsMade++;
-        }
-        yield chunk;
-      }
-
-      // Phase 2: If this was a plan-based goal, resume remaining steps
-      if (planId != null && planId !== "" && this.planEngine != null) {
-        const loopDeps = this.runtime.getLoopDeps();
-        if (loopDeps) {
-          const planResult = await this.consumePlanStream(
-            this.planEngine.resumePlan(planId, loopDeps, undefined, runId),
-            { goal_id: goalId, prompt, mode },
-            invoke,
-          );
-
-          if (planResult.suspended) {
-            // Another approval request during plan continuation — stay suspended
-            return;
-          }
-
-          accumulated += planResult.responseText;
-          toolCallsMade += planResult.toolCallsMade;
-          planTitle = planResult.planTitle;
-          stepsCompleted = planResult.stepsCompleted;
-          totalSteps = planResult.totalSteps;
-        }
-      }
-
-      // Record outcome to DB (use runId as outcome_id for audit correlation)
-      const outcomeId = runId ?? crypto.randomUUID();
-      const now = Date.now();
-      await invoke<number>("db_execute", {
-        sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
-        params: [now, goalId],
-      });
-
-      await invoke<number>("db_execute", {
-        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL)`,
-        params: [outcomeId, goalId, this.motebitId, now, accumulated.slice(0, 500), toolCallsMade],
-      });
-
-      // One-shot auto-complete
-      if (mode === "once") {
-        await invoke<number>("db_execute", {
-          sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
-          params: [goalId],
-        });
-      }
-
-      // Notify UI
-      this._goalCompleteCallback?.({
-        goalId,
-        prompt,
-        status: "completed",
-        summary: accumulated.slice(0, 200),
-        error: null,
-        planTitle,
-        stepsCompleted,
-        totalSteps,
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this._goalCompleteCallback?.({
-        goalId,
-        prompt,
-        status: "failed",
-        summary: null,
-        error: msg,
-      });
-      throw err;
-    } finally {
-      if (this._pendingGoalApproval == null || this._pendingGoalApproval.goalId === goalId) {
-        this._goalExecuting = false;
-        this._currentGoalId = null;
-        this._goalStatusCallback?.(false);
-        this._pendingGoalApproval = null;
-        this.runtime?.resetConversation();
-      }
-    }
+    yield* this.goals.resumeGoalAfterApproval(approved);
   }
 
   get isGoalExecuting(): boolean {
-    return this._goalExecuting;
+    return this.goals.isGoalExecuting;
   }
 
-  /**
-   * Start background goal scheduling. Checks for active goals every 60s and
-   * executes them in the background without interrupting the user's chat.
-   * Goals are stored in the database as rows in a `goals` table — the desktop
-   * reads them via Tauri IPC. If the goals table doesn't exist or has no active
-   * goals, the tick is a no-op.
-   */
+  /** Start background goal scheduling (60s interval). */
   startGoalScheduler(invoke: InvokeFn): void {
-    if (this.goalSchedulerTimer) return;
-    this.goalSchedulerTimer = setInterval(() => {
-      void this.goalTick(invoke);
-    }, 60_000);
-    // Run first tick after a short delay (let UI settle)
-    setTimeout(() => {
-      void this.goalTick(invoke);
-    }, 5_000);
+    this.goals.start(invoke);
   }
 
   stopGoalScheduler(): void {
-    if (this.goalSchedulerTimer) {
-      clearInterval(this.goalSchedulerTimer);
-      this.goalSchedulerTimer = null;
-    }
-  }
-
-  private async goalTick(invoke: InvokeFn): Promise<void> {
-    if (!this.runtime || this._goalExecuting || this.runtime.isProcessing) return;
-
-    try {
-      interface GoalRow {
-        goal_id: string;
-        motebit_id: string;
-        prompt: string;
-        interval_ms: number;
-        last_run_at: number | null;
-        enabled: number;
-        status: string;
-        mode: string;
-        parent_goal_id: string | null;
-        max_retries: number;
-        consecutive_failures: number;
-      }
-
-      interface OutcomeRow {
-        ran_at: number;
-        status: string;
-        summary: string | null;
-        error_message: string | null;
-      }
-
-      const goals = await invoke<GoalRow[]>("db_query", {
-        sql: "SELECT * FROM goals WHERE motebit_id = ? AND enabled = 1 AND status = 'active'",
-        params: [this.motebitId],
-      });
-
-      if (goals.length === 0) return;
-
-      const now = Date.now();
-      for (const goal of goals) {
-        const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
-        if (elapsed < goal.interval_ms) continue;
-        if (this.runtime.isProcessing) break;
-
-        this._goalExecuting = true;
-        this._currentGoalId = goal.goal_id;
-        this._goalStatusCallback?.(true);
-
-        // Generate a stable runId for this goal execution (= outcome_id for audit correlation)
-        const runId = crypto.randomUUID();
-
-        try {
-          // Build enriched context with previous outcomes
-          const outcomes = await invoke<OutcomeRow[]>("db_query", {
-            sql: "SELECT ran_at, status, summary, error_message FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 3",
-            params: [goal.goal_id],
-          });
-
-          // Use PlanEngine for multi-step execution if available
-          // Wall-clock limit: 10 minutes per goal run
-          const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
-          const abortController = new AbortController();
-          const deadlineTimer = setTimeout(
-            () => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")),
-            GOAL_WALL_CLOCK_MS,
-          );
-          let result: Awaited<ReturnType<typeof this.executePlanGoal>>;
-          try {
-            result = await this.executePlanGoal(
-              goal,
-              outcomes ?? [],
-              invoke,
-              runId,
-              abortController.signal,
-            );
-          } finally {
-            clearTimeout(deadlineTimer);
-          }
-
-          if (result.suspended) {
-            // Approval requested — _goalExecuting stays true to block further ticks.
-            return;
-          }
-
-          // Normal completion: record outcome, update DB (runId = outcome_id for audit correlation)
-          await invoke<number>("db_execute", {
-            sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
-            params: [now, goal.goal_id],
-          });
-
-          await invoke<number>("db_execute", {
-            sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
-                  VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?)`,
-            params: [
-              runId,
-              goal.goal_id,
-              this.motebitId,
-              now,
-              result.responseText.slice(0, 500),
-              result.toolCallsMade,
-              result.tokensUsed ?? null,
-            ],
-          });
-
-          // One-shot auto-complete
-          if (goal.mode === "once") {
-            await invoke<number>("db_execute", {
-              sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
-              params: [goal.goal_id],
-            });
-          }
-
-          // Notify UI
-          this._goalCompleteCallback?.({
-            goalId: goal.goal_id,
-            prompt: goal.prompt,
-            status: "completed",
-            summary: result.responseText.slice(0, 200),
-            error: null,
-            planTitle: result.planTitle,
-            stepsCompleted: result.stepsCompleted,
-            totalSteps: result.totalSteps,
-          });
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-
-          // Record failed outcome (runId = outcome_id for audit correlation)
-          await invoke<number>("db_execute", {
-            sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-                  VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
-            params: [runId, goal.goal_id, this.motebitId, now, msg],
-          }).catch(() => {});
-
-          // Increment failures and auto-pause if threshold reached
-          await invoke<number>("db_execute", {
-            sql: "UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE goal_id = ?",
-            params: [goal.goal_id],
-          }).catch(() => {});
-
-          if (goal.consecutive_failures + 1 >= goal.max_retries) {
-            await invoke<number>("db_execute", {
-              sql: "UPDATE goals SET status = 'paused' WHERE goal_id = ?",
-              params: [goal.goal_id],
-            }).catch(() => {});
-          }
-
-          // Notify UI
-          this._goalCompleteCallback?.({
-            goalId: goal.goal_id,
-            prompt: goal.prompt,
-            status: "failed",
-            summary: null,
-            error: msg,
-          });
-        } finally {
-          if (!this._pendingGoalApproval) {
-            this._goalExecuting = false;
-            this._currentGoalId = null;
-            this._goalStatusCallback?.(false);
-            this.runtime?.resetConversation();
-          }
-        }
-      }
-    } catch {
-      this._goalExecuting = false;
-      this._currentGoalId = null;
-      this._goalStatusCallback?.(false);
-    }
-  }
-
-  /**
-   * Execute a goal using PlanEngine for multi-step decomposition.
-   * Falls back to single-turn streaming if PlanEngine is unavailable.
-   */
-  private async executePlanGoal(
-    goal: { goal_id: string; prompt: string; mode: string },
-    outcomes: Array<{
-      ran_at: number;
-      status: string;
-      summary: string | null;
-      error_message: string | null;
-    }>,
-    invoke: InvokeFn,
-    runId?: string,
-    signal?: AbortSignal,
-  ): Promise<{
-    suspended: boolean;
-    toolCallsMade: number;
-    responseText: string;
-    planTitle?: string;
-    stepsCompleted?: number;
-    totalSteps?: number;
-    tokensUsed?: number;
-  }> {
-    const loopDeps = this.runtime!.getLoopDeps();
-
-    // If PlanEngine or loopDeps are unavailable, fall back to single-turn execution
-    if (!this.planEngine || !loopDeps) {
-      return this.executeSingleTurnGoal(goal, outcomes, invoke, runId, signal);
-    }
-
-    const registry = this.runtime!.getToolRegistry();
-
-    // Pre-load any existing active plan for this goal (async cache warm-up for Tauri)
-    if (this.planStoreRef && "preloadForGoal" in this.planStoreRef) {
-      await this.planStoreRef.preloadForGoal(goal.goal_id);
-    }
-
-    // Check for existing active plan (resume interrupted plan)
-    let plan = this.planStoreRef!.getPlanForGoal(goal.goal_id);
-    let planStream: AsyncGenerator<PlanChunk>;
-
-    if (plan && plan.status === PlanStatus.Active) {
-      planStream = this.planEngine.resumePlan(plan.plan_id, loopDeps, undefined, runId);
-    } else {
-      const created = await this.planEngine.createPlan(
-        goal.goal_id,
-        this.motebitId,
-        {
-          goalPrompt: goal.prompt,
-          previousOutcomes: outcomes.map((o) =>
-            o.status === "failed"
-              ? `failed: ${o.error_message ?? "unknown"}`
-              : `${o.status}: ${o.summary ?? "no summary"}`,
-          ),
-          availableTools: registry.list().map((t) => t.name),
-        },
-        loopDeps,
-      );
-      const newPlan = created.plan;
-      plan = newPlan;
-      if (created.truncatedFrom != null && created.truncatedFrom > 0) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `Plan truncated from ${created.truncatedFrom} to ${newPlan.total_steps} steps (max ${newPlan.total_steps})`,
-        );
-      }
-      planStream = this.planEngine.executePlan(newPlan.plan_id, loopDeps, undefined, runId);
-    }
-
-    return this.consumePlanStream(planStream, goal, invoke, runId, signal);
-  }
-
-  /**
-   * Fallback: single-turn goal execution (pre-PlanEngine behavior).
-   */
-  private async executeSingleTurnGoal(
-    goal: { goal_id: string; prompt: string; mode: string },
-    outcomes: Array<{
-      ran_at: number;
-      status: string;
-      summary: string | null;
-      error_message: string | null;
-    }>,
-    invoke: InvokeFn,
-    runId?: string,
-    signal?: AbortSignal,
-  ): Promise<{
-    suspended: boolean;
-    toolCallsMade: number;
-    responseText: string;
-    tokensUsed?: number;
-  }> {
-    const now = Date.now();
-    let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
-    if (outcomes.length > 0) {
-      context += "\n\nPrevious executions (most recent first):";
-      for (const o of outcomes) {
-        const ago = formatTimeAgo(now - o.ran_at);
-        if (o.status === "failed" && o.error_message != null && o.error_message !== "") {
-          context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
-        } else if (o.summary != null && o.summary !== "") {
-          context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
-        } else {
-          context += `\n- ${ago}: ${o.status}`;
-        }
-      }
-    }
-    if (goal.mode === "once") {
-      context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
-    }
-
-    let accumulated = "";
-    let toolCallsMade = 0;
-    let tokensUsed = 0;
-
-    for await (const chunk of this.runtime!.sendMessageStreaming(context, runId)) {
-      if (signal?.aborted === true) {
-        throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
-      }
-      if (chunk.type === "text") {
-        accumulated += chunk.text;
-      } else if (chunk.type === "tool_status" && chunk.status === "calling") {
-        toolCallsMade++;
-        if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
-          throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
-        }
-      } else if (
-        chunk.type === "result" &&
-        chunk.result.totalTokens != null &&
-        chunk.result.totalTokens > 0
-      ) {
-        tokensUsed += chunk.result.totalTokens;
-      } else if (chunk.type === "approval_request") {
-        this._pendingGoalApproval = {
-          goalId: goal.goal_id,
-          prompt: goal.prompt,
-          invoke,
-          mode: goal.mode,
-          runId,
-        };
-        this._goalApprovalCallback?.({
-          goalId: goal.goal_id,
-          goalPrompt: goal.prompt,
-          toolName: chunk.name,
-          args: chunk.args,
-          riskLevel: chunk.risk_level,
-        });
-        return {
-          suspended: true,
-          toolCallsMade,
-          responseText: accumulated,
-          tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
-        };
-      }
-    }
-
-    return {
-      suspended: false,
-      toolCallsMade,
-      responseText: accumulated,
-      tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
-    };
-  }
-
-  /**
-   * Consume a PlanEngine stream, forwarding progress to UI callbacks.
-   */
-  private async consumePlanStream(
-    stream: AsyncGenerator<PlanChunk>,
-    goal: { goal_id: string; prompt: string; mode: string },
-    invoke: InvokeFn,
-    runId?: string,
-    signal?: AbortSignal,
-  ): Promise<{
-    suspended: boolean;
-    toolCallsMade: number;
-    responseText: string;
-    planTitle?: string;
-    stepsCompleted?: number;
-    totalSteps?: number;
-    tokensUsed?: number;
-  }> {
-    let toolCallsMade = 0;
-    let responseText = "";
-    let tokensUsed = 0;
-    let planTitle: string | undefined;
-    let totalSteps = 0;
-    let stepsCompleted = 0;
-
-    for await (const chunk of stream) {
-      if (signal?.aborted === true) {
-        throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
-      }
-      switch (chunk.type) {
-        case "plan_created":
-          planTitle = chunk.plan.title;
-          totalSteps = chunk.steps.length;
-          this._goalPlanProgressCallback?.({
-            goalId: goal.goal_id,
-            planTitle: chunk.plan.title,
-            stepIndex: 0,
-            totalSteps: chunk.steps.length,
-            stepDescription: chunk.steps[0]?.description ?? "",
-            type: "plan_created",
-          });
-          break;
-
-        case "step_started":
-          this._goalPlanProgressCallback?.({
-            goalId: goal.goal_id,
-            planTitle: planTitle ?? "",
-            stepIndex: chunk.step.ordinal + 1,
-            totalSteps,
-            stepDescription: chunk.step.description,
-            type: "step_started",
-          });
-          break;
-
-        case "step_chunk":
-          // Forward inner agentic chunks
-          if (chunk.chunk.type === "text") {
-            responseText += chunk.chunk.text;
-          } else if (chunk.chunk.type === "tool_status" && chunk.chunk.status === "calling") {
-            toolCallsMade++;
-            if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
-              throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
-            }
-          } else if (
-            chunk.chunk.type === "result" &&
-            chunk.chunk.result.totalTokens != null &&
-            chunk.chunk.result.totalTokens > 0
-          ) {
-            tokensUsed += chunk.chunk.result.totalTokens;
-          }
-          break;
-
-        case "step_completed":
-          stepsCompleted++;
-          this._goalPlanProgressCallback?.({
-            goalId: goal.goal_id,
-            planTitle: planTitle ?? "",
-            stepIndex: chunk.step.ordinal + 1,
-            totalSteps,
-            stepDescription: chunk.step.description,
-            type: "step_completed",
-          });
-          break;
-
-        case "step_delegated": {
-          const rc = chunk.routing_choice;
-          const agentId = rc?.selected_agent ?? chunk.task_id?.slice(0, 8) ?? "network";
-          const agentShort = agentId.length > 12 ? agentId.slice(0, 8) + "…" : agentId;
-          let desc = `→ agent ${agentShort}: ${chunk.step.description}`;
-          if (rc?.alternatives_considered != null && rc.alternatives_considered > 0)
-            desc += ` (${rc.alternatives_considered + 1} evaluated)`;
-          this._goalPlanProgressCallback?.({
-            goalId: goal.goal_id,
-            planTitle: planTitle ?? "",
-            stepIndex: chunk.step.ordinal + 1,
-            totalSteps,
-            stepDescription: desc,
-            type: "step_started",
-          });
-          break;
-        }
-
-        case "step_failed":
-          this._goalPlanProgressCallback?.({
-            goalId: goal.goal_id,
-            planTitle: planTitle ?? "",
-            stepIndex: chunk.step.ordinal + 1,
-            totalSteps,
-            stepDescription: chunk.step.description,
-            type: "step_failed",
-          });
-          break;
-
-        case "approval_request": {
-          const innerChunk = chunk.chunk;
-          if (innerChunk.type !== "approval_request") break;
-          this._pendingGoalApproval = {
-            goalId: goal.goal_id,
-            prompt: goal.prompt,
-            invoke,
-            mode: goal.mode,
-            planId: chunk.step.plan_id,
-            runId,
-          };
-          this._goalApprovalCallback?.({
-            goalId: goal.goal_id,
-            goalPrompt: goal.prompt,
-            toolName: innerChunk.name,
-            args: innerChunk.args,
-            riskLevel: innerChunk.risk_level,
-          });
-          return {
-            suspended: true,
-            toolCallsMade,
-            responseText,
-            planTitle,
-            stepsCompleted,
-            totalSteps,
-            tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
-          };
-        }
-
-        case "plan_completed":
-          // Plan finished successfully
-          break;
-
-        case "plan_failed":
-          // Plan failed — the error will surface through the outer catch
-          throw new Error(`Plan failed: ${chunk.reason}`);
-      }
-    }
-
-    return {
-      suspended: false,
-      toolCallsMade,
-      responseText,
-      planTitle,
-      stepsCompleted,
-      totalSteps,
-      tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
-    };
+    this.goals.stop();
   }
 
   // === MCP via Tauri Commands ===
@@ -2792,15 +2037,6 @@ export class DesktopApp {
     this.runtime?.sync.stop();
     this.emitSyncStatus({ status: "disconnected" });
   }
-}
-
-// === Helpers ===
-
-function formatTimeAgo(ms: number): string {
-  if (ms < 60_000) return "just now";
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
-  return `${Math.round(ms / 86_400_000)}d ago`;
 }
 
 // === Slash Command Utilities ===
