@@ -8,7 +8,8 @@ import {
   saveVoiceConfig,
   loadVoiceConfig,
 } from "../storage";
-import { detectOllamaModels, checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
+import { checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
+import { detectLocalInference, probeLocalModels, DEFAULT_LOCAL_ENDPOINTS } from "../bootstrap";
 import { setTTSVoice } from "./chat";
 import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import type { ColorPickerAPI } from "./color-picker";
@@ -109,6 +110,10 @@ const voiceResponse = document.getElementById("settings-voice-response") as HTML
 
 let activeProviderTab: ProviderType | "proxy" = "proxy";
 let activeByokProvider: "anthropic" | "openai" | "google" = "anthropic";
+/** On-Device backend: browser (WebLLM) or auto-detected local server. */
+let activeLocalBackend: "webllm" | "server" = "webllm";
+/** Detected server type when user picks "Local Server" — drives ProviderConfig.type on save. */
+let detectedServerType: "ollama" | "openai" = "ollama";
 
 // === Settings API ===
 
@@ -395,9 +400,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       el.classList.toggle("active", key === provider);
     }
 
-    // Auto-detect Ollama models when switching to Ollama tab
-    if (provider === "ollama") {
-      void detectAndPopulateOllama();
+    // Auto-detect local servers when switching to On-Device tab with server backend active
+    if (provider === "ollama" && activeLocalBackend === "server") {
+      void detectAndPopulateLocalServer();
     }
 
     // Check WebGPU when switching to WebLLM tab
@@ -440,37 +445,108 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     });
   });
 
-  // === Ollama Auto-Detection ===
+  // === On-Device Backend Toggle (WebLLM vs Local Server) ===
+  document.querySelectorAll<HTMLButtonElement>(".local-backend-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const backend = btn.dataset.backend as "webllm" | "server";
+      if (!backend) return;
+      activeLocalBackend = backend;
+      document.querySelectorAll<HTMLButtonElement>(".local-backend-btn").forEach((b) => {
+        const isActive = b.dataset.backend === backend;
+        b.classList.toggle("active", isActive);
+        b.style.background = isActive ? "var(--accent-bg)" : "transparent";
+        b.style.color = isActive ? "var(--text-heading)" : "var(--text-muted)";
+      });
+      const webllmSection = document.getElementById("local-webllm");
+      const serverSection = document.getElementById("local-ollama");
+      if (webllmSection) webllmSection.style.display = backend === "webllm" ? "" : "none";
+      if (serverSection) serverSection.style.display = backend === "server" ? "" : "none";
+      if (backend === "server") void detectAndPopulateLocalServer();
+    });
+  });
 
-  async function detectAndPopulateOllama(): Promise<void> {
-    const baseUrl = ollamaBaseUrl.value.trim() || DEFAULT_OLLAMA_URL;
-    ollamaStatus.textContent = "Detecting...";
-    ollamaStatus.className = "ollama-status";
+  // === Local Server Auto-Detection ===
+  // Probes multiple known endpoints (Ollama, LM Studio, llama.cpp, Jan, generic OpenAI-compat)
+  // and shows which one was found. User can override the endpoint manually.
 
-    const models = await detectOllamaModels(baseUrl);
+  /** Friendly server name from endpoint URL and API type. */
+  function friendlyServerName(baseUrl: string, type: "ollama" | "openai"): string {
+    if (type === "ollama") return "Ollama";
+    if (baseUrl.includes(":1234")) return "LM Studio";
+    if (baseUrl.includes(":8080")) return "llama.cpp";
+    if (baseUrl.includes(":1337")) return "Jan";
+    return "Local server";
+  }
+
+  function populateModelList(models: string[]): void {
     ollamaModel.innerHTML = "";
-
     if (models.length === 0) {
-      ollamaStatus.textContent = "No Ollama instance detected";
-      ollamaStatus.className = "ollama-status error";
       const opt = document.createElement("option");
-      opt.value = "llama3.2";
-      opt.textContent = "llama3.2 (default)";
+      opt.value = "";
+      opt.textContent = "No models found";
       ollamaModel.appendChild(opt);
-    } else {
-      ollamaStatus.textContent = `Connected — ${models.length} model${models.length !== 1 ? "s" : ""}`;
-      ollamaStatus.className = "ollama-status connected";
-      for (const model of models) {
-        const opt = document.createElement("option");
-        opt.value = model;
-        opt.textContent = model;
-        ollamaModel.appendChild(opt);
-      }
+      return;
+    }
+    for (const model of models) {
+      const opt = document.createElement("option");
+      opt.value = model;
+      opt.textContent = model;
+      ollamaModel.appendChild(opt);
     }
   }
 
+  /** Initial detection — probe all known endpoints and populate UI with the first hit. */
+  async function detectAndPopulateLocalServer(): Promise<void> {
+    ollamaStatus.textContent = "Detecting local servers...";
+    ollamaStatus.className = "ollama-status";
+
+    const result = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS);
+    if (!result) {
+      ollamaStatus.textContent =
+        "No local server detected. Start Ollama, LM Studio, or llama.cpp on localhost.";
+      ollamaStatus.className = "ollama-status error";
+      detectedServerType = "ollama";
+      if (!ollamaBaseUrl.value) ollamaBaseUrl.value = DEFAULT_OLLAMA_URL;
+      populateModelList([]);
+      return;
+    }
+
+    detectedServerType = result.type;
+    ollamaBaseUrl.value = result.baseUrl;
+    const name = friendlyServerName(result.baseUrl, result.type);
+    ollamaStatus.textContent = `${name} — ${result.models.length} model${result.models.length !== 1 ? "s" : ""}`;
+    ollamaStatus.className = "ollama-status connected";
+    populateModelList(result.models);
+  }
+
+  /** Re-probe a specific endpoint when the user edits the URL manually. */
+  async function reprobeCustomEndpoint(): Promise<void> {
+    const url = ollamaBaseUrl.value.trim();
+    if (!url) return;
+    ollamaStatus.textContent = "Probing...";
+    ollamaStatus.className = "ollama-status";
+
+    // Try Ollama API first, then OpenAI-compatible
+    let result = await probeLocalModels(url, "ollama");
+    if (!result) result = await probeLocalModels(url, "openai");
+
+    if (!result) {
+      ollamaStatus.textContent = "No server found at this endpoint";
+      ollamaStatus.className = "ollama-status error";
+      detectedServerType = "ollama";
+      populateModelList([]);
+      return;
+    }
+
+    detectedServerType = result.type;
+    const name = friendlyServerName(result.baseUrl, result.type);
+    ollamaStatus.textContent = `${name} — ${result.models.length} model${result.models.length !== 1 ? "s" : ""}`;
+    ollamaStatus.className = "ollama-status connected";
+    populateModelList(result.models);
+  }
+
   // Re-detect when base URL changes
-  ollamaBaseUrl.addEventListener("change", () => void detectAndPopulateOllama());
+  ollamaBaseUrl.addEventListener("change", () => void reprobeCustomEndpoint());
 
   // Governance: live-update persistence threshold display
   govPersistenceThreshold.addEventListener("input", () => {
@@ -521,35 +597,60 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     // Pre-fill from current provider config
     const config = ctx.getConfig();
     if (config) {
-      switchProviderTab(config.type);
+      // Determine if this is an on-device config (webllm or local server with localhost URL)
+      const isLocalServerUrl =
+        config.baseUrl != null &&
+        /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)/.test(config.baseUrl);
+      const isOnDevice =
+        config.type === "webllm" ||
+        config.type === "ollama" ||
+        (config.type === "openai" && isLocalServerUrl);
+
+      // On-Device configs use the "ollama" tab key (label is "On-Device" in UI)
+      const tabKey = isOnDevice ? "ollama" : config.type;
+      switchProviderTab(tabKey);
       if (maxTokensSelect) maxTokensSelect.value = String(config.maxTokens ?? 4096);
-      switch (config.type) {
-        case "proxy": {
-          const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
-          if (cloudModelEl) cloudModelEl.value = config.model;
-          break;
-        }
-        case "anthropic":
-          anthropicApiKey.value = config.apiKey ?? "";
-          anthropicModel.value = config.model;
-          if (config.apiKey) fetchModelsForProvider("anthropic", config.apiKey, "anthropic-models");
-          break;
-        case "openai":
-          openaiApiKey.value = config.apiKey ?? "";
-          openaiModel.value = config.model;
-          if (config.apiKey) fetchModelsForProvider("openai", config.apiKey, "openai-models");
-          break;
-        case "ollama":
-          ollamaBaseUrl.value = config.baseUrl || DEFAULT_OLLAMA_URL;
-          void detectAndPopulateOllama().then(() => {
-            ollamaModel.value = config.model;
-          });
-          break;
-        case "webllm":
-          webllmModel.value = config.model;
-          break;
+
+      if (config.type === "proxy") {
+        const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
+        if (cloudModelEl) cloudModelEl.value = config.model;
+      } else if (config.type === "anthropic") {
+        anthropicApiKey.value = config.apiKey ?? "";
+        anthropicModel.value = config.model;
+        if (config.apiKey) fetchModelsForProvider("anthropic", config.apiKey, "anthropic-models");
+      } else if (config.type === "openai" && !isLocalServerUrl) {
+        // BYOK OpenAI (cloud, not a local server)
+        openaiApiKey.value = config.apiKey ?? "";
+        openaiModel.value = config.model;
+        if (config.apiKey) fetchModelsForProvider("openai", config.apiKey, "openai-models");
+      } else if (config.type === "webllm") {
+        activeLocalBackend = "webllm";
+        setLocalBackendUI("webllm");
+        webllmModel.value = config.model;
+      } else if (config.type === "ollama" || (config.type === "openai" && isLocalServerUrl)) {
+        // Local server — either Ollama API or OpenAI-compatible localhost
+        activeLocalBackend = "server";
+        detectedServerType = config.type;
+        setLocalBackendUI("server");
+        ollamaBaseUrl.value = config.baseUrl ?? DEFAULT_OLLAMA_URL;
+        void detectAndPopulateLocalServer().then(() => {
+          if (config.model) ollamaModel.value = config.model;
+        });
       }
     }
+  }
+
+  function setLocalBackendUI(backend: "webllm" | "server"): void {
+    document.querySelectorAll<HTMLButtonElement>(".local-backend-btn").forEach((b) => {
+      const isActive = b.dataset.backend === backend;
+      b.classList.toggle("active", isActive);
+      b.style.background = isActive ? "var(--accent-bg)" : "transparent";
+      b.style.color = isActive ? "var(--text-heading)" : "var(--text-muted)";
+    });
+    const webllmSection = document.getElementById("local-webllm");
+    const serverSection = document.getElementById("local-ollama");
+    if (webllmSection) webllmSection.style.display = backend === "webllm" ? "" : "none";
+    if (serverSection) serverSection.style.display = backend === "server" ? "" : "none";
   }
 
   function close(): void {
@@ -636,12 +737,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         };
         break;
       case "ollama":
-        config = {
-          type: "ollama",
-          model: ollamaModel.value,
-          baseUrl: ollamaBaseUrl.value.trim(),
-          maxTokens,
-        };
+        // "On-Device" tab — branches on active backend picker
+        if (activeLocalBackend === "webllm") {
+          config = { type: "webllm", model: webllmModel.value, maxTokens };
+        } else {
+          // Local Server — use detected type (ollama or openai-compatible)
+          config = {
+            type: detectedServerType,
+            model: ollamaModel.value,
+            baseUrl: ollamaBaseUrl.value.trim(),
+            maxTokens,
+          };
+        }
         break;
       case "webllm":
         config = { type: "webllm", model: webllmModel.value, maxTokens };

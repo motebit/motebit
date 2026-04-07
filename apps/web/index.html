@@ -4786,8 +4786,7 @@
           <div class="provider-tabs" id="provider-tabs">
             <button class="provider-tab active" data-provider="proxy">Motebit Cloud</button>
             <button class="provider-tab" data-provider="anthropic">API Key</button>
-            <button class="provider-tab" data-provider="ollama">Local</button>
-            <button class="provider-tab" data-provider="webllm">WebLLM</button>
+            <button class="provider-tab" data-provider="ollama">On-Device</button>
           </div>
           <!-- Motebit Cloud (subscription + credits) -->
           <div class="provider-config active" id="provider-proxy">
@@ -4878,36 +4877,54 @@
           </div>
           <!-- OpenAI (hidden — merged into API Key tab, kept for settings.ts compat) -->
           <div class="provider-config" id="provider-openai" style="display:none !important;"></div>
-          <!-- Local config -->
+          <!-- On-Device: WebLLM (browser) or Local Server (auto-detected) -->
           <div class="provider-config" id="provider-ollama">
-            <div class="settings-field">
-              <label for="ollama-base-url">Base URL</label>
-              <input id="ollama-base-url" type="text" value="http://localhost:11434" />
+            <div class="settings-field" style="margin-bottom:10px;">
+              <label>Backend</label>
+              <div style="display:flex; gap:6px;">
+                <button class="local-backend-btn active" data-backend="webllm" style="flex:1; padding:6px; border:1px solid var(--border-light); border-radius:6px; background:var(--accent-bg); color:var(--text-heading); font-size:12px; cursor:pointer;">WebLLM</button>
+                <button class="local-backend-btn" data-backend="server" style="flex:1; padding:6px; border:1px solid var(--border-light); border-radius:6px; background:transparent; color:var(--text-muted); font-size:12px; cursor:pointer;">Local Server</button>
+              </div>
             </div>
-            <div class="settings-field">
-              <label for="ollama-model">Model</label>
-              <select id="ollama-model">
-                <option value="">Detecting...</option>
-              </select>
+            <!-- WebLLM sub-panel -->
+            <div id="local-webllm">
+              <div class="settings-field">
+                <label for="webllm-model">Model</label>
+                <select id="webllm-model">
+                  <option value="Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama-3.2-3B (recommended)</option>
+                  <option value="Llama-3.1-8B-Instruct-q4f16_1-MLC">Llama-3.1-8B</option>
+                  <option value="Phi-3.5-mini-instruct-q4f16_1-MLC">Phi-3.5-mini (3.8B)</option>
+                </select>
+              </div>
+              <div class="webllm-status" id="webllm-status"></div>
+              <div class="webllm-progress" id="webllm-progress" style="display:none;">
+                <div class="webllm-progress-bar"><div class="webllm-progress-fill" id="webllm-progress-fill"></div></div>
+                <div class="webllm-progress-text" id="webllm-progress-text"></div>
+              </div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+                Runs in your browser via WebGPU. First download ~1.8 GB.
+              </div>
             </div>
-            <div class="ollama-status" id="ollama-status"></div>
+            <!-- Local Server sub-panel -->
+            <div id="local-ollama" style="display:none;">
+              <div class="settings-field">
+                <label for="ollama-base-url">Endpoint</label>
+                <input id="ollama-base-url" type="text" placeholder="http://localhost:11434" />
+              </div>
+              <div class="settings-field">
+                <label for="ollama-model">Model</label>
+                <select id="ollama-model">
+                  <option value="">Detecting...</option>
+                </select>
+              </div>
+              <div class="ollama-status" id="ollama-status"></div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+                Auto-detects Ollama, LM Studio, llama.cpp, Jan, or any OpenAI-compatible server. Requires <code>OLLAMA_ORIGINS="https://motebit.com"</code> for Ollama.
+              </div>
+            </div>
           </div>
-          <!-- WebLLM config -->
-          <div class="provider-config" id="provider-webllm">
-            <div class="settings-field">
-              <label for="webllm-model">Model</label>
-              <select id="webllm-model">
-                <option value="Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama-3.2-3B (3B, recommended)</option>
-                <option value="Llama-3.1-8B-Instruct-q4f16_1-MLC">Llama-3.1-8B (8B)</option>
-                <option value="Phi-3.5-mini-instruct-q4f16_1-MLC">Phi-3.5-mini (3.8B)</option>
-              </select>
-            </div>
-            <div class="webllm-status" id="webllm-status"></div>
-            <div class="webllm-progress" id="webllm-progress" style="display:none;">
-              <div class="webllm-progress-bar"><div class="webllm-progress-fill" id="webllm-progress-fill"></div></div>
-              <div class="webllm-progress-text" id="webllm-progress-text"></div>
-            </div>
-          </div>
+          <!-- Hidden: kept for settings.ts compat, folded into On-Device -->
+          <div class="provider-config" id="provider-webllm" style="display:none !important;"></div>
         </div>
         <!-- Response length removed: the creature reads the room.
              System prompt: "Match the energy of the user's message."
