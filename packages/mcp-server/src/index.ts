@@ -1,6 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+// Transport classes are imported dynamically inside `start()` / `startHttp()`
+// — see those methods. Static value-level imports here would force browser
+// bundlers (Vite/rollup) to trace into the Node-only paths
+// (`node:stream`, `node:http`) used by the SDK's stdio + http transports,
+// breaking any browser surface that tries to import mcp-server even for its
+// types or helpers. The type-only `import type` below is erased at runtime
+// and doesn't pull anything into the bundle. Mirrors the pattern used by
+// `mcp-client` for the same reason.
+import type { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { AgentTrustLevel, RiskLevel } from "@motebit/sdk";
@@ -319,6 +326,11 @@ export class McpServerAdapter {
 
   async start(): Promise<void> {
     if (this.config.transport === "stdio") {
+      // Dynamic import — stdio.js pulls in `node:stream`'s `PassThrough` and
+      // is Node-only. Gating it here keeps the static import graph
+      // browser-safe so any future browser surface can import mcp-server's
+      // types/helpers without choking the bundler.
+      const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
     } else {
@@ -1051,7 +1063,12 @@ export class McpServerAdapter {
   // --- HTTP Transport (Streamable HTTP) ---
 
   private async startHttp(): Promise<void> {
+    // Both `node:http` and the SDK's HTTP transport are Node-only. Loading
+    // them dynamically inside `startHttp()` keeps the static import graph
+    // browser-safe — see the import-block comment at the top of the file.
     const http = await import("node:http");
+    const { StreamableHTTPServerTransport } =
+      await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
     const port = this.config.port ?? 3100;
 
     // Session ID → transport mapping for stateful connections

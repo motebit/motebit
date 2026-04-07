@@ -9,12 +9,29 @@ export default defineConfig({
   build: {
     target: "esnext",
     rollupOptions: {
-      // Only externalize Node-specific MCP SDK transports (stdio uses
-      // node:stream/child_process). The HTTP transport and Client class
-      // are browser-safe. Mirrors apps/web and apps/desktop — the
-      // established pattern for browser-target Vite apps in this monorepo
-      // that consume @motebit/mcp-client.
-      external: ["@modelcontextprotocol/sdk/client/stdio.js", "cross-spawn", /^node:/],
+      // Externalize Node-only MCP SDK paths and their transitive Node deps.
+      // The MCP SDK ships transports for both client and server roles, and
+      // several of them statically pull `node:stream`, `node:http`, or the
+      // Hono Node adapter. The HTTP client, the Client class itself, and
+      // mcp-server's type-only / dynamic-import surface are browser-safe;
+      // these externals just stop rollup from tracing the dynamic import
+      // strings that gate the Node-only code paths at runtime.
+      // Mirrors apps/web and apps/desktop — the established pattern for
+      // browser-target Vite apps in this monorepo.
+      external: [
+        // mcp-client's stdio transport (Node-only, gated dynamically)
+        "@modelcontextprotocol/sdk/client/stdio.js",
+        // mcp-server's stdio + HTTP transports (Node-only, gated dynamically)
+        "@modelcontextprotocol/sdk/server/stdio.js",
+        "@modelcontextprotocol/sdk/server/streamableHttp.js",
+        // Hono Node adapter — statically pulled by the SDK's HTTP server
+        // transport; never reachable when the dynamic import is gated out.
+        "@hono/node-server",
+        // cross-spawn — pulled transitively by the stdio paths above
+        "cross-spawn",
+        // Anything from the `node:` namespace
+        /^node:/,
+      ],
     },
   },
   optimizeDeps: {
