@@ -10,13 +10,17 @@ The architecture enforces this. `MotebitRuntime` is surface-agnostic. It accepts
 
 ## Surfaces
 
-**Glass** — the desktop app. The primary surface. A glass droplet that breathes, glows, responds to voice. Chat, tool use, operator mode, approval flow. The creature is the interface. This ships first because the first impression defines what people think a motebit is. A being, not a tool.
+**Glass** — the desktop app. The primary surface. A glass droplet that breathes, glows, responds to voice. Chat, tool use, operator mode, approval flow. The creature is the interface. The first impression defines what people think a motebit is. A being, not a tool.
 
-**Headless** — the CLI. For environments without a screen: daemon mode on a server, SSH sessions, CI/CD pipelines, scripting. Same runtime, `NullRenderer`. Not a developer tool — a headless surface. Ships second, positioned as "bring your motebit to environments without a display."
+**Headless** — the CLI. For environments without a screen: daemon mode on a server, SSH sessions, CI/CD pipelines, scripting. Same runtime, `NullRenderer`. Not a developer tool — a headless surface positioned as "bring your motebit to environments without a display."
 
-**Mobile** — phone and tablet. Quick interactions, approvals on the go, voice capture. Same identity via sync relay. Ships third.
+**Mobile** — phone and tablet. Quick interactions, approvals on the go, voice capture. Same identity via sync relay. Expo build, WebView-hosted creature renderer, wake-on-push background task execution.
 
-**Web** — identity portal, sharing, marketplace (later). Not a surface the motebit inhabits — a surface the owner manages.
+**Web** — browser as inhabited surface. IndexedDB identity, CORS proxy for inference, same WebGL glass creature. The owner manages _and_ inhabits here: one creature in a tab, no install. This replaces the older "identity portal only" framing — the web surface now runs the full MotebitRuntime with `createBrowserStorage`, and the creature lives in it.
+
+**Spatial** — AR/VR via WebXR. Orbital dynamics around the wearer's body anchors, gesture recognition (pinch approves, dismiss denies), ambient heartbeat presence, voice pipeline with VAD. The creature in the room rather than on a screen.
+
+All five surfaces consume the same `MotebitRuntime` through adapter boundaries. Glass defines the visual language; the rest are organs of the same being in different media. Each surface maximizes what its platform offers — desktop/web/mobile can serve (accept delegations via `/serve`), CLI operates and serves, spatial embodies.
 
 ## Consent-first autonomy
 
