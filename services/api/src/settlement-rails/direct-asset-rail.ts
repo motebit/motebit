@@ -54,6 +54,76 @@ export interface WalletProvider {
   }): Promise<{ txHash: string }>;
 }
 
+/**
+ * Thrown by `DirectAssetRail.withdraw` when the agent's onchain wallet does
+ * not hold enough of the asset to cover the requested transfer.
+ *
+ * This is the treasury-gap surface: the relay's *virtual* ledger can show a
+ * large balance (earned from settled delegations), while the agent's
+ * *onchain* wallet is empty because the relay has not yet funded it from
+ * the treasury. The two balances live in different systems — the virtual
+ * ledger is the relay's SQLite, the onchain balance is the wallet provider
+ * (Privy, Turnkey, CDP, …). Bridging them is the treasury rebalancer's job;
+ * until that exists, an agent who tries to withdraw to a wallet address
+ * can hit this even though their relay account says they have money.
+ *
+ * The error carries enough context for the withdrawal endpoint to compose
+ * a clear user-facing message (including the virtual balance, which the
+ * rail itself doesn't know about) and to fall back to a manual rail.
+ *
+ * Code: `INSUFFICIENT_ONCHAIN_BALANCE`. Machine-readable so HTTP layers
+ * can map it to a specific response shape instead of a 500.
+ */
+export class InsufficientOnchainBalanceError extends Error {
+  readonly code = "INSUFFICIENT_ONCHAIN_BALANCE" as const;
+  readonly motebitId: string;
+  readonly chain: string;
+  readonly asset: string;
+  readonly walletAddress: string;
+  /** Onchain balance in token-native units (e.g. USDC 6 decimals). */
+  readonly onchainBalance: bigint;
+  /** Required amount in token-native units. */
+  readonly requiredAmount: bigint;
+  /** Token decimals used for conversion. */
+  readonly decimals: number;
+  /** Requested withdrawal amount in human dollars (as received by `withdraw`). */
+  readonly amountUsd: number;
+
+  constructor(details: {
+    motebitId: string;
+    chain: string;
+    asset: string;
+    walletAddress: string;
+    onchainBalance: bigint;
+    requiredAmount: bigint;
+    decimals: number;
+    amountUsd: number;
+  }) {
+    const shortfallUnits = details.requiredAmount - details.onchainBalance;
+    const shortfallUsd = Number(shortfallUnits) / 10 ** details.decimals;
+    super(
+      `Insufficient onchain balance on ${details.chain}: wallet ${details.walletAddress} ` +
+        `holds ${details.onchainBalance.toString()} ${details.asset} ` +
+        `(${(Number(details.onchainBalance) / 10 ** details.decimals).toFixed(details.decimals)} ${details.asset}), ` +
+        `need ${details.requiredAmount.toString()} ` +
+        `(${details.amountUsd.toFixed(2)} USD). ` +
+        `Shortfall: ${shortfallUsd.toFixed(2)} ${details.asset}. ` +
+        `The relay virtual account ledger may show a larger balance than the wallet — ` +
+        `onchain treasury has not been funded for this agent yet. ` +
+        `Fall back to the manual Stripe withdrawal rail, or wait for treasury rebalancing.`,
+    );
+    this.name = "InsufficientOnchainBalanceError";
+    this.motebitId = details.motebitId;
+    this.chain = details.chain;
+    this.asset = details.asset;
+    this.walletAddress = details.walletAddress;
+    this.onchainBalance = details.onchainBalance;
+    this.requiredAmount = details.requiredAmount;
+    this.decimals = details.decimals;
+    this.amountUsd = details.amountUsd;
+  }
+}
+
 export interface DirectAssetRailConfig {
   /** Wallet provider instance. */
   walletProvider: WalletProvider;
@@ -145,12 +215,36 @@ export class DirectAssetRail implements DepositableSettlementRail {
     // Convert dollar amount to token-native units
     const tokenAmount = BigInt(Math.round(amount * 10 ** this.decimals));
 
-    // Check balance before signing
+    // Check balance before signing. If short, throw a structured error that
+    // carries enough context for the withdrawal endpoint to surface a clear
+    // user-facing message and fall back to a manual rail. The relay's
+    // virtual ledger can show a large balance while this onchain wallet is
+    // empty — see `InsufficientOnchainBalanceError` for the treasury-gap
+    // rationale.
     const balance = await this.wallet.getBalance(motebitId, this.chain, this.asset);
     if (balance < tokenAmount) {
-      throw new Error(
-        `Insufficient onchain balance: have ${balance.toString()}, need ${tokenAmount.toString()}`,
-      );
+      const walletAddress = await this.wallet.getAddress(motebitId, this.chain);
+      const err = new InsufficientOnchainBalanceError({
+        motebitId,
+        chain: this.chain,
+        asset: this.asset,
+        walletAddress,
+        onchainBalance: balance,
+        requiredAmount: tokenAmount,
+        decimals: this.decimals,
+        amountUsd: amount,
+      });
+      logger.warn("direct-asset.withdrawal.insufficient_balance", {
+        motebitId,
+        chain: this.chain,
+        asset: this.asset,
+        walletAddress,
+        onchainBalance: balance.toString(),
+        requiredAmount: tokenAmount.toString(),
+        amountUsd: amount,
+        code: err.code,
+      });
+      throw err;
     }
 
     // Sign and broadcast

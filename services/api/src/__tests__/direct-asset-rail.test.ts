@@ -4,7 +4,10 @@
  * Tests the rail adapter with a mock wallet provider — no real chain interactions.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { DirectAssetRail } from "../settlement-rails/direct-asset-rail.js";
+import {
+  DirectAssetRail,
+  InsufficientOnchainBalanceError,
+} from "../settlement-rails/direct-asset-rail.js";
 import { SettlementRailRegistry } from "../settlement-rails/index.js";
 import { isDepositableRail } from "@motebit/sdk";
 import type { WalletProvider } from "../settlement-rails/direct-asset-rail.js";
@@ -111,12 +114,39 @@ describe("DirectAssetRail", () => {
       expect(wallet.sendTransfer).toHaveBeenCalled();
     });
 
-    it("throws on insufficient onchain balance", async () => {
+    it("throws structured InsufficientOnchainBalanceError with full treasury-gap context", async () => {
       (wallet.getBalance as ReturnType<typeof vi.fn>).mockResolvedValueOnce(BigInt(1_000_000)); // 1 USDC
 
+      let caught: unknown;
+      try {
+        await rail.withdraw("agent-001", 50.0, "USDC", "0xDest1234567890abcdef1234567890ab", "k2");
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(InsufficientOnchainBalanceError);
+      const err = caught as InsufficientOnchainBalanceError;
+      expect(err.code).toBe("INSUFFICIENT_ONCHAIN_BALANCE");
+      expect(err.motebitId).toBe("agent-001");
+      expect(err.chain).toBe("eip155:8453");
+      expect(err.asset).toBe("USDC");
+      expect(err.walletAddress).toBe("0xAgentWallet1234567890abcdef12345678");
+      expect(err.onchainBalance).toBe(BigInt(1_000_000));
+      expect(err.requiredAmount).toBe(BigInt(50_000_000));
+      expect(err.decimals).toBe(6);
+      expect(err.amountUsd).toBe(50.0);
+      // Message includes actionable recovery instruction
+      expect(err.message).toContain("Shortfall");
+      expect(err.message).toContain("treasury");
+      expect(err.message).toContain("Stripe");
+    });
+
+    it("does not broadcast when balance check fails", async () => {
+      (wallet.getBalance as ReturnType<typeof vi.fn>).mockResolvedValueOnce(BigInt(1_000_000));
       await expect(
-        rail.withdraw("agent-001", 50.0, "USDC", "0xDest1234567890abcdef1234567890ab", "k2"),
-      ).rejects.toThrow("Insufficient onchain balance");
+        rail.withdraw("agent-001", 50.0, "USDC", "0xDest1234567890abcdef1234567890ab", "k2b"),
+      ).rejects.toBeInstanceOf(InsufficientOnchainBalanceError);
+      expect(wallet.sendTransfer).not.toHaveBeenCalled();
     });
 
     it("converts amount to token decimals correctly", async () => {
