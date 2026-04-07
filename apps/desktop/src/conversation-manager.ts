@@ -2,8 +2,8 @@
  * Conversation manager — owns the desktop's conversation browsing,
  * loading, summarization, and auto-titling logic.
  *
- * Extracted from DesktopApp as Target 6 (final) of the desktop extraction
- * plan. Conversations are the visible thread of interaction — the body of
+ * Extracted from DesktopApp as Target 6 of the desktop extraction plan
+ * (8 targets total). Conversations are the visible thread of interaction — the body of
  * each exchange the user has had with the motebit. The manager wraps the
  * TauriConversationStore with the product-level semantics the desktop UI
  * needs: "show me recent threads", "load this one", "name this one",
