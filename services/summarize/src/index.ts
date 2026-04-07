@@ -42,6 +42,10 @@ function loadConfig() {
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],
     webSearchUrl: process.env["WEB_SEARCH_URL"] ?? "http://localhost:3200",
+    // Bearer token for upstream web-search MCP endpoint. When set,
+    // summarize authenticates as a static MCP client. Unset in local
+    // dev where web-search has no inbound auth.
+    webSearchAuthToken: process.env["WEB_SEARCH_AUTH_TOKEN"],
   };
 }
 
@@ -140,6 +144,7 @@ async function main(): Promise<void> {
     name: "web-search",
     transport: "http",
     url: `${config.webSearchUrl}/mcp`,
+    ...(config.webSearchAuthToken ? { authToken: config.webSearchAuthToken } : {}),
   });
   await webSearchAdapter.connect();
   log(`Connected to web-search at ${config.webSearchUrl}`);
