@@ -12,6 +12,7 @@ import type {
   ExecutionStepSummary,
   ToolAuditEntry,
 } from "@motebit/sdk";
+import { sign, toBase64Url, hexToBytes } from "@motebit/crypto";
 import type { EventStore } from "@motebit/event-log";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";
@@ -250,7 +251,6 @@ export class PlanExecutionManager {
 
     // 6. Sign if private key provided
     if (privateKey) {
-      const { sign, toBase64Url, hexToBytes } = await import("@motebit/crypto");
       const hashBytes = hexToBytes(contentHash);
       const sig = await sign(hashBytes, privateKey);
       manifest.signature = toBase64Url(sig);

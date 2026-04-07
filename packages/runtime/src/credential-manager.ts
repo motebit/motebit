@@ -7,6 +7,7 @@
  */
 
 import type { CredentialStoreAdapter, GradientCredentialSubject } from "@motebit/sdk";
+import { issueGradientCredential } from "@motebit/crypto";
 import type { GradientStoreAdapter } from "./gradient.js";
 
 /** Union of all credential subject types issued by the runtime. */
@@ -45,9 +46,7 @@ export class CredentialManager {
   ): Promise<import("@motebit/crypto").VerifiableCredential<GradientCredentialSubject> | null> {
     const snapshot = this.deps.gradientStore.latest(this.deps.motebitId);
     if (!snapshot) return null;
-
-    const { issueGradientCredential: issue } = await import("@motebit/crypto");
-    return issue(snapshot, privateKey, publicKey);
+    return issueGradientCredential(snapshot, privateKey, publicKey);
   }
 
   /**

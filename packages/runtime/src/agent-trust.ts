@@ -9,6 +9,12 @@
 import { EventType, AgentTrustLevel } from "@motebit/sdk";
 import type { ExecutionReceipt, AgentTrustRecord, AgentTrustStoreAdapter } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
+import {
+  issueTrustCredential,
+  issueReputationCredential,
+  hexPublicKeyToDidKey,
+} from "@motebit/crypto";
+import { evaluateTrustTransition } from "@motebit/semiring";
 import type { AgentGraphManager } from "./agent-graph.js";
 
 // === Types ===
@@ -80,7 +86,6 @@ export async function bumpTrustFromReceipt(
       quality_sample_count: (existing.quality_sample_count ?? 0) + 1,
     };
     // Evaluate trust level transition (promotion or demotion)
-    const { evaluateTrustTransition } = await import("@motebit/semiring");
     const newLevel = evaluateTrustTransition(updated);
     if (newLevel != null) {
       const previousLevel = updated.trust_level;
@@ -107,7 +112,6 @@ export async function bumpTrustFromReceipt(
       // Issue trust credential for the transition (best-effort)
       if (signingKeys) {
         try {
-          const { issueTrustCredential, hexPublicKeyToDidKey } = await import("@motebit/crypto");
           let subjectDid = `did:motebit:${remoteMotebitId}`;
           if (updated.public_key) {
             try {
@@ -144,7 +148,6 @@ export async function bumpTrustFromReceipt(
     // where an operator delegates tasks between their own agents at zero cost.
     if (signingKeys && effectiveSuccess && remoteMotebitId !== motebitId) {
       try {
-        const { issueReputationCredential, hexPublicKeyToDidKey } = await import("@motebit/crypto");
         let subjectDid = `did:motebit:${remoteMotebitId}`;
         if (updated.public_key) {
           try {
@@ -199,7 +202,6 @@ export async function bumpTrustFromReceipt(
     // Skip self-delegation — same sybil defense as the existing-trust path.
     if (signingKeys && effectiveSuccess && remoteMotebitId !== motebitId) {
       try {
-        const { issueReputationCredential } = await import("@motebit/crypto");
         const subjectDid = `did:motebit:${remoteMotebitId}`;
         const avgLatency =
           receipt.completed_at && receipt.submitted_at

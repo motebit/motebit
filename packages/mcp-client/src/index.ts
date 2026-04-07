@@ -16,7 +16,7 @@ export type {
   VerificationResult,
   ServerVerifier,
 } from "@motebit/sdk";
-import { secureErase } from "@motebit/crypto";
+import { secureErase, createSignedToken, verifyKeySuccession } from "@motebit/crypto";
 import type { KeySuccessionRecord } from "@motebit/crypto";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
@@ -657,7 +657,6 @@ export class McpClientAdapter {
       return null;
     }
     try {
-      const { createSignedToken } = await import("@motebit/crypto");
       return await createSignedToken(
         {
           mid: this.config.callerMotebitId,
@@ -822,7 +821,6 @@ export class McpClientAdapter {
    * Returns true if the rotation was accepted, false if the succession record is invalid.
    */
   async acceptKeyRotation(successionRecord: KeySuccessionRecord): Promise<boolean> {
-    const { verifyKeySuccession } = await import("@motebit/crypto");
     const valid = await verifyKeySuccession(successionRecord, this.config.guardianPublicKey);
     if (!valid) return false;
 

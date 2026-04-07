@@ -488,25 +488,10 @@ export interface SignableReceipt {
   signature: string;
 }
 
-/**
- * Deterministic JSON serialization with sorted keys (recursive).
- * Produces identical output regardless of insertion order.
- */
-export function canonicalJson(obj: unknown): string {
-  if (obj === null || obj === undefined) return JSON.stringify(obj);
-  if (typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) {
-    return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
-  }
-  const sorted = Object.keys(obj as Record<string, unknown>).sort();
-  const entries: string[] = [];
-  for (const key of sorted) {
-    const val = (obj as Record<string, unknown>)[key];
-    if (val === undefined) continue; // Match JSON.stringify behavior: omit undefined
-    entries.push(JSON.stringify(key) + ":" + canonicalJson(val));
-  }
-  return "{" + entries.join(",") + "}";
-}
+// `canonicalJson` lives in its own file so `merkle.ts` can import it
+// without creating a circular dependency through this barrel.
+export { canonicalJson } from "./canonical.js";
+import { canonicalJson } from "./canonical.js";
 
 /**
  * Sign an execution receipt. Produces a canonical JSON representation

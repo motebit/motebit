@@ -30,6 +30,11 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
 vi.mock("@motebit/crypto", () => ({
   createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
   secureErase: vi.fn((bytes: Uint8Array) => bytes.fill(0)),
+  // verifyKeySuccession is statically imported by acceptKeyRotation in
+  // index.ts, so it must appear in the module-level mock surface even
+  // though most tests don't exercise it. Specific tests override the
+  // return value via vi.doMock further down.
+  verifyKeySuccession: vi.fn().mockResolvedValue(true),
 }));
 
 // Import after mocks are set up

@@ -23,18 +23,16 @@ function manualChunks(id: string): string | undefined {
     if (id.includes("@noble/") || id.includes("@scure/")) return "vendor-crypto";
     return undefined;
   }
+  // See apps/web/vite.config.ts for the layering rationale: motebit-core
+  // is the true foundation (used by both runtime and network), so
+  // event-log / memory-graph / state-vector / behavior-engine / gradient
+  // / policy live there even though they look "runtime-y" by name.
   if (id.includes("/packages/render-engine/")) return "motebit-render";
   if (
     id.includes("/packages/runtime/") ||
-    id.includes("/packages/policy/") ||
-    id.includes("/packages/memory-graph/") ||
-    id.includes("/packages/state-vector/") ||
-    id.includes("/packages/behavior-engine/") ||
-    id.includes("/packages/event-log/") ||
+    id.includes("/packages/ai-core/") ||
     id.includes("/packages/planner/") ||
-    id.includes("/packages/gradient/") ||
-    id.includes("/packages/reflection/") ||
-    id.includes("/packages/ai-core/")
+    id.includes("/packages/reflection/")
   ) {
     return "motebit-runtime";
   }
@@ -53,7 +51,13 @@ function manualChunks(id: string): string | undefined {
     id.includes("/packages/protocol/") ||
     id.includes("/packages/crypto/") ||
     id.includes("/packages/semiring/") ||
+    id.includes("/packages/policy/") ||
     id.includes("/packages/policy-invariants/") ||
+    id.includes("/packages/event-log/") ||
+    id.includes("/packages/memory-graph/") ||
+    id.includes("/packages/state-vector/") ||
+    id.includes("/packages/behavior-engine/") ||
+    id.includes("/packages/gradient/") ||
     id.includes("/packages/privacy-layer/")
   ) {
     return "motebit-core";

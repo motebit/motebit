@@ -26,17 +26,23 @@ import { defineConfig } from "vite";
  *   vendor-crypto         @noble/* + @scure/* — crypto primitives, stable
  *   motebit-render        render-engine (Three.js wrapper) — separate from
  *                         runtime so render updates don't cascade
- *   motebit-runtime       runtime + policy + memory-graph + state-vector +
- *                         behavior-engine + event-log + planner + gradient +
- *                         reflection + ai-core — the orchestration core.
- *                         ai-core sits here because runtime↔ai-core have a
- *                         tight cycle (ai-core needs runtime types, runtime
- *                         needs provider classes); splitting them into
- *                         separate chunks produces a circular-chunk error.
+ *   motebit-runtime       runtime + ai-core + planner + reflection — the
+ *                         orchestration layer. ai-core sits here because
+ *                         runtime↔ai-core have a tight cycle (ai-core needs
+ *                         runtime types, runtime needs provider classes);
+ *                         splitting them produces a circular-chunk error.
  *   motebit-network       mcp-client + tools + sync-engine + browser-persistence
  *                         + core-identity + identity-file — I/O boundary code
- *   motebit-core          sdk + protocol + crypto + semiring + policy-invariants
- *                         + privacy-layer — foundation types + algebra
+ *   motebit-core          sdk + protocol + crypto + semiring + policy +
+ *                         policy-invariants + event-log + memory-graph +
+ *                         state-vector + behavior-engine + gradient +
+ *                         privacy-layer — true foundation: types, algebra,
+ *                         in-memory storage primitives. Used by BOTH the
+ *                         runtime and network chunks; placing these
+ *                         dual-use modules anywhere else creates a
+ *                         network↔runtime circular chunk because
+ *                         browser-persistence/core-identity need them at
+ *                         value level.
  *   (vite auto-split)     transformers, onnxruntime-web, and any other
  *                         dynamic-import-only deps fall through to vite's
  *                         default chunking, which gives them their own files.
@@ -58,19 +64,16 @@ function manualChunks(id: string): string | undefined {
     if (id.includes("@noble/") || id.includes("@scure/")) return "vendor-crypto";
     return undefined;
   }
-  // Motebit packages — group by domain for cache + parallel fetch
+  // Motebit packages — grouped by layer (foundation / network / runtime).
+  // Order matters because we use early return; render-engine first, then
+  // the orchestration layer (which depends on everything below it), then
+  // network (I/O), then the foundation catch-all.
   if (id.includes("/packages/render-engine/")) return "motebit-render";
   if (
     id.includes("/packages/runtime/") ||
-    id.includes("/packages/policy/") ||
-    id.includes("/packages/memory-graph/") ||
-    id.includes("/packages/state-vector/") ||
-    id.includes("/packages/behavior-engine/") ||
-    id.includes("/packages/event-log/") ||
+    id.includes("/packages/ai-core/") ||
     id.includes("/packages/planner/") ||
-    id.includes("/packages/gradient/") ||
-    id.includes("/packages/reflection/") ||
-    id.includes("/packages/ai-core/")
+    id.includes("/packages/reflection/")
   ) {
     return "motebit-runtime";
   }
@@ -89,7 +92,13 @@ function manualChunks(id: string): string | undefined {
     id.includes("/packages/protocol/") ||
     id.includes("/packages/crypto/") ||
     id.includes("/packages/semiring/") ||
+    id.includes("/packages/policy/") ||
     id.includes("/packages/policy-invariants/") ||
+    id.includes("/packages/event-log/") ||
+    id.includes("/packages/memory-graph/") ||
+    id.includes("/packages/state-vector/") ||
+    id.includes("/packages/behavior-engine/") ||
+    id.includes("/packages/gradient/") ||
     id.includes("/packages/privacy-layer/")
   ) {
     return "motebit-core";

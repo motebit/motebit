@@ -3,8 +3,8 @@
  * motebit/execution-ledger@1.0 specification.
  *
  * Extracted from MotebitRuntime to keep the orchestrator focused on
- * lifecycle and messaging. All crypto is lazily imported so this
- * module stays browser-safe.
+ * lifecycle and messaging. @motebit/crypto is browser-safe (uses @noble),
+ * so it imports statically with the rest of the runtime.
  */
 
 import { EventType } from "@motebit/sdk";
@@ -17,6 +17,7 @@ import type {
   PlanStoreAdapter,
   AuditLogSink,
 } from "@motebit/sdk";
+import { sign, toBase64Url, hexToBytes } from "@motebit/crypto";
 import type { EventStore } from "@motebit/event-log";
 
 // === Canonical JSON ===
@@ -379,7 +380,6 @@ export async function replayGoal(
 
   // 11. Sign if private key provided — sign raw 32-byte hash per spec §6
   if (privateKey) {
-    const { sign, toBase64Url, hexToBytes } = await import("@motebit/crypto");
     const hashBytes = hexToBytes(contentHash);
     const sig = await sign(hashBytes, privateKey);
     manifest.signature = toBase64Url(sig);

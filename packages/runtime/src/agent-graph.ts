@@ -18,6 +18,7 @@ import type {
   ReputationCredentialSubject,
 } from "@motebit/sdk";
 import { AgentTrustLevel, VC_TYPE_REPUTATION } from "@motebit/sdk";
+import { hexPublicKeyToDidKey } from "@motebit/crypto";
 import { trustLevelToScore } from "@motebit/semiring";
 import type { WeightedDigraph } from "@motebit/semiring";
 import type { RouteWeight, AgentProfile } from "@motebit/semiring";
@@ -270,7 +271,6 @@ export class AgentGraphManager {
       issuerTrustByDid.set(`did:motebit:${rec.remote_motebit_id}`, score);
       if (rec.public_key) {
         try {
-          const { hexPublicKeyToDidKey } = await import("@motebit/crypto");
           issuerTrustByDid.set(hexPublicKeyToDidKey(rec.public_key), score);
         } catch {
           // public_key may not be valid hex — skip did:key mapping

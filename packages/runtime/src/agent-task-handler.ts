@@ -6,7 +6,7 @@
  * receipts, and logs events.
  */
 
-import { EventType } from "@motebit/sdk";
+import { EventType, AgentTrustLevel } from "@motebit/sdk";
 import type {
   AgentTask,
   ExecutionReceipt,
@@ -14,6 +14,8 @@ import type {
   LatencyStatsStoreAdapter,
   ConversationMessage,
 } from "@motebit/sdk";
+import { hash, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/crypto";
+import { composeDelegationTrust, trustLevelToScore } from "@motebit/semiring";
 import type { EventStore } from "@motebit/event-log";
 import type { AgentGraphManager } from "./agent-graph.js";
 import type { StreamChunk } from "./index.js";
@@ -135,10 +137,6 @@ export async function* handleAgentTask(
   // Bump trust from verified delegation receipts (best-effort)
   if (delegationReceipts.length > 0 && deps.agentTrustStore != null) {
     try {
-      const { verifyExecutionReceipt } = await import("@motebit/crypto");
-      const { composeDelegationTrust, trustLevelToScore } = await import("@motebit/semiring");
-      const { AgentTrustLevel } = await import("@motebit/sdk");
-
       // Pre-fetch trust scores for all agents in receipt trees into a sync map
       const collectIds = (r: ExecutionReceipt): string[] => {
         const ids = [r.motebit_id];
@@ -238,7 +236,6 @@ export async function* handleAgentTask(
   }
 
   // Hash prompt and result
-  const { hash, signExecutionReceipt } = await import("@motebit/crypto");
   const promptHash = await hash(new TextEncoder().encode(task.prompt));
   const resultHash = await hash(new TextEncoder().encode(responseText));
 

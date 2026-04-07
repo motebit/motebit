@@ -7,7 +7,7 @@
  * clusters into semantic summaries, and identifies curiosity targets.
  */
 
-import { EventType } from "@motebit/sdk";
+import { EventType, MemoryType, RelationType } from "@motebit/sdk";
 import type { MemoryNode } from "@motebit/sdk";
 import type { StreamingProvider } from "@motebit/ai-core";
 import {
@@ -141,12 +141,10 @@ async function consolidateEpisodicMemories(
   allNodes: MemoryNode[],
   now: number,
 ): Promise<void> {
-  const { MemoryType: MT } = await import("@motebit/sdk");
-
   // Find episodic memories past 50% of their half-life, not tombstoned, not pinned
   const candidates = allNodes.filter((n) => {
     if (n.tombstoned || n.pinned) return false;
-    if (n.memory_type !== MT.Episodic) return false;
+    if (n.memory_type !== MemoryType.Episodic) return false;
     const elapsed = now - n.created_at;
     return elapsed > n.half_life * 0.5;
   });
@@ -185,7 +183,7 @@ async function consolidateEpisodicMemories(
         content: summary,
         confidence: newConf,
         sensitivity: cluster[0]!.sensitivity,
-        memory_type: MT.Semantic,
+        memory_type: MemoryType.Semantic,
       };
       const [decision] = deps.memoryGovernor.evaluate([candidate]);
       if (decision && decision.memoryClass === MemoryClass.REJECTED) {
@@ -199,9 +197,8 @@ async function consolidateEpisodicMemories(
       );
 
       // Create PartOf edges — lineage trail from synthesis to each source
-      const { RelationType: SynthRT } = await import("@motebit/sdk");
       for (const sourceNode of cluster) {
-        await deps.memory.link(synthesized.node_id, sourceNode.node_id, SynthRT.PartOf);
+        await deps.memory.link(synthesized.node_id, sourceNode.node_id, RelationType.PartOf);
       }
 
       // Tombstone the episodic cluster members (edges preserved for lineage)

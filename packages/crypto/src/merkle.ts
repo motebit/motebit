@@ -6,6 +6,8 @@
  * Used by federation settlement anchoring (relay-federation-v1.md §7.6).
  */
 
+import { canonicalJson } from "./canonical.js";
+
 // === Helpers ===
 
 /** SHA-256 of raw bytes, returned as Uint8Array (32 bytes). */
@@ -177,10 +179,6 @@ export async function computeSettlementLeaf(settlement: {
   receipt_hash: string;
   settled_at: number;
 }): Promise<string> {
-  // Import canonicalJson inline to avoid circular dependency issues
-  // (this module is part of @motebit/crypto which defines canonicalJson)
-  const { canonicalJson } = await import("./index.js");
-
   const canonical = canonicalJson({
     settlement_id: settlement.settlement_id,
     task_id: settlement.task_id,
