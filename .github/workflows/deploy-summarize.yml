@@ -1,0 +1,29 @@
+name: Deploy Summarize Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/summarize/**"
+      - "packages/**"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-summarize-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: superfly/flyctl-actions/setup-flyctl@63da3ecc5e2793b98a3f2519b3d75d4f4c11cec2 # master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --config services/summarize/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
