@@ -49,8 +49,11 @@ import type {
   TaskRouterConfig,
   TaskType,
 } from "@motebit/ai-core";
-// Node-only packages (@motebit/tools, @motebit/mcp-client) are imported dynamically
-// to avoid bundling node:child_process / stdio into browser builds (desktop app).
+import { connectMcpServers } from "@motebit/mcp-client";
+// `McpClientAdapter` is the structural shape we depend on. It's inlined here
+// rather than imported from `@motebit/mcp-client` so the runtime's public
+// type surface stays independent of mcp-client's class shape — consumers can
+// pass any object that satisfies this interface, including test doubles.
 type McpClientAdapter = {
   disconnect(): Promise<void>;
   getAndResetDelegationReceipts?(): import("@motebit/sdk").ExecutionReceipt[];
@@ -248,8 +251,14 @@ export interface McpServerConfig {
   tlsCertFingerprint?: string;
 }
 
-// === Browser-safe Tool Registry ===
-// Inlined so @motebit/tools (which pulls in node:child_process via builtins) is never eagerly imported.
+// === Tool Registry ===
+// `SimpleToolRegistry` is inlined here so the runtime doesn't take a value
+// dep on `@motebit/tools`. The main `@motebit/tools` entry pulls in
+// node:child_process / node:fs via the shell-exec / read-file / write-file
+// builtins; the `@motebit/tools/web-safe` subpath excludes those. Browser
+// surfaces import the web-safe subpath; rather than make runtime import
+// either subpath, we keep this minimal in-memory registry inline so runtime
+// stays neutral on which subpath the consumer uses.
 
 import type { ToolDefinition, ToolResult, ToolHandler } from "@motebit/sdk";
 
@@ -755,9 +764,8 @@ export class MotebitRuntime {
   async init(target?: unknown): Promise<void> {
     await this.renderer.init(target);
 
-    // Connect to MCP servers and discover their tools (dynamic import — Node-only)
+    // Connect to MCP servers and discover their tools.
     if (this.mcpConfigs.length > 0) {
-      const { connectMcpServers } = await import("@motebit/mcp-client");
       this.mcpAdapters = await connectMcpServers(this.mcpConfigs, this.toolRegistry as never);
 
       // Build motebit tool-to-server mapping for delegation visibility

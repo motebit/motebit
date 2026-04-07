@@ -271,6 +271,9 @@ function resolveMotebitRelayUrl(): string {
   if (canonical != null && canonical !== "") return canonical;
   const legacy = env?.VITE_PROXY_URL;
   if (legacy != null && legacy !== "") {
+    // One-shot deprecation diagnostic — fires at most once per build,
+    // when an older `.env` file is read for the first time.
+    // eslint-disable-next-line no-console -- one-shot deprecation warning
     console.warn("[motebit] VITE_PROXY_URL is deprecated, use VITE_MOTEBIT_RELAY_URL instead");
     return legacy;
   }
