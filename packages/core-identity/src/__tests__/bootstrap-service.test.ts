@@ -6,7 +6,7 @@ import {
   bootstrapServiceIdentity,
   FileSystemBootstrapConfigStore,
   FileSystemBootstrapKeyStore,
-} from "../index.js";
+} from "../node.js";
 
 describe("FileSystemBootstrapConfigStore", () => {
   let dataDir: string;

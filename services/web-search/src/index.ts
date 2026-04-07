@@ -24,7 +24,7 @@ import {
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import { bootstrapServiceIdentity } from "@motebit/core-identity";
+import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate, parseRiskLevel } from "@motebit/identity-file";
 import {
   verifySignedToken,

@@ -17,7 +17,7 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import { bootstrapServiceIdentity } from "@motebit/core-identity";
+import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate, parseRiskLevel } from "@motebit/identity-file";
 import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
 import { embedText } from "@motebit/memory-graph";

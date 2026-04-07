@@ -35,15 +35,10 @@ function generateUUIDv7(): string {
 
 export type { DeviceRegistration, IdentityStorage } from "@motebit/protocol";
 
-// Filesystem bootstrap adapters + service-identity helper (for
-// Fly-deployed reference services that persist identity in a
-// mounted volume — see bootstrap-service.ts for the full rationale).
-export { FileSystemBootstrapConfigStore, FileSystemBootstrapKeyStore } from "./file-stores.js";
-export {
-  bootstrapServiceIdentity,
-  type BootstrapServiceIdentityOptions,
-  type BootstrapServiceIdentityResult,
-} from "./bootstrap-service.js";
+// Note: filesystem bootstrap adapters + service-identity helper live
+// in `./node` — they import node:fs/node:path and must NOT be pulled
+// into browser bundles. Import from `@motebit/core-identity/node` in
+// Node-only code (services, CLI).
 import type { DeviceRegistration, IdentityStorage } from "@motebit/protocol";
 
 // === In-Memory Storage (for testing) ===
