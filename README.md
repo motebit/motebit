@@ -114,6 +114,13 @@ Every task settles through the relay: budget locked → execution → signed rec
 
 Each surface maximizes what its platform offers. Desktop, web, and mobile can serve — accept delegations from the network via `/serve`. The CLI operates and serves. Spatial embodies.
 
+### Supporting apps
+
+Two additional apps ship alongside the five surfaces and play narrower roles:
+
+- **Identity viewer** (`apps/identity`) — static browser tool for dropping a `motebit.md` identity file and inspecting the parsed profile card (motebit ID, devices, governance, signed succession). Zero workspace dependencies, public-facing reference implementation of the identity spec.
+- **Admin dashboard** (`apps/admin`) — React/Vite operator console for monitoring a running relay in real time (state, memory graph, event log, tool audit, gradient, trust ledger). Internal tool — operators run it locally against their relay; not deployed as a public surface.
+
 ### Federation
 
 Connect independent relays so agents can discover and delegate across organizational boundaries:
@@ -134,10 +141,10 @@ apps/
   cli/         Node.js — REPL, daemon, goal scheduling, operator console
   desktop/     Tauri — OS keyring, stdio MCP, full operator mode
   mobile/      React Native — Expo, secure keychain, triple providers
-  admin/       React — 15-tab real-time monitoring dashboard
   spatial/     WebXR — 6DOF anchoring, spatial audio reactivity
+  admin/       React — operator dashboard for live relay monitoring (internal tool)
+  identity/    Vite — motebit.md identity profile viewer (public reference tool)
   docs/        Next.js — docs.motebit.com
-  identity/    Vite — identity management
 
 packages/
   protocol/        Network protocol types — zero deps, MIT licensed
