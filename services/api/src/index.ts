@@ -104,7 +104,6 @@ import {
   createWithdrawalTables,
   createProofTable,
   createWalletTable,
-  createSqliteWalletStore,
   creditAccount,
   storeSettlementProof,
 } from "./accounts.js";
@@ -126,7 +125,6 @@ import {
   StripeSettlementRail,
   X402SettlementRail,
   BridgeSettlementRail,
-  DirectAssetRail,
 } from "./settlement-rails/index.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
@@ -218,19 +216,6 @@ export interface SyncRelayConfig {
     /** Webhook public key (PEM) for signature verification. Omit to skip verification (dev only). */
     webhookPublicKey?: string;
   };
-  /** Direct asset rail configuration. Omit to disable onchain wallet withdrawals. */
-  directAsset?: {
-    /** Pre-built wallet provider (for tests/custom providers). */
-    walletProvider?: import("./settlement-rails/direct-asset-rail.js").WalletProvider;
-    /** Privy credentials — relay constructs PrivyWalletProvider with DB-backed persistence. */
-    privy?: { appId: string; appSecret: string };
-    /** CAIP-2 chain identifier (e.g., "eip155:8453" for Base). Default: "eip155:8453". */
-    chain?: string;
-    /** Asset identifier (e.g., "USDC"). Default: "USDC". */
-    asset?: string;
-    /** Token decimals. Default: 6. */
-    decimals?: number;
-  };
 }
 
 export interface SyncRelay {
@@ -272,7 +257,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     federation: federationConfig,
     stripe: stripeConfig,
     bridge: bridgeConfig,
-    directAsset: directAssetConfig,
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
   } = config;
 
@@ -412,28 +396,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         onProofAttached: proofCallback("bridge"),
       }),
     );
-  }
-  if (directAssetConfig) {
-    // Resolve wallet provider: pre-built > Privy with DB persistence
-    let walletProvider = directAssetConfig.walletProvider;
-    if (!walletProvider && directAssetConfig.privy) {
-      const { PrivyWalletProvider } = await import("./settlement-rails/privy-wallet-provider.js");
-      walletProvider = new PrivyWalletProvider({
-        ...directAssetConfig.privy,
-        walletStore: createSqliteWalletStore(moteDb.db),
-      });
-    }
-    if (walletProvider) {
-      railRegistry.register(
-        new DirectAssetRail({
-          walletProvider,
-          chain: directAssetConfig.chain ?? "eip155:8453",
-          asset: directAssetConfig.asset ?? "USDC",
-          decimals: directAssetConfig.decimals,
-          onProofAttached: proofCallback("direct-asset"),
-        }),
-      );
-    }
   }
   createSubscriptionTables(moteDb.db);
 
@@ -863,7 +825,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   );
 
   // --- Deposit detector (scans onchain Transfer events for agent wallets) ---
-  const depositDetectorChain = directAssetConfig?.chain ?? x402Config.network;
+  const depositDetectorChain = x402Config.network;
   const depositDetectorInterval = startDepositDetector({
     db: moteDb.db,
     chain: depositDetectorChain,
@@ -1068,17 +1030,6 @@ if (process.env.VITEST != null) {
             sourceCurrency: process.env.BRIDGE_SOURCE_CURRENCY,
             baseUrl: process.env.BRIDGE_API_BASE_URL,
             webhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY,
-          }
-        : undefined,
-    directAsset:
-      process.env.PRIVY_APP_ID && process.env.PRIVY_APP_SECRET
-        ? {
-            privy: {
-              appId: process.env.PRIVY_APP_ID,
-              appSecret: process.env.PRIVY_APP_SECRET,
-            },
-            chain: process.env.DIRECT_ASSET_CHAIN,
-            asset: process.env.DIRECT_ASSET_TOKEN,
           }
         : undefined,
   });

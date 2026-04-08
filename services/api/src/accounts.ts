@@ -786,22 +786,3 @@ export function createWalletTable(db: DatabaseDriver): void {
     );
   `);
 }
-
-/** SQLite-backed wallet store for PrivyWalletProvider. */
-export function createSqliteWalletStore(
-  db: DatabaseDriver,
-): import("./settlement-rails/privy-wallet-provider.js").WalletStore {
-  return {
-    getWalletId(agentId: string): string | null {
-      const row = db
-        .prepare("SELECT wallet_id FROM relay_agent_wallets WHERE agent_id = ?")
-        .get(agentId) as { wallet_id: string } | undefined;
-      return row?.wallet_id ?? null;
-    },
-    setWalletId(agentId: string, walletId: string, address: string): void {
-      db.prepare(
-        "INSERT OR IGNORE INTO relay_agent_wallets (agent_id, wallet_id, address, created_at) VALUES (?, ?, ?, ?)",
-      ).run(agentId, walletId, address, Date.now());
-    },
-  };
-}
