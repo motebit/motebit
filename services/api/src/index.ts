@@ -97,6 +97,7 @@ import { startDepositDetector } from "./deposit-detector.js";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
 import { registerA2ARoutes } from "./a2a-bridge.js";
+import { registerReceiptExchangeRoutes } from "./receipt-exchange.js";
 import { createTaskRouter } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import {
@@ -686,6 +687,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayVersion: "0.5.2",
   });
 
+  // --- Sovereign receipt exchange (relay-mediated convenience tier) ---
+  // The relay is a dumb pipe here: it routes SovereignReceiptRequest/
+  // Response messages by motebit_id without inspecting or modifying
+  // receipt contents. This is the paved fallback for motebits that
+  // cannot reach each other directly (NAT-bound, dynamic IPs, offline
+  // payee waiting for payer to come back online). Same doctrinal role
+  // as multi-device sync: a legitimate meeting point, not an authority.
+  // See services/api/src/receipt-exchange.ts for the protocol.
+  const receiptExchangeHub = registerReceiptExchangeRoutes(app);
+
   // --- Budget, accounts & admin routes (after auth middleware) ---
   registerBudgetRoutes({
     app,
@@ -928,6 +939,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(settlementRetryInterval);
     clearInterval(batchAnchorInterval);
     clearInterval(depositDetectorInterval);
+    receiptExchangeHub.close();
     moteDb.close();
   }
 

@@ -1408,6 +1408,9 @@ importers:
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
+      '@motebit/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11

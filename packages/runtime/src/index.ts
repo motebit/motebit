@@ -225,6 +225,14 @@ export { InMemoryReceiptExchangeHub } from "./sovereign-receipt-exchange.js";
 export { createHttpReceiptExchange } from "./http-receipt-exchange.js";
 export type { HttpReceiptExchange, HttpReceiptExchangeConfig } from "./http-receipt-exchange.js";
 
+// Relay-mediated receipt exchange — the paved convenience tier,
+// paralleling the HTTP direct transport as the sovereign floor.
+// Best for NAT-bound, dynamic-IP, or intermittently-online motebits.
+// Relay is a dumb pipe per CLAUDE.md "sync is the floor of legitimate
+// centralization." See relay-receipt-exchange.ts for the protocol.
+export { createRelayReceiptExchange } from "./relay-receipt-exchange.js";
+export type { RelayReceiptExchange, RelayReceiptExchangeConfig } from "./relay-receipt-exchange.js";
+
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 // Credential/verifier interfaces imported from @motebit/sdk (canonical source).
 
