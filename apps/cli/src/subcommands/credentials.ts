@@ -12,18 +12,13 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
-import { requireMotebitId } from "./_helpers.js";
+import { getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 
 export async function handleCredentials(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
 
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
-  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
-
-  const headers: Record<string, string> = {};
-  if (syncToken) {
-    headers["Authorization"] = `Bearer ${syncToken}`;
-  }
+  const headers = await getRelayAuthHeaders(config);
 
   // Read locally-persisted peer-issued credentials from SQLite
   type CredRow = {

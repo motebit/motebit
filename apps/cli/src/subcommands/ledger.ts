@@ -10,7 +10,7 @@
 
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
-import { requireMotebitId } from "./_helpers.js";
+import { getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 
 export async function handleLedger(config: CliConfig): Promise<void> {
   const goalId = config.positionals[1];
@@ -22,7 +22,6 @@ export async function handleLedger(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
 
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
-  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   if (syncUrl == null || syncUrl === "") {
     console.error(
       "Error: --sync-url or MOTEBIT_SYNC_URL is required to fetch ledger from the relay.",
@@ -31,10 +30,7 @@ export async function handleLedger(config: CliConfig): Promise<void> {
   }
 
   const url = `${syncUrl.replace(/\/$/, "")}/agent/${motebitId}/ledger/${goalId}`;
-  const headers: Record<string, string> = {};
-  if (syncToken) {
-    headers["Authorization"] = `Bearer ${syncToken}`;
-  }
+  const headers = await getRelayAuthHeaders(config);
 
   let res: Response;
   try {
