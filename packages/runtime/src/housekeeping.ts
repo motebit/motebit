@@ -33,6 +33,8 @@ export interface HousekeepingDeps {
   memoryGovernor: MemoryGovernor;
   privacy: PrivacyLayer;
   episodicConsolidation: boolean;
+  /** Structured logger — consistent with every other runtime deps interface. */
+  logger: { warn(message: string, context?: Record<string, unknown>): void };
   /** Resolve current AI provider (may change over lifetime). */
   getProvider(): StreamingProvider | null;
   /** Callback to compute and store the intelligence gradient after pruning. */
@@ -123,10 +125,9 @@ export async function runHousekeeping(deps: HousekeepingDeps): Promise<Housekeep
     return { curiosityTargets };
   } catch (err: unknown) {
     // Housekeeping is best-effort — don't crash the runtime
-    console.warn(
-      "[motebit] housekeeping failed:",
-      err instanceof Error ? err.message : String(err),
-    );
+    deps.logger.warn("housekeeping failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return { curiosityTargets: [] };
   }
 }

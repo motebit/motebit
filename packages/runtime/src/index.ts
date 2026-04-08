@@ -522,6 +522,7 @@ export class MotebitRuntime {
     this.episodicConsolidation = config.episodicConsolidation ?? false;
     this._signingKeys = config.signingKeys ?? null;
     this._logger = config.logger ?? {
+      // eslint-disable-next-line no-console -- default logger fallback when no logger is injected
       warn: (msg, ctx) => console.warn(`[motebit] ${msg}`, ctx ? JSON.stringify(ctx) : ""),
     };
     this.renderer = adapters.renderer;
@@ -1417,6 +1418,7 @@ export class MotebitRuntime {
       memoryGovernor: this.memoryGovernor,
       privacy: this.privacy,
       episodicConsolidation: this.episodicConsolidation,
+      logger: this._logger,
       getProvider: () => this.provider,
       computeAndStoreGradient: (nodes) =>
         this.gradientManager.computeAndStoreGradient(nodes).then(() => {}),

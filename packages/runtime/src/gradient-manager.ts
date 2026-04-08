@@ -217,7 +217,7 @@ export class GradientManager {
           signingKeys.privateKey,
           signingKeys.publicKey,
         );
-        if (vc) this.deps.persistCredential(vc);
+        if (vc != null) this.deps.persistCredential(vc);
       } catch (err: unknown) {
         this.deps.logger.warn("gradient credential issuance failed", {
           error: err instanceof Error ? err.message : String(err),
