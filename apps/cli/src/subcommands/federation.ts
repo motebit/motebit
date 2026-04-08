@@ -2,10 +2,9 @@
  * `motebit federation ...` subcommands — status, peers, and the
  * peer-confirm dance (propose + challenge + confirm on both sides).
  *
- * Extracted from `subcommands.ts` as Target 10 of the CLI extraction.
- * Uses the shared `getRelayUrl` + `fetchRelayJson` helpers from
- * `_helpers.ts` since federation handlers were the original reason
- * those helpers exist.
+ * `handleFederationPeer` is the most involved handler: it walks both
+ * relays through propose → oracle signature extraction → bidirectional
+ * confirm so the two relays end in mutually-active peering.
  */
 
 import type { CliConfig } from "../args.js";

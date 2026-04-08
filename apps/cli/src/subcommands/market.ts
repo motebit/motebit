@@ -1,18 +1,13 @@
 /**
  * `motebit balance` / `motebit withdraw` / `motebit fund` — the
- * user-facing money path. Three handlers that talk to the relay's
- * virtual account ledger (balance + transactions), request
- * withdrawals, and open Stripe Checkout to deposit.
+ * user-facing money path. Talks to the relay's virtual account
+ * ledger (balance + transaction history), submits withdrawal
+ * requests, and opens Stripe Checkout for deposits.
  *
- * Extracted from `subcommands.ts` as Target 12 of the CLI extraction.
- * The private `getBalanceAmount` helper travels with handleFund (the
- * only consumer — it polls balance after opening the checkout URL).
- *
- * While extracting, also clears the three pre-existing lint warnings
- * in handleFund by tightening the `data.withdrawal_id` null checks
- * (the warnings were flagged by
- * @typescript-eslint/strict-boolean-expressions and were present
- * unchanged since before Target 1).
+ * `handleFund` is the most involved: it opens Checkout in the user's
+ * browser via `open`/`xdg-open`, then polls the balance endpoint
+ * (via the private `getBalanceAmount` helper) for up to two minutes
+ * waiting for the Stripe webhook to credit the account.
  */
 
 import type { CliConfig } from "../args.js";

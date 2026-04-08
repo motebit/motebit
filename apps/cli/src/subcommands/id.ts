@@ -1,9 +1,9 @@
 /**
  * `motebit id` — display the identity card from local config.
  *
- * No file read, no verification — just prints what the config already
- * knows. Extracted from `subcommands.ts` as Target 5 of the CLI
- * extraction. The only sync handler in the set.
+ * No file read, no cryptographic verification — just prints the
+ * motebit_id, did:key, public key fingerprint, device_id, and config
+ * path that are already known from the persisted CLI config. Sync.
  */
 
 import { hexPublicKeyToDidKey } from "@motebit/crypto";

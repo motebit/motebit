@@ -2,10 +2,11 @@
  * `motebit credentials` — list accumulated peer-issued credentials and
  * optionally generate a signed Verifiable Presentation bundle.
  *
- * Extracted from `subcommands.ts` as Target 7 of the CLI extraction.
  * Reads locally-persisted credentials from SQLite first, then merges
  * with any relay-held credentials (if a sync URL is configured), then
- * batch-queries the relay for revocation status before display.
+ * batch-queries the relay for revocation status before display. The
+ * `--presentation` flag instead returns a signed VP bundle the user
+ * can present to external verifiers.
  */
 
 import { openMotebitDatabase } from "@motebit/persistence";

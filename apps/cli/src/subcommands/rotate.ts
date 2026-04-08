@@ -3,10 +3,11 @@
  * succession record, re-sign the identity file, and submit the
  * succession to the relay.
  *
- * Extracted from `subcommands.ts` as Target 11 of the CLI extraction.
- * The private `discoverIdentityFile` helper travels with the module
- * because nothing else uses it (it walks cwd + parents + ~/.motebit
- * looking for a motebit.md).
+ * The private `discoverIdentityFile` helper walks cwd + parent
+ * directories + `~/.motebit/identity.md` looking for an existing
+ * motebit.md to rotate. Rotation is all-or-nothing: if the new
+ * identity file fails self-verification, the old key is kept and
+ * nothing is written.
  */
 
 import * as readline from "node:readline";

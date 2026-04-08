@@ -2,10 +2,9 @@
  * `motebit approvals ...` subcommands — list, show, approve, deny
  * pending tool-call approval requests the daemon has queued.
  *
- * Extracted from the monolithic `subcommands.ts` as Target 4 of the CLI
- * extraction. All four handlers share the same resolve-motebitId →
- * open-db → query-approvalStore → (optionally resolve) → close pattern
- * so they co-locate naturally.
+ * All four handlers read from (and approve/deny on) the local
+ * approval store. The daemon handles actual tool execution on its
+ * next tick after an approval transitions from pending to approved.
  */
 
 import { openMotebitDatabase } from "@motebit/persistence";

@@ -1,19 +1,18 @@
 /**
  * `motebit delegate "<prompt>"` — submit a task to a worker agent
- * and poll for the result. The `--plan` variant instead decomposes
- * the prompt into a plan and delegates each step via PlanEngine,
- * initializing a lightweight local runtime with no local capabilities
- * so every step routes to the network.
+ * and poll for the result.
  *
- * Extracted from `subcommands.ts` as the final target (T13) of the
- * CLI extraction. handleDelegate is the exported entrypoint;
- * handleDelegatePlan and its nested attemptDelegation helper are
- * private to this module because nothing else uses them.
+ * Two modes:
+ *   - Default: discover a worker with the requested capability via
+ *     the relay's market/candidates endpoint (or use --target to
+ *     skip discovery), submit the task, poll for completion.
+ *   - --plan: decompose the prompt into a plan via PlanEngine and
+ *     delegate each step to the network. This mode initializes a
+ *     lightweight local runtime with *no* local capabilities so every
+ *     step must route through the relay to a worker agent.
  *
- * Also clears the three pre-existing lint warnings that lived in
- * handleDelegatePlan since before the extraction started — the
- * `strict-boolean-expressions` rule wanted explicit null checks on
- * `required_capabilities?.length` and `submitted_at`/`completed_at`.
+ * `handleDelegatePlan` and its nested `attemptDelegation` helper are
+ * private because nothing else uses them.
  */
 
 import { openMotebitDatabase } from "@motebit/persistence";
