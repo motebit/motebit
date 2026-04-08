@@ -13,14 +13,10 @@ import { RiskLevel } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
+import { requireMotebitId } from "./_helpers.js";
 
 export async function handleApprovalList(config: CliConfig): Promise<void> {
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -51,12 +47,7 @@ export async function handleApprovalShow(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -99,12 +90,7 @@ export async function handleApprovalApprove(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -139,12 +125,7 @@ export async function handleApprovalDeny(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
