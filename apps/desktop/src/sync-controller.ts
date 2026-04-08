@@ -358,10 +358,11 @@ export class SyncController {
       }
 
       if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
-      if (!rt || !this._servingPrivateKey) return;
+      if (!rt || !this._servingPrivateKey || !this._servingAuthToken) return;
 
       const task = msg.task as AgentTask;
       const privateKey = this._servingPrivateKey;
+      const authToken = this._servingAuthToken;
 
       // Claim the task
       this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
@@ -389,7 +390,7 @@ export class SyncController {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: `Bearer ${this._servingAuthToken ?? ""}`,
+                Authorization: `Bearer ${authToken}`,
               },
               body: JSON.stringify(receipt),
             });
