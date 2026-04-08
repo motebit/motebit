@@ -99,6 +99,7 @@ import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscripti
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { registerReceiptExchangeRoutes } from "./receipt-exchange.js";
 import { registerOnrampRoutes, StripeCryptoOnrampAdapter, type OnrampAdapter } from "./onramp.js";
+import { registerOfframpRoutes, BridgeOfframpAdapter, type OfframpAdapter } from "./offramp.js";
 import { createTaskRouter } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import {
@@ -216,6 +217,16 @@ export interface SyncRelayConfig {
    * like MoonPay or Ramp Network).
    */
   onramp?: OnrampAdapter;
+  /**
+   * Pluggable off-ramp adapter for the crypto→fiat withdrawal flow.
+   * When set, `POST /api/v1/offramp/session` creates a Bridge transfer
+   * and returns deposit instructions (the motebit sends USDC to Bridge's
+   * deposit address, Bridge converts and ACH's to the user's bank).
+   * When omitted, the endpoint returns 503.
+   *
+   * Auto-constructed from `bridge.apiKey` when Bridge is configured.
+   */
+  offramp?: OfframpAdapter;
   /** Bridge.xyz configuration. Omit to disable Bridge orchestration rail. */
   bridge?: {
     /** Bridge API key. */
@@ -273,6 +284,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     stripe: stripeConfig,
     bridge: bridgeConfig,
     onramp: onrampOverride,
+    offramp: offrampOverride,
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
   } = config;
 
@@ -724,6 +736,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     onrampOverride ??
     (stripeConfig ? new StripeCryptoOnrampAdapter({ secretKey: stripeConfig.secretKey }) : null);
   registerOnrampRoutes(app, onrampAdapter);
+
+  // --- Paved crypto → fiat off-ramp (Bridge by default) ---
+  // Mirror of the on-ramp. User clicks "Withdraw to Bank", relay creates
+  // a Bridge transfer, returns deposit instructions (motebit sends USDC to
+  // Bridge's deposit address, Bridge converts and ACH's to user's bank).
+  const offrampAdapter: OfframpAdapter | null =
+    offrampOverride ??
+    (bridgeConfig ? new BridgeOfframpAdapter({ apiKey: bridgeConfig.apiKey }) : null);
+  registerOfframpRoutes(app, offrampAdapter);
 
   // --- Budget, accounts & admin routes (after auth middleware) ---
   registerBudgetRoutes({
