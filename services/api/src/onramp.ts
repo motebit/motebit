@@ -213,9 +213,9 @@ export class StripeCryptoOnrampAdapter implements OnrampAdapter {
     body.set("destination_networks[0]", req.destinationNetwork);
 
     if (req.amountUsd != null && req.amountUsd > 0) {
-      // Stripe expects the presumed source amount as a decimal string
-      // in the source currency (USD by default for most regions).
-      body.set("source_exchange_amount", req.amountUsd.toFixed(2));
+      // Stripe's field is `source_amount` (decimal string in the source
+      // currency). Verified against docs.stripe.com/api/crypto/onramp_sessions/create.
+      body.set("source_amount", req.amountUsd.toFixed(2));
       body.set("source_currency", "usd");
     }
 
@@ -250,11 +250,23 @@ export class StripeCryptoOnrampAdapter implements OnrampAdapter {
       throw new Error("Stripe returned no session ID in the onramp response");
     }
 
+    // Stripe returns redirect_url for the hosted flow (the one we use).
+    // The URL format is `https://crypto.link.com?session_hash=...`.
+    // If redirect_url is missing, fall back to the client_secret-based
+    // hosted URL pattern. If neither exists, throw — the session is
+    // unusable without a URL to redirect the user to.
+    const redirectUrl =
+      data.redirect_url ??
+      (data.client_secret ? `https://crypto.link.com?client_secret=${data.client_secret}` : null);
+    if (!redirectUrl) {
+      throw new Error(
+        "Stripe returned no redirect_url or client_secret — cannot redirect the user",
+      );
+    }
+
     return {
       sessionId: data.id,
-      // Stripe's field name varies across API versions; accept either
-      // redirect_url (documented) or fall back to the generic pattern.
-      redirectUrl: data.redirect_url ?? `https://crypto.link.com/checkout/${data.id}`,
+      redirectUrl,
       provider: this.provider,
     };
   }

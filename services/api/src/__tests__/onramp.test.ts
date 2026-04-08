@@ -123,7 +123,7 @@ describe("StripeCryptoOnrampAdapter", () => {
     expect(params.get("wallet_addresses[solana]")).toBe("AliceSolanaAddress");
     expect(params.get("destination_currencies[0]")).toBe("usdc");
     expect(params.get("destination_networks[0]")).toBe("solana");
-    expect(params.get("source_exchange_amount")).toBe("50.00");
+    expect(params.get("source_amount")).toBe("50.00");
     expect(params.get("source_currency")).toBe("usd");
     expect(params.get("metadata[motebit_id]")).toBe("alice-mote");
   });
@@ -143,7 +143,7 @@ describe("StripeCryptoOnrampAdapter", () => {
 
     const init = fetchMock.mock.calls[0]![1];
     const params = new URLSearchParams(init.body as string);
-    expect(params.has("source_exchange_amount")).toBe(false);
+    expect(params.has("source_amount")).toBe(false);
     expect(params.has("source_currency")).toBe(false);
   });
 
@@ -178,6 +178,22 @@ describe("StripeCryptoOnrampAdapter", () => {
         destinationCurrency: "usdc",
       }),
     ).rejects.toThrow(/no session ID/);
+  });
+
+  it("throws when Stripe returns no redirect_url or client_secret", async () => {
+    const { adapter } = makeAdapterWithMockFetch({
+      ok: true,
+      body: { id: "cos_no_url" }, // id present but no redirect
+    });
+
+    await expect(
+      adapter.createSession({
+        motebitId: "m",
+        destinationAddress: "addr",
+        destinationNetwork: "solana",
+        destinationCurrency: "usdc",
+      }),
+    ).rejects.toThrow(/redirect_url/);
   });
 
   it("forwards optional metadata to Stripe", async () => {
