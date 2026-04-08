@@ -16,6 +16,7 @@ import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
 import { formatMs } from "../utils.js";
 import { parseInterval } from "../intervals.js";
+import { requireMotebitId } from "./_helpers.js";
 
 export async function handleGoalAdd(config: CliConfig): Promise<void> {
   // positionals: ["goal", "add", "<prompt>"]
@@ -38,12 +39,7 @@ export async function handleGoalAdd(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -109,12 +105,7 @@ export async function handleGoalAdd(config: CliConfig): Promise<void> {
 }
 
 export async function handleGoalList(config: CliConfig): Promise<void> {
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -160,12 +151,7 @@ export async function handleGoalOutcomes(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -214,12 +200,7 @@ export async function handleGoalRemove(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -259,12 +240,7 @@ export async function handleGoalSetEnabled(config: CliConfig, enabled: boolean):
     process.exit(1);
   }
 
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);

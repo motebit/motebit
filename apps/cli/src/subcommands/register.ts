@@ -12,6 +12,7 @@ import { createSignedToken, secureErase } from "@motebit/crypto";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
+import { requireMotebitId } from "./_helpers.js";
 
 const DEFAULT_SYNC_URL = "https://motebit-sync.fly.dev";
 
@@ -24,14 +25,10 @@ export async function handleRegister(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
 
   // Require identity to exist (user must have launched the REPL at least once)
-  const motebitId = fullConfig.motebit_id;
+  const motebitId = requireMotebitId(fullConfig);
   const deviceId = fullConfig.device_id;
   const publicKeyHex = fullConfig.device_public_key;
 
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
   if (deviceId == null || deviceId === "") {
     console.error("Error: no device_id found in config. Run `motebit` first.");
     process.exit(1);

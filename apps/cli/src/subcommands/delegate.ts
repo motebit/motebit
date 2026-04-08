@@ -22,7 +22,7 @@ import type { StepDelegationAdapter } from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
-import { getRelayUrl, getRelayAuthHeaders } from "./_helpers.js";
+import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 
 // ---------------------------------------------------------------------------
 // motebit delegate --plan — multi-agent orchestration via PlanEngine
@@ -247,12 +247,7 @@ async function handleDelegatePlan(
 // ---------------------------------------------------------------------------
 
 export async function handleDelegate(config: CliConfig): Promise<void> {
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const prompt = config.positionals.slice(1).join(" ");
   if (!prompt) {

@@ -18,15 +18,10 @@
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { formatTimeAgo } from "../utils.js";
-import { fetchRelayJson, getRelayUrl, getRelayAuthHeaders } from "./_helpers.js";
+import { fetchRelayJson, getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 
 export async function handleBalance(config: CliConfig): Promise<void> {
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const relayUrl = getRelayUrl(config);
   const headers = await getRelayAuthHeaders(config);
@@ -66,12 +61,7 @@ export async function handleBalance(config: CliConfig): Promise<void> {
 }
 
 export async function handleWithdraw(config: CliConfig): Promise<void> {
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const amountStr = config.positionals[1];
   if (!amountStr) {
@@ -118,12 +108,7 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
 }
 
 export async function handleFund(config: CliConfig): Promise<void> {
-  const fullConfig = loadFullConfig();
-  const motebitId = fullConfig.motebit_id;
-  if (motebitId == null || motebitId === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
-    process.exit(1);
-  }
+  const motebitId = requireMotebitId(loadFullConfig());
 
   const amountStr = config.positionals[1];
   if (!amountStr) {
