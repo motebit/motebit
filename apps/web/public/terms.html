@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Terms of Service — Motebit, Inc.</title>
+    <meta
+      name="description"
+      content="Terms of Service for Motebit, Inc., an identity and infrastructure platform for AI agents."
+    />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://motebit.com/terms.html" />
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #fafafa;
+        color: #181818;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial,
+          sans-serif;
+        font-size: 16px;
+        line-height: 1.6;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #0a0a0a;
+          color: #e8e8e8;
+        }
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 64px 24px 120px;
+      }
+      header {
+        border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+        padding-bottom: 24px;
+        margin-bottom: 40px;
+      }
+      header a.home {
+        font-size: 13px;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: rgba(128, 128, 128, 0.9);
+        text-decoration: none;
+      }
+      header a.home:hover {
+        color: inherit;
+      }
+      h1 {
+        font-size: 28px;
+        font-weight: 600;
+        margin: 16px 0 8px;
+        letter-spacing: -0.01em;
+      }
+      .dates {
+        font-size: 13px;
+        color: rgba(128, 128, 128, 0.9);
+      }
+      h2 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 40px 0 8px;
+        letter-spacing: -0.005em;
+      }
+      h2 .num {
+        color: rgba(128, 128, 128, 0.7);
+        font-weight: 400;
+        margin-right: 8px;
+      }
+      p,
+      li {
+        font-size: 15px;
+      }
+      p {
+        margin: 12px 0;
+      }
+      ul {
+        margin: 12px 0;
+        padding-left: 24px;
+      }
+      li {
+        margin: 6px 0;
+      }
+      strong {
+        font-weight: 600;
+      }
+      em {
+        font-style: italic;
+      }
+      code,
+      .legalese {
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 13px;
+      }
+      .legalese {
+        display: block;
+        background: rgba(128, 128, 128, 0.08);
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        border-radius: 6px;
+        padding: 16px 20px;
+        margin: 16px 0;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: normal;
+      }
+      address {
+        font-style: normal;
+        margin: 12px 0;
+        padding: 12px 16px;
+        border-left: 3px solid rgba(128, 128, 128, 0.3);
+      }
+      footer {
+        border-top: 1px solid rgba(128, 128, 128, 0.25);
+        padding-top: 24px;
+        margin-top: 64px;
+        font-size: 13px;
+        color: rgba(128, 128, 128, 0.9);
+      }
+      footer a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <a class="home" href="/">&larr; motebit.com</a>
+        <h1>Motebit Terms of Service</h1>
+        <p class="dates">Effective Date: April 8, 2026 · Last Updated: April 8, 2026</p>
+      </header>
+
+      <h2><span class="num">1.</span>Introduction and Acceptance</h2>
+      <p>
+        These Terms of Service (the <strong>&ldquo;Terms&rdquo;</strong>) govern your use of the
+        software, websites, command-line tools, mobile applications, and relay services provided by
+        <strong>Motebit, Inc.</strong>, a Delaware corporation
+        (<strong>&ldquo;Motebit&rdquo;</strong>, <strong>&ldquo;we&rdquo;</strong>,
+        <strong>&ldquo;us&rdquo;</strong>, or <strong>&ldquo;our&rdquo;</strong>). Our principal
+        office is located at 5022 Doman Avenue, Tarzana, CA 91356, United States.
+      </p>
+      <p>
+        By accessing or using the Motebit software, websites (including
+        <code>motebit.com</code> and <code>docs.motebit.com</code>), command-line tools, desktop
+        applications, mobile applications, or any Motebit-operated relay service (collectively, the
+        <strong>&ldquo;Services&rdquo;</strong>), you agree to these Terms. If you do not agree, you
+        may not use the Services. These Terms form a binding agreement between you and Motebit,
+        Inc.
+      </p>
+
+      <h2><span class="num">2.</span>Description of the Services</h2>
+      <p>
+        Motebit is an identity and infrastructure platform for autonomous software agents
+        (<strong>&ldquo;motebits&rdquo;</strong>). Each motebit has:
+      </p>
+      <ul>
+        <li>
+          A sovereign cryptographic identity based on the Ed25519 signature scheme, generated and
+          stored locally on your device.
+        </li>
+        <li>
+          A self-custodied on-chain wallet (USDC on Solana) derived directly from the identity key
+          by mathematical coincidence of the Ed25519 curve.
+        </li>
+        <li>A local memory store, trust store, and governance configuration.</li>
+        <li>
+          Optional access to Motebit-operated relay services for discovery, multi-device
+          synchronization, task orchestration, trust aggregation, and managed AI inference
+          proxying.
+        </li>
+      </ul>
+      <p>
+        <strong
+          >Motebit is an identity and infrastructure platform. Motebit is NOT a cryptocurrency
+          exchange, broker, money transmitter, wallet provider, custodian, or financial
+          institution.</strong
+        >
+      </p>
+
+      <h2><span class="num">3.</span>Non-Custodial Model</h2>
+      <p>
+        You, the user, solely control your motebit&rsquo;s identity key and the on-chain wallet
+        derived from it. <strong
+          >Motebit does not custody, hold, manage, or have access to your funds at any time.</strong
+        >
+      </p>
+      <p>Specifically:</p>
+      <ul>
+        <li>
+          Your identity private key is generated on your device and stored in your local keystore
+          (browser IndexedDB, operating system keychain, or mobile secure enclave). Motebit does
+          not receive, transmit, or store this key.
+        </li>
+        <li>
+          Your on-chain USDC is held at your Solana address, which is derived from your public key
+          and is controlled solely by your private key. Motebit has no ability to move funds from
+          your address.
+        </li>
+        <li>
+          Signed receipts, credentials, and delegation records are produced by your device using
+          your key. Motebit does not sign on your behalf.
+        </li>
+        <li>
+          When you use a third-party payment provider through Motebit (for example, Stripe Crypto
+          Onramp to purchase USDC with a payment card), the provider is legally responsible for
+          that payment. Motebit creates the purchase session but does not process, hold, or route
+          the funds. USDC is delivered directly from the provider to your self-custodied Solana
+          address on-chain.
+        </li>
+      </ul>
+      <p>
+        <strong
+          >If you lose your identity private key or the device holding it, you will lose access to
+          your motebit and its associated wallet, and Motebit cannot recover them for you.</strong
+        > Please back up your identity using the export tools provided in the Motebit interface and
+        store your backups securely.
+      </p>
+
+      <h2><span class="num">4.</span>Eligibility and Prohibited Use</h2>
+      <p>
+        You must be at least 18 years old to use the Services. By using the Services, you
+        represent that you meet this requirement.
+      </p>
+      <p>
+        You may not use the Services if you are located in, organized under the laws of, or a
+        citizen or resident of a jurisdiction subject to comprehensive U.S. economic sanctions or
+        on any U.S. government list of prohibited or restricted parties (including the U.S.
+        Department of the Treasury Office of Foreign Assets Control Specially Designated Nationals
+        and Blocked Persons List).
+      </p>
+      <p>You may not use the Services to:</p>
+      <ul>
+        <li>Violate any applicable law, regulation, or third-party right.</li>
+        <li>
+          Finance, facilitate, or engage in any illegal activity, including money laundering,
+          terrorist financing, or sanctions evasion.
+        </li>
+        <li>
+          Impersonate any person or entity, or misrepresent your identity or affiliation.
+        </li>
+        <li>
+          Interfere with or disrupt the Services, any Motebit-operated relay, or any other
+          user&rsquo;s use of the Services.
+        </li>
+        <li>
+          Attempt to gain unauthorized access to any part of the Services or to data not intended
+          for you.
+        </li>
+        <li>
+          Use the Services to process payments for goods or services that violate applicable law or
+          the terms of any of our payment processing partners.
+        </li>
+        <li>
+          Reverse engineer, decompile, or attempt to extract the source code of any non-open-source
+          component, except where expressly permitted by applicable law.
+        </li>
+      </ul>
+
+      <h2><span class="num">5.</span>Fees and Payments</h2>
+      <p>
+        Core Motebit software and protocol specifications are available under open-source or
+        source-available licenses. Certain Motebit-operated services (hosted relay, managed AI
+        inference proxy, multi-device synchronization, orchestrated delegation, credential
+        issuance, and similar convenience services) may be offered on a paid basis.
+      </p>
+      <p>
+        When you fund your motebit through a third-party payment provider (for example, Stripe
+        Crypto Onramp), the provider&rsquo;s own terms of service, fees, and processing times apply
+        in addition to these Terms. Motebit does not set those fees and does not receive the funds
+        you are purchasing through the provider.
+      </p>
+      <p>
+        We may change our fees at any time with reasonable advance notice posted on
+        <code>motebit.com</code> or delivered through the Services.
+      </p>
+
+      <h2><span class="num">6.</span>Intellectual Property</h2>
+      <p>
+        The Motebit protocol specifications and the MIT-licensed packages are available under their
+        stated open-source licenses. The Motebit reference implementation, including certain
+        server-side code, is licensed under the Business Source License (BSL-1.1) or such other
+        license as stated in the applicable repository. The &ldquo;Motebit&rdquo; name, the Motebit
+        logo, and any associated trademarks are the property of Motebit, Inc. and may not be used
+        without our written permission except as permitted under the applicable open-source
+        license.
+      </p>
+      <p>
+        You retain ownership of your identity, your memory, your credentials, and any content you
+        create or input through the Services. By using the Services, you grant us a limited,
+        non-exclusive license to process your data as necessary to provide the Services to you.
+      </p>
+
+      <h2><span class="num">7.</span>Privacy</h2>
+      <p>
+        Our collection and use of personal information in connection with the Services is described
+        in our Privacy Policy, which is incorporated into these Terms by reference. Because of the
+        non-custodial architecture of Motebit, we generally do not have access to your identity
+        private key, your wallet contents, or the substantive contents of your memory store. When
+        you use Motebit-operated convenience services (for example, multi-device synchronization),
+        we handle only encrypted data that we cannot read.
+      </p>
+
+      <h2><span class="num">8.</span>Third-Party Services</h2>
+      <p>
+        The Services may integrate with or route to third-party services (for example, Stripe for
+        fiat payment processing, Solana for on-chain settlement, AI inference providers such as
+        Anthropic or OpenAI). Your use of those services is subject to their own terms and
+        policies. We are not responsible for the availability, accuracy, or reliability of
+        third-party services, and we do not endorse any third-party content accessed through the
+        Services.
+      </p>
+
+      <h2><span class="num">9.</span>Service Availability and Modifications</h2>
+      <p>
+        We may modify, suspend, or discontinue the Services (or any part of the Services) at any
+        time, with or without notice. Because Motebit is a sovereign, self-custodial system, the
+        continued existence of Motebit-operated convenience services is not required for you to
+        retain access to your motebit identity or your on-chain wallet. If we discontinue
+        Motebit-operated services, you will still own your identity keys and have access to your
+        wallet through compatible third-party tools or a self-hosted Motebit implementation.
+      </p>
+
+      <h2><span class="num">10.</span>Disclaimers</h2>
+      <div class="legalese">
+        THE SERVICES ARE PROVIDED &ldquo;AS IS&rdquo; AND &ldquo;AS AVAILABLE,&rdquo; WITHOUT
+        WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTIES OF
+        MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, OR UNINTERRUPTED OR
+        ERROR-FREE OPERATION. WE DO NOT WARRANT THAT THE SERVICES WILL MEET YOUR REQUIREMENTS OR
+        THAT YOUR USE OF THE SERVICES WILL BE UNINTERRUPTED, SECURE, OR FREE OF DEFECTS.
+      </div>
+      <div class="legalese">
+        CRYPTOCURRENCY AND DIGITAL ASSETS ARE VOLATILE AND CARRY INHERENT RISKS, INCLUDING BUT NOT
+        LIMITED TO LOSS OF VALUE, NETWORK CONGESTION, CHAIN REORGANIZATIONS, SMART CONTRACT RISKS,
+        AND REGULATORY UNCERTAINTY. YOU ARE SOLELY RESPONSIBLE FOR ASSESSING AND ACCEPTING THESE
+        RISKS BEFORE ACQUIRING OR TRANSACTING IN ANY DIGITAL ASSET THROUGH THE SERVICES OR
+        OTHERWISE.
+      </div>
+
+      <h2><span class="num">11.</span>Limitation of Liability</h2>
+      <div class="legalese">
+        TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, MOTEBIT, INC. AND ITS AFFILIATES,
+        OFFICERS, DIRECTORS, EMPLOYEES, AND AGENTS SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
+        SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES, INCLUDING LOST PROFITS, LOST DATA,
+        LOSS OF DIGITAL ASSETS, BUSINESS INTERRUPTION, OR COST OF SUBSTITUTE SERVICES, ARISING OUT
+        OF OR RELATED TO YOUR USE OF THE SERVICES, EVEN IF WE HAVE BEEN ADVISED OF THE POSSIBILITY
+        OF SUCH DAMAGES.
+      </div>
+      <div class="legalese">
+        OUR TOTAL AGGREGATE LIABILITY TO YOU FOR ALL CLAIMS ARISING OUT OF OR RELATED TO THE
+        SERVICES SHALL NOT EXCEED THE GREATER OF (A) ONE HUNDRED U.S. DOLLARS (USD $100) OR (B) THE
+        AMOUNT YOU PAID TO MOTEBIT FOR THE SERVICES IN THE TWELVE (12) MONTHS PRECEDING THE EVENT
+        GIVING RISE TO THE CLAIM.
+      </div>
+      <p>
+        Some jurisdictions do not allow the exclusion or limitation of certain warranties or
+        damages, so some of these limitations may not apply to you.
+      </p>
+
+      <h2><span class="num">12.</span>Indemnification</h2>
+      <p>
+        You agree to indemnify, defend, and hold harmless Motebit, Inc. and its affiliates,
+        officers, directors, employees, and agents from and against any claims, damages, losses,
+        liabilities, costs, and expenses (including reasonable attorneys&rsquo; fees) arising out
+        of or related to (a) your use of the Services, (b) your violation of these Terms, (c) your
+        violation of any applicable law or third-party right, or (d) your use of any digital asset
+        in connection with the Services.
+      </p>
+
+      <h2><span class="num">13.</span>Governing Law and Dispute Resolution</h2>
+      <p>
+        These Terms and any dispute arising out of or related to these Terms or the Services shall
+        be governed by and construed in accordance with the laws of the State of Delaware, without
+        regard to its conflict of laws principles.
+      </p>
+      <p>
+        Any dispute, claim, or controversy arising out of or relating to these Terms or the
+        Services shall be resolved by binding individual arbitration administered by a recognized
+        arbitration provider under its then-current rules. The arbitration shall take place in
+        Delaware or any other location mutually agreed in writing. You and Motebit each waive the
+        right to a jury trial and the right to participate in a class action.
+      </p>
+      <p>
+        If any provision of this Section 13 is found unenforceable, the remaining provisions shall
+        continue in full force and effect, and the unenforceable provision shall be modified only
+        to the extent necessary to make it enforceable.
+      </p>
+
+      <h2><span class="num">14.</span>Termination</h2>
+      <p>
+        You may stop using the Services at any time. We may terminate or suspend your access to the
+        Services at any time, with or without cause and with or without notice. Upon termination,
+        sections of these Terms that by their nature should survive (including Sections 6, 7, 10,
+        11, 12, 13, and 15) shall survive.
+      </p>
+      <p>
+        Because Motebit is non-custodial, termination of your access to Motebit-operated
+        convenience services does not affect your ownership of your identity key or your on-chain
+        wallet. You will retain access to those assets through any compatible third-party tool or a
+        self-hosted Motebit implementation.
+      </p>
+
+      <h2><span class="num">15.</span>Changes to These Terms</h2>
+      <p>
+        We may modify these Terms from time to time. If we make material changes, we will notify
+        you by posting the updated Terms at <code>motebit.com/terms.html</code> with a new
+        &ldquo;Last Updated&rdquo; date and, where appropriate, by other reasonable means. Your
+        continued use of the Services after the updated Terms take effect constitutes your
+        acceptance of those changes. If you do not agree to the updated Terms, you must stop using
+        the Services.
+      </p>
+
+      <h2><span class="num">16.</span>Miscellaneous</h2>
+      <p>
+        These Terms, together with any policies or documents referenced in them, constitute the
+        entire agreement between you and Motebit concerning the Services and supersede all prior
+        or contemporaneous communications. If any provision of these Terms is found to be
+        unenforceable, the remaining provisions shall remain in full force and effect. Our failure
+        to enforce any right or provision of these Terms shall not be deemed a waiver of that
+        right or provision. You may not assign these Terms without our prior written consent. We
+        may assign these Terms in connection with a merger, acquisition, or sale of assets, or
+        otherwise at our discretion.
+      </p>
+
+      <h2><span class="num">17.</span>Contact</h2>
+      <p>If you have questions about these Terms, contact us at:</p>
+      <address>
+        <strong>Motebit, Inc.</strong><br />
+        5022 Doman Avenue<br />
+        Tarzana, CA 91356<br />
+        United States<br />
+        <br />
+        Email: legal@motebit.com
+      </address>
+
+      <footer>
+        <p>
+          &copy; 2026 Motebit, Inc. A Delaware corporation.
+          <a href="/">Return to motebit.com</a>
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>
