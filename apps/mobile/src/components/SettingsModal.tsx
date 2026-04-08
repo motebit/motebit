@@ -216,6 +216,30 @@ export function SettingsModal({
 
   const identity = useMemo(() => app.getIdentityInfo(), [app]);
 
+  // Sovereign wallet state — address is sync, balance loads async.
+  const runtime = app.getRuntime();
+  const solanaAddress = runtime?.getSolanaAddress() ?? null;
+  const [solanaBalance, setSolanaBalance] = useState<string | null>(null);
+  React.useEffect(() => {
+    if (!runtime || !solanaAddress) {
+      setSolanaBalance(null);
+      return;
+    }
+    setSolanaBalance(null); // reset while loading
+    void runtime
+      .getSolanaBalance()
+      .then((micro) => {
+        if (micro == null) {
+          setSolanaBalance("-");
+          return;
+        }
+        setSolanaBalance(`${(Number(micro) / 1_000_000).toFixed(2)} USDC`);
+      })
+      .catch(() => {
+        setSolanaBalance("-");
+      });
+  }, [runtime, solanaAddress]);
+
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <View style={styles.container}>
@@ -346,6 +370,8 @@ export function SettingsModal({
               motebitId={identity.motebitId}
               deviceId={identity.deviceId}
               publicKey={identity.publicKey}
+              solanaAddress={solanaAddress}
+              solanaBalance={solanaBalance}
               onExport={() => {
                 void (async () => {
                   try {

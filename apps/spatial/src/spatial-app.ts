@@ -202,6 +202,10 @@ export class SpatialApp {
   readonly heartbeat: AmbientHeartbeat;
 
   private runtime: MotebitRuntime | null = null;
+  /** Get the runtime instance. Null before initAI completes. */
+  getRuntime(): MotebitRuntime | null {
+    return this.runtime;
+  }
   private storage: StorageAdapters | null = null;
   private keyring: KeyringAdapter;
   private keyStore = new EncryptedKeyStore();
@@ -587,6 +591,22 @@ export class SpatialApp {
       ? (presetConfigs[gov.approvalPreset] ?? presetConfigs.balanced!)
       : presetConfigs.balanced!;
 
+    // Build signing keys from the already-loaded private key bytes (line ~425).
+    // The same key signs identity assertions AND derives the sovereign Solana
+    // wallet via Keypair.fromSeed (settlement-v1.md §6, curve coincidence).
+    let signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
+    if (this._privKeyBytes && this.publicKey) {
+      try {
+        const pubBytes = new Uint8Array(this.publicKey.length / 2);
+        for (let i = 0; i < this.publicKey.length; i += 2) {
+          pubBytes[i / 2] = parseInt(this.publicKey.slice(i, i + 2), 16);
+        }
+        signingKeys = { privateKey: this._privKeyBytes, publicKey: pubBytes };
+      } catch {
+        // Hex parse failed — runtime runs without signing keys
+      }
+    }
+
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
@@ -606,6 +626,8 @@ export class SpatialApp {
             }
           : undefined,
         taskRouter: PLANNING_TASK_ROUTER,
+        signingKeys,
+        solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
       },
       { storage, renderer: this.adapter, ai: provider, keyring: this.keyring },
     );

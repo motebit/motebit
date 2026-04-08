@@ -496,6 +496,30 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     syncBadge.className = `sync-badge ${syncState.status}`;
     syncBadge.textContent = statusLabels[syncState.status] ?? syncState.status;
 
+    // Populate sovereign wallet fields from the full rail
+    const runtime = ctx.app.getRuntime();
+    const walletAddr = document.getElementById("wallet-solana-address") as HTMLElement;
+    const walletBal = document.getElementById("wallet-solana-balance") as HTMLElement;
+    const address = runtime?.getSolanaAddress() ?? null;
+    walletAddr.textContent = address ?? "-";
+    if (runtime && address) {
+      walletBal.textContent = "Loading\u2026";
+      void runtime
+        .getSolanaBalance()
+        .then((micro) => {
+          if (micro == null) {
+            walletBal.textContent = "-";
+            return;
+          }
+          walletBal.textContent = `${(Number(micro) / 1_000_000).toFixed(2)} USDC`;
+        })
+        .catch(() => {
+          walletBal.textContent = "-";
+        });
+    } else {
+      walletBal.textContent = "-";
+    }
+
     // Populate credentials and budget from relay
     void populateCredentialsAndBudget(info.motebitId);
   }

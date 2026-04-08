@@ -873,12 +873,35 @@ export class MobileApp {
       this._governanceStatus = { governed: false, reason: "identity file parse error" };
     }
 
+    // Load identity signing keys for credential issuance + sovereign
+    // Solana wallet rail. Same pattern as web-app.ts — load private key
+    // hex from secure storage, convert to bytes, pass to RuntimeConfig.
+    let signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
+    try {
+      const privKeyHex = await this.keyring.get("device_private_key");
+      if (privKeyHex != null && privKeyHex !== "" && this.publicKey !== "") {
+        const privBytes = new Uint8Array(privKeyHex.length / 2);
+        for (let i = 0; i < privKeyHex.length; i += 2) {
+          privBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
+        }
+        const pubBytes = new Uint8Array(this.publicKey.length / 2);
+        for (let i = 0; i < this.publicKey.length; i += 2) {
+          pubBytes[i / 2] = parseInt(this.publicKey.slice(i, i + 2), 16);
+        }
+        signingKeys = { privateKey: privBytes, publicKey: pubBytes };
+      }
+    } catch {
+      // Secure store read failed — runtime runs without signing keys
+    }
+
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
         tickRateHz: 2,
         policy: policyConfig,
         taskRouter: PLANNING_TASK_ROUTER,
+        signingKeys,
+        solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
       },
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );

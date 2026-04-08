@@ -4455,6 +4455,19 @@
             <span class="sync-badge disconnected" id="identity-sync-status">Not connected</span>
           </div>
         </div>
+        <div class="settings-card" style="margin-top:8px;">
+          <div class="card-title">Sovereign Wallet</div>
+          <div class="identity-field">
+            <span class="identity-label">Address</span>
+            <span class="identity-value" id="wallet-solana-address">-</span>
+            <button class="copy-btn" data-copy="wallet-solana-address">Copy</button>
+          </div>
+          <div class="identity-field">
+            <span class="identity-label">Balance</span>
+            <span class="identity-value" id="wallet-solana-balance">-</span>
+          </div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Your Ed25519 public key is your Solana address. Send USDC here to fund your motebit.</div>
+        </div>
         <div style="display:flex;gap:8px;margin-bottom:8px;">
           <button class="settings-outline-btn" id="settings-link-device" style="flex:1;">Link Another Device</button>
           <button class="settings-outline-btn" id="settings-rotate-key" style="flex:1;color:var(--status-warning, #f0a030);border-color:var(--status-warning, #f0a030);">Rotate Key</button>

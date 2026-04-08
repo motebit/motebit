@@ -728,6 +728,28 @@ export class DesktopApp {
       budget: { maxCallsPerTurn: gov.maxCallsPerTurn },
     };
 
+    // Load identity signing keys for credential issuance + sovereign
+    // Solana wallet rail. The Ed25519 seed is the same 32 bytes that
+    // sign identity assertions — Solana derives its address from this
+    // via Keypair.fromSeed (curve coincidence, settlement-v1.md §6).
+    // Best-effort: if the keyring has no key, the runtime runs without
+    // signing keys and without a wallet; the UX shows "-".
+    let signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
+    if (config.invoke) {
+      try {
+        const kp = await this.getDeviceKeypair(config.invoke);
+        if (kp) {
+          const { hexToBytes } = await import("@motebit/crypto");
+          signingKeys = {
+            privateKey: hexToBytes(kp.privateKey),
+            publicKey: hexToBytes(kp.publicKey),
+          };
+        }
+      } catch {
+        // Keyring read failed — runtime runs without signing keys
+      }
+    }
+
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
@@ -739,6 +761,8 @@ export class DesktopApp {
           maxMemoriesPerTurn: gov.maxMemoriesPerTurn,
         },
         taskRouter: PLANNING_TASK_ROUTER,
+        signingKeys,
+        solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
       },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );

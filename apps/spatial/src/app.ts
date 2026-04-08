@@ -387,12 +387,46 @@ async function init(): Promise<void> {
   // Apply network settings (best-effort relay — does not block boot)
   app.setNetworkSettings({ relayUrl: settings.relayUrl, showNetwork: settings.showNetwork });
 
+  // Populate sovereign wallet fields from the runtime's full Solana rail
+  function populateWalletFields(): void {
+    const runtime = app.getRuntime();
+    const addrEl = document.getElementById("wallet-solana-address");
+    const balEl = document.getElementById("wallet-solana-balance");
+    if (!addrEl || !balEl) return;
+
+    const address = runtime?.getSolanaAddress() ?? null;
+    addrEl.textContent = address ?? "-";
+    // Click to copy
+    addrEl.onclick = () => {
+      if (address) void navigator.clipboard.writeText(address);
+    };
+
+    if (runtime && address) {
+      balEl.textContent = "Loading\u2026";
+      void runtime
+        .getSolanaBalance()
+        .then((micro: bigint | null) => {
+          if (micro == null) {
+            balEl.textContent = "-";
+            return;
+          }
+          balEl.textContent = `${(Number(micro) / 1_000_000).toFixed(2)} USDC`;
+        })
+        .catch(() => {
+          balEl.textContent = "-";
+        });
+    } else {
+      balEl.textContent = "-";
+    }
+  }
+
   // If we have a saved config that can init, skip settings
   if (await tryInitAI(settings)) {
     settingsOverlay.classList.add("hidden");
     void initVoiceIfEnabled(settings);
     void app.connectRelay().then(() => void loadCredentials());
     renderMcpServers();
+    populateWalletFields();
     showMainOverlay();
   } else {
     // No saved config — try local inference first (zero API cost), then show settings
@@ -402,6 +436,7 @@ async function init(): Promise<void> {
       void initVoiceIfEnabled(loadSettings());
       void app.connectRelay().then(() => void loadCredentials());
       renderMcpServers();
+      populateWalletFields();
       showMainOverlay();
     } else {
       // No local inference — show settings overlay

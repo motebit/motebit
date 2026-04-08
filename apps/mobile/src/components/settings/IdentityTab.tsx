@@ -13,6 +13,10 @@ export interface IdentityTabProps {
   motebitId: string;
   deviceId: string;
   publicKey: string;
+  /** Sovereign wallet Solana address (from runtime.getSolanaAddress()). Null when no rail. */
+  solanaAddress?: string | null;
+  /** Sovereign wallet USDC balance string (e.g., "12.50 USDC"). Null when loading or no rail. */
+  solanaBalance?: string | null;
   onExport: () => void;
   onExportIdentity?: () => void;
   onLinkDevice?: () => void;
@@ -23,6 +27,8 @@ export function IdentityTab({
   motebitId,
   deviceId,
   publicKey,
+  solanaAddress,
+  solanaBalance,
   onExport,
   onExportIdentity,
   onLinkDevice,
@@ -123,6 +129,42 @@ export function IdentityTab({
           {copiedField === "publicKey" ? "Copied!" : "Copy"}
         </Text>
       </TouchableOpacity>
+
+      {solanaAddress ? (
+        <>
+          <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Sovereign Wallet</Text>
+          <TouchableOpacity
+            onPress={() => copyToClipboard("solanaAddress", solanaAddress)}
+            style={styles.identityFieldRow}
+          >
+            <Text style={[styles.monoValue, styles.identityFieldValue]} numberOfLines={2}>
+              {solanaAddress}
+            </Text>
+            <Text
+              style={[
+                styles.identityCopyLabel,
+                copiedField === "solanaAddress" && styles.identityCopiedLabel,
+              ]}
+            >
+              {copiedField === "solanaAddress" ? "Copied!" : "Copy"}
+            </Text>
+          </TouchableOpacity>
+          <Text style={styles.sectionTitle}>USDC Balance</Text>
+          <Text style={[styles.monoValue, { paddingVertical: 6, paddingHorizontal: 12 }]}>
+            {solanaBalance ?? "Loading\u2026"}
+          </Text>
+          <Text
+            style={{
+              fontSize: 11,
+              color: "#888",
+              paddingHorizontal: 12,
+              paddingBottom: 8,
+            }}
+          >
+            Your Ed25519 public key is your Solana address. Send USDC here to fund your motebit.
+          </Text>
+        </>
+      ) : null}
 
       {onRotateKey && (
         <TouchableOpacity style={styles.rotateKeyButton} onPress={onRotateKey} activeOpacity={0.7}>
