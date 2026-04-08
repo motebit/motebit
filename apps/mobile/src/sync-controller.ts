@@ -238,7 +238,12 @@ export class MobileSyncController {
     try {
       const done = await AsyncStorage.getItem(FLAG);
       if (done === "true") return;
-    } catch {
+    } catch (err: unknown) {
+      // eslint-disable-next-line no-console -- docstring promises logging
+      console.warn(
+        "[self-test] flag check failed:",
+        err instanceof Error ? err.message : String(err),
+      );
       return;
     }
     const runtime = this.deps.getRuntime();
