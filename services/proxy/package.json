@@ -17,7 +17,7 @@
   "dependencies": {
     "@noble/ed25519": "~3.0.1",
     "@vercel/kv": "^2.0.0",
-    "next": "^16.1.7",
+    "next": "^16.2.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

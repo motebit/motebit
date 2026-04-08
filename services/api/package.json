@@ -17,7 +17,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.12",
+    "@hono/node-server": "^1.19.13",
     "@hono/node-ws": "^1.3.0",
     "@motebit/core-identity": "workspace:*",
     "@motebit/crypto": "workspace:*",
@@ -26,10 +26,10 @@
     "@motebit/persistence": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@privy-io/node": "^0.12.0",
-    "@x402/core": "^2.6.0",
-    "@x402/evm": "^2.6.0",
-    "@x402/hono": "^2.6.0",
-    "hono": "^4.12.9",
+    "@x402/core": "^2.9.0",
+    "@x402/evm": "^2.9.0",
+    "@x402/hono": "^2.9.0",
+    "hono": "^4.12.12",
     "stripe": "^17.0.0"
   },
   "devDependencies": {
