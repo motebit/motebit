@@ -72,6 +72,7 @@ spec/
   relay-federation-v1.md   motebit/relay-federation@1.0 — peering, discovery, routing
   market-v1.md             motebit/market@1.0 — budget, settlement, fees, trust, routing
   credential-v1.md         motebit/credential@1.0 — W3C VC 2.0, issuance, weighting, revocation
+  settlement-v1.md         motebit/settlement@1.0 — foundation law, rail taxonomy, sovereign rail, receipts, security model
 
 services/
   api/          Relay server (modules: index, federation, task-routing,
@@ -109,6 +110,28 @@ These are not suggestions. They are the architectural invariants that make the m
 **Capability rings, not feature parity.** Ring 1 (core, identical everywhere): runtime, sdk, crypto, policy. Ring 2 (platform adapters): persistence, keyring, voice. Ring 3 (platform capabilities): MCP stdio (CLI/desktop only), 3D creature (desktop/mobile/web/spatial), daemon (CLI/desktop). The anti-pattern is shimming platform-impossible capabilities. Each surface maximizes what its platform offers.
 
 **Deletion policy.** Three classifications before removing anything flagged by tooling or review. (1) Internal workspace dependencies (`@motebit/*`): never remove from import analysis alone — they encode layer membership and protocol contracts, not just usage. Remove only when the layer contract itself changes. (2) Exports and capabilities: if it is published API, intentional vocabulary (e.g. semantic color aliases), or scaffolding for a sibling surface, preserve it. (3) Dead code: remove only when there are zero callers, it is not part of an intended API surface, it is not staged for near-term cross-surface use, and typecheck/tests pass after deletion. When uncertain, do not delete. `check-deps` (hard CI gate) governs architecture. `check-unused` (soft signal) governs external dependency hygiene. The two tools govern different domains and must not be conflated.
+
+## Protocol Doctrine
+
+Motebit is a protocol, not a platform. This has concrete architectural consequences that bend every design decision.
+
+**The three-layer model.** Every function the relay performs lives in exactly one of three layers, and each layer has a different shape of ownership:
+
+1. **Protocol** — the open spec anyone can implement. Published in `spec/*.md`. Consumed via the MIT type packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`). A third party reading only the specs and the MIT types can build an interoperating alternative implementation without permission.
+2. **Reference implementation** — Motebit, Inc.'s code that implements the protocol. BSL-1.1 licensed: source-available, commercially restricted during the early phase, automatically converting to a permissive license after the conversion date. Same pattern as MariaDB, CockroachDB, Stripe, Confluent, and Ethereum's commercial clients.
+3. **Accumulated state** — trust history, federation graph, network effects, operational data. Never licensed; private to the canonical relay operator. The long-term moat that makes the reference implementation commercially defensible.
+
+A function is "protocol-shaped" only when its rules live in an open spec. A rule that exists only in BSL implementation code is not yet part of the protocol — it is part of the canonical implementation.
+
+**The operational test.** For any relay function, ask: _can a third party stand up a competing implementation today, using only the published specs and the MIT type packages, without permission?_ If yes, the function has crossed from platform into protocol. If no, it is still platform-shaped regardless of how the codebase is organized internally. This test is the honest measure of "how protocol-shaped is motebit right now" and should be applied to every new architectural decision.
+
+**Sync is the floor of legitimate centralization.** Multi-device sync is the only relay function with a legitimate centralization premium, because devices are intermittently online and NAT/offline/push notifications are genuinely hard to do peer-to-peer. Every other relay function (discovery, trust aggregation, multi-hop orchestration, settlement, federation, sybil defense, credential verification) can exist as a service so long as it is optional, replaceable, and spec-governed. The relay may offer these services — and should, because they are how the commercial entity earns — but they must not be the only path.
+
+**The dual license is correct.** The MIT/BSL split does not contradict the protocol position; it is the standard pattern for protocol-shaped businesses. MIT on the vocabulary and verification primitives lets anyone implement against the protocol. BSL on the reference implementation provides commercial protection during the early phase. The accumulated state stays private as the long-term moat. All three layers work together; the split is a feature, not a tension.
+
+**Foundation law vs implementation convention.** Protocol specs must distinguish what every implementation must preserve (foundation law) from what one particular implementation happens to be elegant at (convention). Foundation law should survive chain change, hardware upgrades, multisig wrappers, and hot/cold key splits without breaking. Conventions are how a specific reference implementation chooses to satisfy the foundation law, not binding on alternative implementations. When writing a spec, if a rule cannot survive swapping the chain or the wallet topology, it does not belong in foundation law — it belongs in the reference implementation section, clearly marked as convention.
+
+**Settlement is protocol-shaped as of 2026-04-08.** The settlement spec (`spec/settlement-v1.md`) establishes the first protocol layer where the operational test passes without any relay dependency. The foundation law lives at the receipt / verification / sovereign-floor / relay-optional / plural-rails layer — not at the wallet topology layer. The Ed25519/Solana curve coincidence (where a motebit's identity public key is natively a valid Solana address) is documented as the **default reference implementation**, not as protocol law. Multi-hop sovereign settlement is first-class under the foundation law, even though only relay-mediated multi-hop is currently wired in the runtime; three additional patterns (pay-forward, onchain escrow, hybrid) are specified as compliant alternatives. Compatible implementations (multisig treasuries at the Solana program layer, hardware-backed identity storage, separate identity/wallet keys with binding attestation, different Ed25519-native chains, post-quantum migration) are explicitly first-class citizens of the protocol, not deviations. The sovereign payment receipt format anchors receipts to onchain proofs via `task_id = "{rail}:tx:{txHash}"` and is signed by the motebit's identity key — _the wallet transaction is referenced as data, not as the signing authority_, which is the structural decoupling that lets every alternative wallet topology coexist under the same receipt format.
 
 ## Security Boundaries
 
