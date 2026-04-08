@@ -73,6 +73,7 @@ import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
+import { verifyExecutionReceipt, signSovereignPaymentReceipt, hexToBytes } from "@motebit/crypto";
 import { InMemoryGradientStore } from "./gradient.js";
 import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
@@ -207,6 +208,16 @@ export {
 export { AgentGraphManager } from "./agent-graph.js";
 export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";
+
+// Sovereign receipt exchange — protocol types, transport interface, and
+// an in-memory reference implementation for tests and in-process demos.
+// See sovereign-receipt-exchange.ts for the protocol definition.
+export type {
+  SovereignReceiptRequest,
+  SovereignReceiptResponse,
+  SovereignReceiptExchangeAdapter,
+} from "./sovereign-receipt-exchange.js";
+export { InMemoryReceiptExchangeHub } from "./sovereign-receipt-exchange.js";
 
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 // Credential/verifier interfaces imported from @motebit/sdk (canonical source).
@@ -419,6 +430,21 @@ export interface RuntimeConfig {
    * surface apps that want to control rail construction directly.
    */
   solanaWallet?: import("@motebit/wallet-solana").SolanaWalletRail;
+  /**
+   * Sovereign receipt exchange transport. When provided, the runtime
+   * can request signed receipts from counterparties via
+   * `requestSovereignReceipt` and automatically fulfills incoming
+   * requests by signing receipts for itself as the payee.
+   *
+   * The transport is the protocol's rails-plural boundary: the request/
+   * response format is singular, but any number of transports may
+   * implement it (relay-mediated A2A, direct HTTP callback, WebRTC,
+   * in-memory hub for tests). See
+   * `packages/runtime/src/sovereign-receipt-exchange.ts` for the
+   * protocol definition and the `InMemoryReceiptExchangeHub` reference
+   * implementation used by the end-to-end trust-loop test.
+   */
+  sovereignReceiptExchange?: import("./sovereign-receipt-exchange.js").SovereignReceiptExchangeAdapter;
   /** Optional structured logger. Falls back to console.warn for best-effort diagnostics. */
   logger?: { warn(message: string, context?: Record<string, unknown>): void };
 }
@@ -541,6 +567,16 @@ export class MotebitRuntime {
    * `getSolanaAddress`, `getSolanaBalance`, and `sendUsdc`.
    */
   private _solanaWallet: import("@motebit/wallet-solana").SolanaWalletRail | null = null;
+  /**
+   * Sovereign receipt exchange transport. Null when no transport is
+   * configured — in that state, the runtime can still send USDC via
+   * the Solana rail, but cannot get a trust-bearing receipt back from
+   * the counterparty. Receipts produced via this transport flow into
+   * the trust loop the same way relay-mediated receipts do.
+   */
+  private _receiptExchange:
+    | import("./sovereign-receipt-exchange.js").SovereignReceiptExchangeAdapter
+    | null = null;
   private credentialManager!: CredentialManager;
   private planExecution!: PlanExecutionManager;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
@@ -567,6 +603,15 @@ export class MotebitRuntime {
         usdcMint: config.solana.usdcMint,
         commitment: config.solana.commitment,
       });
+    }
+    // Sovereign receipt exchange transport. Register an incoming-request
+    // handler so this runtime automatically signs receipts when other
+    // motebits request them via the same transport. Handler registration
+    // happens BEFORE any outbound request can be made, so the payee side
+    // is ready the moment the hub has two parties connected.
+    if (config.sovereignReceiptExchange) {
+      this._receiptExchange = config.sovereignReceiptExchange;
+      this._receiptExchange.onIncomingRequest((req) => this.handleSovereignReceiptRequest(req));
     }
     this._logger = config.logger ?? {
       // eslint-disable-next-line no-console -- default logger fallback when no logger is injected
@@ -1758,6 +1803,175 @@ export class MotebitRuntime {
   async isSolanaAvailable(): Promise<boolean | null> {
     if (!this._solanaWallet) return null;
     return this._solanaWallet.isAvailable();
+  }
+
+  // ── Sovereign Receipt Exchange (motebit/settlement@1.0 §7) ─────────
+  //
+  // The receipt exchange closes the last gap in the single-hop sovereign
+  // loop. After the payer sends USDC via `sendUsdc`, it calls
+  // `requestSovereignReceipt` to ask the payee for a signed
+  // SovereignPaymentReceipt. The runtime verifies the signature, feeds
+  // the receipt into `bumpTrustFromReceipt`, and returns the verified
+  // receipt to the caller. Zero relay involvement at any step.
+  //
+  // The transport is pluggable — any adapter implementing
+  // `SovereignReceiptExchangeAdapter` works. See
+  // `sovereign-receipt-exchange.ts` for the protocol definition and
+  // the `InMemoryReceiptExchangeHub` reference used by tests.
+
+  /**
+   * Request a signed SovereignPaymentReceipt from a counterparty after
+   * paying them via the sovereign rail. The payer constructs the
+   * request (including the `tx_hash` returned by `sendUsdc`), calls
+   * this method, and receives a verified receipt once the payee signs.
+   *
+   * On success:
+   *   - The response's signature is verified against the embedded
+   *     public key via `verifyExecutionReceipt`.
+   *   - The verified receipt is fed into `bumpTrustFromReceipt` so the
+   *     payer's local trust store reflects the interaction.
+   *   - The verified receipt is returned to the caller for further use
+   *     (logging, UI display, audit).
+   *
+   * Throws when:
+   *   - No receipt exchange transport is configured
+   *   - The payee returns an error response
+   *   - The returned receipt's signature fails verification
+   *   - The `public_key` field is missing or malformed
+   *
+   * This method intentionally does NOT verify the underlying onchain
+   * payment. An optional verifier adapter can add that check before
+   * the trust update; see extension points in settlement-v1.md §11.
+   */
+  async requestSovereignReceipt(
+    payeeMotebitId: string,
+    request: Omit<
+      import("./sovereign-receipt-exchange.js").SovereignReceiptRequest,
+      "payer_motebit_id" | "payer_device_id"
+    > & { payer_device_id?: string },
+  ): Promise<ExecutionReceipt> {
+    if (!this._receiptExchange) {
+      throw new Error("Sovereign receipt exchange transport not configured on this runtime.");
+    }
+
+    const fullRequest: import("./sovereign-receipt-exchange.js").SovereignReceiptRequest = {
+      ...request,
+      payer_motebit_id: this.motebitId,
+      payer_device_id: request.payer_device_id ?? "runtime-default",
+    };
+
+    const response = await this._receiptExchange.request(payeeMotebitId, fullRequest);
+
+    if (response.error) {
+      throw new Error(
+        `Sovereign receipt exchange failed [${response.error.code}]: ${response.error.message}`,
+      );
+    }
+    if (!response.receipt) {
+      throw new Error("Sovereign receipt exchange returned neither a receipt nor an error.");
+    }
+
+    // Verify the signature using the embedded public key. No relay
+    // lookup, no registry, no third-party trust — the receipt is
+    // self-verifiable per settlement-v1.md §3.2.
+    const receipt = response.receipt;
+    if (!receipt.public_key) {
+      throw new Error("Sovereign receipt is missing the payee's public_key field.");
+    }
+    const pubKeyBytes = hexToBytes(receipt.public_key);
+    const valid = await verifyExecutionReceipt(receipt, pubKeyBytes);
+    if (!valid) {
+      throw new Error("Sovereign receipt signature verification failed — rejecting.");
+    }
+
+    // Feed into the trust loop. The payee's motebit_id is the subject
+    // of the trust update; the payer (this runtime) is the observer.
+    await this.bumpTrustFromReceipt(receipt, true);
+
+    return receipt;
+  }
+
+  /**
+   * Handle an incoming sovereign receipt request from another motebit.
+   * Called by the receipt exchange transport when this runtime is the
+   * payee. The runtime verifies the request is addressed to us,
+   * constructs a SovereignPaymentReceipt from the request data, signs
+   * it with the identity key, and returns it in the response.
+   *
+   * Returns an `error` response when:
+   *   - The runtime has no signing keys (can't sign a receipt)
+   *   - The request's `payee_motebit_id` doesn't match us
+   *   - The request's `payee_address` doesn't match our Solana wallet
+   *     address (when we have one)
+   *
+   * This method does NOT verify the underlying onchain payment. The
+   * caller (transport / verifier adapter) is responsible for any
+   * onchain cross-check before invoking this handler.
+   */
+  private async handleSovereignReceiptRequest(
+    request: import("./sovereign-receipt-exchange.js").SovereignReceiptRequest,
+  ): Promise<import("./sovereign-receipt-exchange.js").SovereignReceiptResponse> {
+    if (!this._signingKeys) {
+      return {
+        error: {
+          code: "unknown",
+          message: "No signing keys configured on this runtime",
+        },
+      };
+    }
+
+    if (request.payee_motebit_id !== this.motebitId) {
+      return {
+        error: {
+          code: "address_mismatch",
+          message: `Request addressed to ${request.payee_motebit_id}, but this motebit is ${this.motebitId}`,
+        },
+      };
+    }
+
+    // When we have a Solana wallet, cross-check that the payee_address
+    // in the request matches our own address. This prevents a confused
+    // deputy where someone tricks us into signing for a payment that
+    // landed somewhere else.
+    const ownAddress = this.getSolanaAddress();
+    if (ownAddress && request.payee_address !== ownAddress) {
+      return {
+        error: {
+          code: "address_mismatch",
+          message: `Request payee_address ${request.payee_address} does not match our wallet ${ownAddress}`,
+        },
+      };
+    }
+
+    try {
+      const receipt = await signSovereignPaymentReceipt(
+        {
+          payee_motebit_id: this.motebitId,
+          payee_device_id: "runtime-default",
+          payer_motebit_id: request.payer_motebit_id,
+          rail: request.rail,
+          tx_hash: request.tx_hash,
+          amount_micro: request.amount_micro,
+          asset: request.asset,
+          service_description: request.service_description,
+          prompt_hash: request.prompt_hash,
+          result_hash: request.result_hash,
+          tools_used: request.tools_used,
+          submitted_at: request.submitted_at,
+          completed_at: request.completed_at,
+        },
+        this._signingKeys.privateKey,
+        this._signingKeys.publicKey,
+      );
+      return { receipt };
+    } catch (err: unknown) {
+      return {
+        error: {
+          code: "unknown",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      };
+    }
   }
 
   /** Register or update this agent's service listing. */
