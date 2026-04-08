@@ -53,7 +53,7 @@ vi.mock("../runtime-factory.js", () => ({
 }));
 
 // Import after mocks
-import { handleBalance, handleWithdraw, handleFund, handleDelegate } from "../subcommands.js";
+import { handleBalance, handleWithdraw, handleFund, handleDelegate } from "../subcommands/index.js";
 import { loadFullConfig } from "../config.js";
 
 // === Test helpers ===

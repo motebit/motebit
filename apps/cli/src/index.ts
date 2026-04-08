@@ -57,7 +57,7 @@ import {
   handleFund,
   handleDelegate,
   handleWithdraw,
-} from "./subcommands.js";
+} from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
 
