@@ -1085,15 +1085,25 @@ export class DesktopApp {
       exported_at: new Date().toISOString(),
     };
 
+    // Track any section that fails so the exported bundle can surface it
+    // explicitly. A silent fallback to an empty array would make the user
+    // think their motebit had no memories or events when the query actually
+    // threw — that's worse than failing loudly.
+    const failedSections: string[] = [];
+
     if (this.runtime) {
       // Export memories (nodes + edges)
       try {
         const { nodes, edges } = await this.runtime.memory.exportAll();
         data.memories = nodes;
         data.edges = edges;
-      } catch {
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- diagnostic for partial export
+        console.warn(`[export] memory export failed — bundle will omit memories: ${msg}`);
         data.memories = [];
         data.edges = [];
+        failedSections.push("memories", "edges");
       }
 
       // Export state vector
@@ -1106,9 +1116,18 @@ export class DesktopApp {
           limit: 500,
         });
         data.events = events;
-      } catch {
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- diagnostic for partial export
+        console.warn(`[export] event export failed — bundle will omit events: ${msg}`);
         data.events = [];
+        failedSections.push("events");
       }
+    }
+
+    if (failedSections.length > 0) {
+      data.partial_export = true;
+      data.failed_sections = failedSections;
     }
 
     return JSON.stringify(data, null, 2);
