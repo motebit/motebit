@@ -26,7 +26,7 @@ import {
   bootstrapIdentity,
 } from "../identity.js";
 import { getDbPath } from "../runtime-factory.js";
-import { fetchRelayJson } from "./_helpers.js";
+import { fetchRelayJson, getRelayAuthHeaders } from "./_helpers.js";
 
 export async function handleExport(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
@@ -156,11 +156,7 @@ export async function handleExport(config: CliConfig): Promise<void> {
 
   // Relay-dependent exports
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
-  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
-  const headers: Record<string, string> = {};
-  if (syncToken) {
-    headers["Authorization"] = `Bearer ${syncToken}`;
-  }
+  const headers = await getRelayAuthHeaders(config);
   const baseUrl = syncUrl ? syncUrl.replace(/\/$/, "") : null;
 
   if (!baseUrl) {

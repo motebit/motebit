@@ -9,7 +9,7 @@
  */
 
 import type { CliConfig } from "../args.js";
-import { fetchRelayJson, getRelayUrl } from "./_helpers.js";
+import { fetchRelayJson, getRelayAuthHeaders, getRelayUrl } from "./_helpers.js";
 
 export async function handleFederationStatus(config: CliConfig): Promise<void> {
   const relayUrl = getRelayUrl(config);
@@ -33,10 +33,8 @@ export async function handleFederationStatus(config: CliConfig): Promise<void> {
 
 export async function handleFederationPeers(config: CliConfig): Promise<void> {
   const relayUrl = getRelayUrl(config);
-  const token = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"] ?? "";
-  const result = await fetchRelayJson(`${relayUrl}/federation/v1/peers`, {
-    Authorization: `Bearer ${token}`,
-  });
+  const headers = await getRelayAuthHeaders(config);
+  const result = await fetchRelayJson(`${relayUrl}/federation/v1/peers`, headers);
   if (!result.ok) {
     console.error(`Failed to list peers: ${result.error}`);
     process.exit(1);
