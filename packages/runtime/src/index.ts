@@ -219,6 +219,12 @@ export type {
 } from "./sovereign-receipt-exchange.js";
 export { InMemoryReceiptExchangeHub } from "./sovereign-receipt-exchange.js";
 
+// HTTP direct receipt exchange — pure peer-to-peer transport, no relay.
+// Node-only (server side), fetch-based (client side). See
+// http-receipt-exchange.ts for the wire format and usage.
+export { createHttpReceiptExchange } from "./http-receipt-exchange.js";
+export type { HttpReceiptExchange, HttpReceiptExchangeConfig } from "./http-receipt-exchange.js";
+
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 // Credential/verifier interfaces imported from @motebit/sdk (canonical source).
 
