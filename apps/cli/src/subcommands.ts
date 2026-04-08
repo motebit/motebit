@@ -23,6 +23,7 @@ export {
   handleApprovalApprove,
   handleApprovalDeny,
 } from "./subcommands/approvals.js";
+export { handleId } from "./subcommands/id.js";
 
 // Shared helper still used by handlers that haven't been extracted yet
 // (federation, balance). Will become unused once T10 + T12 land.
@@ -50,38 +51,6 @@ import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "./config.js";
 import { fromHex, promptPassphrase, encryptPrivateKey, decryptPrivateKey } from "./identity.js";
 import { getDbPath } from "./runtime-factory.js";
 import { formatTimeAgo } from "./utils.js";
-
-// ---------------------------------------------------------------------------
-// motebit id — display identity card from config (no file / verification needed)
-// ---------------------------------------------------------------------------
-
-export function handleId(): void {
-  const config = loadFullConfig();
-
-  if (!config.motebit_id) {
-    console.error("No identity found. Run `npm create motebit` or `motebit run` to create one.");
-    process.exit(1);
-  }
-
-  console.log();
-  console.log(`  motebit_id   ${config.motebit_id}`);
-
-  if (config.device_public_key) {
-    try {
-      console.log(`  did          ${hexPublicKeyToDidKey(config.device_public_key)}`);
-    } catch {
-      // Non-fatal — key may be invalid
-    }
-    console.log(`  public_key   ${config.device_public_key.slice(0, 16)}...`);
-  }
-
-  if (config.device_id) {
-    console.log(`  device_id    ${config.device_id}`);
-  }
-
-  console.log(`  config       ${CONFIG_DIR}/config.json`);
-  console.log();
-}
 
 // ---------------------------------------------------------------------------
 // motebit ledger <goalId> — fetch and display a signed execution ledger
