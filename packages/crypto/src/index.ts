@@ -476,7 +476,7 @@ export interface SignableReceipt {
   device_id: string;
   submitted_at: number;
   completed_at: number;
-  status: string;
+  status: "completed" | "failed" | "denied";
   result: string;
   tools_used: string[];
   memories_formed: number;
@@ -529,6 +529,85 @@ export async function verifyExecutionReceipt(
   } catch {
     return false;
   }
+}
+
+// === Sovereign Payment Receipts ===
+
+/**
+ * Inputs for a sovereign payment receipt — produced by the *payee* when
+ * a counterparty pays them directly via an onchain wallet rail (Solana,
+ * future Aptos/Sui), bypassing the relay's settlement gate.
+ *
+ * The receipt is structurally an `ExecutionReceipt` with:
+ *   - `task_id` formatted as `{rail}:tx:{txHash}` so the trust signal
+ *     anchors to a specific, globally unique onchain payment.
+ *   - `relay_task_id` left undefined (the field is optional precisely
+ *     for non-relay execution paths — see protocol/index.ts).
+ *   - All cryptography identical to relay-mediated receipts: same
+ *     canonical JSON, same Ed25519 sign/verify, same trust ingestion.
+ *
+ * Verifiers do not need any relay or registry to validate the signature.
+ * Optional second-layer verification (the txHash actually exists onchain
+ * and matches the claimed amount) lives at the wallet-rail boundary, not
+ * here — this helper is the cryptographic primitive only.
+ */
+export interface SovereignPaymentReceiptInput {
+  /** The payee's motebit ID (the worker who is signing this receipt). */
+  payee_motebit_id: string;
+  /** The payee's device ID. */
+  payee_device_id: string;
+  /** The payer's motebit ID — recorded in `result` for downstream audit. */
+  payer_motebit_id: string;
+  /** Onchain payment proof: rail name (e.g., "solana") + transaction signature. */
+  rail: string;
+  tx_hash: string;
+  /** Payment amount in micro-units (6 decimals for USDC). */
+  amount_micro: bigint;
+  /** Asset symbol (e.g., "USDC"). */
+  asset: string;
+  /** Brief human-readable description of the service rendered. */
+  service_description: string;
+  /** SHA-256 hash of the request payload. */
+  prompt_hash: string;
+  /** SHA-256 hash of the result payload. */
+  result_hash: string;
+  /** Tools the payee used to deliver the service. Empty array if pure payment ack. */
+  tools_used?: string[];
+  /** When the payee accepted the request. */
+  submitted_at: number;
+  /** When the payee completed the work. */
+  completed_at: number;
+}
+
+/**
+ * Construct, canonicalize, and sign a sovereign payment receipt with
+ * the payee's Ed25519 identity key. Returns a fully-formed
+ * `ExecutionReceipt` that can be passed to any standard verifier and
+ * fed into `bumpTrustFromReceipt` on the payer's runtime.
+ *
+ * No relay is contacted at any point. The resulting receipt is
+ * self-verifiable forever from the embedded `public_key` field.
+ */
+export async function signSovereignPaymentReceipt(
+  input: SovereignPaymentReceiptInput,
+  privateKey: Uint8Array,
+  publicKey: Uint8Array,
+): Promise<SignableReceipt> {
+  const receipt: Omit<SignableReceipt, "signature"> = {
+    task_id: `${input.rail}:tx:${input.tx_hash}`,
+    motebit_id: input.payee_motebit_id,
+    device_id: input.payee_device_id,
+    submitted_at: input.submitted_at,
+    completed_at: input.completed_at,
+    status: "completed",
+    result: `${input.service_description} | paid by ${input.payer_motebit_id}: ${input.amount_micro.toString()} micro-${input.asset} via ${input.rail}`,
+    tools_used: input.tools_used ?? [],
+    memories_formed: 0,
+    prompt_hash: input.prompt_hash,
+    result_hash: input.result_hash,
+    // relay_task_id intentionally omitted — sovereign rail, no relay binding
+  };
+  return signExecutionReceipt(receipt, privateKey, publicKey);
 }
 
 // === Receipt Chain Verification ===

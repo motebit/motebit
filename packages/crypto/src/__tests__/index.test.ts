@@ -17,6 +17,7 @@ import {
   verifySignedToken,
   signExecutionReceipt,
   verifyExecutionReceipt,
+  signSovereignPaymentReceipt,
   verifyReceiptChain,
   signKeySuccession,
   verifyKeySuccession,
@@ -1299,5 +1300,128 @@ describe("signGuardianRevocation + verifyGuardianRevocation", () => {
       bytesToHex(guardianKp.publicKey),
     );
     expect(valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signSovereignPaymentReceipt() — sovereign trust signal, no relay involved
+// ---------------------------------------------------------------------------
+
+describe("signSovereignPaymentReceipt", () => {
+  it("produces a verifiable ExecutionReceipt anchored to an onchain tx", async () => {
+    const payeeKp = await generateKeypair();
+
+    const receipt = await signSovereignPaymentReceipt(
+      {
+        payee_motebit_id: "payee-mote",
+        payee_device_id: "payee-device",
+        payer_motebit_id: "payer-mote",
+        rail: "solana",
+        tx_hash: "5JxYzExampleSolanaTxSignature",
+        amount_micro: 5_000n,
+        asset: "USDC",
+        service_description: "search query",
+        prompt_hash: "sha256:prompt",
+        result_hash: "sha256:result",
+        submitted_at: 1_700_000_000_000,
+        completed_at: 1_700_000_001_000,
+      },
+      payeeKp.privateKey,
+      payeeKp.publicKey,
+    );
+
+    // task_id anchors the trust signal to a globally unique onchain payment
+    expect(receipt.task_id).toBe("solana:tx:5JxYzExampleSolanaTxSignature");
+    // sovereign rail — no relay binding
+    expect(receipt.relay_task_id).toBeUndefined();
+    expect(receipt.motebit_id).toBe("payee-mote");
+    expect(receipt.status).toBe("completed");
+    expect(receipt.signature).toBeTruthy();
+
+    // The signature must verify against the embedded public key — no relay
+    // lookup, no registry, no third party. Self-contained trust artifact.
+    const valid = await verifyExecutionReceipt(receipt, payeeKp.publicKey);
+    expect(valid).toBe(true);
+  });
+
+  it("tampering with the amount breaks verification", async () => {
+    const payeeKp = await generateKeypair();
+    const receipt = await signSovereignPaymentReceipt(
+      {
+        payee_motebit_id: "payee",
+        payee_device_id: "device",
+        payer_motebit_id: "payer",
+        rail: "solana",
+        tx_hash: "txhash",
+        amount_micro: 5_000n,
+        asset: "USDC",
+        service_description: "service",
+        prompt_hash: "h1",
+        result_hash: "h2",
+        submitted_at: 1,
+        completed_at: 2,
+      },
+      payeeKp.privateKey,
+      payeeKp.publicKey,
+    );
+
+    // Forge a higher amount in the result string after signing
+    const tampered = {
+      ...receipt,
+      result: receipt.result.replace("5000", "999999999"),
+    };
+    const valid = await verifyExecutionReceipt(tampered, payeeKp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("a different signer cannot produce a valid receipt for the same payment", async () => {
+    const payeeKp = await generateKeypair();
+    const attackerKp = await generateKeypair();
+
+    const real = await signSovereignPaymentReceipt(
+      {
+        payee_motebit_id: "payee",
+        payee_device_id: "device",
+        payer_motebit_id: "payer",
+        rail: "solana",
+        tx_hash: "txhash",
+        amount_micro: 1_000n,
+        asset: "USDC",
+        service_description: "service",
+        prompt_hash: "h1",
+        result_hash: "h2",
+        submitted_at: 1,
+        completed_at: 2,
+      },
+      payeeKp.privateKey,
+      payeeKp.publicKey,
+    );
+
+    // Attacker can't validate the real receipt against their own pubkey
+    const validAgainstAttacker = await verifyExecutionReceipt(real, attackerKp.publicKey);
+    expect(validAgainstAttacker).toBe(false);
+  });
+
+  it("works with an empty tools_used array by default", async () => {
+    const payeeKp = await generateKeypair();
+    const receipt = await signSovereignPaymentReceipt(
+      {
+        payee_motebit_id: "p",
+        payee_device_id: "d",
+        payer_motebit_id: "x",
+        rail: "solana",
+        tx_hash: "h",
+        amount_micro: 1n,
+        asset: "USDC",
+        service_description: "s",
+        prompt_hash: "ph",
+        result_hash: "rh",
+        submitted_at: 0,
+        completed_at: 0,
+      },
+      payeeKp.privateKey,
+      payeeKp.publicKey,
+    );
+    expect(receipt.tools_used).toEqual([]);
   });
 });

@@ -219,3 +219,121 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
     expect(edge!.weight.trust).toBeGreaterThanOrEqual(0.3);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Sovereign trust loop — proves trust closes end-to-end without the relay
+// ---------------------------------------------------------------------------
+//
+// This is the load-bearing test for the sovereign-stack thesis. It exercises
+// the full payment → receipt → verification → trust accumulation loop with
+// zero relay involvement. If this test passes, the trust layer joins every
+// other layer in offering a free, sovereign path.
+//
+// Flow:
+//   1. Payee constructs a sovereign payment receipt for an onchain payment
+//   2. Payee signs it with their own Ed25519 identity key
+//   3. Payer verifies the signature (using only the embedded public key)
+//   4. Payer feeds the verified receipt into bumpTrustFromReceipt
+//   5. Payer's local trust store reflects the new trust signal
+//
+// At no point does any relay get contacted, queried, or trusted.
+
+describe("MotebitRuntime sovereign trust loop (no relay)", () => {
+  it("a payee can mint a trust signal for a payer via signed onchain payment receipt", async () => {
+    const { generateKeypair, signSovereignPaymentReceipt, verifyExecutionReceipt } =
+      await import("@motebit/crypto");
+
+    // 1. Payer (the motebit running this runtime) and payee (a remote
+    //    counterparty paid via wallet-solana). Each owns its own Ed25519
+    //    identity key — no shared infrastructure.
+    const payeeKp = await generateKeypair();
+    const PAYER_ID = "test-mote";
+    const PAYEE_ID = "remote-payee";
+
+    const { adapters, trustStore } = createAdaptersWithTrust();
+    const runtime = new MotebitRuntime({ motebitId: PAYER_ID, tickRateHz: 0 }, adapters);
+
+    // 2. Payee constructs and signs a sovereign payment receipt for an
+    //    (imagined) Solana USDC transfer. The tx_hash anchors the receipt
+    //    to a globally unique onchain proof.
+    const receipt = await signSovereignPaymentReceipt(
+      {
+        payee_motebit_id: PAYEE_ID,
+        payee_device_id: "remote-device",
+        payer_motebit_id: PAYER_ID,
+        rail: "solana",
+        tx_hash: "5JxYzExampleSolanaTxSignature",
+        amount_micro: 5_000n,
+        asset: "USDC",
+        service_description:
+          "Search query rendered with verifiable result and tool usage producing meaningful content for the user.",
+        prompt_hash: "sha256:prompt",
+        result_hash: "sha256:result",
+        tools_used: ["web_search", "read_url"],
+        submitted_at: Date.now() - 2_000,
+        completed_at: Date.now(),
+      },
+      payeeKp.privateKey,
+      payeeKp.publicKey,
+    );
+
+    // Sanity: receipt is sovereign (no relay binding)
+    expect(receipt.relay_task_id).toBeUndefined();
+    expect(receipt.task_id).toBe("solana:tx:5JxYzExampleSolanaTxSignature");
+
+    // 3. Payer verifies the signature using ONLY the embedded public key.
+    //    No relay, no registry, no third party.
+    const valid = await verifyExecutionReceipt(receipt, payeeKp.publicKey);
+    expect(valid).toBe(true);
+
+    // 4. Payer feeds the verified receipt into the trust loop.
+    await runtime.bumpTrustFromReceipt(receipt, true);
+
+    // 5. Payer's local trust store reflects the new trust signal.
+    const record = await trustStore.getAgentTrust(PAYER_ID, PAYEE_ID);
+    expect(record).not.toBeNull();
+    expect(record!.trust_level).toBe(AgentTrustLevel.FirstContact);
+    expect(record!.interaction_count).toBe(1);
+    expect(record!.successful_tasks).toBe(1);
+
+    // The local agent graph also picks up the new edge — routing decisions
+    // can now use this counterparty without ever consulting a relay.
+    const graph = runtime.getAgentGraph();
+    const snapshot = await graph!.getGraphSnapshot();
+    const edge = snapshot.edges.find((e) => e.to === PAYEE_ID);
+    expect(edge).toBeDefined();
+  });
+
+  it("an unverified sovereign receipt does not affect trust (fail-closed)", async () => {
+    const { generateKeypair, signSovereignPaymentReceipt } = await import("@motebit/crypto");
+
+    const payeeKp = await generateKeypair();
+    const { adapters, trustStore } = createAdaptersWithTrust();
+    const runtime = new MotebitRuntime({ motebitId: "test-mote", tickRateHz: 0 }, adapters);
+
+    const receipt = await signSovereignPaymentReceipt(
+      {
+        payee_motebit_id: "remote",
+        payee_device_id: "device",
+        payer_motebit_id: "test-mote",
+        rail: "solana",
+        tx_hash: "tx",
+        amount_micro: 1_000n,
+        asset: "USDC",
+        service_description: "service",
+        prompt_hash: "p",
+        result_hash: "r",
+        submitted_at: Date.now() - 1000,
+        completed_at: Date.now(),
+      },
+      payeeKp.privateKey,
+      payeeKp.publicKey,
+    );
+
+    // Caller passes verified=false — the receipt is well-formed but the
+    // payer chose not to trust it. Trust must NOT be updated.
+    await runtime.bumpTrustFromReceipt(receipt, false);
+    const record = await trustStore.getAgentTrust("test-mote", "remote");
+    expect(record).toBeNull();
+  });
+});

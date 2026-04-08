@@ -23,6 +23,7 @@ import {
   generateKeypair,
   signExecutionReceipt,
   verifyExecutionReceipt,
+  type SignableReceipt,
   verifySignedToken,
   hash as sha256,
 } from "@motebit/crypto";
@@ -270,23 +271,7 @@ describe("Web Search Service — Protocol Loop", () => {
     const pubKeyBytes = new Uint8Array(
       (publicKeyHex.match(/.{2}/g) ?? []).map((h) => parseInt(h, 16)),
     );
-    const valid = await verifyExecutionReceipt(
-      receipt as unknown as {
-        task_id: string;
-        motebit_id: string;
-        device_id: string;
-        submitted_at: number;
-        completed_at: number;
-        status: string;
-        result: string;
-        tools_used: string[];
-        memories_formed: number;
-        prompt_hash: string;
-        result_hash: string;
-        signature: string;
-      },
-      pubKeyBytes,
-    );
+    const valid = await verifyExecutionReceipt(receipt as unknown as SignableReceipt, pubKeyBytes);
     expect(valid).toBe(true);
   });
 });
