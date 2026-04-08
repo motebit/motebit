@@ -2,11 +2,12 @@
  * `motebit verify <path>` — verify identity files, export bundles,
  * individual Verifiable Credentials, or Verifiable Presentations.
  *
- * Extracted from `subcommands.ts` as Target 8 of the CLI extraction —
- * the largest target at ~400 lines, including six private helper
- * functions (tryParseJson, readJsonFile, isVerifiableCredential,
- * isVerifiablePresentation, credentialTypeName, extractSubjectMotebitId)
- * that travel with the module because nothing else uses them.
+ * Dispatches on path shape: `.md` → single identity file,
+ * `.json` → VC / VP / credential array, directory → export bundle
+ * with cross-checked subject consistency. All cryptographic
+ * verification delegates to `@motebit/identity-file` and
+ * `@motebit/crypto`; this module owns the file-shape detection and
+ * per-format display logic.
  */
 
 import * as fs from "node:fs";

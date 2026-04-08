@@ -3,11 +3,11 @@
  * presentation, OSSA manifest, and budget state into a directory for
  * sharing or migration.
  *
- * Extracted from the monolithic `subcommands.ts` as Target 2 of the CLI
- * extraction. The OSSA manifest generator is a private helper co-located
- * here because nothing else uses it. `fetchRelayJson` is imported from
- * the shared `_helpers.ts` module because federation/balance handlers
- * also use it.
+ * Writes `motebit.md` (signed identity), `gradient.json`, `credentials.json`,
+ * `presentation.json`, `ossa-manifest.yaml`, and `budget.json` to the
+ * output directory. Relay-dependent artifacts (credentials, presentation,
+ * budget) are skipped with a reason line if no sync URL is configured.
+ * The OSSA manifest generator is a private helper below.
  */
 
 import * as readline from "node:readline";

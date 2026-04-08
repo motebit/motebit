@@ -2,10 +2,9 @@
  * `motebit goal ...` subcommands — add, list, outcomes, remove,
  * pause/resume for scheduled goals.
  *
- * Extracted from the monolithic `subcommands.ts` as Target 3 of the CLI
- * extraction. All five handlers share the same access pattern (resolve
- * motebitId from config, open the SQLite DB, query/mutate the goal
- * store, log an event, close) so they co-locate naturally.
+ * All five handlers share the same access pattern: resolve motebitId
+ * from config, open the SQLite database, query or mutate the goal
+ * store, emit an event, and close.
  */
 
 import { openMotebitDatabase } from "@motebit/persistence";

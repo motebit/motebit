@@ -4,8 +4,10 @@
  * to it. Saves the sync URL to `~/.motebit/config.json` so daemon and
  * REPL modes can skip the flag on subsequent runs.
  *
- * Extracted from `subcommands.ts` as Target 9 of the CLI extraction.
- * DEFAULT_SYNC_URL lives here because only this handler uses it.
+ * DEFAULT_SYNC_URL is private to this handler because it is the only
+ * command that can run against the default production relay without
+ * a pre-configured sync URL — every other handler routes through
+ * `getRelayUrl`, which requires one.
  */
 
 import { createSignedToken, secureErase } from "@motebit/crypto";

@@ -1,11 +1,10 @@
 /**
  * `motebit doctor` — environment self-check for CLI installations.
  *
- * Extracted from the monolithic `subcommands.ts` as Target 1 of the CLI
- * extraction. Same deps-by-import pattern as the desktop/mobile/spatial
- * extractions: each topic file owns its own imports and exports the
- * `handle*` functions the CLI entrypoint delegates to via the
- * `subcommands.ts` barrel.
+ * Validates Node version, config directory writability, SQLite driver,
+ * optional embeddings availability, and whether an identity has been
+ * created. Prints a per-check status line and exits non-zero if any
+ * required check fails.
  */
 
 import * as fs from "node:fs";

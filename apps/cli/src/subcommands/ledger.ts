@@ -2,10 +2,9 @@
  * `motebit ledger <goal_id>` — fetch and display a signed execution
  * ledger manifest from the relay.
  *
- * Extracted from `subcommands.ts` as Target 6 of the CLI extraction.
  * Uses a raw `fetch` rather than the shared `fetchRelayJson` helper
- * because it needs to handle the response body twice (structured JSON
- * for the happy path, raw text for the error path).
+ * because the error path reads the response body as text while the
+ * happy path parses it as JSON.
  */
 
 import type { CliConfig } from "../args.js";

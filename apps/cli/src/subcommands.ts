@@ -1,17 +1,14 @@
 // --- CLI subcommand handlers (non-REPL) ---
 //
-// Barrel file. Every handler is defined in a topic-scoped file under
-// `./subcommands/{topic}.ts`; this file just re-exports them so the
-// one importer (`./index.ts`) can keep its `import from "./subcommands.js"`
-// unchanged.
+// Barrel file. Every `handleX` function is defined in a topic-scoped
+// file under `./subcommands/{topic}.ts`; this file only re-exports
+// them so the single importer (`./index.ts`) keeps one import site.
 //
-// The extraction happened in 13 targets (T1 doctor → T13 delegate),
-// mirroring the leaves-first, one-commit-per-target pattern proven
-// on the runtime, desktop, mobile, and spatial surfaces. Shared
-// internal helpers (`fetchRelayJson`, `getRelayUrl`,
-// `getRelayAuthHeaders`) live in `./subcommands/_helpers.ts` — the
-// underscore marks that module as internal to this directory, not
-// part of the public barrel.
+// Shared internal helpers (`fetchRelayJson`, `getRelayUrl`,
+// `getRelayAuthHeaders`, `requireMotebitId`) live in
+// `./subcommands/_helpers.ts`. The leading underscore marks that
+// module as internal to this directory — it is deliberately not
+// re-exported here.
 
 export { handleDoctor } from "./subcommands/doctor.js";
 export { handleExport } from "./subcommands/export.js";
