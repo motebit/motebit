@@ -233,6 +233,13 @@ export type { HttpReceiptExchange, HttpReceiptExchangeConfig } from "./http-rece
 export { createRelayReceiptExchange } from "./relay-receipt-exchange.js";
 export type { RelayReceiptExchange, RelayReceiptExchangeConfig } from "./relay-receipt-exchange.js";
 
+// Composite receipt exchange — dual-transport routing with automatic
+// fallback on transport-level errors, fail-fast on payee-level errors.
+// The primitive that makes "HTTP direct first, relay-mediated fallback"
+// trivial to configure. See composite-receipt-exchange.ts.
+export { createCompositeReceiptExchange } from "./composite-receipt-exchange.js";
+export type { CompositeReceiptExchange } from "./composite-receipt-exchange.js";
+
 // === McpServerConfig (inlined to avoid importing Node-only @motebit/mcp-client) ===
 // Credential/verifier interfaces imported from @motebit/sdk (canonical source).
 
