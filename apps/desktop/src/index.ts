@@ -693,8 +693,14 @@ export class DesktopApp {
             governanceLoaded = true;
           }
         }
-      } catch {
-        // Parse failure — governance stays unloaded, tools won't register
+      } catch (err: unknown) {
+        // Parse failure — governance stays unloaded, tools won't register.
+        // Log so the operator can see *why* tools are missing instead of
+        // having to trace "no tools" backward to a silent identity-file
+        // parse error.
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- operator diagnostic
+        console.warn(`[governance] identity file parse failed — tools will not register: ${msg}`);
       }
     }
 
