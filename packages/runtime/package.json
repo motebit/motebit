@@ -31,7 +31,8 @@
     "@motebit/mcp-client": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/policy": "workspace:*",
-    "@motebit/semiring": "workspace:*"
+    "@motebit/semiring": "workspace:*",
+    "@motebit/wallet-solana": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

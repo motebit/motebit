@@ -1190,6 +1190,9 @@ importers:
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../sync-engine
+      '@motebit/wallet-solana':
+        specifier: workspace:*
+        version: link:../wallet-solana
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

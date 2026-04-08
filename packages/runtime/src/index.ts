@@ -72,6 +72,7 @@ import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
+import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { InMemoryGradientStore } from "./gradient.js";
 import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
@@ -393,6 +394,31 @@ export interface RuntimeConfig {
   episodicConsolidation?: boolean;
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
+  /**
+   * Sovereign Solana wallet rail configuration.
+   *
+   * When set (and `signingKeys` is also set), the runtime derives a
+   * `SolanaWalletRail` from the identity private key as a 32-byte Ed25519
+   * seed — the Solana address is the identity public key itself, by
+   * mathematical accident of curve choice. See `spec/settlement-v1.md` §6.
+   *
+   * Omit this field to run without any sovereign wallet rail. The runtime
+   * still works exactly as before; it just has no Solana wallet exposed.
+   */
+  solana?: {
+    /** Solana RPC endpoint URL (mainnet-beta, devnet, or custom). */
+    rpcUrl: string;
+    /** USDC SPL mint (base58). Defaults to mainnet USDC inside wallet-solana. */
+    usdcMint?: string;
+    /** RPC commitment level. Defaults to "confirmed" inside wallet-solana. */
+    commitment?: "processed" | "confirmed" | "finalized";
+  };
+  /**
+   * Pre-built sovereign Solana wallet rail. Overrides `solana` when set.
+   * Intended for tests (inject a rail with a mocked RPC adapter) and for
+   * surface apps that want to control rail construction directly.
+   */
+  solanaWallet?: import("@motebit/wallet-solana").SolanaWalletRail;
   /** Optional structured logger. Falls back to console.warn for best-effort diagnostics. */
   logger?: { warn(message: string, context?: Record<string, unknown>): void };
 }
@@ -508,6 +534,13 @@ export class MotebitRuntime {
   private latencyStatsStore: LatencyStatsStoreAdapter | null;
   private agentGraph: AgentGraphManager;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
+  /**
+   * Sovereign Solana wallet rail. Null when the runtime has no signing keys
+   * or the caller did not configure a Solana rail. When present, exposes
+   * the motebit's onchain address, balance, and USDC send capability via
+   * `getSolanaAddress`, `getSolanaBalance`, and `sendUsdc`.
+   */
+  private _solanaWallet: import("@motebit/wallet-solana").SolanaWalletRail | null = null;
   private credentialManager!: CredentialManager;
   private planExecution!: PlanExecutionManager;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
@@ -521,6 +554,20 @@ export class MotebitRuntime {
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     this.episodicConsolidation = config.episodicConsolidation ?? false;
     this._signingKeys = config.signingKeys ?? null;
+    // Sovereign Solana wallet rail. The runtime owns at most one instance.
+    // Priority: pre-built rail (for tests / custom adapters) > inline config
+    // > nothing (sovereign rail disabled). Requires signing keys either way
+    // because the rail derives its keypair from the identity seed.
+    if (config.solanaWallet) {
+      this._solanaWallet = config.solanaWallet;
+    } else if (config.solana && this._signingKeys) {
+      this._solanaWallet = createSolanaWalletRail({
+        rpcUrl: config.solana.rpcUrl,
+        identitySeed: this._signingKeys.privateKey,
+        usdcMint: config.solana.usdcMint,
+        commitment: config.solana.commitment,
+      });
+    }
     this._logger = config.logger ?? {
       // eslint-disable-next-line no-console -- default logger fallback when no logger is injected
       warn: (msg, ctx) => console.warn(`[motebit] ${msg}`, ctx ? JSON.stringify(ctx) : ""),
@@ -1642,6 +1689,75 @@ export class MotebitRuntime {
   /** Get the agent network graph manager for routing queries. */
   getAgentGraph(): AgentGraphManager {
     return this.agentGraph;
+  }
+
+  // ── Sovereign Solana Wallet (motebit/settlement@1.0 §6 default reference impl) ──
+  //
+  // The runtime exposes the motebit's sovereign wallet as a first-class
+  // primitive. The wallet exists by mathematical accident of the Ed25519/
+  // Solana curve coincidence — the motebit's identity public key IS a
+  // valid Solana address, with no second key, no binding ceremony, and
+  // no vendor dependency. See `spec/settlement-v1.md` §3 (foundation
+  // law), §6 (default reference implementation), and §7 (sovereign
+  // payment receipt format) for the protocol-level semantics.
+  //
+  // These methods return null when the runtime has no Solana wallet
+  // configured (either no signing keys, or no `solana` / `solanaWallet`
+  // in RuntimeConfig). Callers can treat absence gracefully: a motebit
+  // without a sovereign rail falls back to relay-mediated settlement.
+
+  /**
+   * The motebit's sovereign Solana wallet address (base58).
+   *
+   * Returns null when no Solana wallet is configured. When present, this
+   * address is identical to the base58-encoded Ed25519 identity public
+   * key — the same key that signs receipts, credentials, and federation
+   * messages. Other motebits and external counterparties can send USDC
+   * (or SOL) directly to this address.
+   */
+  getSolanaAddress(): string | null {
+    return this._solanaWallet?.address ?? null;
+  }
+
+  /**
+   * USDC balance in micro-units (6 decimals, matching motebit money).
+   *
+   * Returns null when no Solana wallet is configured. Queries the
+   * configured RPC endpoint; best-effort and may throw RPC errors.
+   * Missing associated token accounts return 0, not null.
+   */
+  async getSolanaBalance(): Promise<bigint | null> {
+    if (!this._solanaWallet) return null;
+    return this._solanaWallet.getBalance();
+  }
+
+  /**
+   * Send USDC to a counterparty Solana address via the sovereign rail.
+   *
+   * Returns the transaction signature and confirmation state. Does NOT
+   * produce a trust-bearing receipt by itself — sovereign payment
+   * receipts are signed by the PAYEE, not the payer, and require a
+   * separate receipt-exchange step. See §7 of the settlement spec.
+   *
+   * Returns null when no Solana wallet is configured. Throws on
+   * insufficient balance, invalid counterparty address, or RPC errors
+   * (see @motebit/wallet-solana error types).
+   */
+  async sendUsdc(
+    toAddress: string,
+    microAmount: bigint,
+  ): Promise<import("@motebit/wallet-solana").SendResult | null> {
+    if (!this._solanaWallet) return null;
+    return this._solanaWallet.send(toAddress, microAmount);
+  }
+
+  /**
+   * Whether the sovereign Solana rail is reachable right now (best-
+   * effort RPC health probe). Returns null when no wallet is configured.
+   */
+  async isSolanaAvailable(): Promise<boolean | null> {
+    if (!this._solanaWallet) return null;
+    return this._solanaWallet.isAvailable();
   }
 
   /** Register or update this agent's service listing. */
