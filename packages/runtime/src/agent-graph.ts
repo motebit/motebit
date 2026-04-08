@@ -153,7 +153,7 @@ export class AgentGraphManager {
     private readonly motebitId: MotebitId,
     private readonly trustStore: AgentTrustStoreAdapter | null,
     private readonly listingStore: ServiceListingStoreAdapter | null,
-    _latencyStore: LatencyStatsStoreAdapter | null,
+    private readonly latencyStore: LatencyStatsStoreAdapter | null,
     private readonly credentialStore: AgentGraphCredentialSource | null = null,
   ) {}
 
@@ -177,19 +177,49 @@ export class AgentGraphManager {
   /**
    * Update the graph with edges from a delegation receipt tree.
    * Called after receipt verification to add multi-hop topology.
+   *
+   * Pre-fetches trust records and latency stats for every motebit in the
+   * receipt tree before building edges. This is the only way to feed real
+   * data to `addDelegationEdges`, which takes synchronous callbacks — both
+   * the trust store and the latency store may return Promises, so we
+   * resolve them upfront and pass sync getters reading from the maps.
    */
   async addReceiptEdges(receipt: ExecutionReceipt): Promise<void> {
     const graph = await this.getGraph();
-    const getTrust = (id: string): number => {
-      if (!this.trustStore) return 0.1;
-      const rec = this.trustStore.getAgentTrust(this.motebitId, id);
-      // Handle both sync and async stores — for async, use fallback
-      if (rec && typeof (rec as Promise<unknown>).then === "function") return 0.1;
-      return (rec as AgentTrustRecord | null)
-        ? trustLevelToScore((rec as AgentTrustRecord).trust_level)
-        : 0.1;
+
+    // Walk the receipt tree to collect every motebit ID we'll need data for.
+    const motebitIds = new Set<string>();
+    const collect = (r: ExecutionReceipt): void => {
+      motebitIds.add(r.motebit_id);
+      if (r.delegation_receipts) {
+        for (const sub of r.delegation_receipts) collect(sub);
+      }
     };
-    const getLatency = (_id: string): number => 3000; // default; real latency comes from stats
+    collect(receipt);
+
+    // Pre-fetch trust records and latency stats in parallel. Both stores
+    // are awaited; missing data falls back to FirstContact-shaped defaults
+    // (0.1 trust, 3000 ms latency) so routing degrades gracefully.
+    const trustMap = new Map<string, number>();
+    const latencyMap = new Map<string, number>();
+
+    await Promise.all(
+      Array.from(motebitIds).map(async (id) => {
+        const [rec, stats] = await Promise.all([
+          this.trustStore
+            ? Promise.resolve(this.trustStore.getAgentTrust(this.motebitId, id))
+            : Promise.resolve(null),
+          this.latencyStore?.getStats
+            ? Promise.resolve(this.latencyStore.getStats(this.motebitId, id))
+            : Promise.resolve(null),
+        ]);
+        trustMap.set(id, rec ? trustLevelToScore(rec.trust_level) : 0.1);
+        latencyMap.set(id, stats?.avg_ms ?? 3000);
+      }),
+    );
+
+    const getTrust = (id: string): number => trustMap.get(id) ?? 0.1;
+    const getLatency = (id: string): number => latencyMap.get(id) ?? 3000;
     addDelegationEdges(graph, receipt, getTrust, getLatency);
   }
 
