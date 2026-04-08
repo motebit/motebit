@@ -1,0 +1,137 @@
+/**
+ * `motebit register [--sync-url <url>]` — register this motebit's
+ * identity with the relay so other agents can discover and delegate
+ * to it. Saves the sync URL to `~/.motebit/config.json` so daemon and
+ * REPL modes can skip the flag on subsequent runs.
+ *
+ * Extracted from `subcommands.ts` as Target 9 of the CLI extraction.
+ * DEFAULT_SYNC_URL lives here because only this handler uses it.
+ */
+
+import { createSignedToken, secureErase } from "@motebit/crypto";
+import type { CliConfig } from "../args.js";
+import { loadFullConfig, saveFullConfig } from "../config.js";
+import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
+
+const DEFAULT_SYNC_URL = "https://motebit-sync.fly.dev";
+
+export async function handleRegister(config: CliConfig): Promise<void> {
+  const syncUrl = (config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? DEFAULT_SYNC_URL).replace(
+    /\/+$/,
+    "",
+  );
+
+  const fullConfig = loadFullConfig();
+
+  // Require identity to exist (user must have launched the REPL at least once)
+  const motebitId = fullConfig.motebit_id;
+  const deviceId = fullConfig.device_id;
+  const publicKeyHex = fullConfig.device_public_key;
+
+  if (motebitId == null || motebitId === "") {
+    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    process.exit(1);
+  }
+  if (deviceId == null || deviceId === "") {
+    console.error("Error: no device_id found in config. Run `motebit` first.");
+    process.exit(1);
+  }
+  if (publicKeyHex == null || publicKeyHex === "") {
+    console.error("Error: no public key found in config. Run `motebit` first.");
+    process.exit(1);
+  }
+
+  // Optionally decrypt private key so we can verify the registration with a signed token
+  let privateKeyBytes: Uint8Array | undefined;
+  if (fullConfig.cli_encrypted_key) {
+    try {
+      const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+      let passphrase: string;
+      if (envPassphrase != null && envPassphrase !== "") {
+        passphrase = envPassphrase;
+      } else {
+        passphrase = await promptPassphrase("Passphrase (to sign registration): ");
+      }
+      const pkHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+      privateKeyBytes = fromHex(pkHex);
+    } catch {
+      console.warn("Warning: could not decrypt private key — registration proceeds unsigned");
+    }
+  }
+
+  // Step 1: Bootstrap identity + device on relay (creates identity if new, idempotent if same key)
+  const bootstrapBody = {
+    motebit_id: motebitId,
+    device_id: deviceId,
+    public_key: publicKeyHex,
+  };
+
+  let registerResp: Response;
+  try {
+    registerResp = await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bootstrapBody),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: could not reach relay at ${syncUrl}: ${msg}`);
+    process.exit(1);
+  }
+
+  if (!registerResp.ok) {
+    const text = await registerResp.text();
+    console.error(
+      `Error: relay registration failed (${registerResp.status}): ${text.slice(0, 200)}`,
+    );
+    process.exit(1);
+  }
+
+  const bootstrapResult = (await registerResp.json()) as { registered: boolean };
+  const registered = true;
+
+  // Step 2: Verify registration succeeded by minting a signed token and calling /health
+  if (registered && privateKeyBytes) {
+    try {
+      const token = await createSignedToken(
+        {
+          mid: motebitId,
+          did: deviceId,
+          iat: Date.now(),
+          exp: Date.now() + 5 * 60 * 1000,
+          jti: crypto.randomUUID(),
+          aud: "sync",
+        },
+        privateKeyBytes,
+      );
+
+      const healthResp = await fetch(`${syncUrl}/health`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!healthResp.ok) {
+        console.warn(`Warning: relay health check returned ${healthResp.status} — continuing`);
+      }
+    } catch {
+      // Best-effort verification — don't fail the command
+    }
+  }
+
+  // Step 3: Save sync URL to config if not already set
+  if (fullConfig.sync_url == null || fullConfig.sync_url === "") {
+    fullConfig.sync_url = syncUrl;
+    saveFullConfig(fullConfig);
+    console.log(`Saved sync URL: ${syncUrl}`);
+  }
+
+  if (bootstrapResult.registered) {
+    console.log(`Created + registered ${motebitId.slice(0, 8)}... with relay at ${syncUrl}`);
+  } else {
+    console.log(
+      `Registered ${motebitId.slice(0, 8)}... with relay at ${syncUrl} (identity already existed)`,
+    );
+  }
+
+  // Erase temporary private key bytes
+  if (privateKeyBytes) secureErase(privateKeyBytes);
+}
