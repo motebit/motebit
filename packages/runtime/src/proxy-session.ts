@@ -84,6 +84,10 @@ export async function fetchProxyToken(
       motebitId,
     };
   } catch {
+    // Network unreachable, JSON malformed, or relay rejected the request.
+    // Return null so the caller (ProxySession.bootstrap) can fall through
+    // to local inference (Ollama → WebLLM → deposit prompt) per the
+    // documented session lifecycle.
     return null;
   }
 }
