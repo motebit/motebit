@@ -57,6 +57,7 @@ import {
   handleFund,
   handleDelegate,
   handleWithdraw,
+  handleWallet,
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -109,6 +110,14 @@ async function main(): Promise<void> {
 
   if (subcommand === "id") {
     handleId();
+    return;
+  }
+
+  if (subcommand === "wallet") {
+    await handleWallet({
+      rpcUrl: config.solanaRpcUrl,
+      addressOnly: config.walletAddressOnly,
+    });
     return;
   }
 

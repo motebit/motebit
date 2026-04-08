@@ -41,3 +41,4 @@ export { handleBalance, handleFund, handleWithdraw } from "./market.js";
 export { handleRegister } from "./register.js";
 export { handleRotate } from "./rotate.js";
 export { handleVerify } from "./verify.js";
+export { handleWallet } from "./wallet.js";

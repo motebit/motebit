@@ -5040,6 +5040,18 @@
           </div>
           <div class="identity-note">Ed25519 keypair stored in encrypted IndexedDB. Private key never leaves this browser.</div>
         </div>
+        <div class="settings-card" style="margin-top:12px;">
+          <div class="card-title">Sovereign Wallet</div>
+          <div class="settings-field">
+            <label>Solana Address</label>
+            <div class="identity-value monospace" id="wallet-solana-address" title="Click to copy">—</div>
+          </div>
+          <div class="settings-field">
+            <label>USDC Balance</label>
+            <div class="identity-value" id="wallet-solana-balance">—</div>
+          </div>
+          <div class="identity-note">Your motebit's sovereign wallet. The address <em>is</em> your Ed25519 public key, base58-encoded — one key, two uses, by mathematical coincidence. Send USDC directly to this address to fund your motebit. No relay, no custody, no intermediary.</div>
+        </div>
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button class="settings-outline-btn" id="settings-link-device" style="flex:1;">Link Device</button>
           <button class="settings-outline-btn" id="settings-claim-device" style="flex:1;">Claim Device</button>

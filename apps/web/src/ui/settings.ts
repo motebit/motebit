@@ -69,6 +69,10 @@ const identityDeviceId = document.getElementById("identity-device-id") as HTMLDi
 const identityDid = document.getElementById("identity-did") as HTMLDivElement;
 const identityPublicKey = document.getElementById("identity-public-key") as HTMLDivElement;
 
+// Sovereign wallet fields (sibling to Cryptographic Identity, NOT nested)
+const walletSolanaAddress = document.getElementById("wallet-solana-address") as HTMLDivElement;
+const walletSolanaBalance = document.getElementById("wallet-solana-balance") as HTMLDivElement;
+
 // === Provider Tab DOM ===
 const providerTabs = document.querySelectorAll<HTMLButtonElement>("#provider-tabs .provider-tab");
 const providerConfigs = {
@@ -212,6 +216,48 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const pubHex = ctx.app.publicKeyHex;
     identityDid.textContent = pubHex ? hexPublicKeyToDidKey(pubHex) : "—";
     identityPublicKey.textContent = pubHex || "—";
+    populateWalletFields();
+  }
+
+  /**
+   * Populate the Sovereign Wallet card. Reads from the live runtime so
+   * the address and balance always reflect the currently loaded motebit.
+   * Address is available synchronously (derived from the identity key at
+   * runtime construction); balance is async and requires an RPC call.
+   *
+   * When no wallet is configured on the runtime (e.g., the web app has
+   * not yet wired Solana config, or signing keys are not set), the
+   * fields show an em dash — the UX gracefully degrades to "no wallet".
+   */
+  function populateWalletFields(): void {
+    const runtime = ctx.app.getRuntime();
+    const address = runtime?.getSolanaAddress() ?? null;
+    walletSolanaAddress.textContent = address ?? "—";
+
+    // Balance loads async; show a placeholder while the RPC call is in flight,
+    // then update on resolve. No spinner — the placeholder is the spinner.
+    if (!runtime || !address) {
+      walletSolanaBalance.textContent = "—";
+      return;
+    }
+    walletSolanaBalance.textContent = "Loading…";
+    void runtime
+      .getSolanaBalance()
+      .then((microUsdc) => {
+        if (microUsdc == null) {
+          walletSolanaBalance.textContent = "—";
+          return;
+        }
+        // Format as USDC with 2 decimal places for readability. 6 decimals
+        // is USDC-native but shows too much precision for a balance display.
+        const usdc = Number(microUsdc) / 1_000_000;
+        walletSolanaBalance.textContent = `${usdc.toFixed(2)} USDC`;
+      })
+      .catch(() => {
+        // RPC unreachable or other error. Silent — show em dash.
+        // The user can re-open settings to retry.
+        walletSolanaBalance.textContent = "—";
+      });
   }
 
   function populateTtsVoices(): void {
@@ -331,7 +377,16 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   }
 
   function setupIdentityCopyHandlers(): void {
-    for (const el of [identityMotebitId, identityDeviceId, identityDid, identityPublicKey]) {
+    // Wallet address is click-to-copy like the identity fields, because the
+    // most common user action is "give this address to someone to fund me."
+    const clickable = [
+      identityMotebitId,
+      identityDeviceId,
+      identityDid,
+      identityPublicKey,
+      walletSolanaAddress,
+    ];
+    for (const el of clickable) {
       el.addEventListener("click", () => {
         const text = el.textContent;
         if (text == null || text === "" || text === "—") return;

@@ -50,6 +50,10 @@ export interface CliConfig {
   json: boolean;
   presentation: boolean;
   all?: boolean;
+  /** Solana RPC endpoint override for `motebit wallet`. */
+  solanaRpcUrl?: string;
+  /** Skip the balance query in `motebit wallet` (address-only). */
+  walletAddressOnly?: boolean;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -93,6 +97,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       json: { type: "boolean", default: false },
       presentation: { type: "boolean", default: false },
       all: { type: "boolean", default: false },
+      "solana-rpc-url": { type: "string" },
+      "address-only": { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -179,6 +185,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     json: values.json,
     presentation: values.presentation,
     all: values.all,
+    solanaRpcUrl: values["solana-rpc-url"],
+    walletAddressOnly: values["address-only"],
     version: values.version,
     help: values.help,
     positionals,
@@ -259,6 +267,9 @@ Usage: motebit [command] [options]
 
 Commands:
   id                        Show your identity (motebit_id, did:key, public key)
+  wallet                    Show your sovereign Solana wallet (address, USDC balance)
+    --solana-rpc-url <url>    Solana RPC endpoint (default: mainnet-beta public RPC)
+    --address-only            Skip the balance query (address-only)
   doctor                    Check system readiness (Node, SQLite, config)
   export [--output <dir>]   Export identity bundle (motebit.md, credentials, budget, gradient)
     --all                   Include sensitive memories (medical/financial/secret) in export

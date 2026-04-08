@@ -222,6 +222,39 @@ export class WebApp {
     const preset = govConfig
       ? (presetConfigs[govConfig.approvalPreset] ?? presetConfigs.balanced!)
       : presetConfigs.balanced!;
+
+    // Load identity signing keys so the runtime can construct the sovereign
+    // Solana wallet (settlement-v1.md §6). The Ed25519 seed is the same 32
+    // bytes that sign identity assertions — Solana derives its address from
+    // this via Keypair.fromSeed (curve coincidence). Best-effort: if the
+    // keystore has no key (fresh install, unlocked-but-migrated state), the
+    // runtime runs without a wallet and the UX shows an em dash.
+    let signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
+    try {
+      const privateKeyHex = await this.keyStore.loadPrivateKey();
+      if (privateKeyHex != null && privateKeyHex !== "" && this._publicKeyHex !== "") {
+        const privBytes = new Uint8Array(privateKeyHex.length / 2);
+        for (let i = 0; i < privateKeyHex.length; i += 2) {
+          privBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
+        }
+        const pubBytes = new Uint8Array(this._publicKeyHex.length / 2);
+        for (let i = 0; i < this._publicKeyHex.length; i += 2) {
+          pubBytes[i / 2] = parseInt(this._publicKeyHex.slice(i, i + 2), 16);
+        }
+        signingKeys = { privateKey: privBytes, publicKey: pubBytes };
+      }
+    } catch {
+      // Keystore read failed. Runtime runs without signing keys; wallet UX
+      // gracefully shows em dash. User can still use the app for everything
+      // else. Re-attempting at next bootstrap.
+    }
+
+    // Solana RPC endpoint. Default to mainnet-beta public RPC (rate-limited
+    // ~5 req/s, free, fine for the MVP since we only call getBalance()
+    // occasionally). Override at build time via VITE_SOLANA_RPC_URL.
+    const env = (import.meta as { env?: Record<string, string | undefined> }).env;
+    const solanaRpcUrl = env?.VITE_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+
     this.runtime = new MotebitRuntime(
       {
         motebitId: this._motebitId,
@@ -241,6 +274,8 @@ export class WebApp {
             }
           : undefined,
         taskRouter: PLANNING_TASK_ROUTER,
+        signingKeys,
+        solana: { rpcUrl: solanaRpcUrl },
       },
       { storage, renderer: this.renderer, ai: undefined, keyring },
     );
