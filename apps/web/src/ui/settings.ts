@@ -72,6 +72,7 @@ const identityPublicKey = document.getElementById("identity-public-key") as HTML
 // Sovereign wallet fields (sibling to Cryptographic Identity, NOT nested)
 const walletSolanaAddress = document.getElementById("wallet-solana-address") as HTMLDivElement;
 const walletSolanaBalance = document.getElementById("wallet-solana-balance") as HTMLDivElement;
+const walletFundBtn = document.getElementById("wallet-fund-btn") as HTMLButtonElement | null;
 
 // === Provider Tab DOM ===
 const providerTabs = document.querySelectorAll<HTMLButtonElement>("#provider-tabs .provider-tab");
@@ -399,6 +400,84 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   }
 
   setupIdentityCopyHandlers();
+
+  // ── Fund Your Wallet button ────────────────────────────────────
+  //
+  // Click -> POST to the relay's /api/v1/onramp/session with the
+  // motebit's Solana address -> open the returned redirect URL in a
+  // new tab -> user completes the purchase on the provider's hosted
+  // page (Stripe Crypto Onramp by default) -> USDC arrives at the
+  // motebit's Solana address onchain -> balance refreshes when the
+  // user returns to this tab (window focus event).
+  //
+  // The relay is a session broker here, not a custodian. It does not
+  // see the card data, does not touch the funds — the provider
+  // handles all of that and delivers directly to the motebit's
+  // sovereign wallet.
+  walletFundBtn?.addEventListener("click", () => {
+    const address = walletSolanaAddress.textContent;
+    if (address == null || address === "" || address === "—") {
+      ctx.showToast("No wallet address — wallet is not configured");
+      return;
+    }
+
+    const runtime = ctx.app.getRuntime();
+    const motebitId = runtime?.motebitId ?? ctx.app.motebitId;
+    if (!motebitId) {
+      ctx.showToast("No motebit identity — cannot create onramp session");
+      return;
+    }
+
+    walletFundBtn.disabled = true;
+    const originalText = walletFundBtn.textContent;
+    walletFundBtn.textContent = "Opening…";
+
+    void (async (): Promise<void> => {
+      try {
+        const response = await fetch(`${PROXY_BASE_URL}/api/v1/onramp/session`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            motebit_id: motebitId,
+            destination_address: address,
+          }),
+        });
+
+        if (!response.ok) {
+          if (response.status === 503) {
+            ctx.showToast("Funding is not yet available on this relay");
+          } else {
+            ctx.showToast(`Funding failed: HTTP ${response.status}`);
+          }
+          return;
+        }
+
+        const body = (await response.json()) as {
+          redirect_url: string;
+          provider: string;
+        };
+
+        // Open in a new tab so the user stays in the motebit app.
+        // When they return (window focus event), we refresh the balance.
+        window.open(body.redirect_url, "_blank", "noopener,noreferrer");
+
+        // One-shot focus listener: refresh balance the next time the
+        // motebit tab regains focus. Common case: user closes the
+        // onramp tab after completing the purchase.
+        const onFocus = (): void => {
+          window.removeEventListener("focus", onFocus);
+          populateWalletFields();
+        };
+        window.addEventListener("focus", onFocus);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.showToast(`Funding error: ${msg}`);
+      } finally {
+        walletFundBtn.disabled = false;
+        walletFundBtn.textContent = originalText;
+      }
+    })();
+  });
 
   // Rotate Key button
   document.getElementById("settings-rotate-key")?.addEventListener("click", () => {

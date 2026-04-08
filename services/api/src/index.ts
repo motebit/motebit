@@ -98,6 +98,7 @@ import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { registerReceiptExchangeRoutes } from "./receipt-exchange.js";
+import { registerOnrampRoutes, StripeCryptoOnrampAdapter, type OnrampAdapter } from "./onramp.js";
 import { createTaskRouter } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import {
@@ -202,6 +203,19 @@ export interface SyncRelayConfig {
     webhookSecret: string;
     currency?: string; // default 'usd'
   };
+  /**
+   * Pluggable on-ramp adapter for the paved funding flow. When set,
+   * `POST /api/v1/onramp/session` returns a redirect URL the surface
+   * can open to launch the provider's hosted purchase flow (e.g.,
+   * Stripe Crypto Onramp). When omitted, the endpoint returns 503.
+   *
+   * The default behavior when `stripe.secretKey` is configured is to
+   * auto-construct a `StripeCryptoOnrampAdapter` using the same
+   * secret key. Pass an explicit adapter here to override (e.g., to
+   * inject a mock adapter in tests, or to plug in a different provider
+   * like MoonPay or Ramp Network).
+   */
+  onramp?: OnrampAdapter;
   /** Bridge.xyz configuration. Omit to disable Bridge orchestration rail. */
   bridge?: {
     /** Bridge API key. */
@@ -258,6 +272,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     federation: federationConfig,
     stripe: stripeConfig,
     bridge: bridgeConfig,
+    onramp: onrampOverride,
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
   } = config;
 
@@ -696,6 +711,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // as multi-device sync: a legitimate meeting point, not an authority.
   // See services/api/src/receipt-exchange.ts for the protocol.
   const receiptExchangeHub = registerReceiptExchangeRoutes(app);
+
+  // --- Paved fiat → crypto on-ramp (Stripe Crypto Onramp by default) ---
+  // Turns "your motebit has an address" into "click Fund, USDC arrives."
+  // Priority: explicit adapter in config > auto-construct Stripe adapter
+  // if Stripe secret key is present > null (endpoint returns 503).
+  // Surfaces call POST /api/v1/onramp/session to get a redirect URL and
+  // open it in a new tab; the user completes the purchase on Stripe's
+  // hosted page; USDC arrives at the motebit's Solana address.
+  // See services/api/src/onramp.ts for the adapter pattern.
+  const onrampAdapter: OnrampAdapter | null =
+    onrampOverride ??
+    (stripeConfig ? new StripeCryptoOnrampAdapter({ secretKey: stripeConfig.secretKey }) : null);
+  registerOnrampRoutes(app, onrampAdapter);
 
   // --- Budget, accounts & admin routes (after auth middleware) ---
   registerBudgetRoutes({
