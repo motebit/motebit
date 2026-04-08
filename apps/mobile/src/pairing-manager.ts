@@ -2,10 +2,9 @@
  * Mobile pairing manager — owns the pairing-client lifecycle for
  * device-to-device identity transfer via the relay.
  *
- * Extracted from `mobile-app.ts` as Target 4 of the mobile extraction
- * plan. Pairing is the identity-transfer flow: Device A (existing)
- * mints a code; Device B (new) claims it; A approves; B completes by
- * writing the pinned motebit_id + device_id to its own keyring.
+ * Pairing is the identity-transfer flow: Device A (existing) mints a
+ * code; Device B (new) claims it; A approves; B completes by writing
+ * the pinned motebit_id + device_id to its own keyring.
  *
  * ### State ownership
  *

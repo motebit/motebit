@@ -1,10 +1,9 @@
 /**
  * Appearance tab — color preset grid, custom HSL sliders, theme toggle.
  *
- * Extracted from SettingsModal.tsx. Pure presentation component: takes
- * the current selection + custom hue/saturation as props, emits changes
- * via callbacks. Live preview of the droplet color is the caller's
- * responsibility.
+ * Pure presentation component: takes the current selection + custom
+ * hue/saturation as props, emits changes via callbacks. Live preview
+ * of the droplet color is the caller's responsibility.
  */
 
 import React, { useMemo } from "react";

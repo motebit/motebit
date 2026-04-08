@@ -2,8 +2,6 @@
  * Identity tab — displays motebit ID, DID, device ID, public key with
  * copy-to-clipboard; actions for rotate key, link device, export
  * identity file, export all data, open docs.
- *
- * Extracted from SettingsModal.tsx.
  */
 
 import React, { useState } from "react";

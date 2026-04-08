@@ -1,7 +1,6 @@
 /**
  * `usePairing` — React hook that owns the cross-device pairing flow
- * state and handlers for the mobile App. Extracted from `App.tsx` as
- * Target 9 of the mobile extraction plan.
+ * state and handlers for the mobile App.
  *
  * Owns:
  *

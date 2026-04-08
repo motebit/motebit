@@ -4,7 +4,6 @@
  * delegation task handler, and the "serving" state (whether the motebit
  * is accepting inbound delegations from the network).
  *
- * Extracted from DesktopApp as Target 5 of the desktop extraction plan.
  * Sync is the membrane that lets the motebit live across devices — the
  * body accumulates state locally; the relay is the rail along which that
  * state replicates. Giving it a dedicated home keeps the DesktopApp shell

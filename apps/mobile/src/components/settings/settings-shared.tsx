@@ -1,11 +1,9 @@
 /**
  * Shared building blocks for the settings tab components.
  *
- * Extracted from the old monolithic `SettingsModal.tsx` (2,129 lines)
- * during Target 11 of the mobile extraction plan. Every tab imports
- * from here: the stylesheet factory, the tab-key + vendor + backend
- * types, the preset color swatches, the risk labels, the
- * `PolicySummary` helper, and the pure color math used by the
+ * Every tab imports from here: the stylesheet factory, the tab-key +
+ * vendor + backend types, the preset color swatches, the risk labels,
+ * the `PolicySummary` helper, and the pure color math used by the
  * appearance picker.
  *
  * The stylesheet factory is the load-bearing member — every tab calls

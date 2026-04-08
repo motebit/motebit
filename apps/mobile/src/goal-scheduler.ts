@@ -3,11 +3,10 @@
  * plan-based goal dispatch, approval suspension/resumption, and outcome
  * recording to the SQLite goal store.
  *
- * Extracted from `mobile-app.ts` as Target 1 of the mobile extraction
- * plan (see `mobile_extraction_plan.md`). Mirrors the desktop
- * `GoalScheduler` pattern — class owns the timer + executing flag +
- * pending approval state + 4 UI callback slots; runtime, plan engine,
- * and goal store are read lazily via getter closures.
+ * Mirrors the desktop `GoalScheduler` pattern — class owns the timer +
+ * executing flag + pending approval state + 4 UI callback slots;
+ * runtime, plan engine, and goal store are read lazily via getter
+ * closures.
  *
  * ### State ownership
  *

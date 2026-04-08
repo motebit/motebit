@@ -3,8 +3,7 @@
  * event sync, conversation + plan HTTP sync, adversarial self-test,
  * delegation task handler, and serving state.
  *
- * Extracted from `mobile-app.ts` as Target 2 of the mobile extraction
- * plan. Mirrors the desktop `SyncController` pattern — class owns every
+ * Mirrors the desktop `SyncController` pattern — class owns every
  * sync-specific piece of state, reads runtime/storage/identity helpers
  * through getter closures.
  *

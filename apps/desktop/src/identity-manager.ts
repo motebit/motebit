@@ -2,12 +2,10 @@
  * Identity manager — owns the desktop's motebitId / deviceId / publicKey
  * state and every operation that reads or writes it.
  *
- * Extracted from the DesktopApp god class as Target 4 of the desktop
- * extraction plan (see `desktop_extraction_plan.md`). This is the
- * **foundation** target: every downstream target (sync, conversation,
- * MCP, goals) reads identity state but doesn't write it, so once
- * identity has a single clear home the rest of the extraction is
- * mechanical.
+ * This is the **foundation** module: every other desktop module (sync,
+ * conversation, MCP, goals) reads identity state but doesn't write it,
+ * so keeping identity in one clear home lets the rest of the desktop
+ * surface stay mechanical and shell-shaped.
  *
  * The 15 methods here cover three concerns:
  *

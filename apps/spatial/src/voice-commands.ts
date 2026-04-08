@@ -3,8 +3,7 @@
  * routes a voice transcript to the shared command layer
  * (`executeCommand`) via regex pattern matching.
  *
- * Extracted from `spatial-app.ts` as Target 4 of the spatial extraction
- * plan. Each command returns a spoken response string, or null to fall
+ * Each command returns a spoken response string, or null to fall
  * through to the AI conversation path.
  *
  * ### Two command shapes

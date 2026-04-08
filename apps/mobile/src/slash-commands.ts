@@ -2,9 +2,7 @@
  * Mobile slash command dispatcher — pure functional handler for the
  * 30+ `/command` shortcuts the user can type into the chat input.
  *
- * Extracted from `App.tsx` as Target 7 of the mobile extraction plan —
- * the biggest single-file reduction to App.tsx (~560 lines). The
- * dispatcher has no internal state; every side effect lands via
+ * The dispatcher has no internal state; every side effect lands via
  * injected setter callbacks (`setMessages`, `setShowXxxPanel`,
  * `showToast`, `addSystemMessage`, `setCurrentModel`).
  *

@@ -2,14 +2,11 @@
  * MCP manager — owns the desktop's registered MCP servers and the
  * connect / disconnect / tool-dispatch lifecycle.
  *
- * Extracted from the DesktopApp god class as Target 7 of the desktop
- * extraction plan (see `desktop_extraction_plan.md`). MCP is the motebit
- * tool-dispatch boundary: every external capability the motebit can
- * invoke (GitHub MCP, file ops, web search, code review, …) enters via
- * an MCP server connection. Giving it a dedicated home makes the goal
- * scheduler (Target 8) a clean downstream consumer — the scheduler
- * calls the runtime's tool registry for dispatch and never needs to
- * know about MCP internals.
+ * MCP is the motebit tool-dispatch boundary: every external capability
+ * the motebit can invoke (GitHub MCP, file ops, web search, code
+ * review, …) enters via an MCP server connection. The goal scheduler
+ * is a clean downstream consumer — it calls the runtime's tool
+ * registry for dispatch and never needs to know about MCP internals.
  *
  * ### State ownership
  *

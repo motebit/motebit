@@ -3,8 +3,6 @@
  * TTS/STT providers, audio monitor with VAD, and the streaming TTS
  * queue for the mobile App.
  *
- * Extracted from `App.tsx` as Target 10 of the mobile extraction plan.
- *
  * ### State machine (5 states)
  *
  *   off → ambient         — mic listening, creature breathes, VAD armed

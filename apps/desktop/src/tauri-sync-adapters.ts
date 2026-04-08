@@ -11,7 +11,6 @@
  * arrays/maps, then the sync engine reads from those snapshots
  * synchronously.
  *
- * Extracted from `index.ts` as part of the DesktopApp decomposition.
  * Both classes are pure leaves — they hold a store reference and a
  * cache; they don't depend on the runtime, MCP, identity, or any other
  * desktop module.

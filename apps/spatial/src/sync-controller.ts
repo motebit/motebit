@@ -4,9 +4,8 @@
  * sync, conversation sync, delegation wiring, token refresh, and
  * orphaned-step recovery.
  *
- * Extracted from `spatial-app.ts` as Target 2 of the spatial extraction
- * plan. Mirrors the desktop/mobile SyncController pattern — class owns
- * all sync state; runtime, identity, and keypair access come in via
+ * Mirrors the desktop/mobile SyncController pattern — class owns all
+ * sync state; runtime, identity, and keypair access come in via
  * getter closures.
  *
  * ### State ownership

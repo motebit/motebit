@@ -2,10 +2,9 @@
  * Spatial inference providers — WebLLM (in-browser via WebGPU) + the
  * spec→provider transport switch.
  *
- * Extracted from `spatial-app.ts` as Target 1 of the spatial extraction
- * plan. Mirrors `apps/web/src/providers.ts` — the web surface and
- * spatial both need an in-browser inference path, so this file plays
- * the same role in both codebases.
+ * Mirrors `apps/web/src/providers.ts` — the web surface and spatial
+ * both need an in-browser inference path, so this file plays the same
+ * role in both codebases.
  *
  * ### Metabolic boundary
  *

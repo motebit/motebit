@@ -1,7 +1,6 @@
 /**
  * `useChatStream` — React hook that owns the chat stream consumer and
- * approval handler for the mobile App. Extracted from `App.tsx` as
- * Target 8 of the mobile extraction plan.
+ * approval handler for the mobile App.
  *
  * Owns:
  *

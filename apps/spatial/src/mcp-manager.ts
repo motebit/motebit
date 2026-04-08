@@ -5,8 +5,7 @@
  * need the desktop or CLI app because React Native and the browser
  * have no node:child_process.
  *
- * Extracted from `spatial-app.ts` as Target 3 of the spatial extraction
- * plan. Mirrors the mobile McpManager — same shape, same vocabulary,
+ * Mirrors the mobile McpManager — same shape, same vocabulary,
  * different storage (localStorage instead of AsyncStorage).
  *
  * ### State ownership

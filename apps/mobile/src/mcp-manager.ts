@@ -4,8 +4,7 @@
  * Mobile is HTTP-only (no stdio transport — no node:child_process in
  * React Native), so this is simpler than the desktop MCP manager.
  *
- * Extracted from `mobile-app.ts` as Target 3 of the mobile extraction
- * plan. Mirrors the desktop `McpManager` pattern — class owns the
+ * Mirrors the desktop `McpManager` pattern — class owns the
  * `adapters` + `configs` maps and a `_toolsChangedCallback` slot;
  * runtime is read lazily via a getter closure.
  *

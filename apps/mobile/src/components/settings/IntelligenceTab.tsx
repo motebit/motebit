@@ -5,9 +5,9 @@
  * settings (TTS enable, speak responses, auto-send, neural VAD, TTS
  * voice, OpenAI API key).
  *
- * Extracted from SettingsModal.tsx. The inner `OnDeviceSection`
- * component is co-located because it's only used here — it handles
- * device capability detection and MLX model download/delete.
+ * The inner `OnDeviceSection` component is co-located because it's
+ * only used here — it handles device capability detection and MLX
+ * model download/delete.
  */
 
 import React, { useCallback, useEffect, useState } from "react";

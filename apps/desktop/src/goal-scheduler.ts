@@ -3,13 +3,11 @@
  * goal dispatch, approval suspension/resumption, and the goal-management
  * tool handlers (createSubGoal, completeGoal, reportProgress).
  *
- * Extracted from the DesktopApp god class as Target 8 (final major
- * extraction) of the desktop extraction plan. The scheduler is the
- * downstream consumer of every prior extraction — it reads identity
- * (`motebitId`), dispatches via the runtime (tool registry, streaming
- * turns, event log), and delegates multi-step execution to PlanEngine.
- * Giving it a dedicated home lets `index.ts` shrink to a thin platform
- * shell around MotebitRuntime.
+ * The scheduler is the downstream consumer of every other desktop module
+ * — it reads identity (`motebitId`), dispatches via the runtime (tool
+ * registry, streaming turns, event log), and delegates multi-step
+ * execution to PlanEngine. Keeping it in its own file lets `index.ts`
+ * stay a thin platform shell around MotebitRuntime.
  *
  * ### State ownership
  *

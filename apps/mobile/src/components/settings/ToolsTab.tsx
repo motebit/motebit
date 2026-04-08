@@ -7,8 +7,6 @@
  * MCP tools are the intelligence-adjacent capability surface. Kept as
  * a separate component for testability and so the prop shape mirrors
  * the desktop pattern.
- *
- * Extracted from SettingsModal.tsx.
  */
 
 import React, { useCallback, useState } from "react";

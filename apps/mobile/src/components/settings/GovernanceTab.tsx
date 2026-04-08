@@ -3,8 +3,8 @@
  * memory persistence threshold, reject-secrets switch, max tool calls
  * per turn.
  *
- * Extracted from SettingsModal.tsx. PolicySummary co-located in
- * settings-shared.tsx since it's reusable across tabs.
+ * PolicySummary lives in settings-shared.tsx because it's reusable
+ * across tabs.
  */
 
 import React from "react";

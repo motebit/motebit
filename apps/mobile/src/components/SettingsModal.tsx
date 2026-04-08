@@ -4,9 +4,9 @@
  * the save handler; each tab is a pure presentation component with a
  * prop-shaped interface.
  *
- * Refactored as Target 11 of the mobile extraction plan. The previous
- * monolithic file was 2,129 lines (one file, one modal, every tab
- * + every style + every helper). Split into:
+ * The modal is intentionally a barrel: it imports every tab and wires
+ * shared state to their props. Each tab lives in its own file for
+ * testability and so the prop shape stays explicit. Sub-modules:
  *
  *   - `./settings/settings-shared.tsx`  — types, constants, PolicySummary,
  *                                         deriveInteriorColor, stylesheet factory

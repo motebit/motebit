@@ -3,11 +3,10 @@
  * registration with the relay, token-rotation listener, foreground-
  * refresh on AppState change, and deregister cleanup.
  *
- * Extracted from `mobile-app.ts` as Target 5 of the mobile extraction
- * plan. This is the wake-on-demand primitive — the relay uses the
- * registered push token to send silent pushes that boot the mobile
- * background task handler (defined at the bottom of mobile-app.ts as
- * a module-level TaskManager.defineTask).
+ * This is the wake-on-demand primitive — the relay uses the registered
+ * push token to send silent pushes that boot the mobile background
+ * task handler (defined at the bottom of mobile-app.ts as a
+ * module-level TaskManager.defineTask).
  *
  * ### State ownership
  *
