@@ -435,8 +435,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
     void (async (): Promise<void> => {
       try {
-        // Use the relay/sync URL (where Stripe keys live), not the Vercel proxy
-        const relayUrl = loadSyncUrl() || PROXY_BASE_URL;
+        // Use the relay/sync URL (where Stripe keys live), not the Vercel proxy.
+        // Default to motebit-sync.fly.dev — that's where the onramp endpoint lives.
+        const relayUrl = loadSyncUrl() || "https://motebit-sync.fly.dev";
         const response = await fetch(`${relayUrl}/api/v1/onramp/session`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
