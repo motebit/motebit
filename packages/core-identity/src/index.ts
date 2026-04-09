@@ -200,6 +200,13 @@ export class IdentityManager {
   }
 
   /**
+   * Load a device by its device_id.
+   */
+  async getDevice(deviceId: string): Promise<DeviceRegistration | null> {
+    return this.deviceStore.loadDevice(deviceId);
+  }
+
+  /**
    * Load a device by its device_id and motebit_id.
    */
   async loadDeviceById(deviceId: string, motebitId: string): Promise<DeviceRegistration | null> {

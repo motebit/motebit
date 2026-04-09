@@ -52,7 +52,17 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
-import { createSignedToken, hexPublicKeyToDidKey, secureErase, bytesToHex } from "@motebit/crypto";
+import {
+  createSignedToken,
+  hexPublicKeyToDidKey,
+  secureErase,
+  bytesToHex,
+  generateX25519Keypair,
+  buildKeyTransferPayload,
+  decryptKeyTransfer,
+  checkPreTransferBalance,
+} from "@motebit/crypto";
+import type { KeyTransferPayload } from "@motebit/protocol";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
@@ -498,7 +508,7 @@ export class IdentityManager {
     return client.getSession(pairingId, token);
   }
 
-  /** Approve a claimed pairing session, registering Device B. */
+  /** Approve a claimed pairing session, registering Device B. Encrypts identity key if Device B supports key transfer. */
   async approvePairing(
     invoke: InvokeFn,
     syncUrl: string,
@@ -509,7 +519,25 @@ export class IdentityManager {
 
     const token = await this.createSyncToken(keypair.privateKey, "device:auth");
     const client = new PairingClient({ relayUrl: syncUrl });
-    const result = await client.approve(pairingId, token);
+
+    // Check if Device B supports key transfer (sent X25519 ephemeral key with claim)
+    let keyTransfer: KeyTransferPayload | undefined;
+    const session = await client.getSession(pairingId, token);
+    if (session.claiming_x25519_pubkey) {
+      const privKeyBytes = hexToBytes(keypair.privateKey);
+      try {
+        keyTransfer = await buildKeyTransferPayload(
+          privKeyBytes,
+          keypair.publicKey,
+          hexToBytes(session.claiming_x25519_pubkey),
+          session.pairing_code,
+        );
+      } finally {
+        secureErase(privKeyBytes);
+      }
+    }
+
+    const result = await client.approve(pairingId, token, keyTransfer);
     return { deviceId: result.deviceId };
   }
 
@@ -525,15 +553,26 @@ export class IdentityManager {
 
   // === Pairing: Device B (new device) ===
 
-  /** Claim a pairing session using a code from Device A. */
+  /**
+   * Claim a pairing session using a code from Device A.
+   * Generates an ephemeral X25519 keypair for identity key transfer.
+   * Returns the ephemeral private key — caller must hold it until completePairing.
+   */
   async claimPairing(
     syncUrl: string,
     code: string,
-  ): Promise<{ pairingId: string; motebitId: string }> {
+  ): Promise<{ pairingId: string; motebitId: string; ephemeralPrivateKey: Uint8Array }> {
     if (!this.publicKey) throw new Error("No public key available — bootstrap first");
 
+    const ephemeral = generateX25519Keypair();
     const client = new PairingClient({ relayUrl: syncUrl });
-    return client.claim(code.toUpperCase(), "Desktop", this.publicKey);
+    const result = await client.claim(
+      code.toUpperCase(),
+      "Desktop",
+      this.publicKey,
+      bytesToHex(ephemeral.publicKey),
+    );
+    return { ...result, ephemeralPrivateKey: ephemeral.privateKey };
   }
 
   /** Poll for pairing approval status (Device B). */
@@ -548,22 +587,92 @@ export class IdentityManager {
    * manager's instance state — which the DesktopApp reads via getters,
    * so every downstream consumer (sync, identity-file, goals, …) picks
    * up the new identity without needing to restart.
+   *
+   * If key transfer payload + ephemeral key + pairing code are provided,
+   * decrypts the identity seed and replaces the device's private key —
+   * both devices then derive the same Solana address.
    */
   async completePairing(
     invoke: InvokeFn,
     result: { motebitId: string; deviceId: string },
+    keyTransferOpts?: {
+      keyTransfer: KeyTransferPayload;
+      ephemeralPrivateKey: Uint8Array;
+      pairingCode: string;
+      syncUrl: string;
+      pairingId: string;
+    },
   ): Promise<void> {
     const raw = await invoke<string>("read_config");
     const config = JSON.parse(raw) as Record<string, unknown>;
 
-    const updatedConfig = {
+    let updatedConfig: Record<string, unknown> = {
       ...config,
       motebit_id: result.motebitId,
       device_id: result.deviceId,
     };
-    await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
 
-    // Auth uses signed JWTs — no device_token storage needed
+    // Decrypt and install the identity key if key transfer is available
+    if (keyTransferOpts) {
+      const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
+      try {
+        const identitySeed = await decryptKeyTransfer(
+          keyTransfer,
+          ephemeralPrivateKey,
+          pairingCode,
+        );
+        try {
+          // Safety check: refuse key transfer if old wallet has funds
+          const oldPrivKeyHex = await invoke<string>("keyring_get", { key: "device_private_key" });
+          if (oldPrivKeyHex) {
+            const oldSeedBytes = hexToBytes(oldPrivKeyHex);
+            try {
+              const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
+              if (walletCheck.hasAnyValue) {
+                const parts: string[] = [];
+                if (walletCheck.solLamports > 0n) {
+                  const sol = Number(walletCheck.solLamports) / 1_000_000_000;
+                  parts.push(`${sol.toFixed(4)} SOL`);
+                }
+                if (walletCheck.tokenAccountCount > 0) {
+                  parts.push(`${walletCheck.tokenAccountCount} token account(s)`);
+                }
+                throw new Error(
+                  `Cannot transfer identity key: this device's wallet (${walletCheck.oldAddress}) ` +
+                    `has ${parts.join(" and ")}. Send all funds to ${walletCheck.newAddress} before linking.`,
+                );
+              }
+            } finally {
+              secureErase(oldSeedBytes);
+            }
+          }
+
+          // Replace private key in OS keyring
+          const newPrivHex = bytesToHex(identitySeed);
+          await invoke<void>("keyring_set", { key: "device_private_key", value: newPrivHex });
+
+          // Derive the new public key and update config
+          const { getPublicKeyAsync } = await import("@noble/ed25519");
+          const newPub = await getPublicKeyAsync(identitySeed);
+          const newPubHex = bytesToHex(newPub);
+          updatedConfig = { ...updatedConfig, device_public_key: newPubHex };
+          this.publicKey = newPubHex;
+
+          // Update the relay's device registration with the new public key
+          const client = new PairingClient({ relayUrl: syncUrl });
+          await client.updateDeviceKey(pairingId, newPubHex);
+        } finally {
+          secureErase(identitySeed);
+        }
+      } catch (err) {
+        // Key transfer failed — log warning but don't fail pairing
+        console.warn("Key transfer failed, device keeps its own keypair:", err);
+      } finally {
+        secureErase(ephemeralPrivateKey);
+      }
+    }
+
+    await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
 
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;

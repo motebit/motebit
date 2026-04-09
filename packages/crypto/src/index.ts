@@ -1366,3 +1366,15 @@ export {
   computeSettlementLeaf,
 } from "./merkle.js";
 export type { MerkleTree, MerkleProof } from "./merkle.js";
+
+// === X25519 Key Transfer ===
+
+export {
+  generateX25519Keypair,
+  x25519SharedSecret,
+  deriveKeyTransferKey,
+  buildKeyTransferPayload,
+  decryptKeyTransfer,
+  checkPreTransferBalance,
+} from "./x25519.js";
+export type { X25519Keypair, PreTransferWalletCheck } from "./x25519.js";

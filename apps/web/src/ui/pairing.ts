@@ -216,7 +216,7 @@ export function startClaimDevice(ctx: WebContext): void {
 
     void (async () => {
       try {
-        const { pairingId } = await ctx.app.claimPairing(url, code);
+        const { pairingId, ephemeralPrivateKey } = await ctx.app.claimPairing(url, code);
         inputRow.style.display = "none";
         urlRow.style.display = "none";
         submitBtn.remove();
@@ -233,6 +233,19 @@ export function startClaimDevice(ctx: WebContext): void {
                   pollTimer = null;
                 }
                 setStatus("Approved! Starting sync...");
+                // Decrypt and install identity key if key transfer is available
+                await ctx.app.completePairing(
+                  { motebitId: result.motebit_id, deviceId: result.device_id },
+                  result.key_transfer
+                    ? {
+                        keyTransfer: result.key_transfer,
+                        ephemeralPrivateKey,
+                        pairingCode: code.toUpperCase(),
+                        syncUrl: url,
+                        pairingId,
+                      }
+                    : undefined,
+                );
                 try {
                   await ctx.app.startSync(url);
                 } catch {

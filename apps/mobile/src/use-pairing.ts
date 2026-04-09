@@ -92,6 +92,9 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
   const [pairingSyncUrlInput, setPairingSyncUrlInput] = useState("");
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pairingSyncUrlRef = useRef("");
+  /** Held between claim and complete — ephemeral X25519 private key for identity key transfer. */
+  const ephemeralKeyRef = useRef<Uint8Array | null>(null);
+  const claimCodeRef = useRef("");
 
   const stopPairingPoll = useCallback(() => {
     if (pairingPollRef.current) {
@@ -171,7 +174,9 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     pairingSyncUrlRef.current = syncUrl;
     setPairingStatusText("Claiming...");
     try {
-      const { pairingId: pid } = await app.claimPairing(syncUrl, code);
+      const { pairingId: pid, ephemeralPrivateKey } = await app.claimPairing(syncUrl, code);
+      ephemeralKeyRef.current = ephemeralPrivateKey;
+      claimCodeRef.current = code;
       setPairingId(pid);
       setPairingStatusText("Waiting for approval...");
 
@@ -194,7 +199,16 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
                   deviceId: status.device_id,
                 },
                 syncUrl,
+                status.key_transfer && ephemeralKeyRef.current
+                  ? {
+                      keyTransfer: status.key_transfer,
+                      ephemeralPrivateKey: ephemeralKeyRef.current,
+                      pairingCode: claimCodeRef.current,
+                      pairingId: pid,
+                    }
+                  : undefined,
               );
+              ephemeralKeyRef.current = null;
               closePairingDialog();
               addSystemMessage("Linked to existing motebit");
 

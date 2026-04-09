@@ -38,7 +38,13 @@ import {
   deriveSyncEncryptionKey,
   secureErase,
   bytesToHex,
+  hexToBytes,
+  generateX25519Keypair,
+  buildKeyTransferPayload,
+  decryptKeyTransfer,
+  checkPreTransferBalance,
 } from "@motebit/crypto";
+import type { KeyTransferPayload } from "@motebit/protocol";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
@@ -1382,7 +1388,28 @@ export class WebApp {
     const token = await this.createSyncToken("pair");
     if (!token) throw new Error("No signing key");
     const client = new PairingClient({ relayUrl: syncUrl });
-    const result = await client.approve(pairingId, token);
+
+    // Build key transfer payload if Device B supports it
+    let keyTransfer: KeyTransferPayload | undefined;
+    const session = await client.getSession(pairingId, token);
+    if (session.claiming_x25519_pubkey) {
+      const privateKeyHex = await this.keyStore.loadPrivateKey();
+      if (privateKeyHex) {
+        const privKeyBytes = hexToBytes(privateKeyHex);
+        try {
+          keyTransfer = await buildKeyTransferPayload(
+            privKeyBytes,
+            this._publicKeyHex!,
+            hexToBytes(session.claiming_x25519_pubkey),
+            session.pairing_code,
+          );
+        } finally {
+          secureErase(privKeyBytes);
+        }
+      }
+    }
+
+    const result = await client.approve(pairingId, token, keyTransfer);
     return { deviceId: result.deviceId };
   }
 
@@ -1396,14 +1423,95 @@ export class WebApp {
   async claimPairing(
     syncUrl: string,
     code: string,
-  ): Promise<{ pairingId: string; motebitId: string }> {
+  ): Promise<{ pairingId: string; motebitId: string; ephemeralPrivateKey: Uint8Array }> {
     if (!this._publicKeyHex) throw new Error("No public key — initialize identity first");
+    const ephemeral = generateX25519Keypair();
     const client = new PairingClient({ relayUrl: syncUrl });
-    return client.claim(code.toUpperCase(), "Browser", this._publicKeyHex);
+    const result = await client.claim(
+      code.toUpperCase(),
+      "Browser",
+      this._publicKeyHex,
+      bytesToHex(ephemeral.publicKey),
+    );
+    return { ...result, ephemeralPrivateKey: ephemeral.privateKey };
   }
 
   async pollPairingStatus(syncUrl: string, pairingId: string): Promise<PairingStatus> {
     const client = new PairingClient({ relayUrl: syncUrl });
     return client.pollStatus(pairingId);
+  }
+
+  /**
+   * Complete pairing on Device B. If key transfer payload + ephemeral key are provided,
+   * decrypts the identity seed and replaces the device's private key.
+   */
+  async completePairing(
+    { motebitId, deviceId }: { motebitId: string; deviceId: string },
+    keyTransferOpts?: {
+      keyTransfer: KeyTransferPayload;
+      ephemeralPrivateKey: Uint8Array;
+      pairingCode: string;
+      syncUrl: string;
+      pairingId: string;
+    },
+  ): Promise<void> {
+    // Update in-memory identity state
+    this._motebitId = motebitId;
+    this._deviceId = deviceId;
+
+    if (keyTransferOpts) {
+      const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
+      try {
+        const identitySeed = await decryptKeyTransfer(
+          keyTransfer,
+          ephemeralPrivateKey,
+          pairingCode,
+        );
+        try {
+          // Safety check: refuse key transfer if old wallet has funds
+          const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
+          if (oldPrivKeyHex) {
+            const oldSeedBytes = hexToBytes(oldPrivKeyHex);
+            try {
+              const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
+              if (walletCheck.hasAnyValue) {
+                const parts: string[] = [];
+                if (walletCheck.solLamports > 0n) {
+                  const sol = Number(walletCheck.solLamports) / 1_000_000_000;
+                  parts.push(`${sol.toFixed(4)} SOL`);
+                }
+                if (walletCheck.tokenAccountCount > 0) {
+                  parts.push(`${walletCheck.tokenAccountCount} token account(s)`);
+                }
+                throw new Error(
+                  `Cannot transfer identity key: this device's wallet (${walletCheck.oldAddress}) ` +
+                    `has ${parts.join(" and ")}. Send all funds to ${walletCheck.newAddress} before linking.`,
+                );
+              }
+            } finally {
+              secureErase(oldSeedBytes);
+            }
+          }
+
+          const newPrivHex = bytesToHex(identitySeed);
+          await this.keyStore.storePrivateKey(newPrivHex);
+
+          // Derive and update public key
+          const { getPublicKeyAsync } = await import("@noble/ed25519");
+          const newPub = await getPublicKeyAsync(identitySeed);
+          this._publicKeyHex = bytesToHex(newPub);
+
+          // Update relay device registration
+          const client = new PairingClient({ relayUrl: syncUrl });
+          await client.updateDeviceKey(pairingId, this._publicKeyHex);
+        } finally {
+          secureErase(identitySeed);
+        }
+      } catch (err) {
+        console.warn("Key transfer failed, device keeps its own keypair:", err);
+      } finally {
+        secureErase(ephemeralPrivateKey);
+      }
+    }
   }
 }

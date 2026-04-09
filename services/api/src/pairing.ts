@@ -57,8 +57,10 @@ export function createPairingTables(db: { exec(sql: string): void }): void {
         status TEXT NOT NULL DEFAULT 'pending',
         claiming_device_name TEXT,
         claiming_public_key TEXT,
+        claiming_x25519_pubkey TEXT,
         approved_device_id TEXT,
         approved_device_token TEXT,
+        key_transfer_payload TEXT,
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
       );
@@ -136,8 +138,9 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       pairing_code: string;
       device_name: string;
       public_key: string;
+      x25519_pubkey?: string;
     }>();
-    const { pairing_code, device_name, public_key } = body;
+    const { pairing_code, device_name, public_key, x25519_pubkey } = body;
 
     if (!pairing_code || typeof pairing_code !== "string" || !/^[A-Z2-9]{6}$/.test(pairing_code)) {
       throw new HTTPException(400, { message: "Invalid pairing code format" });
@@ -147,6 +150,14 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     }
     if (!public_key || typeof public_key !== "string" || !/^[0-9a-f]{64}$/i.test(public_key)) {
       throw new HTTPException(400, { message: "Invalid public_key — must be 64-char hex string" });
+    }
+    if (
+      x25519_pubkey != null &&
+      (typeof x25519_pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(x25519_pubkey))
+    ) {
+      throw new HTTPException(400, {
+        message: "Invalid x25519_pubkey — must be 64-char hex string",
+      });
     }
 
     const session = db
@@ -169,9 +180,9 @@ export function registerPairingRoutes(deps: PairingDeps): void {
 
     db.prepare(
       `
-      UPDATE pairing_sessions SET status = 'claimed', claiming_device_name = ?, claiming_public_key = ? WHERE pairing_id = ?
+      UPDATE pairing_sessions SET status = 'claimed', claiming_device_name = ?, claiming_public_key = ?, claiming_x25519_pubkey = ? WHERE pairing_id = ?
     `,
-    ).run(device_name, public_key, session.pairing_id as string);
+    ).run(device_name, public_key, x25519_pubkey ?? null, session.pairing_id as string);
 
     return c.json({ pairing_id: session.pairing_id, motebit_id: session.motebit_id });
   });
@@ -199,7 +210,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       throw new HTTPException(403, { message: "Not authorized for this pairing session" });
     }
 
-    return c.json({
+    const result: Record<string, unknown> = {
       pairing_id: session.pairing_id,
       motebit_id: session.motebit_id,
       status: session.status,
@@ -208,7 +219,11 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       claiming_public_key: session.claiming_public_key,
       created_at: session.created_at,
       expires_at: session.expires_at,
-    });
+    };
+    if (session.claiming_x25519_pubkey) {
+      result.claiming_x25519_pubkey = session.claiming_x25519_pubkey;
+    }
+    return c.json(result);
   });
 
   // --- Pairing: approve (Device A, authenticated) ---
@@ -239,6 +254,30 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       });
     }
 
+    // Accept optional key_transfer payload from Device A (encrypted identity seed)
+    let keyTransferJson: string | null = null;
+    const contentType = c.req.header("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      try {
+        const body = await c.req.json<{ key_transfer?: Record<string, string> }>();
+        if (body.key_transfer) {
+          const kt = body.key_transfer;
+          // Validate structure — relay stores it opaque but checks shape
+          if (
+            typeof kt.x25519_pubkey === "string" &&
+            typeof kt.encrypted_seed === "string" &&
+            typeof kt.nonce === "string" &&
+            typeof kt.tag === "string" &&
+            typeof kt.identity_pubkey_check === "string"
+          ) {
+            keyTransferJson = JSON.stringify(kt);
+          }
+        }
+      } catch {
+        // No JSON body or malformed — proceed without key transfer
+      }
+    }
+
     // Register the claiming device under the same motebit identity
     const registeredDevice = await identityManager.registerDevice(
       session.motebit_id as string,
@@ -248,9 +287,9 @@ export function registerPairingRoutes(deps: PairingDeps): void {
 
     db.prepare(
       `
-      UPDATE pairing_sessions SET status = 'approved', approved_device_id = ? WHERE pairing_id = ?
+      UPDATE pairing_sessions SET status = 'approved', approved_device_id = ?, key_transfer_payload = ? WHERE pairing_id = ?
     `,
-    ).run(registeredDevice.device_id, pairingId);
+    ).run(registeredDevice.device_id, keyTransferJson, pairingId);
 
     return c.json({
       device_id: registeredDevice.device_id,
@@ -296,7 +335,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     const session = db
       .prepare(
         `
-      SELECT status, motebit_id, approved_device_id FROM pairing_sessions WHERE pairing_id = ?
+      SELECT status, motebit_id, approved_device_id, key_transfer_payload FROM pairing_sessions WHERE pairing_id = ?
     `,
       )
       .get(pairingId) as Record<string, unknown> | undefined;
@@ -309,8 +348,59 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     if ((session.status as string) === "approved") {
       result.motebit_id = session.motebit_id;
       result.device_id = session.approved_device_id;
+      // Include key_transfer payload if present (encrypted identity seed from Device A)
+      if (session.key_transfer_payload) {
+        try {
+          result.key_transfer = JSON.parse(session.key_transfer_payload as string);
+        } catch {
+          // Malformed — skip
+        }
+      }
     }
 
     return c.json(result);
+  });
+
+  // --- Pairing: update device key after identity key transfer (Device B, no auth) ---
+  app.post("/pairing/:pairingId/update-key", async (c) => {
+    const pairingId = c.req.param("pairingId");
+    const body = await c.req.json<{ public_key: string }>();
+
+    if (
+      !body.public_key ||
+      typeof body.public_key !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(body.public_key)
+    ) {
+      throw new HTTPException(400, { message: "Invalid public_key — must be 64-char hex string" });
+    }
+
+    const session = db
+      .prepare(
+        `
+      SELECT pairing_id, status, approved_device_id, motebit_id FROM pairing_sessions WHERE pairing_id = ?
+    `,
+      )
+      .get(pairingId) as Record<string, unknown> | undefined;
+
+    if (!session) {
+      throw new HTTPException(404, { message: "Pairing session not found" });
+    }
+    if ((session.status as string) !== "approved") {
+      throw new HTTPException(409, { message: "Pairing session not approved" });
+    }
+    if (!session.approved_device_id) {
+      throw new HTTPException(409, { message: "No approved device" });
+    }
+
+    // Update the device's public key in the identity store
+    const deviceId = session.approved_device_id as string;
+    const device = await identityManager.getDevice(deviceId);
+    if (!device) {
+      throw new HTTPException(404, { message: "Approved device not found in identity store" });
+    }
+
+    await identityManager.updateDevicePublicKey(deviceId, body.public_key);
+
+    return c.json({ ok: true });
   });
 }

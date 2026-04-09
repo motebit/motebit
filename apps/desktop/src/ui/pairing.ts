@@ -176,7 +176,7 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
     pairingInputRow.style.display = "none";
 
     try {
-      const { pairingId } = await ctx.app.claimPairing(syncUrl, code);
+      const { pairingId, ephemeralPrivateKey } = await ctx.app.claimPairing(syncUrl, code);
       pairingStatus.textContent = "Waiting for approval...";
 
       pairingActions.innerHTML = "";
@@ -201,10 +201,22 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
                 clearInterval(pairingPollTimer);
                 pairingPollTimer = null;
               }
-              await ctx.app.completePairing(invoke, {
-                motebitId: status.motebit_id,
-                deviceId: status.device_id,
-              });
+              await ctx.app.completePairing(
+                invoke,
+                {
+                  motebitId: status.motebit_id,
+                  deviceId: status.device_id,
+                },
+                status.key_transfer
+                  ? {
+                      keyTransfer: status.key_transfer,
+                      ephemeralPrivateKey,
+                      pairingCode: code.toUpperCase(),
+                      syncUrl,
+                      pairingId,
+                    }
+                  : undefined,
+              );
               void ctx.app.startSync(invoke, syncUrl).catch(() => {});
               close();
               ctx.showToast("Linked to existing motebit");

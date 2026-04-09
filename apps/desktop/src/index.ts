@@ -1232,7 +1232,10 @@ export class DesktopApp {
     return this.identity.denyPairing(invoke, syncUrl, pairingId);
   }
 
-  claimPairing(syncUrl: string, code: string): Promise<{ pairingId: string; motebitId: string }> {
+  claimPairing(
+    syncUrl: string,
+    code: string,
+  ): Promise<{ pairingId: string; motebitId: string; ephemeralPrivateKey: Uint8Array }> {
     return this.identity.claimPairing(syncUrl, code);
   }
 
@@ -1243,8 +1246,9 @@ export class DesktopApp {
   completePairing(
     invoke: InvokeFn,
     result: { motebitId: string; deviceId: string },
+    keyTransferOpts?: Parameters<typeof this.identity.completePairing>[2],
   ): Promise<void> {
-    return this.identity.completePairing(invoke, result);
+    return this.identity.completePairing(invoke, result, keyTransferOpts);
   }
 
   // === Goal Scheduling ===

@@ -568,10 +568,18 @@ export class MobileApp {
   private pairing = new MobilePairingManager({
     getKeyring: () => this.keyring,
     getPublicKey: () => this.publicKey,
+    getPrivKeyHex: async () => {
+      const hex = await this.keyring.get("device_private_key");
+      if (!hex) throw new Error("No device private key in keyring");
+      return hex;
+    },
     createSyncToken: (aud) => this.createSyncToken(aud),
     setIdentity: (motebitId, deviceId) => {
       this.motebitId = motebitId;
       this.deviceId = deviceId;
+    },
+    setPublicKey: (pubKeyHex) => {
+      this.publicKey = pubKeyHex;
     },
     setSyncUrl: (url) => this.setSyncUrl(url),
   });
@@ -1642,7 +1650,10 @@ export class MobileApp {
     return this.pairing.denyPairing(syncUrl, pairingId);
   }
 
-  claimPairing(syncUrl: string, code: string): Promise<{ pairingId: string; motebitId: string }> {
+  claimPairing(
+    syncUrl: string,
+    code: string,
+  ): Promise<{ pairingId: string; motebitId: string; ephemeralPrivateKey: Uint8Array }> {
     return this.pairing.claimPairing(syncUrl, code);
   }
 
@@ -1653,8 +1664,9 @@ export class MobileApp {
   completePairing(
     result: { motebitId: string; deviceId: string },
     syncUrl?: string,
+    keyTransferOpts?: Parameters<typeof this.pairing.completePairing>[2],
   ): Promise<void> {
-    return this.pairing.completePairing(result, syncUrl);
+    return this.pairing.completePairing(result, syncUrl, keyTransferOpts);
   }
 
   // === Push Token Lifecycle (delegates to MobilePushTokenManager) ===

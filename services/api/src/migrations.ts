@@ -444,4 +444,20 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 7,
+    name: "add_key_transfer_columns",
+    up: (db) => {
+      // Guard: columns already exist on fresh installs (createPairingTables includes them).
+      const cols = (
+        db.prepare("PRAGMA table_info(pairing_sessions)").all() as { name: string }[]
+      ).map((c) => c.name);
+      if (!cols.includes("claiming_x25519_pubkey")) {
+        db.exec("ALTER TABLE pairing_sessions ADD COLUMN claiming_x25519_pubkey TEXT");
+      }
+      if (!cols.includes("key_transfer_payload")) {
+        db.exec("ALTER TABLE pairing_sessions ADD COLUMN key_transfer_payload TEXT");
+      }
+    },
+  },
 ];

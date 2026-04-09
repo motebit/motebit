@@ -637,6 +637,26 @@ export interface DelegatedStepResult {
 // === Key Succession ===
 
 /**
+ * Encrypted identity key transfer payload for multi-device pairing.
+ *
+ * Device A encrypts its Ed25519 identity seed using ephemeral X25519 key agreement
+ * and posts this payload through the relay. The relay sees only opaque ciphertext.
+ * Device B decrypts using its held ephemeral X25519 private key + the pairing code.
+ */
+export interface KeyTransferPayload {
+  /** Device A's ephemeral X25519 public key (64-char hex). */
+  x25519_pubkey: string;
+  /** AES-256-GCM encrypted 32-byte Ed25519 identity seed (hex). */
+  encrypted_seed: string;
+  /** AES-256-GCM nonce, 12 bytes (24-char hex). */
+  nonce: string;
+  /** AES-256-GCM auth tag, 16 bytes (32-char hex). */
+  tag: string;
+  /** Device A's Ed25519 identity public key for post-decryption verification (64-char hex). */
+  identity_pubkey_check: string;
+}
+
+/**
  * A key succession record proving that one Ed25519 key has been replaced by another.
  * Both the old and new keys sign the record, creating a cryptographic chain of custody.
  * Structurally compatible with @motebit/crypto KeySuccessionRecord.
