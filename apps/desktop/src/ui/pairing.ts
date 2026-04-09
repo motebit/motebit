@@ -1,5 +1,6 @@
 import type { InvokeFn, PairingSession } from "../index";
 import type { DesktopContext } from "../types";
+import { checkWalletHasAssets, hexToBytes, secureErase } from "@motebit/crypto";
 
 // === DOM Refs ===
 
@@ -142,16 +143,33 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
 
     // Check for accumulated state and show backup prompt if needed
     void (async () => {
-      const [convs, memories] = await Promise.all([
+      // Check wallet in parallel — needs the private key from keyring
+      const walletCheck = (async () => {
+        try {
+          const privHex = await invoke<string>("keyring_get", { key: "device_private_key" });
+          if (!privHex) return false;
+          const seed = hexToBytes(privHex);
+          try {
+            return await checkWalletHasAssets(seed);
+          } finally {
+            secureErase(seed);
+          }
+        } catch {
+          return false;
+        }
+      })();
+      const [convs, memories, hasWallet] = await Promise.all([
         ctx.app.listConversationsAsync(100),
         ctx.app.listMemories(),
+        walletCheck,
       ]);
-      if (convs.length === 0 && memories.length === 0) return;
+      if (convs.length === 0 && memories.length === 0 && !hasWallet) return;
       const parts: string[] = [];
       if (convs.length > 0)
         parts.push(`${convs.length} conversation${convs.length !== 1 ? "s" : ""}`);
       if (memories.length > 0)
         parts.push(`${memories.length} memor${memories.length !== 1 ? "ies" : "y"}`);
+      if (hasWallet) parts.push("wallet assets");
       const backupRow = document.createElement("div");
       backupRow.id = "pairing-backup-row";
       backupRow.style.cssText =

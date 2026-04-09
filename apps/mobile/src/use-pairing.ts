@@ -41,6 +41,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { checkWalletHasAssets, secureErase } from "@motebit/crypto";
 import type { MobileApp } from "./mobile-app";
 
 export interface UsePairingDeps {
@@ -68,6 +69,7 @@ export interface UsePairingResult {
   /** Counts of local state — shown in claim mode for backup prompt. */
   localConversationCount: number;
   localMemoryCount: number;
+  localHasWallet: boolean;
 
   // Controlled setters for modal inputs
   setPairingCodeInput: (v: string) => void;
@@ -97,6 +99,7 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
   /** Counts of local state — shown in claim mode for backup prompt. */
   const [localConversationCount, setLocalConversationCount] = useState(0);
   const [localMemoryCount, setLocalMemoryCount] = useState(0);
+  const [localHasWallet, setLocalHasWallet] = useState(false);
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pairingSyncUrlRef = useRef("");
   /** Held between claim and complete — ephemeral X25519 private key for identity key transfer. */
@@ -294,6 +297,19 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
         .listMemories()
         .then((m) => setLocalMemoryCount(m.length))
         .catch(() => setLocalMemoryCount(0));
+      // Wallet check — async, best-effort
+      void (async () => {
+        try {
+          const seed = await app.getPrivKeyBytes();
+          try {
+            setLocalHasWallet(await checkWalletHasAssets(seed));
+          } finally {
+            secureErase(seed);
+          }
+        } catch {
+          setLocalHasWallet(false);
+        }
+      })();
     }
   }, [showPairing, pairingMode, app]);
 
@@ -313,6 +329,7 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     pairingSyncUrlInput,
     localConversationCount,
     localMemoryCount,
+    localHasWallet,
     setPairingCodeInput,
     setPairingSyncUrlInput,
     handleInitiatePairing,

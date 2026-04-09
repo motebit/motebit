@@ -803,6 +803,7 @@ export default function App(): React.ReactElement {
     handleExportBackup,
     localConversationCount,
     localMemoryCount,
+    localHasWallet,
     closePairingDialog,
   } = usePairing({
     app: app.current,
@@ -1191,7 +1192,7 @@ export default function App(): React.ReactElement {
 
               {pairingMode === "claim" &&
                 (pairingId == null || pairingId === "") &&
-                (localConversationCount > 0 || localMemoryCount > 0) && (
+                (localConversationCount > 0 || localMemoryCount > 0 || localHasWallet) && (
                   <View
                     style={{
                       flexDirection: "row",
@@ -1210,9 +1211,10 @@ export default function App(): React.ReactElement {
                           `${localConversationCount} conversation${localConversationCount !== 1 ? "s" : ""}`,
                         localMemoryCount > 0 &&
                           `${localMemoryCount} memor${localMemoryCount !== 1 ? "ies" : "y"}`,
+                        localHasWallet && "wallet assets",
                       ]
                         .filter(Boolean)
-                        .join(" and ")}
+                        .join(", ")}
                     </Text>
                     <TouchableOpacity
                       onPress={() => void handleExportBackup()}

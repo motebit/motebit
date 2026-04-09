@@ -10,6 +10,7 @@
  */
 import type { WebContext } from "../types";
 import { loadSyncUrl } from "../storage";
+import { checkWalletHasAssets, hexToBytes, secureErase } from "@motebit/crypto";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -197,13 +198,30 @@ export function startClaimDevice(ctx: WebContext): void {
 
   // Show backup prompt if device has accumulated data
   const convs = ctx.app.listConversations();
-  void ctx.app.listMemories().then((memories) => {
-    if (convs.length === 0 && memories.length === 0) return;
+  void Promise.all([
+    ctx.app.listMemories(),
+    (async () => {
+      try {
+        const privHex = await ctx.app.loadPrivateKeyHex();
+        if (!privHex) return false;
+        const seed = hexToBytes(privHex);
+        try {
+          return await checkWalletHasAssets(seed);
+        } finally {
+          secureErase(seed);
+        }
+      } catch {
+        return false;
+      }
+    })(),
+  ]).then(([memories, hasWallet]) => {
+    if (convs.length === 0 && memories.length === 0 && !hasWallet) return;
     const parts: string[] = [];
     if (convs.length > 0)
       parts.push(`${convs.length} conversation${convs.length !== 1 ? "s" : ""}`);
     if (memories.length > 0)
       parts.push(`${memories.length} memor${memories.length !== 1 ? "ies" : "y"}`);
+    if (hasWallet) parts.push("wallet assets");
     const backupRow = document.createElement("div");
     backupRow.id = "pairing-backup-row";
     backupRow.style.cssText =

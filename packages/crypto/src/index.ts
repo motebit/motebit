@@ -1376,6 +1376,7 @@ export {
   buildKeyTransferPayload,
   decryptKeyTransfer,
   checkPreTransferBalance,
+  checkWalletHasAssets,
   formatWalletWarning,
 } from "./x25519.js";
 export type { X25519Keypair, PreTransferWalletCheck } from "./x25519.js";

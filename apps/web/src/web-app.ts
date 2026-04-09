@@ -577,6 +577,11 @@ export class WebApp {
     );
   }
 
+  /** Load the device's private key hex from encrypted keystore (for wallet checks). */
+  async loadPrivateKeyHex(): Promise<string | null> {
+    return this.keyStore.loadPrivateKey();
+  }
+
   // === Streaming Chat ===
 
   async *sendMessageStreaming(text: string): AsyncGenerator<StreamChunk> {
