@@ -330,6 +330,7 @@ describe("POST /api/v1/onramp/session", () => {
         body: JSON.stringify({
           motebit_id: "m",
           destination_address: "addr",
+          destination_currency: "usdc",
         }),
       });
 

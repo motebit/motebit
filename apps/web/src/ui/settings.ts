@@ -438,9 +438,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         // Use the relay/sync URL (where Stripe keys live), not the Vercel proxy.
         // Default to motebit-sync.fly.dev — that's where the onramp endpoint lives.
         const relayUrl = loadSyncUrl() || "https://motebit-sync.fly.dev";
+        const token = await ctx.app.createSyncToken("device:auth");
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (token) headers["Authorization"] = `Bearer ${token}`;
         const response = await fetch(`${relayUrl}/api/v1/onramp/session`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify({
             motebit_id: motebitId,
             destination_address: address,
