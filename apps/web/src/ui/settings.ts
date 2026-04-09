@@ -1,5 +1,6 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, GovernanceConfig, VoiceConfig, AppearanceConfig } from "../storage";
+import { loadSyncUrl } from "../storage";
 import { DEFAULT_GOVERNANCE_CONFIG, RISK_LABELS } from "@motebit/sdk";
 import {
   saveProviderConfig,
@@ -434,7 +435,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
     void (async (): Promise<void> => {
       try {
-        const response = await fetch(`${PROXY_BASE_URL}/api/v1/onramp/session`, {
+        // Use the relay/sync URL (where Stripe keys live), not the Vercel proxy
+        const relayUrl = loadSyncUrl() || PROXY_BASE_URL;
+        const response = await fetch(`${relayUrl}/api/v1/onramp/session`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
