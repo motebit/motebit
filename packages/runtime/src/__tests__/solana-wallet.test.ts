@@ -24,6 +24,7 @@ function makeMockAdapter(overrides: Partial<SolanaRpcAdapter> = {}): SolanaRpcAd
   return {
     ownAddress: "MockDerivedAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(1_250_000n),
+    getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
     sendUsdc: vi.fn(async (_args: SendUsdcArgs) => ({
       signature: "mockTxSignature5JxYz",
       slot: 42,

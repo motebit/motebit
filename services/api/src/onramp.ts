@@ -299,6 +299,38 @@ export class MockOnrampAdapter implements OnrampAdapter {
   }
 }
 
+// ── Gas detection ───────────────────────────────────────────────────
+
+/** Minimum SOL balance (in lamports) to consider gas sufficient. ~0.005 SOL ≈ 1000 transactions. */
+const MIN_GAS_LAMPORTS = 5_000_000;
+
+/** Default Solana RPC for server-side balance checks. No CORS issues from Node. */
+const DEFAULT_RPC = "https://api.mainnet-beta.solana.com";
+
+/**
+ * Check whether a Solana address has enough SOL for gas. Server-side —
+ * no CORS restrictions. Returns true if the address has >= MIN_GAS_LAMPORTS.
+ */
+async function hasGas(address: string, rpcUrl: string = DEFAULT_RPC): Promise<boolean> {
+  try {
+    const res = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getBalance",
+        params: [address],
+      }),
+    });
+    if (!res.ok) return true; // Assume gas exists on RPC failure — don't block the on-ramp
+    const data = (await res.json()) as { result?: { value?: number } };
+    return (data.result?.value ?? 0) >= MIN_GAS_LAMPORTS;
+  } catch {
+    return true; // Best-effort — don't block on-ramp on RPC failure
+  }
+}
+
 // ── HTTP route registration ──────────────────────────────────────────
 
 /**
@@ -306,8 +338,18 @@ export class MockOnrampAdapter implements OnrampAdapter {
  * When `adapter` is null, the route is still registered but returns
  * HTTP 503 — this keeps the endpoint's existence discoverable (clients
  * can probe) while clearly signaling it's not available.
+ *
+ * Smart currency selection: if the client omits `destination_currency`,
+ * the relay checks the wallet's SOL balance. If SOL is below the gas
+ * threshold, the session buys SOL (for gas). Otherwise, USDC (for
+ * spending). The user clicks one button; the relay decides what the
+ * wallet needs.
  */
-export function registerOnrampRoutes(app: Hono, adapter: OnrampAdapter | null): void {
+export function registerOnrampRoutes(
+  app: Hono,
+  adapter: OnrampAdapter | null,
+  solanaRpcUrl?: string,
+): void {
   app.post("/api/v1/onramp/session", async (c) => {
     if (!adapter) {
       throw new HTTPException(503, {
@@ -337,19 +379,29 @@ export function registerOnrampRoutes(app: Hono, adapter: OnrampAdapter | null): 
       });
     }
 
+    // Smart currency: if the client didn't specify, auto-detect.
+    // No gas → buy SOL. Has gas → buy USDC.
+    let currency = body.destination_currency;
+    if (!currency) {
+      const walletHasGas = await hasGas(body.destination_address, solanaRpcUrl);
+      currency = walletHasGas ? "usdc" : "sol";
+    }
+
     try {
       const session = await adapter.createSession({
         motebitId: body.motebit_id,
         destinationAddress: body.destination_address,
         destinationNetwork: body.destination_network ?? "solana",
-        destinationCurrency: body.destination_currency ?? "usdc",
-        amountUsd: body.amount_usd,
+        destinationCurrency: currency,
+        amountUsd:
+          body.amount_usd ?? (!body.destination_currency && currency === "sol" ? 2 : undefined),
       });
 
       return c.json({
         session_id: session.sessionId,
         redirect_url: session.redirectUrl,
         provider: session.provider,
+        currency,
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

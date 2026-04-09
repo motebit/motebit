@@ -740,7 +740,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const onrampAdapter: OnrampAdapter | null =
     onrampOverride ??
     (stripeConfig ? new StripeCryptoOnrampAdapter({ secretKey: stripeConfig.secretKey }) : null);
-  registerOnrampRoutes(app, onrampAdapter);
+  registerOnrampRoutes(app, onrampAdapter, process.env.SOLANA_RPC_URL);
 
   // --- Paved crypto → fiat off-ramp (Bridge by default) ---
   // Mirror of the on-ramp. User clicks "Withdraw to Bank", relay creates

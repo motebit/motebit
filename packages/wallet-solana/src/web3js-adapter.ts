@@ -66,6 +66,31 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     return this.keypair.publicKey.toBase58();
   }
 
+  /** Expose keypair for Jupiter swap signing. */
+  getKeypair(): Keypair {
+    return this.keypair;
+  }
+
+  /** Expose connection for Jupiter transaction submission. */
+  getConnection(): Connection {
+    return this.connection;
+  }
+
+  /** Expose commitment for Jupiter confirmation. */
+  getCommitment(): Commitment {
+    return this.commitment;
+  }
+
+  /** Expose USDC mint address for Jupiter quote. */
+  getUsdcMint(): string {
+    return this.mint.toBase58();
+  }
+
+  async getSolBalance(): Promise<bigint> {
+    const lamports = await this.connection.getBalance(this.keypair.publicKey, this.commitment);
+    return BigInt(lamports);
+  }
+
   async getUsdcBalance(): Promise<bigint> {
     const ata = await getAssociatedTokenAddress(this.mint, this.keypair.publicKey);
     try {

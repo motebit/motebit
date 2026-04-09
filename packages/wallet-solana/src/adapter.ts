@@ -34,6 +34,9 @@ export interface SolanaRpcAdapter {
   /** USDC balance in micro-units. Returns 0 if no token account exists yet. */
   getUsdcBalance(): Promise<bigint>;
 
+  /** Native SOL balance in lamports. */
+  getSolBalance(): Promise<bigint>;
+
   /**
    * Send USDC to a counterparty address. Creates the destination
    * Associated Token Account if it doesn't exist (payer = self).

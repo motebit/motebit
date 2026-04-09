@@ -19,6 +19,18 @@ import { Web3JsRpcAdapter } from "./web3js-adapter.js";
 
 export type SendResult = SendUsdcResult;
 
+/**
+ * Minimum SOL balance in lamports to consider gas sufficient.
+ * 5_000_000 lamports = 0.005 SOL ≈ enough for ~1000 transactions.
+ */
+const GAS_FLOOR_LAMPORTS = 5_000_000n;
+
+/**
+ * Amount of USDC micro-units to swap for gas when the floor is breached.
+ * 2_000_000 micro = $2.00 → buys ~0.01+ SOL at current prices → thousands of txns.
+ */
+const GAS_SWAP_USDC_MICRO = 2_000_000n;
+
 export interface SolanaWalletRailConfig {
   /** Solana RPC endpoint URL (mainnet-beta, devnet, or custom). */
   rpcUrl: string;
@@ -32,6 +44,13 @@ export interface SolanaWalletRailConfig {
   usdcMint?: string;
   /** RPC commitment level. Defaults to "confirmed". */
   commitment?: "processed" | "confirmed" | "finalized";
+  /**
+   * Disable automatic gas management. When false (default), the rail
+   * auto-swaps USDC → SOL via Jupiter when the SOL balance drops below
+   * the gas floor before sending USDC. Set to true in tests or when
+   * gas is managed externally.
+   */
+  disableAutoGas?: boolean;
 }
 
 export class SolanaWalletRail {
@@ -39,7 +58,16 @@ export class SolanaWalletRail {
   readonly chain = "solana" as const;
   readonly asset = "USDC" as const;
 
-  constructor(private readonly adapter: SolanaRpcAdapter) {}
+  private readonly autoGas: boolean;
+  private readonly web3Adapter: Web3JsRpcAdapter | null;
+
+  constructor(
+    private readonly adapter: SolanaRpcAdapter,
+    opts?: { autoGas?: boolean },
+  ) {
+    this.autoGas = opts?.autoGas ?? false;
+    this.web3Adapter = adapter instanceof Web3JsRpcAdapter ? adapter : null;
+  }
 
   /** The wallet's own base58 address. Equivalent to the motebit identity public key. */
   get address(): string {
@@ -51,13 +79,50 @@ export class SolanaWalletRail {
     return this.adapter.getUsdcBalance();
   }
 
+  /** Native SOL balance in lamports. */
+  getSolBalance(): Promise<bigint> {
+    return this.adapter.getSolBalance();
+  }
+
+  /**
+   * Ensure the wallet has enough SOL for gas. If below the floor,
+   * auto-swaps a small amount of USDC → SOL via Jupiter.
+   *
+   * @returns true if gas is sufficient (or was replenished), false if
+   *   auto-swap failed or is disabled.
+   */
+  async ensureGas(): Promise<boolean> {
+    const solBalance = await this.adapter.getSolBalance();
+    if (solBalance >= GAS_FLOOR_LAMPORTS) return true;
+    if (!this.autoGas || !this.web3Adapter) return false;
+
+    try {
+      // Lazy-import Jupiter to avoid loading the module when gas is sufficient
+      const { swapUsdcToSol } = await import("./jupiter.js");
+      await swapUsdcToSol(
+        GAS_SWAP_USDC_MICRO,
+        this.web3Adapter.getKeypair(),
+        this.web3Adapter.getConnection(),
+        this.web3Adapter.getCommitment(),
+        this.web3Adapter.getUsdcMint(),
+      );
+      return true;
+    } catch {
+      // Auto-swap failed — caller can still attempt the transaction
+      // (it will fail with insufficient gas, but that's the honest state)
+      return false;
+    }
+  }
+
   /**
    * Send USDC to a counterparty Solana address. Amount in micro-units.
+   * Auto-swaps USDC → SOL for gas if needed (when autoGas is enabled).
    * Returns the transaction signature once the network confirms it.
-   * Throws InsufficientUsdcBalanceError or InvalidSolanaAddressError
-   * for predictable error paths; other RPC errors propagate.
    */
-  send(toAddress: string, microAmount: bigint): Promise<SendResult> {
+  async send(toAddress: string, microAmount: bigint): Promise<SendResult> {
+    if (this.autoGas) {
+      await this.ensureGas();
+    }
     return this.adapter.sendUsdc({ toAddress, microAmount });
   }
 
@@ -79,5 +144,5 @@ export function createSolanaWalletRail(config: SolanaWalletRailConfig): SolanaWa
     usdcMint: config.usdcMint,
     commitment: config.commitment,
   });
-  return new SolanaWalletRail(adapter);
+  return new SolanaWalletRail(adapter, { autoGas: !config.disableAutoGas });
 }

@@ -35,3 +35,5 @@ export {
   InsufficientUsdcBalanceError,
   InvalidSolanaAddressError,
 } from "./constants.js";
+
+export { swapUsdcToSol, type JupiterSwapResult } from "./jupiter.js";
