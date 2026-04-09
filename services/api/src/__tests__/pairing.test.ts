@@ -452,6 +452,145 @@ describe("Pairing Protocol", () => {
     expect(res.status).toBe(404);
   });
 
+  // --- Key transfer ---
+
+  it("claim with x25519_pubkey stores it, approve with key_transfer stores it, status returns it", async () => {
+    const deviceA = await setupIdentityAndDevice(relay);
+    const initRes = await relay.app.request("/pairing/initiate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deviceA.authToken}` },
+    });
+    const { pairing_id, pairing_code } = (await initRes.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
+
+    // Claim with x25519 ephemeral public key
+    const keypairB = await generateKeypair();
+    const pubKeyB = bytesToHex(keypairB.publicKey);
+    const x25519Pub = "b".repeat(64);
+    const claimRes = await relay.app.request("/pairing/claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pairing_code,
+        device_name: "Mobile",
+        public_key: pubKeyB,
+        x25519_pubkey: x25519Pub,
+      }),
+    });
+    expect(claimRes.status).toBe(200);
+
+    // Session should include claiming_x25519_pubkey
+    const sessionRes = await relay.app.request(`/pairing/${pairing_id}`, {
+      headers: { Authorization: `Bearer ${deviceA.authToken}` },
+    });
+    const session = (await sessionRes.json()) as { claiming_x25519_pubkey?: string };
+    expect(session.claiming_x25519_pubkey).toBe(x25519Pub);
+
+    // Approve with key_transfer payload
+    const keyTransfer = {
+      x25519_pubkey: "a".repeat(64),
+      encrypted_seed: "c".repeat(96),
+      nonce: "d".repeat(24),
+      tag: "e".repeat(32),
+      identity_pubkey_check: deviceA.publicKeyHex,
+    };
+    const approveRes = await relay.app.request(`/pairing/${pairing_id}/approve`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${deviceA.authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ key_transfer: keyTransfer }),
+    });
+    expect(approveRes.status).toBe(200);
+
+    // Status should include key_transfer
+    const statusRes = await relay.app.request(`/pairing/${pairing_id}/status`);
+    const status = (await statusRes.json()) as {
+      status: string;
+      key_transfer?: Record<string, string>;
+    };
+    expect(status.status).toBe("approved");
+    expect(status.key_transfer).toBeDefined();
+    expect(status.key_transfer!.x25519_pubkey).toBe("a".repeat(64));
+    expect(status.key_transfer!.identity_pubkey_check).toBe(deviceA.publicKeyHex);
+  });
+
+  it("POST /pairing/:id/update-key updates device public key", async () => {
+    const deviceA = await setupIdentityAndDevice(relay);
+    const initRes = await relay.app.request("/pairing/initiate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deviceA.authToken}` },
+    });
+    const { pairing_id, pairing_code } = (await initRes.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
+
+    const keypairB = await generateKeypair();
+    await relay.app.request("/pairing/claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pairing_code,
+        device_name: "Mobile",
+        public_key: bytesToHex(keypairB.publicKey),
+      }),
+    });
+
+    await relay.app.request(`/pairing/${pairing_id}/approve`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deviceA.authToken}` },
+    });
+
+    // Update device B's key
+    const newKey = "f".repeat(64);
+    const updateRes = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ public_key: newKey }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updateBody = (await updateRes.json()) as { ok: boolean };
+    expect(updateBody.ok).toBe(true);
+  });
+
+  it("POST /pairing/:id/update-key rejects invalid public key", async () => {
+    const res = await relay.app.request("/pairing/fake-id/update-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ public_key: "not-hex" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /pairing/:id/update-key returns 404 for non-existent session", async () => {
+    const res = await relay.app.request("/pairing/non-existent/update-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ public_key: "a".repeat(64) }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /pairing/:id/update-key returns 409 for unapproved session", async () => {
+    const { authToken } = await setupIdentityAndDevice(relay);
+    const initRes = await relay.app.request("/pairing/initiate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const { pairing_id } = (await initRes.json()) as { pairing_id: string };
+
+    const res = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ public_key: "a".repeat(64) }),
+    });
+    expect(res.status).toBe(409);
+  });
+
   it("POST /pairing/:id/deny returns 403 for wrong motebit owner", async () => {
     const deviceA = await setupIdentityAndDevice(relay);
     const deviceC = await setupIdentityAndDevice(relay);
