@@ -61,6 +61,7 @@ import {
   buildKeyTransferPayload,
   decryptKeyTransfer,
   checkPreTransferBalance,
+  formatWalletWarning,
 } from "@motebit/crypto";
 import type { KeyTransferPayload } from "@motebit/protocol";
 import {
@@ -592,6 +593,11 @@ export class IdentityManager {
    * decrypts the identity seed and replaces the device's private key —
    * both devices then derive the same Solana address.
    */
+  /**
+   * @returns A wallet warning string if key transfer was skipped due to
+   * existing funds at the old address, or undefined if wallet was unified
+   * (or no key transfer was attempted).
+   */
   async completePairing(
     invoke: InvokeFn,
     result: { motebitId: string; deviceId: string },
@@ -602,9 +608,10 @@ export class IdentityManager {
       syncUrl: string;
       pairingId: string;
     },
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const raw = await invoke<string>("read_config");
     const config = JSON.parse(raw) as Record<string, unknown>;
+    let walletWarning: string | undefined;
 
     let updatedConfig: Record<string, unknown> = {
       ...config,
@@ -629,43 +636,33 @@ export class IdentityManager {
             try {
               const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
               if (walletCheck.hasAnyValue) {
-                const parts: string[] = [];
-                if (walletCheck.solLamports > 0n) {
-                  const sol = Number(walletCheck.solLamports) / 1_000_000_000;
-                  parts.push(`${sol.toFixed(4)} SOL`);
-                }
-                if (walletCheck.tokenAccountCount > 0) {
-                  parts.push(`${walletCheck.tokenAccountCount} token account(s)`);
-                }
-                throw new Error(
-                  `Cannot transfer identity key: this device's wallet (${walletCheck.oldAddress}) ` +
-                    `has ${parts.join(" and ")}. Send all funds to ${walletCheck.newAddress} before linking.`,
-                );
+                walletWarning = formatWalletWarning(walletCheck);
               }
             } finally {
               secureErase(oldSeedBytes);
             }
           }
 
-          // Replace private key in OS keyring
-          const newPrivHex = bytesToHex(identitySeed);
-          await invoke<void>("keyring_set", { key: "device_private_key", value: newPrivHex });
+          if (!walletWarning) {
+            // Replace private key in OS keyring
+            const newPrivHex = bytesToHex(identitySeed);
+            await invoke<void>("keyring_set", { key: "device_private_key", value: newPrivHex });
 
-          // Derive the new public key and update config
-          const { getPublicKeyAsync } = await import("@noble/ed25519");
-          const newPub = await getPublicKeyAsync(identitySeed);
-          const newPubHex = bytesToHex(newPub);
-          updatedConfig = { ...updatedConfig, device_public_key: newPubHex };
-          this.publicKey = newPubHex;
+            // Derive the new public key and update config
+            const { getPublicKeyAsync } = await import("@noble/ed25519");
+            const newPub = await getPublicKeyAsync(identitySeed);
+            const newPubHex = bytesToHex(newPub);
+            updatedConfig = { ...updatedConfig, device_public_key: newPubHex };
+            this.publicKey = newPubHex;
 
-          // Update the relay's device registration with the new public key
-          const client = new PairingClient({ relayUrl: syncUrl });
-          await client.updateDeviceKey(pairingId, newPubHex);
+            // Update the relay's device registration with the new public key
+            const client = new PairingClient({ relayUrl: syncUrl });
+            await client.updateDeviceKey(pairingId, newPubHex);
+          }
         } finally {
           secureErase(identitySeed);
         }
       } catch (err) {
-        // Key transfer failed — log warning but don't fail pairing
         console.warn("Key transfer failed, device keeps its own keypair:", err);
       } finally {
         secureErase(ephemeralPrivateKey);
@@ -676,6 +673,7 @@ export class IdentityManager {
 
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
+    return walletWarning;
   }
 }
 

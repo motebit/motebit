@@ -263,3 +263,22 @@ export async function checkPreTransferBalance(
     hasAnyValue: solLamports > 0n || tokenAccountCount > 0,
   };
 }
+
+/**
+ * Format a human-readable wallet warning for display when key transfer
+ * is refused due to existing funds.
+ */
+export function formatWalletWarning(check: PreTransferWalletCheck): string {
+  const parts: string[] = [];
+  if (check.solLamports > 0n) {
+    const sol = Number(check.solLamports) / 1_000_000_000;
+    parts.push(`${sol.toFixed(4)} SOL`);
+  }
+  if (check.tokenAccountCount > 0) {
+    parts.push(`${check.tokenAccountCount} token account(s)`);
+  }
+  return (
+    `Devices linked, but wallet not unified: this device's wallet (${check.oldAddress}) ` +
+    `has ${parts.join(" and ")}. Send all funds to ${check.newAddress}, then re-link to unify wallets.`
+  );
+}

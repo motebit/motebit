@@ -26,6 +26,7 @@ import {
   buildKeyTransferPayload,
   decryptKeyTransfer,
   checkPreTransferBalance,
+  formatWalletWarning,
   secureErase,
   bytesToHex,
   hexToBytes,
@@ -132,6 +133,10 @@ export class MobilePairingManager {
    * If key transfer opts are provided, decrypts the identity seed and replaces
    * the device's private key — both devices then derive the same Solana address.
    */
+  /**
+   * @returns A wallet warning string if key transfer was skipped due to
+   * existing funds, or undefined if wallet was unified (or no transfer attempted).
+   */
   async completePairing(
     result: { motebitId: string; deviceId: string },
     syncUrl?: string,
@@ -141,8 +146,9 @@ export class MobilePairingManager {
       pairingCode: string;
       pairingId: string;
     },
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const keyring = this.deps.getKeyring();
+    let walletWarning: string | undefined;
     await keyring.set(KEYRING_KEYS.motebitId, result.motebitId);
     await keyring.set("device_id", result.deviceId);
 
@@ -163,37 +169,30 @@ export class MobilePairingManager {
             try {
               const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
               if (walletCheck.hasAnyValue) {
-                const parts: string[] = [];
-                if (walletCheck.solLamports > 0n) {
-                  const sol = Number(walletCheck.solLamports) / 1_000_000_000;
-                  parts.push(`${sol.toFixed(4)} SOL`);
-                }
-                if (walletCheck.tokenAccountCount > 0) {
-                  parts.push(`${walletCheck.tokenAccountCount} token account(s)`);
-                }
-                throw new Error(
-                  `Cannot transfer identity key: this device's wallet (${walletCheck.oldAddress}) ` +
-                    `has ${parts.join(" and ")}. Send all funds to ${walletCheck.newAddress} before linking.`,
-                );
+                walletWarning = formatWalletWarning(walletCheck);
+                // Don't replace the key — user must sweep first
+                // Fall through to finalize identity + sync without key transfer
               }
             } finally {
               secureErase(oldSeedBytes);
             }
           }
 
-          const newPrivHex = bytesToHex(identitySeed);
-          await keyring.set("device_private_key", newPrivHex);
+          if (!walletWarning) {
+            const newPrivHex = bytesToHex(identitySeed);
+            await keyring.set("device_private_key", newPrivHex);
 
-          // Derive and update public key
-          const { getPublicKeyAsync } = await import("@noble/ed25519");
-          const newPub = await getPublicKeyAsync(identitySeed);
-          const newPubHex = bytesToHex(newPub);
-          this.deps.setPublicKey(newPubHex);
+            // Derive and update public key
+            const { getPublicKeyAsync } = await import("@noble/ed25519");
+            const newPub = await getPublicKeyAsync(identitySeed);
+            const newPubHex = bytesToHex(newPub);
+            this.deps.setPublicKey(newPubHex);
 
-          // Update relay device registration with new public key
-          if (syncUrl) {
-            const client = new PairingClient({ relayUrl: syncUrl });
-            await client.updateDeviceKey(pairingId, newPubHex);
+            // Update relay device registration with new public key
+            if (syncUrl) {
+              const client = new PairingClient({ relayUrl: syncUrl });
+              await client.updateDeviceKey(pairingId, newPubHex);
+            }
           }
         } finally {
           secureErase(identitySeed);
@@ -210,5 +209,6 @@ export class MobilePairingManager {
     if (syncUrl != null && syncUrl !== "") {
       await this.deps.setSyncUrl(syncUrl);
     }
+    return walletWarning;
   }
 }

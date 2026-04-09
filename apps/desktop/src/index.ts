@@ -1247,7 +1247,7 @@ export class DesktopApp {
     invoke: InvokeFn,
     result: { motebitId: string; deviceId: string },
     keyTransferOpts?: Parameters<typeof this.identity.completePairing>[2],
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     return this.identity.completePairing(invoke, result, keyTransferOpts);
   }
 

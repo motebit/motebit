@@ -193,7 +193,7 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
               status.motebit_id !== ""
             ) {
               stopPairingPoll();
-              await app.completePairing(
+              const walletWarning = await app.completePairing(
                 {
                   motebitId: status.motebit_id,
                   deviceId: status.device_id,
@@ -210,7 +210,7 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
               );
               ephemeralKeyRef.current = null;
               closePairingDialog();
-              addSystemMessage("Linked to existing motebit");
+              addSystemMessage(walletWarning ?? "Linked to existing motebit");
 
               // Run the caller's post-pair bootstrap
               await onPaired(syncUrl);

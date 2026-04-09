@@ -1665,7 +1665,7 @@ export class MobileApp {
     result: { motebitId: string; deviceId: string },
     syncUrl?: string,
     keyTransferOpts?: Parameters<typeof this.pairing.completePairing>[2],
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     return this.pairing.completePairing(result, syncUrl, keyTransferOpts);
   }
 

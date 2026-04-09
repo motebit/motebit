@@ -234,7 +234,7 @@ export function startClaimDevice(ctx: WebContext): void {
                 }
                 setStatus("Approved! Starting sync...");
                 // Decrypt and install identity key if key transfer is available
-                await ctx.app.completePairing(
+                const walletWarning = await ctx.app.completePairing(
                   { motebitId: result.motebit_id, deviceId: result.device_id },
                   result.key_transfer
                     ? {
@@ -251,7 +251,11 @@ export function startClaimDevice(ctx: WebContext): void {
                 } catch {
                   // Sync start failure is non-fatal for pairing
                 }
-                ctx.showToast("Device paired successfully");
+                if (walletWarning) {
+                  ctx.addMessage("system", walletWarning);
+                } else {
+                  ctx.showToast("Device paired successfully");
+                }
                 hide();
                 reset();
               } else if (result.status === "denied") {

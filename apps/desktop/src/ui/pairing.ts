@@ -201,7 +201,7 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
                 clearInterval(pairingPollTimer);
                 pairingPollTimer = null;
               }
-              await ctx.app.completePairing(
+              const walletWarning = await ctx.app.completePairing(
                 invoke,
                 {
                   motebitId: status.motebit_id,
@@ -219,7 +219,11 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
               );
               void ctx.app.startSync(invoke, syncUrl).catch(() => {});
               close();
-              ctx.showToast("Linked to existing motebit");
+              if (walletWarning) {
+                ctx.addMessage("system", walletWarning);
+              } else {
+                ctx.showToast("Linked to existing motebit");
+              }
             } else if (status.status === "denied") {
               if (pairingPollTimer) {
                 clearInterval(pairingPollTimer);

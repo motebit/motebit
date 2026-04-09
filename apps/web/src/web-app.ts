@@ -43,6 +43,7 @@ import {
   buildKeyTransferPayload,
   decryptKeyTransfer,
   checkPreTransferBalance,
+  formatWalletWarning,
 } from "@motebit/crypto";
 import type { KeyTransferPayload } from "@motebit/protocol";
 import {
@@ -1454,10 +1455,11 @@ export class WebApp {
       syncUrl: string;
       pairingId: string;
     },
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     // Update in-memory identity state
     this._motebitId = motebitId;
     this._deviceId = deviceId;
+    let walletWarning: string | undefined;
 
     if (keyTransferOpts) {
       const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
@@ -1475,35 +1477,26 @@ export class WebApp {
             try {
               const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
               if (walletCheck.hasAnyValue) {
-                const parts: string[] = [];
-                if (walletCheck.solLamports > 0n) {
-                  const sol = Number(walletCheck.solLamports) / 1_000_000_000;
-                  parts.push(`${sol.toFixed(4)} SOL`);
-                }
-                if (walletCheck.tokenAccountCount > 0) {
-                  parts.push(`${walletCheck.tokenAccountCount} token account(s)`);
-                }
-                throw new Error(
-                  `Cannot transfer identity key: this device's wallet (${walletCheck.oldAddress}) ` +
-                    `has ${parts.join(" and ")}. Send all funds to ${walletCheck.newAddress} before linking.`,
-                );
+                walletWarning = formatWalletWarning(walletCheck);
               }
             } finally {
               secureErase(oldSeedBytes);
             }
           }
 
-          const newPrivHex = bytesToHex(identitySeed);
-          await this.keyStore.storePrivateKey(newPrivHex);
+          if (!walletWarning) {
+            const newPrivHex = bytesToHex(identitySeed);
+            await this.keyStore.storePrivateKey(newPrivHex);
 
-          // Derive and update public key
-          const { getPublicKeyAsync } = await import("@noble/ed25519");
-          const newPub = await getPublicKeyAsync(identitySeed);
-          this._publicKeyHex = bytesToHex(newPub);
+            // Derive and update public key
+            const { getPublicKeyAsync } = await import("@noble/ed25519");
+            const newPub = await getPublicKeyAsync(identitySeed);
+            this._publicKeyHex = bytesToHex(newPub);
 
-          // Update relay device registration
-          const client = new PairingClient({ relayUrl: syncUrl });
-          await client.updateDeviceKey(pairingId, this._publicKeyHex);
+            // Update relay device registration
+            const client = new PairingClient({ relayUrl: syncUrl });
+            await client.updateDeviceKey(pairingId, this._publicKeyHex);
+          }
         } finally {
           secureErase(identitySeed);
         }
@@ -1513,5 +1506,6 @@ export class WebApp {
         secureErase(ephemeralPrivateKey);
       }
     }
+    return walletWarning;
   }
 }
