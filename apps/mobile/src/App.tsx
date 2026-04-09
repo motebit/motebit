@@ -800,6 +800,8 @@ export default function App(): React.ReactElement {
     handlePairingClaimSubmit,
     handlePairingApprove,
     handlePairingDeny,
+    handleExportBackup,
+    localConversationCount,
     closePairingDialog,
   } = usePairing({
     app: app.current,
@@ -1185,6 +1187,40 @@ export default function App(): React.ReactElement {
               {pairingMode === "initiate" && pairingCode != null && pairingCode !== "" ? (
                 <Text style={ds.pairingCodeDisplay}>{pairingCode}</Text>
               ) : null}
+
+              {pairingMode === "claim" &&
+                (pairingId == null || pairingId === "") &&
+                localConversationCount > 0 && (
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      backgroundColor: "rgba(255,200,50,0.12)",
+                      borderRadius: 8,
+                      padding: 10,
+                      marginBottom: 10,
+                    }}
+                  >
+                    <Text style={{ color: themeColors.textMuted, fontSize: 13, flex: 1 }}>
+                      This device has {localConversationCount} conversation
+                      {localConversationCount !== 1 ? "s" : ""}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => void handleExportBackup()}
+                      activeOpacity={0.7}
+                      style={{
+                        backgroundColor: themeColors.inputBg,
+                        borderRadius: 6,
+                        paddingHorizontal: 10,
+                        paddingVertical: 4,
+                        marginLeft: 8,
+                      }}
+                    >
+                      <Text style={{ color: themeColors.accent, fontSize: 12 }}>Export Backup</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
 
               {pairingMode === "claim" && (pairingId == null || pairingId === "") && (
                 <TextInput

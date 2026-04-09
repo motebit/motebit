@@ -65,6 +65,8 @@ export interface UsePairingResult {
   pairingId: string | null;
   pairingClaimName: string;
   pairingSyncUrlInput: string;
+  /** Number of conversations on this device — shown in claim mode for backup prompt. */
+  localConversationCount: number;
 
   // Controlled setters for modal inputs
   setPairingCodeInput: (v: string) => void;
@@ -76,6 +78,7 @@ export interface UsePairingResult {
   handlePairingClaimSubmit: () => Promise<void>;
   handlePairingApprove: () => Promise<void>;
   handlePairingDeny: () => Promise<void>;
+  handleExportBackup: () => Promise<void>;
   closePairingDialog: () => void;
 }
 
@@ -90,6 +93,8 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
   const [pairingId, setPairingId] = useState<string | null>(null);
   const [pairingClaimName, setPairingClaimName] = useState("");
   const [pairingSyncUrlInput, setPairingSyncUrlInput] = useState("");
+  /** Number of conversations on this device — shown in claim mode as a backup prompt. */
+  const [localConversationCount, setLocalConversationCount] = useState(0);
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pairingSyncUrlRef = useRef("");
   /** Held between claim and complete — ephemeral X25519 private key for identity key transfer. */
@@ -250,6 +255,18 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     }
   }, [pairingId, app, closePairingDialog, addSystemMessage]);
 
+  // Export backup before linking (Device B)
+  const handleExportBackup = useCallback(async () => {
+    try {
+      const json = await app.exportAllData();
+      // Use React Native Share for export
+      const { Share } = await import("react-native");
+      await Share.share({ message: json, title: "motebit-backup.json" });
+    } catch (err: unknown) {
+      addSystemMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [app, addSystemMessage]);
+
   // Device A: deny
   const handlePairingDeny = useCallback(async () => {
     if (pairingId == null || pairingId === "") return;
@@ -262,6 +279,18 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
       setPairingStatusText(err instanceof Error ? err.message : String(err));
     }
   }, [pairingId, app, closePairingDialog, addSystemMessage]);
+
+  // Count local conversations when claim modal opens (for backup prompt)
+  useEffect(() => {
+    if (showPairing && pairingMode === "claim") {
+      try {
+        const convs = app.listConversations(100);
+        setLocalConversationCount(convs.length);
+      } catch {
+        setLocalConversationCount(0);
+      }
+    }
+  }, [showPairing, pairingMode, app]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -277,6 +306,7 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     pairingId,
     pairingClaimName,
     pairingSyncUrlInput,
+    localConversationCount,
     setPairingCodeInput,
     setPairingSyncUrlInput,
     handleInitiatePairing,
@@ -284,6 +314,7 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     handlePairingClaimSubmit,
     handlePairingApprove,
     handlePairingDeny,
+    handleExportBackup,
     closePairingDialog,
   };
 }

@@ -44,6 +44,8 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
     pairingActions.innerHTML =
       '<button class="pairing-btn-cancel" id="pairing-cancel">Cancel</button>';
     document.getElementById("pairing-cancel")!.addEventListener("click", close);
+    // Remove pre-link backup prompt if present
+    document.getElementById("pairing-backup-row")?.remove();
   }
 
   // Device A: "Link Another Device"
@@ -137,6 +139,38 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
     pairingTitle.textContent = "Link Existing Motebit";
     pairingInputRow.style.display = "block";
     pairingStatus.textContent = "Enter the code from your other device";
+
+    // Check for accumulated state and show backup prompt if needed
+    void (async () => {
+      const convs = await ctx.app.listConversationsAsync(100);
+      if (convs.length === 0) return;
+      const backupRow = document.createElement("div");
+      backupRow.id = "pairing-backup-row";
+      backupRow.style.cssText =
+        "margin-bottom:12px;padding:8px 12px;background:rgba(255,200,50,0.12);border-radius:8px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:8px;";
+      const label = document.createElement("span");
+      label.textContent = `This device has ${convs.length} conversation${convs.length !== 1 ? "s" : ""}`;
+      const exportBtn = document.createElement("button");
+      exportBtn.className = "pairing-btn-approve";
+      exportBtn.style.cssText = "font-size:12px;padding:4px 10px;";
+      exportBtn.textContent = "Export Backup";
+      exportBtn.addEventListener("click", () => {
+        exportBtn.disabled = true;
+        exportBtn.textContent = "Exporting...";
+        void ctx.app.exportAllData().then((json) => {
+          const blob = new Blob([json], { type: "application/json" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "motebit-backup.json";
+          a.click();
+          URL.revokeObjectURL(a.href);
+          exportBtn.textContent = "Exported";
+        });
+      });
+      backupRow.appendChild(label);
+      backupRow.appendChild(exportBtn);
+      pairingInputRow.parentElement?.insertBefore(backupRow, pairingInputRow);
+    })();
 
     const submitBtn = document.createElement("button");
     submitBtn.className = "pairing-btn-approve";

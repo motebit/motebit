@@ -52,6 +52,8 @@ function reset(): void {
   // Reset actions to just cancel
   actions.innerHTML = "";
   actions.appendChild(cancelBtn);
+  // Remove pre-link backup prompt if present
+  document.getElementById("pairing-backup-row")?.remove();
 }
 
 function setStatus(text: string): void {
@@ -192,6 +194,37 @@ export function startClaimDevice(ctx: WebContext): void {
   inputRow.style.display = "block";
   show();
   codeInput.focus();
+
+  // Show backup prompt if device has accumulated data
+  const convs = ctx.app.listConversations();
+  if (convs.length > 0) {
+    const backupRow = document.createElement("div");
+    backupRow.id = "pairing-backup-row";
+    backupRow.style.cssText =
+      "margin-bottom:12px;padding:8px 12px;background:rgba(255,200,50,0.12);border-radius:8px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:8px;";
+    const label = document.createElement("span");
+    label.textContent = `This device has ${convs.length} conversation${convs.length !== 1 ? "s" : ""}`;
+    const exportBtn = document.createElement("button");
+    exportBtn.className = "settings-outline-btn";
+    exportBtn.style.cssText = "font-size:12px;padding:4px 10px;";
+    exportBtn.textContent = "Export Backup";
+    exportBtn.addEventListener("click", () => {
+      exportBtn.disabled = true;
+      exportBtn.textContent = "Exporting...";
+      void ctx.app.exportData().then((json) => {
+        const blob = new Blob([json], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "motebit-backup.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        exportBtn.textContent = "Exported";
+      });
+    });
+    backupRow.appendChild(label);
+    backupRow.appendChild(exportBtn);
+    inputRow.parentElement?.insertBefore(backupRow, inputRow);
+  }
 
   const submitBtn = document.createElement("button");
   submitBtn.className = "settings-outline-btn";
