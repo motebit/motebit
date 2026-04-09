@@ -138,7 +138,7 @@ export class MobileSyncController {
         },
         body: JSON.stringify({
           motebit_id: this.deps.getMotebitId(),
-          endpoint_url: `ws://${this.deps.getMotebitId()}`,
+          endpoint_url: `wss://${this.deps.getMotebitId()}`,
           public_key: this.deps.getPublicKey(),
           capabilities,
         }),

@@ -535,7 +535,7 @@ export class SyncController {
         },
         body: JSON.stringify({
           motebit_id: this.deps.getMotebitId(),
-          endpoint_url: `ws://${this.deps.getMotebitId()}`,
+          endpoint_url: `wss://${this.deps.getMotebitId()}`,
           public_key: publicKey,
           capabilities,
         }),

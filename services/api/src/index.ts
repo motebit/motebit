@@ -707,7 +707,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerDataSyncRoutes({ db: moteDb.db, app, connections });
 
   // --- A2A protocol bridge ---
-  const a2aRelayUrl = federationConfig?.endpointUrl ?? "http://localhost:3000";
+  // Federation endpoint: explicit config > Fly.io app URL > localhost fallback for dev
+  const a2aRelayUrl =
+    federationConfig?.endpointUrl ??
+    (process.env.FLY_APP_NAME
+      ? `https://${process.env.FLY_APP_NAME}.fly.dev`
+      : `http://localhost:${process.env.PORT ?? 3000}`);
   registerA2ARoutes(app, moteDb.db, {
     relayIdentity,
     relayUrl: a2aRelayUrl,

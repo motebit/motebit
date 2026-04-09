@@ -1315,7 +1315,7 @@ export class WebApp {
         },
         body: JSON.stringify({
           motebit_id: this._motebitId,
-          endpoint_url: `ws://${this._motebitId}`,
+          endpoint_url: `wss://${this._motebitId}`,
           public_key: this._publicKeyHex,
           capabilities,
         }),
