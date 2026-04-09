@@ -433,10 +433,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const originalText = walletFundBtn.textContent;
     walletFundBtn.textContent = "Opening…";
 
+    // Open blank tab synchronously (user gesture context) to avoid popup blocker.
+    // Navigate it to the Stripe URL after the fetch completes.
+    const tab = window.open("about:blank", "_blank");
+
     void (async (): Promise<void> => {
       try {
-        // Use the relay/sync URL (where Stripe keys live), not the Vercel proxy.
-        // Default to motebit-sync.fly.dev — that's where the onramp endpoint lives.
         const relayUrl = loadSyncUrl() || "https://motebit-sync.fly.dev";
         const token = await ctx.app.createSyncToken("device:auth");
         const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -451,6 +453,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         });
 
         if (!response.ok) {
+          tab?.close();
           if (response.status === 503) {
             ctx.showToast("Funding is not yet available on this relay");
           } else {
@@ -464,9 +467,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           provider: string;
         };
 
-        // Open in a new tab so the user stays in the motebit app.
-        // When they return (window focus event), we refresh the balance.
-        window.open(body.redirect_url, "_blank", "noopener,noreferrer");
+        if (tab) {
+          tab.location.href = body.redirect_url;
+        } else {
+          // Fallback if popup was still blocked
+          window.open(body.redirect_url, "_blank", "noopener,noreferrer");
+        }
 
         // One-shot focus listener: refresh balance the next time the
         // motebit tab regains focus. Common case: user closes the
