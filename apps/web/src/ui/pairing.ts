@@ -10,7 +10,6 @@
  */
 import type { WebContext } from "../types";
 import { loadSyncUrl } from "../storage";
-import { checkWalletHasAssets, hexToBytes, secureErase } from "@motebit/crypto";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -53,8 +52,6 @@ function reset(): void {
   // Reset actions to just cancel
   actions.innerHTML = "";
   actions.appendChild(cancelBtn);
-  // Remove pre-link backup prompt if present
-  document.getElementById("pairing-backup-row")?.remove();
 }
 
 function setStatus(text: string): void {
@@ -195,60 +192,6 @@ export function startClaimDevice(ctx: WebContext): void {
   inputRow.style.display = "block";
   show();
   codeInput.focus();
-
-  // Show backup prompt if device has accumulated data
-  const convs = ctx.app.listConversations();
-  void Promise.all([
-    ctx.app.listMemories(),
-    (async () => {
-      try {
-        const privHex = await ctx.app.loadPrivateKeyHex();
-        if (!privHex) return false;
-        const seed = hexToBytes(privHex);
-        try {
-          return await checkWalletHasAssets(seed);
-        } finally {
-          secureErase(seed);
-        }
-      } catch {
-        return false;
-      }
-    })(),
-  ]).then(([memories, hasWallet]) => {
-    if (convs.length === 0 && memories.length === 0 && !hasWallet) return;
-    const parts: string[] = [];
-    if (convs.length > 0)
-      parts.push(`${convs.length} conversation${convs.length !== 1 ? "s" : ""}`);
-    if (memories.length > 0)
-      parts.push(`${memories.length} memor${memories.length !== 1 ? "ies" : "y"}`);
-    if (hasWallet) parts.push("wallet assets");
-    const backupRow = document.createElement("div");
-    backupRow.id = "pairing-backup-row";
-    backupRow.style.cssText =
-      "margin-bottom:12px;padding:8px 12px;background:rgba(255,200,50,0.12);border-radius:8px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:8px;";
-    const label = document.createElement("span");
-    label.textContent = `This device has ${parts.join(" and ")}`;
-    const exportBtn = document.createElement("button");
-    exportBtn.className = "settings-outline-btn";
-    exportBtn.style.cssText = "font-size:12px;padding:4px 10px;";
-    exportBtn.textContent = "Export Backup";
-    exportBtn.addEventListener("click", () => {
-      exportBtn.disabled = true;
-      exportBtn.textContent = "Exporting...";
-      void ctx.app.exportData().then((json) => {
-        const blob = new Blob([json], { type: "application/json" });
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "motebit-backup.json";
-        a.click();
-        URL.revokeObjectURL(a.href);
-        exportBtn.textContent = "Exported";
-      });
-    });
-    backupRow.appendChild(label);
-    backupRow.appendChild(exportBtn);
-    inputRow.parentElement?.insertBefore(backupRow, inputRow);
-  });
 
   const submitBtn = document.createElement("button");
   submitBtn.className = "settings-outline-btn";

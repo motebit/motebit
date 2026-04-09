@@ -265,58 +265,6 @@ export async function checkPreTransferBalance(
 }
 
 /**
- * Lightweight check: does this device's wallet hold any onchain value?
- * Used for the pre-link backup prompt — just a boolean, no addresses or amounts.
- * Non-blocking: returns false on RPC failure (best-effort).
- */
-export async function checkWalletHasAssets(
-  seed: Uint8Array,
-  rpcUrl: string = DEFAULT_SOLANA_RPC,
-): Promise<boolean> {
-  try {
-    const pub = await ed.getPublicKeyAsync(seed);
-    const address = base58btcEncode(pub);
-    const batch = JSON.stringify([
-      { jsonrpc: "2.0", id: 1, method: "getBalance", params: [address] },
-      {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "getTokenAccountsByOwner",
-        params: [address, { programId: TOKEN_PROGRAM_ID }, { encoding: "jsonParsed" }],
-      },
-    ]);
-    const res = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: batch,
-    });
-    if (!res.ok) return false;
-    const results = (await res.json()) as Array<{ id: number; result?: unknown }>;
-    for (const entry of results) {
-      if (entry.id === 1) {
-        const bal = entry.result as { value?: number } | undefined;
-        if (bal?.value != null && bal.value > 0) return true;
-      } else if (entry.id === 2) {
-        const tok = entry.result as
-          | {
-              value?: Array<{
-                account: { data: { parsed: { info: { tokenAmount: { amount: string } } } } };
-              }>;
-            }
-          | undefined;
-        for (const acct of tok?.value ?? []) {
-          const amt = acct.account?.data?.parsed?.info?.tokenAmount?.amount;
-          if (amt && BigInt(amt) > 0n) return true;
-        }
-      }
-    }
-  } catch {
-    // Best-effort — don't block linking on RPC failure
-  }
-  return false;
-}
-
-/**
  * Format a human-readable wallet warning for display when key transfer
  * is refused due to existing funds.
  */

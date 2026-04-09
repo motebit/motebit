@@ -567,21 +567,6 @@ export class WebApp {
     return this.runtime?.listConversations() ?? [];
   }
 
-  async listMemories(): Promise<Array<{ node_id: string }>> {
-    if (!this.runtime) return [];
-    const { nodes } = await this.runtime.memory.exportAll();
-    const now = Date.now();
-    return nodes.filter(
-      (n: { tombstoned?: boolean; valid_until?: number | null }) =>
-        !n.tombstoned && (n.valid_until == null || n.valid_until > now),
-    );
-  }
-
-  /** Load the device's private key hex from encrypted keystore (for wallet checks). */
-  async loadPrivateKeyHex(): Promise<string | null> {
-    return this.keyStore.loadPrivateKey();
-  }
-
   // === Streaming Chat ===
 
   async *sendMessageStreaming(text: string): AsyncGenerator<StreamChunk> {
