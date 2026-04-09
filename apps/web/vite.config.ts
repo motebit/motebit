@@ -108,6 +108,30 @@ function manualChunks(id: string): string | undefined {
 }
 
 export default defineConfig({
+  // @solana/web3.js and @solana/spl-token use Node's Buffer which
+  // doesn't exist in browsers. Vite externalizes Node built-ins for
+  // browser compat, but these Solana libs need the polyfill at
+  // runtime. `define` injects the global before any module runs.
+  define: {
+    global: "globalThis",
+  },
+  resolve: {
+    alias: {
+      // Point the Node "buffer" import at the browser polyfill
+      buffer: "buffer",
+    },
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      // Make Buffer available globally during dev-time dependency
+      // pre-bundling (esbuild pass). Without this, @solana/spl-token
+      // crashes with "Buffer is not defined" during Vite's dev
+      // pre-bundle step.
+      define: {
+        global: "globalThis",
+      },
+    },
+  },
   build: {
     target: "esnext",
     outDir: "dist",

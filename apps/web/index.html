@@ -1,6 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script type="module">
+    // Buffer polyfill for @solana/web3.js + @solana/spl-token.
+    // These Solana libraries use Node's Buffer which doesn't exist
+    // in browsers. Must run before any module import.
+    import { Buffer } from "buffer";
+    globalThis.Buffer = Buffer;
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Motebit</title>
