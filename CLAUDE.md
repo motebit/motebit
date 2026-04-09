@@ -34,13 +34,13 @@ apps/
   identity/    Identity management app. Vite, TypeScript
 
 packages/
-  protocol/           Network protocol types (Layer 0, MIT, 0 deps)
+  protocol/           Network protocol types + semiring algebra (Layer 0, MIT, 0 deps)
   sdk/                Full type vocabulary, re-exports protocol (Layer 0, MIT)
   verify/             Standalone identity verifier (Layer 0, MIT, 0 deps)
   create-motebit/     CLI scaffolder: npm create motebit (Layer 0, MIT)
   crypto/             Ed25519, AES-256-GCM, PBKDF2, signed tokens, W3C VC 2.0
   gradient/           Self-measurement: "What am I?" Pure narrative from gradient data (Layer 1, BSL)
-  semiring/           Trust Semiring Algebra — generic computation graph for routing
+  semiring/           Agent network judgment layer — routing wiring, provenance, trust transitions (BSL)
   policy/             PolicyGate, MemoryGovernor, injection defense
   policy-invariants/  Clamping rules, state bounds validation
   event-log/          Append-only event sourcing with version clocks
@@ -97,7 +97,7 @@ These are not suggestions. They are the architectural invariants that make the m
 
 **Proof composability.** Canonical JSON → SHA-256 → Ed25519 verify. Always. External anchoring (blockchain, IPFS, x402) is additive, never gatekeeping. `@motebit/verify` works standalone with zero monorepo deps. Do not add verification paths that require external systems.
 
-**Semiring algebra for routing.** Agent network routing is algebraic. `Semiring<T>` interface, concrete semirings (Trust, Cost, Latency, Reliability, RegulatoryRisk), product combinators, `WeightedDigraph<T>`, generic traversal. Swap the semiring to change what "best path" means. New routing concerns require only a new semiring definition — zero new algorithms. Provenance tracks why a route was chosen, signed into the execution ledger.
+**Semiring algebra for routing.** Agent network routing is algebraic. The algebra (the protocol's language) lives in MIT `@motebit/protocol`: `Semiring<T>` interface, concrete semirings (Trust, Cost, Latency, Reliability, RegulatoryRisk), product combinators, `WeightedDigraph<T>`, generic traversal, trust scoring constants. The judgment (the product's value) lives in BSL `@motebit/semiring`: agent network graph construction, multi-objective ranking, provenance tracking, trust state transitions, delegation trust composition. The boundary: protocol defines how trust computes; semiring defines how Motebit applies it. Swap the semiring to change what "best path" means. New routing concerns require only a new semiring definition — zero new algorithms.
 
 **Economic loop principle.** The relay is the economy's ledger, the rails are the membrane, and agents are the workers and spenders inside the loop. Users fund at the edges (Stripe, Bridge, wallet deposit). Agents transact inside the relay via virtual accounts — allocate, execute, settle, earn, delegate, earn again. The 5% platform fee is extracted at each settlement checkpoint. Settlement rails (fiat, protocol, direct asset, orchestration) are on/off ramps only — they never hold economic truth. The internal ledger is the circulation system. The ideal endgame: user funds a droplet once, the agent earns its own way forward. Not every agent will be self-sustaining immediately, but the architecture must never prevent it. Do not build flows that require human intervention inside the loop. Deposits and withdrawals are edge operations. Everything between is agent-to-agent.
 

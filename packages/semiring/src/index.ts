@@ -1,5 +1,5 @@
-// ── Semiring Algebra ────────────────────────────────────────────────
-export type { Semiring } from "./semiring.js";
+// ── Semiring Algebra (re-exported from @motebit/protocol) ──────────
+export type { Semiring } from "@motebit/protocol";
 export {
   TrustSemiring,
   CostSemiring,
@@ -11,20 +11,17 @@ export {
   productSemiring,
   recordSemiring,
   mappedSemiring,
-} from "./semiring.js";
+} from "@motebit/protocol";
 
-// ── Weighted Directed Graph ─────────────────────────────────────────
-export type { Edge } from "./graph.js";
-export { WeightedDigraph } from "./graph.js";
+// ── Weighted Directed Graph (re-exported from @motebit/protocol) ───
+export type { Edge } from "@motebit/protocol";
+export { WeightedDigraph } from "@motebit/protocol";
 
-// ── Graph Traversal ─────────────────────────────────────────────────
-export { optimalPaths, optimalPath, transitiveClosure, optimalPathTrace } from "./traversal.js";
+// ── Graph Traversal (re-exported from @motebit/protocol) ───────────
+export { optimalPaths, optimalPath, transitiveClosure, optimalPathTrace } from "@motebit/protocol";
 
-// ── Provenance ──────────────────────────────────────────────────────
-export type { Provenance, Annotated } from "./provenance.js";
-export { ProvenanceSemiring, boundedProvenanceSemiring, annotatedSemiring } from "./provenance.js";
-
-// ── Trust Algebra ──────────────────────────────────────────────────
+// ── Trust Algebra ─────────────────────────────────────────────────
+// Protocol primitives (re-exported) + judgment functions (local BSL)
 export type { DelegationReceiptLike } from "./trust-algebra.js";
 export {
   TRUST_LEVEL_SCORES,
@@ -40,7 +37,11 @@ export {
   composeDelegationTrust,
 } from "./trust-algebra.js";
 
-// ── Agent Network Bridge ────────────────────────────────────────────
+// ── Provenance (BSL) ──────────────────────────────────────────────
+export type { Provenance, Annotated } from "./provenance.js";
+export { ProvenanceSemiring, boundedProvenanceSemiring, annotatedSemiring } from "./provenance.js";
+
+// ── Agent Network Bridge (BSL) ────────────────────────────────────
 export type { RouteWeight, AgentProfile } from "./agent-network.js";
 export {
   RouteWeightSemiring,

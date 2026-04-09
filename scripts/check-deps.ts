@@ -98,6 +98,7 @@ const MIT_IMPORT_ALLOWED = new Set([
 // Any new function export in an MIT package requires explicit allowlisting here.
 const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
   "@motebit/protocol": new Set([
+    // Branded ID casts
     "asMotebitId",
     "asDeviceId",
     "asNodeId",
@@ -110,6 +111,19 @@ const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "asListingId",
     "asProposalId",
     "isDepositableRail",
+    // Semiring algebra — protocol-level primitives (open standard)
+    "productSemiring",
+    "recordSemiring",
+    "mappedSemiring",
+    "optimalPaths",
+    "optimalPath",
+    "transitiveClosure",
+    "optimalPathTrace",
+    "trustLevelToScore",
+    "trustAdd",
+    "trustMultiply",
+    "composeTrustChain",
+    "joinParallelRoutes",
   ]),
   "@motebit/verify": new Set(["verify", "verifyIdentityFile", "parse"]),
 };
@@ -596,12 +610,12 @@ function checkMitExportSurface(packages: PkgInfo[]): void {
     const allowed = MIT_ALLOWED_FUNCTIONS[pkg.name] ?? new Set<string>();
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      const line = lines[i]!;
 
       // Match "export function NAME" or "export async function NAME"
       const fnMatch = /^export\s+(?:async\s+)?function\s+(\w+)/.exec(line);
       if (fnMatch) {
-        const fnName = fnMatch[1];
+        const fnName = fnMatch[1]!;
         if (!allowed.has(fnName)) {
           fail(
             "mit-export",
@@ -609,6 +623,31 @@ function checkMitExportSurface(packages: PkgInfo[]): void {
               `MIT packages must export only types, enums, and allowlisted utilities. ` +
               `Move this function to a BSL package or add it to MIT_ALLOWED_FUNCTIONS in check-deps.ts.`,
           );
+        }
+      }
+
+      // Match re-exported non-type names: export { a, b, c } from "..."
+      // Skip lines with "export type {" — those are type-only re-exports
+      if (/^export\s+type\s/.test(line)) continue;
+      const reExportMatch = /^export\s*\{([^}]+)\}\s*from\s/.exec(line);
+      if (reExportMatch) {
+        const names = reExportMatch[1]!.split(",").map((n) =>
+          n
+            .trim()
+            .split(/\s+as\s+/)
+            .pop()!
+            .trim(),
+        );
+        for (const name of names) {
+          if (!name || /^[A-Z]/.test(name)) continue; // Skip types/classes/enums (PascalCase)
+          if (!allowed.has(name)) {
+            fail(
+              "mit-export",
+              `${pkg.name} src/index.ts:${i + 1} re-exports function "${name}" — ` +
+                `MIT packages must export only types, enums, and allowlisted utilities. ` +
+                `Add to MIT_ALLOWED_FUNCTIONS in check-deps.ts if intentional.`,
+            );
+          }
         }
       }
     }
