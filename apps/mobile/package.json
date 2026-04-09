@@ -25,6 +25,7 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/gradient": "workspace:*",
+    "@motebit/protocol": "workspace:*",
     "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/memory-graph": "workspace:*",

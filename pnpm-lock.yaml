@@ -247,6 +247,9 @@ importers:
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../../packages/privacy-layer
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
@@ -423,6 +426,9 @@ importers:
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../../packages/privacy-layer
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
@@ -605,6 +611,9 @@ importers:
       '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../../packages/policy-invariants
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
@@ -626,6 +635,9 @@ importers:
       '@motebit/voice':
         specifier: workspace:*
         version: link:../../packages/voice
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
       three:
         specifier: ^0.170.0
         version: 0.170.0
@@ -1272,6 +1284,9 @@ importers:
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk

@@ -1400,7 +1400,7 @@ export class WebApp {
         try {
           keyTransfer = await buildKeyTransferPayload(
             privKeyBytes,
-            this._publicKeyHex!,
+            this._publicKeyHex,
             hexToBytes(session.claiming_x25519_pubkey),
             session.pairing_code,
           );
@@ -1500,8 +1500,8 @@ export class WebApp {
         } finally {
           secureErase(identitySeed);
         }
-      } catch (err) {
-        console.warn("Key transfer failed, device keeps its own keypair:", err);
+      } catch {
+        // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
       } finally {
         secureErase(ephemeralPrivateKey);
       }

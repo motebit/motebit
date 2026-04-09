@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { resolve } from "node:path";
 
 /**
  * Manual chunk strategy for the web bundle.
@@ -117,8 +118,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      // Point the Node "buffer" import at the browser polyfill
-      buffer: "buffer",
+      // Point the Node "buffer" import at the npm buffer polyfill.
+      // Must resolve to the actual file path — a bare "buffer" string
+      // makes Rollup treat it as a Node built-in and externalize it.
+      buffer: resolve("node_modules/buffer/"),
     },
   },
   optimizeDeps: {

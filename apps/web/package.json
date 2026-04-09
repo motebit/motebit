@@ -22,6 +22,7 @@
     "@motebit/browser-persistence": "workspace:*",
     "@motebit/core-identity": "workspace:*",
     "@motebit/crypto": "workspace:*",
+    "@motebit/protocol": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/policy-invariants": "workspace:*",
@@ -34,6 +35,7 @@
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/voice": "workspace:*",
+    "buffer": "^6.0.3",
     "three": "^0.170.0"
   },
   "devDependencies": {

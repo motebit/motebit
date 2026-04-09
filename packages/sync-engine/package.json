@@ -17,6 +17,7 @@
   "dependencies": {
     "@motebit/crypto": "workspace:*",
     "@motebit/event-log": "workspace:*",
+    "@motebit/protocol": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "ws": "^8.20.0"
   },
