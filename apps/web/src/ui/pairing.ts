@@ -197,13 +197,19 @@ export function startClaimDevice(ctx: WebContext): void {
 
   // Show backup prompt if device has accumulated data
   const convs = ctx.app.listConversations();
-  if (convs.length > 0) {
+  void ctx.app.listMemories().then((memories) => {
+    if (convs.length === 0 && memories.length === 0) return;
+    const parts: string[] = [];
+    if (convs.length > 0)
+      parts.push(`${convs.length} conversation${convs.length !== 1 ? "s" : ""}`);
+    if (memories.length > 0)
+      parts.push(`${memories.length} memor${memories.length !== 1 ? "ies" : "y"}`);
     const backupRow = document.createElement("div");
     backupRow.id = "pairing-backup-row";
     backupRow.style.cssText =
       "margin-bottom:12px;padding:8px 12px;background:rgba(255,200,50,0.12);border-radius:8px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:8px;";
     const label = document.createElement("span");
-    label.textContent = `This device has ${convs.length} conversation${convs.length !== 1 ? "s" : ""}`;
+    label.textContent = `This device has ${parts.join(" and ")}`;
     const exportBtn = document.createElement("button");
     exportBtn.className = "settings-outline-btn";
     exportBtn.style.cssText = "font-size:12px;padding:4px 10px;";
@@ -224,7 +230,7 @@ export function startClaimDevice(ctx: WebContext): void {
     backupRow.appendChild(label);
     backupRow.appendChild(exportBtn);
     inputRow.parentElement?.insertBefore(backupRow, inputRow);
-  }
+  });
 
   const submitBtn = document.createElement("button");
   submitBtn.className = "settings-outline-btn";

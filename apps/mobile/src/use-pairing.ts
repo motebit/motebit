@@ -65,8 +65,9 @@ export interface UsePairingResult {
   pairingId: string | null;
   pairingClaimName: string;
   pairingSyncUrlInput: string;
-  /** Number of conversations on this device — shown in claim mode for backup prompt. */
+  /** Counts of local state — shown in claim mode for backup prompt. */
   localConversationCount: number;
+  localMemoryCount: number;
 
   // Controlled setters for modal inputs
   setPairingCodeInput: (v: string) => void;
@@ -93,8 +94,9 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
   const [pairingId, setPairingId] = useState<string | null>(null);
   const [pairingClaimName, setPairingClaimName] = useState("");
   const [pairingSyncUrlInput, setPairingSyncUrlInput] = useState("");
-  /** Number of conversations on this device — shown in claim mode as a backup prompt. */
+  /** Counts of local state — shown in claim mode for backup prompt. */
   const [localConversationCount, setLocalConversationCount] = useState(0);
+  const [localMemoryCount, setLocalMemoryCount] = useState(0);
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pairingSyncUrlRef = useRef("");
   /** Held between claim and complete — ephemeral X25519 private key for identity key transfer. */
@@ -280,15 +282,18 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     }
   }, [pairingId, app, closePairingDialog, addSystemMessage]);
 
-  // Count local conversations when claim modal opens (for backup prompt)
+  // Count local state when claim modal opens (for backup prompt)
   useEffect(() => {
     if (showPairing && pairingMode === "claim") {
       try {
-        const convs = app.listConversations(100);
-        setLocalConversationCount(convs.length);
+        setLocalConversationCount(app.listConversations(100).length);
       } catch {
         setLocalConversationCount(0);
       }
+      void app
+        .listMemories()
+        .then((m) => setLocalMemoryCount(m.length))
+        .catch(() => setLocalMemoryCount(0));
     }
   }, [showPairing, pairingMode, app]);
 
@@ -307,6 +312,7 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     pairingClaimName,
     pairingSyncUrlInput,
     localConversationCount,
+    localMemoryCount,
     setPairingCodeInput,
     setPairingSyncUrlInput,
     handleInitiatePairing,

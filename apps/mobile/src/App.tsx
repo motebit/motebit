@@ -802,6 +802,7 @@ export default function App(): React.ReactElement {
     handlePairingDeny,
     handleExportBackup,
     localConversationCount,
+    localMemoryCount,
     closePairingDialog,
   } = usePairing({
     app: app.current,
@@ -1190,7 +1191,7 @@ export default function App(): React.ReactElement {
 
               {pairingMode === "claim" &&
                 (pairingId == null || pairingId === "") &&
-                localConversationCount > 0 && (
+                (localConversationCount > 0 || localMemoryCount > 0) && (
                   <View
                     style={{
                       flexDirection: "row",
@@ -1203,8 +1204,15 @@ export default function App(): React.ReactElement {
                     }}
                   >
                     <Text style={{ color: themeColors.textMuted, fontSize: 13, flex: 1 }}>
-                      This device has {localConversationCount} conversation
-                      {localConversationCount !== 1 ? "s" : ""}
+                      This device has{" "}
+                      {[
+                        localConversationCount > 0 &&
+                          `${localConversationCount} conversation${localConversationCount !== 1 ? "s" : ""}`,
+                        localMemoryCount > 0 &&
+                          `${localMemoryCount} memor${localMemoryCount !== 1 ? "ies" : "y"}`,
+                      ]
+                        .filter(Boolean)
+                        .join(" and ")}
                     </Text>
                     <TouchableOpacity
                       onPress={() => void handleExportBackup()}

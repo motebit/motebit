@@ -142,14 +142,22 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
 
     // Check for accumulated state and show backup prompt if needed
     void (async () => {
-      const convs = await ctx.app.listConversationsAsync(100);
-      if (convs.length === 0) return;
+      const [convs, memories] = await Promise.all([
+        ctx.app.listConversationsAsync(100),
+        ctx.app.listMemories(),
+      ]);
+      if (convs.length === 0 && memories.length === 0) return;
+      const parts: string[] = [];
+      if (convs.length > 0)
+        parts.push(`${convs.length} conversation${convs.length !== 1 ? "s" : ""}`);
+      if (memories.length > 0)
+        parts.push(`${memories.length} memor${memories.length !== 1 ? "ies" : "y"}`);
       const backupRow = document.createElement("div");
       backupRow.id = "pairing-backup-row";
       backupRow.style.cssText =
         "margin-bottom:12px;padding:8px 12px;background:rgba(255,200,50,0.12);border-radius:8px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:8px;";
       const label = document.createElement("span");
-      label.textContent = `This device has ${convs.length} conversation${convs.length !== 1 ? "s" : ""}`;
+      label.textContent = `This device has ${parts.join(" and ")}`;
       const exportBtn = document.createElement("button");
       exportBtn.className = "pairing-btn-approve";
       exportBtn.style.cssText = "font-size:12px;padding:4px 10px;";
