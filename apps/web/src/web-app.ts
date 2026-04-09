@@ -1488,10 +1488,8 @@ export class WebApp {
             const newPrivHex = bytesToHex(identitySeed);
             await this.keyStore.storePrivateKey(newPrivHex);
 
-            // Derive and update public key
-            const { getPublicKeyAsync } = await import("@noble/ed25519");
-            const newPub = await getPublicKeyAsync(identitySeed);
-            this._publicKeyHex = bytesToHex(newPub);
+            // The new public key is identity_pubkey_check (verified during decryption)
+            this._publicKeyHex = keyTransfer.identity_pubkey_check;
 
             // Update relay device registration
             const client = new PairingClient({ relayUrl: syncUrl });

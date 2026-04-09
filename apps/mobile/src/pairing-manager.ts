@@ -182,10 +182,8 @@ export class MobilePairingManager {
             const newPrivHex = bytesToHex(identitySeed);
             await keyring.set("device_private_key", newPrivHex);
 
-            // Derive and update public key
-            const { getPublicKeyAsync } = await import("@noble/ed25519");
-            const newPub = await getPublicKeyAsync(identitySeed);
-            const newPubHex = bytesToHex(newPub);
+            // The new public key is identity_pubkey_check (verified during decryption)
+            const newPubHex = keyTransfer.identity_pubkey_check;
             this.deps.setPublicKey(newPubHex);
 
             // Update relay device registration with new public key

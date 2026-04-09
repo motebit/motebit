@@ -648,10 +648,8 @@ export class IdentityManager {
             const newPrivHex = bytesToHex(identitySeed);
             await invoke<void>("keyring_set", { key: "device_private_key", value: newPrivHex });
 
-            // Derive the new public key and update config
-            const { getPublicKeyAsync } = await import("@noble/ed25519");
-            const newPub = await getPublicKeyAsync(identitySeed);
-            const newPubHex = bytesToHex(newPub);
+            // The new public key is identity_pubkey_check (verified during decryption)
+            const newPubHex = keyTransfer.identity_pubkey_check;
             updatedConfig = { ...updatedConfig, device_public_key: newPubHex };
             this.publicKey = newPubHex;
 
