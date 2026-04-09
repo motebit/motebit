@@ -36,9 +36,9 @@ apps/
 packages/
   protocol/           Network protocol types + semiring algebra (Layer 0, MIT, 0 deps)
   sdk/                Full type vocabulary, re-exports protocol (Layer 0, MIT)
-  verify/             Standalone identity verifier (Layer 0, MIT, 0 deps)
+  verify/             Protocol cryptography — sign and verify all artifacts (Layer 0, MIT, 0 monorepo deps)
   create-motebit/     CLI scaffolder: npm create motebit (Layer 0, MIT)
-  crypto/             Ed25519, AES-256-GCM, PBKDF2, signed tokens, W3C VC 2.0
+  crypto/             Product security: AES-256-GCM encryption, PBKDF2, sync keys, deletion certificates (re-exports signing from verify)
   gradient/           Self-measurement: "What am I?" Pure narrative from gradient data (Layer 1, BSL)
   semiring/           Agent network judgment layer — routing wiring, provenance, trust transitions (BSL)
   policy/             PolicyGate, MemoryGovernor, injection defense

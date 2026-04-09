@@ -796,6 +796,9 @@ importers:
       '@motebit/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@motebit/verify':
+        specifier: workspace:*
+        version: link:../verify
       '@noble/curves':
         specifier: ~1.9.0
         version: 1.9.7

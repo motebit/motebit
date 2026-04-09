@@ -1,25 +1,25 @@
 /**
- * @motebit/verify — Standalone verifier for all Motebit artifacts.
+ * @motebit/verify — Protocol cryptography for Motebit artifacts.
  *
- * Verifies identity files, execution receipts, verifiable credentials,
- * and verifiable presentations. One function, any artifact, zero config.
+ * Sign and verify identity files, execution receipts, verifiable credentials,
+ * delegation tokens, key successions, and presentations. One package, any
+ * artifact, zero monorepo dependencies.
  *
  * Zero monorepo dependencies — only @noble/ed25519 for cryptography.
  *
  * Usage:
  *   import { verify } from "@motebit/verify";
  *
- *   // Identity file
+ *   // Verify any artifact
  *   const result = await verify(fs.readFileSync("motebit.md", "utf-8"));
  *
- *   // Execution receipt (JSON)
- *   const result = await verify(receiptJson);
+ *   // Sign an execution receipt
+ *   import { signExecutionReceipt } from "@motebit/verify";
+ *   const signed = await signExecutionReceipt(receipt, privateKey, publicKey);
  *
- *   // Verifiable credential or presentation (JSON)
- *   const result = await verify(credentialJson);
- *
- *   // With expected type (fail-fast on misclassification)
- *   const result = await verify(artifact, { expectedType: "receipt" });
+ *   // Issue a verifiable credential
+ *   import { issueReputationCredential } from "@motebit/verify";
+ *   const vc = await issueReputationCredential(snapshot, privateKey, publicKey, did);
  */
 
 import * as ed from "@noble/ed25519";
@@ -131,35 +131,19 @@ export interface ExecutionReceipt {
 
 // ===========================================================================
 // Types — W3C Verifiable Credentials / Presentations
+// Canonical definitions in credentials.ts; re-exported here for verify consumers.
 // ===========================================================================
 
-export interface DataIntegrityProof {
-  type: "DataIntegrityProof";
-  cryptosuite: "eddsa-jcs-2022";
-  created: string;
-  verificationMethod: string;
-  proofPurpose: "assertionMethod" | "authentication";
-  proofValue: string;
-}
-
-export interface VerifiableCredential {
-  "@context": string[];
-  type: string[];
-  issuer: string;
-  credentialSubject: Record<string, unknown> & { id: string };
-  validFrom: string;
-  validUntil?: string;
-  credentialStatus?: { id: string; type: string };
-  proof: DataIntegrityProof;
-}
-
-export interface VerifiablePresentation {
-  "@context": string[];
-  type: string[];
-  holder: string;
-  verifiableCredential: VerifiableCredential[];
-  proof: DataIntegrityProof;
-}
+export type {
+  DataIntegrityProof,
+  VerifiableCredential,
+  VerifiablePresentation,
+} from "./credentials.js";
+import type {
+  DataIntegrityProof,
+  VerifiableCredential,
+  VerifiablePresentation,
+} from "./credentials.js";
 
 // ===========================================================================
 // Types — Verification Results (discriminated union)
@@ -1164,3 +1148,24 @@ export async function verifyIdentityFile(content: string): Promise<LegacyVerifyR
     succession: result.succession,
   };
 }
+
+// ===========================================================================
+// Protocol signing primitives — sign and produce valid Motebit artifacts.
+// Re-exported from sibling modules (bundled by tsup into a single file).
+// ===========================================================================
+
+export * from "./signing.js";
+export * from "./artifacts.js";
+export {
+  signVerifiableCredential,
+  verifyVerifiableCredential,
+  signVerifiablePresentation,
+  verifyVerifiablePresentation,
+  issueGradientCredential,
+  issueReputationCredential,
+  issueTrustCredential,
+  createPresentation,
+  type GradientCredentialSubject,
+  type ReputationCredentialSubject,
+  type TrustCredentialSubject,
+} from "./credentials.js";

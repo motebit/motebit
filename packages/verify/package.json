@@ -1,7 +1,7 @@
 {
   "name": "@motebit/verify",
   "version": "0.7.0",
-  "description": "Verify any Motebit artifact — identity files, execution receipts, verifiable credentials, and presentations. One function, zero deps, MIT.",
+  "description": "Protocol cryptography — sign and verify all Motebit artifacts. Receipts, credentials, delegations, successions. Zero monorepo deps, MIT.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,10 +12,10 @@
     }
   },
   "files": [
-    "dist/index.js",
-    "dist/index.js.map",
-    "dist/index.d.ts",
-    "dist/index.d.ts.map",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
     "LICENSE",
     "README.md"
   ],
@@ -42,7 +42,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsc --emitDeclarationOnly --declaration --outDir dist",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
