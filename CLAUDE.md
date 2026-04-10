@@ -73,6 +73,7 @@ spec/
   market-v1.md             motebit/market@1.0 — budget, settlement, fees, trust, routing
   credential-v1.md         motebit/credential@1.0 — W3C VC 2.0, issuance, weighting, revocation
   settlement-v1.md         motebit/settlement@1.0 — foundation law, rail taxonomy, sovereign rail, receipts, security model
+  auth-token-v1.md         motebit/auth-token@1.0 — signed bearer tokens, audience binding, replay prevention
 
 services/
   api/          Relay server (modules: index, federation, task-routing,

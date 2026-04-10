@@ -618,7 +618,7 @@ When two agents interact, each can verify the other's `motebit.md`. Mutual verif
 
 ### 9.3 — Service Authentication
 
-A service may require agents to prove ownership of their declared identity by signing a challenge with the private key corresponding to `identity.public_key`. The challenge-response protocol is outside the scope of this specification, but the cryptographic primitive (Ed25519 sign/verify) is the same.
+Agents authenticate to relays and services using short-lived Ed25519-signed bearer tokens. The token binds `motebit_id`, `device_id`, an audience claim, a unique nonce, and an expiration timestamp into a self-verifiable credential. The full specification is in `motebit/auth-token@1.0`. The cryptographic primitive (Ed25519 sign/verify) is the same as identity file signing.
 
 ---
 
