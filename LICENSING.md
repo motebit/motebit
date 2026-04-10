@@ -83,7 +83,7 @@ After four years, the recipe is free. By then, the network of sovereign agents w
 ## Quick reference
 
 ```
-MIT (now, any use):          protocol · sdk · verify · create-motebit · spec · github-action
+MIT (now, any use):          protocol · crypto · sdk · create-motebit · spec · github-action
 BSL-1.1 (source-visible):   runtime · engines · apps · services · everything else
 BSL → Apache 2.0 conversion: 4 years per version, automatic, irrevocable
 ```
