@@ -24,7 +24,7 @@ export interface InteractiveDelegationDeps {
   /** Set the credential submitter on the credential manager. */
   setCredentialSubmitter: (
     submitter: (
-      vc: import("@motebit/crypto").VerifiableCredential<unknown>,
+      vc: import("@motebit/encryption").VerifiableCredential<unknown>,
       targetMotebitId: string,
     ) => Promise<void>,
   ) => void;

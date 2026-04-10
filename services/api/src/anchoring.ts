@@ -18,7 +18,7 @@ import {
   canonicalJson,
   sign,
   bytesToHex,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 

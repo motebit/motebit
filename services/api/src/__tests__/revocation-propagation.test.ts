@@ -16,7 +16,7 @@ import {
 import type { RelayIdentity, RevocationEvent } from "../federation.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, sign, bytesToHex } from "@motebit/crypto";
+import { generateKeypair, sign, bytesToHex } from "@motebit/encryption";
 
 describe("Revocation Propagation", () => {
   let db: DatabaseDriver;

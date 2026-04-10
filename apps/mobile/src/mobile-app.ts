@@ -40,7 +40,7 @@ import {
   type VoiceConfig,
   type AppearanceConfig,
 } from "@motebit/sdk";
-import { createSignedToken, secureErase, bytesToHex } from "@motebit/crypto";
+import { createSignedToken, secureErase, bytesToHex } from "@motebit/encryption";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
   rotateIdentityKeys,
@@ -1409,7 +1409,7 @@ export class MobileApp {
         secureErase(rotateResult.newPrivateKey);
       } else {
         // No identity file — generate raw keypair for device key rotation only
-        const { generateKeypair } = await import("@motebit/crypto");
+        const { generateKeypair } = await import("@motebit/encryption");
         const newKeypair = await generateKeypair();
         newPubKeyHex = bytesToHex(newKeypair.publicKey);
         newPrivKeyHex = bytesToHex(newKeypair.privateKey);

@@ -16,8 +16,8 @@ export type {
   VerificationResult,
   ServerVerifier,
 } from "@motebit/sdk";
-import { secureErase, createSignedToken, verifyKeySuccession } from "@motebit/crypto";
-import type { KeySuccessionRecord } from "@motebit/crypto";
+import { secureErase, createSignedToken, verifyKeySuccession } from "@motebit/encryption";
+import type { KeySuccessionRecord } from "@motebit/encryption";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
 export {

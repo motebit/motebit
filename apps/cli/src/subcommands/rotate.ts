@@ -15,7 +15,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { verifyIdentityFile, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { rotateIdentityKeys } from "@motebit/core-identity";
-import { hexPublicKeyToDidKey, createSignedToken, secureErase, bytesToHex } from "@motebit/crypto";
+import {
+  hexPublicKeyToDidKey,
+  createSignedToken,
+  secureErase,
+  bytesToHex,
+} from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import { fromHex, promptPassphrase, encryptPrivateKey, decryptPrivateKey } from "../identity.js";

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EncryptedPlanSyncAdapter } from "../encrypted-plan-adapter.js";
-import { generateKey } from "@motebit/crypto";
+import { generateKey } from "@motebit/encryption";
 import type { SyncPlan, SyncPlanStep } from "@motebit/sdk";
 import type { PlanSyncRemoteAdapter } from "../plan-sync.js";
 

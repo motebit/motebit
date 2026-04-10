@@ -1,6 +1,6 @@
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
-import { deriveSyncEncryptionKey, createSignedToken } from "@motebit/crypto";
+import { deriveSyncEncryptionKey, createSignedToken } from "@motebit/encryption";
 import { connectMcpServers } from "@motebit/mcp-client";
 import { formatBodyAwareness } from "@motebit/ai-core";
 import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";

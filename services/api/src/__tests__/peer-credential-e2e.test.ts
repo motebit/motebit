@@ -20,8 +20,8 @@ import {
   bytesToHex,
   hexPublicKeyToDidKey,
   publicKeyToDidKey,
-} from "@motebit/crypto";
-import type { KeyPair, VerifiableCredential } from "@motebit/crypto";
+} from "@motebit/encryption";
+import type { KeyPair, VerifiableCredential } from "@motebit/encryption";
 import type { MotebitId, DeviceId, ReputationCredentialSubject } from "@motebit/sdk";
 
 // === Helpers ===

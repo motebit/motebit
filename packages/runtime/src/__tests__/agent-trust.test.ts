@@ -189,7 +189,7 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
 
   it("credential-blended trust affects graph edge weight", async () => {
     const keys = await (async () => {
-      const { generateKeypair } = await import("@motebit/crypto");
+      const { generateKeypair } = await import("@motebit/encryption");
       return generateKeypair();
     })();
     const { adapters } = createAdaptersWithTrust();
@@ -241,7 +241,7 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
 describe("MotebitRuntime sovereign trust loop (no relay)", () => {
   it("a payee can mint a trust signal for a payer via signed onchain payment receipt", async () => {
     const { generateKeypair, signSovereignPaymentReceipt, verifyExecutionReceipt } =
-      await import("@motebit/crypto");
+      await import("@motebit/encryption");
 
     // 1. Payer (the motebit running this runtime) and payee (a remote
     //    counterparty paid via wallet-solana). Each owns its own Ed25519
@@ -305,7 +305,7 @@ describe("MotebitRuntime sovereign trust loop (no relay)", () => {
   });
 
   it("an unverified sovereign receipt does not affect trust (fail-closed)", async () => {
-    const { generateKeypair, signSovereignPaymentReceipt } = await import("@motebit/crypto");
+    const { generateKeypair, signSovereignPaymentReceipt } = await import("@motebit/encryption");
 
     const payeeKp = await generateKeypair();
     const { adapters, trustStore } = createAdaptersWithTrust();

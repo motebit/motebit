@@ -8,7 +8,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
-import { generateKeypair, bytesToHex, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
+import {
+  generateKeypair,
+  bytesToHex,
+  signExecutionReceipt,
+  hash as sha256,
+} from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { reconcileLedger, toMicro } from "../accounts.js";
 import {

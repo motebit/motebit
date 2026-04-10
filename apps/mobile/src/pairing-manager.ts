@@ -30,7 +30,7 @@ import {
   secureErase,
   bytesToHex,
   hexToBytes,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import type { KeyTransferPayload } from "@motebit/protocol";
 import type { SecureStoreAdapter } from "./adapters/secure-store";
 import { KEYRING_KEYS } from "./storage-keys";

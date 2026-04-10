@@ -14,7 +14,7 @@ Motebit agents issue, accumulate, and present W3C Verifiable Credentials (VC Dat
 
 Three credential types capture three dimensions of agent quality: reputation (how well an agent executes), trust (how a peer evaluates an agent over time), and gradient (how an agent measures itself). Together they form a compounding trust history that makes agents more valuable the longer they operate.
 
-Credentials are signed with Ed25519 using the `eddsa-jcs-2022` Data Integrity cryptosuite. Verification requires only the credential document and the embedded public key — no relay, no registry, no external service. The `@motebit/verify` library verifies credentials alongside identity files, receipts, and presentations with a single function call, zero dependencies.
+Credentials are signed with Ed25519 using the `eddsa-jcs-2022` Data Integrity cryptosuite. Verification requires only the credential document and the embedded public key — no relay, no registry, no external service. The `@motebit/crypto` library verifies credentials alongside identity files, receipts, and presentations with a single function call, zero dependencies.
 
 **Design principles:**
 

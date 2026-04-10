@@ -26,7 +26,7 @@ import {
   type SignableReceipt,
   verifySignedToken,
   hash as sha256,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { generate as generateIdentity, verifyIdentityFile } from "@motebit/identity-file";
 
 // Deterministic test ID

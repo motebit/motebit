@@ -7,7 +7,7 @@
  */
 
 import type { CredentialStoreAdapter, GradientCredentialSubject } from "@motebit/sdk";
-import { issueGradientCredential } from "@motebit/crypto";
+import { issueGradientCredential } from "@motebit/encryption";
 import type { GradientStoreAdapter } from "./gradient.js";
 
 /** Union of all credential subject types issued by the runtime. */
@@ -24,12 +24,12 @@ export interface CredentialManagerDeps {
 }
 
 export class CredentialManager {
-  private _issuedCredentials: import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>[] =
+  private _issuedCredentials: import("@motebit/encryption").VerifiableCredential<AnyCredentialSubject>[] =
     [];
   /** Callback to submit credentials to relay for indexing. Set externally (e.g. by enableInteractiveDelegation). */
   credentialSubmitter:
     | ((
-        vc: import("@motebit/crypto").VerifiableCredential<unknown>,
+        vc: import("@motebit/encryption").VerifiableCredential<unknown>,
         subjectMotebitId: string,
       ) => Promise<void>)
     | null = null;
@@ -43,7 +43,7 @@ export class CredentialManager {
   async issueGradientCredential(
     privateKey: Uint8Array,
     publicKey: Uint8Array,
-  ): Promise<import("@motebit/crypto").VerifiableCredential<GradientCredentialSubject> | null> {
+  ): Promise<import("@motebit/encryption").VerifiableCredential<GradientCredentialSubject> | null> {
     const snapshot = this.deps.gradientStore.latest(this.deps.motebitId);
     if (!snapshot) return null;
     return issueGradientCredential(snapshot, privateKey, publicKey);
@@ -53,7 +53,7 @@ export class CredentialManager {
    * Return all verifiable credentials issued by this runtime (gradient + trust).
    * Credentials accumulate in memory; consumers can read and clear as needed.
    */
-  getIssuedCredentials(): import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>[] {
+  getIssuedCredentials(): import("@motebit/encryption").VerifiableCredential<AnyCredentialSubject>[] {
     return [...this._issuedCredentials];
   }
 
@@ -66,11 +66,11 @@ export class CredentialManager {
 
   /** Push a credential to both in-memory cache and persistent store. */
   persistCredential(
-    vc: import("@motebit/crypto").VerifiableCredential<unknown>,
+    vc: import("@motebit/encryption").VerifiableCredential<unknown>,
     subjectMotebitId?: string,
   ): void {
     this._issuedCredentials.push(
-      vc as import("@motebit/crypto").VerifiableCredential<AnyCredentialSubject>,
+      vc as import("@motebit/encryption").VerifiableCredential<AnyCredentialSubject>,
     );
     if (this.deps.credentialStore) {
       try {

@@ -62,7 +62,7 @@ import {
   decryptKeyTransfer,
   checkPreTransferBalance,
   formatWalletWarning,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import type { KeyTransferPayload } from "@motebit/protocol";
 import {
   generate as generateIdentityFile,
@@ -415,7 +415,7 @@ export class IdentityManager {
         secureErase(rotateResult.newPrivateKey);
       } else {
         // No identity file — generate raw keypair for device key rotation only
-        const { generateKeypair } = await import("@motebit/crypto");
+        const { generateKeypair } = await import("@motebit/encryption");
         const newKeypair = await generateKeypair();
         newPubKeyHex = bytesToHex(newKeypair.publicKey);
         newPrivKeyHex = bytesToHex(newKeypair.privateKey);

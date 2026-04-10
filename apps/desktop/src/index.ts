@@ -99,7 +99,7 @@ export type {
 };
 export type { PairingSession, PairingStatus };
 export type { MemoryNode, MemoryEdge };
-export type { DeletionCertificate } from "@motebit/crypto";
+export type { DeletionCertificate } from "@motebit/encryption";
 
 // Sync + goal event types live in ./sync-controller.ts and ./goal-scheduler.ts
 // and are re-exported from the top of this file.
@@ -739,7 +739,7 @@ export class DesktopApp {
       try {
         const kp = await this.getDeviceKeypair(config.invoke);
         if (kp) {
-          const { hexToBytes } = await import("@motebit/crypto");
+          const { hexToBytes } = await import("@motebit/encryption");
           signingKeys = {
             privateKey: hexToBytes(kp.privateKey),
             publicKey: hexToBytes(kp.publicKey),
@@ -1184,7 +1184,7 @@ export class DesktopApp {
   }
 
   /** Soft-delete a memory with audit trail. */
-  deleteMemory(nodeId: string): Promise<import("@motebit/crypto").DeletionCertificate | null> {
+  deleteMemory(nodeId: string): Promise<import("@motebit/encryption").DeletionCertificate | null> {
     return memoryCommands.deleteMemory(this.runtime, this.motebitId, nodeId);
   }
 

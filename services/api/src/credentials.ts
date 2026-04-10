@@ -11,8 +11,8 @@ import {
   issueReputationCredential,
   verifyVerifiableCredential,
   createPresentation,
-} from "@motebit/crypto";
-import type { VerifiableCredential } from "@motebit/crypto";
+} from "@motebit/encryption";
+import type { VerifiableCredential } from "@motebit/encryption";
 import { asMotebitId, AgentTrustLevel } from "@motebit/sdk";
 import type { ExecutionReceipt, MotebitId, DeviceId, AgentTrustRecord } from "@motebit/sdk";
 import { computeServiceReputation } from "@motebit/market";

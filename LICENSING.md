@@ -11,7 +11,7 @@ The protocol specification, type definitions, identity verification, and scaffol
 | `spec/`                    | —                   | Identity, execution-ledger, federation, market specs |
 | `packages/protocol/`       | `@motebit/protocol` | Network protocol types (0 deps)                      |
 | `packages/sdk/`            | `@motebit/sdk`      | Full type vocabulary (re-exports protocol)           |
-| `packages/verify/`         | `@motebit/verify`   | Standalone signature verification (0 deps)           |
+| `packages/crypto/`         | `@motebit/crypto`   | Standalone signature verification (0 deps)           |
 | `packages/create-motebit/` | `create-motebit`    | Identity scaffolding CLI (0 deps)                    |
 | `packages/github-action/`  | —                   | GitHub Action for identity verification              |
 

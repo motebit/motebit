@@ -20,8 +20,8 @@ import {
   hexToBytes,
   verify as ed25519Verify,
   canonicalJson,
-} from "@motebit/crypto";
-import type { KeySuccessionRecord } from "@motebit/crypto";
+} from "@motebit/encryption";
+import type { KeySuccessionRecord } from "@motebit/encryption";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
 

@@ -45,13 +45,13 @@ Returns exit code 0 if valid, 1 if tampered or malformed.
 Install the standalone verifier:
 
 ```bash
-npm install @motebit/verify
+npm install @motebit/crypto
 ```
 
-`@motebit/verify` verifies any Motebit artifact — identity files, execution receipts, verifiable credentials, and presentations. One function, zero monorepo dependencies, MIT licensed.
+`@motebit/crypto` verifies any Motebit artifact — identity files, execution receipts, verifiable credentials, and presentations. One function, zero monorepo dependencies, MIT licensed.
 
 ```typescript
-import { verify } from "@motebit/verify";
+import { verify } from "@motebit/crypto";
 import fs from "node:fs";
 
 // Identity file

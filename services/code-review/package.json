@@ -19,7 +19,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
     "@motebit/core-identity": "workspace:*",
-    "@motebit/crypto": "workspace:*",
+    "@motebit/encryption": "workspace:*",
     "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-client": "workspace:^",
     "@motebit/mcp-server": "workspace:*",

@@ -65,7 +65,7 @@ const BOUNDARY_GROUPS: BoundaryGroup[] = [
     files: [
       "packages/core-identity/src/index.ts",
       "packages/identity-file/src/index.ts",
-      "packages/verify/src/index.ts",
+      "packages/crypto/src/index.ts",
       "packages/crypto/src/index.ts",
       "packages/crypto/src/credentials.ts",
     ],

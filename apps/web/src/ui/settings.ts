@@ -13,7 +13,7 @@ import {
 import { checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
 import { detectLocalInference, probeLocalModels, DEFAULT_LOCAL_ENDPOINTS } from "../bootstrap";
 import { setTTSVoice } from "./chat";
-import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
 import { PROXY_BASE_URL } from "../providers";

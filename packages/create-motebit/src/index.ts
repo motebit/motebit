@@ -7,7 +7,7 @@
  *   npx create-motebit verify [path] # Verify an existing motebit.md
  */
 
-import { verifyIdentityFile } from "@motebit/verify";
+import { verifyIdentityFile } from "@motebit/crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -86,14 +86,14 @@ function makePackageJson(name: string): string {
       verify: "npx create-motebit verify motebit.md",
     },
     dependencies: {
-      "@motebit/verify": `^${__VERIFY_VERSION__}`,
+      "@motebit/crypto": `^${__VERIFY_VERSION__}`,
     },
   };
   return JSON.stringify(pkg, null, 2) + "\n";
 }
 
 function makeVerifyExample(): string {
-  return `import { verify } from "@motebit/verify";
+  return `import { verify } from "@motebit/crypto";
 import { readFileSync } from "node:fs";
 
 const content = readFileSync("motebit.md", "utf-8");

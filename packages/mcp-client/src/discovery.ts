@@ -21,7 +21,7 @@ export interface DnsDiscoveryResult {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal identity file frontmatter extraction (no @motebit/verify dependency)
+// Minimal identity file frontmatter extraction (no @motebit/crypto dependency)
 // ---------------------------------------------------------------------------
 
 interface ParsedFrontmatter {

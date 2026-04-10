@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@motebit/crypto": "workspace:*",
+    "@motebit/encryption": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "zod": "^3.25.0"
   },

@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
-import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import {
@@ -266,7 +266,7 @@ function generateOssaManifest(motebitId: string, publicKeyHex: string): string {
     "  verification:",
     "    method: Ed25519",
     "    spec: motebit/identity@1.0",
-    "    verifier: '@motebit/verify'",
+    "    verifier: '@motebit/crypto'",
     "",
     "protocols:",
     "  mcp:",

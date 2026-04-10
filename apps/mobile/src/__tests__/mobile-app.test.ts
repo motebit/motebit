@@ -81,7 +81,7 @@ vi.mock("expo-three", () => ({
 }));
 
 // @motebit/crypto
-vi.mock("@motebit/crypto", () => ({
+vi.mock("@motebit/encryption", () => ({
   createSignedToken: vi.fn(() => Promise.resolve("mock-signed-token")),
 }));
 

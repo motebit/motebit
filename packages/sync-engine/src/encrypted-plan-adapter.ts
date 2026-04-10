@@ -8,7 +8,7 @@
  */
 
 import type { SyncPlan, SyncPlanStep } from "@motebit/sdk";
-import { encrypt, decrypt, type EncryptedPayload } from "@motebit/crypto";
+import { encrypt, decrypt, type EncryptedPayload } from "@motebit/encryption";
 import type { PlanSyncRemoteAdapter } from "./plan-sync.js";
 
 export interface EncryptedPlanAdapterConfig {

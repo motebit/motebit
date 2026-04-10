@@ -12,7 +12,7 @@ import type { EventStore } from "@motebit/event-log";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 import { asMotebitId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
-import { canonicalJson, bytesToHex } from "@motebit/crypto";
+import { canonicalJson, bytesToHex } from "@motebit/encryption";
 
 export interface StateExportDeps {
   app: Hono;

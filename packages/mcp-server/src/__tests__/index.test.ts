@@ -1742,7 +1742,7 @@ describe("McpServerAdapter — mutual authentication", () => {
 describe("McpServerAdapter — motebit_task scope enforcement", () => {
   // Helper: create a real signed delegation token for testing
   async function createDelegationToken(scope: string): Promise<string> {
-    const { generateKeypair, signDelegation, toBase64Url } = await import("@motebit/crypto");
+    const { generateKeypair, signDelegation, toBase64Url } = await import("@motebit/encryption");
 
     const delegatorKp = await generateKeypair();
     const delegateKp = await generateKeypair();
@@ -1866,7 +1866,7 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
     await adapter.start();
 
     // Create a valid token then tamper with the scope to invalidate signature
-    const { generateKeypair, signDelegation, toBase64Url } = await import("@motebit/crypto");
+    const { generateKeypair, signDelegation, toBase64Url } = await import("@motebit/encryption");
     const kp1 = await generateKeypair();
     const kp2 = await generateKeypair();
     const token = await signDelegation(

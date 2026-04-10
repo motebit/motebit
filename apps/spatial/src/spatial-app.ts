@@ -36,7 +36,7 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
-import { createSignedToken, secureErase } from "@motebit/crypto";
+import { createSignedToken, secureErase } from "@motebit/encryption";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
 import type {
   MotebitState,

@@ -21,7 +21,7 @@ import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate } from "@motebit/identity-file";
-import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
+import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/encryption";
 import { embedText } from "@motebit/memory-graph";
 import { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.js";
 

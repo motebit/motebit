@@ -1,4 +1,4 @@
-# @motebit/verify
+# @motebit/crypto
 
 Verify any Motebit artifact — identity files, execution receipts, verifiable credentials, and verifiable presentations.
 
@@ -7,13 +7,13 @@ One function. Any artifact. Zero runtime dependencies. MIT licensed.
 ## Install
 
 ```bash
-npm install @motebit/verify
+npm install @motebit/crypto
 ```
 
 ## Usage
 
 ```typescript
-import { verify } from "@motebit/verify";
+import { verify } from "@motebit/crypto";
 
 // Identity file
 const r1 = await verify(fs.readFileSync("motebit.md", "utf-8"));
@@ -58,7 +58,7 @@ const result = await verify(artifact, { expectedType: "receipt" });
 ### Parse without verifying
 
 ```typescript
-import { parse } from "@motebit/verify";
+import { parse } from "@motebit/crypto";
 
 const { frontmatter, signature, rawFrontmatter } = parse(identityFileContent);
 console.log(frontmatter.motebit_id);

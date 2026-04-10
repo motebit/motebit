@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
-import { generateKeypair, bytesToHex, hexPublicKeyToDidKey } from "@motebit/crypto";
+import { generateKeypair, bytesToHex, hexPublicKeyToDidKey } from "@motebit/encryption";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===

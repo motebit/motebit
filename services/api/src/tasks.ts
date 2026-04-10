@@ -39,7 +39,7 @@ import {
   canonicalJson,
   bytesToHex,
   hexToBytes,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
 import {
   explainedRankCandidates,

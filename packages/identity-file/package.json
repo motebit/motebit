@@ -15,9 +15,9 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@motebit/verify": "workspace:*",
+    "@motebit/crypto": "workspace:*",
     "@motebit/sdk": "workspace:*",
-    "@motebit/crypto": "workspace:*"
+    "@motebit/encryption": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

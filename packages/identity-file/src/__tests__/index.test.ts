@@ -4,8 +4,8 @@ import {
   signKeySuccession,
   signGuardianRecoverySuccession,
   bytesToHex,
-} from "@motebit/crypto";
-import { verifyIdentityFile as standaloneVerify } from "@motebit/verify";
+} from "@motebit/encryption";
+import { verifyIdentityFile as standaloneVerify } from "@motebit/crypto";
 import {
   generate,
   parse,
@@ -420,14 +420,14 @@ describe("service identity", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cross-compatibility: identity-file generate → @motebit/verify verify
+// Cross-compatibility: identity-file generate → @motebit/crypto verify
 // ---------------------------------------------------------------------------
 // This locks the contract between the two packages. identity-file generates
-// and serializes; @motebit/verify (the standalone, zero-monorepo-dep package)
-// must accept the output. Import standaloneVerify directly from @motebit/verify
+// and serializes; @motebit/crypto (the standalone, zero-monorepo-dep package)
+// must accept the output. Import standaloneVerify directly from @motebit/crypto
 // so this test breaks visibly if the packages drift.
 
-describe("cross-compatibility with @motebit/verify", () => {
+describe("cross-compatibility with @motebit/crypto", () => {
   it("standalone verify accepts generate() output", async () => {
     const kp = await makeKeypairHex();
 
@@ -502,7 +502,7 @@ describe("cross-compatibility with @motebit/verify", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Re-exports from @motebit/crypto and @motebit/verify (lines 14, 20)
+// Re-exports from @motebit/crypto and @motebit/crypto (lines 14, 20)
 // ---------------------------------------------------------------------------
 
 describe("re-exports", () => {
@@ -514,15 +514,15 @@ describe("re-exports", () => {
     expect(typeof hexPublicKeyToDidKey).toBe("function");
   });
 
-  it("re-exports parse from @motebit/verify", () => {
+  it("re-exports parse from @motebit/crypto", () => {
     expect(typeof parse).toBe("function");
   });
 
-  it("re-exports verify from @motebit/verify", () => {
+  it("re-exports verify from @motebit/crypto", () => {
     expect(typeof verifyFromIdentityFile).toBe("function");
   });
 
-  it("re-exports verifyIdentityFile from @motebit/verify", () => {
+  it("re-exports verifyIdentityFile from @motebit/crypto", () => {
     expect(typeof verifyIdentityFileReexport).toBe("function");
   });
 

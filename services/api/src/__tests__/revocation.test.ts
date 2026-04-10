@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
-import { generateKeypair, createSignedToken, bytesToHex } from "@motebit/crypto";
+import { generateKeypair, createSignedToken, bytesToHex } from "@motebit/encryption";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 async function createIdentityAndDevice(

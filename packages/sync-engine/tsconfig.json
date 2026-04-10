@@ -8,7 +8,7 @@
   "include": ["src"],
   "references": [
     {
-      "path": "../crypto"
+      "path": "../encryption"
     },
     {
       "path": "../event-log"

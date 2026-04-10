@@ -6,7 +6,7 @@
 
 import React, { useState } from "react";
 import { View, Text, TouchableOpacity, Clipboard, Linking } from "react-native";
-import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import { useSettingsStyles } from "./settings-shared";
 
 export interface IdentityTabProps {

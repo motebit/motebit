@@ -56,7 +56,7 @@ pnpm --filter <pkg> test    # Test a single package
 
 ### Changesets
 
-We use [Changesets](https://github.com/changesets/changesets) to manage versions and changelogs for published packages. If your PR affects any published package (`@motebit/sdk`, `@motebit/verify`, `create-motebit`, or `motebit`), add a changeset:
+We use [Changesets](https://github.com/changesets/changesets) to manage versions and changelogs for published packages. If your PR affects any published package (`@motebit/sdk`, `@motebit/crypto`, `create-motebit`, or `motebit`), add a changeset:
 
 ```bash
 pnpm changeset
@@ -99,5 +99,5 @@ The CLA grants Motebit the rights needed to license contributions under our dual
 
 Contributions are licensed under the same terms as the project:
 
-- **Protocol layer** (`spec/`, `packages/verify/`, `packages/create-motebit/`, `packages/sdk/`, `packages/github-action/`) -- MIT
+- **Protocol layer** (`spec/`, `packages/crypto/`, `packages/create-motebit/`, `packages/sdk/`, `packages/github-action/`) -- MIT
 - **Everything else** -- [BSL 1.1](LICENSE), source-available, converts to Apache 2.0 per-version after 4 years

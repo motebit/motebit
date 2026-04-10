@@ -22,7 +22,7 @@
     "@motebit/ai-core": "workspace:*",
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/core-identity": "workspace:*",
-    "@motebit/crypto": "workspace:*",
+    "@motebit/encryption": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/gradient": "workspace:*",
     "@motebit/protocol": "workspace:*",

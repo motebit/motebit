@@ -18,7 +18,7 @@ import type {
   ReputationCredentialSubject,
 } from "@motebit/sdk";
 import { AgentTrustLevel, VC_TYPE_REPUTATION } from "@motebit/sdk";
-import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import { trustLevelToScore } from "@motebit/semiring";
 import type { WeightedDigraph } from "@motebit/semiring";
 import type { RouteWeight, AgentProfile } from "@motebit/semiring";

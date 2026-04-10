@@ -73,7 +73,11 @@ import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
-import { verifyExecutionReceipt, signSovereignPaymentReceipt, hexToBytes } from "@motebit/crypto";
+import {
+  verifyExecutionReceipt,
+  signSovereignPaymentReceipt,
+  hexToBytes,
+} from "@motebit/encryption";
 import { InMemoryGradientStore } from "./gradient.js";
 import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
@@ -170,7 +174,7 @@ export type {
 } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
-export type { DeletionCertificate } from "@motebit/crypto";
+export type { DeletionCertificate } from "@motebit/encryption";
 export type {
   RenderAdapter,
   RenderFrame,
@@ -736,7 +740,7 @@ export class MotebitRuntime {
         this.credentialManager.issueGradientCredential(priv, pub),
       persistCredential: (vc) =>
         this.credentialManager.persistCredential(
-          vc as import("@motebit/crypto").VerifiableCredential<unknown>,
+          vc as import("@motebit/encryption").VerifiableCredential<unknown>,
         ),
       getSigningKeys: () => this._signingKeys,
     });

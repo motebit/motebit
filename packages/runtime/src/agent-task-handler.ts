@@ -14,7 +14,7 @@ import type {
   LatencyStatsStoreAdapter,
   ConversationMessage,
 } from "@motebit/sdk";
-import { hash, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/crypto";
+import { hash, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
 import { composeDelegationTrust, trustLevelToScore } from "@motebit/semiring";
 import type { EventStore } from "@motebit/event-log";
 import type { AgentGraphManager } from "./agent-graph.js";

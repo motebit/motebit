@@ -39,7 +39,7 @@ import {
 } from "@motebit/sync-engine";
 import type { PlanSyncStoreAdapter, SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
 import type { EventStoreAdapter } from "@motebit/event-log";
-import { deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
+import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import type { SecureStoreAdapter } from "./adapters/secure-store";
 

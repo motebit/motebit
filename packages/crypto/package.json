@@ -1,29 +1,68 @@
 {
   "name": "@motebit/crypto",
-  "version": "0.1.16",
-  "license": "BSL-1.1",
-  "private": true,
+  "version": "0.7.0",
+  "description": "Protocol cryptography — sign and verify all Motebit artifacts. Receipts, credentials, delegations, successions. Zero monorepo deps, MIT.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "keywords": [
+    "motebit",
+    "agent",
+    "identity",
+    "ed25519",
+    "crypto",
+    "sign",
+    "verify",
+    "signature",
+    "receipts",
+    "credentials"
+  ],
+  "homepage": "https://github.com/motebit/motebit/tree/main/packages/crypto#readme",
+  "bugs": {
+    "url": "https://github.com/motebit/motebit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit",
+    "directory": "packages/crypto"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsup && tsc -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap --outDir dist",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/",
-    "clean": "rm -rf dist .turbo *.tsbuildinfo"
-  },
-  "dependencies": {
-    "@motebit/protocol": "workspace:*",
-    "@motebit/verify": "workspace:*",
-    "@noble/curves": "~1.9.0",
-    "@noble/ed25519": "~3.0.1",
-    "@noble/hashes": "~1.6.0"
+    "lint": "eslint --parser-options=project:tsconfig.eslint.json src/",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
+    "@noble/ed25519": "~3.0.1",
+    "@noble/hashes": "~1.6.0",
     "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

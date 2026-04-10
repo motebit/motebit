@@ -13,7 +13,7 @@ import type { CapabilityPrice, AgentTrustRecord } from "@motebit/sdk";
 import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
 import { trustLevelToScore } from "@motebit/market";
 import type { ListingId } from "@motebit/sdk";
-import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/crypto";
+import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/encryption";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 import { CircuitBreaker } from "./circuit-breaker.js";

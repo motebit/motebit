@@ -148,9 +148,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
@@ -223,9 +223,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
@@ -402,9 +402,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
@@ -538,9 +538,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
@@ -593,9 +593,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/gradient':
         specifier: workspace:*
         version: link:../../packages/gradient
@@ -747,9 +747,9 @@ importers:
 
   packages/core-identity:
     dependencies:
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../crypto
+        version: link:../encryption
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
@@ -769,9 +769,9 @@ importers:
 
   packages/create-motebit:
     devDependencies:
-      '@motebit/verify':
+      '@motebit/crypto':
         specifier: workspace:*
-        version: link:../verify
+        version: link:../crypto
       '@noble/ed25519':
         specifier: ~3.0.1
         version: 3.0.1
@@ -792,13 +792,34 @@ importers:
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
 
   packages/crypto:
+    devDependencies:
+      '@noble/ed25519':
+        specifier: ~3.0.1
+        version: 3.0.1
+      '@noble/hashes':
+        specifier: ~1.6.0
+        version: 1.6.1
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
+  packages/encryption:
     dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@motebit/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@motebit/verify':
-        specifier: workspace:*
-        version: link:../verify
       '@noble/curves':
         specifier: ~1.9.0
         version: 1.9.7
@@ -856,12 +877,12 @@ importers:
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@motebit/encryption':
+        specifier: workspace:*
+        version: link:../encryption
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@motebit/verify':
-        specifier: workspace:*
-        version: link:../verify
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -897,9 +918,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../crypto
+        version: link:../encryption
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -922,9 +943,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../crypto
+        version: link:../encryption
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -1067,9 +1088,9 @@ importers:
 
   packages/privacy-layer:
     dependencies:
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../crypto
+        version: link:../encryption
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
@@ -1169,9 +1190,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../crypto
+        version: link:../encryption
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
@@ -1281,9 +1302,9 @@ importers:
 
   packages/sync-engine:
     dependencies:
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../crypto
+        version: link:../encryption
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../event-log
@@ -1319,27 +1340,6 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
-      typescript:
-        specifier: ^5.6.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
-
-  packages/verify:
-    devDependencies:
-      '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
-      '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.11
-      tsup:
-        specifier: ^8.0.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1389,9 +1389,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/event-log':
         specifier: workspace:*
         version: link:../../packages/event-log
@@ -1453,9 +1453,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
@@ -1555,9 +1555,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
@@ -1601,9 +1601,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
@@ -1650,9 +1650,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
-      '@motebit/crypto':
+      '@motebit/encryption':
         specifier: workspace:*
-        version: link:../../packages/crypto
+        version: link:../../packages/encryption
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file

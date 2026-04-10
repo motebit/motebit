@@ -5,14 +5,14 @@
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
-import type { KeySuccessionRecord } from "@motebit/crypto";
+import type { KeySuccessionRecord } from "@motebit/encryption";
 import {
   verifyKeySuccession,
   verify,
   canonicalJson,
   bytesToHex,
   hexToBytes,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { insertRevocationEvent } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";

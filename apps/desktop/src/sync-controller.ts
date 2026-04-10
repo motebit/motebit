@@ -30,7 +30,7 @@ import { executeCommand, cmdSelfTest } from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
-import { deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
+import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,

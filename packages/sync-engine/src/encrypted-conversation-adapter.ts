@@ -8,7 +8,7 @@
  */
 
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
-import { encrypt, decrypt, type EncryptedPayload } from "@motebit/crypto";
+import { encrypt, decrypt, type EncryptedPayload } from "@motebit/encryption";
 import type { ConversationSyncRemoteAdapter } from "./conversation-sync.js";
 
 export interface EncryptedConversationAdapterConfig {

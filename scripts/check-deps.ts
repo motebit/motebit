@@ -32,11 +32,11 @@ const LAYER: Record<string, number> = {
   // Layer 0 — Foundation (zero internal deps)
   "@motebit/protocol": 0,
   "@motebit/sdk": 0,
-  "@motebit/verify": 0,
+  "@motebit/crypto": 0,
   "@motebit/voice": 0,
 
   // Layer 1 — Primitives (depend only on Layer 0)
-  "@motebit/crypto": 1,
+  "@motebit/encryption": 1,
   "@motebit/gradient": 1,
   "@motebit/event-log": 1,
   "@motebit/policy": 1,
@@ -80,7 +80,7 @@ const APP_LAYER = 6;
 const MIT_PACKAGES = new Set([
   "@motebit/protocol",
   "@motebit/sdk",
-  "@motebit/verify",
+  "@motebit/crypto",
   "create-motebit",
 ]);
 
@@ -89,7 +89,7 @@ const MIT_PACKAGES = new Set([
 const MIT_IMPORT_ALLOWED = new Set([
   "@motebit/protocol",
   "@motebit/sdk",
-  "@motebit/verify",
+  "@motebit/crypto",
   "create-motebit",
 ]);
 
@@ -125,7 +125,58 @@ const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "composeTrustChain",
     "joinParallelRoutes",
   ]),
-  "@motebit/verify": new Set(["verify", "verifyIdentityFile", "parse"]),
+  "@motebit/crypto": new Set([
+    // Artifact verification (original verify package)
+    "verify",
+    "verifyIdentityFile",
+    "parse",
+    // Signing primitives
+    "canonicalJson",
+    "bytesToHex",
+    "hexToBytes",
+    "toBase64Url",
+    "fromBase64Url",
+    "base58btcEncode",
+    "base58btcDecode",
+    "didKeyToPublicKey",
+    "publicKeyToDidKey",
+    "hexPublicKeyToDidKey",
+    "hash",
+    "sha256",
+    "generateKeypair",
+    "ed25519Sign",
+    "ed25519Verify",
+    "createSignedToken",
+    "verifySignedToken",
+    "parseScopeSet",
+    "isScopeNarrowed",
+    // Artifact signing
+    "signExecutionReceipt",
+    "verifyExecutionReceipt",
+    "signSovereignPaymentReceipt",
+    "verifyReceiptChain",
+    "verifyReceiptSequence",
+    "signDelegation",
+    "verifyDelegation",
+    "verifyDelegationChain",
+    "signKeySuccession",
+    "signGuardianRecoverySuccession",
+    "verifyKeySuccession",
+    "verifySuccessionChain",
+    "signGuardianRevocation",
+    "verifyGuardianRevocation",
+    "signCollaborativeReceipt",
+    "verifyCollaborativeReceipt",
+    // Credential signing
+    "signVerifiableCredential",
+    "verifyVerifiableCredential",
+    "signVerifiablePresentation",
+    "verifyVerifiablePresentation",
+    "issueGradientCredential",
+    "issueReputationCredential",
+    "issueTrustCredential",
+    "createPresentation",
+  ]),
 };
 
 // ── Types ──────────────────────────────────────────────────────────────

@@ -2,8 +2,8 @@
 
 import * as readline from "node:readline";
 import { Writable } from "node:stream";
-import { deriveKey, encrypt, decrypt, generateSalt } from "@motebit/crypto";
-import type { EncryptedPayload } from "@motebit/crypto";
+import { deriveKey, encrypt, decrypt, generateSalt } from "@motebit/encryption";
+import type { EncryptedPayload } from "@motebit/encryption";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
   type BootstrapConfigStore,

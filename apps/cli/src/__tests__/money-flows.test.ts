@@ -21,7 +21,7 @@ vi.mock("../identity.js", () => ({
   bootstrapIdentity: vi.fn(),
 }));
 
-vi.mock("@motebit/crypto", () => ({
+vi.mock("@motebit/encryption", () => ({
   hexPublicKeyToDidKey: vi.fn(),
   verifyVerifiableCredential: vi.fn(),
   verifyVerifiablePresentation: vi.fn(),

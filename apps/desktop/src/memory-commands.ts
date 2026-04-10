@@ -18,7 +18,7 @@ import type { MemoryNode, MemoryEdge, SensitivityLevel } from "@motebit/sdk";
 import { SensitivityLevel as SensitivityLevelEnum } from "@motebit/sdk";
 import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import type { MotebitRuntime } from "@motebit/runtime";
-import type { DeletionCertificate } from "@motebit/crypto";
+import type { DeletionCertificate } from "@motebit/encryption";
 
 /**
  * List all non-tombstoned memories for the local agent, sorted newest first.

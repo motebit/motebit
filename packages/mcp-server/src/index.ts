@@ -12,8 +12,13 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { AgentTrustLevel, RiskLevel } from "@motebit/sdk";
 import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
-import { hexPublicKeyToDidKey, hexToBytes, verifyDelegation, parseScopeSet } from "@motebit/crypto";
-import type { DelegationToken } from "@motebit/crypto";
+import {
+  hexPublicKeyToDidKey,
+  hexToBytes,
+  verifyDelegation,
+  parseScopeSet,
+} from "@motebit/encryption";
+import type { DelegationToken } from "@motebit/encryption";
 
 // Re-export for consumers
 export type { MotebitServerDeps, McpServerConfig, InboundCredentialVerifier };

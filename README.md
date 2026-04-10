@@ -203,7 +203,7 @@ spec/
 Verify any motebit artifact — identity files, receipts, credentials, or presentations — with zero dependencies:
 
 ```typescript
-import { verify } from "@motebit/verify";
+import { verify } from "@motebit/crypto";
 
 const result = await verify(artifact);
 
@@ -228,14 +228,14 @@ Five npm packages (four with zero dependencies, SDK re-exports protocol):
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
 | [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Network protocol types — identity, receipts, credentials, settlement       | MIT     |
 | [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Full type vocabulary — re-exports protocol + product types                 | MIT     |
-| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)     | Signature verification — zero dependencies                                 | MIT     |
+| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Signature verification — zero dependencies                                 | MIT     |
 | [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | `npm create motebit` — scaffold identity or `--agent` for runnable service | MIT     |
 | [`motebit`](https://www.npmjs.com/package/motebit)                     | CLI — REPL, daemon, operator console                                       | BSL-1.1 |
 
 ## Specification
 
 > [!NOTE]
-> **Motebit is a protocol first.** The `motebit.md` identity file is an [open standard](spec/identity-v1.md) (MIT) that can be verified by any tool, with or without the motebit runtime. The [verification library](https://www.npmjs.com/package/@motebit/verify) is zero-dependency and MIT licensed.
+> **Motebit is a protocol first.** The `motebit.md` identity file is an [open standard](spec/identity-v1.md) (MIT) that can be verified by any tool, with or without the motebit runtime. The [verification library](https://www.npmjs.com/package/@motebit/crypto) is zero-dependency and MIT licensed.
 
 A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), registered devices, optional organizational guardian ([spec](spec/identity-v1.md) §3.3), and key succession history ([spec](spec/identity-v1.md) §3.8).
 
@@ -255,7 +255,7 @@ The **protocol layer** is MIT licensed — use it freely, build on it, implement
 
 - [`spec/`](spec/) — identity, execution-ledger, relay-federation, market specifications
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, settlement, trust algebra)
-- [`packages/verify/`](packages/verify/) — verification library (zero dependencies)
+- [`packages/crypto/`](packages/crypto/) — verification library (zero dependencies)
 - [`packages/create-motebit/`](packages/create-motebit/) — CLI scaffolder
 
 The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.

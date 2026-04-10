@@ -27,7 +27,7 @@
   "dependencies": {
     "@motebit/protocol": "workspace:*",
     "@motebit/event-log": "workspace:*",
-    "@motebit/crypto": "workspace:*"
+    "@motebit/encryption": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

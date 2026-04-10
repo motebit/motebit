@@ -34,8 +34,8 @@ import {
   signExecutionReceipt,
   verifyExecutionReceipt,
   bytesToHex,
-} from "@motebit/crypto";
-import type { KeyPair } from "@motebit/crypto";
+} from "@motebit/encryption";
+import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
 
 // === Helpers ===

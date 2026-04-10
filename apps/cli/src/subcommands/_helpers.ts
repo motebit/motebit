@@ -8,7 +8,7 @@
  * lives here.
  */
 
-import { createSignedToken, secureErase } from "@motebit/crypto";
+import { createSignedToken, secureErase } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, type FullConfig } from "../config.js";
 import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
