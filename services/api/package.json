@@ -25,6 +25,7 @@
     "@motebit/market": "workspace:*",
     "@motebit/persistence": "workspace:*",
     "@motebit/sdk": "workspace:*",
+    "@motebit/wallet-solana": "workspace:*",
     "@privy-io/node": "^0.12.0",
     "@x402/core": "^2.6.0",
     "@x402/evm": "^2.6.0",

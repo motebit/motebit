@@ -98,6 +98,7 @@ import {
   getCredentialAnchorProof,
   getCredentialAnchorBatch,
   isCredentialPendingBatch,
+  type CredentialAnchoringConfig,
 } from "./credential-anchoring.js";
 import { startDepositDetector } from "./deposit-detector.js";
 import { registerCredentialRoutes } from "./credentials.js";
@@ -923,8 +924,25 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   );
 
   // --- Credential anchor batching (credential-anchor-v1.md) ---
-  const credentialAnchorInterval = startCredentialAnchorLoop(moteDb.db, relayIdentity, {}, () =>
-    getEmergencyFreeze(),
+  const credentialAnchorConfig: CredentialAnchoringConfig = {};
+  const solanaRpcUrl = process.env.SOLANA_RPC_URL;
+  if (solanaRpcUrl) {
+    const { createSolanaMemoSubmitter } = await import("@motebit/wallet-solana");
+    const memoSubmitter = createSolanaMemoSubmitter({
+      rpcUrl: solanaRpcUrl,
+      identitySeed: relayIdentity.privateKey,
+    });
+    credentialAnchorConfig.submitter = memoSubmitter;
+    logger.info("credential_anchoring.solana_submitter_configured", {
+      address: memoSubmitter.address,
+      network: memoSubmitter.network,
+    });
+  }
+  const credentialAnchorInterval = startCredentialAnchorLoop(
+    moteDb.db,
+    relayIdentity,
+    credentialAnchorConfig,
+    () => getEmergencyFreeze(),
   );
 
   // --- Deposit detector (scans onchain Transfer events for agent wallets) ---
