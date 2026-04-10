@@ -20,6 +20,8 @@ export interface CandidateProfile {
   credential_reputation?: import("./credential-weight.js").CredentialReputation;
   /** Guardian public key (hex) if agent is under organizational custody. Same guardian = same org. */
   guardian_public_key?: string;
+  /** Agent's MCP endpoint URL (from agent_registry). Used for sovereign delegation. */
+  endpoint_url?: string;
 }
 
 export interface TaskRequirements {

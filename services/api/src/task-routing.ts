@@ -170,7 +170,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     if (capabilityFilter) {
       listingRows = db
         .prepare(
-          `SELECT l.*, r.public_key, r.expires_at, r.guardian_public_key
+          `SELECT l.*, r.public_key, r.expires_at, r.guardian_public_key, r.endpoint_url AS agent_endpoint_url
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
            WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
@@ -180,7 +180,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     } else {
       listingRows = db
         .prepare(
-          `SELECT l.*, r.public_key, r.expires_at, r.guardian_public_key
+          `SELECT l.*, r.public_key, r.expires_at, r.guardian_public_key, r.endpoint_url AS agent_endpoint_url
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
            LIMIT ?`,
@@ -310,6 +310,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
             availability_guarantee: row.sla_availability as number,
           },
           description: row.description as string,
+          pay_to_address: (row.pay_to_address as string | null) ?? undefined,
           regulatory_risk: (row.regulatory_risk as number | null) ?? undefined,
           updated_at: row.updated_at as number,
         },
@@ -317,6 +318,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         is_online: isOnline,
         credential_reputation,
         guardian_public_key: (row.guardian_public_key as string | null) ?? undefined,
+        endpoint_url: (row.agent_endpoint_url as string | null) ?? undefined,
       } satisfies CandidateProfile;
     });
 

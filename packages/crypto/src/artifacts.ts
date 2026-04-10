@@ -5,7 +5,7 @@
  * artifacts. A third party needs these to produce valid signed artifacts that
  * any verifier will accept.
  *
- * Moved from BSL @motebit/crypto to MIT @motebit/verify.
+ * Moved from BSL @motebit/crypto to MIT @motebit/crypto.
  */
 
 import {

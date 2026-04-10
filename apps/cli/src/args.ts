@@ -38,6 +38,7 @@ export interface CliConfig {
   budget: string | undefined;
   price: string | undefined;
   plan: boolean;
+  sovereign: boolean;
   serveTransport: string | undefined;
   servePort: string | undefined;
   tools: string | undefined;
@@ -85,6 +86,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       budget: { type: "string" },
       price: { type: "string" },
       plan: { type: "boolean", default: false },
+      sovereign: { type: "boolean", default: false },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
       tools: { type: "string" },
@@ -167,6 +169,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     budget: values.budget,
     price: values.price,
     plan: values.plan,
+    sovereign: values.sovereign,
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
     tools: values.tools,
@@ -300,6 +303,7 @@ Commands:
     --target <id>             Skip discovery, delegate to specific agent
     --budget <amount>         Max spend in USD (default: from listing price)
     --plan                    Decompose into multi-step plan, delegate each to specialists
+    --sovereign               Pay agents directly via Solana wallet (no relay settlement)
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail

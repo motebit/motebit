@@ -1,5 +1,5 @@
 /**
- * @motebit/verify — Protocol cryptography for Motebit artifacts.
+ * @motebit/crypto — Protocol cryptography for Motebit artifacts.
  *
  * Sign and verify identity files, execution receipts, verifiable credentials,
  * delegation tokens, key successions, and presentations. One package, any

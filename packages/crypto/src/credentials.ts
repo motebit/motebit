@@ -4,7 +4,7 @@
  * Signing and verification of W3C Verifiable Credentials and Presentations
  * using the protocol's canonical Ed25519 + JCS pipeline.
  *
- * Moved from BSL @motebit/crypto to MIT @motebit/verify.
+ * Moved from BSL @motebit/crypto to MIT @motebit/crypto.
  */
 
 import {

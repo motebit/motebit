@@ -3,7 +3,7 @@
  *
  * These are the cryptographic building blocks that any protocol participant
  * needs to produce valid Motebit artifacts. Moved from BSL @motebit/crypto
- * to MIT @motebit/verify so the protocol's signing format is open.
+ * to MIT @motebit/crypto so the protocol's signing format is open.
  *
  * Zero monorepo dependencies — only @noble/ed25519 for cryptography.
  */

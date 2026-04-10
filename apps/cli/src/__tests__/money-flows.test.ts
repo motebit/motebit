@@ -75,6 +75,7 @@ function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
     destination: undefined,
     price: undefined,
     plan: false,
+    sovereign: false,
     json: false,
     positionals: [],
     identity: undefined,
