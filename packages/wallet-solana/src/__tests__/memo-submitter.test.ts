@@ -19,7 +19,7 @@ import { Keypair } from "@solana/web3.js";
 describe("parseMemoAnchor", () => {
   it("parses a valid memo string", () => {
     const result = parseMemoAnchor(
-      "motebit:credential-anchor:v1:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234:42",
+      "motebit:anchor:v1:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234:42",
     );
     expect(result).toEqual({
       version: "v1",
@@ -33,7 +33,7 @@ describe("parseMemoAnchor", () => {
   });
 
   it("returns null for wrong prefix", () => {
-    expect(parseMemoAnchor("other:credential-anchor:v1:root:10")).toBeNull();
+    expect(parseMemoAnchor("other:anchor:v1:root:10")).toBeNull();
   });
 
   it("returns null for wrong second segment", () => {
@@ -41,19 +41,19 @@ describe("parseMemoAnchor", () => {
   });
 
   it("returns null for non-numeric leaf count", () => {
-    expect(parseMemoAnchor("motebit:credential-anchor:v1:root:abc")).toBeNull();
+    expect(parseMemoAnchor("motebit:anchor:v1:root:abc")).toBeNull();
   });
 
   it("returns null for too few parts", () => {
-    expect(parseMemoAnchor("motebit:credential-anchor:v1:root")).toBeNull();
+    expect(parseMemoAnchor("motebit:anchor:v1:root")).toBeNull();
   });
 
   it("returns null for too many parts", () => {
-    expect(parseMemoAnchor("motebit:credential-anchor:v1:root:10:extra")).toBeNull();
+    expect(parseMemoAnchor("motebit:anchor:v1:root:10:extra")).toBeNull();
   });
 
   it("handles leaf count of 0", () => {
-    const result = parseMemoAnchor("motebit:credential-anchor:v1:root:0");
+    const result = parseMemoAnchor("motebit:anchor:v1:root:0");
     expect(result).toEqual({ version: "v1", merkleRoot: "root", leafCount: 0 });
   });
 });
@@ -131,10 +131,10 @@ describe("SolanaMemoSubmitter", () => {
 
 describe("memo format round-trip", () => {
   it("memo string produced by submitter is parseable", () => {
-    // The submitter produces: "motebit:credential-anchor:v1:{root}:{leafCount}"
+    // The submitter produces: "motebit:anchor:v1:{root}:{leafCount}"
     const root = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
     const leafCount = 50;
-    const memo = `motebit:credential-anchor:v1:${root}:${leafCount}`;
+    const memo = `motebit:anchor:v1:${root}:${leafCount}`;
 
     const parsed = parseMemoAnchor(memo);
     expect(parsed).not.toBeNull();

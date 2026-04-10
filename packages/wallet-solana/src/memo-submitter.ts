@@ -8,7 +8,7 @@
  * signed by the relay's identity — anyone can look up the tx by hash and
  * verify the root was published by a known relay address.
  *
- * Memo format: "motebit:credential-anchor:v1:{merkle_root_hex}:{leaf_count}"
+ * Memo format: "motebit:anchor:v1:{merkle_root_hex}:{leaf_count}"
  * Human-readable, machine-parseable, permanent.
  *
  * The Memo program (MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr) is a
@@ -83,7 +83,7 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     // Verifiers derive the relay identity from the tx's signer pubkey.
 
     // Build memo data — human-readable, machine-parseable
-    const memo = `motebit:credential-anchor:v1:${root}:${leafCount}`;
+    const memo = `motebit:anchor:v1:${root}:${leafCount}`;
 
     // Construct memo instruction
     const instruction = new TransactionInstruction({
@@ -142,7 +142,7 @@ export function parseMemoAnchor(memo: string): {
 } | null {
   const parts = memo.split(":");
   if (parts.length !== 5) return null;
-  if (parts[0] !== "motebit" || parts[1] !== "credential-anchor") return null;
+  if (parts[0] !== "motebit" || parts[1] !== "anchor") return null;
   const version = parts[2]!;
   const merkleRoot = parts[3]!;
   const leafCount = parseInt(parts[4]!, 10);

@@ -171,7 +171,7 @@ The reference implementation uses the Solana Memo Program (MemoSq4gqABAXKb96qnH8
 
 - Signer: Relay's Ed25519 keypair (identity key = Solana address)
 - Program: Memo v2 (`MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`)
-- Memo data: `motebit:credential-anchor:v1:{merkle_root_hex}:{leaf_count}`
+- Memo data: `motebit:anchor:v1:{merkle_root_hex}:{leaf_count}`
 
 The memo is human-readable and machine-parseable. The relay's signature is the Solana transaction signature. The transaction hash is the permanent reference.
 
