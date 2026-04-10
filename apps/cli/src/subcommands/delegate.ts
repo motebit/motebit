@@ -98,6 +98,14 @@ async function handleDelegatePlan(
   await runtime.init();
   runtime.setProvider(provider);
 
+  // Enable credential publishing to relay (sovereign trust → network trust bridge).
+  // The relay is used for discovery; credentials published here feed the routing graph.
+  const authTokenFactory = async (aud = "task:submit"): Promise<string> => {
+    const h = await getRelayAuthHeaders(config, { aud, json: true });
+    return (h["Authorization"] ?? "").replace("Bearer ", "");
+  };
+  runtime.enableInteractiveDelegation({ syncUrl: relayUrl, authToken: authTokenFactory });
+
   // Sovereign delegation: pay agents directly via Solana wallet (pattern 9.1)
   if (config.sovereign) {
     const sovereignAdapter = runtime.createSovereignDelegationAdapter(relayUrl, {
