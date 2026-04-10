@@ -198,6 +198,7 @@ spec/
   settlement-v1.md         motebit/settlement@1.0 — sovereign rails, onchain receipts, relay-optional
   auth-token-v1.md         motebit/auth-token@1.0 — signed bearer tokens, audience binding
   credential-anchor-v1.md  motebit/credential-anchor@1.0 — Merkle anchoring, self-verifiable proofs
+  delegation-v1.md         motebit/delegation@1.0 — task lifecycle, receipt exchange, budget, routing
 ```
 
 46 packages across packages, apps, and services.
