@@ -189,11 +189,14 @@ services/
   embed/        ONNX embedding service
 
 spec/
-  identity-v1.md          motebit/identity@1.0
-  execution-ledger-v1.md  motebit/execution-ledger@1.0
-  relay-federation-v1.md  motebit/relay-federation@1.0
-  market-v1.md            motebit/market@1.0 — budget, settlement, routing
-  credential-v1.md        motebit/credential@1.0 — W3C VC 2.0, weighting, revocation
+  identity-v1.md           motebit/identity@1.0 — file format, signing, succession
+  execution-ledger-v1.md   motebit/execution-ledger@1.0 — timeline, signed manifests
+  relay-federation-v1.md   motebit/relay-federation@1.0 — peering, discovery, routing
+  market-v1.md             motebit/market@1.0 — budget, settlement, fees, trust, routing
+  credential-v1.md         motebit/credential@1.0 — W3C VC 2.0, issuance, weighting, revocation
+  settlement-v1.md         motebit/settlement@1.0 — sovereign rails, onchain receipts, relay-optional
+  auth-token-v1.md         motebit/auth-token@1.0 — signed bearer tokens, audience binding
+  credential-anchor-v1.md  motebit/credential-anchor@1.0 — Merkle anchoring, self-verifiable proofs
 ```
 
 45 packages across packages, apps, and services.
