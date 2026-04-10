@@ -305,14 +305,14 @@ A allocates budget at a relay, the relay holds the budget in an internal virtual
 
 ### Implementation status
 
-| Pattern            | Specified                  | Referenced implementation                    | Status                |
-| ------------------ | -------------------------- | -------------------------------------------- | --------------------- |
-| 9.1 pay-forward    | Yes                        | Runtime wiring pending                       | Not yet default       |
-| 9.2 onchain escrow | Yes (as permitted pattern) | No reference implementation                  | Deferred until demand |
-| 9.3 hybrid         | Yes (as permitted pattern) | No reference implementation                  | Deferred              |
-| 9.4 relay-mediated | Yes                        | `services/api` task routing + virtual ledger | Current default       |
+| Pattern            | Specified                  | Referenced implementation                                                  | Status                |
+| ------------------ | -------------------------- | -------------------------------------------------------------------------- | --------------------- |
+| 9.1 pay-forward    | Yes                        | `SovereignDelegationAdapter` in `packages/planner`, CLI `--sovereign` flag | Available via flag    |
+| 9.2 onchain escrow | Yes (as permitted pattern) | No reference implementation                                                | Deferred until demand |
+| 9.3 hybrid         | Yes (as permitted pattern) | No reference implementation                                                | Deferred              |
+| 9.4 relay-mediated | Yes                        | `services/api` task routing + virtual ledger                               | Current default       |
 
-The current runtime default is 9.4 (relay-mediated) because the runtime wiring for sovereign multi-hop has not yet landed. This is an implementation phasing, not a protocol preference. The foundation law treats all four patterns as equally valid.
+The runtime default is 9.4 (relay-mediated). Pattern 9.1 (pay-forward) is available via `SovereignDelegationAdapter` and the CLI's `--sovereign` flag. The foundation law treats all four patterns as equally valid.
 
 ---
 
