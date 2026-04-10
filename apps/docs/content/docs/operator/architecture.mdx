@@ -30,7 +30,8 @@ The foundation. No package in this tier imports another motebit package.
 | Package | Role |
 |---------|------|
 | `sdk` | Shared types — `MotebitState`, `BehaviorCues`, `MemoryNode`, `EventLogEntry`, `PolicyDecision`, `RenderSpec`. |
-| `crypto` | Ed25519 signing, AES-256-GCM encryption, PBKDF2 derivation, signed tokens (5 min expiry). |
+| `crypto` | Protocol cryptography — Ed25519 signing, receipt/credential/delegation signing, canonical JSON, did:key. MIT. |
+| `encryption` | Product security — AES-256-GCM, PBKDF2 derivation, sync key derivation, deletion certificates. BSL. |
 | `core-identity` | UUID v7 identity generation, multi-device registration, Ed25519 public key binding. |
 
 ### Engines
