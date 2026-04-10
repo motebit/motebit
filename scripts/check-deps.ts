@@ -647,8 +647,8 @@ function checkMitPurity(packages: PkgInfo[]): void {
 
 // Check 10: MIT export surface — MIT packages must not export unapproved functions
 function checkMitExportSurface(packages: PkgInfo[]): void {
-  // Only check packages that publish their own source (not create-motebit which bundles)
-  const CHECKED_MIT = ["@motebit/protocol", "@motebit/sdk"];
+  // Check packages that publish typed exports. create-motebit is excluded (bin-only, no library API).
+  const CHECKED_MIT = ["@motebit/protocol", "@motebit/sdk", "@motebit/crypto"];
 
   for (const pkg of packages) {
     if (!CHECKED_MIT.includes(pkg.name)) continue;
