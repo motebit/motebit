@@ -124,6 +124,14 @@ Motebit is a protocol, not a platform. This has concrete architectural consequen
 
 A function is "protocol-shaped" only when its rules live in an open spec. A rule that exists only in BSL implementation code is not yet part of the protocol — it is part of the canonical implementation.
 
+**The MIT/BSL boundary test.** For every package, module, or function, ask which question it answers:
+
+MIT if it answers: What is the artifact? How is it encoded? How is it signed? How is it verified? What deterministic math defines interoperability? What interface must another implementation satisfy?
+
+BSL if it answers: How does the system decide? How does the system adapt over time? How does the system monetize, route, prioritize, govern, or operationalize? How does the product behave in practice?
+
+MIT defines the interoperable protocol: artifacts, cryptography, deterministic algebra, and abstract interfaces. BSL contains the stateful runtime, orchestration, governance, memory, routing, and product implementations that make Motebit commercially differentiated. Accumulated state (trust data, federation graph, settlement history) is never licensed — it is the permanent moat.
+
 **The operational test.** For any relay function, ask: _can a third party stand up a competing implementation today, using only the published specs and the MIT type packages, without permission?_ If yes, the function has crossed from platform into protocol. If no, it is still platform-shaped regardless of how the codebase is organized internally. This test is the honest measure of "how protocol-shaped is motebit right now" and should be applied to every new architectural decision.
 
 **Sync is the floor of legitimate centralization.** Multi-device sync is the only relay function with a legitimate centralization premium, because devices are intermittently online and NAT/offline/push notifications are genuinely hard to do peer-to-peer. Every other relay function (discovery, trust aggregation, multi-hop orchestration, settlement, federation, sybil defense, credential verification) can exist as a service so long as it is optional, replaceable, and spec-governed. The relay may offer these services — and should, because they are how the commercial entity earns — but they must not be the only path.
