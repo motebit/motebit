@@ -19,7 +19,7 @@ node verify.js
 my-agent/
   motebit.md       Signed agent identity (Ed25519)
   verify.js        Verification example
-  package.json     Node project with @motebit/verify
+  package.json     Node project with @motebit/crypto
   .env.example     Environment variable template
   .gitignore       Secrets excluded
 ```
@@ -40,7 +40,7 @@ A `motebit.md` is a human-readable, cryptographically signed agent identity file
 - **Privacy** — sensitivity levels, retention rules, fail-closed defaults
 - **Memory** — decay parameters, confidence thresholds
 
-The identity file is YAML frontmatter signed with Ed25519. Any tool can verify it using the [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) package.
+The identity file is YAML frontmatter signed with Ed25519. Any tool can verify it using the [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) package.
 
 ## Rotate your key
 

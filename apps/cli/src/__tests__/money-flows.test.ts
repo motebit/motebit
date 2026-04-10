@@ -21,7 +21,7 @@ vi.mock("../identity.js", () => ({
   bootstrapIdentity: vi.fn(),
 }));
 
-vi.mock("@motebit/crypto", () => ({
+vi.mock("@motebit/encryption", () => ({
   hexPublicKeyToDidKey: vi.fn(),
   verifyVerifiableCredential: vi.fn(),
   verifyVerifiablePresentation: vi.fn(),
@@ -75,6 +75,7 @@ function makeConfig(overrides: Partial<CliConfig> = {}): CliConfig {
     destination: undefined,
     price: undefined,
     plan: false,
+    sovereign: false,
     json: false,
     positionals: [],
     identity: undefined,

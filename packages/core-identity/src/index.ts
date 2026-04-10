@@ -2,8 +2,8 @@ import type { MotebitIdentity } from "@motebit/protocol";
 import { EventType } from "@motebit/protocol";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { EventStore } from "@motebit/event-log";
-import { generateKeypair, signKeySuccession, bytesToHex } from "@motebit/crypto";
-import type { KeySuccessionRecord } from "@motebit/crypto";
+import { generateKeypair, signKeySuccession, bytesToHex } from "@motebit/encryption";
+import type { KeySuccessionRecord } from "@motebit/encryption";
 
 // === UUID v7 Generation ===
 

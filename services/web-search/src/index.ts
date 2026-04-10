@@ -31,7 +31,7 @@ import {
   signExecutionReceipt,
   hash as sha256,
   createSignedToken,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { embedText } from "@motebit/memory-graph";
 import { loadConfig, fromHex, canonicalizeResults } from "./helpers.js";
 

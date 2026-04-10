@@ -10,7 +10,7 @@ import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-co
 import type { AIResponse, ContextPack, ExecutionReceipt, AgentTask } from "@motebit/sdk";
 import { TrustMode, BatteryMode, AgentTaskStatus, AgentTrustLevel } from "@motebit/sdk";
 import type { AgentServiceListing } from "@motebit/sdk";
-import { generateKeypair } from "@motebit/crypto";
+import { generateKeypair } from "@motebit/encryption";
 import type { ServiceListingStoreAdapter } from "../index";
 
 // === Mock ai-core: intercept runTurnStreaming to simulate AI calling delegate_to_agent ===

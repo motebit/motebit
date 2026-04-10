@@ -10,7 +10,7 @@
  * `getRelayUrl`, which requires one.
  */
 
-import { createSignedToken, secureErase } from "@motebit/crypto";
+import { createSignedToken, secureErase } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";

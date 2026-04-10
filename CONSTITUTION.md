@@ -34,7 +34,7 @@ Autonomy is a dial, not a switch. The user turns it. The surface tension — pol
 
 ## Open standard, proprietary product
 
-**Open** (MIT): `@motebit/verify`, `create-motebit`, the `motebit/identity@1.0` specification. Anyone can create and verify agent identity files. The standard is a public good.
+**Open** (MIT): `@motebit/crypto`, `create-motebit`, the `motebit/identity@1.0` specification. Anyone can create and verify agent identity files. The standard is a public good.
 
 **Source-available** (BSL 1.1): the runtime, the surfaces, the memory graph, the policy engine, the sync relay. Free to use, source-available, converts to Apache 2.0 per-version after 4 years. The product is protected to sustain development.
 

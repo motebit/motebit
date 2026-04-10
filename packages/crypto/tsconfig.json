@@ -6,9 +6,5 @@
     "lib": ["ES2022", "DOM"]
   },
   "include": ["src"],
-  "references": [
-    {
-      "path": "../protocol"
-    }
-  ]
+  "exclude": ["src/__tests__"]
 }

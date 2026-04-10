@@ -18,7 +18,7 @@
  * or whatever you label edges with).
  */
 
-import type { Semiring } from "./semiring.js";
+import type { Semiring } from "@motebit/protocol";
 
 /**
  * A provenance value: a set of derivation paths.

@@ -17,7 +17,7 @@ import {
   canonicalJson,
   bytesToHex,
   hexToBytes,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";

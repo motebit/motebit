@@ -12,7 +12,7 @@ import type {
   ExecutionStepSummary,
   ToolAuditEntry,
 } from "@motebit/sdk";
-import { sign, toBase64Url, hexToBytes } from "@motebit/crypto";
+import { sign, toBase64Url, hexToBytes } from "@motebit/encryption";
 import type { EventStore } from "@motebit/event-log";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";

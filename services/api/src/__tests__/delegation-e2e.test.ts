@@ -13,8 +13,8 @@ import { DeviceCapability, StepStatus, PlanStatus } from "@motebit/sdk";
 import type { ExecutionReceipt, MotebitId, DeviceId, AgentTask } from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/crypto";
-import type { KeyPair } from "@motebit/crypto";
+import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/encryption";
+import type { KeyPair } from "@motebit/encryption";
 import {
   API_TOKEN,
   AUTH_HEADER,

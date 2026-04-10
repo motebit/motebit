@@ -12,7 +12,7 @@
 import type { Hono } from "hono";
 import Stripe from "stripe";
 import type { DatabaseDriver } from "@motebit/persistence";
-import { canonicalJson, sign, toBase64Url } from "@motebit/crypto";
+import { canonicalJson, sign, toBase64Url } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import {

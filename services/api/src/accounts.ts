@@ -7,7 +7,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
-import { canonicalJson, sign, toBase64Url } from "@motebit/crypto";
+import { canonicalJson, sign, toBase64Url } from "@motebit/encryption";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "accounts" });

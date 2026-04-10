@@ -25,7 +25,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { generateKeypair } from "@motebit/crypto";
+import { generateKeypair } from "@motebit/encryption";
 import { AgentTrustLevel } from "@motebit/sdk";
 
 import {

@@ -1,26 +1,22 @@
 /**
  * Verifiable Credentials (W3C VC Data Model 2.0) with eddsa-jcs-2022 cryptosuite.
  *
- * Uses existing canonicalJson (JCS/RFC 8785) + Ed25519 from @motebit/crypto.
- * Zero new dependencies.
+ * Signing and verification of W3C Verifiable Credentials and Presentations
+ * using the protocol's canonical Ed25519 + JCS pipeline.
+ *
+ * Moved from BSL @motebit/crypto to MIT @motebit/crypto.
  */
 
 import {
   canonicalJson,
-  sign,
-  verify,
+  ed25519Sign,
+  ed25519Verify,
   base58btcEncode,
   base58btcDecode,
   publicKeyToDidKey,
   didKeyToPublicKey,
-} from "./index.js";
-
-import type {
-  GradientCredentialSubject,
-  ReputationCredentialSubject,
-  TrustCredentialSubject,
-} from "@motebit/protocol";
-import { VC_TYPE_GRADIENT, VC_TYPE_REPUTATION, VC_TYPE_TRUST } from "@motebit/protocol";
+  sha256,
+} from "./signing.js";
 
 // === Types ===
 
@@ -34,7 +30,7 @@ export interface DataIntegrityProof {
 }
 
 export interface VerifiableCredential<T = Record<string, unknown>> {
-  "@context": ["https://www.w3.org/ns/credentials/v2"];
+  "@context": string[];
   type: string[];
   issuer: string;
   credentialSubject: T & { id: string };
@@ -45,25 +41,57 @@ export interface VerifiableCredential<T = Record<string, unknown>> {
 }
 
 export interface VerifiablePresentation {
-  "@context": ["https://www.w3.org/ns/credentials/v2"];
-  type: ["VerifiablePresentation"];
+  "@context": string[];
+  type: string[];
   holder: string;
   verifiableCredential: VerifiableCredential[];
   proof: DataIntegrityProof;
+}
+
+// === Credential Subject Types ===
+// Inlined here to avoid importing from @motebit/protocol (verify has zero monorepo deps).
+
+export interface GradientCredentialSubject {
+  id: string;
+  gradient: number;
+  knowledge_density: number;
+  knowledge_quality: number;
+  graph_connectivity: number;
+  temporal_stability: number;
+  retrieval_quality: number;
+  interaction_efficiency: number;
+  tool_efficiency: number;
+  curiosity_pressure: number;
+  measured_at: number;
+}
+
+export interface ReputationCredentialSubject {
+  id: string;
+  success_rate: number;
+  avg_latency_ms: number;
+  task_count: number;
+  trust_score: number;
+  availability: number;
+  sample_size: number;
+  measured_at: number;
+}
+
+export interface TrustCredentialSubject {
+  id: string;
+  trust_level: string;
+  interaction_count: number;
+  successful_tasks: number;
+  failed_tasks: number;
+  first_seen_at: number;
+  last_seen_at: number;
 }
 
 // === Internal helpers ===
 
 function buildVerificationMethod(publicKey: Uint8Array): string {
   const did = publicKeyToDidKey(publicKey);
-  // Fragment is the same multicodec-encoded key
   const fragment = did.slice("did:key:".length);
   return `${did}#${fragment}`;
-}
-
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  const buf = await crypto.subtle.digest("SHA-256", data as BufferSource);
-  return new Uint8Array(buf);
 }
 
 // === eddsa-jcs-2022 Signing ===
@@ -86,7 +114,6 @@ async function signDataIntegrity(
   const verificationMethod = buildVerificationMethod(publicKey);
   const created = new Date().toISOString();
 
-  // Proof options (without proofValue)
   const proofOptions = {
     type: "DataIntegrityProof" as const,
     cryptosuite: "eddsa-jcs-2022" as const,
@@ -96,20 +123,15 @@ async function signDataIntegrity(
   };
 
   const encoder = new TextEncoder();
-
-  // Hash proof options
   const proofHash = await sha256(encoder.encode(canonicalJson(proofOptions)));
-
-  // Hash document (without proof field)
   const { proof: _proof, ...docWithoutProof } = document;
   const docHash = await sha256(encoder.encode(canonicalJson(docWithoutProof)));
 
-  // Concatenate hashes and sign
   const combined = new Uint8Array(proofHash.length + docHash.length);
   combined.set(proofHash);
   combined.set(docHash, proofHash.length);
 
-  const signature = await sign(combined, privateKey);
+  const signature = await ed25519Sign(combined, privateKey);
   const proofValue = "z" + base58btcEncode(signature);
 
   return { ...proofOptions, proofValue };
@@ -118,7 +140,7 @@ async function signDataIntegrity(
 /**
  * Verify a Data Integrity proof using eddsa-jcs-2022.
  */
-async function verifyDataIntegrity(
+async function verifyDataIntegritySigning(
   document: Record<string, unknown>,
   proof: DataIntegrityProof,
 ): Promise<boolean> {
@@ -126,7 +148,6 @@ async function verifyDataIntegrity(
     return false;
   }
 
-  // Extract public key from verificationMethod
   const did = proof.verificationMethod.split("#")[0]!;
   let publicKey: Uint8Array;
   try {
@@ -135,24 +156,17 @@ async function verifyDataIntegrity(
     return false;
   }
 
-  // Reconstruct proof options (without proofValue)
   const { proofValue, ...proofOptions } = proof;
 
   const encoder = new TextEncoder();
-
-  // Hash proof options
   const proofHash = await sha256(encoder.encode(canonicalJson(proofOptions)));
-
-  // Hash document (without proof field)
   const { proof: _proof, ...docWithoutProof } = document;
   const docHash = await sha256(encoder.encode(canonicalJson(docWithoutProof)));
 
-  // Concatenate hashes
   const combined = new Uint8Array(proofHash.length + docHash.length);
   combined.set(proofHash);
   combined.set(docHash, proofHash.length);
 
-  // Decode signature (strip "z" prefix)
   if (!proofValue.startsWith("z")) return false;
   let signature: Uint8Array;
   try {
@@ -161,7 +175,7 @@ async function verifyDataIntegrity(
     return false;
   }
 
-  return verify(signature, combined, publicKey);
+  return ed25519Verify(signature, combined, publicKey);
 }
 
 // === Verifiable Credential Sign/Verify ===
@@ -183,12 +197,11 @@ export async function signVerifiableCredential<T = Record<string, unknown>>(
 export async function verifyVerifiableCredential<T = Record<string, unknown>>(
   vc: VerifiableCredential<T>,
 ): Promise<boolean> {
-  // Check expiry
   if (vc.validUntil) {
     const expiresAt = new Date(vc.validUntil).getTime();
     if (Date.now() > expiresAt) return false;
   }
-  return verifyDataIntegrity(vc as unknown as Record<string, unknown>, vc.proof);
+  return verifyDataIntegritySigning(vc as unknown as Record<string, unknown>, vc.proof);
 }
 
 // === Verifiable Presentation Sign/Verify ===
@@ -212,13 +225,14 @@ export async function verifyVerifiablePresentation(
 ): Promise<{ valid: boolean; errors: string[] }> {
   const errors: string[] = [];
 
-  // Verify VP envelope proof
-  const vpValid = await verifyDataIntegrity(vp as unknown as Record<string, unknown>, vp.proof);
+  const vpValid = await verifyDataIntegritySigning(
+    vp as unknown as Record<string, unknown>,
+    vp.proof,
+  );
   if (!vpValid) {
     errors.push("Presentation proof is invalid");
   }
 
-  // Verify each contained VC
   for (let i = 0; i < vp.verifiableCredential.length; i++) {
     const vc = vp.verifiableCredential[i]!;
     const vcValid = await verifyVerifiableCredential(vc);
@@ -232,12 +246,12 @@ export async function verifyVerifiablePresentation(
 
 // === Convenience Issuance Functions ===
 
+const VC_TYPE_GRADIENT = "AgentGradientCredential";
+const VC_TYPE_REPUTATION = "AgentReputationCredential";
+const VC_TYPE_TRUST = "AgentTrustCredential";
+
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
-/**
- * Issue a gradient credential from a snapshot shape.
- * Structurally typed to avoid importing GradientSnapshot from runtime.
- */
 export async function issueGradientCredential(
   snapshot: {
     gradient: number;
@@ -258,7 +272,7 @@ export async function issueGradientCredential(
   statusEndpoint?: string,
 ): Promise<VerifiableCredential<GradientCredentialSubject>> {
   const issuerDid = publicKeyToDidKey(publicKey);
-  const subject: GradientCredentialSubject & { id: string } = {
+  const subject: GradientCredentialSubject = {
     id: subjectDid ?? issuerDid,
     gradient: snapshot.gradient,
     knowledge_density: snapshot.knowledge_density,
@@ -288,9 +302,6 @@ export async function issueGradientCredential(
   return signVerifiableCredential(unsignedVC, privateKey, publicKey);
 }
 
-/**
- * Issue a reputation credential. Primarily peer-issued by the delegating agent; optionally relay co-signed.
- */
 export async function issueReputationCredential(
   snapshot: {
     success_rate: number;
@@ -307,7 +318,7 @@ export async function issueReputationCredential(
   statusEndpoint?: string,
 ): Promise<VerifiableCredential<ReputationCredentialSubject>> {
   const issuerDid = publicKeyToDidKey(publicKey);
-  const subject: ReputationCredentialSubject & { id: string } = {
+  const subject: ReputationCredentialSubject = {
     id: subjectDid,
     success_rate: snapshot.success_rate,
     avg_latency_ms: snapshot.avg_latency_ms,
@@ -334,9 +345,6 @@ export async function issueReputationCredential(
   return signVerifiableCredential(unsignedVC, privateKey, publicKey);
 }
 
-/**
- * Issue a trust credential — one agent attesting about another's trust level.
- */
 export async function issueTrustCredential(
   trustRecord: {
     trust_level: string;
@@ -353,7 +361,7 @@ export async function issueTrustCredential(
   statusEndpoint?: string,
 ): Promise<VerifiableCredential<TrustCredentialSubject>> {
   const issuerDid = publicKeyToDidKey(publicKey);
-  const subject: TrustCredentialSubject & { id: string } = {
+  const subject: TrustCredentialSubject = {
     id: subjectDid,
     trust_level: trustRecord.trust_level,
     interaction_count: trustRecord.interaction_count,
@@ -379,9 +387,6 @@ export async function issueTrustCredential(
   return signVerifiableCredential(unsignedVC, privateKey, publicKey);
 }
 
-/**
- * Bundle credentials into a signed Verifiable Presentation.
- */
 export async function createPresentation(
   credentials: VerifiableCredential[],
   privateKey: Uint8Array,

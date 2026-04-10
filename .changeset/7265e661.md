@@ -1,6 +1,6 @@
 ---
 "@motebit/sdk": patch
-"@motebit/verify": patch
+"@motebit/crypto": patch
 "create-motebit": patch
 "motebit": patch
 ---

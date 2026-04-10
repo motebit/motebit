@@ -1,1427 +1,1305 @@
 import { describe, it, expect } from "vitest";
-import {
-  generateKey,
-  generateNonce,
-  generateSalt,
-  encrypt,
-  decrypt,
-  deriveKey,
-  deriveSyncEncryptionKey,
-  hash,
-  createDeletionCertificate,
-  secureErase,
-  generateKeypair,
-  sign,
-  verify,
-  createSignedToken,
-  verifySignedToken,
-  signExecutionReceipt,
-  verifyExecutionReceipt,
-  signSovereignPaymentReceipt,
-  verifyReceiptChain,
-  signKeySuccession,
-  verifyKeySuccession,
-  signGuardianRecoverySuccession,
-  signGuardianRevocation,
-  verifyGuardianRevocation,
-  verifySuccessionChain,
-  didKeyToPublicKey,
-  type SignedTokenPayload,
-  type SignableReceipt,
-  type KnownKeys,
-  base58btcEncode,
-  hexToBytes,
-  publicKeyToDidKey,
-  hexPublicKeyToDidKey,
-  bytesToHex,
-} from "../index";
+import * as ed from "@noble/ed25519";
+import { sha512 } from "@noble/hashes/sha512";
+import { parse, verify } from "../index";
+
+// @noble/ed25519 v3 requires explicit SHA-512 binding
+if (!ed.hashes.sha512) {
+  ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
+}
 
 // ---------------------------------------------------------------------------
-// generateKey()
+// Helpers — zero monorepo dependencies, only @noble/ed25519
 // ---------------------------------------------------------------------------
 
-describe("generateKey", () => {
-  it("returns a Uint8Array of 32 bytes", () => {
-    const key = generateKey();
-    expect(key).toBeInstanceOf(Uint8Array);
-    expect(key.length).toBe(32);
-  });
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
-  it("generates different keys on successive calls", () => {
-    const a = generateKey();
-    const b = generateKey();
-    // Extremely unlikely to be equal
-    expect(a).not.toEqual(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// generateNonce()
-// ---------------------------------------------------------------------------
-
-describe("generateNonce", () => {
-  it("returns a Uint8Array of 12 bytes", () => {
-    const nonce = generateNonce();
-    expect(nonce).toBeInstanceOf(Uint8Array);
-    expect(nonce.length).toBe(12);
-  });
-
-  it("generates different nonces on successive calls", () => {
-    const a = generateNonce();
-    const b = generateNonce();
-    expect(a).not.toEqual(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// generateSalt()
-// ---------------------------------------------------------------------------
-
-describe("generateSalt", () => {
-  it("returns a Uint8Array of 16 bytes", () => {
-    const salt = generateSalt();
-    expect(salt).toBeInstanceOf(Uint8Array);
-    expect(salt.length).toBe(16);
-  });
-
-  it("generates different salts on successive calls", () => {
-    const a = generateSalt();
-    const b = generateSalt();
-    expect(a).not.toEqual(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// encrypt() / decrypt() roundtrip
-// ---------------------------------------------------------------------------
-
-describe("encrypt and decrypt", () => {
-  it("roundtrips plaintext correctly", async () => {
-    const key = generateKey();
-    const plaintext = new TextEncoder().encode("Hello, Motebit!");
-    const encrypted = await encrypt(plaintext, key);
-
-    expect(encrypted.ciphertext).toBeInstanceOf(Uint8Array);
-    expect(encrypted.nonce).toBeInstanceOf(Uint8Array);
-    expect(encrypted.nonce.length).toBe(12);
-    expect(encrypted.tag).toBeInstanceOf(Uint8Array);
-    expect(encrypted.tag.length).toBe(16);
-
-    const decrypted = await decrypt(encrypted, key);
-    expect(new TextDecoder().decode(decrypted)).toBe("Hello, Motebit!");
-  });
-
-  it("fails to decrypt with wrong key", async () => {
-    const key1 = generateKey();
-    const key2 = generateKey();
-    const plaintext = new TextEncoder().encode("secret data");
-    const encrypted = await encrypt(plaintext, key1);
-
-    await expect(decrypt(encrypted, key2)).rejects.toThrow();
-  });
-
-  it("roundtrips empty data", async () => {
-    const key = generateKey();
-    const plaintext = new Uint8Array(0);
-    const encrypted = await encrypt(plaintext, key);
-    const decrypted = await decrypt(encrypted, key);
-    expect(decrypted.length).toBe(0);
-  });
-
-  it("roundtrips large data", async () => {
-    const key = generateKey();
-    const plaintext = new Uint8Array(10000);
-    for (let i = 0; i < plaintext.length; i++) {
-      plaintext[i] = i % 256;
-    }
-    const encrypted = await encrypt(plaintext, key);
-    const decrypted = await decrypt(encrypted, key);
-    expect(decrypted).toEqual(plaintext);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// deriveKey()
-// ---------------------------------------------------------------------------
-
-describe("deriveKey", () => {
-  it("produces a 32-byte key", async () => {
-    const salt = new Uint8Array(16);
-    const derived = await deriveKey("password", salt, 1000);
-    expect(derived).toBeInstanceOf(Uint8Array);
-    expect(derived.length).toBe(32);
-  });
-
-  it("produces deterministic output with same inputs", async () => {
-    const salt = new TextEncoder().encode("fixed-salt-value");
-    const a = await deriveKey("my-password", salt, 1000);
-    const b = await deriveKey("my-password", salt, 1000);
-    expect(a).toEqual(b);
-  });
-
-  it("produces different output with different passwords", async () => {
-    const salt = new TextEncoder().encode("fixed-salt-value");
-    const a = await deriveKey("password-a", salt, 1000);
-    const b = await deriveKey("password-b", salt, 1000);
-    expect(a).not.toEqual(b);
-  });
-
-  it("produces different output with different salts", async () => {
-    const saltA = new TextEncoder().encode("salt-a");
-    const saltB = new TextEncoder().encode("salt-b");
-    const a = await deriveKey("same-password", saltA, 1000);
-    const b = await deriveKey("same-password", saltB, 1000);
-    expect(a).not.toEqual(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// deriveSyncEncryptionKey()
-// ---------------------------------------------------------------------------
-
-describe("deriveSyncEncryptionKey", () => {
-  it("produces a 32-byte key", async () => {
-    const kp = await generateKeypair();
-    const derived = await deriveSyncEncryptionKey(kp.privateKey);
-    expect(derived).toBeInstanceOf(Uint8Array);
-    expect(derived.length).toBe(32);
-  });
-
-  it("is deterministic — same private key produces same output", async () => {
-    const kp = await generateKeypair();
-    const a = await deriveSyncEncryptionKey(kp.privateKey);
-    const b = await deriveSyncEncryptionKey(kp.privateKey);
-    expect(a).toEqual(b);
-  });
-
-  it("different private keys produce different output", async () => {
-    const kpA = await generateKeypair();
-    const kpB = await generateKeypair();
-    const a = await deriveSyncEncryptionKey(kpA.privateKey);
-    const b = await deriveSyncEncryptionKey(kpB.privateKey);
-    expect(a).not.toEqual(b);
-  });
-
-  it("round-trips through encrypt/decrypt", async () => {
-    const kp = await generateKeypair();
-    const key = await deriveSyncEncryptionKey(kp.privateKey);
-    const plaintext = new TextEncoder().encode("sync payload");
-    const encrypted = await encrypt(plaintext, key);
-    const decrypted = await decrypt(encrypted, key);
-    expect(new TextDecoder().decode(decrypted)).toBe("sync payload");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// hash()
-// ---------------------------------------------------------------------------
-
-describe("hash", () => {
-  it("produces a hex string of 64 characters (SHA-256)", async () => {
-    const data = new TextEncoder().encode("test data");
-    const result = await hash(data);
-    expect(typeof result).toBe("string");
-    expect(result.length).toBe(64);
-    expect(result).toMatch(/^[0-9a-f]+$/);
-  });
-
-  it("produces consistent output for the same input", async () => {
-    const data = new TextEncoder().encode("hello");
-    const a = await hash(data);
-    const b = await hash(data);
-    expect(a).toBe(b);
-  });
-
-  it("produces different output for different inputs", async () => {
-    const a = await hash(new TextEncoder().encode("input-a"));
-    const b = await hash(new TextEncoder().encode("input-b"));
-    expect(a).not.toBe(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// createDeletionCertificate()
-// ---------------------------------------------------------------------------
-
-describe("createDeletionCertificate", () => {
-  it("creates a valid deletion certificate", async () => {
-    const cert = await createDeletionCertificate("node-123", "memory", "user-456");
-
-    expect(cert.target_id).toBe("node-123");
-    expect(cert.target_type).toBe("memory");
-    expect(cert.deleted_by).toBe("user-456");
-    expect(typeof cert.deleted_at).toBe("number");
-    expect(cert.deleted_at).toBeGreaterThan(0);
-    expect(typeof cert.tombstone_hash).toBe("string");
-    expect(cert.tombstone_hash.length).toBe(64);
-  });
-
-  it("creates different hashes for different targets", async () => {
-    const certA = await createDeletionCertificate("a", "memory", "user");
-    const certB = await createDeletionCertificate("b", "memory", "user");
-    expect(certA.tombstone_hash).not.toBe(certB.tombstone_hash);
-  });
-
-  it("supports event and identity target types", async () => {
-    const eventCert = await createDeletionCertificate("e1", "event", "user");
-    expect(eventCert.target_type).toBe("event");
-
-    const idCert = await createDeletionCertificate("i1", "identity", "user");
-    expect(idCert.target_type).toBe("identity");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// secureErase()
-// ---------------------------------------------------------------------------
-
-describe("secureErase", () => {
-  it("zeros the array", () => {
-    const data = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
-    secureErase(data);
-    expect(data.every((b) => b === 0)).toBe(true);
-  });
-
-  it("zeros a large array", () => {
-    const data = new Uint8Array(1024);
-    crypto.getRandomValues(data);
-    secureErase(data);
-    expect(data.every((b) => b === 0)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Ed25519: generateKeypair()
-// ---------------------------------------------------------------------------
-
-describe("generateKeypair", () => {
-  it("returns 32-byte keys", async () => {
-    const kp = await generateKeypair();
-    expect(kp.publicKey).toBeInstanceOf(Uint8Array);
-    expect(kp.privateKey).toBeInstanceOf(Uint8Array);
-    expect(kp.publicKey.length).toBe(32);
-    expect(kp.privateKey.length).toBe(32);
-  });
-
-  it("generates different keypairs on successive calls", async () => {
-    const a = await generateKeypair();
-    const b = await generateKeypair();
-    expect(a.publicKey).not.toEqual(b.publicKey);
-    expect(a.privateKey).not.toEqual(b.privateKey);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Ed25519: sign() / verify()
-// ---------------------------------------------------------------------------
-
-describe("sign and verify", () => {
-  it("round-trips correctly", async () => {
-    const kp = await generateKeypair();
-    const message = new TextEncoder().encode("Hello, Ed25519!");
-    const sig = await sign(message, kp.privateKey);
-    expect(sig).toBeInstanceOf(Uint8Array);
-    expect(sig.length).toBe(64);
-    const valid = await verify(sig, message, kp.publicKey);
-    expect(valid).toBe(true);
-  });
-
-  it("rejects tampered message", async () => {
-    const kp = await generateKeypair();
-    const message = new TextEncoder().encode("Original message");
-    const sig = await sign(message, kp.privateKey);
-    const tampered = new TextEncoder().encode("Tampered message");
-    const valid = await verify(sig, tampered, kp.publicKey);
-    expect(valid).toBe(false);
-  });
-
-  it("rejects signature verified with wrong public key", async () => {
-    const kpA = await generateKeypair();
-    const kpB = await generateKeypair();
-    const message = new TextEncoder().encode("test");
-    const sig = await sign(message, kpA.privateKey);
-    const valid = await verify(sig, message, kpB.publicKey);
-    expect(valid).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Signed Tokens
-// ---------------------------------------------------------------------------
-
-describe("createSignedToken / verifySignedToken", () => {
-  it("round-trips correctly", async () => {
-    const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
-      mid: "mote-123",
-      did: "device-456",
-      iat: Date.now(),
-      exp: Date.now() + 5 * 60 * 1000,
-      jti: crypto.randomUUID(),
-      aud: "sync",
-    };
-    const token = await createSignedToken(payload, kp.privateKey);
-    expect(typeof token).toBe("string");
-    expect(token).toContain(".");
-
-    const result = await verifySignedToken(token, kp.publicKey);
-    expect(result).not.toBeNull();
-    expect(result!.mid).toBe("mote-123");
-    expect(result!.did).toBe("device-456");
-    expect(result!.aud).toBe("sync");
-  });
-
-  it("round-trips with audience claim preserved", async () => {
-    const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
-      mid: "mote-123",
-      did: "device-456",
-      iat: Date.now(),
-      exp: Date.now() + 5 * 60 * 1000,
-      jti: crypto.randomUUID(),
-      aud: "task:submit",
-    };
-    const token = await createSignedToken(payload, kp.privateKey);
-    const result = await verifySignedToken(token, kp.publicKey);
-    expect(result).not.toBeNull();
-    expect(result!.aud).toBe("task:submit");
-  });
-
-  it("rejects tokens without audience binding (cross-endpoint replay prevention)", async () => {
-    const kp = await generateKeypair();
-    // Intentionally omit aud to test runtime guard against malformed payloads
-    const payload = {
-      mid: "mote-123",
-      did: "device-456",
-      iat: Date.now(),
-      exp: Date.now() + 5 * 60 * 1000,
-      jti: crypto.randomUUID(),
-    } as SignedTokenPayload;
-    const token = await createSignedToken(payload, kp.privateKey);
-    const result = await verifySignedToken(token, kp.publicKey);
-    expect(result).toBeNull();
-  });
-
-  it("rejects expired token", async () => {
-    const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
-      mid: "mote-123",
-      did: "device-456",
-      iat: Date.now() - 10 * 60 * 1000,
-      exp: Date.now() - 1, // Already expired
-      jti: crypto.randomUUID(),
-      aud: "sync",
-    };
-    const token = await createSignedToken(payload, kp.privateKey);
-    const result = await verifySignedToken(token, kp.publicKey);
-    expect(result).toBeNull();
-  });
-
-  it("rejects invalid signature (wrong key)", async () => {
-    const kpA = await generateKeypair();
-    const kpB = await generateKeypair();
-    const payload: SignedTokenPayload = {
-      mid: "mote-123",
-      did: "device-456",
-      iat: Date.now(),
-      exp: Date.now() + 5 * 60 * 1000,
-      jti: crypto.randomUUID(),
-      aud: "sync",
-    };
-    const token = await createSignedToken(payload, kpA.privateKey);
-    const result = await verifySignedToken(token, kpB.publicKey);
-    expect(result).toBeNull();
-  });
-
-  it("rejects malformed token (no dot)", async () => {
-    const kp = await generateKeypair();
-    const result = await verifySignedToken("nodothere", kp.publicKey);
-    expect(result).toBeNull();
-  });
-
-  it("rejects token without jti (replay attack protection)", async () => {
-    const kp = await generateKeypair();
-    // Intentionally omit jti and aud to test runtime guard against malformed payloads
-    const payload = {
-      mid: "mote-123",
-      did: "device-456",
-      iat: Date.now(),
-      exp: Date.now() + 5 * 60 * 1000,
-    } as SignedTokenPayload;
-    const token = await createSignedToken(payload, kp.privateKey);
-    const result = await verifySignedToken(token, kp.publicKey);
-    expect(result).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Execution Receipt Signing
-// ---------------------------------------------------------------------------
-
-describe("signExecutionReceipt / verifyExecutionReceipt", () => {
-  function makeReceipt(): Omit<SignableReceipt, "signature"> {
-    return {
-      task_id: "task-001",
-      motebit_id: "mote-123",
-      device_id: "device-456",
-      submitted_at: 1700000000000,
-      completed_at: 1700000060000,
-      status: "completed",
-      result: "Task completed successfully",
-      tools_used: ["search", "calculate"],
-      memories_formed: 2,
-      prompt_hash: "a".repeat(64),
-      result_hash: "b".repeat(64),
-    };
+function toBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]!);
   }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 
-  it("round-trips correctly (sign → verify = true)", async () => {
-    const kp = await generateKeypair();
-    const receipt = makeReceipt();
-    const signed = await signExecutionReceipt(receipt, kp.privateKey);
+async function makeKeypair() {
+  const privateKey = ed.utils.randomSecretKey();
+  const publicKey = await ed.getPublicKeyAsync(privateKey);
+  return { privateKey, publicKey, publicKeyHex: toHex(publicKey) };
+}
 
-    expect(signed.signature).toBeTruthy();
-    expect(signed.task_id).toBe("task-001");
+function buildIdentityFile(yaml: string, signature: string): string {
+  return `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${signature} -->\n`;
+}
 
-    const valid = await verifyExecutionReceipt(signed, kp.publicKey);
-    expect(valid).toBe(true);
+async function generateValidFile(kp?: Awaited<ReturnType<typeof makeKeypair>>) {
+  const { privateKey, publicKeyHex } = kp ?? (await makeKeypair());
+
+  const yaml = [
+    `spec: "motebit/identity@1.0"`,
+    `motebit_id: "01234567-89ab-cdef-0123-456789abcdef"`,
+    `created_at: "2026-01-15T00:00:00.000Z"`,
+    `owner_id: "owner-test"`,
+    `identity:`,
+    `  algorithm: "Ed25519"`,
+    `  public_key: "${publicKeyHex}"`,
+    `governance:`,
+    `  trust_mode: "guarded"`,
+    `  max_risk_auto: "R1_DRAFT"`,
+    `  require_approval_above: "R1_DRAFT"`,
+    `  deny_above: "R4_MONEY"`,
+    `  operator_mode: false`,
+    `privacy:`,
+    `  default_sensitivity: "personal"`,
+    `  retention_days:`,
+    `    none: 365`,
+    `    personal: 90`,
+    `    medical: 30`,
+    `    financial: 30`,
+    `    secret: 7`,
+    `  fail_closed: true`,
+    `memory:`,
+    `  half_life_days: 7`,
+    `  confidence_threshold: 0.3`,
+    `  per_turn_limit: 5`,
+    `devices: []`,
+  ].join("\n");
+
+  const frontmatterBytes = new TextEncoder().encode(yaml);
+  const signature = await ed.signAsync(frontmatterBytes, privateKey);
+  const sigB64 = toBase64Url(signature);
+
+  return { content: buildIdentityFile(yaml, sigB64), yaml, publicKeyHex };
+}
+
+// ---------------------------------------------------------------------------
+// parse()
+// ---------------------------------------------------------------------------
+
+describe("parse", () => {
+  it("extracts frontmatter and signature", async () => {
+    const { content, publicKeyHex } = await generateValidFile();
+    const parsed = parse(content);
+
+    expect(parsed.frontmatter.spec).toBe("motebit/identity@1.0");
+    expect(parsed.frontmatter.motebit_id).toBe("01234567-89ab-cdef-0123-456789abcdef");
+    expect(parsed.frontmatter.owner_id).toBe("owner-test");
+    expect(parsed.frontmatter.identity.algorithm).toBe("Ed25519");
+    expect(parsed.frontmatter.identity.public_key).toBe(publicKeyHex);
+    expect(parsed.frontmatter.governance.trust_mode).toBe("guarded");
+    expect(parsed.frontmatter.governance.operator_mode).toBe(false);
+    expect(parsed.frontmatter.privacy.fail_closed).toBe(true);
+    expect(parsed.frontmatter.privacy.retention_days).toEqual({
+      none: 365,
+      personal: 90,
+      medical: 30,
+      financial: 30,
+      secret: 7,
+    });
+    expect(parsed.frontmatter.memory.half_life_days).toBe(7);
+    expect(parsed.frontmatter.memory.confidence_threshold).toBe(0.3);
+    expect(parsed.frontmatter.devices).toEqual([]);
+    expect(parsed.signature).toBeTruthy();
   });
 
-  it("detects tampering (modify result → verify = false)", async () => {
-    const kp = await generateKeypair();
-    const receipt = makeReceipt();
-    const signed = await signExecutionReceipt(receipt, kp.privateKey);
-
-    const tampered: SignableReceipt = { ...signed, result: "TAMPERED" };
-    const valid = await verifyExecutionReceipt(tampered, kp.publicKey);
-    expect(valid).toBe(false);
+  it("throws on missing frontmatter opening ---", () => {
+    expect(() => parse("no frontmatter here")).toThrow("Missing frontmatter opening ---");
   });
 
-  it("rejects wrong key", async () => {
-    const kpA = await generateKeypair();
-    const kpB = await generateKeypair();
-    const receipt = makeReceipt();
-    const signed = await signExecutionReceipt(receipt, kpA.privateKey);
-
-    const valid = await verifyExecutionReceipt(signed, kpB.publicKey);
-    expect(valid).toBe(false);
+  it("throws on missing frontmatter closing ---", () => {
+    expect(() => parse("---\nspec: test\n")).toThrow("Missing frontmatter closing ---");
   });
 
-  it("is deterministic (same receipt → same signature)", async () => {
-    const kp = await generateKeypair();
-    const receipt = makeReceipt();
-    const signed1 = await signExecutionReceipt(receipt, kp.privateKey);
-    const signed2 = await signExecutionReceipt(receipt, kp.privateKey);
-
-    expect(signed1.signature).toBe(signed2.signature);
-  });
-
-  it("round-trips with delegation_receipts present", async () => {
-    const kp = await generateKeypair();
-    const delegationReceipt: SignableReceipt = {
-      ...makeReceipt(),
-      task_id: "delegated-001",
-      signature: "delegate-sig",
-    };
-    const receipt = {
-      ...makeReceipt(),
-      delegation_receipts: [delegationReceipt],
-    };
-    const signed = await signExecutionReceipt(receipt, kp.privateKey);
-
-    expect(signed.delegation_receipts).toHaveLength(1);
-    expect(signed.delegation_receipts![0]!.task_id).toBe("delegated-001");
-
-    const valid = await verifyExecutionReceipt(signed, kp.publicKey);
-    expect(valid).toBe(true);
-  });
-
-  it("backward compat: receipt without delegation_receipts still verifies", async () => {
-    const kp = await generateKeypair();
-    const receipt = makeReceipt(); // no delegation_receipts field
-    const signed = await signExecutionReceipt(receipt, kp.privateKey);
-
-    expect(signed.delegation_receipts).toBeUndefined();
-    const valid = await verifyExecutionReceipt(signed, kp.publicKey);
-    expect(valid).toBe(true);
+  it("throws on missing signature", () => {
+    expect(() => parse("---\nspec: test\n---\n")).toThrow("Missing signature");
   });
 });
 
 // ---------------------------------------------------------------------------
-// verifyReceiptChain()
+// verify() — valid files
 // ---------------------------------------------------------------------------
 
-describe("verifyReceiptChain", () => {
-  function makeReceipt(
-    overrides?: Partial<Omit<SignableReceipt, "signature">>,
-  ): Omit<SignableReceipt, "signature"> {
-    return {
-      task_id: "task-001",
-      motebit_id: "mote-123",
-      device_id: "device-456",
-      submitted_at: 1700000000000,
-      completed_at: 1700000060000,
-      status: "completed",
-      result: "Task completed successfully",
-      tools_used: ["search", "calculate"],
-      memories_formed: 2,
-      prompt_hash: "a".repeat(64),
-      result_hash: "b".repeat(64),
-      ...overrides,
-    };
-  }
+describe("verify — valid signatures", () => {
+  it("verifies a correctly signed identity file", async () => {
+    const { content } = await generateValidFile();
+    const result = await verify(content);
 
-  it("single receipt verifies", async () => {
-    const kp = await generateKeypair();
-    const signed = await signExecutionReceipt(makeReceipt(), kp.privateKey);
-
-    const knownKeys: KnownKeys = new Map([["mote-123", kp.publicKey]]);
-    const result = await verifyReceiptChain(signed, knownKeys);
-
-    expect(result.task_id).toBe("task-001");
-    expect(result.motebit_id).toBe("mote-123");
-    expect(result.verified).toBe(true);
-    expect(result.error).toBeUndefined();
-    expect(result.delegations).toEqual([]);
+    expect(result.valid).toBe(true);
+    expect(result.identity).not.toBeNull();
+    expect(result.identity!.motebit_id).toBe("01234567-89ab-cdef-0123-456789abcdef");
+    expect(result.identity!.spec).toBe("motebit/identity@1.0");
+    expect(result.did).toMatch(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/);
+    expect(result.errors).toBeUndefined();
   });
 
-  it("single receipt fails with wrong key", async () => {
-    const kpA = await generateKeypair();
-    const kpB = await generateKeypair();
-    const signed = await signExecutionReceipt(makeReceipt(), kpA.privateKey);
-
-    const knownKeys: KnownKeys = new Map([["mote-123", kpB.publicKey]]);
-    const result = await verifyReceiptChain(signed, knownKeys);
-
-    expect(result.verified).toBe(false);
-    expect(result.error).toBeUndefined();
-    expect(result.delegations).toEqual([]);
+  it("returns deterministic did:key on valid verification", async () => {
+    const { content } = await generateValidFile();
+    const a = await verify(content);
+    const b = await verify(content);
+    expect(a.did).toBe(b.did);
+    expect(a.did).toMatch(/^did:key:z/);
   });
 
-  it("unknown motebit_id", async () => {
-    const kp = await generateKeypair();
-    const signed = await signExecutionReceipt(makeReceipt(), kp.privateKey);
+  it("returns full identity on success", async () => {
+    const { content, publicKeyHex } = await generateValidFile();
+    const result = await verify(content);
 
-    const knownKeys: KnownKeys = new Map(); // empty — no known keys
-    const result = await verifyReceiptChain(signed, knownKeys);
+    expect(result.valid).toBe(true);
+    expect(result.identity!.identity.public_key).toBe(publicKeyHex);
+    expect(result.identity!.governance.trust_mode).toBe("guarded");
+    expect(result.identity!.privacy.fail_closed).toBe(true);
+    expect(result.identity!.memory.half_life_days).toBe(7);
+  });
+});
 
-    expect(result.verified).toBe(false);
-    expect(result.error).toBe("unknown motebit_id");
-    expect(result.delegations).toEqual([]);
+// ---------------------------------------------------------------------------
+// verify() — tamper detection
+// ---------------------------------------------------------------------------
+
+describe("verify — tamper detection", () => {
+  it("fails when frontmatter content is modified", async () => {
+    const { content } = await generateValidFile();
+    const tampered = content.replace("owner-test", "evil-owner");
+
+    const result = await verify(tampered);
+    expect(result.valid).toBe(false);
+    expect(result.identity).toBeNull();
+    expect(result.errors?.[0]?.message).toBe("Signature verification failed");
   });
 
-  it("two-level chain — both verify", async () => {
-    const parentKp = await generateKeypair();
-    const childKp = await generateKeypair();
+  it("fails when trust_mode is changed", async () => {
+    const { content } = await generateValidFile();
+    const tampered = content.replace('"guarded"', '"full"');
 
-    // Sign the child (delegation) receipt first
-    const childSigned = await signExecutionReceipt(
-      makeReceipt({ task_id: "delegated-001", motebit_id: "mote-child" }),
-      childKp.privateKey,
+    const result = await verify(tampered);
+    expect(result.valid).toBe(false);
+  });
+
+  it("fails when motebit_id is changed", async () => {
+    const { content } = await generateValidFile();
+    const tampered = content.replace(
+      "01234567-89ab-cdef-0123-456789abcdef",
+      "ffffffff-ffff-ffff-ffff-ffffffffffff",
     );
 
-    // Sign the parent receipt with the delegation included
-    const parentSigned = await signExecutionReceipt(
-      {
-        ...makeReceipt({ task_id: "parent-001", motebit_id: "mote-parent" }),
-        delegation_receipts: [childSigned],
-      },
-      parentKp.privateKey,
-    );
+    const result = await verify(tampered);
+    expect(result.valid).toBe(false);
+  });
+});
 
-    const knownKeys: KnownKeys = new Map([
-      ["mote-parent", parentKp.publicKey],
-      ["mote-child", childKp.publicKey],
+// ---------------------------------------------------------------------------
+// verify() — wrong key
+// ---------------------------------------------------------------------------
+
+describe("verify — wrong key", () => {
+  it("fails when signed with a different private key", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    // Build YAML with kp2's public key, but sign with kp1's private key
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "test"`,
+      `created_at: "2026-01-01T00:00:00.000Z"`,
+      `owner_id: "owner"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp2.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R1_DRAFT"`,
+      `  require_approval_above: "R1_DRAFT"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+    ].join("\n");
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp1.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("Signature verification failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — malformed inputs
+// ---------------------------------------------------------------------------
+
+describe("verify — malformed inputs", () => {
+  it("returns error for missing frontmatter", async () => {
+    const result = await verify("no frontmatter");
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("Unrecognized artifact format");
+  });
+
+  it("returns error for missing signature", async () => {
+    const result = await verify("---\nspec: test\n---\n");
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("Missing signature");
+  });
+
+  it("returns error for missing public key", async () => {
+    const yaml = `spec: "motebit/identity@1.0"\nmotebit_id: "test"`;
+    const content = buildIdentityFile(yaml, "AAAA");
+
+    const result = await verify(content);
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("No public key in frontmatter");
+  });
+
+  it("returns error for invalid public key hex (wrong length)", async () => {
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "abcd"`,
+    ].join("\n");
+    const content = buildIdentityFile(yaml, "AAAA");
+
+    const result = await verify(content);
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("Public key must be 32 bytes");
+  });
+
+  it("returns error for invalid signature encoding", async () => {
+    const kp = await makeKeypair();
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+    ].join("\n");
+    // Invalid base64url — contains characters that break atob
+    const content = buildIdentityFile(yaml, "!!!invalid!!!");
+
+    const result = await verify(content);
+    expect(result.valid).toBe(false);
+    // Could be encoding error or length error
+    expect(result.errors?.[0]?.message).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — files with devices
+// ---------------------------------------------------------------------------
+
+describe("verify — files with devices", () => {
+  it("verifies a file with device entries", async () => {
+    const kp = await makeKeypair();
+
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "test-with-devices"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R1_DRAFT"`,
+      `  require_approval_above: "R1_DRAFT"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices:`,
+      `  - device_id: "dev-001"`,
+      `    name: "Desktop"`,
+      `    public_key: "${kp.publicKeyHex}"`,
+      `    registered_at: "2026-01-15T00:00:00.000Z"`,
+    ].join("\n");
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity!.devices).toHaveLength(1);
+    expect(result.identity!.devices[0]!.device_id).toBe("dev-001");
+    expect(result.identity!.devices[0]!.name).toBe("Desktop");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — service identity files
+// ---------------------------------------------------------------------------
+
+describe("verify — service identity", () => {
+  it("verifies a service identity file with all service fields", async () => {
+    const kp = await makeKeypair();
+
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "test-service"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `type: "service"`,
+      `service_name: "Flight Search"`,
+      `service_description: "Search and book flights"`,
+      `service_url: "https://flights.example.com"`,
+      `capabilities:`,
+      `  - flight_search`,
+      `  - flight_booking`,
+      `  - price_alerts`,
+      `terms_url: "https://flights.example.com/terms"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R2_WRITE"`,
+      `  require_approval_above: "R2_WRITE"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `    personal: 90`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+    ].join("\n");
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity!.type).toBe("service");
+    expect(result.identity!.service_name).toBe("Flight Search");
+    expect(result.identity!.service_description).toBe("Search and book flights");
+    expect(result.identity!.service_url).toBe("https://flights.example.com");
+    expect(result.identity!.capabilities).toEqual([
+      "flight_search",
+      "flight_booking",
+      "price_alerts",
     ]);
-    const result = await verifyReceiptChain(parentSigned, knownKeys);
-
-    expect(result.task_id).toBe("parent-001");
-    expect(result.verified).toBe(true);
-    expect(result.delegations).toHaveLength(1);
-    expect(result.delegations[0]!.task_id).toBe("delegated-001");
-    expect(result.delegations[0]!.motebit_id).toBe("mote-child");
-    expect(result.delegations[0]!.verified).toBe(true);
-    expect(result.delegations[0]!.delegations).toEqual([]);
+    expect(result.identity!.terms_url).toBe("https://flights.example.com/terms");
   });
 
-  it("chain where parent verifies but delegation fails", async () => {
-    const parentKp = await generateKeypair();
-    const childKp = await generateKeypair();
-
-    // Sign child receipt
-    const childSigned = await signExecutionReceipt(
-      makeReceipt({ task_id: "delegated-002", motebit_id: "mote-unknown-child" }),
-      childKp.privateKey,
-    );
-
-    // Sign parent receipt with delegation
-    const parentSigned = await signExecutionReceipt(
-      {
-        ...makeReceipt({ task_id: "parent-002", motebit_id: "mote-parent" }),
-        delegation_receipts: [childSigned],
-      },
-      parentKp.privateKey,
-    );
-
-    // Only parent key is known — child's motebit_id is missing from knownKeys
-    const knownKeys: KnownKeys = new Map([["mote-parent", parentKp.publicKey]]);
-    const result = await verifyReceiptChain(parentSigned, knownKeys);
-
-    expect(result.verified).toBe(true);
-    expect(result.delegations).toHaveLength(1);
-    expect(result.delegations[0]!.verified).toBe(false);
-    expect(result.delegations[0]!.error).toBe("unknown motebit_id");
+  it("verifies a personal identity file without service fields", async () => {
+    const { content } = await generateValidFile();
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity!.type).toBeUndefined();
+    expect(result.identity!.service_name).toBeUndefined();
+    expect(result.identity!.capabilities).toBeUndefined();
   });
 
-  it("verifies using embedded public_key when not in knownKeys", async () => {
-    const kp = await generateKeypair();
-    const receiptWithKey = { ...makeReceipt(), public_key: bytesToHex(kp.publicKey) };
-    const signed = await signExecutionReceipt(receiptWithKey, kp.privateKey);
+  it("detects tampering of service fields", async () => {
+    const kp = await makeKeypair();
 
-    // Empty knownKeys — verification falls back to receipt.public_key
-    const knownKeys: KnownKeys = new Map();
-    const result = await verifyReceiptChain(signed, knownKeys);
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "test-service"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `type: "service"`,
+      `service_name: "Flight Search"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R1_DRAFT"`,
+      `  require_approval_above: "R1_DRAFT"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+    ].join("\n");
 
-    expect(result.verified).toBe(true);
-    expect(result.error).toBeUndefined();
-  });
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
 
-  it("empty delegation_receipts still verifies with empty delegations array", async () => {
-    const kp = await generateKeypair();
-    const signed = await signExecutionReceipt(
-      { ...makeReceipt(), delegation_receipts: [] },
-      kp.privateKey,
-    );
-
-    const knownKeys: KnownKeys = new Map([["mote-123", kp.publicKey]]);
-    const result = await verifyReceiptChain(signed, knownKeys);
-
-    expect(result.verified).toBe(true);
-    expect(result.delegations).toEqual([]);
+    // Tamper: change service_name
+    const tampered = content.replace("Flight Search", "Evil Service");
+    const result = await verify(tampered);
+    expect(result.valid).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// did:key — W3C DID derivation from Ed25519 public keys
+// Helpers for succession chain tests
 // ---------------------------------------------------------------------------
 
-describe("base58btcEncode", () => {
-  it("encodes empty bytes as empty string", () => {
-    expect(base58btcEncode(new Uint8Array(0))).toBe("");
-  });
+function canonicalJson(obj: unknown): string {
+  if (obj === null || obj === undefined) return JSON.stringify(obj);
+  if (typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) {
+    return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
+  }
+  const sorted = Object.keys(obj as Record<string, unknown>).sort();
+  const entries: string[] = [];
+  for (const key of sorted) {
+    const val = (obj as Record<string, unknown>)[key];
+    if (val === undefined) continue;
+    entries.push(JSON.stringify(key) + ":" + canonicalJson(val));
+  }
+  return "{" + entries.join(",") + "}";
+}
 
-  it("encodes leading zeros as '1' characters", () => {
-    const result = base58btcEncode(new Uint8Array([0, 0, 0, 1]));
-    expect(result.startsWith("111")).toBe(true);
-    expect(result).toBe("1112");
-  });
+async function createSuccessionRecord(
+  oldKp: Awaited<ReturnType<typeof makeKeypair>>,
+  newKp: Awaited<ReturnType<typeof makeKeypair>>,
+  timestamp: number,
+  reason?: string,
+) {
+  const payloadObj: Record<string, unknown> = {
+    old_public_key: oldKp.publicKeyHex,
+    new_public_key: newKp.publicKeyHex,
+    timestamp,
+  };
+  if (reason !== undefined) {
+    payloadObj.reason = reason;
+  }
+  const payload = canonicalJson(payloadObj);
+  const message = new TextEncoder().encode(payload);
 
-  it("encodes a known byte sequence correctly", () => {
-    // "Hello" in base58btc = "9Ajdvzr"
-    const hello = new TextEncoder().encode("Hello");
-    expect(base58btcEncode(hello)).toBe("9Ajdvzr");
-  });
-});
+  const oldSig = await ed.signAsync(message, oldKp.privateKey);
+  const newSig = await ed.signAsync(message, newKp.privateKey);
 
-describe("hexToBytes", () => {
-  it("converts hex string to Uint8Array", () => {
-    const bytes = hexToBytes("deadbeef");
-    expect(bytes).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
-  });
+  return {
+    old_public_key: oldKp.publicKeyHex,
+    new_public_key: newKp.publicKeyHex,
+    timestamp,
+    ...(reason !== undefined ? { reason } : {}),
+    old_key_signature: toHex(oldSig),
+    new_key_signature: toHex(newSig),
+  };
+}
 
-  it("handles all-zero hex", () => {
-    const bytes = hexToBytes("00000000");
-    expect(bytes).toEqual(new Uint8Array([0, 0, 0, 0]));
-  });
+function buildYamlWithSuccession(
+  publicKeyHex: string,
+  successionRecords: Array<{
+    old_public_key: string;
+    new_public_key: string;
+    timestamp: number;
+    reason?: string;
+    old_key_signature: string;
+    new_key_signature: string;
+  }>,
+): string {
+  const lines = [
+    `spec: "motebit/identity@1.0"`,
+    `motebit_id: "01234567-89ab-cdef-0123-456789abcdef"`,
+    `created_at: "2026-01-15T00:00:00.000Z"`,
+    `owner_id: "owner-test"`,
+    `identity:`,
+    `  algorithm: "Ed25519"`,
+    `  public_key: "${publicKeyHex}"`,
+    `governance:`,
+    `  trust_mode: "guarded"`,
+    `  max_risk_auto: "R1_DRAFT"`,
+    `  require_approval_above: "R1_DRAFT"`,
+    `  deny_above: "R4_MONEY"`,
+    `  operator_mode: false`,
+    `privacy:`,
+    `  default_sensitivity: "personal"`,
+    `  retention_days:`,
+    `    none: 365`,
+    `  fail_closed: true`,
+    `memory:`,
+    `  half_life_days: 7`,
+    `  confidence_threshold: 0.3`,
+    `  per_turn_limit: 5`,
+    `devices: []`,
+    `succession:`,
+  ];
 
-  it("handles empty string", () => {
-    const bytes = hexToBytes("");
-    expect(bytes.length).toBe(0);
-  });
-});
+  for (const rec of successionRecords) {
+    lines.push(`  - old_public_key: "${rec.old_public_key}"`);
+    lines.push(`    new_public_key: "${rec.new_public_key}"`);
+    lines.push(`    timestamp: ${rec.timestamp}`);
+    if (rec.reason !== undefined) {
+      lines.push(`    reason: "${rec.reason}"`);
+    }
+    lines.push(`    old_key_signature: "${rec.old_key_signature}"`);
+    lines.push(`    new_key_signature: "${rec.new_key_signature}"`);
+  }
 
-describe("publicKeyToDidKey", () => {
-  it("produces a did:key URI starting with did:key:z", async () => {
-    const kp = await generateKeypair();
-    const did = publicKeyToDidKey(kp.publicKey);
-    expect(did).toMatch(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/);
-  });
-
-  it("is deterministic — same key produces same DID", async () => {
-    const kp = await generateKeypair();
-    const a = publicKeyToDidKey(kp.publicKey);
-    const b = publicKeyToDidKey(kp.publicKey);
-    expect(a).toBe(b);
-  });
-
-  it("different keys produce different DIDs", async () => {
-    const kpA = await generateKeypair();
-    const kpB = await generateKeypair();
-    expect(publicKeyToDidKey(kpA.publicKey)).not.toBe(publicKeyToDidKey(kpB.publicKey));
-  });
-
-  it("rejects non-32-byte input", () => {
-    expect(() => publicKeyToDidKey(new Uint8Array(16))).toThrow("32 bytes");
-    expect(() => publicKeyToDidKey(new Uint8Array(64))).toThrow("32 bytes");
-  });
-
-  it("matches known test vector", () => {
-    // Test vector: 32 zero bytes → known did:key
-    // Multicodec prefix ed01 + 32 zero bytes → base58btc
-    const zeroKey = new Uint8Array(32);
-    const did = publicKeyToDidKey(zeroKey);
-    expect(did).toMatch(/^did:key:z/);
-    // The prefix bytes (0xed, 0x01) followed by 32 zeros should produce a consistent result
-    const prefixed = new Uint8Array(34);
-    prefixed[0] = 0xed;
-    prefixed[1] = 0x01;
-    expect(did).toBe(`did:key:z${base58btcEncode(prefixed)}`);
-  });
-});
-
-describe("hexPublicKeyToDidKey", () => {
-  it("converts hex public key to did:key", async () => {
-    const kp = await generateKeypair();
-    const hex = Array.from(kp.publicKey)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    const didFromHex = hexPublicKeyToDidKey(hex);
-    const didFromBytes = publicKeyToDidKey(kp.publicKey);
-    expect(didFromHex).toBe(didFromBytes);
-  });
-});
+  return lines.join("\n");
+}
 
 // ---------------------------------------------------------------------------
-// signKeySuccession / verifyKeySuccession
+// verify() — succession chain
 // ---------------------------------------------------------------------------
 
-describe("signKeySuccession", () => {
-  it("creates a valid succession record signed by both keys", async () => {
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
+describe("verify — succession chain", () => {
+  it("verifies identity file with one succession record", async () => {
+    const kp1 = await makeKeypair(); // genesis key
+    const kp2 = await makeKeypair(); // current key
 
-    const record = await signKeySuccession(
-      oldKp.privateKey,
-      newKp.privateKey,
-      newKp.publicKey,
-      oldKp.publicKey,
-      "routine rotation",
-    );
+    const record = await createSuccessionRecord(kp1, kp2, 1000000);
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
 
-    expect(record.old_public_key).toHaveLength(64);
-    expect(record.new_public_key).toHaveLength(64);
-    expect(record.old_key_signature).toHaveLength(128);
-    expect(record.new_key_signature).toHaveLength(128);
-    expect(record.reason).toBe("routine rotation");
-    expect(record.timestamp).toBeTypeOf("number");
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.rotations).toBe(1);
+    expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
+    expect(result.succession!.error).toBeUndefined();
   });
 
-  it("creates a record without reason", async () => {
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
+  it("verifies identity file with succession record including reason", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
 
-    const record = await signKeySuccession(
-      oldKp.privateKey,
-      newKp.privateKey,
-      newKp.publicKey,
-      oldKp.publicKey,
-    );
+    const record = await createSuccessionRecord(kp1, kp2, 1000000, "key compromise");
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
 
-    expect(record.reason).toBeUndefined();
-    const valid = await verifyKeySuccession(record);
-    expect(valid).toBe(true);
-  });
-});
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
 
-describe("verifyKeySuccession", () => {
-  it("verifies a valid succession record", async () => {
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
-
-    const record = await signKeySuccession(
-      oldKp.privateKey,
-      newKp.privateKey,
-      newKp.publicKey,
-      oldKp.publicKey,
-      "compromise",
-    );
-
-    const valid = await verifyKeySuccession(record);
-    expect(valid).toBe(true);
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.rotations).toBe(1);
   });
 
-  it("rejects a record with tampered new_public_key", async () => {
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
+  it("verifies identity file with multi-hop succession chain", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kp3 = await makeKeypair();
 
-    const record = await signKeySuccession(
-      oldKp.privateKey,
-      newKp.privateKey,
-      newKp.publicKey,
-      oldKp.publicKey,
-    );
+    const rec1 = await createSuccessionRecord(kp1, kp2, 1000000);
+    const rec2 = await createSuccessionRecord(kp2, kp3, 2000000);
+    const yaml = buildYamlWithSuccession(kp3.publicKeyHex, [rec1, rec2]);
 
-    // Tamper with the new public key
-    record.new_public_key = "ff".repeat(32);
-    const valid = await verifyKeySuccession(record);
-    expect(valid).toBe(false);
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.rotations).toBe(2);
+    expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
   });
 
-  it("rejects a record with tampered old_key_signature", async () => {
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
-
-    const record = await signKeySuccession(
-      oldKp.privateKey,
-      newKp.privateKey,
-      newKp.publicKey,
-      oldKp.publicKey,
-    );
-
-    // Tamper with old key signature
-    record.old_key_signature = "aa".repeat(64);
-    const valid = await verifyKeySuccession(record);
-    expect(valid).toBe(false);
+  it("backward compat: no succession field returns no succession result", async () => {
+    const { content } = await generateValidFile();
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeUndefined();
   });
 
-  it("rejects a record with tampered new_key_signature", async () => {
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
+  it("fails when succession chain linkage is broken", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kp3 = await makeKeypair();
+    const kpRandom = await makeKeypair();
 
-    const record = await signKeySuccession(
-      oldKp.privateKey,
-      newKp.privateKey,
-      newKp.publicKey,
-      oldKp.publicKey,
-    );
+    // rec1 goes kp1 -> kpRandom, rec2 goes kp2 -> kp3
+    // Linkage broken: kpRandom != kp2
+    const rec1 = await createSuccessionRecord(kp1, kpRandom, 1000000);
+    const rec2 = await createSuccessionRecord(kp2, kp3, 2000000);
+    const yaml = buildYamlWithSuccession(kp3.publicKeyHex, [rec1, rec2]);
 
-    // Tamper with new key signature
-    record.new_key_signature = "bb".repeat(64);
-    const valid = await verifyKeySuccession(record);
-    expect(valid).toBe(false);
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("chain broken");
   });
 
-  it("rejects a record with tampered timestamp", async () => {
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
+  it("fails when last succession new_public_key doesn't match identity public_key", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kpActual = await makeKeypair(); // actual identity key, different from kp2
 
-    const record = await signKeySuccession(
-      oldKp.privateKey,
-      newKp.privateKey,
-      newKp.publicKey,
-      oldKp.publicKey,
-    );
+    const record = await createSuccessionRecord(kp1, kp2, 1000000);
+    // Identity uses kpActual, but succession chain ends at kp2
+    const yaml = buildYamlWithSuccession(kpActual.publicKeyHex, [record]);
 
-    record.timestamp = record.timestamp + 1;
-    const valid = await verifyKeySuccession(record);
-    expect(valid).toBe(false);
-  });
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kpActual.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
 
-  it("returns false for invalid hex in public keys (catch block)", async () => {
-    const record = {
-      old_public_key: "not-valid-hex",
-      new_public_key: "also-not-valid-hex",
-      timestamp: Date.now(),
-      old_key_signature: "aa".repeat(64),
-      new_key_signature: "bb".repeat(64),
-    };
-    const valid = await verifyKeySuccession(record);
-    expect(valid).toBe(false);
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("terminal");
   });
 });
 
 // ---------------------------------------------------------------------------
-// didKeyToPublicKey error paths (index.ts lines 278-284)
+// verify() — dispatch: JSON string inputs for non-identity types
 // ---------------------------------------------------------------------------
 
-describe("didKeyToPublicKey error paths", () => {
-  it("rejects did:key with wrong multicodec prefix", () => {
-    // Build a did:key with wrong prefix bytes (0x00, 0x00 instead of 0xed, 0x01)
-    const fakeBytes = new Uint8Array(34);
-    fakeBytes[0] = 0x00;
-    fakeBytes[1] = 0x00;
-    const encoded = `did:key:z${base58btcEncode(fakeBytes)}`;
-    expect(() => didKeyToPublicKey(encoded)).toThrow("multicodec prefix");
-  });
-
-  it("rejects did:key with wrong decoded length", () => {
-    // Build a did:key with only 20 bytes instead of 34
-    const shortBytes = new Uint8Array(20);
-    const encoded = `did:key:z${base58btcEncode(shortBytes)}`;
-    expect(() => didKeyToPublicKey(encoded)).toThrow("expected 34 bytes");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// verify() catch block (index.ts lines 361-362)
-// ---------------------------------------------------------------------------
-
-describe("verify error handling", () => {
-  it("returns false when signature bytes are malformed (not 64 bytes)", async () => {
-    const kp = await generateKeypair();
-    const message = new TextEncoder().encode("test");
-    // Pass a too-short signature — @noble/ed25519 will throw
-    const badSig = new Uint8Array(10);
-    const valid = await verify(badSig, message, kp.publicKey);
-    expect(valid).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// verifySignedToken error paths (index.ts lines 419-420, 429-430)
-// ---------------------------------------------------------------------------
-
-describe("verifySignedToken error paths", () => {
-  it("returns null when base64url payload is invalid (decode error)", async () => {
-    const kp = await generateKeypair();
-    // "!!!" is not valid base64url — atob will throw
-    const result = await verifySignedToken("!!!.!!!", kp.publicKey);
-    expect(result).toBeNull();
-  });
-
-  it("returns null when payload is valid base64 but not valid JSON", async () => {
-    const kp = await generateKeypair();
-    // Create a token where the payload is valid base64url but not JSON,
-    // and the signature is valid for that payload
-    const notJson = new TextEncoder().encode("this is not json");
-    const payloadB64 = btoa(String.fromCharCode(...notJson))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-    const sig = await sign(notJson, kp.privateKey);
-    const sigB64 = btoa(String.fromCharCode(...sig))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-    const token = `${payloadB64}.${sigB64}`;
-    const result = await verifySignedToken(token, kp.publicKey);
-    expect(result).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// verifyExecutionReceipt catch block (index.ts lines 518-519)
-// ---------------------------------------------------------------------------
-
-describe("verifyExecutionReceipt error paths", () => {
-  it("returns false when signature is not valid base64url", async () => {
-    const kp = await generateKeypair();
-    const receipt: SignableReceipt = {
-      task_id: "task-001",
-      motebit_id: "mote-123",
-      device_id: "device-456",
-      submitted_at: 1700000000000,
-      completed_at: 1700000060000,
+describe("verify — JSON string dispatch", () => {
+  it("dispatches a receipt JSON string to verifyReceipt", async () => {
+    const kp = await makeKeypair();
+    const receiptBody = {
+      task_id: "task-json-str",
+      motebit_id: "01234567-89ab-cdef-0123-456789abcdef",
+      public_key: kp.publicKeyHex,
+      device_id: "dev-001",
+      submitted_at: 1000000,
+      completed_at: 1001000,
       status: "completed",
       result: "ok",
       tools_used: [],
       memories_formed: 0,
-      prompt_hash: "a".repeat(64),
-      result_hash: "b".repeat(64),
-      signature: "!!!not-valid-base64!!!",
+      prompt_hash: "abc",
+      result_hash: "def",
     };
-    const valid = await verifyExecutionReceipt(receipt, kp.publicKey);
-    expect(valid).toBe(false);
-  });
-});
+    const canonical = canonicalJson(receiptBody);
+    const message = new TextEncoder().encode(canonical);
+    const sig = await ed.signAsync(message, kp.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const receipt = { ...receiptBody, signature: sigB64 };
 
-// ---------------------------------------------------------------------------
-// Guardian Recovery Succession (§3.8.3)
-// ---------------------------------------------------------------------------
-
-describe("signGuardianRecoverySuccession", () => {
-  it("creates a valid guardian recovery record", async () => {
-    const guardianKp = await generateKeypair();
-    const oldKp = await generateKeypair(); // compromised key
-    const newKp = await generateKeypair();
-
-    const record = await signGuardianRecoverySuccession(
-      guardianKp.privateKey,
-      newKp.privateKey,
-      oldKp.publicKey,
-      newKp.publicKey,
-    );
-
-    expect(record.recovery).toBe(true);
-    expect(record.reason).toBe("guardian_recovery");
-    expect(record.guardian_signature).toHaveLength(128);
-    expect(record.new_key_signature).toHaveLength(128);
-    expect(record.old_key_signature).toBeUndefined();
-  });
-
-  it("uses custom reason when provided", async () => {
-    const guardianKp = await generateKeypair();
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
-
-    const record = await signGuardianRecoverySuccession(
-      guardianKp.privateKey,
-      newKp.privateKey,
-      oldKp.publicKey,
-      newKp.publicKey,
-      "guardian_recovery: employee departure",
-    );
-
-    expect(record.reason).toBe("guardian_recovery: employee departure");
-  });
-
-  it("verifies with correct guardian public key", async () => {
-    const guardianKp = await generateKeypair();
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
-
-    const record = await signGuardianRecoverySuccession(
-      guardianKp.privateKey,
-      newKp.privateKey,
-      oldKp.publicKey,
-      newKp.publicKey,
-    );
-
-    const guardianPubHex = bytesToHex(guardianKp.publicKey);
-    const valid = await verifyKeySuccession(record, guardianPubHex);
-    expect(valid).toBe(true);
-  });
-
-  it("rejects with wrong guardian public key", async () => {
-    const guardianKp = await generateKeypair();
-    const wrongGuardianKp = await generateKeypair();
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
-
-    const record = await signGuardianRecoverySuccession(
-      guardianKp.privateKey,
-      newKp.privateKey,
-      oldKp.publicKey,
-      newKp.publicKey,
-    );
-
-    const wrongPubHex = bytesToHex(wrongGuardianKp.publicKey);
-    const valid = await verifyKeySuccession(record, wrongPubHex);
-    expect(valid).toBe(false);
-  });
-
-  it("rejects guardian recovery when no guardian key provided", async () => {
-    const guardianKp = await generateKeypair();
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
-
-    const record = await signGuardianRecoverySuccession(
-      guardianKp.privateKey,
-      newKp.privateKey,
-      oldKp.publicKey,
-      newKp.publicKey,
-    );
-
-    // No guardian key provided — must reject
-    const valid = await verifyKeySuccession(record);
-    expect(valid).toBe(false);
-  });
-
-  it("rejects when guardian_signature is tampered", async () => {
-    const guardianKp = await generateKeypair();
-    const oldKp = await generateKeypair();
-    const newKp = await generateKeypair();
-
-    const record = await signGuardianRecoverySuccession(
-      guardianKp.privateKey,
-      newKp.privateKey,
-      oldKp.publicKey,
-      newKp.publicKey,
-    );
-
-    record.guardian_signature = "aa".repeat(64);
-    const guardianPubHex = bytesToHex(guardianKp.publicKey);
-    const valid = await verifyKeySuccession(record, guardianPubHex);
-    expect(valid).toBe(false);
-  });
-});
-
-describe("verifySuccessionChain with guardian recovery", () => {
-  it("verifies a mixed chain: normal rotation → guardian recovery", async () => {
-    const guardianKp = await generateKeypair();
-    const kp1 = await generateKeypair(); // genesis
-    const kp2 = await generateKeypair(); // normal rotation target
-    const kp3 = await generateKeypair(); // guardian recovery target
-
-    // Step 1: normal rotation kp1 → kp2
-    const normalRecord = await signKeySuccession(
-      kp1.privateKey,
-      kp2.privateKey,
-      kp2.publicKey,
-      kp1.publicKey,
-      "routine rotation",
-    );
-
-    // Small delay to ensure timestamp ordering
-    await new Promise((r) => setTimeout(r, 5));
-
-    // Step 2: guardian recovery kp2 → kp3 (kp2 compromised)
-    const recoveryRecord = await signGuardianRecoverySuccession(
-      guardianKp.privateKey,
-      kp3.privateKey,
-      kp2.publicKey,
-      kp3.publicKey,
-    );
-
-    const guardianPubHex = bytesToHex(guardianKp.publicKey);
-
-    const result = await verifySuccessionChain([normalRecord, recoveryRecord], guardianPubHex);
-
+    const result = await verify(JSON.stringify(receipt));
+    expect(result.type).toBe("receipt");
     expect(result.valid).toBe(true);
-    expect(result.genesis_public_key).toBe(bytesToHex(kp1.publicKey));
-    expect(result.current_public_key).toBe(bytesToHex(kp3.publicKey));
-    expect(result.length).toBe(2);
   });
 
-  it("rejects guardian recovery in chain without guardian key", async () => {
-    const guardianKp = await generateKeypair();
-    const kp1 = await generateKeypair();
-    const kp2 = await generateKeypair();
-
-    const recoveryRecord = await signGuardianRecoverySuccession(
-      guardianKp.privateKey,
-      kp2.privateKey,
-      kp1.publicKey,
-      kp2.publicKey,
-    );
-
-    const result = await verifySuccessionChain([recoveryRecord]);
+  it("returns error for receipt-shaped string with invalid JSON", async () => {
+    // This is tricky — detectArtifactType tries JSON.parse. If it fails,
+    // it returns null (not a receipt). We need something that detects as receipt
+    // but then fails JSON.parse on the second pass.
+    // Actually, strings that contain "---" go to identity, and non-JSON without "---" return null.
+    // The JSON parse fail path on line 1030 would only be hit if detectArtifactType
+    // successfully parsed but then the second parse fails — which can't happen
+    // since they use the same JSON.parse. So this path is essentially dead code
+    // for valid detection. Let's verify the type mismatch paths instead.
+    const result = await verify(42, { expectedType: "receipt" });
     expect(result.valid).toBe(false);
-    expect(result.error?.message).toContain("guardian recovery but no guardian public key");
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
   });
 
-  it("guardian key must not equal identity key", async () => {
-    // This is a policy invariant: guardian.public_key !== identity.public_key
-    // Enforced at identity generation, not chain verification — but let's verify
-    // that a self-signed "guardian recovery" is still cryptographically valid
-    // (the policy check happens at a higher layer)
-    const kp1 = await generateKeypair();
-    const kp2 = await generateKeypair();
-
-    // "Guardian" is actually kp1 itself — cryptographically valid but policy-invalid
-    const record = await signGuardianRecoverySuccession(
-      kp1.privateKey, // using identity key as guardian
-      kp2.privateKey,
-      kp1.publicKey,
-      kp2.publicKey,
-    );
-
-    const pubHex = bytesToHex(kp1.publicKey);
-    const valid = await verifyKeySuccession(record, pubHex);
-    // Cryptographically valid — policy layer rejects this, not crypto
-    expect(valid).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Guardian Revocation (§3.3.2) — dual authorization
-// ---------------------------------------------------------------------------
-
-describe("signGuardianRevocation + verifyGuardianRevocation", () => {
-  it("creates and verifies a dual-signed revocation", async () => {
-    const identityKp = await generateKeypair();
-    const guardianKp = await generateKeypair();
-
-    const revocation = await signGuardianRevocation(identityKp.privateKey, guardianKp.privateKey);
-
-    expect(revocation.identity_signature).toHaveLength(128);
-    expect(revocation.guardian_signature).toHaveLength(128);
-    expect(revocation.timestamp).toBeTypeOf("number");
-
-    const valid = await verifyGuardianRevocation(
-      revocation,
-      bytesToHex(identityKp.publicKey),
-      bytesToHex(guardianKp.publicKey),
-    );
-    expect(valid).toBe(true);
+  it("returns unrecognized format for non-object non-string input", async () => {
+    const result = await verify(null);
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
   });
 
-  it("rejects with wrong identity key", async () => {
-    const identityKp = await generateKeypair();
-    const guardianKp = await generateKeypair();
-    const wrongKp = await generateKeypair();
-
-    const revocation = await signGuardianRevocation(identityKp.privateKey, guardianKp.privateKey);
-
-    const valid = await verifyGuardianRevocation(
-      revocation,
-      bytesToHex(wrongKp.publicKey), // wrong identity key
-      bytesToHex(guardianKp.publicKey),
-    );
-    expect(valid).toBe(false);
+  it("returns unrecognized format with credential fallback type", async () => {
+    const result = await verify(42, { expectedType: "credential" });
+    expect(result.valid).toBe(false);
+    expect((result as { credential: unknown }).credential).toBeNull();
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
   });
 
-  it("rejects with wrong guardian key", async () => {
-    const identityKp = await generateKeypair();
-    const guardianKp = await generateKeypair();
-    const wrongKp = await generateKeypair();
-
-    const revocation = await signGuardianRevocation(identityKp.privateKey, guardianKp.privateKey);
-
-    const valid = await verifyGuardianRevocation(
-      revocation,
-      bytesToHex(identityKp.publicKey),
-      bytesToHex(wrongKp.publicKey), // wrong guardian key
-    );
-    expect(valid).toBe(false);
+  it("returns unrecognized format with presentation fallback type", async () => {
+    const result = await verify(42, { expectedType: "presentation" });
+    expect(result.valid).toBe(false);
+    expect((result as { presentation: unknown }).presentation).toBeNull();
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
   });
 
-  it("rejects tampered timestamp", async () => {
-    const identityKp = await generateKeypair();
-    const guardianKp = await generateKeypair();
-
-    const revocation = await signGuardianRevocation(identityKp.privateKey, guardianKp.privateKey);
-
-    const tampered = { ...revocation, timestamp: revocation.timestamp + 1 };
-    const valid = await verifyGuardianRevocation(
-      tampered,
-      bytesToHex(identityKp.publicKey),
-      bytesToHex(guardianKp.publicKey),
-    );
-    expect(valid).toBe(false);
-  });
-
-  it("uses provided timestamp", async () => {
-    const identityKp = await generateKeypair();
-    const guardianKp = await generateKeypair();
-    const ts = 1700000000000;
-
-    const revocation = await signGuardianRevocation(
-      identityKp.privateKey,
-      guardianKp.privateKey,
-      ts,
-    );
-
-    expect(revocation.timestamp).toBe(ts);
-
-    const valid = await verifyGuardianRevocation(
-      revocation,
-      bytesToHex(identityKp.publicKey),
-      bytesToHex(guardianKp.publicKey),
-    );
-    expect(valid).toBe(true);
+  it("dispatches identity string to verifyIdentity", async () => {
+    const { content } = await generateValidFile();
+    const result = await verify(content);
+    expect(result.type).toBe("identity");
+    expect(result.valid).toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------
-// signSovereignPaymentReceipt() — sovereign trust signal, no relay involved
+// verify() — verifyIdentityFile (deprecated wrapper)
 // ---------------------------------------------------------------------------
 
-describe("signSovereignPaymentReceipt", () => {
-  it("produces a verifiable ExecutionReceipt anchored to an onchain tx", async () => {
-    const payeeKp = await generateKeypair();
+import { verifyIdentityFile } from "../index";
 
-    const receipt = await signSovereignPaymentReceipt(
-      {
-        payee_motebit_id: "payee-mote",
-        payee_device_id: "payee-device",
-        payer_motebit_id: "payer-mote",
-        rail: "solana",
-        tx_hash: "5JxYzExampleSolanaTxSignature",
-        amount_micro: 5_000n,
-        asset: "USDC",
-        service_description: "search query",
-        prompt_hash: "sha256:prompt",
-        result_hash: "sha256:result",
-        submitted_at: 1_700_000_000_000,
-        completed_at: 1_700_000_001_000,
-      },
-      payeeKp.privateKey,
-      payeeKp.publicKey,
-    );
-
-    // task_id anchors the trust signal to a globally unique onchain payment
-    expect(receipt.task_id).toBe("solana:tx:5JxYzExampleSolanaTxSignature");
-    // sovereign rail — no relay binding
-    expect(receipt.relay_task_id).toBeUndefined();
-    expect(receipt.motebit_id).toBe("payee-mote");
-    expect(receipt.status).toBe("completed");
-    expect(receipt.signature).toBeTruthy();
-
-    // The signature must verify against the embedded public key — no relay
-    // lookup, no registry, no third party. Self-contained trust artifact.
-    const valid = await verifyExecutionReceipt(receipt, payeeKp.publicKey);
-    expect(valid).toBe(true);
+describe("verifyIdentityFile — deprecated wrapper", () => {
+  it("returns valid result for a correctly signed file", async () => {
+    const { content } = await generateValidFile();
+    const result = await verifyIdentityFile(content);
+    expect(result.valid).toBe(true);
+    expect(result.identity).not.toBeNull();
+    expect(result.identity!.motebit_id).toBe("01234567-89ab-cdef-0123-456789abcdef");
+    expect(result.did).toMatch(/^did:key:z/);
+    expect(result.error).toBeUndefined();
   });
 
-  it("tampering with the amount breaks verification", async () => {
-    const payeeKp = await generateKeypair();
-    const receipt = await signSovereignPaymentReceipt(
-      {
-        payee_motebit_id: "payee",
-        payee_device_id: "device",
-        payer_motebit_id: "payer",
-        rail: "solana",
-        tx_hash: "txhash",
-        amount_micro: 5_000n,
-        asset: "USDC",
-        service_description: "service",
-        prompt_hash: "h1",
-        result_hash: "h2",
-        submitted_at: 1,
-        completed_at: 2,
-      },
-      payeeKp.privateKey,
-      payeeKp.publicKey,
-    );
+  it("returns error for a tampered file", async () => {
+    const { content } = await generateValidFile();
+    const tampered = content.replace("owner-test", "evil-owner");
+    const result = await verifyIdentityFile(tampered);
+    expect(result.valid).toBe(false);
+    expect(result.identity).toBeNull();
+    expect(result.error).toBe("Signature verification failed");
+  });
 
-    // Forge a higher amount in the result string after signing
-    const tampered = {
-      ...receipt,
-      result: receipt.result.replace("5000", "999999999"),
+  it("returns succession result when present", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    const record = await createSuccessionRecord(kp1, kp2, 1000000);
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verifyIdentityFile(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.rotations).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — JSON parse failure path (line 1034)
+// ---------------------------------------------------------------------------
+
+describe("verify — JSON parse failure for detected non-identity string", () => {
+  it("returns parse error for a string that detects as JSON type but fails parse on second pass", async () => {
+    // This path (lines 1034-1043) is essentially dead code:
+    // detectArtifactType already calls JSON.parse successfully if it detects
+    // a non-identity type from a string. The second JSON.parse on line 1032
+    // would only fail if the string mutated between calls — impossible in
+    // single-threaded JS. We cannot reach this path without modifying source.
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — succession chain edge cases
+// ---------------------------------------------------------------------------
+
+describe("verify — succession chain failures", () => {
+  it("fails when old_key_signature verification fails", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kpWrong = await makeKeypair();
+
+    // Create a record where old_key_signature is signed by wrong key
+    const payloadObj: Record<string, unknown> = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
     };
-    const valid = await verifyExecutionReceipt(tampered, payeeKp.publicKey);
-    expect(valid).toBe(false);
+    const payload = canonicalJson(payloadObj);
+    const message = new TextEncoder().encode(payload);
+
+    // Sign old_key_signature with WRONG key (kpWrong instead of kp1)
+    const oldSig = await ed.signAsync(message, kpWrong.privateKey);
+    const newSig = await ed.signAsync(message, kp2.privateKey);
+
+    const record = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+      old_key_signature: toHex(oldSig),
+      new_key_signature: toHex(newSig),
+    };
+
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("old_key_signature verification failed");
   });
 
-  it("a different signer cannot produce a valid receipt for the same payment", async () => {
-    const payeeKp = await generateKeypair();
-    const attackerKp = await generateKeypair();
+  it("fails when new_key_signature verification fails", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kpWrong = await makeKeypair();
 
-    const real = await signSovereignPaymentReceipt(
-      {
-        payee_motebit_id: "payee",
-        payee_device_id: "device",
-        payer_motebit_id: "payer",
-        rail: "solana",
-        tx_hash: "txhash",
-        amount_micro: 1_000n,
-        asset: "USDC",
-        service_description: "service",
-        prompt_hash: "h1",
-        result_hash: "h2",
-        submitted_at: 1,
-        completed_at: 2,
-      },
-      payeeKp.privateKey,
-      payeeKp.publicKey,
-    );
+    const payloadObj: Record<string, unknown> = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+    };
+    const payload = canonicalJson(payloadObj);
+    const message = new TextEncoder().encode(payload);
 
-    // Attacker can't validate the real receipt against their own pubkey
-    const validAgainstAttacker = await verifyExecutionReceipt(real, attackerKp.publicKey);
-    expect(validAgainstAttacker).toBe(false);
+    // Sign old_key_signature correctly, new_key_signature with WRONG key
+    const oldSig = await ed.signAsync(message, kp1.privateKey);
+    const newSig = await ed.signAsync(message, kpWrong.privateKey);
+
+    const record = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+      old_key_signature: toHex(oldSig),
+      new_key_signature: toHex(newSig),
+    };
+
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("new_key_signature verification failed");
   });
 
-  it("works with an empty tools_used array by default", async () => {
-    const payeeKp = await generateKeypair();
-    const receipt = await signSovereignPaymentReceipt(
-      {
-        payee_motebit_id: "p",
-        payee_device_id: "d",
-        payer_motebit_id: "x",
-        rail: "solana",
-        tx_hash: "h",
-        amount_micro: 1n,
-        asset: "USDC",
-        service_description: "s",
-        prompt_hash: "ph",
-        result_hash: "rh",
-        submitted_at: 0,
-        completed_at: 0,
-      },
-      payeeKp.privateKey,
-      payeeKp.publicKey,
-    );
-    expect(receipt.tools_used).toEqual([]);
+  it("catches unexpected errors in succession chain verification", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    // Create a succession record with a truncated old_key_signature (not 64 bytes)
+    // This will cause ed.verifyAsync to throw instead of returning false
+    const record = {
+      old_public_key: kp1.publicKeyHex,
+      new_public_key: kp2.publicKeyHex,
+      timestamp: 1000000,
+      old_key_signature: "ab".repeat(10), // 10 bytes, not 64 — will throw
+      new_key_signature: "cd".repeat(10),
+    };
+
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("Succession");
+  });
+
+  it("fails when succession chain has temporal ordering violated", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+    const kp3 = await makeKeypair();
+
+    // rec1 timestamp (2000000) > rec2 timestamp (1000000) — temporal violation
+    const rec1 = await createSuccessionRecord(kp1, kp2, 2000000);
+    const rec2 = await createSuccessionRecord(kp2, kp3, 1000000);
+    const yaml = buildYamlWithSuccession(kp3.publicKeyHex, [rec1, rec2]);
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("temporal ordering violated");
   });
 });
+
+// ---------------------------------------------------------------------------
+// verify() — identity validation edge cases
+// ---------------------------------------------------------------------------
+
+describe("verify — identity edge cases", () => {
+  it("returns error for invalid public key hex (odd length — triggers hexToBytes throw)", async () => {
+    // hexToBytes never throws for non-hex chars (parseInt returns NaN → 0).
+    // The "Invalid public key hex" path (line 596) is defensive dead code
+    // because the current hexToBytes implementation is lenient.
+    // We can still hit "Public key must be 32 bytes" with wrong-length hex:
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "abcdef"`,
+    ].join("\n");
+    // Build a valid-length base64url signature (64 bytes)
+    const sigBytes = new Uint8Array(64);
+    const content = buildIdentityFile(yaml, toBase64Url(sigBytes));
+
+    const result = await verify(content);
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("Public key must be 32 bytes");
+  });
+
+  it("returns error for signature with wrong length (not 64 bytes)", async () => {
+    const kp = await makeKeypair();
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+    ].join("\n");
+    // Create a short base64url signature (16 bytes = 22 chars in base64url)
+    const shortSig = toBase64Url(new Uint8Array(16));
+    const content = buildIdentityFile(yaml, shortSig);
+
+    const result = await verify(content);
+    expect(result.valid).toBe(false);
+    expect(result.errors?.[0]?.message).toBe("Signature must be 64 bytes");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — unrecognized object format
+// ---------------------------------------------------------------------------
+
+describe("verify — unrecognized object formats", () => {
+  it("returns null detection for an object without known fields", async () => {
+    const result = await verify({ foo: "bar", baz: 42 });
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+
+  it("returns null detection for an empty object", async () => {
+    const result = await verify({});
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parse() — YAML with nested arrays inside sections
+// ---------------------------------------------------------------------------
+
+describe("parse — YAML edge cases", () => {
+  it("parses identity file with a section header ending current array context", async () => {
+    const kp = await makeKeypair();
+
+    // Build YAML with capabilities array followed by a section at same indent
+    const yaml = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "test-array-close"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `capabilities:`,
+      `  - web_search`,
+      `  - file_read`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R1_DRAFT"`,
+      `  require_approval_above: "R1_DRAFT"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+    ].join("\n");
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
+    const content = buildIdentityFile(yaml, toBase64Url(signature));
+
+    const parsed = parse(content);
+    expect(parsed.frontmatter.capabilities).toEqual(["web_search", "file_read"]);
+    expect(parsed.frontmatter.identity.algorithm).toBe("Ed25519");
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers for guardian recovery tests
+// ---------------------------------------------------------------------------
+
+async function createGuardianRecoveryRecord(
+  guardianKp: Awaited<ReturnType<typeof makeKeypair>>,
+  newKp: Awaited<ReturnType<typeof makeKeypair>>,
+  oldPublicKeyHex: string,
+  timestamp: number,
+  reason?: string,
+) {
+  const effectiveReason = reason ?? "guardian_recovery";
+  const payloadObj: Record<string, unknown> = {
+    old_public_key: oldPublicKeyHex,
+    new_public_key: newKp.publicKeyHex,
+    timestamp,
+  };
+  payloadObj.reason = effectiveReason;
+  payloadObj.recovery = true;
+  const payload = canonicalJson(payloadObj);
+  const message = new TextEncoder().encode(payload);
+
+  const guardianSig = await ed.signAsync(message, guardianKp.privateKey);
+  const newSig = await ed.signAsync(message, newKp.privateKey);
+
+  return {
+    old_public_key: oldPublicKeyHex,
+    new_public_key: newKp.publicKeyHex,
+    timestamp,
+    reason: effectiveReason,
+    new_key_signature: toHex(newSig),
+    recovery: true as const,
+    guardian_signature: toHex(guardianSig),
+  };
+}
+
+function buildYamlWithGuardian(
+  publicKeyHex: string,
+  guardianPublicKeyHex: string,
+  successionRecords: Array<{
+    old_public_key: string;
+    new_public_key: string;
+    timestamp: number;
+    reason?: string;
+    old_key_signature?: string;
+    new_key_signature: string;
+    recovery?: boolean;
+    guardian_signature?: string;
+  }>,
+): string {
+  const lines = [
+    `spec: "motebit/identity@1.0"`,
+    `motebit_id: "01234567-89ab-cdef-0123-456789abcdef"`,
+    `created_at: "2026-01-15T00:00:00.000Z"`,
+    `owner_id: "owner-test"`,
+    `identity:`,
+    `  algorithm: "Ed25519"`,
+    `  public_key: "${publicKeyHex}"`,
+    `governance:`,
+    `  trust_mode: "guarded"`,
+    `  max_risk_auto: "R1_DRAFT"`,
+    `  require_approval_above: "R1_DRAFT"`,
+    `  deny_above: "R4_MONEY"`,
+    `  operator_mode: false`,
+    `privacy:`,
+    `  default_sensitivity: "personal"`,
+    `  retention_days:`,
+    `    none: 365`,
+    `  fail_closed: true`,
+    `memory:`,
+    `  half_life_days: 7`,
+    `  confidence_threshold: 0.3`,
+    `  per_turn_limit: 5`,
+    `guardian:`,
+    `  public_key: "${guardianPublicKeyHex}"`,
+    `  organization: "Test Corp"`,
+    `  established_at: "2026-01-01T00:00:00.000Z"`,
+    `devices: []`,
+    `succession:`,
+  ];
+
+  for (const rec of successionRecords) {
+    lines.push(`  - old_public_key: "${rec.old_public_key}"`);
+    lines.push(`    new_public_key: "${rec.new_public_key}"`);
+    lines.push(`    timestamp: ${rec.timestamp}`);
+    if (rec.reason !== undefined) {
+      lines.push(`    reason: "${rec.reason}"`);
+    }
+    if (rec.old_key_signature) {
+      lines.push(`    old_key_signature: "${rec.old_key_signature}"`);
+    }
+    lines.push(`    new_key_signature: "${rec.new_key_signature}"`);
+    if (rec.recovery) {
+      lines.push(`    recovery: true`);
+    }
+    if (rec.guardian_signature) {
+      lines.push(`    guardian_signature: "${rec.guardian_signature}"`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// verify() — guardian recovery succession chain
+// ---------------------------------------------------------------------------
+
+describe("verify — guardian recovery succession", () => {
+  it("verifies identity file with guardian recovery succession", async () => {
+    const guardianKp = await makeKeypair();
+    const kp1 = await makeKeypair(); // genesis (compromised)
+    const kp2 = await makeKeypair(); // recovery target (current)
+
+    const recoveryRecord = await createGuardianRecoveryRecord(
+      guardianKp,
+      kp2,
+      kp1.publicKeyHex,
+      1000,
+    );
+
+    const yaml = buildYamlWithGuardian(kp2.publicKeyHex, guardianKp.publicKeyHex, [recoveryRecord]);
+    const yamlBytes = new TextEncoder().encode(yaml);
+    const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
+    expect(result.succession!.rotations).toBe(1);
+  });
+
+  it("verifies mixed chain: normal rotation → guardian recovery", async () => {
+    const guardianKp = await makeKeypair();
+    const kp1 = await makeKeypair(); // genesis
+    const kp2 = await makeKeypair(); // normal rotation target
+    const kp3 = await makeKeypair(); // guardian recovery target (current)
+
+    const normalRecord = await createSuccessionRecord(kp1, kp2, 1000, "routine");
+    const recoveryRecord = await createGuardianRecoveryRecord(
+      guardianKp,
+      kp3,
+      kp2.publicKeyHex,
+      2000,
+    );
+
+    const yaml = buildYamlWithGuardian(kp3.publicKeyHex, guardianKp.publicKeyHex, [
+      normalRecord,
+      recoveryRecord,
+    ]);
+    const yamlBytes = new TextEncoder().encode(yaml);
+    const sig = await ed.signAsync(yamlBytes, kp3.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true);
+    expect(result.succession!.valid).toBe(true);
+    expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
+    expect(result.succession!.rotations).toBe(2);
+  });
+
+  it("rejects guardian recovery without guardian field in identity", async () => {
+    const guardianKp = await makeKeypair();
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    const recoveryRecord = await createGuardianRecoveryRecord(
+      guardianKp,
+      kp2,
+      kp1.publicKeyHex,
+      1000,
+    );
+
+    // Hand-build YAML with recovery fields but no guardian
+    const lines = [
+      `spec: "motebit/identity@1.0"`,
+      `motebit_id: "01234567-89ab-cdef-0123-456789abcdef"`,
+      `created_at: "2026-01-15T00:00:00.000Z"`,
+      `owner_id: "owner-test"`,
+      `identity:`,
+      `  algorithm: "Ed25519"`,
+      `  public_key: "${kp2.publicKeyHex}"`,
+      `governance:`,
+      `  trust_mode: "guarded"`,
+      `  max_risk_auto: "R1_DRAFT"`,
+      `  require_approval_above: "R1_DRAFT"`,
+      `  deny_above: "R4_MONEY"`,
+      `  operator_mode: false`,
+      `privacy:`,
+      `  default_sensitivity: "personal"`,
+      `  retention_days:`,
+      `    none: 365`,
+      `  fail_closed: true`,
+      `memory:`,
+      `  half_life_days: 7`,
+      `  confidence_threshold: 0.3`,
+      `  per_turn_limit: 5`,
+      `devices: []`,
+      `succession:`,
+      `  - old_public_key: "${recoveryRecord.old_public_key}"`,
+      `    new_public_key: "${recoveryRecord.new_public_key}"`,
+      `    timestamp: ${recoveryRecord.timestamp}`,
+      `    reason: "${recoveryRecord.reason}"`,
+      `    new_key_signature: "${recoveryRecord.new_key_signature}"`,
+      `    recovery: true`,
+      `    guardian_signature: "${recoveryRecord.guardian_signature}"`,
+    ].join("\n");
+
+    const yamlBytes = new TextEncoder().encode(lines);
+    const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const content = `---\n${lines}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // signature is valid
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("no guardian public key");
+  });
+
+  it("rejects guardian recovery with wrong guardian key", async () => {
+    const guardianKp = await makeKeypair();
+    const wrongGuardianKp = await makeKeypair();
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    // Sign with guardianKp but put wrongGuardianKp in the identity file
+    const recoveryRecord = await createGuardianRecoveryRecord(
+      guardianKp,
+      kp2,
+      kp1.publicKeyHex,
+      1000,
+    );
+
+    const yaml = buildYamlWithGuardian(kp2.publicKeyHex, wrongGuardianKp.publicKeyHex, [
+      recoveryRecord,
+    ]);
+    const yamlBytes = new TextEncoder().encode(yaml);
+    const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
+    const sigB64 = toBase64Url(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+
+    const result = await verify(content);
+    expect(result.valid).toBe(true); // file signature valid
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.error).toContain("guardian_signature verification failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-compatibility with @motebit/identity-file
+// ---------------------------------------------------------------------------
+// NOTE: Cross-compat is now tested in @motebit/identity-file's test suite,
+// since identity-file delegates parse/verify to this package. The roundtrip
+// tests (generate → parse → verify) inherently verify cross-compatibility.

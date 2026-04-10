@@ -16,20 +16,21 @@ import type {
   AgentServiceListing,
   MotebitId,
   ExecutionReceipt,
+  Semiring,
 } from "@motebit/protocol";
-import { AgentTrustLevel } from "@motebit/protocol";
-import { trustLevelToScore } from "./trust-algebra.js";
-import { WeightedDigraph } from "./graph.js";
 import {
+  AgentTrustLevel,
+  trustLevelToScore,
+  WeightedDigraph,
   TrustSemiring,
   CostSemiring,
   LatencySemiring,
   ReliabilitySemiring,
   RegulatoryRiskSemiring,
   recordSemiring,
-} from "./semiring.js";
-import type { Semiring } from "./semiring.js";
-import { optimalPaths, optimalPathTrace } from "./traversal.js";
+  optimalPaths,
+  optimalPathTrace,
+} from "@motebit/protocol";
 import type { Annotated } from "./provenance.js";
 import { annotatedSemiring } from "./provenance.js";
 

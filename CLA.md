@@ -34,7 +34,7 @@ You are not expected to provide support for your contributions, except to the ex
 
 You understand and agree that your contributions will be licensed under the project's applicable license:
 
-- Contributions to `spec/`, `packages/sdk/`, `packages/verify/`, `packages/create-motebit/`, and `packages/github-action/` are licensed under the **MIT License**.
+- Contributions to `spec/`, `packages/sdk/`, `packages/crypto/`, `packages/create-motebit/`, and `packages/github-action/` are licensed under the **MIT License**.
 - All other contributions are licensed under the **Business Source License 1.1**, which converts to the Apache License, Version 2.0 on the Change Date specified in the LICENSE file.
 
 ## 7. Relicensing

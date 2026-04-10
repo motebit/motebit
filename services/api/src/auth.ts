@@ -1,4 +1,4 @@
-import { verifySignedToken, hexToBytes } from "@motebit/crypto";
+import { verifySignedToken, hexToBytes } from "@motebit/encryption";
 import { IdentityManager } from "@motebit/core-identity";
 import { createLogger } from "./logger.js";
 

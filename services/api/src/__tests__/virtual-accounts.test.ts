@@ -13,7 +13,7 @@ import {
   canonicalJson,
   verify,
   fromBase64Url,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 
 const API_TOKEN = "test-token";

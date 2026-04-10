@@ -13,7 +13,12 @@ import type { RelayIdentity } from "../federation.js";
 import type { SyncRelay } from "../index.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, bytesToHex, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
+import {
+  generateKeypair,
+  bytesToHex,
+  signExecutionReceipt,
+  hash as sha256,
+} from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import {
   AUTH_HEADER as AUTH,

@@ -14,7 +14,7 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import { AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { computeReputationScore } from "@motebit/policy";
-import { createSignedToken, verifyExecutionReceipt, hexToBytes } from "@motebit/crypto";
+import { createSignedToken, verifyExecutionReceipt, hexToBytes } from "@motebit/encryption";
 import { McpServerAdapter, wireServerDeps } from "@motebit/mcp-server";
 import type { McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
 import { type CliConfig, COMMANDS } from "./args.js";
@@ -33,7 +33,7 @@ import {
   PlanSyncEngine,
   HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
-import { deriveSyncEncryptionKey } from "@motebit/crypto";
+import { deriveSyncEncryptionKey } from "@motebit/encryption";
 import { parseInterval } from "./intervals.js";
 
 export interface ReplContext {

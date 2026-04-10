@@ -5,7 +5,7 @@ import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
 import { AgentTaskStatus } from "@motebit/sdk";
 import type { AgentTask } from "@motebit/sdk";
-import { generateKeypair, verifyExecutionReceipt } from "@motebit/crypto";
+import { generateKeypair, verifyExecutionReceipt } from "@motebit/encryption";
 
 // === Mock Provider ===
 

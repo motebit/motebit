@@ -1,6 +1,6 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
-import { encrypt, decrypt, type EncryptedPayload } from "@motebit/crypto";
+import { encrypt, decrypt, type EncryptedPayload } from "@motebit/encryption";
 
 /**
  * Provides versioned encryption keys for key rotation.

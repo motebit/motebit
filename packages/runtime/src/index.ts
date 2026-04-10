@@ -73,7 +73,11 @@ import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
-import { verifyExecutionReceipt, signSovereignPaymentReceipt, hexToBytes } from "@motebit/crypto";
+import {
+  verifyExecutionReceipt,
+  signSovereignPaymentReceipt,
+  hexToBytes,
+} from "@motebit/encryption";
 import { InMemoryGradientStore } from "./gradient.js";
 import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
@@ -170,7 +174,7 @@ export type {
 } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
-export type { DeletionCertificate } from "@motebit/crypto";
+export type { DeletionCertificate } from "@motebit/encryption";
 export type {
   RenderAdapter,
   RenderFrame,
@@ -736,7 +740,7 @@ export class MotebitRuntime {
         this.credentialManager.issueGradientCredential(priv, pub),
       persistCredential: (vc) =>
         this.credentialManager.persistCredential(
-          vc as import("@motebit/crypto").VerifiableCredential<unknown>,
+          vc as import("@motebit/encryption").VerifiableCredential<unknown>,
         ),
       getSigningKeys: () => this._signingKeys,
     });
@@ -997,6 +1001,76 @@ export class MotebitRuntime {
 
   setDelegationAdapter(adapter: StepDelegationAdapter): void {
     this.planEngine.setDelegationAdapter(adapter);
+  }
+
+  /**
+   * Create a sovereign delegation adapter for relay-free multi-hop delegation (settlement spec §9.1).
+   * Returns null if signing keys or wallet rail are not configured.
+   */
+  createSovereignDelegationAdapter(
+    discoveryUrl: string,
+    opts?: {
+      deviceId?: string;
+      routingStrategy?: "cost" | "quality" | "balanced";
+      maxRetries?: number;
+      authToken?: string | ((audience?: string) => Promise<string>);
+      onDelegationFailure?: (
+        step: import("@motebit/sdk").PlanStep,
+        attempt: number,
+        error: string,
+        failedAgentId?: string,
+      ) => void;
+    },
+  ): StepDelegationAdapter | null {
+    if (!this._signingKeys || !this._solanaWallet) return null;
+
+    const signingKeys = this._signingKeys;
+    const solanaWallet = this._solanaWallet;
+    const deviceId = opts?.deviceId ?? "runtime-default";
+
+    const config = {
+      discoveryUrl,
+      motebitId: this.motebitId,
+      deviceId,
+      signingKeys,
+      walletRail: solanaWallet,
+      authToken: opts?.authToken,
+      routingStrategy: opts?.routingStrategy,
+      maxRetries: opts?.maxRetries,
+      onDelegationFailure: opts?.onDelegationFailure,
+      createSignedToken: async (
+        payload: import("@motebit/encryption").SignedTokenPayload,
+        privateKey: Uint8Array,
+      ): Promise<string> => {
+        const { createSignedToken: create } = await import("@motebit/encryption");
+        return create(payload, privateKey);
+      },
+      verifyReceipt: async (
+        receipt: import("@motebit/sdk").ExecutionReceipt,
+        publicKey: Uint8Array,
+      ): Promise<boolean> => {
+        return verifyExecutionReceipt(
+          receipt as import("@motebit/encryption").SignableReceipt,
+          publicKey,
+        );
+      },
+      hexToBytes,
+      hash: async (data: Uint8Array): Promise<string> => {
+        const { hash: h } = await import("@motebit/encryption");
+        return h(data);
+      },
+    };
+
+    let adapter: StepDelegationAdapter | undefined;
+    return {
+      async delegateStep(...args) {
+        if (!adapter) {
+          const mod = await import("@motebit/planner");
+          adapter = new mod.SovereignDelegationAdapter(config);
+        }
+        return adapter.delegateStep(...args);
+      },
+    };
   }
 
   setCollaborativeAdapter(adapter: CollaborativeDelegationAdapter | undefined): void {

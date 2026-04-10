@@ -28,7 +28,7 @@ async function generateEd25519Keypair(): Promise<{
   privateKey: Uint8Array;
   publicKey: Uint8Array;
 }> {
-  const { generateKeypair } = await import("@motebit/crypto");
+  const { generateKeypair } = await import("@motebit/encryption");
   return generateKeypair();
 }
 
@@ -135,7 +135,7 @@ describe("Gradient credential issuance during housekeeping", () => {
     const gradientCred = creds.find((c) => c.type.includes("AgentGradientCredential"));
     expect(gradientCred).toBeDefined();
 
-    const { verifyVerifiableCredential } = await import("@motebit/crypto");
+    const { verifyVerifiableCredential } = await import("@motebit/encryption");
     const valid = await verifyVerifiableCredential(gradientCred!);
     expect(valid).toBe(true);
   });
@@ -232,7 +232,7 @@ describe("Trust credential issuance on trust transitions", () => {
     const trustCred = creds.find((c) => c.type.includes("AgentTrustCredential"));
     expect(trustCred).toBeDefined();
 
-    const { verifyVerifiableCredential } = await import("@motebit/crypto");
+    const { verifyVerifiableCredential } = await import("@motebit/encryption");
     const valid = await verifyVerifiableCredential(trustCred!);
     expect(valid).toBe(true);
   });
@@ -291,7 +291,7 @@ describe("Peer reputation credential issuance on verified receipts", () => {
     const repCred = creds.find((c) => c.type.includes("AgentReputationCredential"));
     expect(repCred).toBeDefined();
 
-    const { verifyVerifiableCredential } = await import("@motebit/crypto");
+    const { verifyVerifiableCredential } = await import("@motebit/encryption");
     const valid = await verifyVerifiableCredential(repCred!);
     expect(valid).toBe(true);
   });

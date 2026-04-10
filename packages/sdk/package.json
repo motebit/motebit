@@ -1,7 +1,7 @@
 {
   "name": "@motebit/sdk",
   "version": "0.7.0",
-  "description": "Motebit types — protocol (re-exported) + product (state vectors, behavior, rendering, memory graph, AI provider). Zero-dep type vocabulary for the motebit ecosystem.",
+  "description": "Motebit product development kit — shared types, config schemas, normalization, and adapters for Motebit surfaces. Re-exports @motebit/protocol.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,10 +12,10 @@
     }
   },
   "files": [
-    "dist/*.js",
-    "dist/*.js.map",
-    "dist/*.d.ts",
-    "dist/*.d.ts.map",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
     "LICENSE",
     "README.md"
   ],

@@ -18,7 +18,7 @@
  */
 
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
-import { secureErase } from "@motebit/crypto";
+import { secureErase } from "@motebit/encryption";
 import { loadFullConfig } from "../config.js";
 import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
 

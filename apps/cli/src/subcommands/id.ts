@@ -6,7 +6,7 @@
  * path that are already known from the persisted CLI config. Sync.
  */
 
-import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
 
 export function handleId(): void {

@@ -8,7 +8,7 @@ import {
   createSignedToken,
   signExecutionReceipt,
   bytesToHex,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
@@ -2770,7 +2770,7 @@ describe("POST /api/v1/agents/:motebitId/rotate-key", () => {
   });
 
   it("accepts a valid key succession record", async () => {
-    const { signKeySuccession } = await import("@motebit/crypto");
+    const { signKeySuccession } = await import("@motebit/encryption");
     const oldKp = await generateKeypair();
     const newKp = await generateKeypair();
 

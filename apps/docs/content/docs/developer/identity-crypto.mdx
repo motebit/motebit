@@ -73,7 +73,7 @@ All cryptographic operations use Web Crypto API or `@noble/hashes` and `@noble/c
 
 ## Verification
 
-Anyone can verify a motebit's identity. The `@motebit/verify` package has zero monorepo dependencies — only `@noble/ed25519`.
+Anyone can verify a motebit's identity. The `@motebit/crypto` package has zero monorepo dependencies — only `@noble/ed25519`.
 
 ```bash
 # CLI verification
@@ -82,7 +82,7 @@ npx create-motebit verify motebit.md
 
 ```typescript
 // Programmatic verification
-import { verify } from "@motebit/verify";
+import { verify } from "@motebit/crypto";
 import fs from "node:fs";
 
 const result = await verify(fs.readFileSync("motebit.md", "utf-8"));

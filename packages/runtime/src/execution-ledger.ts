@@ -17,7 +17,7 @@ import type {
   PlanStoreAdapter,
   AuditLogSink,
 } from "@motebit/sdk";
-import { sign, toBase64Url, hexToBytes } from "@motebit/crypto";
+import { sign, toBase64Url, hexToBytes } from "@motebit/encryption";
 import type { EventStore } from "@motebit/event-log";
 
 // === Canonical JSON ===

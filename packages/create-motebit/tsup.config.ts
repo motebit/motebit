@@ -7,8 +7,8 @@ const require = createRequire(import.meta.url);
 
 const pkg = JSON.parse(readFileSync("package.json", "utf-8"));
 
-// Resolve @motebit/verify's package.json by finding its main entry and going up
-const verifyEntry = require.resolve("@motebit/verify");
+// Resolve @motebit/crypto's package.json by finding its main entry and going up
+const verifyEntry = require.resolve("@motebit/crypto");
 const verifyPkg = JSON.parse(
   readFileSync(join(dirname(verifyEntry), "..", "package.json"), "utf-8"),
 );

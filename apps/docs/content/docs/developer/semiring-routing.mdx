@@ -3,7 +3,7 @@ title: Semiring Routing
 description: Algebraic routing over agent networks — one graph, one algorithm, swap the semiring, different answer.
 ---
 
-Agent network routing is algebraic, not ad-hoc. The `@motebit/semiring` package provides a generic `Semiring<T>` interface, concrete semirings for different routing concerns, a `WeightedDigraph<T>`, and two traversal algorithms that answer every routing query the system needs. Most trusted path, cheapest pipeline, reachability, and all of the above simultaneously — by swapping the semiring.
+Agent network routing is algebraic, not ad-hoc. The `@motebit/protocol` package provides a generic `Semiring<T>` interface, concrete semirings for different routing concerns, a `WeightedDigraph<T>`, and two traversal algorithms that answer every routing query the system needs. Most trusted path, cheapest pipeline, reachability, and all of the above simultaneously — by swapping the semiring.
 
 ## What a semiring is
 
@@ -38,7 +38,7 @@ import {
   CostSemiring,
   BooleanSemiring,
   RegulatoryRiskSemiring,
-} from "@motebit/semiring";
+} from "@motebit/protocol";
 
 // Trust: best alternative (max), chains multiply
 TrustSemiring.add(0.8, 0.6);  // 0.8  (max — pick the better route)
@@ -62,7 +62,7 @@ To optimize multiple concerns simultaneously, combine semirings:
 Pairs two semirings into a tuple. Operations apply component-wise.
 
 ```typescript
-import { productSemiring, TrustSemiring, CostSemiring } from "@motebit/semiring";
+import { productSemiring, TrustSemiring, CostSemiring } from "@motebit/protocol";
 
 const TrustCost = productSemiring(TrustSemiring, CostSemiring);
 // Semiring<readonly [number, number]>
@@ -83,7 +83,7 @@ import {
   LatencySemiring,
   ReliabilitySemiring,
   RegulatoryRiskSemiring,
-} from "@motebit/semiring";
+} from "@motebit/protocol";
 
 const RouteWeightSemiring = recordSemiring({
   trust: TrustSemiring,
@@ -102,7 +102,7 @@ One graph traversal computes trust, cost, latency, reliability, and regulatory r
 Transform a semiring through an isomorphism — useful for branded types or unit conversions:
 
 ```typescript
-import { mappedSemiring, CostSemiring } from "@motebit/semiring";
+import { mappedSemiring, CostSemiring } from "@motebit/protocol";
 
 const CentsSemiring = mappedSemiring(
   CostSemiring,
@@ -118,7 +118,7 @@ const CentsSemiring = mappedSemiring(
 A directed graph parameterized by a semiring. Nodes are string IDs (typically `motebit_id` values). Edges carry semiring-typed weights.
 
 ```typescript
-import { WeightedDigraph, TrustSemiring } from "@motebit/semiring";
+import { WeightedDigraph, TrustSemiring } from "@motebit/protocol";
 
 const graph = new WeightedDigraph(TrustSemiring);
 graph.addNode("alice");
@@ -135,7 +135,7 @@ graph.setEdge("alice", "carol", 0.5);  // Alice trusts Carol directly at 0.5
 `optimalPaths` computes the optimal semiring value from a source to every reachable node. This is generalized Bellman-Ford — relax edges using `add` (choice) and `mul` (composition).
 
 ```typescript
-import { optimalPaths } from "@motebit/semiring";
+import { optimalPaths } from "@motebit/protocol";
 
 const paths = optimalPaths(graph, "alice");
 // paths.get("bob")   → 0.9   (direct)
@@ -151,7 +151,7 @@ Complexity: O(V * E). Early termination when no values change.
 `transitiveClosure` computes the optimal semiring value between every pair of nodes. Used to pre-compute the entire trust network.
 
 ```typescript
-import { transitiveClosure } from "@motebit/semiring";
+import { transitiveClosure } from "@motebit/protocol";
 
 const closure = transitiveClosure(graph);
 // closure.get("alice")?.get("carol") → 0.72
@@ -165,7 +165,7 @@ Complexity: O(V^3). Use `optimalPaths` for single-source queries on large graphs
 `optimalPathTrace` returns both the optimal value and the actual path (sequence of node IDs):
 
 ```typescript
-import { optimalPathTrace } from "@motebit/semiring";
+import { optimalPathTrace } from "@motebit/protocol";
 
 const result = optimalPathTrace(graph, "alice", "carol");
 // result.value → 0.72
@@ -352,7 +352,7 @@ const policy: RoutingPolicy = {
 Adding a new routing dimension requires only a new semiring definition — zero new algorithms:
 
 ```typescript
-import type { Semiring } from "@motebit/semiring";
+import type { Semiring } from "@motebit/protocol";
 
 // Energy cost: accumulates along chains, pick the greenest route
 const EnergySemiring: Semiring<number> = {

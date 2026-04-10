@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/crypto";
+import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
 

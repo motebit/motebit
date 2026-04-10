@@ -13,8 +13,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { verifyIdentityFile } from "@motebit/identity-file";
-import { verifyVerifiableCredential, verifyVerifiablePresentation } from "@motebit/crypto";
-import type { VerifiableCredential, VerifiablePresentation } from "@motebit/crypto";
+import { verifyVerifiableCredential, verifyVerifiablePresentation } from "@motebit/encryption";
+import type { VerifiableCredential, VerifiablePresentation } from "@motebit/encryption";
 
 /** Try to parse JSON from a string, returning null on failure. */
 function tryParseJson(text: string): unknown {

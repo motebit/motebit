@@ -27,7 +27,7 @@
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/render-engine": "workspace:*",
-    "@motebit/crypto": "workspace:*",
+    "@motebit/encryption": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/policy": "workspace:*",

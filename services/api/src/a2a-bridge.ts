@@ -15,7 +15,7 @@
 
 import type { Hono } from "hono";
 import type { DatabaseDriver } from "@motebit/persistence";
-import { hexPublicKeyToDidKey } from "@motebit/crypto";
+import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 
 // ---------------------------------------------------------------------------

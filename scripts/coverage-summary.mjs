@@ -12,7 +12,7 @@ const thresholds = {
   "packages/market": 100,
   "packages/semiring": 100,
   "packages/policy": 96,
-  "packages/verify": 90,
+  "packages/crypto": 90,
   "packages/identity-file": 96,
   "packages/behavior-engine": 100,
   "packages/state-vector": 97,

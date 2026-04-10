@@ -131,7 +131,6 @@ export interface AgentTrustRecord {
 }
 
 // ── Trust Level Transitions ──────────────────────────────────────────
-// Types only — implementation moved to @motebit/semiring (BSL).
 
 /** Thresholds for automatic trust level promotion/demotion. */
 export interface TrustTransitionThresholds {
@@ -1309,3 +1308,38 @@ export interface ApprovalStoreAdapter {
   /** Set quorum metadata on a pending approval item. */
   setQuorum(approvalId: string, required: number, approvers: string[]): void;
 }
+
+// ── Semiring Algebra (protocol-level) ──────────────────────────────
+// The language of trust: algebra, graph, traversal, scoring constants.
+// Any compatible implementation must use the same algebraic semantics.
+
+export type { Semiring } from "./semiring.js";
+export {
+  TrustSemiring,
+  CostSemiring,
+  LatencySemiring,
+  BottleneckSemiring,
+  ReliabilitySemiring,
+  BooleanSemiring,
+  RegulatoryRiskSemiring,
+  productSemiring,
+  recordSemiring,
+  mappedSemiring,
+} from "./semiring.js";
+
+export type { Edge } from "./graph.js";
+export { WeightedDigraph } from "./graph.js";
+
+export { optimalPaths, optimalPath, transitiveClosure, optimalPathTrace } from "./traversal.js";
+
+export {
+  TRUST_LEVEL_SCORES,
+  trustLevelToScore,
+  TRUST_ZERO,
+  TRUST_ONE,
+  trustAdd,
+  trustMultiply,
+  composeTrustChain,
+  joinParallelRoutes,
+  DEFAULT_TRUST_THRESHOLDS,
+} from "./trust-algebra.js";

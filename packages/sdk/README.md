@@ -25,7 +25,7 @@ Everything from `@motebit/protocol` (re-exported), plus:
 ## Related
 
 - [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — network protocol types (MIT, zero deps)
-- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — signature verification (MIT, zero deps)
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — signature verification (MIT, zero deps)
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
 
 ## License

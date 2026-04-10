@@ -159,7 +159,7 @@ describe("MotebitRuntime — sovereign Solana wallet (inline config path)", () =
   });
 
   it("builds a rail from inline config when signing keys are present", async () => {
-    const { generateKeypair } = await import("@motebit/crypto");
+    const { generateKeypair } = await import("@motebit/encryption");
     const kp = await generateKeypair();
 
     const runtime = new MotebitRuntime(

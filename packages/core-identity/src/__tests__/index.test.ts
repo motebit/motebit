@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { IdentityManager, InMemoryIdentityStorage, rotateIdentityKeys } from "../index";
 import type { DeviceRegistration, IdentityStorage } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
-import { generateKeypair } from "@motebit/crypto";
+import { generateKeypair } from "@motebit/encryption";
 
 // ---------------------------------------------------------------------------
 // InMemoryIdentityStorage

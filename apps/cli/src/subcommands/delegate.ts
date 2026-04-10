@@ -51,6 +51,33 @@ async function handleDelegatePlan(
   const storage = buildStorageAdapters(moteDb);
   const governance = deriveGovernanceForRuntime(loadFullConfig().governance);
 
+  // For sovereign mode, load identity keys and configure Solana wallet
+  let signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
+  let solanaConfig: { rpcUrl: string } | undefined;
+  if (config.sovereign) {
+    const fullConfig = loadFullConfig();
+    const { fromHex, promptPassphrase, decryptPrivateKey } = await import("../identity.js");
+
+    let privateKey: Uint8Array | null = null;
+    if (fullConfig.cli_private_key) {
+      privateKey = fromHex(fullConfig.cli_private_key);
+    } else if (fullConfig.cli_encrypted_key) {
+      const passphrase = await promptPassphrase("Passphrase (for sovereign wallet): ");
+      const keyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+      privateKey = fromHex(keyHex);
+    }
+
+    if (!privateKey) {
+      console.error("Sovereign delegation requires identity keys. Run `motebit id` to check.");
+      process.exit(1);
+    }
+
+    const ed = await import("@noble/ed25519");
+    const publicKey = await ed.getPublicKeyAsync(privateKey);
+    signingKeys = { privateKey, publicKey };
+    solanaConfig = { rpcUrl: config.solanaRpcUrl ?? "https://api.mainnet-beta.solana.com" };
+  }
+
   const runtime = new MotebitRuntime(
     {
       motebitId,
@@ -62,6 +89,8 @@ async function handleDelegatePlan(
       },
       memoryGovernance: governance.memoryGovernance,
       taskRouter: PLANNING_TASK_ROUTER,
+      ...(signingKeys ? { signingKeys } : {}),
+      ...(solanaConfig ? { solana: solanaConfig } : {}),
     },
     { storage, renderer: new NullRenderer(), tools: registry },
   );
@@ -69,119 +98,150 @@ async function handleDelegatePlan(
   await runtime.init();
   runtime.setProvider(provider);
 
-  // HTTP-polling delegation adapter with retry logic matching RelayDelegationAdapter
-  const MAX_RETRIES = 2;
-  const httpDelegationAdapter: StepDelegationAdapter = {
-    async delegateStep(
+  // Enable credential publishing to relay (sovereign trust → network trust bridge).
+  // The relay is used for discovery; credentials published here feed the routing graph.
+  const authTokenFactory = async (aud = "task:submit"): Promise<string> => {
+    const h = await getRelayAuthHeaders(config, { aud, json: true });
+    return (h["Authorization"] ?? "").replace("Bearer ", "");
+  };
+  runtime.enableInteractiveDelegation({ syncUrl: relayUrl, authToken: authTokenFactory });
+
+  // Sovereign delegation: pay agents directly via Solana wallet (pattern 9.1)
+  if (config.sovereign) {
+    const sovereignAdapter = runtime.createSovereignDelegationAdapter(relayUrl, {
+      authToken: async (aud?: string) => {
+        const h = await getRelayAuthHeaders(config, { aud: aud ?? "market:query", json: true });
+        return (h["Authorization"] ?? "").replace("Bearer ", "");
+      },
+      routingStrategy: config.routingStrategy,
+      onDelegationFailure: (_step, attempt, error) => {
+        console.log(`  ✗ Sovereign attempt ${attempt + 1} failed: ${error}`);
+      },
+    });
+    if (!sovereignAdapter) {
+      console.error("Sovereign delegation requires identity keys and a configured Solana wallet.");
+      console.error("Run `motebit wallet` to check wallet configuration.");
+      process.exit(1);
+    }
+    runtime.setLocalCapabilities([]);
+    runtime.setDelegationAdapter(sovereignAdapter);
+  } else {
+    // HTTP-polling delegation adapter with retry logic matching RelayDelegationAdapter
+    const MAX_RETRIES = 2;
+    const httpDelegationAdapter: StepDelegationAdapter = {
+      async delegateStep(
+        step: PlanStep,
+        timeoutMs: number,
+        onTaskSubmitted?: (taskId: string) => void,
+      ): Promise<DelegatedStepResult> {
+        const excludeAgents: string[] = [];
+        let lastError: Error | undefined;
+
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            const result = await attemptDelegation(
+              step,
+              timeoutMs,
+              excludeAgents,
+              attempt === 0 ? onTaskSubmitted : undefined,
+            );
+            return result;
+          } catch (err: unknown) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            // Extract failed agent ID from receipt if available
+            const failedId = (lastError as { failedAgentId?: string }).failedAgentId;
+            if (failedId) excludeAgents.push(failedId);
+            // Don't retry non-retryable errors (submission failures, payment required)
+            if (
+              lastError.message.includes("Relay task submission failed") ||
+              lastError.message.includes("HTTP 402")
+            ) {
+              break;
+            }
+            if (attempt < MAX_RETRIES) {
+              console.log(
+                `  ↻ Retrying step "${step.description}" (attempt ${attempt + 2}/${MAX_RETRIES + 1})`,
+              );
+            }
+          }
+        }
+        throw new Error(
+          `Delegation failed after ${Math.min(excludeAgents.length, MAX_RETRIES) + 1} attempt(s): ${lastError?.message ?? "unknown"}`,
+          { cause: lastError },
+        );
+      },
+    };
+
+    async function attemptDelegation(
       step: PlanStep,
       timeoutMs: number,
+      excludeAgents: string[],
       onTaskSubmitted?: (taskId: string) => void,
     ): Promise<DelegatedStepResult> {
-      const excludeAgents: string[] = [];
-      let lastError: Error | undefined;
+      const body: Record<string, unknown> = {
+        prompt: step.prompt,
+        submitted_by: motebitId,
+        required_capabilities: step.required_capabilities,
+        step_id: step.step_id,
+        routing_strategy: config.routingStrategy,
+      };
+      if (excludeAgents.length > 0) body.exclude_agents = excludeAgents;
 
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
+        method: "POST",
+        headers: { ...authHeaders, "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify(body),
+      });
+
+      if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
+      }
+
+      const taskResp = (await resp.json()) as { task_id: string };
+      const taskId = taskResp.task_id;
+      onTaskSubmitted?.(taskId);
+
+      // Poll for result
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await new Promise<void>((r) => setTimeout(r, 2000));
         try {
-          const result = await attemptDelegation(
-            step,
-            timeoutMs,
-            excludeAgents,
-            attempt === 0 ? onTaskSubmitted : undefined,
-          );
-          return result;
-        } catch (err: unknown) {
-          lastError = err instanceof Error ? err : new Error(String(err));
-          // Extract failed agent ID from receipt if available
-          const failedId = (lastError as { failedAgentId?: string }).failedAgentId;
-          if (failedId) excludeAgents.push(failedId);
-          // Don't retry non-retryable errors (submission failures, payment required)
-          if (
-            lastError.message.includes("Relay task submission failed") ||
-            lastError.message.includes("HTTP 402")
-          ) {
-            break;
-          }
-          if (attempt < MAX_RETRIES) {
-            console.log(
-              `  ↻ Retrying step "${step.description}" (attempt ${attempt + 2}/${MAX_RETRIES + 1})`,
-            );
-          }
-        }
-      }
-      throw new Error(
-        `Delegation failed after ${Math.min(excludeAgents.length, MAX_RETRIES) + 1} attempt(s): ${lastError?.message ?? "unknown"}`,
-        { cause: lastError },
-      );
-    },
-  };
-
-  async function attemptDelegation(
-    step: PlanStep,
-    timeoutMs: number,
-    excludeAgents: string[],
-    onTaskSubmitted?: (taskId: string) => void,
-  ): Promise<DelegatedStepResult> {
-    const body: Record<string, unknown> = {
-      prompt: step.prompt,
-      submitted_by: motebitId,
-      required_capabilities: step.required_capabilities,
-      step_id: step.step_id,
-      routing_strategy: config.routingStrategy,
-    };
-    if (excludeAgents.length > 0) body.exclude_agents = excludeAgents;
-
-    const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
-      method: "POST",
-      headers: { ...authHeaders, "Idempotency-Key": crypto.randomUUID() },
-      body: JSON.stringify(body),
-    });
-
-    if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
-    }
-
-    const taskResp = (await resp.json()) as { task_id: string };
-    const taskId = taskResp.task_id;
-    onTaskSubmitted?.(taskId);
-
-    // Poll for result
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      await new Promise<void>((r) => setTimeout(r, 2000));
-      try {
-        const pollResp = await fetch(`${relayUrl}/agent/${motebitId}/task/${taskId}`, {
-          headers: authHeaders,
-        });
-        if (!pollResp.ok) continue;
-        const data = (await pollResp.json()) as {
-          receipt: ExecutionReceipt | null;
-        };
-        if (data.receipt) {
-          if (data.receipt.status !== "completed") {
-            const err = new Error(`Delegated step ${data.receipt.status}: ${data.receipt.result}`);
-            (err as { failedAgentId?: string }).failedAgentId = data.receipt.motebit_id;
-            throw err;
-          }
-          return {
-            step_id: step.step_id,
-            task_id: taskId,
-            receipt: data.receipt,
-            result_text: data.receipt.result,
+          const pollResp = await fetch(`${relayUrl}/agent/${motebitId}/task/${taskId}`, {
+            headers: authHeaders,
+          });
+          if (!pollResp.ok) continue;
+          const data = (await pollResp.json()) as {
+            receipt: ExecutionReceipt | null;
           };
+          if (data.receipt) {
+            if (data.receipt.status !== "completed") {
+              const err = new Error(
+                `Delegated step ${data.receipt.status}: ${data.receipt.result}`,
+              );
+              (err as { failedAgentId?: string }).failedAgentId = data.receipt.motebit_id;
+              throw err;
+            }
+            return {
+              step_id: step.step_id,
+              task_id: taskId,
+              receipt: data.receipt,
+              result_text: data.receipt.result,
+            };
+          }
+        } catch (err) {
+          if (err instanceof Error && (err as { failedAgentId?: string }).failedAgentId) throw err;
+          // Network error — keep polling
         }
-      } catch (err) {
-        if (err instanceof Error && (err as { failedAgentId?: string }).failedAgentId) throw err;
-        // Network error — keep polling
       }
+      throw new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`);
     }
-    throw new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`);
-  }
 
-  // Wire delegation: empty local capabilities forces all steps to delegate to the network
-  runtime.setLocalCapabilities([]);
-  runtime.setDelegationAdapter(httpDelegationAdapter);
+    // Wire relay delegation: empty local capabilities forces all steps to delegate to the network
+    runtime.setLocalCapabilities([]);
+    runtime.setDelegationAdapter(httpDelegationAdapter);
+  } // end else (relay mode)
 
   // Execute plan
   const goalId = crypto.randomUUID();

@@ -35,7 +35,7 @@ import {
   secureErase,
   signExecutionReceipt,
   hash as sha256,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import { MemoryClass } from "@motebit/policy";

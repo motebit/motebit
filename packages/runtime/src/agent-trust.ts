@@ -13,7 +13,7 @@ import {
   issueTrustCredential,
   issueReputationCredential,
   hexPublicKeyToDidKey,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { evaluateTrustTransition } from "@motebit/semiring";
 import type { AgentGraphManager } from "./agent-graph.js";
 
@@ -26,7 +26,7 @@ export interface AgentTrustDeps {
   agentGraph: AgentGraphManager;
   signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
   onCredentialIssued?: (
-    vc: import("@motebit/crypto").VerifiableCredential<unknown>,
+    vc: import("@motebit/encryption").VerifiableCredential<unknown>,
     subjectMotebitId: string,
   ) => void;
 }

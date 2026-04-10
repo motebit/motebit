@@ -27,7 +27,7 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: mockHttpTransport,
 }));
 
-vi.mock("@motebit/crypto", () => ({
+vi.mock("@motebit/encryption", () => ({
   createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
   secureErase: vi.fn((bytes: Uint8Array) => bytes.fill(0)),
   // verifyKeySuccession is statically imported by acceptKeyRotation in
@@ -1346,7 +1346,7 @@ describe("McpClientAdapter — key rotation grace period", () => {
     const adapter = new McpClientAdapter(httpConfig({ motebitPublicKey: "aa".repeat(32) }));
 
     // Mock verifyKeySuccession to return true
-    vi.doMock("@motebit/crypto", () => ({
+    vi.doMock("@motebit/encryption", () => ({
       createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
       verifyKeySuccession: vi.fn().mockResolvedValue(true),
     }));
@@ -1368,7 +1368,7 @@ describe("McpClientAdapter — key rotation grace period", () => {
   it("acceptKeyRotation() rejects if old key does not match pinned key", async () => {
     const adapter = new McpClientAdapter(httpConfig({ motebitPublicKey: "aa".repeat(32) }));
 
-    vi.doMock("@motebit/crypto", () => ({
+    vi.doMock("@motebit/encryption", () => ({
       createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
       verifyKeySuccession: vi.fn().mockResolvedValue(true),
     }));
@@ -1495,7 +1495,7 @@ describe("McpClientAdapter — createCallerToken paths", () => {
 
   it("catches createSignedToken error and connects without token", async () => {
     // Mock createSignedToken to throw
-    const { createSignedToken } = await import("@motebit/crypto");
+    const { createSignedToken } = await import("@motebit/encryption");
     (createSignedToken as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("Signing failed"),
     );

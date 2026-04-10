@@ -28,7 +28,7 @@ import type { MotebitRuntime, StorageAdapters } from "@motebit/runtime";
 import { executeCommand, cmdSelfTest, RelayDelegationAdapter } from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
 import type { SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
-import { deriveSyncEncryptionKey, secureErase } from "@motebit/crypto";
+import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,

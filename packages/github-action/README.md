@@ -2,7 +2,7 @@
 
 Verify the Ed25519 signature of a `motebit.md` agent identity file in your CI pipeline. Fails the check if the signature is invalid or the file is missing.
 
-Uses [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) (MIT, zero dependencies) under the hood.
+Uses [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) (MIT, zero dependencies) under the hood.
 
 ## Quick Start
 

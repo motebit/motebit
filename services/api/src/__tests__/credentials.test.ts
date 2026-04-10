@@ -6,7 +6,7 @@ import {
   bytesToHex,
   issueReputationCredential,
   publicKeyToDidKey,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 async function createIdentityAndDevice(

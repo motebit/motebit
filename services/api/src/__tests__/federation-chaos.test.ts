@@ -12,7 +12,7 @@ import type { RelayIdentity } from "../federation.js";
 import { createSyncRelay } from "../index.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, bytesToHex } from "@motebit/crypto";
+import { generateKeypair, bytesToHex } from "@motebit/encryption";
 
 // === Helpers ===
 

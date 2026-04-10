@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { bytesToHex } from "@motebit/crypto";
+import { bytesToHex } from "@motebit/encryption";
 import { createTestRelay } from "./test-helpers.js";
 
 /** Helper: create a relay with specific federation config. */

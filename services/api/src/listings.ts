@@ -170,6 +170,8 @@ export function registerListingsRoutes(deps: ListingsDeps): void {
           description: profile?.listing?.description ?? "",
           is_online: profile?.is_online ?? false,
           latency_stats: profile?.latency_stats ?? null,
+          endpoint_url: profile?.endpoint_url ?? null,
+          pay_to_address: profile?.listing?.pay_to_address ?? null,
         };
       }),
     });

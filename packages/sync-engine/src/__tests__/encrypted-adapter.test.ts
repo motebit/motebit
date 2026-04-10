@@ -5,7 +5,7 @@ import {
   type KeyProvider,
 } from "../encrypted-adapter.js";
 import { InMemoryEventStore } from "@motebit/event-log";
-import { generateKey, encrypt } from "@motebit/crypto";
+import { generateKey, encrypt } from "@motebit/encryption";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
 

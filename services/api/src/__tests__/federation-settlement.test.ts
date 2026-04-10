@@ -10,7 +10,7 @@ import { processSettlementRetries, createFederationTables } from "../federation.
 import type { RelayIdentity } from "../federation.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, bytesToHex } from "@motebit/crypto";
+import { generateKeypair, bytesToHex } from "@motebit/encryption";
 
 /** Insert a peer so settlement retries can look up the endpoint. */
 function insertPeer(

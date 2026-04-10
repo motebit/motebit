@@ -44,7 +44,7 @@ import {
   decryptKeyTransfer,
   checkPreTransferBalance,
   formatWalletWarning,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import type { KeyTransferPayload } from "@motebit/protocol";
 import {
   HttpEventStoreAdapter,

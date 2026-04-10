@@ -8,7 +8,7 @@
   "references": [
     { "path": "../../packages/sdk" },
     { "path": "../../packages/core-identity" },
-    { "path": "../../packages/crypto" },
+    { "path": "../../packages/encryption" },
     { "path": "../../packages/identity-file" },
     { "path": "../../packages/mcp-server" },
     { "path": "../../packages/memory-graph" },

@@ -5,20 +5,20 @@
  * The YAML frontmatter contains the identity spec; the Ed25519 signature covers
  * the exact frontmatter bytes for tamper detection.
  *
- * Parsing and verification are delegated to @motebit/verify (the standalone,
+ * Parsing and verification are delegated to @motebit/crypto (the standalone,
  * zero-monorepo-dep public verifier). This package adds generation, update,
  * YAML serialization, and risk-level bridging on top.
  */
 
-import { sign as ed25519Sign, toBase64Url, bytesToHex, canonicalJson } from "@motebit/crypto";
-export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/crypto";
+import { sign as ed25519Sign, toBase64Url, bytesToHex, canonicalJson } from "@motebit/encryption";
+export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/encryption";
 import { RiskLevel } from "@motebit/sdk";
-import { parse, verify, verifyIdentityFile } from "@motebit/verify";
+import { parse, verify, verifyIdentityFile } from "@motebit/crypto";
 import type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
-// Re-export parse/verify from @motebit/verify
+// Re-export parse/verify from @motebit/crypto
 export { parse, verify, verifyIdentityFile };
-export type { VerifyResult, LegacyVerifyResult } from "@motebit/verify";
+export type { VerifyResult, LegacyVerifyResult } from "@motebit/crypto";
 export type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
 // --- YAML Serialization (hand-rolled for the flat/predictable schema) ---

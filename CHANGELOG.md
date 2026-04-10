@@ -103,7 +103,7 @@ All notable changes to the published packages are documented here. This project 
 
 ### Fixed
 
-- `create-motebit`: fixed dependency on unpublished package; use `@motebit/verify` directly
+- `create-motebit`: fixed dependency on unpublished package; use `@motebit/crypto` directly
 
 ## [0.1.1] - 2026-03-09
 
@@ -115,7 +115,7 @@ All notable changes to the published packages are documented here. This project 
 
 ### Added
 
-- `@motebit/verify`: Ed25519 signature verification for `motebit.md` identity files
+- `@motebit/crypto`: Ed25519 signature verification for `motebit.md` identity files
 - `create-motebit`: CLI scaffolder (`npm create motebit`) for generating signed agent identities
 - `spec/identity-v1.md`: open specification for the `motebit/identity@1.0` file format
 - npm provenance enabled for supply chain transparency

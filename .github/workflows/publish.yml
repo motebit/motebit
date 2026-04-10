@@ -38,7 +38,7 @@ jobs:
       - name: Test published packages
         run: |
           pnpm --filter @motebit/sdk test
-          pnpm --filter @motebit/verify test
+          pnpm --filter @motebit/crypto test
           pnpm --filter create-motebit test
           pnpm --filter motebit test
 
@@ -47,8 +47,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish @motebit/verify
-        run: pnpm --filter @motebit/verify publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
+      - name: Publish @motebit/crypto
+        run: pnpm --filter @motebit/crypto publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

@@ -2,8 +2,8 @@ import type { MemoryNode, AuditRecord, ExportManifest, MotebitIdentity } from "@
 import { EventType, SensitivityLevel } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, MemoryStorageAdapter } from "@motebit/memory-graph";
-import type { DeletionCertificate } from "@motebit/crypto";
-import { createDeletionCertificate } from "@motebit/crypto";
+import type { DeletionCertificate } from "@motebit/encryption";
+import { createDeletionCertificate } from "@motebit/encryption";
 
 // === Audit Log ===
 

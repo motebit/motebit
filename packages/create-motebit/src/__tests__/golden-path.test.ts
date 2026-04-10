@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { verify } from "@motebit/verify";
+import { verify } from "@motebit/crypto";
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha512";
 import { generateIdentity, fromHex, toHex, decrypt } from "../generate.js";
@@ -32,7 +32,7 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
     expect(result.publicKeyHex).toMatch(/^[0-9a-f]{64}$/);
     expect(result.identityFileContent).toContain("motebit/identity@1.0");
 
-    // Step 2: Verify the generated motebit.md using @motebit/verify
+    // Step 2: Verify the generated motebit.md using @motebit/crypto
     const verification = await verify(result.identityFileContent);
 
     expect(verification.valid).toBe(true);

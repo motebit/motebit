@@ -38,7 +38,7 @@ import { InMemoryToolRegistry, readUrlDefinition, createReadUrlHandler } from "@
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate, parseRiskLevel } from "@motebit/identity-file";
-import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/crypto";
+import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/encryption";
 import { embedText } from "@motebit/memory-graph";
 import { loadConfig, fromHex } from "./helpers.js";
 

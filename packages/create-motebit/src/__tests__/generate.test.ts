@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { verify } from "@motebit/verify";
+import { verify } from "@motebit/crypto";
 import {
   generateIdentity,
   GOVERNANCE_PRESETS,
@@ -12,7 +12,7 @@ import {
 import type { TrustMode } from "../generate.js";
 
 describe("generateIdentity", () => {
-  it("produces a motebit.md that passes @motebit/verify", async () => {
+  it("produces a motebit.md that passes @motebit/crypto", async () => {
     const result = await generateIdentity({
       name: "test-agent",
       trustMode: "guarded",

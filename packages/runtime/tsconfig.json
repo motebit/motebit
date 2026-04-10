@@ -16,7 +16,7 @@
       "path": "../core-identity"
     },
     {
-      "path": "../crypto"
+      "path": "../encryption"
     },
     {
       "path": "../event-log"

@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
-import { generateKeypair, verifyExecutionReceipt } from "@motebit/crypto";
+import { generateKeypair, verifyExecutionReceipt } from "@motebit/encryption";
 import { handleAgentTask } from "../agent-task-handler.js";
 import type { AgentTaskHandlerDeps, SavedConversationContext } from "../agent-task-handler.js";
 import type { StreamChunk } from "../index.js";

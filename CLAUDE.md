@@ -34,13 +34,13 @@ apps/
   identity/    Identity management app. Vite, TypeScript
 
 packages/
-  protocol/           Network protocol types (Layer 0, MIT, 0 deps)
+  protocol/           Network protocol types + semiring algebra (Layer 0, MIT, 0 deps)
   sdk/                Full type vocabulary, re-exports protocol (Layer 0, MIT)
-  verify/             Standalone identity verifier (Layer 0, MIT, 0 deps)
+  crypto/             Protocol cryptography — sign and verify all artifacts (Layer 0, MIT, 0 monorepo deps)
   create-motebit/     CLI scaffolder: npm create motebit (Layer 0, MIT)
-  crypto/             Ed25519, AES-256-GCM, PBKDF2, signed tokens, W3C VC 2.0
+  encryption/         Product security: AES-256-GCM, PBKDF2, sync keys, deletion certificates (re-exports signing from crypto)
   gradient/           Self-measurement: "What am I?" Pure narrative from gradient data (Layer 1, BSL)
-  semiring/           Trust Semiring Algebra — generic computation graph for routing
+  semiring/           Agent network judgment layer — routing wiring, provenance, trust transitions (BSL)
   policy/             PolicyGate, MemoryGovernor, injection defense
   policy-invariants/  Clamping rules, state bounds validation
   event-log/          Append-only event sourcing with version clocks
@@ -73,6 +73,7 @@ spec/
   market-v1.md             motebit/market@1.0 — budget, settlement, fees, trust, routing
   credential-v1.md         motebit/credential@1.0 — W3C VC 2.0, issuance, weighting, revocation
   settlement-v1.md         motebit/settlement@1.0 — foundation law, rail taxonomy, sovereign rail, receipts, security model
+  auth-token-v1.md         motebit/auth-token@1.0 — signed bearer tokens, audience binding, replay prevention
 
 services/
   api/          Relay server (modules: index, federation, task-routing,
@@ -95,9 +96,9 @@ These are not suggestions. They are the architectural invariants that make the m
 
 **Fail-closed privacy.** Deny on error. Sensitivity levels (none/personal/medical/financial/secret) enforced at storage, retrieval, sync, and context boundaries. Medical/financial/secret memories never reach external AI providers. Relay sync redacts sensitive content. Retention rules enforced in housekeeping with deletion certificates.
 
-**Proof composability.** Canonical JSON → SHA-256 → Ed25519 verify. Always. External anchoring (blockchain, IPFS, x402) is additive, never gatekeeping. `@motebit/verify` works standalone with zero monorepo deps. Do not add verification paths that require external systems.
+**Proof composability.** Canonical JSON → SHA-256 → Ed25519 verify. Always. External anchoring (blockchain, IPFS, x402) is additive, never gatekeeping. `@motebit/crypto` works standalone with zero monorepo deps. Do not add verification paths that require external systems.
 
-**Semiring algebra for routing.** Agent network routing is algebraic. `Semiring<T>` interface, concrete semirings (Trust, Cost, Latency, Reliability, RegulatoryRisk), product combinators, `WeightedDigraph<T>`, generic traversal. Swap the semiring to change what "best path" means. New routing concerns require only a new semiring definition — zero new algorithms. Provenance tracks why a route was chosen, signed into the execution ledger.
+**Semiring algebra for routing.** Agent network routing is algebraic. The algebra (the protocol's language) lives in MIT `@motebit/protocol`: `Semiring<T>` interface, concrete semirings (Trust, Cost, Latency, Reliability, RegulatoryRisk), product combinators, `WeightedDigraph<T>`, generic traversal, trust scoring constants. The judgment (the product's value) lives in BSL `@motebit/semiring`: agent network graph construction, multi-objective ranking, provenance tracking, trust state transitions, delegation trust composition. The boundary: protocol defines how trust computes; semiring defines how Motebit applies it. Swap the semiring to change what "best path" means. New routing concerns require only a new semiring definition — zero new algorithms.
 
 **Economic loop principle.** The relay is the economy's ledger, the rails are the membrane, and agents are the workers and spenders inside the loop. Users fund at the edges (Stripe, Bridge, wallet deposit). Agents transact inside the relay via virtual accounts — allocate, execute, settle, earn, delegate, earn again. The 5% platform fee is extracted at each settlement checkpoint. Settlement rails (fiat, protocol, direct asset, orchestration) are on/off ramps only — they never hold economic truth. The internal ledger is the circulation system. The ideal endgame: user funds a droplet once, the agent earns its own way forward. Not every agent will be self-sustaining immediately, but the architecture must never prevent it. Do not build flows that require human intervention inside the loop. Deposits and withdrawals are edge operations. Everything between is agent-to-agent.
 
@@ -117,11 +118,19 @@ Motebit is a protocol, not a platform. This has concrete architectural consequen
 
 **The three-layer model.** Every function the relay performs lives in exactly one of three layers, and each layer has a different shape of ownership:
 
-1. **Protocol** — the open spec anyone can implement. Published in `spec/*.md`. Consumed via the MIT type packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`). A third party reading only the specs and the MIT types can build an interoperating alternative implementation without permission.
+1. **Protocol** — the open spec anyone can implement. Published in `spec/*.md`. Consumed via the MIT type packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`). A third party reading only the specs and the MIT types can build an interoperating alternative implementation without permission.
 2. **Reference implementation** — Motebit, Inc.'s code that implements the protocol. BSL-1.1 licensed: source-available, commercially restricted during the early phase, automatically converting to a permissive license after the conversion date. Same pattern as MariaDB, CockroachDB, Stripe, Confluent, and Ethereum's commercial clients.
 3. **Accumulated state** — trust history, federation graph, network effects, operational data. Never licensed; private to the canonical relay operator. The long-term moat that makes the reference implementation commercially defensible.
 
 A function is "protocol-shaped" only when its rules live in an open spec. A rule that exists only in BSL implementation code is not yet part of the protocol — it is part of the canonical implementation.
+
+**The MIT/BSL boundary test.** For every package, module, or function, ask which question it answers:
+
+MIT if it answers: What is the artifact? How is it encoded? How is it signed? How is it verified? What deterministic math defines interoperability? What interface must another implementation satisfy?
+
+BSL if it answers: How does the system decide? How does the system adapt over time? How does the system monetize, route, prioritize, govern, or operationalize? How does the product behave in practice?
+
+MIT defines the interoperable protocol: artifacts, cryptography, deterministic algebra, and abstract interfaces. BSL contains the stateful runtime, orchestration, governance, memory, routing, and product implementations that make Motebit commercially differentiated. Accumulated state (trust data, federation graph, settlement history) is never licensed — it is the permanent moat.
 
 **The operational test.** For any relay function, ask: _can a third party stand up a competing implementation today, using only the published specs and the MIT type packages, without permission?_ If yes, the function has crossed from platform into protocol. If no, it is still platform-shaped regardless of how the codebase is organized internally. This test is the honest measure of "how protocol-shaped is motebit right now" and should be applied to every new architectural decision.
 
@@ -241,10 +250,10 @@ Motebit is calm software. Do not confirm what the user can already see.
 
 ## Published Packages
 
-Five npm packages: four MIT (types + verification), one BSL (runtime):
+Five npm packages: four MIT (the open protocol), one BSL (the product):
 
-- `@motebit/protocol` — Network protocol types (identity, receipts, credentials, settlement, trust algebra). MIT, 0 deps.
-- `@motebit/sdk` — Full type vocabulary (re-exports protocol + product types). MIT, depends on protocol.
-- `@motebit/verify` — Standalone identity verifier. MIT, 0 deps (noble bundled).
+- `@motebit/protocol` — Network protocol: types, semiring algebra, routing. MIT, 0 deps.
+- `@motebit/crypto` — Protocol cryptography: sign and verify all artifacts. MIT, 0 monorepo deps (noble bundled).
+- `@motebit/sdk` — Product development kit: shared types, config, normalization, adapters. MIT, depends on protocol.
 - `create-motebit` — Scaffold signed identity. MIT, zero-deps CLI. `npm create motebit`, `--agent` for runnable project.
 - `motebit` — Operator console. BSL-1.1. REPL, daemon, MCP server, delegation, export/verify/rotate.

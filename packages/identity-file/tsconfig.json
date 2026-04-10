@@ -8,13 +8,13 @@
   "include": ["src"],
   "references": [
     {
-      "path": "../crypto"
+      "path": "../encryption"
     },
     {
       "path": "../sdk"
     },
     {
-      "path": "../verify"
+      "path": "../crypto"
     }
   ]
 }

@@ -5,7 +5,7 @@
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
-import { bytesToHex, hash as sha256Hash } from "@motebit/crypto";
+import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import { createVerify } from "node:crypto";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";

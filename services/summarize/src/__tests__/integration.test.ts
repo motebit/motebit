@@ -22,7 +22,7 @@ import {
   verifyReceiptChain,
   verifySignedToken,
   hash as sha256,
-} from "@motebit/crypto";
+} from "@motebit/encryption";
 import { generate as generateIdentity } from "@motebit/identity-file";
 import { createSummarizeSearchHandler, summarizeSearchDefinition } from "../tool.js";
 

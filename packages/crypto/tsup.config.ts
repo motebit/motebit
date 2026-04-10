@@ -6,7 +6,8 @@ export default defineConfig({
   target: "node18",
   platform: "node",
   splitting: false,
-  dts: true,
+  // DTS generated separately via tsc (tsup DTS doesn't handle multi-file well)
+  dts: false,
   // Bundle all dependencies into the output — zero runtime deps
   noExternal: [/.*/],
 });
