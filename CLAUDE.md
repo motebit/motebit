@@ -75,6 +75,7 @@ spec/
   settlement-v1.md         motebit/settlement@1.0 — foundation law, rail taxonomy, sovereign rail, receipts, security model
   auth-token-v1.md         motebit/auth-token@1.0 — signed bearer tokens, audience binding, replay prevention
   credential-anchor-v1.md  motebit/credential-anchor@1.0 — Merkle batch anchoring, self-verifiable proofs, chain-agnostic
+  delegation-v1.md         motebit/delegation@1.0 — task submission, receipt exchange, budget lifecycle, routing scores
 
 services/
   api/          Relay server (modules: index, federation, task-routing,
