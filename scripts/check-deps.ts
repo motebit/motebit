@@ -176,6 +176,8 @@ const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "issueReputationCredential",
     "issueTrustCredential",
     "createPresentation",
+    // Credential anchoring (credential-anchor-v1.md §3)
+    "computeCredentialLeaf",
   ]),
 };
 

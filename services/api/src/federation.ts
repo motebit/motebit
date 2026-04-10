@@ -29,6 +29,7 @@ import {
   getSettlementProof,
   isSettlementPendingBatch,
 } from "./anchoring.js";
+import { createCredentialAnchoringTables } from "./credential-anchoring.js";
 import { nextRetryDelay, DEFAULT_RETRY_POLICY } from "./retry-policy.js";
 import type { RetryPolicy } from "./retry-policy.js";
 
@@ -217,6 +218,9 @@ export function createFederationTables(db: DatabaseDriver): void {
 
   // Merkle batch anchoring tables (§7.6)
   createAnchoringTables(db);
+
+  // Credential anchor batching tables (credential-anchor-v1.md)
+  createCredentialAnchoringTables(db);
 }
 
 // === Revocation Event Helpers ===

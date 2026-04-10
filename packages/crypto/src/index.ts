@@ -1169,3 +1169,4 @@ export {
   type ReputationCredentialSubject,
   type TrustCredentialSubject,
 } from "./credentials.js";
+export { computeCredentialLeaf } from "./credential-anchor.js";

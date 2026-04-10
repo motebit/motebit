@@ -93,6 +93,12 @@ import {
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { startBatchAnchorLoop } from "./anchoring.js";
+import {
+  startCredentialAnchorLoop,
+  getCredentialAnchorProof,
+  getCredentialAnchorBatch,
+  isCredentialPendingBatch,
+} from "./credential-anchoring.js";
 import { startDepositDetector } from "./deposit-detector.js";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
@@ -676,6 +682,33 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     issueCredentials,
   });
 
+  // --- Credential anchor proof routes (credential-anchor-v1.md §7) ---
+  app.get("/api/v1/credentials/:credentialId/anchor-proof", async (c) => {
+    const credentialId = c.req.param("credentialId");
+
+    if (isCredentialPendingBatch(moteDb.db, credentialId)) {
+      return c.json({ status: "pending", message: "Credential not yet batched" }, 202, {
+        "Retry-After": "60",
+      });
+    }
+
+    const proof = await getCredentialAnchorProof(moteDb.db, credentialId);
+    if (!proof) {
+      return c.json({ error: "Credential not found or not batched" }, 404);
+    }
+
+    return c.json(proof);
+  });
+
+  app.get("/api/v1/credential-anchors/:batchId", (c) => {
+    const batchId = c.req.param("batchId");
+    const batch = getCredentialAnchorBatch(moteDb.db, batchId);
+    if (!batch) {
+      return c.json({ error: "Batch not found" }, 404);
+    }
+    return c.json(batch);
+  });
+
   // --- Pairing routes ---
   registerPairingRoutes({
     db: moteDb.db,
@@ -889,6 +922,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getEmergencyFreeze(),
   );
 
+  // --- Credential anchor batching (credential-anchor-v1.md) ---
+  const credentialAnchorInterval = startCredentialAnchorLoop(moteDb.db, relayIdentity, {}, () =>
+    getEmergencyFreeze(),
+  );
+
   // --- Deposit detector (scans onchain Transfer events for agent wallets) ---
   const depositDetectorChain = x402Config.network;
   const depositDetectorInterval = startDepositDetector({
@@ -992,6 +1030,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(heartbeatInterval);
     clearInterval(settlementRetryInterval);
     clearInterval(batchAnchorInterval);
+    clearInterval(credentialAnchorInterval);
     clearInterval(depositDetectorInterval);
     receiptExchangeHub.close();
     moteDb.close();
