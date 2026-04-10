@@ -8,9 +8,14 @@
  * On-chain submission is async and additive — the relay's signature is the primary
  * trust mechanism between peers. The chain anchor prevents the relay from later
  * denying it produced the batch.
+ *
+ * Chain submission is pluggable via ChainAnchorSubmitter (same adapter used by
+ * credential anchoring). Default: Solana Memo when SOLANA_RPC_URL is set.
+ * Legacy: EVM contract via EvmContractSubmitter when chainRpcUrl + contractAddress are set.
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import type { ChainAnchorSubmitter } from "@motebit/sdk";
 import {
   buildMerkleTree,
   getMerkleProof,
@@ -31,11 +36,14 @@ export interface AnchoringConfig {
   batchMaxSize?: number;
   /** Batch trigger: max time between batches in ms. Default: 3_600_000 (1 hour). */
   batchIntervalMs?: number;
-  /** On-chain RPC URL. If unset, batches are signed but not submitted on-chain. */
+  /** Chain anchor submitter. If unset, batches are signed but not submitted on-chain. */
+  submitter?: ChainAnchorSubmitter;
+  // --- Legacy EVM config (use submitter instead) ---
+  /** @deprecated Use submitter instead. On-chain RPC URL for EVM contract. */
   chainRpcUrl?: string;
-  /** On-chain contract address. Required if chainRpcUrl is set. */
+  /** @deprecated Use submitter instead. On-chain contract address for EVM. */
   contractAddress?: string;
-  /** CAIP-2 chain identifier. Default: "eip155:8453" (Base). */
+  /** @deprecated Use submitter instead. CAIP-2 chain identifier. Default: "eip155:8453" (Base). */
   chainNetwork?: string;
 }
 
@@ -208,61 +216,95 @@ export async function cutBatch(
 // === On-Chain Submission ===
 
 /**
- * Submit a batch's Merkle root on-chain.
+ * Submit a batch's Merkle root on-chain via ChainAnchorSubmitter.
  * Updates the batch record with tx_hash, network, anchored_at on success.
  * Returns false if submission fails (caller should retry).
- *
- * Requires: config.chainRpcUrl and config.contractAddress.
- * If not configured, this is a no-op (batches remain Ed25519-signed only).
  */
 export async function submitAnchorOnChain(
   db: DatabaseDriver,
   batchId: string,
-  config: AnchoringConfig,
+  submitter: ChainAnchorSubmitter,
 ): Promise<boolean> {
-  if (!config.chainRpcUrl || !config.contractAddress) return true; // no-op if not configured
-
   const batch = db
-    .prepare("SELECT * FROM relay_anchor_batches WHERE batch_id = ? AND status = 'signed'")
+    .prepare(
+      "SELECT merkle_root, relay_id, leaf_count FROM relay_anchor_batches WHERE batch_id = ? AND status = 'signed'",
+    )
     .get(batchId) as { merkle_root: string; relay_id: string; leaf_count: number } | undefined;
 
   if (!batch) return true; // already submitted or doesn't exist
 
   try {
-    // Encode the function call — keccak256("anchor(bytes32,bytes32,uint64)") selector + ABI-encoded args
-    // We use raw fetch to the JSON-RPC endpoint to avoid a viem/ethers dependency.
-    // The relay operator's wallet signs via eth_sendTransaction (requires the RPC to be an unlocked account
-    // or a signing proxy like Privy/Fireblocks). For testnet, Hardhat/Anvil unlocked accounts work.
+    const result = await submitter.submitMerkleRoot(
+      batch.merkle_root,
+      batch.relay_id,
+      batch.leaf_count,
+    );
+    const now = Date.now();
 
-    // Relay ID → SHA-256(motebit_id string) → bytes32 for contract indexing
-    const relayIdHash = await sha256Hex(batch.relay_id);
+    db.prepare(
+      "UPDATE relay_anchor_batches SET tx_hash = ?, network = ?, anchored_at = ?, status = 'confirmed' WHERE batch_id = ?",
+    ).run(result.txHash, submitter.network, now, batchId);
 
-    // Function selector: keccak256("anchor(bytes32,bytes32,uint64)") first 4 bytes
-    const selectorHex = ANCHOR_SELECTOR;
+    logger.info("anchoring.chain_confirmed", {
+      batch_id: batchId,
+      tx_hash: result.txHash,
+      chain: submitter.chain,
+      network: submitter.network,
+    });
 
-    // ABI encode: bytes32 merkleRoot + bytes32 relayId + uint64 leafCount (padded to 32 bytes)
-    const leafCountHex = batch.leaf_count.toString(16).padStart(64, "0");
+    return true;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn("anchoring.chain_submit_error", { batch_id: batchId, error: message });
+    return false;
+  }
+}
+
+// === Legacy EVM Contract Submitter ===
+
+/**
+ * EVM contract submitter for SettlementAnchor.sol.
+ *
+ * @deprecated Prefer SolanaMemoSubmitter (identity key signs natively).
+ * This submitter requires a separate secp256k1 key and a deployed contract.
+ * Retained for operators who specifically want Base/EVM anchoring.
+ *
+ * Requires: chainRpcUrl with an unlocked account or signing proxy.
+ */
+export class EvmContractSubmitter implements ChainAnchorSubmitter {
+  readonly chain = "eip155" as const;
+  readonly network: string;
+  private readonly rpcUrl: string;
+  private readonly contractAddress: string;
+
+  constructor(config: { chainRpcUrl: string; contractAddress: string; chainNetwork?: string }) {
+    this.rpcUrl = config.chainRpcUrl;
+    this.contractAddress = config.contractAddress;
+    this.network = config.chainNetwork ?? "eip155:8453";
+  }
+
+  async submitMerkleRoot(
+    root: string,
+    relayId: string,
+    leafCount: number,
+  ): Promise<{ txHash: string }> {
+    const relayIdHash = await sha256Hex(relayId);
+    const leafCountHex = leafCount.toString(16).padStart(64, "0");
     const calldata =
       "0x" +
-      selectorHex +
-      batch.merkle_root.padStart(64, "0") +
+      ANCHOR_SELECTOR +
+      root.padStart(64, "0") +
       relayIdHash.padStart(64, "0") +
       leafCountHex;
 
-    const network = config.chainNetwork ?? "eip155:8453";
-    const txResponse = await fetch(config.chainRpcUrl, {
+    const txResponse = await fetch(this.rpcUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
         method: "eth_sendTransaction",
-        params: [
-          {
-            to: config.contractAddress,
-            data: calldata,
-          },
-        ],
+        params: [{ to: this.contractAddress, data: calldata }],
       }),
     });
 
@@ -272,29 +314,24 @@ export async function submitAnchorOnChain(
     };
 
     if (txResult.error || !txResult.result) {
-      const errMsg = txResult.error?.message ?? "No transaction hash returned";
-      logger.warn("anchoring.chain_submit_failed", { batch_id: batchId, error: errMsg });
-      return false;
+      throw new Error(txResult.error?.message ?? "No transaction hash returned");
     }
 
-    const txHash = txResult.result;
-    const now = Date.now();
+    return { txHash: txResult.result };
+  }
 
-    db.prepare(
-      "UPDATE relay_anchor_batches SET tx_hash = ?, network = ?, anchored_at = ?, status = 'confirmed' WHERE batch_id = ?",
-    ).run(txHash, network, now, batchId);
-
-    logger.info("anchoring.chain_confirmed", {
-      batch_id: batchId,
-      tx_hash: txHash,
-      network,
-    });
-
-    return true;
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.warn("anchoring.chain_submit_error", { batch_id: batchId, error: message });
-    return false;
+  async isAvailable(): Promise<boolean> {
+    try {
+      const res = await fetch(this.rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+      });
+      const data = (await res.json()) as { result?: string };
+      return !!data.result;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -325,6 +362,17 @@ export function startBatchAnchorLoop(
   const intervalMs = config.batchIntervalMs ?? DEFAULT_BATCH_INTERVAL_MS;
   // Check every 60s — actual batch cutting only happens when triggers are met
   const checkIntervalMs = Math.min(60_000, intervalMs);
+
+  // Resolve submitter: explicit submitter > legacy EVM config > none
+  const submitter =
+    config.submitter ??
+    (config.chainRpcUrl && config.contractAddress
+      ? new EvmContractSubmitter({
+          chainRpcUrl: config.chainRpcUrl,
+          contractAddress: config.contractAddress,
+          chainNetwork: config.chainNetwork,
+        })
+      : undefined);
 
   return setInterval(() => {
     if (isFrozen?.()) return;
@@ -358,12 +406,12 @@ export function startBatchAnchorLoop(
         }
 
         // Attempt on-chain submission for newly cut batch
-        if (batch && config.chainRpcUrl) {
-          await submitAnchorOnChain(db, batch.batch_id, config);
+        if (batch && submitter) {
+          await submitAnchorOnChain(db, batch.batch_id, submitter);
         }
 
         // Retry previously failed submissions
-        if (config.chainRpcUrl) {
+        if (submitter) {
           const failedBatches = db
             .prepare(
               "SELECT batch_id FROM relay_anchor_batches WHERE status = 'signed' AND tx_hash IS NULL",
@@ -371,7 +419,7 @@ export function startBatchAnchorLoop(
             .all() as { batch_id: string }[];
 
           for (const fb of failedBatches) {
-            await submitAnchorOnChain(db, fb.batch_id, config);
+            await submitAnchorOnChain(db, fb.batch_id, submitter);
           }
         }
       } catch (err: unknown) {

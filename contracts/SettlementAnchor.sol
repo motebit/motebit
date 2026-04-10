@@ -17,7 +17,7 @@ contract SettlementAnchor {
     /**
      * @notice Emitted when a relay anchors a settlement batch.
      * @param merkleRoot SHA-256 Merkle root of the settlement batch.
-     * @param relayId    Relay's motebit_id (keccak256-truncated to bytes32 for indexing).
+     * @param relayId    Relay's motebit_id (SHA-256 hashed to bytes32 for indexing).
      * @param leafCount  Number of settlements in the batch.
      * @param batchTimestamp Epoch seconds when the batch was created.
      */
@@ -34,7 +34,7 @@ contract SettlementAnchor {
      *      on the AnchorRecord (off-chain) is the trust mechanism. This contract
      *      provides non-repudiability: once emitted, the relay cannot deny the batch.
      * @param merkleRoot SHA-256 root hash of the settlement Merkle tree.
-     * @param relayId    Relay identifier (keccak256 of the relay's motebit_id string).
+     * @param relayId    Relay identifier (SHA-256 of the relay's motebit_id string).
      * @param leafCount  Number of settlements in the batch.
      */
     function anchor(

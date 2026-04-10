@@ -937,25 +937,34 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     () => getEmergencyFreeze(),
   );
 
-  const batchAnchorInterval = startBatchAnchorLoop(moteDb.db, relayIdentity, {}, () =>
-    getEmergencyFreeze(),
-  );
-
-  // --- Credential anchor batching (credential-anchor-v1.md) ---
+  // --- Unified chain anchor submitter (Solana Memo by default) ---
   const solanaRpcUrl = process.env.SOLANA_RPC_URL;
+  let anchorSubmitter: import("@motebit/sdk").ChainAnchorSubmitter | undefined;
   if (solanaRpcUrl) {
     const { createSolanaMemoSubmitter } = await import("@motebit/wallet-solana");
     const memoSubmitter = createSolanaMemoSubmitter({
       rpcUrl: solanaRpcUrl,
       identitySeed: relayIdentity.privateKey,
     });
-    credentialAnchorConfig.submitter = memoSubmitter;
+    anchorSubmitter = memoSubmitter;
     credentialAnchorAddress = memoSubmitter.address;
-    logger.info("credential_anchoring.solana_submitter_configured", {
+    logger.info("anchoring.solana_submitter_configured", {
       address: memoSubmitter.address,
       network: memoSubmitter.network,
+      streams: ["settlement", "credential"],
     });
   }
+
+  // --- Settlement anchor batching (relay-federation-v1.md §7.6) ---
+  const batchAnchorInterval = startBatchAnchorLoop(
+    moteDb.db,
+    relayIdentity,
+    { submitter: anchorSubmitter },
+    () => getEmergencyFreeze(),
+  );
+
+  // --- Credential anchor batching (credential-anchor-v1.md) ---
+  credentialAnchorConfig.submitter = anchorSubmitter;
   const credentialAnchorInterval = startCredentialAnchorLoop(
     moteDb.db,
     relayIdentity,
