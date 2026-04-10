@@ -258,7 +258,7 @@ pnpm run lint          # Lint all packages
 
 The **protocol layer** is MIT licensed — use it freely, build on it, implement the spec in any language:
 
-- [`spec/`](spec/) — 8 open specs (identity, execution-ledger, relay-federation, market, credential, settlement, auth-token, credential-anchor)
+- [`spec/`](spec/) — 9 open specs (identity, execution-ledger, relay-federation, market, credential, settlement, auth-token, credential-anchor, delegation)
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify all artifacts (zero dependencies)
 - [`packages/sdk/`](packages/sdk/) — product development kit (types, config, adapters)
@@ -272,7 +272,7 @@ The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-av
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specifications](spec/) — 8 open specs (MIT)
+- [Specifications](spec/) — 9 open specs (MIT)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know
