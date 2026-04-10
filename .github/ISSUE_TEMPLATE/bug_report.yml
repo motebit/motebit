@@ -12,7 +12,7 @@ body:
         - Mobile (React Native)
         - CLI
         - Web
-        - "@motebit/verify"
+        - "@motebit/crypto"
         - "create-motebit"
         - Other package
         - API / Sync Relay
