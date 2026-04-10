@@ -51,6 +51,12 @@ export interface CredentialAnchorProof {
   batch_id: string;
   /** Hex-encoded Merkle root of the batch. */
   merkle_root: string;
+  /** Number of credentials in this batch (needed for signature verification). */
+  leaf_count: number;
+  /** Millisecond timestamp of the earliest credential in the batch. */
+  first_issued_at: number;
+  /** Millisecond timestamp of the latest credential in the batch. */
+  last_issued_at: number;
   /** Position of this credential's leaf in the sorted array. */
   leaf_index: number;
   /** Hex-encoded sibling hashes for Merkle path verification. */
