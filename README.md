@@ -175,6 +175,7 @@ packages/
   policy-invariants/ Clamping rules, state bounds validation
   persistence/     SQLite (WAL mode), adapters for all storage types
   browser-persistence/ IndexedDB adapters for web/spatial
+  wallet-solana/   Sovereign Solana USDC rail — Ed25519 identity key IS the Solana address
   voice/           VAD, STT, TTS adapters
   github-action/   GitHub Action for identity verification
 
@@ -199,7 +200,7 @@ spec/
   credential-anchor-v1.md  motebit/credential-anchor@1.0 — Merkle anchoring, self-verifiable proofs
 ```
 
-45 packages across packages, apps, and services.
+46 packages across packages, apps, and services.
 
 ## Verify & integrate
 
@@ -233,7 +234,7 @@ Five npm packages. Four MIT (the open protocol), one BSL (the product):
 | [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Protocol cryptography — sign and verify all artifacts                      | MIT     |
 | [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Product development kit — types, config, normalization, adapters           | MIT     |
 | [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | `npm create motebit` — scaffold identity or `--agent` for runnable service | MIT     |
-| [`motebit`](https://www.npmjs.com/package/motebit)                     | CLI — REPL, daemon, operator console                                       | BSL-1.1 |
+| [`motebit`](https://www.npmjs.com/package/motebit)                     | Operator console — REPL, daemon, delegation, MCP server                    | BSL-1.1 |
 
 ## Specification
 
@@ -256,9 +257,10 @@ pnpm run lint          # Lint all packages
 
 The **protocol layer** is MIT licensed — use it freely, build on it, implement the spec in any language:
 
-- [`spec/`](spec/) — identity, execution-ledger, relay-federation, market specifications
+- [`spec/`](spec/) — 8 open specs (identity, execution-ledger, relay-federation, market, credential, settlement, auth-token, credential-anchor)
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, settlement, trust algebra)
-- [`packages/crypto/`](packages/crypto/) — verification library (zero dependencies)
+- [`packages/crypto/`](packages/crypto/) — sign and verify all artifacts (zero dependencies)
+- [`packages/sdk/`](packages/sdk/) — product development kit (types, config, adapters)
 - [`packages/create-motebit/`](packages/create-motebit/) — CLI scaffolder
 
 The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
@@ -269,7 +271,7 @@ The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-av
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specification](spec/identity-v1.md) — motebit/identity@1.0
+- [Specifications](spec/) — 8 open specs (MIT)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know
