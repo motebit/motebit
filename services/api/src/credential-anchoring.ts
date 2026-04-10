@@ -465,6 +465,83 @@ export function isCredentialPendingBatch(db: DatabaseDriver, credentialId: strin
 }
 
 /**
+ * List all credential anchor batches, most recent first.
+ */
+export function listCredentialAnchorBatches(
+  db: DatabaseDriver,
+  limit: number = 50,
+): CredentialAnchorBatch[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM relay_credential_anchor_batches
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    )
+    .all(limit) as Array<{
+    batch_id: string;
+    relay_id: string;
+    merkle_root: string;
+    leaf_count: number;
+    first_issued_at: number;
+    last_issued_at: number;
+    signature: string;
+    tx_hash: string | null;
+    network: string | null;
+    chain: string | null;
+    anchored_at: number | null;
+  }>;
+
+  return rows.map((row) => ({
+    batch_id: row.batch_id,
+    relay_id: row.relay_id,
+    merkle_root: row.merkle_root,
+    leaf_count: row.leaf_count,
+    first_issued_at: row.first_issued_at,
+    last_issued_at: row.last_issued_at,
+    signature: row.signature,
+    anchor: row.tx_hash
+      ? {
+          chain: row.chain!,
+          network: row.network!,
+          tx_hash: row.tx_hash,
+          anchored_at: row.anchored_at!,
+        }
+      : null,
+  }));
+}
+
+/**
+ * Get credential anchoring stats for the admin dashboard.
+ */
+export function getCredentialAnchoringStats(db: DatabaseDriver): {
+  total_batches: number;
+  confirmed_batches: number;
+  total_credentials_anchored: number;
+  pending_credentials: number;
+} {
+  const batchStats = db
+    .prepare(
+      `SELECT
+         COUNT(*) as total,
+         SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
+         SUM(leaf_count) as total_leaves
+       FROM relay_credential_anchor_batches`,
+    )
+    .get() as { total: number; confirmed: number; total_leaves: number | null };
+
+  const pendingRow = db
+    .prepare("SELECT COUNT(*) as cnt FROM relay_credentials WHERE anchor_batch_id IS NULL")
+    .get() as { cnt: number };
+
+  return {
+    total_batches: batchStats.total,
+    confirmed_batches: batchStats.confirmed,
+    total_credentials_anchored: batchStats.total_leaves ?? 0,
+    pending_credentials: pendingRow.cnt,
+  };
+}
+
+/**
  * Get batch metadata by batch ID.
  */
 export function getCredentialAnchorBatch(

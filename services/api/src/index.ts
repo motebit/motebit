@@ -98,6 +98,8 @@ import {
   getCredentialAnchorProof,
   getCredentialAnchorBatch,
   isCredentialPendingBatch,
+  listCredentialAnchorBatches,
+  getCredentialAnchoringStats,
   type CredentialAnchoringConfig,
 } from "./credential-anchoring.js";
 import { startDepositDetector } from "./deposit-detector.js";
@@ -683,6 +685,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     issueCredentials,
   });
 
+  // --- Credential anchoring config (populated during startup, used by admin endpoint) ---
+  const credentialAnchorConfig: CredentialAnchoringConfig = {};
+  let credentialAnchorAddress: string | null = null;
+
   // --- Credential anchor proof routes (credential-anchor-v1.md §7) ---
   app.get("/api/v1/credentials/:credentialId/anchor-proof", async (c) => {
     const credentialId = c.req.param("credentialId");
@@ -708,6 +714,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return c.json({ error: "Batch not found" }, 404);
     }
     return c.json(batch);
+  });
+
+  // Admin: credential anchoring overview (batches, stats, anchor address)
+  app.get("/api/v1/admin/credential-anchoring", (c) => {
+    const stats = getCredentialAnchoringStats(moteDb.db);
+    const batches = listCredentialAnchorBatches(moteDb.db, 50);
+    return c.json({
+      stats,
+      batches,
+      anchor_address: credentialAnchorAddress,
+      chain_enabled: credentialAnchorConfig.submitter != null,
+    });
   });
 
   // --- Pairing routes ---
@@ -924,7 +942,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   );
 
   // --- Credential anchor batching (credential-anchor-v1.md) ---
-  const credentialAnchorConfig: CredentialAnchoringConfig = {};
   const solanaRpcUrl = process.env.SOLANA_RPC_URL;
   if (solanaRpcUrl) {
     const { createSolanaMemoSubmitter } = await import("@motebit/wallet-solana");
@@ -933,6 +950,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       identitySeed: relayIdentity.privateKey,
     });
     credentialAnchorConfig.submitter = memoSubmitter;
+    credentialAnchorAddress = memoSubmitter.address;
     logger.info("credential_anchoring.solana_submitter_configured", {
       address: memoSubmitter.address,
       network: memoSubmitter.network,

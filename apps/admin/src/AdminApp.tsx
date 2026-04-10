@@ -56,6 +56,7 @@ import { AgentGraphPanel } from "./components/AgentGraphPanel";
 import { CredentialsPanel } from "./components/CredentialsPanel";
 import { FederationPanel } from "./components/FederationPanel";
 import { AccountsPanel } from "./components/AccountsPanel";
+import { CredentialAnchoringPanel } from "./components/CredentialAnchoringPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -276,6 +277,7 @@ export function AdminApp(): React.ReactElement {
       "credentials",
       "federation",
       "accounts",
+      "anchoring",
     ].map((panel) =>
       React.createElement(
         "button",
@@ -374,6 +376,9 @@ export function AdminApp(): React.ReactElement {
       break;
     case "accounts":
       content = React.createElement(AccountsPanel, null);
+      break;
+    case "anchoring":
+      content = React.createElement(CredentialAnchoringPanel, null);
       break;
     default:
       content = React.createElement(
