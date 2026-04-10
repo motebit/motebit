@@ -1343,3 +1343,14 @@ export {
   joinParallelRoutes,
   DEFAULT_TRUST_THRESHOLDS,
 } from "./trust-algebra.js";
+
+// ── Credential Anchoring (protocol-level) ────────────────────────────
+// Self-verifiable Merkle inclusion proofs for onchain credential anchoring.
+// motebit/credential-anchor@1.0.
+
+export type {
+  CredentialAnchorBatch,
+  CredentialChainAnchor,
+  CredentialAnchorProof,
+  ChainAnchorSubmitter,
+} from "./credential-anchor.js";

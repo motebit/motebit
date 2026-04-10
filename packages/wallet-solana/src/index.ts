@@ -37,3 +37,12 @@ export {
 } from "./constants.js";
 
 export { swapUsdcToSol, type JupiterSwapResult } from "./jupiter.js";
+
+export {
+  SolanaMemoSubmitter,
+  type SolanaMemoSubmitterConfig,
+  createSolanaMemoSubmitter,
+  parseMemoAnchor,
+  SOLANA_MAINNET_CAIP2,
+  SOLANA_DEVNET_CAIP2,
+} from "./memo-submitter.js";
