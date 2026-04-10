@@ -100,6 +100,9 @@ CredentialAnchorProof {
   credential_hash:  string      // hex SHA-256 leaf hash
   batch_id:         string      // which batch contains this credential
   merkle_root:      string      // hex root of the batch tree
+  leaf_count:       number      // number of credentials in the batch
+  first_issued_at:  number      // ms timestamp of earliest credential
+  last_issued_at:   number      // ms timestamp of latest credential
   leaf_index:       number      // position in the leaf array
   siblings:         string[]    // hex Merkle proof path
   layer_sizes:      number[]    // for odd-leaf promotion detection
@@ -115,6 +118,8 @@ CredentialAnchorProof {
 }
 ```
 
+The `leaf_count`, `first_issued_at`, and `last_issued_at` fields are required in the proof because they are part of the signed batch payload (§4.2). Without them, step 3 of the verification algorithm cannot reconstruct the payload for signature verification.
+
 ### 5.2 Verification Algorithm
 
 Given a credential `vc` and its `CredentialAnchorProof`:
@@ -128,6 +133,21 @@ Steps 1-3 are verifiable offline with only the credential, proof, and relay's pu
 Step 4 additionally proves the root was made immutable and public.
 
 Without step 4, the relay's signature still provides accountability — the relay signed the batch with its Ed25519 key, and that signature is non-repudiable. The onchain anchor prevents the relay from later claiming it never signed the batch (the private key could theoretically be rotated and the old batch denied).
+
+### 5.3 Reference Implementation
+
+The canonical implementation is `verifyCredentialAnchor` in `@motebit/crypto` (MIT). It takes a credential, a `CredentialAnchorProofFields` struct, and an optional `ChainAnchorVerifier` callback for step 4. Returns `CredentialAnchorVerifyResult` with per-step breakdown (`hash_valid`, `merkle_valid`, `relay_signature_valid`, `chain_verified`) and error messages.
+
+```ts
+import { verifyCredentialAnchor } from "@motebit/crypto";
+
+const result = await verifyCredentialAnchor(credential, proof);
+if (result.valid) {
+  // All offline steps passed — credential was anchored by this relay
+}
+```
+
+The Merkle proof verification is inlined in `@motebit/crypto` (same algorithm as `@motebit/encryption/merkle.ts`) so the package maintains zero monorepo dependencies. Any implementation can verify anchor proofs using only `@motebit/crypto` and the relay's public key.
 
 ## 6. Chain Submission
 
