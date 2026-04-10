@@ -35,7 +35,7 @@ jobs:
         run: |
           pnpm --filter @motebit/protocol test
           pnpm --filter @motebit/sdk test
-          pnpm --filter @motebit/verify test
+          pnpm --filter @motebit/crypto test
           pnpm --filter create-motebit test
           pnpm --filter motebit test
 
