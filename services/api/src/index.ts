@@ -757,6 +757,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
   });
 
+  // Admin: settlement stats by mode (relay vs p2p) + recent p2p settlements
+  app.get("/api/v1/admin/settlements", async (c) => {
+    const { getSettlementStatsByMode, getRecentP2pSettlements } = await import("./p2p-verifier.js");
+    const statsByMode = getSettlementStatsByMode(moteDb.db);
+    const recentP2p = getRecentP2pSettlements(moteDb.db, 50);
+    return c.json({
+      stats_by_mode: statsByMode,
+      recent_p2p: recentP2p,
+      p2p_verifier_enabled: !!solanaRpcUrl,
+    });
+  });
+
   // --- Pairing routes ---
   registerPairingRoutes({
     db: moteDb.db,
@@ -1013,6 +1025,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     chain: depositDetectorChain,
   });
 
+  // --- P2P payment verifier (async onchain verification of direct settlements) ---
+  let p2pVerifierInterval: ReturnType<typeof setInterval> | undefined;
+  if (solanaRpcUrl) {
+    const { startP2pVerifierLoop } = await import("./p2p-verifier.js");
+    p2pVerifierInterval = startP2pVerifierLoop(moteDb.db, { rpcUrl: solanaRpcUrl }, () =>
+      getEmergencyFreeze(),
+    );
+    logger.info("p2p_verifier.started", { intervalMs: 60000 });
+  }
+
   // --- Task routes (submission, polling, receipt settlement) ---
   await registerTaskRoutes({
     app,
@@ -1111,6 +1133,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(batchAnchorInterval);
     clearInterval(credentialAnchorInterval);
     clearInterval(depositDetectorInterval);
+    if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
     receiptExchangeHub.close();
     moteDb.close();
   }
