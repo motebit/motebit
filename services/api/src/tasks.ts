@@ -734,16 +734,21 @@ export async function handleReceiptIngestion(
           );
       }
 
-      const persistentAlloc =
-        entry.settlement_mode === "p2p"
-          ? undefined
-          : (moteDb.db
-              .prepare("SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'")
-              .get(taskId) as
-              | { allocation_id: string; amount_locked: number; motebit_id: string }
-              | undefined);
+      // P2P tasks: settlement audit already recorded above. Skip relay settlement,
+      // jump to credential issuance.
+      const isP2pTask = entry.settlement_mode === "p2p";
 
-      const fallbackUnitCost = getListingUnitCost(moteDb, receipt.motebit_id as string);
+      const persistentAlloc = isP2pTask
+        ? undefined
+        : (moteDb.db
+            .prepare("SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'")
+            .get(taskId) as
+            | { allocation_id: string; amount_locked: number; motebit_id: string }
+            | undefined);
+
+      const fallbackUnitCost = isP2pTask
+        ? 0
+        : getListingUnitCost(moteDb, receipt.motebit_id as string);
       const grossAmount =
         entry.price_snapshot ??
         persistentAlloc?.amount_locked ??
@@ -823,74 +828,78 @@ export async function handleReceiptIngestion(
 
       moteDb.db.exec("BEGIN");
       try {
-        moteDb.db
-          .prepare(
-            `INSERT OR IGNORE INTO relay_settlements
-             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, x402_tx_hash, x402_network)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            settlement.settlement_id,
-            settlement.allocation_id,
-            taskId,
-            motebitId,
-            settlement.receipt_hash,
-            settlement.ledger_hash,
-            settlement.amount_settled,
-            settlement.platform_fee,
-            settlement.platform_fee_rate,
-            settlement.status,
-            settlement.settled_at,
-            entry.x402_tx_hash ?? null,
-            entry.x402_network ?? null,
-          );
-
-        if (persistentAlloc) {
+        // Relay settlement: INSERT record + credit/refund virtual accounts.
+        // P2P tasks skip this — their audit record was inserted above.
+        if (!isP2pTask) {
           moteDb.db
             .prepare(
-              "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
+              `INSERT OR IGNORE INTO relay_settlements
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, x402_tx_hash, x402_network)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
-            .run(Date.now(), taskId);
-        }
-
-        {
-          const workerMotebitId = receipt.motebit_id as string;
-
-          if (settlement.status === "refunded") {
-            const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
-            creditAccount(
-              moteDb.db,
-              delegatorId,
-              settlement.amount_settled + settlement.platform_fee,
-              "allocation_release",
+            .run(
               settlement.settlement_id,
-              `Refund for task ${taskId} (${receipt.status})`,
+              settlement.allocation_id,
+              taskId,
+              motebitId,
+              settlement.receipt_hash,
+              settlement.ledger_hash,
+              settlement.amount_settled,
+              settlement.platform_fee,
+              settlement.platform_fee_rate,
+              settlement.status,
+              settlement.settled_at,
+              entry.x402_tx_hash ?? null,
+              entry.x402_network ?? null,
             );
-          } else {
-            if (settlement.amount_settled > 0) {
+
+          if (persistentAlloc) {
+            moteDb.db
+              .prepare(
+                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
+              )
+              .run(Date.now(), taskId);
+          }
+
+          {
+            const workerMotebitId = receipt.motebit_id as string;
+
+            if (settlement.status === "refunded") {
+              const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
               creditAccount(
                 moteDb.db,
-                workerMotebitId,
-                settlement.amount_settled,
-                "settlement_credit",
+                delegatorId,
+                settlement.amount_settled + settlement.platform_fee,
+                "allocation_release",
                 settlement.settlement_id,
-                `Payment for task ${taskId}`,
+                `Refund for task ${taskId} (${receipt.status})`,
               );
-            }
-
-            if (settlement.status === "partial" && persistentAlloc) {
-              const grossSettled = settlement.amount_settled + settlement.platform_fee;
-              const remainder = persistentAlloc.amount_locked - grossSettled;
-              if (remainder > 0) {
-                const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+            } else {
+              if (settlement.amount_settled > 0) {
                 creditAccount(
                   moteDb.db,
-                  delegatorId,
-                  remainder,
-                  "allocation_release",
+                  workerMotebitId,
+                  settlement.amount_settled,
+                  "settlement_credit",
                   settlement.settlement_id,
-                  `Partial release for task ${taskId}`,
+                  `Payment for task ${taskId}`,
                 );
+              }
+
+              if (settlement.status === "partial" && persistentAlloc) {
+                const grossSettled = settlement.amount_settled + settlement.platform_fee;
+                const remainder = persistentAlloc.amount_locked - grossSettled;
+                if (remainder > 0) {
+                  const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+                  creditAccount(
+                    moteDb.db,
+                    delegatorId,
+                    remainder,
+                    "allocation_release",
+                    settlement.settlement_id,
+                    `Partial release for task ${taskId}`,
+                  );
+                }
               }
             }
           }
@@ -1240,6 +1249,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             return next();
           }
         }
+
+        // P2P bypass: if the body contains payment_proof, money moved onchain — skip x402.
+        // This check runs after balance check fails, so p2p is only used when
+        // the delegator can't pay through virtual accounts.
+        try {
+          const buf2 = await c.req.raw.clone().arrayBuffer();
+          const peekBody = JSON.parse(new TextDecoder().decode(buf2)) as {
+            payment_proof?: unknown;
+          };
+          if (peekBody.payment_proof) {
+            return next();
+          }
+        } catch {
+          // Fall through to x402
+        }
       } catch {
         // Parse failed — fall through to x402
       }
@@ -1447,8 +1471,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         );
       }
 
-      // Exact amount match (no vague >= check)
-      if (priceSnapshot != null && proof.amount_micro !== priceSnapshot) {
+      // Exact amount match against the worker's unit cost (not the gross
+      // amount which includes platform fee — p2p has zero fee).
+      const unitCostMicro = unitCostAtSubmission > 0 ? toMicro(unitCostAtSubmission) : undefined;
+      if (unitCostMicro != null && proof.amount_micro !== unitCostMicro) {
         throw new TaskError(
           "TASK_P2P_AMOUNT_MISMATCH",
           `Payment amount ${proof.amount_micro} does not match expected ${priceSnapshot}`,

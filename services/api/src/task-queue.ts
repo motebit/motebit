@@ -247,6 +247,9 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       x402_network: entry.x402_network,
       origin_relay: entry.origin_relay,
       settled: entry.settled,
+      settlement_mode: entry.settlement_mode,
+      p2p_payment_proof: entry.p2p_payment_proof,
+      target_agent: entry.target_agent,
       // receipt is stored in its own column for queryability
     };
   }
@@ -267,6 +270,10 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       x402_network: (stored.x402_network as string) ?? undefined,
       origin_relay: (stored.origin_relay as string) ?? undefined,
       settled: (stored.settled as boolean) ?? undefined,
+      settlement_mode: (stored.settlement_mode as "relay" | "p2p") ?? undefined,
+      p2p_payment_proof:
+        (stored.p2p_payment_proof as TaskQueueEntry["p2p_payment_proof"]) ?? undefined,
+      target_agent: (stored.target_agent as string) ?? undefined,
     };
 
     // Restore receipt from its own column (may be updated independently)
