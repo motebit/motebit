@@ -1000,16 +1000,15 @@ export class DesktopApp {
     issued_at: number;
   }> {
     if (!this.runtime) return [];
-    return this.runtime.getIssuedCredentials().map((vc) => ({
-      credential_id: crypto.randomUUID(),
-      credential_type:
-        vc.type.find((t: string) => t !== "VerifiableCredential") ?? "VerifiableCredential",
-      credential: vc as unknown as Record<string, unknown>,
-      issued_at:
-        (vc as unknown as Record<string, unknown>).validFrom != null
-          ? new Date((vc as unknown as Record<string, unknown>).validFrom as string).getTime()
-          : Date.now(),
-    }));
+    return this.runtime
+      .getIssuedCredentials()
+      .map((vc: { type: string[]; validFrom?: string }) => ({
+        credential_id: crypto.randomUUID(),
+        credential_type:
+          vc.type.find((t: string) => t !== "VerifiableCredential") ?? "VerifiableCredential",
+        credential: vc as unknown as Record<string, unknown>,
+        issued_at: vc.validFrom != null ? new Date(vc.validFrom).getTime() : Date.now(),
+      }));
   }
 
   // === Curiosity, Gradient, Reflection, Agents, Approvals ===
