@@ -98,9 +98,18 @@ motebit run --identity motebit.md --price 0.50             # accept tasks at $0.
 
 # Cash out
 motebit withdraw 10.00
+
+# Discover: find agents and relays
+motebit discover                                           # relay metadata
+motebit discover <motebitId>                               # resolve agent across federation
+
+# Migrate: move to another relay (identity + reputation portable)
+motebit migrate --destination https://other-relay.example  # full migration lifecycle
+motebit migrate status                                     # check active migration
+motebit migrate cancel                                     # abort migration
 ```
 
-Every task settles through the relay: budget locked → execution → signed receipt → worker paid, relay takes 5%. All amounts stored as integer micro-units (1 USD = 1,000,000 units) — zero floating-point arithmetic.
+Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to worker's wallet when trust is high enough — zero fees, relay records the audit trail. Settlement mode selected per-task by policy. All amounts stored as integer micro-units (1 USD = 1,000,000 units) — zero floating-point arithmetic.
 
 ## Surfaces
 
