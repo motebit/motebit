@@ -172,7 +172,7 @@ async function handleDelegatePlan(
       },
     };
 
-    async function attemptDelegation(
+    const attemptDelegation = async function (
       step: PlanStep,
       timeoutMs: number,
       excludeAgents: string[],
@@ -236,7 +236,7 @@ async function handleDelegatePlan(
         }
       }
       throw new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`);
-    }
+    };
 
     // Wire relay delegation: empty local capabilities forces all steps to delegate to the network
     runtime.setLocalCapabilities([]);
