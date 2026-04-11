@@ -72,6 +72,10 @@ export interface AgentResolutionResult {
   capabilities?: string[];
   /** Agent's hex-encoded Ed25519 public key (present if found). */
   public_key?: string;
+  /** Agent's declared settlement address (e.g. Solana base58), if any. */
+  settlement_address?: string;
+  /** Settlement modes the agent accepts (e.g. ["relay", "p2p"]). */
+  settlement_modes?: string[];
   /** Chain of relay_ids traversed during resolution (audit trail). */
   resolved_via: string[];
   /** Whether result came from cache. */

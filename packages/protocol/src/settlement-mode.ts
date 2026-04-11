@@ -34,6 +34,36 @@ export interface P2pPaymentProof {
 /** Verification status of an onchain payment proof. */
 export type PaymentVerificationStatus = "pending" | "verified" | "failed";
 
+// === Solvency Proof ===
+
+/**
+ * Relay-signed attestation of an agent's available balance.
+ *
+ * Workers verify this before starting expensive p2p tasks where
+ * the relay doesn't escrow. Short TTL (5 minutes) prevents stale attestations.
+ *
+ * Verification: strip `signature`, canonicalJson the rest, Ed25519 verify
+ * against the relay's public key (from /.well-known/motebit.json).
+ */
+export interface SolvencyProof {
+  /** The agent whose balance is attested. */
+  motebit_id: string;
+  /** Available balance in micro-units (after dispute holds). */
+  balance_available: number;
+  /** The amount the requester asked about. */
+  amount_requested: number;
+  /** Whether balance_available >= amount_requested. */
+  sufficient: boolean;
+  /** Relay that issued this proof. */
+  relay_id: string;
+  /** When the proof was generated (ms since epoch). */
+  attested_at: number;
+  /** When the proof expires (ms since epoch). attested_at + 300_000. */
+  expires_at: number;
+  /** Ed25519 signature over canonical JSON of all other fields. */
+  signature: string;
+}
+
 // === Settlement Eligibility ===
 
 /**

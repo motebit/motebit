@@ -20,12 +20,18 @@ import {
   hexToBytes,
   verify as ed25519Verify,
   canonicalJson,
+  sign as ed25519Sign,
+  bytesToHex,
 } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
+import { getAccountBalanceDetailed } from "./accounts.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "agents" });
+
+/** Solvency proof TTL: 5 minutes. */
+const SOLVENCY_TTL_MS = 5 * 60 * 1000;
 
 export interface AgentsDeps {
   app: Hono;
@@ -139,6 +145,47 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       },
       online_devices: onlineCount,
     });
+  });
+
+  // GET /api/v1/agents/:motebitId/solvency-proof — relay-signed balance attestation (public)
+  app.get("/api/v1/agents/:motebitId/solvency-proof", async (c) => {
+    const motebitId = c.req.param("motebitId");
+
+    // Validate amount parameter (required, integer micro-units)
+    const rawAmount = c.req.query("amount");
+    if (!rawAmount) {
+      throw new HTTPException(400, { message: "amount query parameter is required (micro-units)" });
+    }
+    const amount = Number(rawAmount);
+    if (!Number.isFinite(amount) || amount < 0 || !Number.isInteger(amount)) {
+      throw new HTTPException(400, {
+        message: "amount must be a non-negative integer (micro-units)",
+      });
+    }
+
+    // Get available balance (respects dispute window hold)
+    const detailed = getAccountBalanceDetailed(moteDb.db, motebitId);
+    const balanceAvailable = detailed.available_for_withdrawal;
+    const attestedAt = Date.now();
+
+    // Build proof payload (all fields except signature)
+    const payload = {
+      motebit_id: motebitId,
+      balance_available: balanceAvailable,
+      amount_requested: amount,
+      sufficient: balanceAvailable >= amount,
+      relay_id: relayIdentity.relayMotebitId,
+      attested_at: attestedAt,
+      expires_at: attestedAt + SOLVENCY_TTL_MS, // 5-minute TTL
+    };
+
+    // Sign with relay's Ed25519 key
+    const canonical = canonicalJson(payload);
+    const message = new TextEncoder().encode(canonical);
+    const sig = await ed25519Sign(message, relayIdentity.privateKey);
+    const signatureHex = bytesToHex(sig);
+
+    return c.json({ ...payload, signature: signatureHex });
   });
 
   // POST /agent/:motebitId/verify-receipt — public receipt verification
@@ -690,11 +737,25 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       settlementModes = [...new Set(modes)].join(",") || undefined;
     }
 
+    // Validate sweep_threshold: integer micro-units, must be positive
+    const rawSweepThreshold = (body as Record<string, unknown>).sweep_threshold as
+      | number
+      | undefined;
+    let sweepThreshold: number | null = null;
+    if (rawSweepThreshold !== undefined && rawSweepThreshold !== null) {
+      if (!Number.isInteger(rawSweepThreshold) || rawSweepThreshold < 0) {
+        throw new HTTPException(400, {
+          message: "Invalid sweep_threshold: must be a non-negative integer (micro-units)",
+        });
+      }
+      sweepThreshold = rawSweepThreshold;
+    }
+
     moteDb.db
       .prepare(
         `
-      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key, federation_visible, settlement_address, settlement_modes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key, federation_visible, settlement_address, settlement_modes, sweep_threshold)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
         public_key = excluded.public_key,
         endpoint_url = excluded.endpoint_url,
@@ -705,7 +766,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         guardian_public_key = COALESCE(excluded.guardian_public_key, agent_registry.guardian_public_key),
         federation_visible = excluded.federation_visible,
         settlement_address = COALESCE(excluded.settlement_address, agent_registry.settlement_address),
-        settlement_modes = COALESCE(excluded.settlement_modes, agent_registry.settlement_modes)
+        settlement_modes = COALESCE(excluded.settlement_modes, agent_registry.settlement_modes),
+        sweep_threshold = COALESCE(excluded.sweep_threshold, agent_registry.sweep_threshold)
     `,
       )
       .run(
@@ -721,6 +783,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         fedVisibleVal,
         settlementAddress ?? null,
         settlementModes ?? "relay",
+        sweepThreshold,
       );
 
     // Auto-create a default service listing if one doesn't exist.

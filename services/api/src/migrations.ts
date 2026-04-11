@@ -510,4 +510,16 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 9,
+    name: "add_sweep_threshold",
+    up: (db) => {
+      const agentCols = (
+        db.prepare("PRAGMA table_info(agent_registry)").all() as { name: string }[]
+      ).map((c) => c.name);
+      if (!agentCols.includes("sweep_threshold")) {
+        db.exec("ALTER TABLE agent_registry ADD COLUMN sweep_threshold INTEGER");
+      }
+    },
+  },
 ];

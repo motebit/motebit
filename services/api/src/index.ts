@@ -126,6 +126,7 @@ import { registerListingsRoutes } from "./listings.js";
 import { registerProposalRoutes } from "./proposals.js";
 import { registerKeyRotationRoutes } from "./key-rotation.js";
 import { registerBudgetRoutes } from "./budget.js";
+import { startSweepLoop } from "./sweep.js";
 import { registerAgentRoutes } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes } from "./tasks.js";
@@ -1035,6 +1036,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     logger.info("p2p_verifier.started", { intervalMs: 60000 });
   }
 
+  // --- Auto-sweep loop (relay balance → sovereign wallet) ---
+  const sweepInterval = startSweepLoop(moteDb.db, {}, () => getEmergencyFreeze());
+  logger.info("sweep.started", { intervalMs: 300000 });
+
   // --- Task routes (submission, polling, receipt settlement) ---
   await registerTaskRoutes({
     app,
@@ -1134,6 +1139,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(credentialAnchorInterval);
     clearInterval(depositDetectorInterval);
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
+    clearInterval(sweepInterval);
     receiptExchangeHub.close();
     moteDb.close();
   }

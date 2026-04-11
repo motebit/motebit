@@ -1400,4 +1400,5 @@ export type {
   P2pPaymentProof,
   PaymentVerificationStatus,
   SettlementEligibility,
+  SolvencyProof,
 } from "./settlement-mode.js";

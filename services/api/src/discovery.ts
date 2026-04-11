@@ -166,10 +166,16 @@ async function resolveAgent(
   // Step 1: Check local agent registry
   const localAgent = db
     .prepare(
-      "SELECT motebit_id, public_key, capabilities FROM agent_registry WHERE motebit_id = ? AND revoked = 0",
+      "SELECT motebit_id, public_key, capabilities, settlement_address, settlement_modes FROM agent_registry WHERE motebit_id = ? AND revoked = 0",
     )
     .get(motebitId) as
-    | { motebit_id: string; public_key: string; capabilities: string | null }
+    | {
+        motebit_id: string;
+        public_key: string;
+        capabilities: string | null;
+        settlement_address: string | null;
+        settlement_modes: string | null;
+      }
     | undefined;
 
   if (localAgent) {
@@ -182,6 +188,12 @@ async function resolveAgent(
 
     if (!isRemoteQuery || federationVisible) {
       const caps = localAgent.capabilities ? (JSON.parse(localAgent.capabilities) as string[]) : [];
+      const modes = localAgent.settlement_modes
+        ? localAgent.settlement_modes
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : undefined;
       const result: AgentResolutionResult = {
         motebit_id: motebitId,
         found: true,
@@ -189,6 +201,10 @@ async function resolveAgent(
         relay_url: federationConfig?.endpointUrl ?? "",
         capabilities: caps,
         public_key: localAgent.public_key,
+        ...(localAgent.settlement_address
+          ? { settlement_address: localAgent.settlement_address }
+          : {}),
+        ...(modes && modes.length > 0 ? { settlement_modes: modes } : {}),
         resolved_via: [ownRelayId],
         cached: false,
         ttl: POSITIVE_CACHE_TTL,

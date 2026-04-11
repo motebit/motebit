@@ -270,6 +270,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/agents/:motebitId/deposit", rl(writeLimiter));
   app.use("/api/v1/agents/:motebitId/withdraw", rl(writeLimiter));
   app.use("/api/v1/agents/:motebitId/balance", rl(readLimiter));
+  app.use("/api/v1/agents/:motebitId/solvency-proof", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/withdrawals", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/checkout", rl(writeLimiter));
   app.use("/api/v1/stripe/webhook", rl(publicLimiter));
