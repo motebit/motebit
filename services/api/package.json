@@ -31,7 +31,7 @@
     "@x402/evm": "^2.6.0",
     "@x402/hono": "^2.6.0",
     "hono": "^4.12.9",
-    "stripe": "^17.0.0"
+    "stripe": "^22.0.1"
   },
   "devDependencies": {
     "@motebit/ai-core": "workspace:*",

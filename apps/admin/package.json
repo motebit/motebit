@@ -19,15 +19,15 @@
     "@motebit/gradient": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "d3-force": "^3.0.0",
-    "react": "^18.3.0",
-    "react-dom": "^18.3.0",
-    "recharts": "^2.15.0"
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
     "@types/d3-force": "^3.0.0",
-    "@types/react": "^18.3.0",
-    "@types/react-dom": "^18.3.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.0",
     "jsdom": "^25.0.0",
     "typescript": "^5.6.0",
