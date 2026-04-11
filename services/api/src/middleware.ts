@@ -306,6 +306,17 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/.well-known/motebit.json", rl(publicLimiter));
   app.use("/api/v1/discover/*", rl(readLimiter));
 
+  // Dispute endpoints (dispute-v1.md)
+  app.use("/api/v1/allocations/*/dispute", rl(writeLimiter));
+  app.use("/api/v1/disputes/*/evidence", rl(writeLimiter));
+  app.use("/api/v1/disputes/*/resolve", rl(writeLimiter));
+  app.use("/api/v1/disputes/*/appeal", rl(writeLimiter));
+  app.use("/api/v1/disputes/*", rl(readLimiter));
+
+  // Admin endpoints — dispute + settlement dashboards
+  app.use("/api/v1/admin/disputes", rl(expensiveLimiter));
+  app.use("/api/v1/admin/settlements", rl(expensiveLimiter));
+
   // Federation peering endpoints (30 req/min per IP — write tier)
   // POST handlers also enforce per-peer rate limiting (30 req/min per relay_id) in federation.ts
   app.use("/federation/v1/peer/*", rl(writeLimiter));
@@ -589,4 +600,7 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   // Admin emergency freeze — master token only
   app.use("/api/v1/admin/freeze", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/unfreeze", bearerAuth({ token: apiToken }));
+  // Admin dispute + settlement dashboards — master token only
+  app.use("/api/v1/admin/disputes", bearerAuth({ token: apiToken }));
+  app.use("/api/v1/admin/settlements", bearerAuth({ token: apiToken }));
 }
