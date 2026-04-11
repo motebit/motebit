@@ -1360,3 +1360,17 @@ export type {
 // motebit/discovery@1.0.
 
 export type { RelayMetadata, RelayMetadataPeer, AgentResolutionResult } from "./discovery.js";
+
+// ── Migration (protocol-level) ────────────────────────────
+// Agent migration between relays with identity continuity and trust portability.
+// motebit/migration@1.0.
+
+export type {
+  MigrationState,
+  MigrationRequest,
+  MigrationToken,
+  DepartureAttestation,
+  CredentialBundle,
+  BalanceWaiver,
+  MigrationPresentation,
+} from "./migration.js";

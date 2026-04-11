@@ -683,6 +683,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     platformFeeRate,
   });
 
+  // --- Migration routes (migration-v1.md) ---
+  const { registerMigrationRoutes, createMigrationTables } = await import("./migration.js");
+  createMigrationTables(moteDb.db);
+  await registerMigrationRoutes({
+    db: moteDb.db,
+    app,
+    relayIdentity,
+    federationConfig,
+  });
+
   // --- Proxy token + balance routes ---
   registerProxyTokenRoutes(app, moteDb.db, relayIdentity);
 
