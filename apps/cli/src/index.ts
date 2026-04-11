@@ -56,6 +56,8 @@ import {
   handleBalance,
   handleFund,
   handleDelegate,
+  handleDiscover,
+  handleMigrate,
   handleWithdraw,
   handleWallet,
 } from "./subcommands/index.js";
@@ -195,6 +197,16 @@ async function main(): Promise<void> {
 
   if (subcommand === "withdraw") {
     await handleWithdraw(config);
+    return;
+  }
+
+  if (subcommand === "discover") {
+    await handleDiscover(config);
+    return;
+  }
+
+  if (subcommand === "migrate") {
+    await handleMigrate(config);
     return;
   }
 

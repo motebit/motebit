@@ -21,6 +21,7 @@ export {
 } from "./approvals.js";
 export { handleCredentials } from "./credentials.js";
 export { handleDelegate } from "./delegate.js";
+export { handleDiscover } from "./discover.js";
 export { handleDoctor } from "./doctor.js";
 export { handleExport } from "./export.js";
 export {
@@ -37,6 +38,7 @@ export {
 } from "./goals.js";
 export { handleId } from "./id.js";
 export { handleLedger } from "./ledger.js";
+export { handleMigrate } from "./migrate.js";
 export { handleBalance, handleFund, handleWithdraw } from "./market.js";
 export { handleRegister } from "./register.js";
 export { handleRotate } from "./rotate.js";
