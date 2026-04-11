@@ -682,4 +682,166 @@ describe("RelayDelegationAdapter retry with failover", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("surfaces HTTP 402 with parsed JSON message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ message: "Budget exhausted", estimated_cost: 0.5 }), {
+          status: 402,
+        }),
+      ),
+    );
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+      maxDelegationRetries: 0,
+    });
+
+    await expect(adapter.delegateStep(makeStep(), 5000)).rejects.toThrow(
+      /Payment required.*Budget exhausted/,
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it("surfaces HTTP 402 with raw text when JSON parse fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("Payment required plain text", { status: 402 })),
+    );
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+      maxDelegationRetries: 0,
+    });
+
+    await expect(adapter.delegateStep(makeStep(), 5000)).rejects.toThrow(
+      /Payment required.*plain text/,
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it("pollTaskResult returns result when receipt exists", async () => {
+    const receipt = makeReceipt("task-poll");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            task: { status: "completed" },
+            receipt,
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+    });
+
+    const result = await adapter.pollTaskResult("task-poll", "step-1");
+    expect(result).not.toBeNull();
+    expect(result!.task_id).toBe("task-poll");
+    expect(result!.step_id).toBe("step-1");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("pollTaskResult returns null when receipt is null (still pending)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            task: { status: "running" },
+            receipt: null,
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+    });
+
+    const result = await adapter.pollTaskResult("task-1", "step-1");
+    expect(result).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("pollTaskResult returns null on non-ok response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Not found", { status: 404 })));
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+    });
+
+    const result = await adapter.pollTaskResult("task-1", "step-1");
+    expect(result).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("pollTaskResult returns null on network error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Network failure")));
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+    });
+
+    const result = await adapter.pollTaskResult("task-1", "step-1");
+    expect(result).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("uses function authToken to mint fresh tokens", async () => {
+    const tokenFactory = vi.fn().mockResolvedValue("fresh-token-123");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify({ task_id: "task-1" }), { status: 200 })),
+    );
+
+    const receipt = makeReceipt("task-1");
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      authToken: tokenFactory,
+      sendRaw: vi.fn(),
+      onCustomMessage: (cb) => {
+        setTimeout(() => cb({ type: "task_result", task_id: "task-1", receipt }), 10);
+        return () => {};
+      },
+    });
+
+    await adapter.delegateStep(makeStep(), 5000);
+    expect(tokenFactory).toHaveBeenCalledWith("task:submit");
+
+    vi.unstubAllGlobals();
+  });
 });

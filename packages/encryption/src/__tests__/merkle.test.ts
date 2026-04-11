@@ -221,6 +221,15 @@ describe("computeSettlementLeaf", () => {
     expect(leaf).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("verifyMerkleProof rejects proof with truncated siblings", async () => {
+    const leaves = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+    const tree = await buildMerkleTree(leaves);
+    const proof = getMerkleProof(tree, 0);
+    // Truncate siblings to corrupt the proof
+    const truncated = { ...proof, siblings: [] };
+    expect(await verifyMerkleProof(truncated, tree.root)).toBe(false);
+  });
+
   it("integrates with Merkle tree: settlement leaves produce valid proofs", async () => {
     const settlements = Array.from({ length: 5 }, (_, i) => ({
       ...settlement,

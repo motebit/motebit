@@ -453,3 +453,72 @@ describe("buildAgentGraph — trust_override and no trust_record", () => {
     expect(edge.reliability).toBe(0.5);
   });
 });
+
+describe("cheapestPath — unreachable target", () => {
+  const self = asMotebitId("self");
+
+  it("returns null for unreachable agent", () => {
+    const graph = buildAgentGraph(self, []);
+    graph.addNode(asMotebitId("isolated"));
+
+    const result = cheapestPath(graph, self, asMotebitId("isolated"));
+    expect(result).toBeNull();
+  });
+});
+
+describe("rankReachableAgents — Infinity edge cases", () => {
+  const self = asMotebitId("self");
+
+  it("handles Infinity cost, latency, and risk with zero score", () => {
+    const agents = [makeAgent("high-trust", AgentTrustLevel.Trusted, self)];
+    const graph = buildAgentGraph(self, agents);
+
+    // Manually set edge with Infinity values to test branch coverage
+    graph.setEdge(self, asMotebitId("high-trust"), {
+      trust: 0.9,
+      cost: Infinity,
+      latency: Infinity,
+      reliability: 0.9,
+      regulatory_risk: Infinity,
+    });
+
+    const ranked = rankReachableAgents(graph, self);
+    expect(ranked.length).toBe(1);
+    // With Infinity cost/latency/risk, those score components should be 0
+    // Only trust (0.9 * 0.3) + reliability (0.9 * 0.15) contribute
+    expect(ranked[0]!.score).toBeCloseTo(0.9 * 0.3 + 0.9 * 0.15);
+  });
+
+  it("uses zero regulatory_risk weight when not provided", () => {
+    const agents = [makeAgent("agent-a", AgentTrustLevel.Trusted, self, { reliability: 0.9 })];
+    const graph = buildAgentGraph(self, agents);
+
+    const ranked = rankReachableAgents(graph, self, {
+      trust: 0.5,
+      cost: 0.2,
+      latency: 0.2,
+      reliability: 0.1,
+      // regulatory_risk omitted — defaults to undefined, should use ?? 0
+    });
+
+    expect(ranked.length).toBe(1);
+    expect(ranked[0]!.score).toBeGreaterThan(0);
+  });
+
+  it("filters agents with zero trust from ranking", () => {
+    const agents = [makeAgent("zero-trust", AgentTrustLevel.Trusted, self)];
+    const graph = buildAgentGraph(self, agents);
+
+    // Override to zero trust
+    graph.setEdge(self, asMotebitId("zero-trust"), {
+      trust: 0,
+      cost: 1,
+      latency: 100,
+      reliability: 0.9,
+      regulatory_risk: 0,
+    });
+
+    const ranked = rankReachableAgents(graph, self);
+    expect(ranked.length).toBe(0); // zero trust = filtered out
+  });
+});

@@ -6,6 +6,7 @@ import {
   buildKeyTransferPayload,
   decryptKeyTransfer,
   checkPreTransferBalance,
+  formatWalletWarning,
   generateKeypair,
   bytesToHex,
   base58btcEncode,
@@ -175,5 +176,156 @@ describe("Pre-transfer wallet safety check", () => {
     const kp = await generateKeypair();
     const result = await checkPreTransferBalance(kp.privateKey, kp.privateKey);
     expect(result.hasAnyValue).toBe(false);
+  });
+
+  it("parses SOL balance and token accounts from successful RPC response", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+
+    // Mock fetch to return a batched Solana RPC response with balance and token accounts
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => [
+        { id: 1, result: { value: 5_000_000_000 } }, // 5 SOL in lamports
+        {
+          id: 2,
+          result: {
+            value: [
+              {
+                account: {
+                  data: {
+                    parsed: { info: { tokenAmount: { amount: "1000000" } } },
+                  },
+                },
+              },
+              {
+                account: {
+                  data: {
+                    parsed: { info: { tokenAmount: { amount: "0" } } },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    })) as unknown as typeof fetch;
+
+    try {
+      const result = await checkPreTransferBalance(a.privateKey, b.privateKey, "http://mock-rpc");
+      expect(result.solLamports).toBe(5_000_000_000n);
+      expect(result.tokenAccountCount).toBe(1); // only non-zero count
+      expect(result.hasAnyValue).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("handles RPC response with null/missing nested fields gracefully", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => [
+        { id: 1, result: { value: 0 } }, // zero SOL
+        { id: 2, result: { value: [] } }, // no token accounts
+      ],
+    })) as unknown as typeof fetch;
+
+    try {
+      const result = await checkPreTransferBalance(a.privateKey, b.privateKey, "http://mock-rpc");
+      expect(result.solLamports).toBe(0n);
+      expect(result.tokenAccountCount).toBe(0);
+      expect(result.hasAnyValue).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("handles RPC response with undefined token result value (nullish coalescing fallback)", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => [
+        { id: 1, result: { value: 1_000_000 } }, // some SOL
+        { id: 2, result: undefined }, // tokenResult is undefined — triggers ?? []
+      ],
+    })) as unknown as typeof fetch;
+
+    try {
+      const result = await checkPreTransferBalance(a.privateKey, b.privateKey, "http://mock-rpc");
+      expect(result.solLamports).toBe(1_000_000n);
+      expect(result.tokenAccountCount).toBe(0);
+      expect(result.hasAnyValue).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("handles non-ok HTTP response gracefully (falls back to zero)", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: false,
+      status: 500,
+    })) as unknown as typeof fetch;
+
+    try {
+      const result = await checkPreTransferBalance(a.privateKey, b.privateKey, "http://mock-rpc");
+      expect(result.solLamports).toBe(0n);
+      expect(result.tokenAccountCount).toBe(0);
+      expect(result.hasAnyValue).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("formatWalletWarning", () => {
+  it("formats warning with SOL only", () => {
+    const msg = formatWalletWarning({
+      oldAddress: "OldAddr",
+      newAddress: "NewAddr",
+      solLamports: 2_500_000_000n,
+      tokenAccountCount: 0,
+      hasAnyValue: true,
+    });
+    expect(msg).toContain("2.5000 SOL");
+    expect(msg).toContain("OldAddr");
+    expect(msg).toContain("NewAddr");
+    expect(msg).not.toContain("token account");
+  });
+
+  it("formats warning with token accounts only", () => {
+    const msg = formatWalletWarning({
+      oldAddress: "OldAddr",
+      newAddress: "NewAddr",
+      solLamports: 0n,
+      tokenAccountCount: 3,
+      hasAnyValue: true,
+    });
+    expect(msg).toContain("3 token account(s)");
+    expect(msg).not.toContain("SOL");
+  });
+
+  it("formats warning with both SOL and tokens", () => {
+    const msg = formatWalletWarning({
+      oldAddress: "OldAddr",
+      newAddress: "NewAddr",
+      solLamports: 1_000_000_000n,
+      tokenAccountCount: 2,
+      hasAnyValue: true,
+    });
+    expect(msg).toContain("1.0000 SOL");
+    expect(msg).toContain("2 token account(s)");
+    expect(msg).toContain(" and ");
   });
 });

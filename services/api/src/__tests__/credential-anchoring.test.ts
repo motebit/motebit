@@ -298,3 +298,187 @@ describe("getCredentialAnchorBatch", () => {
     expect(batch!.anchor).toBeNull();
   });
 });
+
+// === submitCredentialAnchorOnChain ===
+
+import {
+  submitCredentialAnchorOnChain,
+  listCredentialAnchorBatches,
+  getCredentialAnchoringStats,
+} from "../credential-anchoring.js";
+import type { ChainAnchorSubmitter } from "@motebit/sdk";
+
+describe("submitCredentialAnchorOnChain", () => {
+  it("submits batch and updates record with chain info", async () => {
+    await insertCredential(db, { issuedAt: 1000 });
+    const record = await cutCredentialBatch(db, relayIdentity);
+    expect(record).not.toBeNull();
+
+    const submitter: ChainAnchorSubmitter = {
+      chain: "solana",
+      network: "mainnet-beta",
+      submitMerkleRoot: async (_root, _relayId, _count) => ({
+        txHash: "tx-hash-abc123",
+      }),
+      isAvailable: async () => true,
+    };
+
+    const ok = await submitCredentialAnchorOnChain(db, record!.batch_id, submitter);
+    expect(ok).toBe(true);
+
+    // Verify the batch record was updated
+    const batch = getCredentialAnchorBatch(db, record!.batch_id);
+    expect(batch).not.toBeNull();
+    expect(batch!.anchor).not.toBeNull();
+    expect(batch!.anchor!.tx_hash).toBe("tx-hash-abc123");
+    expect(batch!.anchor!.chain).toBe("solana");
+    expect(batch!.anchor!.network).toBe("mainnet-beta");
+  });
+
+  it("returns true for already-submitted batch (idempotent)", async () => {
+    await insertCredential(db, { issuedAt: 1000 });
+    const record = await cutCredentialBatch(db, relayIdentity);
+
+    const submitter: ChainAnchorSubmitter = {
+      chain: "solana",
+      network: "mainnet-beta",
+      submitMerkleRoot: async () => ({ txHash: "tx-1" }),
+      isAvailable: async () => true,
+    };
+
+    await submitCredentialAnchorOnChain(db, record!.batch_id, submitter);
+    // Second call: batch already confirmed, should return true without re-submitting
+    const ok = await submitCredentialAnchorOnChain(db, record!.batch_id, submitter);
+    expect(ok).toBe(true);
+  });
+
+  it("returns true for nonexistent batch", async () => {
+    const submitter: ChainAnchorSubmitter = {
+      chain: "solana",
+      network: "mainnet-beta",
+      submitMerkleRoot: async () => ({ txHash: "tx-1" }),
+      isAvailable: async () => true,
+    };
+
+    const ok = await submitCredentialAnchorOnChain(db, "nonexistent", submitter);
+    expect(ok).toBe(true);
+  });
+
+  it("returns false when submitter throws", async () => {
+    await insertCredential(db, { issuedAt: 1000 });
+    const record = await cutCredentialBatch(db, relayIdentity);
+
+    const submitter: ChainAnchorSubmitter = {
+      chain: "solana",
+      network: "mainnet-beta",
+      submitMerkleRoot: async () => {
+        throw new Error("RPC timeout");
+      },
+      isAvailable: async () => true,
+    };
+
+    const ok = await submitCredentialAnchorOnChain(db, record!.batch_id, submitter);
+    expect(ok).toBe(false);
+
+    // Batch should still be in 'signed' status (not confirmed)
+    const batch = getCredentialAnchorBatch(db, record!.batch_id);
+    expect(batch!.anchor).toBeNull();
+  });
+});
+
+// === listCredentialAnchorBatches ===
+
+describe("listCredentialAnchorBatches", () => {
+  it("returns empty array when no batches exist", () => {
+    const batches = listCredentialAnchorBatches(db);
+    expect(batches).toEqual([]);
+  });
+
+  it("returns batches in reverse chronological order", async () => {
+    await insertCredential(db, { issuedAt: 1000 });
+    const batch1 = await cutCredentialBatch(db, relayIdentity, 1);
+    await insertCredential(db, { issuedAt: 2000 });
+    const batch2 = await cutCredentialBatch(db, relayIdentity, 1);
+
+    const batches = listCredentialAnchorBatches(db);
+    expect(batches).toHaveLength(2);
+    // Most recent first
+    expect(batches[0]!.batch_id).toBe(batch2!.batch_id);
+    expect(batches[1]!.batch_id).toBe(batch1!.batch_id);
+  });
+
+  it("respects limit parameter", async () => {
+    for (let i = 0; i < 5; i++) {
+      await insertCredential(db, { issuedAt: 1000 + i });
+      await cutCredentialBatch(db, relayIdentity, 1);
+    }
+
+    const batches = listCredentialAnchorBatches(db, 3);
+    expect(batches).toHaveLength(3);
+  });
+
+  it("includes anchor data for confirmed batches", async () => {
+    await insertCredential(db, { issuedAt: 1000 });
+    const record = await cutCredentialBatch(db, relayIdentity);
+
+    const submitter: ChainAnchorSubmitter = {
+      chain: "solana",
+      network: "mainnet-beta",
+      submitMerkleRoot: async () => ({ txHash: "tx-list-test" }),
+      isAvailable: async () => true,
+    };
+    await submitCredentialAnchorOnChain(db, record!.batch_id, submitter);
+
+    const batches = listCredentialAnchorBatches(db);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.anchor).not.toBeNull();
+    expect(batches[0]!.anchor!.tx_hash).toBe("tx-list-test");
+  });
+});
+
+// === getCredentialAnchoringStats ===
+
+describe("getCredentialAnchoringStats", () => {
+  it("returns zeros when no data exists", () => {
+    const stats = getCredentialAnchoringStats(db);
+    expect(stats.total_batches).toBe(0);
+    // confirmed_batches and total_credentials_anchored may be 0 or null depending on SQLite SUM behavior
+    expect(stats.confirmed_batches ?? 0).toBe(0);
+    expect(stats.total_credentials_anchored).toBe(0);
+    expect(stats.pending_credentials).toBe(0);
+  });
+
+  it("counts batches and credentials correctly", async () => {
+    // Insert 3 credentials, batch 2 of them
+    await insertCredential(db, { issuedAt: 1000 });
+    await insertCredential(db, { issuedAt: 2000 });
+    await insertCredential(db, { issuedAt: 3000 });
+
+    await cutCredentialBatch(db, relayIdentity, 2);
+
+    const stats = getCredentialAnchoringStats(db);
+    expect(stats.total_batches).toBe(1);
+    expect(stats.confirmed_batches).toBe(0);
+    expect(stats.total_credentials_anchored).toBe(2);
+    expect(stats.pending_credentials).toBe(1); // 1 still unbatched
+  });
+
+  it("counts confirmed batches after chain submission", async () => {
+    await insertCredential(db, { issuedAt: 1000 });
+    const record = await cutCredentialBatch(db, relayIdentity);
+
+    const submitter: ChainAnchorSubmitter = {
+      chain: "solana",
+      network: "mainnet-beta",
+      submitMerkleRoot: async () => ({ txHash: "tx-stats" }),
+      isAvailable: async () => true,
+    };
+    await submitCredentialAnchorOnChain(db, record!.batch_id, submitter);
+
+    const stats = getCredentialAnchoringStats(db);
+    expect(stats.total_batches).toBe(1);
+    expect(stats.confirmed_batches).toBe(1);
+    expect(stats.total_credentials_anchored).toBe(1);
+    expect(stats.pending_credentials).toBe(0);
+  });
+});

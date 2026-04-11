@@ -1298,6 +1298,164 @@ describe("verify — guardian recovery succession", () => {
 });
 
 // ---------------------------------------------------------------------------
+// verify() — credential dispatch (covers index.ts line 1130)
+// ---------------------------------------------------------------------------
+
+import { issueReputationCredential } from "../index";
+
+describe("verify — credential dispatch", () => {
+  it("verifies a valid credential object", async () => {
+    const kp = await makeKeypair();
+    const vc = await issueReputationCredential(
+      {
+        success_rate: 0.9,
+        avg_latency_ms: 100,
+        task_count: 10,
+        trust_score: 0.8,
+        availability: 0.95,
+        measured_at: 1000,
+      },
+      ed.hashes.sha512 ? kp.privateKey : kp.privateKey,
+      kp.publicKey,
+      "did:key:zSubjectTest",
+    );
+
+    const result = await verify(vc);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(true);
+    if (result.type === "credential") {
+      expect(result.issuer).toMatch(/^did:key:z/);
+      expect(result.subject).toBe("did:key:zSubjectTest");
+    }
+  });
+
+  it("verifies a credential from JSON string", async () => {
+    const kp = await makeKeypair();
+    const vc = await issueReputationCredential(
+      {
+        success_rate: 0.9,
+        avg_latency_ms: 100,
+        task_count: 10,
+        trust_score: 0.8,
+        availability: 0.95,
+        measured_at: 1000,
+      },
+      kp.privateKey,
+      kp.publicKey,
+      "did:key:zSubjectStr",
+    );
+
+    const result = await verify(JSON.stringify(vc));
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects a credential with tampered subject", async () => {
+    const kp = await makeKeypair();
+    const vc = await issueReputationCredential(
+      {
+        success_rate: 0.9,
+        avg_latency_ms: 100,
+        task_count: 10,
+        trust_score: 0.8,
+        availability: 0.95,
+        measured_at: 1000,
+      },
+      kp.privateKey,
+      kp.publicKey,
+      "did:key:zSubjectTamper",
+    );
+
+    // Tamper with the credential subject
+    const tampered = JSON.parse(JSON.stringify(vc));
+    tampered.credentialSubject.success_rate = 1.0;
+
+    const result = await verify(tampered);
+    expect(result.type).toBe("credential");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects with expectedType mismatch", async () => {
+    const kp = await makeKeypair();
+    const vc = await issueReputationCredential(
+      {
+        success_rate: 0.9,
+        avg_latency_ms: 100,
+        task_count: 10,
+        trust_score: 0.8,
+        availability: 0.95,
+        measured_at: 1000,
+      },
+      kp.privateKey,
+      kp.publicKey,
+      "did:key:zSubjectMismatch",
+    );
+
+    const result = await verify(vc, { expectedType: "receipt" });
+    expect(result.valid).toBe(false);
+    expect(result.errors![0]!.message).toContain('Expected type "receipt"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — presentation dispatch (covers index.ts line 1132)
+// ---------------------------------------------------------------------------
+
+import { createPresentation } from "../index";
+
+describe("verify — presentation dispatch", () => {
+  it("verifies a valid presentation object", async () => {
+    const kp = await makeKeypair();
+    const vc = await issueReputationCredential(
+      {
+        success_rate: 0.9,
+        avg_latency_ms: 100,
+        task_count: 10,
+        trust_score: 0.8,
+        availability: 0.95,
+        measured_at: 1000,
+      },
+      kp.privateKey,
+      kp.publicKey,
+      "did:key:zSubjectVP",
+    );
+
+    const vp = await createPresentation([vc], kp.privateKey, kp.publicKey);
+
+    const result = await verify(vp);
+    expect(result.type).toBe("presentation");
+    expect(result.valid).toBe(true);
+    if (result.type === "presentation") {
+      expect(result.holder).toMatch(/^did:key:z/);
+      expect(result.credentials).toHaveLength(1);
+    }
+  });
+
+  it("verifies a presentation from JSON string", async () => {
+    const kp = await makeKeypair();
+    const vc = await issueReputationCredential(
+      {
+        success_rate: 0.9,
+        avg_latency_ms: 100,
+        task_count: 10,
+        trust_score: 0.8,
+        availability: 0.95,
+        measured_at: 1000,
+      },
+      kp.privateKey,
+      kp.publicKey,
+      "did:key:zSubjectVPStr",
+    );
+
+    const vp = await createPresentation([vc], kp.privateKey, kp.publicKey);
+
+    const result = await verify(JSON.stringify(vp));
+    expect(result.type).toBe("presentation");
+    expect(result.valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-compatibility with @motebit/identity-file
 // ---------------------------------------------------------------------------
 // NOTE: Cross-compat is now tested in @motebit/identity-file's test suite,

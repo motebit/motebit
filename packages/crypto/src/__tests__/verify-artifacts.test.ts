@@ -1,19 +1,12 @@
+/**
+ * Tests extracted from @motebit/encryption to exercise @motebit/crypto
+ * functions directly for coverage attribution.
+ */
 import { describe, it, expect } from "vitest";
 import {
-  canonicalJson,
-  generateKey,
-  generateNonce,
-  generateSalt,
-  encrypt,
-  decrypt,
-  deriveKey,
-  deriveSyncEncryptionKey,
-  hash,
-  createDeletionCertificate,
-  secureErase,
   generateKeypair,
-  sign,
-  verify,
+  ed25519Sign,
+  ed25519Verify,
   createSignedToken,
   verifySignedToken,
   signExecutionReceipt,
@@ -27,191 +20,16 @@ import {
   verifyGuardianRevocation,
   verifySuccessionChain,
   didKeyToPublicKey,
+  publicKeyToDidKey,
+  hexPublicKeyToDidKey,
+  base58btcEncode,
+  hexToBytes,
+  bytesToHex,
+  hash,
   type SignedTokenPayload,
   type SignableReceipt,
   type KnownKeys,
-  base58btcEncode,
-  hexToBytes,
-  publicKeyToDidKey,
-  hexPublicKeyToDidKey,
-  bytesToHex,
-} from "../index";
-
-// ---------------------------------------------------------------------------
-// generateKey()
-// ---------------------------------------------------------------------------
-
-describe("generateKey", () => {
-  it("returns a Uint8Array of 32 bytes", () => {
-    const key = generateKey();
-    expect(key).toBeInstanceOf(Uint8Array);
-    expect(key.length).toBe(32);
-  });
-
-  it("generates different keys on successive calls", () => {
-    const a = generateKey();
-    const b = generateKey();
-    // Extremely unlikely to be equal
-    expect(a).not.toEqual(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// generateNonce()
-// ---------------------------------------------------------------------------
-
-describe("generateNonce", () => {
-  it("returns a Uint8Array of 12 bytes", () => {
-    const nonce = generateNonce();
-    expect(nonce).toBeInstanceOf(Uint8Array);
-    expect(nonce.length).toBe(12);
-  });
-
-  it("generates different nonces on successive calls", () => {
-    const a = generateNonce();
-    const b = generateNonce();
-    expect(a).not.toEqual(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// generateSalt()
-// ---------------------------------------------------------------------------
-
-describe("generateSalt", () => {
-  it("returns a Uint8Array of 16 bytes", () => {
-    const salt = generateSalt();
-    expect(salt).toBeInstanceOf(Uint8Array);
-    expect(salt.length).toBe(16);
-  });
-
-  it("generates different salts on successive calls", () => {
-    const a = generateSalt();
-    const b = generateSalt();
-    expect(a).not.toEqual(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// encrypt() / decrypt() roundtrip
-// ---------------------------------------------------------------------------
-
-describe("encrypt and decrypt", () => {
-  it("roundtrips plaintext correctly", async () => {
-    const key = generateKey();
-    const plaintext = new TextEncoder().encode("Hello, Motebit!");
-    const encrypted = await encrypt(plaintext, key);
-
-    expect(encrypted.ciphertext).toBeInstanceOf(Uint8Array);
-    expect(encrypted.nonce).toBeInstanceOf(Uint8Array);
-    expect(encrypted.nonce.length).toBe(12);
-    expect(encrypted.tag).toBeInstanceOf(Uint8Array);
-    expect(encrypted.tag.length).toBe(16);
-
-    const decrypted = await decrypt(encrypted, key);
-    expect(new TextDecoder().decode(decrypted)).toBe("Hello, Motebit!");
-  });
-
-  it("fails to decrypt with wrong key", async () => {
-    const key1 = generateKey();
-    const key2 = generateKey();
-    const plaintext = new TextEncoder().encode("secret data");
-    const encrypted = await encrypt(plaintext, key1);
-
-    await expect(decrypt(encrypted, key2)).rejects.toThrow();
-  });
-
-  it("roundtrips empty data", async () => {
-    const key = generateKey();
-    const plaintext = new Uint8Array(0);
-    const encrypted = await encrypt(plaintext, key);
-    const decrypted = await decrypt(encrypted, key);
-    expect(decrypted.length).toBe(0);
-  });
-
-  it("roundtrips large data", async () => {
-    const key = generateKey();
-    const plaintext = new Uint8Array(10000);
-    for (let i = 0; i < plaintext.length; i++) {
-      plaintext[i] = i % 256;
-    }
-    const encrypted = await encrypt(plaintext, key);
-    const decrypted = await decrypt(encrypted, key);
-    expect(decrypted).toEqual(plaintext);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// deriveKey()
-// ---------------------------------------------------------------------------
-
-describe("deriveKey", () => {
-  it("produces a 32-byte key", async () => {
-    const salt = new Uint8Array(16);
-    const derived = await deriveKey("password", salt, 1000);
-    expect(derived).toBeInstanceOf(Uint8Array);
-    expect(derived.length).toBe(32);
-  });
-
-  it("produces deterministic output with same inputs", async () => {
-    const salt = new TextEncoder().encode("fixed-salt-value");
-    const a = await deriveKey("my-password", salt, 1000);
-    const b = await deriveKey("my-password", salt, 1000);
-    expect(a).toEqual(b);
-  });
-
-  it("produces different output with different passwords", async () => {
-    const salt = new TextEncoder().encode("fixed-salt-value");
-    const a = await deriveKey("password-a", salt, 1000);
-    const b = await deriveKey("password-b", salt, 1000);
-    expect(a).not.toEqual(b);
-  });
-
-  it("produces different output with different salts", async () => {
-    const saltA = new TextEncoder().encode("salt-a");
-    const saltB = new TextEncoder().encode("salt-b");
-    const a = await deriveKey("same-password", saltA, 1000);
-    const b = await deriveKey("same-password", saltB, 1000);
-    expect(a).not.toEqual(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// deriveSyncEncryptionKey()
-// ---------------------------------------------------------------------------
-
-describe("deriveSyncEncryptionKey", () => {
-  it("produces a 32-byte key", async () => {
-    const kp = await generateKeypair();
-    const derived = await deriveSyncEncryptionKey(kp.privateKey);
-    expect(derived).toBeInstanceOf(Uint8Array);
-    expect(derived.length).toBe(32);
-  });
-
-  it("is deterministic — same private key produces same output", async () => {
-    const kp = await generateKeypair();
-    const a = await deriveSyncEncryptionKey(kp.privateKey);
-    const b = await deriveSyncEncryptionKey(kp.privateKey);
-    expect(a).toEqual(b);
-  });
-
-  it("different private keys produce different output", async () => {
-    const kpA = await generateKeypair();
-    const kpB = await generateKeypair();
-    const a = await deriveSyncEncryptionKey(kpA.privateKey);
-    const b = await deriveSyncEncryptionKey(kpB.privateKey);
-    expect(a).not.toEqual(b);
-  });
-
-  it("round-trips through encrypt/decrypt", async () => {
-    const kp = await generateKeypair();
-    const key = await deriveSyncEncryptionKey(kp.privateKey);
-    const plaintext = new TextEncoder().encode("sync payload");
-    const encrypted = await encrypt(plaintext, key);
-    const decrypted = await decrypt(encrypted, key);
-    expect(new TextDecoder().decode(decrypted)).toBe("sync payload");
-  });
-});
+} from "../index.js";
 
 // ---------------------------------------------------------------------------
 // hash()
@@ -241,57 +59,6 @@ describe("hash", () => {
 });
 
 // ---------------------------------------------------------------------------
-// createDeletionCertificate()
-// ---------------------------------------------------------------------------
-
-describe("createDeletionCertificate", () => {
-  it("creates a valid deletion certificate", async () => {
-    const cert = await createDeletionCertificate("node-123", "memory", "user-456");
-
-    expect(cert.target_id).toBe("node-123");
-    expect(cert.target_type).toBe("memory");
-    expect(cert.deleted_by).toBe("user-456");
-    expect(typeof cert.deleted_at).toBe("number");
-    expect(cert.deleted_at).toBeGreaterThan(0);
-    expect(typeof cert.tombstone_hash).toBe("string");
-    expect(cert.tombstone_hash.length).toBe(64);
-  });
-
-  it("creates different hashes for different targets", async () => {
-    const certA = await createDeletionCertificate("a", "memory", "user");
-    const certB = await createDeletionCertificate("b", "memory", "user");
-    expect(certA.tombstone_hash).not.toBe(certB.tombstone_hash);
-  });
-
-  it("supports event and identity target types", async () => {
-    const eventCert = await createDeletionCertificate("e1", "event", "user");
-    expect(eventCert.target_type).toBe("event");
-
-    const idCert = await createDeletionCertificate("i1", "identity", "user");
-    expect(idCert.target_type).toBe("identity");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// secureErase()
-// ---------------------------------------------------------------------------
-
-describe("secureErase", () => {
-  it("zeros the array", () => {
-    const data = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
-    secureErase(data);
-    expect(data.every((b) => b === 0)).toBe(true);
-  });
-
-  it("zeros a large array", () => {
-    const data = new Uint8Array(1024);
-    crypto.getRandomValues(data);
-    secureErase(data);
-    expect(data.every((b) => b === 0)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Ed25519: generateKeypair()
 // ---------------------------------------------------------------------------
 
@@ -313,26 +80,26 @@ describe("generateKeypair", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Ed25519: sign() / verify()
+// Ed25519: ed25519Sign() / ed25519Verify()
 // ---------------------------------------------------------------------------
 
-describe("sign and verify", () => {
+describe("ed25519Sign and ed25519Verify", () => {
   it("round-trips correctly", async () => {
     const kp = await generateKeypair();
     const message = new TextEncoder().encode("Hello, Ed25519!");
-    const sig = await sign(message, kp.privateKey);
+    const sig = await ed25519Sign(message, kp.privateKey);
     expect(sig).toBeInstanceOf(Uint8Array);
     expect(sig.length).toBe(64);
-    const valid = await verify(sig, message, kp.publicKey);
+    const valid = await ed25519Verify(sig, message, kp.publicKey);
     expect(valid).toBe(true);
   });
 
   it("rejects tampered message", async () => {
     const kp = await generateKeypair();
     const message = new TextEncoder().encode("Original message");
-    const sig = await sign(message, kp.privateKey);
+    const sig = await ed25519Sign(message, kp.privateKey);
     const tampered = new TextEncoder().encode("Tampered message");
-    const valid = await verify(sig, tampered, kp.publicKey);
+    const valid = await ed25519Verify(sig, tampered, kp.publicKey);
     expect(valid).toBe(false);
   });
 
@@ -340,8 +107,8 @@ describe("sign and verify", () => {
     const kpA = await generateKeypair();
     const kpB = await generateKeypair();
     const message = new TextEncoder().encode("test");
-    const sig = await sign(message, kpA.privateKey);
-    const valid = await verify(sig, message, kpB.publicKey);
+    const sig = await ed25519Sign(message, kpA.privateKey);
+    const valid = await ed25519Verify(sig, message, kpB.publicKey);
     expect(valid).toBe(false);
   });
 });
@@ -476,7 +243,7 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
     };
   }
 
-  it("round-trips correctly (sign → verify = true)", async () => {
+  it("round-trips correctly (sign -> verify = true)", async () => {
     const kp = await generateKeypair();
     const receipt = makeReceipt();
     const signed = await signExecutionReceipt(receipt, kp.privateKey);
@@ -488,7 +255,7 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
     expect(valid).toBe(true);
   });
 
-  it("detects tampering (modify result → verify = false)", async () => {
+  it("detects tampering (modify result -> verify = false)", async () => {
     const kp = await generateKeypair();
     const receipt = makeReceipt();
     const signed = await signExecutionReceipt(receipt, kp.privateKey);
@@ -508,7 +275,7 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
     expect(valid).toBe(false);
   });
 
-  it("is deterministic (same receipt → same signature)", async () => {
+  it("is deterministic (same receipt -> same signature)", async () => {
     const kp = await generateKeypair();
     const receipt = makeReceipt();
     const signed1 = await signExecutionReceipt(receipt, kp.privateKey);
@@ -767,8 +534,8 @@ describe("publicKeyToDidKey", () => {
   });
 
   it("matches known test vector", () => {
-    // Test vector: 32 zero bytes → known did:key
-    // Multicodec prefix ed01 + 32 zero bytes → base58btc
+    // Test vector: 32 zero bytes -> known did:key
+    // Multicodec prefix ed01 + 32 zero bytes -> base58btc
     const zeroKey = new Uint8Array(32);
     const did = publicKeyToDidKey(zeroKey);
     expect(did).toMatch(/^did:key:z/);
@@ -932,7 +699,7 @@ describe("verifyKeySuccession", () => {
 });
 
 // ---------------------------------------------------------------------------
-// didKeyToPublicKey error paths (index.ts lines 278-284)
+// didKeyToPublicKey error paths
 // ---------------------------------------------------------------------------
 
 describe("didKeyToPublicKey error paths", () => {
@@ -954,22 +721,22 @@ describe("didKeyToPublicKey error paths", () => {
 });
 
 // ---------------------------------------------------------------------------
-// verify() catch block (index.ts lines 361-362)
+// ed25519Verify() catch block
 // ---------------------------------------------------------------------------
 
-describe("verify error handling", () => {
+describe("ed25519Verify error handling", () => {
   it("returns false when signature bytes are malformed (not 64 bytes)", async () => {
     const kp = await generateKeypair();
     const message = new TextEncoder().encode("test");
     // Pass a too-short signature — @noble/ed25519 will throw
     const badSig = new Uint8Array(10);
-    const valid = await verify(badSig, message, kp.publicKey);
+    const valid = await ed25519Verify(badSig, message, kp.publicKey);
     expect(valid).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// verifySignedToken error paths (index.ts lines 419-420, 429-430)
+// verifySignedToken error paths
 // ---------------------------------------------------------------------------
 
 describe("verifySignedToken error paths", () => {
@@ -989,7 +756,7 @@ describe("verifySignedToken error paths", () => {
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
-    const sig = await sign(notJson, kp.privateKey);
+    const sig = await ed25519Sign(notJson, kp.privateKey);
     const sigB64 = btoa(String.fromCharCode(...sig))
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
@@ -1001,7 +768,7 @@ describe("verifySignedToken error paths", () => {
 });
 
 // ---------------------------------------------------------------------------
-// verifyExecutionReceipt catch block (index.ts lines 518-519)
+// verifyExecutionReceipt catch block
 // ---------------------------------------------------------------------------
 
 describe("verifyExecutionReceipt error paths", () => {
@@ -1027,7 +794,7 @@ describe("verifyExecutionReceipt error paths", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Guardian Recovery Succession (§3.8.3)
+// Guardian Recovery Succession
 // ---------------------------------------------------------------------------
 
 describe("signGuardianRecoverySuccession", () => {
@@ -1138,13 +905,13 @@ describe("signGuardianRecoverySuccession", () => {
 });
 
 describe("verifySuccessionChain with guardian recovery", () => {
-  it("verifies a mixed chain: normal rotation → guardian recovery", async () => {
+  it("verifies a mixed chain: normal rotation -> guardian recovery", async () => {
     const guardianKp = await generateKeypair();
     const kp1 = await generateKeypair(); // genesis
     const kp2 = await generateKeypair(); // normal rotation target
     const kp3 = await generateKeypair(); // guardian recovery target
 
-    // Step 1: normal rotation kp1 → kp2
+    // Step 1: normal rotation kp1 -> kp2
     const normalRecord = await signKeySuccession(
       kp1.privateKey,
       kp2.privateKey,
@@ -1156,7 +923,7 @@ describe("verifySuccessionChain with guardian recovery", () => {
     // Small delay to ensure timestamp ordering
     await new Promise((r) => setTimeout(r, 5));
 
-    // Step 2: guardian recovery kp2 → kp3 (kp2 compromised)
+    // Step 2: guardian recovery kp2 -> kp3 (kp2 compromised)
     const recoveryRecord = await signGuardianRecoverySuccession(
       guardianKp.privateKey,
       kp3.privateKey,
@@ -1215,7 +982,7 @@ describe("verifySuccessionChain with guardian recovery", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Guardian Revocation (§3.3.2) — dual authorization
+// Guardian Revocation — dual authorization
 // ---------------------------------------------------------------------------
 
 describe("signGuardianRevocation + verifyGuardianRevocation", () => {
@@ -1424,30 +1191,5 @@ describe("signSovereignPaymentReceipt", () => {
       payeeKp.publicKey,
     );
     expect(receipt.tools_used).toEqual([]);
-  });
-});
-
-describe("canonicalJson", () => {
-  it("sorts object keys alphabetically", () => {
-    expect(canonicalJson({ b: 2, a: 1 })).toBe('{"a":1,"b":2}');
-  });
-
-  it("handles arrays", () => {
-    expect(canonicalJson([3, 1, 2])).toBe("[3,1,2]");
-  });
-
-  it("handles nested objects and arrays", () => {
-    expect(canonicalJson({ z: [1], a: { c: 3, b: 2 } })).toBe('{"a":{"b":2,"c":3},"z":[1]}');
-  });
-
-  it("omits undefined values (matches JSON.stringify)", () => {
-    expect(canonicalJson({ a: 1, b: undefined, c: 3 })).toBe('{"a":1,"c":3}');
-  });
-
-  it("handles null and primitives", () => {
-    expect(canonicalJson(null)).toBe("null");
-    expect(canonicalJson("hello")).toBe('"hello"');
-    expect(canonicalJson(42)).toBe("42");
-    expect(canonicalJson(true)).toBe("true");
   });
 });
