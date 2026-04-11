@@ -693,6 +693,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     federationConfig,
   });
 
+  // --- Dispute routes (dispute-v1.md) ---
+  const { registerDisputeRoutes, createDisputeTables } = await import("./disputes.js");
+  createDisputeTables(moteDb.db);
+  await registerDisputeRoutes({
+    db: moteDb.db,
+    app,
+    relayIdentity,
+  });
+
   // --- Proxy token + balance routes ---
   registerProxyTokenRoutes(app, moteDb.db, relayIdentity);
 

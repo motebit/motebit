@@ -404,7 +404,9 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         c.req.path.startsWith("/api/v1/bridge/") ||
         c.req.path.startsWith("/api/v1/subscriptions/") ||
         c.req.path.startsWith("/api/v1/onramp/") ||
-        c.req.path.startsWith("/api/v1/discover/")
+        c.req.path.startsWith("/api/v1/discover/") ||
+        c.req.path.startsWith("/api/v1/allocations/") ||
+        c.req.path.startsWith("/api/v1/disputes/")
       ) {
         await next();
         return;

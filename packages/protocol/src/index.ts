@@ -1374,3 +1374,20 @@ export type {
   BalanceWaiver,
   MigrationPresentation,
 } from "./migration.js";
+
+// ── Dispute (protocol-level) ────────────────────────────
+// Dispute resolution for agent-to-agent delegations.
+// motebit/dispute@1.0.
+
+export type {
+  DisputeState,
+  DisputeOutcome,
+  DisputeCategory,
+  DisputeFundAction,
+  DisputeRequest,
+  DisputeEvidence,
+  DisputeEvidenceType,
+  AdjudicatorVote,
+  DisputeResolution,
+  DisputeAppeal,
+} from "./dispute.js";
