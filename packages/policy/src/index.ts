@@ -27,11 +27,9 @@ export {
 } from "./audit-chain.js";
 export type { AuditEntry, AuditChainStore } from "./audit-chain.js";
 
-// Re-export SDK types used in the policy API
+// Re-export SDK types and enums used in the policy API
+export { RiskLevel, DataClass, SideEffect } from "@motebit/protocol";
 export type {
-  RiskLevel,
-  DataClass,
-  SideEffect,
   ToolRiskProfile,
   PolicyDecision,
   TurnContext,
