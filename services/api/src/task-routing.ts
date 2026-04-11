@@ -853,3 +853,114 @@ function extractReceipt(text: string): ReceiptCandidate | null {
     return null;
   }
 }
+
+// === P2P Settlement Eligibility (policy-based) ===
+
+/** Minimum trust score for p2p settlement (verified = 0.6). */
+const P2P_MIN_TRUST_SCORE = 0.6;
+/** Minimum completed interactions between the pair. */
+const P2P_MIN_INTERACTIONS = 5;
+
+/**
+ * Evaluate whether a delegator→worker pair qualifies for p2p settlement.
+ *
+ * Policy checks:
+ * 1. Both parties advertise "p2p" in settlement_modes
+ * 2. Worker has a declared settlement_address
+ * 3. Trust score ≥ threshold (default: 0.6 / "verified")
+ * 4. Interaction count ≥ minimum (default: 5)
+ * 5. No active disputes between this pair
+ */
+export function evaluateSettlementEligibility(
+  db: DatabaseDriver,
+  delegatorId: string,
+  workerId: string,
+): { allowed: boolean; mode: "relay" | "p2p"; reason: string } {
+  // Check worker has declared settlement address
+  const worker = db
+    .prepare("SELECT settlement_address, settlement_modes FROM agent_registry WHERE motebit_id = ?")
+    .get(workerId) as
+    | { settlement_address: string | null; settlement_modes: string | null }
+    | undefined;
+
+  if (!worker?.settlement_address) {
+    return { allowed: false, mode: "relay", reason: "Worker has no declared settlement address" };
+  }
+
+  // Check worker supports p2p
+  const workerModes = (worker.settlement_modes ?? "relay").split(",");
+  if (!workerModes.includes("p2p")) {
+    return { allowed: false, mode: "relay", reason: "Worker does not support p2p settlement" };
+  }
+
+  // Check delegator supports p2p
+  const delegator = db
+    .prepare("SELECT settlement_modes FROM agent_registry WHERE motebit_id = ?")
+    .get(delegatorId) as { settlement_modes: string | null } | undefined;
+
+  const delegatorModes = (delegator?.settlement_modes ?? "relay").split(",");
+  if (!delegatorModes.includes("p2p")) {
+    return {
+      allowed: false,
+      mode: "relay",
+      reason: "Delegator does not support p2p settlement",
+    };
+  }
+
+  // Check trust level
+  const trustRow = db
+    .prepare(
+      "SELECT trust_level, interaction_count FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
+    )
+    .get(delegatorId, workerId) as { trust_level: string; interaction_count: number } | undefined;
+
+  if (!trustRow) {
+    return { allowed: false, mode: "relay", reason: "No trust history between agents" };
+  }
+
+  const score = trustLevelToScore(trustRow.trust_level as AgentTrustLevel);
+  if (score < P2P_MIN_TRUST_SCORE) {
+    return {
+      allowed: false,
+      mode: "relay",
+      reason: `Trust score ${score} below minimum ${P2P_MIN_TRUST_SCORE}`,
+    };
+  }
+
+  // Check interaction count
+  if (trustRow.interaction_count < P2P_MIN_INTERACTIONS) {
+    return {
+      allowed: false,
+      mode: "relay",
+      reason: `Interaction count ${trustRow.interaction_count} below minimum ${P2P_MIN_INTERACTIONS}`,
+    };
+  }
+
+  // Check no active disputes between this pair
+  try {
+    const activeDispute = db
+      .prepare(
+        `SELECT dispute_id FROM relay_disputes
+         WHERE ((filed_by = ? AND respondent = ?) OR (filed_by = ? AND respondent = ?))
+           AND state NOT IN ('final', 'expired')
+         LIMIT 1`,
+      )
+      .get(delegatorId, workerId, workerId, delegatorId) as { dispute_id: string } | undefined;
+
+    if (activeDispute) {
+      return {
+        allowed: false,
+        mode: "relay",
+        reason: `Active dispute ${activeDispute.dispute_id} between agents`,
+      };
+    }
+  } catch {
+    // relay_disputes table may not exist — no disputes, allow
+  }
+
+  return {
+    allowed: true,
+    mode: "p2p",
+    reason: `Trust ${score}, ${trustRow.interaction_count} interactions, both parties opted in`,
+  };
+}

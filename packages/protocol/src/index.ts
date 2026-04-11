@@ -1391,3 +1391,13 @@ export type {
   DisputeResolution,
   DisputeAppeal,
 } from "./dispute.js";
+
+// ── Settlement Mode (protocol-level) ────────────────────────────
+// Relay-mediated vs peer-to-peer settlement selection.
+
+export type {
+  SettlementMode,
+  P2pPaymentProof,
+  PaymentVerificationStatus,
+  SettlementEligibility,
+} from "./settlement-mode.js";

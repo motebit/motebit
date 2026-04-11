@@ -460,4 +460,42 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 8,
+    name: "add_p2p_settlement_columns",
+    up: (db) => {
+      // Agent settlement capabilities (explicit, not inferred from identity key)
+      const agentCols = (
+        db.prepare("PRAGMA table_info(agent_registry)").all() as { name: string }[]
+      ).map((c) => c.name);
+      if (!agentCols.includes("settlement_address")) {
+        db.exec("ALTER TABLE agent_registry ADD COLUMN settlement_address TEXT");
+      }
+      if (!agentCols.includes("settlement_modes")) {
+        db.exec("ALTER TABLE agent_registry ADD COLUMN settlement_modes TEXT DEFAULT 'relay'");
+      }
+
+      // Settlement mode tracking on relay_settlements
+      const settleCols = (
+        db.prepare("PRAGMA table_info(relay_settlements)").all() as { name: string }[]
+      ).map((c) => c.name);
+      if (!settleCols.includes("settlement_mode")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN settlement_mode TEXT DEFAULT 'relay'");
+      }
+      if (!settleCols.includes("p2p_tx_hash")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN p2p_tx_hash TEXT");
+      }
+      if (!settleCols.includes("payment_verification_status")) {
+        db.exec(
+          "ALTER TABLE relay_settlements ADD COLUMN payment_verification_status TEXT DEFAULT 'verified'",
+        );
+      }
+      if (!settleCols.includes("payment_verified_at")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN payment_verified_at INTEGER");
+      }
+      if (!settleCols.includes("payment_verification_error")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN payment_verification_error TEXT");
+      }
+    },
+  },
 ];

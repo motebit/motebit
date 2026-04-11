@@ -185,6 +185,12 @@ describe("Money Loop E2E", () => {
     expect(platformFee).toBeGreaterThan(0);
 
     // === STEP 7: WITHDRAW — Worker withdraws earnings ===
+    // Back-date settlement to clear the 24h dispute window hold.
+    // In production, workers wait 24h before withdrawing recent earnings.
+    relay.moteDb.db
+      .prepare("UPDATE relay_settlements SET settled_at = ? WHERE motebit_id = ?")
+      .run(Date.now() - 25 * 60 * 60 * 1000, worker.motebitId);
+
     const withdrawRes = await relay.app.request(`/api/v1/agents/${worker.motebitId}/withdraw`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),

@@ -652,12 +652,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     const federationVisible = (body as Record<string, unknown>).federation_visible;
     const fedVisibleVal = federationVisible === false ? 0 : 1;
+    const settlementAddress = (body as Record<string, unknown>).settlement_address as
+      | string
+      | undefined;
+    const settlementModes = (body as Record<string, unknown>).settlement_modes as
+      | string
+      | undefined;
 
     moteDb.db
       .prepare(
         `
-      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key, federation_visible)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key, federation_visible, settlement_address, settlement_modes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
         public_key = excluded.public_key,
         endpoint_url = excluded.endpoint_url,
@@ -666,7 +672,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         last_heartbeat = excluded.last_heartbeat,
         expires_at = excluded.expires_at,
         guardian_public_key = COALESCE(excluded.guardian_public_key, agent_registry.guardian_public_key),
-        federation_visible = excluded.federation_visible
+        federation_visible = excluded.federation_visible,
+        settlement_address = COALESCE(excluded.settlement_address, agent_registry.settlement_address),
+        settlement_modes = COALESCE(excluded.settlement_modes, agent_registry.settlement_modes)
     `,
       )
       .run(
@@ -680,6 +688,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         expiresAt,
         guardianPublicKey ?? null,
         fedVisibleVal,
+        settlementAddress ?? null,
+        settlementModes ?? "relay",
       );
 
     // Auto-create a default service listing if one doesn't exist.

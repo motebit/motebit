@@ -54,7 +54,11 @@ import { getAccountBalance, creditAccount, debitAccount, toMicro } from "./accou
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
-import { forwardTaskViaMcp, type ReceiptCandidate } from "./task-routing.js";
+import {
+  forwardTaskViaMcp,
+  evaluateSettlementEligibility,
+  type ReceiptCandidate,
+} from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import type { ConnectedDevice } from "./index.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
@@ -91,6 +95,18 @@ export type TaskQueueEntry = {
   origin_relay?: string;
   /** Set to true after receipt settlement completes — prevents double-settlement. */
   settled?: boolean;
+  /** Settlement mode: "relay" (default) or "p2p" (direct onchain). */
+  settlement_mode?: "relay" | "p2p";
+  /** P2P payment proof (when settlement_mode === "p2p"). */
+  p2p_payment_proof?: {
+    tx_hash: string;
+    chain: string;
+    network: string;
+    to_address: string;
+    amount_micro: number;
+  };
+  /** Target agent for p2p tasks (pinned routing). */
+  target_agent?: string;
 };
 
 // Platform fee rate is no longer a module-level variable. It lives in the
@@ -684,15 +700,60 @@ export async function handleReceiptIngestion(
     }
   }
 
+  // --- P2P settlement: audit record only, no fund movement ---
+  if (entry.settlement_mode === "p2p") {
+    const p2pSettlementId = crypto.randomUUID();
+    try {
+      moteDb.db
+        .prepare(
+          `INSERT OR IGNORE INTO relay_settlements
+           (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
+            amount_settled, platform_fee, platform_fee_rate, status, settled_at,
+            settlement_mode, p2p_tx_hash, payment_verification_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          p2pSettlementId,
+          `p2p-${taskId}`,
+          taskId,
+          motebitId,
+          receipt.result_hash ?? "",
+          0, // amount_settled: relay didn't move money
+          0, // platform_fee: zero for p2p
+          0, // platform_fee_rate: zero for p2p
+          "completed",
+          Date.now(),
+          "p2p",
+          entry.p2p_payment_proof?.tx_hash ?? null,
+          "pending", // verification deferred to async process
+        );
+    } catch (err) {
+      logger.warn("settlement.p2p_audit_failed", {
+        correlationId: taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    // Trust + credentials still issued below (fall through to existing credential block)
+  }
+
   // --- Main settlement + credential issuance ---
   let credential_id: string | null = null;
   {
     try {
-      const persistentAlloc = moteDb.db
-        .prepare("SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'")
-        .get(taskId) as
-        | { allocation_id: string; amount_locked: number; motebit_id: string }
-        | undefined;
+      // P2P tasks have no allocation — skip the settlement block
+      if (entry.settlement_mode === "p2p") {
+        // Jump to credential issuance (trust update already handled above in the
+        // shared trust-record-update block at line ~335)
+      }
+
+      const persistentAlloc =
+        entry.settlement_mode === "p2p"
+          ? undefined
+          : (moteDb.db
+              .prepare("SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'")
+              .get(taskId) as
+              | { allocation_id: string; amount_locked: number; motebit_id: string }
+              | undefined);
 
       const fallbackUnitCost = getListingUnitCost(moteDb, receipt.motebit_id as string);
       const grossAmount =
@@ -1261,6 +1322,16 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       exclude_agents?: string[];
       /** Optional: routing strategy for candidate ranking. */
       routing_strategy?: "cost" | "quality" | "balanced";
+      /** P2P: target agent for direct settlement (required with payment_proof). */
+      target_agent?: string;
+      /** P2P: onchain payment proof (triggers p2p settlement mode). */
+      payment_proof?: {
+        tx_hash: string;
+        chain: string;
+        network: string;
+        to_address: string;
+        amount_micro: number;
+      };
     }>();
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
@@ -1339,6 +1410,77 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       }
     }
 
+    // === P2P settlement path ===
+    let settlementMode: "relay" | "p2p" = "relay";
+    let p2pPaymentProof: TaskQueueEntry["p2p_payment_proof"];
+
+    if (body.payment_proof && body.target_agent && submittedBy) {
+      const proof = body.payment_proof;
+
+      // Validate proof completeness
+      if (
+        !proof.tx_hash ||
+        !proof.chain ||
+        !proof.network ||
+        !proof.to_address ||
+        !proof.amount_micro
+      ) {
+        throw new TaskError("TASK_INVALID_INPUT", "Incomplete payment_proof fields", 400);
+      }
+
+      // Tx hash format (Solana signatures are 87-88 char base58)
+      if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(proof.tx_hash)) {
+        throw new TaskError("TASK_INVALID_INPUT", "Invalid transaction signature format", 400);
+      }
+
+      // Policy-based eligibility check
+      const eligibility = evaluateSettlementEligibility(moteDb.db, submittedBy, body.target_agent);
+      if (!eligibility.allowed) {
+        throw new TaskError("TASK_P2P_INELIGIBLE", eligibility.reason, 403);
+      }
+
+      // Verify worker's settlement address matches payment proof
+      const workerReg = moteDb.db
+        .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
+        .get(body.target_agent) as { settlement_address: string | null } | undefined;
+
+      if (!workerReg?.settlement_address) {
+        throw new TaskError(
+          "TASK_P2P_NO_ADDRESS",
+          "Worker has no declared settlement address",
+          400,
+        );
+      }
+      if (proof.to_address !== workerReg.settlement_address) {
+        throw new TaskError(
+          "TASK_P2P_ADDRESS_MISMATCH",
+          "Payment proof to_address does not match worker's settlement address",
+          400,
+        );
+      }
+
+      // Exact amount match (no vague >= check)
+      if (priceSnapshot != null && proof.amount_micro !== priceSnapshot) {
+        throw new TaskError(
+          "TASK_P2P_AMOUNT_MISMATCH",
+          `Payment amount ${proof.amount_micro} does not match expected ${priceSnapshot}`,
+          400,
+        );
+      }
+
+      settlementMode = "p2p";
+      p2pPaymentProof = proof;
+
+      logger.info("task.p2p_settlement", {
+        correlationId: taskId,
+        delegator: submittedBy,
+        worker: body.target_agent,
+        txHash: proof.tx_hash,
+        amount: proof.amount_micro,
+        reason: eligibility.reason,
+      });
+    }
+
     taskQueue.set(taskId, {
       task,
       expiresAt: now + TASK_TTL_MS,
@@ -1346,6 +1488,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       price_snapshot: priceSnapshot,
       x402_tx_hash: x402TxHash,
       x402_network: x402Net,
+      settlement_mode: settlementMode,
+      p2p_payment_proof: p2pPaymentProof,
+      target_agent: body.target_agent,
     });
 
     logger.info("task.submitted", {
@@ -1356,7 +1501,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     });
 
     // Persist budget allocation so settlement can verify the lock exists.
-    if (priceSnapshot != null && priceSnapshot > 0) {
+    // P2P tasks skip allocation — money already moved onchain.
+    if (settlementMode !== "p2p" && priceSnapshot != null && priceSnapshot > 0) {
       // Determine whether this agent requires payment (has pay_to_address in listing)
       const agentPricingInfo = getAgentPricing(moteDb, motebitId);
       const requiresPayment = agentPricingInfo != null;

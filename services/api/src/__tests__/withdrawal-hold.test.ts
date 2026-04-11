@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
-import { computeDisputeWindowHold, getAccountBalanceDetailed, creditAccount } from "../accounts.js";
+import { computeDisputeWindowHold, creditAccount } from "../accounts.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
@@ -27,9 +27,7 @@ async function registerAgent(relay: SyncRelay, motebitId: string, publicKeyHex: 
 }
 
 function createSettlement(
-  db: ReturnType<typeof relay.moteDb.db.prepare>["run"] extends (...args: unknown[]) => unknown
-    ? never
-    : unknown,
+  db: import("@motebit/persistence").DatabaseDriver,
   workerId: string,
   taskId: string,
   amount: number,

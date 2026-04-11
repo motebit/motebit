@@ -155,7 +155,7 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
       throw new HTTPException(400, { message: "At least one evidence reference is required" });
     }
 
-    // Check allocation exists
+    // Check allocation exists — or if p2p, check settlement exists
     const allocation = db
       .prepare(
         "SELECT allocation_id, task_id, motebit_id, amount_locked, status FROM relay_allocations WHERE allocation_id = ?",
@@ -170,8 +170,22 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
         }
       | undefined;
 
+    // For p2p tasks: no allocation exists, but a p2p settlement does.
+    // Create a trust-layer dispute (amount_locked = 0, no fund movement).
+    let isP2pDispute = false;
     if (!allocation) {
-      throw new HTTPException(404, { message: "Allocation not found" });
+      const p2pSettlement = db
+        .prepare(
+          "SELECT settlement_id, task_id, motebit_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+        )
+        .get(body.task_id) as
+        | { settlement_id: string; task_id: string; motebit_id: string }
+        | undefined;
+
+      if (!p2pSettlement) {
+        throw new HTTPException(404, { message: "Allocation not found" });
+      }
+      isP2pDispute = true;
     }
 
     // Check filing party is a direct party to the task (§4.3)
@@ -190,15 +204,18 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
       });
     }
 
-    // Transition allocation to disputed (§7.1)
-    db.prepare("UPDATE relay_allocations SET status = 'disputed' WHERE allocation_id = ?").run(
-      allocationId,
-    );
+    // Transition allocation to disputed (§7.1) — skip for p2p (no allocation)
+    if (!isP2pDispute) {
+      db.prepare("UPDATE relay_allocations SET status = 'disputed' WHERE allocation_id = ?").run(
+        allocationId,
+      );
+    }
 
     const disputeId = generateDisputeId();
     const filedAt = Date.now();
     const evidenceDeadline = filedAt + EVIDENCE_WINDOW_MS;
-    const filingFee = Math.floor(allocation.amount_locked * FILING_FEE_RATE);
+    const amountLocked = isP2pDispute ? 0 : allocation!.amount_locked;
+    const filingFee = Math.floor(amountLocked * FILING_FEE_RATE);
 
     db.prepare(
       `INSERT INTO relay_disputes
@@ -212,7 +229,7 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
       body.respondent,
       body.category,
       body.description,
-      allocation.amount_locked,
+      amountLocked,
       filingFee,
       filedAt,
       evidenceDeadline,
@@ -227,7 +244,8 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
       allocationId,
       filedBy: body.filed_by,
       category: body.category,
-      amountLocked: allocation.amount_locked,
+      amountLocked,
+      isP2pDispute,
     });
 
     return c.json({
@@ -235,8 +253,9 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
       dispute_id: disputeId,
       state: "evidence" as DisputeState,
       evidence_deadline: evidenceDeadline,
-      amount_locked: allocation.amount_locked,
+      amount_locked: amountLocked,
       filing_fee: filingFee,
+      p2p_dispute: isP2pDispute,
     });
   });
 

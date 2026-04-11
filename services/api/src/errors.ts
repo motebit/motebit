@@ -132,7 +132,11 @@ export class TaskError extends RelayError {
       | "TASK_INVALID_INPUT"
       | "TASK_QUEUE_FULL"
       | "TASK_PER_SUBMITTER_LIMIT"
-      | "TASK_CONFLICT",
+      | "TASK_CONFLICT"
+      | "TASK_P2P_INELIGIBLE"
+      | "TASK_P2P_NO_ADDRESS"
+      | "TASK_P2P_ADDRESS_MISMATCH"
+      | "TASK_P2P_AMOUNT_MISMATCH",
     message: string,
     statusCode: number = 400,
     options?: ErrorOptions,

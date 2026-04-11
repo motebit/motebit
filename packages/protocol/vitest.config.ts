@@ -12,6 +12,7 @@ export default defineConfig({
         "src/discovery.ts",
         "src/migration.ts",
         "src/dispute.ts",
+        "src/settlement-mode.ts",
       ],
       // Floor thresholds anchored to the first measured baseline. protocol
       // is Layer 0 (MIT, zero deps) so coverage should stay high — the one
