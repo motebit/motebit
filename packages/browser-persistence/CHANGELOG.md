@@ -1,5 +1,17 @@
 # @motebit/browser-persistence
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [b231e9c]
+  - @motebit/sdk@0.8.0
+  - @motebit/core-identity@0.1.17
+  - @motebit/event-log@0.1.17
+  - @motebit/memory-graph@0.1.17
+  - @motebit/planner@0.1.17
+  - @motebit/privacy-layer@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

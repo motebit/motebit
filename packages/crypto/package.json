@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Protocol cryptography — sign and verify all Motebit artifacts. Receipts, credentials, delegations, successions. Zero monorepo deps, MIT.",
   "type": "module",
   "main": "./dist/index.js",
