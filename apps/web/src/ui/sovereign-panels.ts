@@ -167,7 +167,8 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
     if (!runtime) return [];
     return runtime.getIssuedCredentials().map((vc) => ({
       credential_id: crypto.randomUUID(),
-      credential_type: vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential",
+      credential_type:
+        vc.type.find((t: string) => t !== "VerifiableCredential") ?? "VerifiableCredential",
       credential: vc as unknown as CredentialEntry["credential"],
       issued_at: vc.validFrom ? new Date(vc.validFrom).getTime() : Date.now(),
       _local: true,
