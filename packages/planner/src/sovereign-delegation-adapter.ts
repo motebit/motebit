@@ -234,12 +234,14 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
     const capability = step.required_capabilities?.[0] ?? "";
 
     const params = new URLSearchParams();
-    if (capability) params.set("capability", capability);
-    if (routingStrategy) params.set("routing_strategy", routingStrategy);
+    if (capability !== "") params.set("capability", capability);
+    if (routingStrategy != null) params.set("routing_strategy", routingStrategy);
     params.set("limit", "10");
 
     const headers = await this.buildHeaders("market:query");
-    const resp = await fetch(`${discoveryUrl}/api/v1/market/candidates?${params}`, { headers });
+    const resp = await fetch(`${discoveryUrl}/api/v1/market/candidates?${params.toString()}`, {
+      headers,
+    });
 
     if (!resp.ok) {
       throw new Error(`Discovery failed (${resp.status}): ${await resp.text()}`);
@@ -404,8 +406,8 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
   }
 
   // No relay state to poll for sovereign delegation
-  async pollTaskResult(_taskId: string, _stepId: string): Promise<DelegatedStepResult | null> {
-    return null;
+  pollTaskResult(_taskId: string, _stepId: string): Promise<DelegatedStepResult | null> {
+    return Promise.resolve(null);
   }
 }
 
