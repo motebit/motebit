@@ -652,12 +652,43 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     const federationVisible = (body as Record<string, unknown>).federation_visible;
     const fedVisibleVal = federationVisible === false ? 0 : 1;
-    const settlementAddress = (body as Record<string, unknown>).settlement_address as
+    // Validate + normalize settlement fields
+    const VALID_SETTLEMENT_MODES = new Set(["relay", "p2p"]);
+    const rawSettlementAddress = (body as Record<string, unknown>).settlement_address as
       | string
       | undefined;
-    const settlementModes = (body as Record<string, unknown>).settlement_modes as
+    const rawSettlementModes = (body as Record<string, unknown>).settlement_modes as
       | string
       | undefined;
+
+    // Reject empty string (truthy but useless)
+    const settlementAddress =
+      rawSettlementAddress && rawSettlementAddress.trim().length > 0
+        ? rawSettlementAddress.trim()
+        : undefined;
+
+    // Solana address format: 32-44 chars base58
+    if (settlementAddress && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(settlementAddress)) {
+      throw new HTTPException(400, {
+        message: "Invalid settlement_address: must be a valid Solana address (32-44 chars base58)",
+      });
+    }
+
+    // Normalize settlement_modes: trim, validate each, deduplicate
+    let settlementModes: string | undefined;
+    if (rawSettlementModes) {
+      const modes = rawSettlementModes
+        .split(",")
+        .map((m) => m.trim())
+        .filter((m) => m.length > 0);
+      const invalid = modes.filter((m) => !VALID_SETTLEMENT_MODES.has(m));
+      if (invalid.length > 0) {
+        throw new HTTPException(400, {
+          message: `Invalid settlement_modes: ${invalid.join(", ")}. Valid: relay, p2p`,
+        });
+      }
+      settlementModes = [...new Set(modes)].join(",") || undefined;
+    }
 
     moteDb.db
       .prepare(

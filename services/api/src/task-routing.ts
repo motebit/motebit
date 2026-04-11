@@ -887,8 +887,8 @@ export function evaluateSettlementEligibility(
     return { allowed: false, mode: "relay", reason: "Worker has no declared settlement address" };
   }
 
-  // Check worker supports p2p
-  const workerModes = (worker.settlement_modes ?? "relay").split(",");
+  // Check worker supports p2p (trim each mode for whitespace safety)
+  const workerModes = (worker.settlement_modes ?? "relay").split(",").map((m) => m.trim());
   if (!workerModes.includes("p2p")) {
     return { allowed: false, mode: "relay", reason: "Worker does not support p2p settlement" };
   }
@@ -898,7 +898,7 @@ export function evaluateSettlementEligibility(
     .prepare("SELECT settlement_modes FROM agent_registry WHERE motebit_id = ?")
     .get(delegatorId) as { settlement_modes: string | null } | undefined;
 
-  const delegatorModes = (delegator?.settlement_modes ?? "relay").split(",");
+  const delegatorModes = (delegator?.settlement_modes ?? "relay").split(",").map((m) => m.trim());
   if (!delegatorModes.includes("p2p")) {
     return {
       allowed: false,

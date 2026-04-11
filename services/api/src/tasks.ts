@@ -700,50 +700,38 @@ export async function handleReceiptIngestion(
     }
   }
 
-  // --- P2P settlement: audit record only, no fund movement ---
-  if (entry.settlement_mode === "p2p") {
-    const p2pSettlementId = crypto.randomUUID();
-    try {
-      moteDb.db
-        .prepare(
-          `INSERT OR IGNORE INTO relay_settlements
-           (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
-            amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-            settlement_mode, p2p_tx_hash, payment_verification_status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          p2pSettlementId,
-          `p2p-${taskId}`,
-          taskId,
-          motebitId,
-          receipt.result_hash ?? "",
-          0, // amount_settled: relay didn't move money
-          0, // platform_fee: zero for p2p
-          0, // platform_fee_rate: zero for p2p
-          "completed",
-          Date.now(),
-          "p2p",
-          entry.p2p_payment_proof?.tx_hash ?? null,
-          "pending", // verification deferred to async process
-        );
-    } catch (err) {
-      logger.warn("settlement.p2p_audit_failed", {
-        correlationId: taskId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    // Trust + credentials still issued below (fall through to existing credential block)
-  }
-
   // --- Main settlement + credential issuance ---
   let credential_id: string | null = null;
   {
     try {
-      // P2P tasks have no allocation — skip the settlement block
+      // P2P tasks: audit record only, no fund movement.
+      // Inserted inside the settlement try-block so it shares the error boundary (#10).
       if (entry.settlement_mode === "p2p") {
-        // Jump to credential issuance (trust update already handled above in the
-        // shared trust-record-update block at line ~335)
+        const p2pSettlementId = crypto.randomUUID();
+        moteDb.db
+          .prepare(
+            `INSERT OR IGNORE INTO relay_settlements
+             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
+              amount_settled, platform_fee, platform_fee_rate, status, settled_at,
+              settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            p2pSettlementId,
+            `p2p-${taskId}`,
+            taskId,
+            motebitId,
+            receipt.result_hash ?? "",
+            0,
+            0,
+            0,
+            "completed",
+            Date.now(),
+            "p2p",
+            entry.p2p_payment_proof?.tx_hash ?? null,
+            "pending",
+            entry.submitted_by ?? null,
+          );
       }
 
       const persistentAlloc =

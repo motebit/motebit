@@ -59,7 +59,7 @@ describe("evaluateSettlementEligibility", () => {
       settlementModes: "relay,p2p",
     });
     await registerAgent(relay, "wrk-elig", bytesToHex(kp2.publicKey), {
-      settlementAddress: "SoLANaAddReSs1234567890abcDEFghij",
+      settlementAddress: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
       settlementModes: "relay,p2p",
     });
   });
@@ -91,7 +91,7 @@ describe("evaluateSettlementEligibility", () => {
   it("rejects when worker does not support p2p", async () => {
     const kp = await generateKeypair();
     await registerAgent(relay, "wrk-relay-only", bytesToHex(kp.publicKey), {
-      settlementAddress: "SoLAddress",
+      settlementAddress: "3xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsm",
       settlementModes: "relay",
     });
     setTrust(relay.moteDb.db, "del-elig", "wrk-relay-only", "trusted", 20);
@@ -162,7 +162,7 @@ describe("P2P task submission", () => {
       settlementModes: "relay,p2p",
     });
     await registerAgent(relay, "wrk-p2p", bytesToHex(kp2.publicKey), {
-      settlementAddress: "WorkerSolanaAddr123456789012345678901234",
+      settlementAddress: "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB",
       settlementModes: "relay,p2p",
     });
     setTrust(relay.moteDb.db, "del-p2p", "wrk-p2p", "verified", 10);
@@ -191,7 +191,7 @@ describe("P2P task submission", () => {
           tx_hash: "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk",
           chain: "solana",
           network: "solana:mainnet",
-          to_address: "WorkerSolanaAddr123456789012345678901234",
+          to_address: "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB",
           amount_micro: 500000,
         },
       }),
@@ -215,7 +215,7 @@ describe("P2P task submission", () => {
           tx_hash: "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk",
           chain: "solana",
           network: "solana:mainnet",
-          to_address: "WrongAddress123456789abcdefghijkmnpqrstuvw",
+          to_address: "2xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgCCC",
           amount_micro: 500000,
         },
       }),

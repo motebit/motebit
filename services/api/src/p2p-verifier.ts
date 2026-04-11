@@ -74,37 +74,46 @@ export function startP2pVerifierLoop(
 
         for (const row of pendingRows) {
           try {
-            const verified = await verifyTransactionOnChain(config.rpcUrl, row.p2p_tx_hash);
+            const result = await verifyTransactionOnChain(config.rpcUrl, row.p2p_tx_hash);
 
-            if (verified) {
-              db.prepare(
-                `UPDATE relay_settlements
-                 SET payment_verification_status = 'verified', payment_verified_at = ?
-                 WHERE settlement_id = ?`,
-              ).run(Date.now(), row.settlement_id);
+            switch (result) {
+              case "verified":
+                db.prepare(
+                  `UPDATE relay_settlements
+                   SET payment_verification_status = 'verified', payment_verified_at = ?
+                   WHERE settlement_id = ?`,
+                ).run(Date.now(), row.settlement_id);
+                logger.info("p2p_verifier.verified", {
+                  settlementId: row.settlement_id,
+                  txHash: row.p2p_tx_hash,
+                });
+                break;
 
-              logger.info("p2p_verifier.verified", {
-                settlementId: row.settlement_id,
-                txHash: row.p2p_tx_hash,
-              });
-            } else {
-              const error = "Transaction not found or not confirmed on Solana";
-              db.prepare(
-                `UPDATE relay_settlements
-                 SET payment_verification_status = 'failed',
-                     payment_verified_at = ?,
-                     payment_verification_error = ?
-                 WHERE settlement_id = ?`,
-              ).run(Date.now(), error, row.settlement_id);
+              case "not_found": {
+                const error = "Transaction not found on Solana";
+                db.prepare(
+                  `UPDATE relay_settlements
+                   SET payment_verification_status = 'failed',
+                       payment_verified_at = ?,
+                       payment_verification_error = ?
+                   WHERE settlement_id = ?`,
+                ).run(Date.now(), error, row.settlement_id);
+                logger.warn("p2p_verifier.failed", {
+                  settlementId: row.settlement_id,
+                  txHash: row.p2p_tx_hash,
+                  error,
+                });
+                downgradeP2pTrust(db, row.task_id, row.motebit_id);
+                break;
+              }
 
-              logger.warn("p2p_verifier.failed", {
-                settlementId: row.settlement_id,
-                txHash: row.p2p_tx_hash,
-                error,
-              });
-
-              // Rail downgrade: increase failed_tasks for the delegator→worker pair
-              downgradeP2pTrust(db, row.task_id, row.motebit_id);
+              case "rpc_error":
+                // Transient — do NOT mark as failed, do NOT downgrade trust. Retry next cycle.
+                logger.warn("p2p_verifier.rpc_error", {
+                  settlementId: row.settlement_id,
+                  txHash: row.p2p_tx_hash,
+                });
+                break;
             }
           } catch (err) {
             logger.error("p2p_verifier.check_error", {
@@ -112,7 +121,7 @@ export function startP2pVerifierLoop(
               txHash: row.p2p_tx_hash,
               error: err instanceof Error ? err.message : String(err),
             });
-            // Don't mark as failed on RPC errors — retry next cycle
+            // Network errors — retry next cycle, never downgrade
           }
         }
       } catch (err) {
@@ -126,11 +135,18 @@ export function startP2pVerifierLoop(
 
 // === Onchain Verification ===
 
+/** Three-state verification result: verified, not_found, or rpc_error. */
+type VerifyResult = "verified" | "not_found" | "rpc_error";
+
 /**
  * Verify a Solana transaction exists and is confirmed via RPC.
- * Uses getTransaction with confirmed commitment.
+ *
+ * Returns three states — not two:
+ * - "verified": transaction exists and is confirmed
+ * - "not_found": transaction does not exist (permanent)
+ * - "rpc_error": transient RPC failure (retry next cycle, never downgrade trust)
  */
-async function verifyTransactionOnChain(rpcUrl: string, txHash: string): Promise<boolean> {
+async function verifyTransactionOnChain(rpcUrl: string, txHash: string): Promise<VerifyResult> {
   const body = JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
@@ -148,11 +164,15 @@ async function verifyTransactionOnChain(rpcUrl: string, txHash: string): Promise
     signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
   });
 
-  if (!resp.ok) return false;
+  if (!resp.ok) return "rpc_error";
 
   const data = (await resp.json()) as { result: unknown | null; error?: unknown };
-  // result is null if transaction not found
-  return data.result != null;
+
+  // JSON-RPC error (timeout, rate limit, internal error) — transient, retry
+  if (data.error) return "rpc_error";
+
+  // result is null only when the transaction genuinely doesn't exist
+  return data.result != null ? "verified" : "not_found";
 }
 
 // === Trust Downgrade on Failed Verification ===
@@ -166,44 +186,34 @@ async function verifyTransactionOnChain(rpcUrl: string, txHash: string): Promise
  * relay-mediated settlement for future tasks.
  */
 function downgradeP2pTrust(db: DatabaseDriver, taskId: string, workerId: string): void {
-  // Find the delegator from the task's submitted_by
-  // The task queue is in-memory, but the settlement has task_id.
-  // Look up the allocation to find the delegator, or check relay_transactions.
   try {
+    // Exact lookup via delegator_id column on the settlement record
     const settlement = db
       .prepare(
-        "SELECT allocation_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+        "SELECT delegator_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
       )
-      .get(taskId) as { allocation_id: string } | undefined;
+      .get(taskId) as { delegator_id: string | null } | undefined;
 
-    if (!settlement) return;
-
-    // For p2p tasks, the allocation_id is "p2p-{taskId}". The delegator
-    // submitted the task. Find via relay_transactions referencing the task.
-    const txn = db
-      .prepare(
-        `SELECT motebit_id FROM relay_transactions
-         WHERE reference_id LIKE ? AND type = 'deposit'
-         LIMIT 1`,
-      )
-      .get(`%${taskId}%`) as { motebit_id: string } | undefined;
-
-    // If we can't find the delegator, just log and return.
-    // The verification failure is already recorded in relay_settlements.
-    if (!txn) {
+    if (!settlement?.delegator_id) {
       logger.warn("p2p_verifier.downgrade_no_delegator", { taskId, workerId });
       return;
     }
 
-    const delegatorId = txn.motebit_id;
+    const delegatorId = settlement.delegator_id;
 
-    // Increment failed_tasks in the trust record
-    db.prepare(
-      `UPDATE agent_trust
-       SET failed_tasks = COALESCE(failed_tasks, 0) + 1,
-           last_seen_at = ?
-       WHERE motebit_id = ? AND remote_motebit_id = ?`,
-    ).run(Date.now(), delegatorId, workerId);
+    // Increment failed_tasks in the trust record (#9: assert existence)
+    const updateResult = db
+      .prepare(
+        `UPDATE agent_trust
+         SET failed_tasks = COALESCE(failed_tasks, 0) + 1,
+             last_seen_at = ?
+         WHERE motebit_id = ? AND remote_motebit_id = ?`,
+      )
+      .run(Date.now(), delegatorId, workerId) as { changes: number };
+
+    if (updateResult.changes === 0) {
+      logger.warn("p2p_verifier.downgrade_no_trust_record", { delegatorId, workerId, taskId });
+    }
 
     // Remove p2p from delegator's settlement_modes (force relay for this agent)
     const delegator = db

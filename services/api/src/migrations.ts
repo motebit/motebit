@@ -496,6 +496,18 @@ export const relayMigrations: Migration[] = [
       if (!settleCols.includes("payment_verification_error")) {
         db.exec("ALTER TABLE relay_settlements ADD COLUMN payment_verification_error TEXT");
       }
+      if (!settleCols.includes("delegator_id")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN delegator_id TEXT");
+      }
+
+      // Uniqueness: one settlement per (task_id, settlement_mode)
+      try {
+        db.exec(
+          "CREATE UNIQUE INDEX IF NOT EXISTS idx_settlements_task_mode ON relay_settlements(task_id, settlement_mode)",
+        );
+      } catch {
+        /* index may already exist */
+      }
     },
   },
 ];

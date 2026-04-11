@@ -569,7 +569,14 @@ function executeFundAction(
   splitRatio: number,
 ): void {
   const amountLocked = dispute.amount_locked as number;
-  if (amountLocked === 0) return; // P2p disputes have no locked funds
+  if (amountLocked === 0) {
+    logger.info("dispute.fund_action_noop", {
+      disputeId: dispute.dispute_id as string,
+      fundAction,
+      reason: "amount_locked is 0 (p2p or zero-value dispute)",
+    });
+    return;
+  }
   const filedBy = dispute.filed_by as string;
   const respondent = dispute.respondent as string;
   const disputeId = dispute.dispute_id as string;

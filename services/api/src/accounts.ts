@@ -139,6 +139,7 @@ export function computeDisputeWindowHold(db: DatabaseDriver, motebitId: string):
          WHERE s.motebit_id = ?
            AND s.settled_at > ?
            AND s.status = 'completed'
+           AND COALESCE(s.settlement_mode, 'relay') = 'relay'
            AND s.task_id NOT IN (
              SELECT d.task_id FROM relay_disputes d
              WHERE d.state NOT IN ('final', 'expired')
