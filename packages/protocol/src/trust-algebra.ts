@@ -8,18 +8,23 @@
  * must compute trust the same way for interoperable routing.
  */
 
-import type { TrustTransitionThresholds } from "./index.js";
-import { AgentTrustLevel } from "./index.js";
+import type { TrustTransitionThresholds, AgentTrustLevel } from "./index.js";
 
 // ── Trust Semiring Algebra ──────────────────────────────────────────
 
-/** Canonical AgentTrustLevel → [0,1] mapping (single source of truth). */
+/**
+ * Canonical AgentTrustLevel → [0,1] mapping (single source of truth).
+ *
+ * Uses string literals instead of enum computed keys to avoid circular
+ * initialization between trust-algebra.ts ↔ index.ts. The values match
+ * AgentTrustLevel enum values exactly.
+ */
 export const TRUST_LEVEL_SCORES: Record<string, number> = {
-  [AgentTrustLevel.Unknown]: 0.1,
-  [AgentTrustLevel.FirstContact]: 0.3,
-  [AgentTrustLevel.Verified]: 0.6,
-  [AgentTrustLevel.Trusted]: 0.9,
-  [AgentTrustLevel.Blocked]: 0.0,
+  unknown: 0.1,
+  first_contact: 0.3,
+  verified: 0.6,
+  trusted: 0.9,
+  blocked: 0.0,
 };
 
 /** Convert a trust level to its numeric score. */
