@@ -390,6 +390,45 @@ The following areas are explicitly left open for future specifications:
 - **Cross-rail receipts.** A settlement that spans multiple rails (e.g., motebit A pays motebit B via Solana, who pays external counterparty C via x402) may produce a composite receipt referencing both rails.
 - **Fee mechanisms.** This spec deliberately does not prescribe a fee mechanism. Relays MAY charge for services (orchestration, discovery, sync). Onchain programs MAY extract fees at the contract layer (Uniswap pattern). These are commercial choices, not protocol law. The sovereign direct path (§6) MUST remain fee-free at the protocol layer.
 
+### 11.1 P2P Settlement Mode (Implemented)
+
+As of 2026-04-11, the reference implementation supports a **p2p settlement mode** alongside the default relay-mediated mode. The settlement mode is selected per-task based on policy, not per-agent.
+
+**Settlement mode:** `"relay"` (default) or `"p2p"`. Stored on `relay_settlements.settlement_mode`.
+
+**P2P payment proof:** When a delegator pays a worker directly onchain (e.g., USDC SPL transfer on Solana), the delegator submits a `P2pPaymentProof` with the task:
+
+```
+P2pPaymentProof {
+  tx_hash:      string      // Onchain transaction signature
+  chain:        string      // "solana"
+  network:      string      // CAIP-2 identifier
+  to_address:   string      // Worker's declared settlement_address
+  amount_micro: number      // Exact payment amount in micro-units
+}
+```
+
+**Payment verification status:** `"pending"` | `"verified"` | `"failed"`. Pending proofs are verified asynchronously by the relay's p2p verifier loop (Solana `getTransaction` RPC). Transient RPC errors (JSON-RPC error responses, HTTP failures, timeouts) are retried — they MUST NOT be classified as "transaction not found." Only a confirmed null result (transaction does not exist onchain) transitions to `"failed"`.
+
+**Policy-based eligibility:** P2p settlement is not automatic. Both parties must opt in via `settlement_modes` on their agent registration. The relay evaluates eligibility based on:
+
+1. Mutual opt-in (both parties advertise `"p2p"` in `settlement_modes`)
+2. Worker has a declared `settlement_address` (explicit, not inferred from identity key)
+3. Trust score ≥ configurable threshold (default: 0.6 / "verified")
+4. Interaction count ≥ configurable minimum (default: 5)
+5. No active disputes between the pair
+
+**Explicit settlement address:** The worker's `settlement_address` is declared at registration, not derived from the identity public key. This preserves future compatibility with separate signing domains, key rotation, multi-chain support, and multisig wallets.
+
+**Fee model:** P2p settlement has zero platform fee in the reference implementation. The relay monetizes routing and credential issuance for p2p tasks, not custody. This is an explicit product policy, not a protocol constraint.
+
+**Foundation Law:**
+
+- Settlement mode selection MUST be policy-based, not hardcoded to a single trust label.
+- Payment verification status MUST distinguish between "transaction not found" (permanent) and "RPC error" (transient/retryable). A transient error MUST NOT trigger trust downgrade.
+- Amount matching MUST be exact (not `>=`). Overpayment or underpayment semantics are not defined and MUST be rejected.
+- The `settlement_address` MUST be explicitly declared by the agent, not inferred from the identity key.
+
 ---
 
 ## 12. Compatibility with External Agent Payment Protocols

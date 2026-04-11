@@ -190,23 +190,27 @@ Given a `MotebitId`, find which relay hosts the agent and how to reach it.
   "relay_url": "https://relay.example.com",
   "capabilities": ["web_search", "code_review"],
   "public_key": "a1b2c3d4...64 hex chars",
+  "settlement_address": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+  "settlement_modes": "relay,p2p",
   "resolved_via": ["019530a1-...local", "019530a1-...peer1"],
   "cached": false,
   "ttl": 300
 }
 ```
 
-| Field          | Type     | Required | Description                                                    |
-| -------------- | -------- | -------- | -------------------------------------------------------------- |
-| `motebit_id`   | string   | yes      | The queried agent's `MotebitId`                                |
-| `found`        | boolean  | yes      | Whether the agent was located                                  |
-| `relay_id`     | string   | if found | The hosting relay's `motebit_id`                               |
-| `relay_url`    | string   | if found | HTTPS endpoint of the hosting relay                            |
-| `capabilities` | string[] | no       | Agent's advertised capabilities                                |
-| `public_key`   | string   | if found | Agent's hex-encoded Ed25519 public key                         |
-| `resolved_via` | string[] | yes      | Chain of `relay_id`s traversed during resolution (audit trail) |
-| `cached`       | boolean  | yes      | Whether the result came from cache                             |
-| `ttl`          | number   | yes      | Seconds until this result should be re-resolved                |
+| Field                | Type     | Required | Description                                                                                         |
+| -------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `motebit_id`         | string   | yes      | The queried agent's `MotebitId`                                                                     |
+| `found`              | boolean  | yes      | Whether the agent was located                                                                       |
+| `relay_id`           | string   | if found | The hosting relay's `motebit_id`                                                                    |
+| `relay_url`          | string   | if found | HTTPS endpoint of the hosting relay                                                                 |
+| `capabilities`       | string[] | no       | Agent's advertised capabilities                                                                     |
+| `public_key`         | string   | if found | Agent's hex-encoded Ed25519 public key                                                              |
+| `settlement_address` | string   | no       | Agent's declared settlement address (e.g., Solana base58). Explicit, not inferred from `public_key` |
+| `settlement_modes`   | string   | no       | Comma-separated settlement modes the agent accepts: `"relay"`, `"relay,p2p"`. Default: `"relay"`    |
+| `resolved_via`       | string[] | yes      | Chain of `relay_id`s traversed during resolution (audit trail)                                      |
+| `cached`             | boolean  | yes      | Whether the result came from cache                                                                  |
+| `ttl`                | number   | yes      | Seconds until this result should be re-resolved                                                     |
 
 ### 5.2 — Resolution Algorithm
 

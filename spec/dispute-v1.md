@@ -211,6 +211,32 @@ When a dispute is opened, the referenced `BudgetAllocation` transitions to `disp
 
 - Platform fee is not re-extracted on dispute resolution. The fee was already computed at original settlement; dispute resolution redistributes the net amount only.
 
+### 7.5 Withdrawal Hold (Dispute Window)
+
+Funds from relay-mediated settlements are held back from withdrawal for 24 hours after settlement. During this window, a dispute can be filed. If no dispute is filed within 24 hours, the funds become freely withdrawable.
+
+The hold is computed as: sum of `amount_settled` from `relay_settlements` where `settled_at > (now - 24h)` AND the settlement's `task_id` does not have an active dispute. Once a dispute is filed, the dispute's own fund locking (allocation status = `disputed`) takes over — the withdrawal hold only protects undisputed recent settlements.
+
+The hold is visible in the balance response as `dispute_window_hold` and `available_for_withdrawal`.
+
+**Foundation Law:**
+
+- Relay-mediated settlement funds MUST NOT be withdrawable during the dispute window.
+- The dispute window is 24 hours after `settled_at` (convention; relay-configurable).
+- P2P settlements (settlement_mode = `"p2p"`) are excluded from the withdrawal hold — funds moved onchain, not through the relay.
+
+### 7.6 P2P Trust-Layer Disputes
+
+When a task settled via direct p2p payment (settlement_mode = `"p2p"`), no `BudgetAllocation` exists. The dispute endpoint accepts these by looking up the p2p settlement record instead. The dispute is created with `amount_locked = 0`.
+
+Trust-layer disputes follow the same lifecycle (evidence, resolution, appeal) but `executeFundAction` is a no-op when `amount_locked = 0`. The dispute's value is in trust signals:
+
+- **Upheld** dispute on a p2p task: negative trust signal on the worker, blocks future p2p eligibility between the pair
+- **Overturned** dispute: negative trust signal on the filer
+- **Split**: both parties' trust records adjusted
+
+This ensures p2p settlement has a consequence path without requiring fund custody.
+
 ## 8. Appeal
 
 ### 8.1 Appeal Window
