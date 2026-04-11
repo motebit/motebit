@@ -53,6 +53,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@noble/ed25519": "~3.0.1",
+    "@noble/hashes": "~1.6.0",
     "sql.js": "^1.14.1",
     "ws": "^8.20.0"
   },

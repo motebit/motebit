@@ -132,6 +132,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
+      '@noble/ed25519':
+        specifier: ~3.0.1
+        version: 3.0.1
+      '@noble/hashes':
+        specifier: ~1.6.0
+        version: 1.6.1
       sql.js:
         specifier: ^1.14.1
         version: 1.14.1
