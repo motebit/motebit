@@ -673,6 +673,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     onSettlementReceived: (v) => federationCallbacks.onSettlementReceived(v),
   });
 
+  // --- Discovery routes (discovery-v1.md §3, §5) ---
+  const { registerDiscoveryRoutes } = await import("./discovery.js");
+  await registerDiscoveryRoutes({
+    db: moteDb.db,
+    app,
+    relayIdentity,
+    federationConfig,
+    platformFeeRate,
+  });
+
   // --- Proxy token + balance routes ---
   registerProxyTokenRoutes(app, moteDb.db, relayIdentity);
 

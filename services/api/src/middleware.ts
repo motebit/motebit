@@ -302,6 +302,10 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/agents/:motebitId/presentation", rl(expensiveLimiter));
   app.use("/api/v1/agents/bootstrap", rl(expensiveLimiter));
 
+  // Discovery endpoints (discovery-v1.md)
+  app.use("/.well-known/motebit.json", rl(publicLimiter));
+  app.use("/api/v1/discover/*", rl(readLimiter));
+
   // Federation peering endpoints (30 req/min per IP — write tier)
   // POST handlers also enforce per-peer rate limiting (30 req/min per relay_id) in federation.ts
   app.use("/federation/v1/peer/*", rl(writeLimiter));
@@ -399,7 +403,8 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         c.req.path.startsWith("/api/v1/stripe/") ||
         c.req.path.startsWith("/api/v1/bridge/") ||
         c.req.path.startsWith("/api/v1/subscriptions/") ||
-        c.req.path.startsWith("/api/v1/onramp/")
+        c.req.path.startsWith("/api/v1/onramp/") ||
+        c.req.path.startsWith("/api/v1/discover/")
       ) {
         await next();
         return;

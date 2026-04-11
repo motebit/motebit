@@ -1354,3 +1354,9 @@ export type {
   CredentialAnchorProof,
   ChainAnchorSubmitter,
 } from "./credential-anchor.js";
+
+// ── Discovery (protocol-level) ────────────────────────────
+// Relay metadata, DNS discovery, and agent resolution.
+// motebit/discovery@1.0.
+
+export type { RelayMetadata, RelayMetadataPeer, AgentResolutionResult } from "./discovery.js";
