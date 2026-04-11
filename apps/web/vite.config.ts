@@ -92,6 +92,7 @@ function manualChunks(id: string): string | undefined {
     id.includes("/packages/sdk/") ||
     id.includes("/packages/protocol/") ||
     id.includes("/packages/crypto/") ||
+    id.includes("/packages/encryption/") ||
     id.includes("/packages/semiring/") ||
     id.includes("/packages/policy/") ||
     id.includes("/packages/policy-invariants/") ||
