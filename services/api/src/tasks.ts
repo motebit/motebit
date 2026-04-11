@@ -1258,7 +1258,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           const peekBody = JSON.parse(new TextDecoder().decode(buf2)) as {
             payment_proof?: unknown;
           };
-          if (peekBody.payment_proof) {
+          if (peekBody.payment_proof != null) {
             return next();
           }
         } catch {

@@ -68,7 +68,7 @@ export interface DiscoveryDeps {
 
 // === Route Registration ===
 
-export async function registerDiscoveryRoutes(deps: DiscoveryDeps): Promise<void> {
+export function registerDiscoveryRoutes(deps: DiscoveryDeps): void {
   const { db, app, relayIdentity, federationConfig, platformFeeRate } = deps;
 
   // ── GET /.well-known/motebit.json (§3) ──

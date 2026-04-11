@@ -55,7 +55,7 @@ export function startSweepLoop(
   return setInterval(() => {
     if (isFrozen?.()) return;
 
-    void (async () => {
+    void (() => {
       try {
         // Find agents eligible for sweep:
         // - Has a sweep_threshold configured (not null)

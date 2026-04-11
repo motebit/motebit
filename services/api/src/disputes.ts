@@ -131,7 +131,7 @@ export interface DisputeDeps {
 
 // === Route Registration ===
 
-export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
+export function registerDisputeRoutes(deps: DisputeDeps): void {
   const { db, app, relayIdentity } = deps;
 
   // ── POST /api/v1/allocations/:allocationId/dispute (§4) ──
@@ -148,10 +148,10 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
     }>();
 
     // Validate required fields (§4.4)
-    if (!body.task_id || !allocationId) {
+    if (body.task_id == null || allocationId == null) {
       throw new HTTPException(400, { message: "task_id and allocation_id are required" });
     }
-    if (!body.evidence_refs || body.evidence_refs.length === 0) {
+    if (body.evidence_refs == null || body.evidence_refs.length === 0) {
       throw new HTTPException(400, { message: "At least one evidence reference is required" });
     }
 
@@ -274,7 +274,7 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
     if (dispute.state !== "evidence" && dispute.state !== "opened") {
       throw new HTTPException(400, {
-        message: `Cannot submit evidence in state: ${dispute.state}`,
+        message: `Cannot submit evidence in state: ${String(dispute.state)}`,
       });
     }
 
@@ -339,7 +339,9 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
     const dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
     if (dispute.state !== "evidence" && dispute.state !== "arbitration") {
-      throw new HTTPException(400, { message: `Cannot resolve in state: ${dispute.state}` });
+      throw new HTTPException(400, {
+        message: `Cannot resolve in state: ${String(dispute.state)}`,
+      });
     }
 
     // Rationale required (§6.5)
@@ -458,7 +460,7 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
     }
 
     // Check no prior appeal (§8.4: one appeal per dispute)
-    if (dispute.appealed_at) {
+    if (dispute.appealed_at != null) {
       throw new HTTPException(409, { message: "Dispute has already been appealed" });
     }
 
@@ -483,7 +485,7 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
 
   // ── GET /api/v1/disputes/:disputeId ──
   // Query dispute status.
-  app.get("/api/v1/disputes/:disputeId", async (c) => {
+  app.get("/api/v1/disputes/:disputeId", (c) => {
     const disputeId = c.req.param("disputeId");
     const dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
@@ -503,7 +505,7 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
     // Check for resolved→final transition (§3.3: auto-final after appeal window)
     if (
       dispute.state === "resolved" &&
-      dispute.resolved_at &&
+      dispute.resolved_at != null &&
       Date.now() > (dispute.resolved_at as number) + APPEAL_WINDOW_MS
     ) {
       db.prepare(
@@ -534,7 +536,7 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
 
   // ── GET /api/v1/admin/disputes ──
   // Admin panel view — all disputes with stats.
-  app.get("/api/v1/admin/disputes", async (c) => {
+  app.get("/api/v1/admin/disputes", (c) => {
     const disputes = db
       .prepare("SELECT * FROM relay_disputes ORDER BY filed_at DESC LIMIT 100")
       .all() as Array<Record<string, unknown>>;

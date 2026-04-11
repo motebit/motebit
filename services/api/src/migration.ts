@@ -110,7 +110,7 @@ export interface MigrationDeps {
 
 // === Route Registration ===
 
-export async function registerMigrationRoutes(deps: MigrationDeps): Promise<void> {
+export function registerMigrationRoutes(deps: MigrationDeps): void {
   const { db, app, relayIdentity, federationConfig } = deps;
 
   // ── POST /api/v1/agents/:motebitId/migrate (§4) ──
@@ -462,7 +462,7 @@ export async function registerMigrationRoutes(deps: MigrationDeps): Promise<void
 
   // ── POST /api/v1/agents/:motebitId/migrate/cancel ──
   // Cancel an in-progress migration (§3.2: agents MAY cancel before departed).
-  app.post("/api/v1/agents/:motebitId/migrate/cancel", async (c) => {
+  app.post("/api/v1/agents/:motebitId/migrate/cancel", (c) => {
     const motebitId = c.req.param("motebitId");
     const migration = getActiveMigration(db, motebitId);
     if (!migration) {
@@ -475,7 +475,7 @@ export async function registerMigrationRoutes(deps: MigrationDeps): Promise<void
 
   // ── POST /api/v1/agents/:motebitId/migrate/depart ──
   // Confirm departure — terminal state (§3.2).
-  app.post("/api/v1/agents/:motebitId/migrate/depart", async (c) => {
+  app.post("/api/v1/agents/:motebitId/migrate/depart", (c) => {
     const motebitId = c.req.param("motebitId");
     const migration = getActiveMigration(db, motebitId);
     if (!migration) {

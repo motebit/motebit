@@ -676,7 +676,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Discovery routes (discovery-v1.md §3, §5) ---
   const { registerDiscoveryRoutes } = await import("./discovery.js");
-  await registerDiscoveryRoutes({
+  registerDiscoveryRoutes({
     db: moteDb.db,
     app,
     relayIdentity,
@@ -687,7 +687,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Migration routes (migration-v1.md) ---
   const { registerMigrationRoutes, createMigrationTables } = await import("./migration.js");
   createMigrationTables(moteDb.db);
-  await registerMigrationRoutes({
+  registerMigrationRoutes({
     db: moteDb.db,
     app,
     relayIdentity,
@@ -697,7 +697,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Dispute routes (dispute-v1.md) ---
   const { registerDisputeRoutes, createDisputeTables } = await import("./disputes.js");
   createDisputeTables(moteDb.db);
-  await registerDisputeRoutes({
+  registerDisputeRoutes({
     db: moteDb.db,
     app,
     relayIdentity,

@@ -220,7 +220,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       created_at: session.created_at,
       expires_at: session.expires_at,
     };
-    if (session.claiming_x25519_pubkey) {
+    if (session.claiming_x25519_pubkey != null) {
       result.claiming_x25519_pubkey = session.claiming_x25519_pubkey;
     }
     return c.json(result);
@@ -349,7 +349,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       result.motebit_id = session.motebit_id;
       result.device_id = session.approved_device_id;
       // Include key_transfer payload if present (encrypted identity seed from Device A)
-      if (session.key_transfer_payload) {
+      if (session.key_transfer_payload != null) {
         try {
           result.key_transfer = JSON.parse(session.key_transfer_payload as string);
         } catch {
@@ -388,7 +388,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     if ((session.status as string) !== "approved") {
       throw new HTTPException(409, { message: "Pairing session not approved" });
     }
-    if (!session.approved_device_id) {
+    if (session.approved_device_id == null) {
       throw new HTTPException(409, { message: "No approved device" });
     }
 

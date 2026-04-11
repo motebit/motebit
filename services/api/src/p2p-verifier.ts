@@ -166,10 +166,10 @@ async function verifyTransactionOnChain(rpcUrl: string, txHash: string): Promise
 
   if (!resp.ok) return "rpc_error";
 
-  const data = (await resp.json()) as { result: unknown | null; error?: unknown };
+  const data = (await resp.json()) as { result: unknown; error?: unknown };
 
   // JSON-RPC error (timeout, rate limit, internal error) — transient, retry
-  if (data.error) return "rpc_error";
+  if (data.error != null) return "rpc_error";
 
   // result is null only when the transaction genuinely doesn't exist
   return data.result != null ? "verified" : "not_found";
