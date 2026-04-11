@@ -113,11 +113,50 @@ export function getAccountBalance(db: DatabaseDriver, motebitId: string): Virtua
   );
 }
 
+/** 24-hour dispute window (matches dispute-v1.md §4.5 convention). */
+const DISPUTE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Compute the amount held back for the dispute window.
+ *
+ * Returns the sum of amount_settled from relay_settlements where:
+ * - The worker (motebit_id) matches the account holder
+ * - settled_at is within the last 24 hours
+ * - The settlement completed (not refunded)
+ * - The settlement's task_id does NOT have an active dispute
+ *
+ * Once a dispute is filed, the dispute's own fund locking (allocation
+ * status = 'disputed') takes over — the window hold only protects
+ * undisputed recent settlements.
+ */
+export function computeDisputeWindowHold(db: DatabaseDriver, motebitId: string): number {
+  const cutoff = Date.now() - DISPUTE_WINDOW_MS;
+  try {
+    const row = db
+      .prepare(
+        `SELECT COALESCE(SUM(s.amount_settled), 0) as total
+         FROM relay_settlements s
+         WHERE s.motebit_id = ?
+           AND s.settled_at > ?
+           AND s.status = 'completed'
+           AND s.task_id NOT IN (
+             SELECT d.task_id FROM relay_disputes d
+             WHERE d.state NOT IN ('final', 'expired')
+           )`,
+      )
+      .get(motebitId, cutoff) as { total: number };
+    return row.total;
+  } catch {
+    // relay_settlements or relay_disputes table may not exist in minimal setups
+    return 0;
+  }
+}
+
 /**
  * Get account balance with available/pending breakdown.
- * available = balance (already debited for holds/withdrawals)
- * pending_withdrawals = sum of pending/processing withdrawal amounts
- * pending_allocations = sum of locked allocation amounts
+ * balance = current ledger balance (already debited for holds/withdrawals)
+ * dispute_window_hold = recent settlements not yet past the 24h dispute window
+ * available_for_withdrawal = balance minus dispute window hold (floor at 0)
  */
 export function getAccountBalanceDetailed(
   db: DatabaseDriver,
@@ -127,6 +166,8 @@ export function getAccountBalanceDetailed(
   currency: string;
   pending_withdrawals: number;
   pending_allocations: number;
+  dispute_window_hold: number;
+  available_for_withdrawal: number;
 } {
   const account = getOrCreateAccount(db, motebitId);
 
@@ -142,11 +183,15 @@ export function getAccountBalanceDetailed(
     )
     .get(motebitId) as { total: number };
 
+  const disputeHold = computeDisputeWindowHold(db, motebitId);
+
   return {
     balance: account.balance,
     currency: account.currency,
     pending_withdrawals: pendingW.total,
     pending_allocations: pendingA.total,
+    dispute_window_hold: disputeHold,
+    available_for_withdrawal: Math.max(0, account.balance - disputeHold),
   };
 }
 
@@ -410,6 +455,20 @@ export function requestWithdrawal(
 
   const withdrawalId = crypto.randomUUID();
   const now = Date.now();
+
+  // Check dispute window hold — funds from recent settlements are not withdrawable
+  const disputeHold = computeDisputeWindowHold(db, motebitId);
+  const account = getOrCreateAccount(db, motebitId);
+  if (account.balance - disputeHold < amount) {
+    logger.info("withdrawal.dispute_window_hold", {
+      motebitId,
+      requestedAmount: amount,
+      balance: account.balance,
+      disputeHold,
+      available: account.balance - disputeHold,
+    });
+    return null;
+  }
 
   // Debit account — returns null if insufficient balance (atomic check)
   const newBalance = debitAccount(

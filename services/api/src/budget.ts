@@ -188,6 +188,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         currency: "USD",
         pending_withdrawals: 0,
         pending_allocations: 0,
+        dispute_window_hold: 0,
+        available_for_withdrawal: 0,
         transactions: [],
       });
     const detailed = getAccountBalanceDetailed(moteDb.db, motebitId);
@@ -202,6 +204,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       currency: detailed.currency,
       pending_withdrawals: fromMicro(detailed.pending_withdrawals),
       pending_allocations: fromMicro(detailed.pending_allocations),
+      dispute_window_hold: fromMicro(detailed.dispute_window_hold),
+      available_for_withdrawal: fromMicro(detailed.available_for_withdrawal),
       transactions,
     });
   });
