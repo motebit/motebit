@@ -199,6 +199,9 @@ spec/
   auth-token-v1.md         motebit/auth-token@1.0 — signed bearer tokens, audience binding
   credential-anchor-v1.md  motebit/credential-anchor@1.0 — Merkle anchoring, self-verifiable proofs
   delegation-v1.md         motebit/delegation@1.0 — task lifecycle, receipt exchange, budget, routing
+  discovery-v1.md          motebit/discovery@1.0 — well-known endpoint, DNS SRV, agent resolution
+  migration-v1.md          motebit/migration@1.0 — departure attestation, credential export, trust bootstrapping
+  dispute-v1.md            motebit/dispute@1.0 — evidence, adjudication, fund handling, appeal
 ```
 
 46 packages across packages, apps, and services.
@@ -258,7 +261,7 @@ pnpm run lint          # Lint all packages
 
 The **protocol layer** is MIT licensed — use it freely, build on it, implement the spec in any language:
 
-- [`spec/`](spec/) — 9 open specs (identity, execution-ledger, relay-federation, market, credential, settlement, auth-token, credential-anchor, delegation)
+- [`spec/`](spec/) — 12 open specs (identity, execution-ledger, relay-federation, market, credential, settlement, auth-token, credential-anchor, delegation, discovery, migration, dispute)
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify all artifacts (zero dependencies)
 - [`packages/sdk/`](packages/sdk/) — product development kit (types, config, adapters)
@@ -272,7 +275,7 @@ The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-av
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specifications](spec/) — 9 open specs (MIT)
+- [Specifications](spec/) — 12 open specs (MIT)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know
