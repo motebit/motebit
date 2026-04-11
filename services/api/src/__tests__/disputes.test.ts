@@ -358,3 +358,115 @@ describe("Dispute: GET status + admin", () => {
     expect(body.stats.total).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("Dispute: fund execution integrity", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+    const kp1 = await generateKeypair();
+    const kp2 = await generateKeypair();
+    await registerAgent(relay, "del-fund", bytesToHex(kp1.publicKey));
+    await registerAgent(relay, "wrk-fund", bytesToHex(kp2.publicKey));
+    createAllocation(relay, "alloc-fund", "task-fund", "del-fund");
+  });
+
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  it("refund credits relay_accounts, not virtual_accounts", async () => {
+    const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    // Check balance before
+    const beforeRow = relay.moteDb.db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get("del-fund") as { balance: number } | undefined;
+    const balanceBefore = beforeRow?.balance ?? 0;
+
+    // Resolve with refund
+    const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "Work was inadequate",
+        fund_action: "refund_to_delegator",
+      }),
+    });
+    expect(resolveRes.status).toBe(200);
+
+    // Verify relay_accounts balance increased
+    const afterRow = relay.moteDb.db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get("del-fund") as { balance: number } | undefined;
+    const balanceAfter = afterRow?.balance ?? 0;
+    expect(balanceAfter).toBe(balanceBefore + 100000);
+
+    // Verify relay_transactions audit trail exists
+    const txns = relay.moteDb.db
+      .prepare(
+        "SELECT * FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit' AND reference_id = ?",
+      )
+      .all("del-fund", dispute_id) as Array<Record<string, unknown>>;
+    expect(txns.length).toBe(1);
+    expect(txns[0]!.amount).toBe(100000);
+  });
+
+  it("split distributes to both parties with integer arithmetic", async () => {
+    const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "split",
+        rationale: "Partial quality issues",
+        fund_action: "split",
+        split_ratio: 0.7,
+      }),
+    });
+    expect(resolveRes.status).toBe(200);
+
+    // Worker gets floor(100000 * 0.7) = 70000
+    const workerTxn = relay.moteDb.db
+      .prepare(
+        "SELECT amount FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit' AND reference_id = ?",
+      )
+      .get("wrk-fund", dispute_id) as { amount: number } | undefined;
+    expect(workerTxn?.amount).toBe(70000);
+
+    // Delegator gets 100000 - 70000 = 30000
+    const delTxn = relay.moteDb.db
+      .prepare(
+        "SELECT amount FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit' AND reference_id = ?",
+      )
+      .get("del-fund", dispute_id) as { amount: number } | undefined;
+    expect(delTxn?.amount).toBe(30000);
+  });
+
+  it("release_to_worker credits the respondent", async () => {
+    const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "overturned",
+        rationale: "Work was actually fine",
+        fund_action: "release_to_worker",
+      }),
+    });
+    expect(resolveRes.status).toBe(200);
+
+    const workerTxn = relay.moteDb.db
+      .prepare(
+        "SELECT amount FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit' AND reference_id = ?",
+      )
+      .get("wrk-fund", dispute_id) as { amount: number } | undefined;
+    expect(workerTxn?.amount).toBe(100000);
+  });
+});

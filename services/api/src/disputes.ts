@@ -20,6 +20,7 @@ import type {
 } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity } from "./federation.js";
+import { creditAccount as creditAccountCanonical } from "./accounts.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "disputes" });
@@ -366,20 +367,31 @@ export async function registerDisputeRoutes(deps: DisputeDeps): Promise<void> {
       signatureHex,
     );
 
-    db.prepare(
-      "UPDATE relay_disputes SET state = 'resolved', resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ?",
-    ).run(
-      body.resolution,
-      body.rationale,
-      body.fund_action,
-      splitRatio,
-      relayIdentity.relayMotebitId,
-      resolvedAt,
-      disputeId,
-    );
+    // Atomic: state transition + fund movement in one transaction.
+    // If fund execution fails, the dispute must NOT be marked resolved.
+    db.exec("BEGIN");
+    try {
+      db.prepare(
+        "UPDATE relay_disputes SET state = 'resolved', resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ?",
+      ).run(
+        body.resolution,
+        body.rationale,
+        body.fund_action,
+        splitRatio,
+        relayIdentity.relayMotebitId,
+        resolvedAt,
+        disputeId,
+      );
 
-    // Execute fund action (§7.2)
-    executeFundAction(db, dispute, body.fund_action, splitRatio);
+      // Execute fund action (§7.2) — must succeed or rollback
+      executeFundAction(db, dispute, body.fund_action, splitRatio);
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw new HTTPException(500, {
+        message: `Dispute resolution failed — funds not moved: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
 
     logger.info("dispute.resolved", {
       disputeId,
@@ -538,46 +550,58 @@ function executeFundAction(
   splitRatio: number,
 ): void {
   const amountLocked = dispute.amount_locked as number;
+  if (amountLocked === 0) return; // P2p disputes have no locked funds
   const filedBy = dispute.filed_by as string;
   const respondent = dispute.respondent as string;
+  const disputeId = dispute.dispute_id as string;
 
-  try {
-    switch (fundAction) {
-      case "refund_to_delegator": {
-        // Return all locked funds to the delegator (filing party in quality disputes)
-        creditAccount(db, filedBy, amountLocked);
-        break;
-      }
-      case "release_to_worker": {
-        // Release locked funds to the worker
-        creditAccount(db, respondent, amountLocked);
-        break;
-      }
-      case "split": {
-        // Split per split_ratio (§7.3: integer micro-units, no floating-point)
-        const workerAmount = Math.floor(amountLocked * splitRatio);
-        const delegatorAmount = amountLocked - workerAmount;
-        if (workerAmount > 0) creditAccount(db, respondent, workerAmount);
-        if (delegatorAmount > 0) creditAccount(db, filedBy, delegatorAmount);
-        break;
-      }
+  switch (fundAction) {
+    case "refund_to_delegator": {
+      creditAccountCanonical(
+        db,
+        filedBy,
+        amountLocked,
+        "settlement_credit",
+        disputeId,
+        `Dispute refund: ${disputeId}`,
+      );
+      break;
     }
-  } catch (err) {
-    logger.error("dispute.fund_action_failed", {
-      disputeId: dispute.dispute_id,
-      fundAction,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-function creditAccount(db: DatabaseDriver, motebitId: string, amount: number): void {
-  try {
-    db.prepare("UPDATE virtual_accounts SET balance = balance + ? WHERE motebit_id = ?").run(
-      amount,
-      motebitId,
-    );
-  } catch {
-    // virtual_accounts table may not exist — best-effort
+    case "release_to_worker": {
+      creditAccountCanonical(
+        db,
+        respondent,
+        amountLocked,
+        "settlement_credit",
+        disputeId,
+        `Dispute release: ${disputeId}`,
+      );
+      break;
+    }
+    case "split": {
+      const workerAmount = Math.floor(amountLocked * splitRatio);
+      const delegatorAmount = amountLocked - workerAmount;
+      if (workerAmount > 0) {
+        creditAccountCanonical(
+          db,
+          respondent,
+          workerAmount,
+          "settlement_credit",
+          disputeId,
+          `Dispute split (worker): ${disputeId}`,
+        );
+      }
+      if (delegatorAmount > 0) {
+        creditAccountCanonical(
+          db,
+          filedBy,
+          delegatorAmount,
+          "settlement_credit",
+          disputeId,
+          `Dispute split (delegator): ${disputeId}`,
+        );
+      }
+      break;
+    }
   }
 }
