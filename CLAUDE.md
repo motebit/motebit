@@ -76,6 +76,9 @@ spec/
   auth-token-v1.md         motebit/auth-token@1.0 — signed bearer tokens, audience binding, replay prevention
   credential-anchor-v1.md  motebit/credential-anchor@1.0 — Merkle batch anchoring, self-verifiable proofs, chain-agnostic
   delegation-v1.md         motebit/delegation@1.0 — task submission, receipt exchange, budget lifecycle, routing scores
+  discovery-v1.md          motebit/discovery@1.0 — well-known endpoint, DNS SRV, agent resolution, relay metadata
+  migration-v1.md          motebit/migration@1.0 — departure attestation, credential export, trust bootstrapping
+  dispute-v1.md            motebit/dispute@1.0 — evidence, adjudication, fund handling, appeal, sybil defense
 
 services/
   api/          Relay server (modules: index, federation, task-routing,
