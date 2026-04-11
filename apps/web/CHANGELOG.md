@@ -1,5 +1,28 @@
 # @motebit/web
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [b231e9c]
+  - @motebit/protocol@0.8.0
+  - @motebit/sdk@0.8.0
+  - @motebit/core-identity@0.1.17
+  - @motebit/encryption@0.1.17
+  - @motebit/sync-engine@0.1.17
+  - @motebit/ai-core@0.1.17
+  - @motebit/behavior-engine@0.1.17
+  - @motebit/browser-persistence@0.1.17
+  - @motebit/gradient@0.1.17
+  - @motebit/mcp-client@0.1.17
+  - @motebit/memory-graph@0.1.17
+  - @motebit/planner@0.1.17
+  - @motebit/policy-invariants@0.1.17
+  - @motebit/render-engine@0.1.17
+  - @motebit/runtime@0.1.17
+  - @motebit/state-vector@0.1.17
+  - @motebit/tools@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

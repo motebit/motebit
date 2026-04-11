@@ -1,5 +1,29 @@
 # @motebit/runtime
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [b231e9c]
+  - @motebit/sdk@0.8.0
+  - @motebit/core-identity@0.1.17
+  - @motebit/encryption@0.1.17
+  - @motebit/event-log@0.1.17
+  - @motebit/policy@0.1.17
+  - @motebit/semiring@0.1.17
+  - @motebit/sync-engine@0.1.17
+  - @motebit/wallet-solana@0.1.17
+  - @motebit/ai-core@0.1.17
+  - @motebit/behavior-engine@0.1.17
+  - @motebit/gradient@0.1.17
+  - @motebit/mcp-client@0.1.17
+  - @motebit/memory-graph@0.1.17
+  - @motebit/planner@0.1.17
+  - @motebit/privacy-layer@0.1.17
+  - @motebit/reflection@0.1.17
+  - @motebit/render-engine@0.1.17
+  - @motebit/state-vector@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

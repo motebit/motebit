@@ -1,5 +1,18 @@
 # @motebit/api
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [b231e9c]
+  - @motebit/sdk@0.8.0
+  - @motebit/core-identity@0.1.17
+  - @motebit/encryption@0.1.17
+  - @motebit/event-log@0.1.17
+  - @motebit/market@0.1.17
+  - @motebit/wallet-solana@0.1.17
+  - @motebit/persistence@0.1.17
+
 ## 0.1.16
 
 ### Patch Changes

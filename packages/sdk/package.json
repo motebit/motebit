@@ -1,6 +1,6 @@
 {
   "name": "@motebit/sdk",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Motebit product development kit — shared types, config schemas, normalization, and adapters for Motebit surfaces. Re-exports @motebit/protocol.",
   "type": "module",
   "main": "./dist/index.js",

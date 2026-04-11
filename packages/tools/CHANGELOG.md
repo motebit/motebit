@@ -1,5 +1,12 @@
 # @motebit/tools
 
+## 0.1.17
+
+### Patch Changes
+
+- Updated dependencies [b231e9c]
+  - @motebit/sdk@0.8.0
+
 ## 0.1.16
 
 ### Patch Changes
