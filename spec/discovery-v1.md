@@ -1,8 +1,8 @@
 # motebit/discovery@1.0
 
-**Status:** Draft
-**Authors:** Daniel Hakim
-**Date:** April 2026
+**Status:** Draft  
+**Authors:** Daniel Hakim  
+**Created:** 2026-04-11
 
 ---
 
@@ -77,15 +77,15 @@ INPUT:  metadata: RelayMetadata object (parsed JSON)
 
 Step 1:  Extract signature field, remove it from the object
 Step 2:  Compute canonicalJson(remaining fields) per RFC 8785 (JCS)
-Step 3:  SHA-256 hash the canonical JSON bytes → digest
+Step 3:  Encode canonical JSON string as UTF-8 bytes
 Step 4:  Decode signature from hex → 64 bytes
 Step 5:  Decode public_key from hex → 32 bytes
-Step 6:  Ed25519.verify(signature, digest, public_key)
+Step 6:  Ed25519.verify(signature, canonical_bytes, public_key)
 Step 7:  If false → reject
 Step 8:  Accept
 ```
 
-The signature covers `SHA-256(canonicalJson(fields_except_signature))`, consistent with the proof composability pattern used across all motebit specs (`@motebit/crypto`).
+The signature covers `canonicalJson(fields_except_signature)` as raw bytes, consistent with the signing pattern used across all motebit specs (receipts, credentials, batch payloads, succession records).
 
 ### 3.4 — Capability Values
 

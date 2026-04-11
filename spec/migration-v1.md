@@ -105,7 +105,7 @@ DepartureAttestation {
   source_relay_url:     string      // Attesting relay's canonical URL
   first_seen:           number      // Unix ms — when the agent first registered
   last_active:          number      // Unix ms — last task execution or interaction
-  trust_level:          number      // Current trust score [0, 1]
+  trust_level:          string      // AgentTrustLevel enum ("unknown", "first_contact", "verified", "trusted", "blocked")
   successful_tasks:     number      // Total completed tasks as worker
   failed_tasks:         number      // Total failed tasks as worker
   credentials_issued:   number      // Total credentials issued to this agent
@@ -117,7 +117,7 @@ DepartureAttestation {
 
 ### 5.2 Verification
 
-1. Fetch the source relay's Ed25519 public key via the `/.well-known/motebit-relay` discovery endpoint (relay-federation@1.0).
+1. Fetch the source relay's Ed25519 public key via the `/.well-known/motebit.json` discovery endpoint (relay-federation@1.0).
 2. Compute `canonicalJson(attestation_without_signature)`.
 3. Verify `Ed25519.verify(signature, canonical_bytes, relay_public_key)`.
 
@@ -217,7 +217,7 @@ MigrationPresentation {
 The destination relay validates in order:
 
 1. **Identity file.** Parse and verify the motebit.md identity file (identity@1.0). Extract `motebit_id` and current public key.
-2. **Migration token.** Fetch the source relay's public key via `/.well-known/motebit-relay`. Verify the token's Ed25519 signature. Check `expires_at > now`. Confirm `motebit_id` matches.
+2. **Migration token.** Fetch the source relay's public key via `/.well-known/motebit.json`. Verify the token's Ed25519 signature. Check `expires_at > now`. Confirm `motebit_id` matches.
 3. **Departure attestation.** Verify the attestation's Ed25519 signature against the same source relay public key. Confirm `motebit_id` matches.
 4. **Credential bundle.** Verify the agent's Ed25519 signature on the bundle. Confirm `motebit_id` matches.
 5. **Anchor proofs.** Spot-check credential anchor proofs onchain (credential-anchor@1.0). At minimum, verify the most recent anchor. Full verification is recommended but not required for onboarding speed.
