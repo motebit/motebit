@@ -12,7 +12,15 @@ export default defineConfig({
   shims: true,
   banner: { js: "#!/usr/bin/env node" },
   noExternal: [/^@motebit\//],
-  external: ["better-sqlite3", "sql.js", "@xenova/transformers", "@modelcontextprotocol/sdk", "ws"],
+  external: [
+    "better-sqlite3",
+    "sql.js",
+    "@xenova/transformers",
+    "@modelcontextprotocol/sdk",
+    "ws",
+    "@noble/ed25519",
+    "@noble/hashes",
+  ],
   define: {
     __PKG_VERSION__: JSON.stringify(pkg.version),
   },
