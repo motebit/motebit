@@ -284,7 +284,7 @@ Step 5:  Persist relay URL to local config for subsequent connections
 
 ### 6.3 — Convention
 
-The default bootstrap URL is `https://motebit-sync.fly.dev`, operated by Motebit, Inc. Alternative bootstrap endpoints are first-class — the protocol does not privilege any operator.
+The reference implementation defaults to `https://motebit-sync.fly.dev`, operated by Motebit, Inc. This is a **product default**, not a protocol requirement. Alternative bootstrap endpoints are first-class. The protocol does not privilege any operator — any relay that serves valid signed metadata at `/.well-known/motebit.json` is an equally valid bootstrap target.
 
 ---
 

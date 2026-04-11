@@ -229,8 +229,9 @@ The destination relay seeds the agent's initial trust level based on the departu
 
 ### 8.4 Foundation Law
 
-- The destination relay MUST accept a valid MigrationPresentation. A relay that rejects valid presentations is not participating in the migration protocol.
-- The agent's `motebit_id` MUST be preserved. The destination relay MUST NOT assign a new identity.
+- A destination relay that evaluates a MigrationPresentation MUST validate it correctly using the steps in §8.2. Incorrect validation (skipping signature checks, ignoring key succession) is a protocol violation.
+- If the relay accepts the agent, the `motebit_id` MUST be preserved. The destination relay MUST NOT require a new identity as a condition of migration.
+- Acceptance is a local admission decision. A relay MAY decline to onboard an agent for capacity, commercial, jurisdictional, or policy reasons — but it MUST NOT require identity reset.
 - The destination relay MAY apply its own trust seeding policy. The attested `trust_level` is an input, not an obligation.
 
 ### 8.5 Convention

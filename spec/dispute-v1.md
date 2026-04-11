@@ -256,14 +256,16 @@ Per-agent caps on active disputes prevent a single identity from flooding the sy
 
 ### 9.3 Foundation Law
 
-- Overturned disputes must produce a negative trust signal on the filing party. Implementations that skip trust consequences for frivolous disputes are non-conformant.
-- Minimum trust threshold for filing is `FirstContact`. Agents below this threshold cannot open disputes.
+- Relays MUST implement a sybil defense policy for disputes. The specific policy (trust thresholds, filing fees, penalties) is relay-local, not protocol law.
+- Relays MUST publish their dispute policy in relay metadata (discovery@1.0) or documentation so agents can evaluate dispute accessibility before registering.
 
 ### 9.4 Convention
 
+- Overturned disputes produce a negative trust signal on the filing party (equivalent to one failed task in routing weight).
+- Minimum trust threshold for filing: `FirstContact` (trust_level >= 0.05).
 - Filing fee: 1% of the disputed allocation amount, refunded on `upheld` or `split`.
 - Maximum 3 active disputes per agent.
-- Trust penalty for overturned dispute: equivalent to one failed task.
+- Relays MAY waive the trust threshold for `non_payment` disputes, since theft can happen on first contact.
 
 ## 10. Security Considerations
 
