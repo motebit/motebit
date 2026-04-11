@@ -232,3 +232,63 @@ Settlement anchoring (relay-federation-v1.md §7.6) and credential anchoring sha
 | Batch table        | `relay_anchor_batches`                       | `relay_credential_anchor_batches`  |
 
 Both use the same `buildMerkleTree`, `getMerkleProof`, `verifyMerkleProof` functions from the shared Merkle library.
+
+## 10. Revocation Anchoring
+
+Revocation events are anchored onchain individually — no batching. Revocations are rare and urgent: a compromised key must be publicly visible immediately so any party can verify revocation without contacting any relay.
+
+### 10.1 Motivation
+
+Without onchain revocation, a relying party that is offline for longer than the federation heartbeat TTL (7 days) misses key compromise events. The chain becomes the revocation registry that anyone can check without contacting any relay. This closes the NIST SP 800-63 revocation requirement gap — no CA, no CRL, no OCSP. The chain is the registry.
+
+### 10.2 Memo Format
+
+```
+motebit:revocation:v1:{revoked_public_key_hex}:{timestamp}
+```
+
+- `revoked_public_key_hex`: 64-character hex-encoded Ed25519 public key being revoked
+- `timestamp`: millisecond Unix timestamp of the revocation event
+
+The memo is signed by the relay's Ed25519 identity key (the Solana transaction signer).
+
+### 10.3 Anchoring Behavior
+
+Revocation anchoring is **immediate** — no batching, no timer. When a key-level revocation event occurs (`agent_revoked` or `key_rotated`), the relay submits the memo to Solana in the same pass. Credential-level revocations (`credential_revoked`) are not anchored individually — credentials already have batch anchoring (§4).
+
+The chain submission is fire-and-forget: failure to anchor does not block the revocation itself. The federation heartbeat remains the primary propagation mechanism; the chain anchor is the permanent fallback.
+
+### 10.4 Verification
+
+Given a revocation anchor:
+
+1. **Memo format:** Validate the memo matches `motebit:revocation:v1:{key}:{timestamp}` and the public key is 64 hex characters
+2. **Relay signature:** The Solana transaction's signer is the relay's Ed25519 identity key. Verify the relay signed the revocation event payload (`revocation:{type}:{motebit_id}:{timestamp}`)
+3. **Onchain lookup:** Fetch the transaction by hash from any Solana RPC. Parse the memo instruction data. Confirm it contains the expected revoked public key
+
+Steps 1-2 are offline-verifiable given the relay's public key. Step 3 requires RPC access but ensures the relay cannot deny the revocation.
+
+### 10.5 Reference Implementation
+
+```ts
+import { verifyRevocationAnchor } from "@motebit/crypto";
+
+const result = await verifyRevocationAnchor(proof, revocationPayload, async (anchor) => {
+  // Step 3: fetch Solana tx, parse memo, compare to anchor.expected_memo
+  return true;
+});
+if (result.valid) {
+  // Key was revoked by this relay — do not trust it
+}
+```
+
+### 10.6 Relationship to Credential Anchoring
+
+| Property          | Credential Anchoring    | Revocation Anchoring                       |
+| ----------------- | ----------------------- | ------------------------------------------ |
+| Batching          | Merkle tree (50/batch)  | Individual (1 memo per event)              |
+| Trigger           | Count or time threshold | Immediate on event                         |
+| What goes onchain | Merkle root             | Revoked public key + timestamp             |
+| Event types       | All credentials         | `agent_revoked`, `key_rotated` only        |
+| Verification      | 4-step (§5.2)           | 3-step (§10.4)                             |
+| Failure mode      | Credential still valid  | Revocation still propagates via federation |

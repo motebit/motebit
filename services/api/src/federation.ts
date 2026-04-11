@@ -227,13 +227,27 @@ export function createFederationTables(db: DatabaseDriver): void {
 
 const REVOCATION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// Module-level submitter for onchain revocation anchoring.
+// Set once at relay startup via setRevocationAnchorSubmitter().
+let revocationAnchorSubmitter:
+  | {
+      submitRevocation(publicKeyHex: string, timestamp: number): Promise<{ txHash: string }>;
+      isAvailable(): Promise<boolean>;
+    }
+  | undefined;
+
+/** Configure the onchain revocation anchor submitter. Called once at relay startup. */
+export function setRevocationAnchorSubmitter(submitter: typeof revocationAnchorSubmitter): void {
+  revocationAnchorSubmitter = submitter;
+}
+
 /** Insert a revocation event — called when an agent is revoked, key is rotated, or credential is revoked. */
 export async function insertRevocationEvent(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
   type: RevocationEvent["type"],
   motebitId: string,
-  opts?: { credentialId?: string; newPublicKey?: string },
+  opts?: { credentialId?: string; newPublicKey?: string; revokedPublicKey?: string },
 ): Promise<RevocationEvent> {
   const timestamp = Date.now();
   const encoder = new TextEncoder();
@@ -254,6 +268,18 @@ export async function insertRevocationEvent(
     signatureHex,
   );
 
+  // Fire-and-forget onchain revocation anchor for key-level events.
+  // Revocations are rare and urgent — anchor immediately, no batching.
+  if (revocationAnchorSubmitter && opts?.revokedPublicKey) {
+    anchorRevocationOnChain(opts.revokedPublicKey, timestamp).catch((err) => {
+      logger.error("revocation.anchor_failed", {
+        motebitId,
+        type,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
   return {
     type,
     motebit_id: motebitId,
@@ -262,6 +288,30 @@ export async function insertRevocationEvent(
     timestamp,
     signature: signatureHex,
   };
+}
+
+/** Anchor a revocation event onchain via the configured submitter. */
+async function anchorRevocationOnChain(
+  revokedPublicKeyHex: string,
+  timestamp: number,
+): Promise<void> {
+  if (!revocationAnchorSubmitter) return;
+  const available = await revocationAnchorSubmitter.isAvailable();
+  if (!available) {
+    logger.warn("revocation.anchor_submitter_unavailable", {
+      publicKey: revokedPublicKeyHex.slice(0, 16) + "...",
+    });
+    return;
+  }
+  const { txHash } = await revocationAnchorSubmitter.submitRevocation(
+    revokedPublicKeyHex,
+    timestamp,
+  );
+  logger.info("revocation.anchored_onchain", {
+    publicKey: revokedPublicKeyHex.slice(0, 16) + "...",
+    txHash,
+    timestamp,
+  });
 }
 
 /** Query revocation events since a given timestamp. */

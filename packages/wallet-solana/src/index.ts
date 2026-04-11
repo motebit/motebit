@@ -43,6 +43,7 @@ export {
   type SolanaMemoSubmitterConfig,
   createSolanaMemoSubmitter,
   parseMemoAnchor,
+  parseRevocationMemo,
   SOLANA_MAINNET_CAIP2,
   SOLANA_DEVNET_CAIP2,
 } from "./memo-submitter.js";

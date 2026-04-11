@@ -222,9 +222,14 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (callerMotebitId && callerMotebitId !== motebitId)
       throw new HTTPException(403, { message: "Cannot revoke another agent" });
+    const agent = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { public_key: string } | undefined;
     moteDb.db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(motebitId);
     try {
-      await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId);
+      await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId, {
+        revokedPublicKey: agent?.public_key,
+      });
     } catch {
       /* best-effort */
     }

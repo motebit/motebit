@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseMemoAnchor,
+  parseRevocationMemo,
   SolanaMemoSubmitter,
   SOLANA_MAINNET_CAIP2,
   SOLANA_DEVNET_CAIP2,
@@ -125,13 +126,58 @@ describe("SolanaMemoSubmitter", () => {
     expect(typeof submitter.submitMerkleRoot).toBe("function");
     expect(typeof submitter.isAvailable).toBe("function");
   });
+
+  it("exposes submitRevocation method", () => {
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "https://api.mainnet-beta.solana.com",
+      identitySeed: seed,
+    });
+    expect(typeof submitter.submitRevocation).toBe("function");
+  });
+});
+
+// === parseRevocationMemo ===
+
+describe("parseRevocationMemo", () => {
+  it("parses a valid revocation memo string", () => {
+    const pubkey = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+    const result = parseRevocationMemo(`motebit:revocation:v1:${pubkey}:1712345678000`);
+    expect(result).toEqual({
+      version: "v1",
+      publicKeyHex: pubkey,
+      timestamp: 1712345678000,
+    });
+  });
+
+  it("returns null for empty string", () => {
+    expect(parseRevocationMemo("")).toBeNull();
+  });
+
+  it("returns null for wrong prefix", () => {
+    expect(parseRevocationMemo("other:revocation:v1:key:123")).toBeNull();
+  });
+
+  it("returns null for wrong second segment", () => {
+    expect(parseRevocationMemo("motebit:anchor:v1:key:123")).toBeNull();
+  });
+
+  it("returns null for non-numeric timestamp", () => {
+    expect(parseRevocationMemo("motebit:revocation:v1:key:abc")).toBeNull();
+  });
+
+  it("returns null for too few parts", () => {
+    expect(parseRevocationMemo("motebit:revocation:v1:key")).toBeNull();
+  });
+
+  it("returns null for too many parts", () => {
+    expect(parseRevocationMemo("motebit:revocation:v1:key:123:extra")).toBeNull();
+  });
 });
 
 // === Memo format round-trip ===
 
 describe("memo format round-trip", () => {
-  it("memo string produced by submitter is parseable", () => {
-    // The submitter produces: "motebit:anchor:v1:{root}:{leafCount}"
+  it("anchor memo string produced by submitter is parseable", () => {
     const root = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
     const leafCount = 50;
     const memo = `motebit:anchor:v1:${root}:${leafCount}`;
@@ -141,5 +187,25 @@ describe("memo format round-trip", () => {
     expect(parsed!.merkleRoot).toBe(root);
     expect(parsed!.leafCount).toBe(leafCount);
     expect(parsed!.version).toBe("v1");
+  });
+
+  it("revocation memo string is parseable", () => {
+    const pubkey = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    const timestamp = 1712345678000;
+    const memo = `motebit:revocation:v1:${pubkey}:${timestamp}`;
+
+    const parsed = parseRevocationMemo(memo);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.publicKeyHex).toBe(pubkey);
+    expect(parsed!.timestamp).toBe(timestamp);
+    expect(parsed!.version).toBe("v1");
+  });
+
+  it("anchor and revocation memos do not cross-parse", () => {
+    const anchorMemo = "motebit:anchor:v1:root:50";
+    const revocationMemo = "motebit:revocation:v1:key:123";
+
+    expect(parseMemoAnchor(revocationMemo)).toBeNull();
+    expect(parseRevocationMemo(anchorMemo)).toBeNull();
   });
 });

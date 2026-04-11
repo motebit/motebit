@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import {
   computeCredentialLeaf,
   verifyCredentialAnchor,
+  verifyRevocationAnchor,
   issueReputationCredential,
   generateKeypair,
   canonicalJson,
@@ -551,5 +552,189 @@ describe("verifyCredentialAnchor", () => {
 
     expect(result.valid).toBe(true);
     expect(result.steps.chain_verified).toBeNull();
+  });
+});
+
+// === verifyRevocationAnchor ===
+
+describe("verifyRevocationAnchor", () => {
+  it("verifies a valid revocation anchor (steps 1-2)", async () => {
+    const relayKeypair = await generateKeypair();
+    const revokedKeyHex = bytesToHex(relayKeypair.publicKey); // use relay key as test revoked key
+    const timestamp = Date.now();
+    const payload = `revocation:agent_revoked:mid-test-agent:${timestamp}`;
+    const sig = await ed25519Sign(new TextEncoder().encode(payload), relayKeypair.privateKey);
+
+    const result = await verifyRevocationAnchor(
+      {
+        revoked_public_key: revokedKeyHex,
+        timestamp,
+        signature: bytesToHex(sig),
+        relay_public_key: bytesToHex(relayKeypair.publicKey),
+        anchor: null,
+      },
+      payload,
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.steps.memo_valid).toBe(true);
+    expect(result.steps.relay_signature_valid).toBe(true);
+    expect(result.steps.chain_verified).toBeNull();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("fails on wrong relay key", async () => {
+    const relayKeypair = await generateKeypair();
+    const wrongKeypair = await generateKeypair();
+    const revokedKeyHex = bytesToHex(relayKeypair.publicKey);
+    const timestamp = Date.now();
+    const payload = `revocation:key_rotated:mid-test-agent:${timestamp}`;
+    const sig = await ed25519Sign(new TextEncoder().encode(payload), relayKeypair.privateKey);
+
+    const result = await verifyRevocationAnchor(
+      {
+        revoked_public_key: revokedKeyHex,
+        timestamp,
+        signature: bytesToHex(sig),
+        relay_public_key: bytesToHex(wrongKeypair.publicKey),
+        anchor: null,
+      },
+      payload,
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.steps.relay_signature_valid).toBe(false);
+    expect(result.errors[0]).toMatch(/signature verification failed/);
+  });
+
+  it("fails on invalid public key format", async () => {
+    const relayKeypair = await generateKeypair();
+    const timestamp = Date.now();
+    const payload = `revocation:agent_revoked:mid-test:${timestamp}`;
+    const sig = await ed25519Sign(new TextEncoder().encode(payload), relayKeypair.privateKey);
+
+    const result = await verifyRevocationAnchor(
+      {
+        revoked_public_key: "short",
+        timestamp,
+        signature: bytesToHex(sig),
+        relay_public_key: bytesToHex(relayKeypair.publicKey),
+        anchor: null,
+      },
+      payload,
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.steps.memo_valid).toBe(false);
+  });
+
+  it("fails on zero timestamp", async () => {
+    const relayKeypair = await generateKeypair();
+    const revokedKeyHex = bytesToHex(relayKeypair.publicKey);
+    const payload = `revocation:agent_revoked:mid-test:0`;
+    const sig = await ed25519Sign(new TextEncoder().encode(payload), relayKeypair.privateKey);
+
+    const result = await verifyRevocationAnchor(
+      {
+        revoked_public_key: revokedKeyHex,
+        timestamp: 0,
+        signature: bytesToHex(sig),
+        relay_public_key: bytesToHex(relayKeypair.publicKey),
+        anchor: null,
+      },
+      payload,
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.steps.memo_valid).toBe(false);
+  });
+
+  it("calls chain verifier when anchor is present", async () => {
+    const relayKeypair = await generateKeypair();
+    const revokedKeyHex = bytesToHex(relayKeypair.publicKey);
+    const timestamp = Date.now();
+    const payload = `revocation:agent_revoked:mid-test:${timestamp}`;
+    const sig = await ed25519Sign(new TextEncoder().encode(payload), relayKeypair.privateKey);
+
+    let verifierCalled = false;
+    const expectedMemo = `motebit:revocation:v1:${revokedKeyHex}:${timestamp}`;
+
+    const result = await verifyRevocationAnchor(
+      {
+        revoked_public_key: revokedKeyHex,
+        timestamp,
+        signature: bytesToHex(sig),
+        relay_public_key: bytesToHex(relayKeypair.publicKey),
+        anchor: {
+          chain: "solana",
+          network: "solana:devnet",
+          tx_hash: "fakeTxHash",
+        },
+      },
+      payload,
+      async (anchor) => {
+        verifierCalled = true;
+        expect(anchor.expected_memo).toBe(expectedMemo);
+        return true;
+      },
+    );
+
+    expect(verifierCalled).toBe(true);
+    expect(result.valid).toBe(true);
+    expect(result.steps.chain_verified).toBe(true);
+  });
+
+  it("skips chain verification when no verifier provided", async () => {
+    const relayKeypair = await generateKeypair();
+    const revokedKeyHex = bytesToHex(relayKeypair.publicKey);
+    const timestamp = Date.now();
+    const payload = `revocation:agent_revoked:mid-test:${timestamp}`;
+    const sig = await ed25519Sign(new TextEncoder().encode(payload), relayKeypair.privateKey);
+
+    const result = await verifyRevocationAnchor(
+      {
+        revoked_public_key: revokedKeyHex,
+        timestamp,
+        signature: bytesToHex(sig),
+        relay_public_key: bytesToHex(relayKeypair.publicKey),
+        anchor: {
+          chain: "solana",
+          network: "solana:devnet",
+          tx_hash: "fakeTx",
+        },
+      },
+      payload,
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.steps.chain_verified).toBeNull();
+  });
+
+  it("reports chain verifier failure", async () => {
+    const relayKeypair = await generateKeypair();
+    const revokedKeyHex = bytesToHex(relayKeypair.publicKey);
+    const timestamp = Date.now();
+    const payload = `revocation:agent_revoked:mid-test:${timestamp}`;
+    const sig = await ed25519Sign(new TextEncoder().encode(payload), relayKeypair.privateKey);
+
+    const result = await verifyRevocationAnchor(
+      {
+        revoked_public_key: revokedKeyHex,
+        timestamp,
+        signature: bytesToHex(sig),
+        relay_public_key: bytesToHex(relayKeypair.publicKey),
+        anchor: {
+          chain: "solana",
+          network: "solana:devnet",
+          tx_hash: "fakeTx",
+        },
+      },
+      payload,
+      async () => false,
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.steps.chain_verified).toBe(false);
+    expect(result.errors[0]).toMatch(/Onchain revocation anchor verification failed/);
   });
 });

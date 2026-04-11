@@ -112,6 +112,43 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     return { txHash: signature };
   }
 
+  /**
+   * Submit a revocation memo to Solana — immediate, no batching.
+   *
+   * Revocations are rare and urgent. A compromised key must be visible
+   * onchain immediately so any party can verify revocation without
+   * contacting any relay.
+   *
+   * Memo format: "motebit:revocation:v1:{old_public_key_hex}:{timestamp}"
+   */
+  async submitRevocation(oldPublicKeyHex: string, timestamp: number): Promise<{ txHash: string }> {
+    const memo = `motebit:revocation:v1:${oldPublicKeyHex}:${timestamp}`;
+
+    const instruction = new TransactionInstruction({
+      keys: [{ pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }],
+      programId: MEMO_PROGRAM_ID,
+      data: Buffer.from(memo, "utf-8"),
+    });
+
+    const tx = new Transaction().add(instruction);
+    const latest = await this.connection.getLatestBlockhash(this.commitment);
+    tx.recentBlockhash = latest.blockhash;
+    tx.feePayer = this.keypair.publicKey;
+    tx.sign(this.keypair);
+
+    const signature = await this.connection.sendRawTransaction(tx.serialize());
+    await this.connection.confirmTransaction(
+      {
+        signature,
+        blockhash: latest.blockhash,
+        lastValidBlockHeight: latest.lastValidBlockHeight,
+      },
+      this.commitment,
+    );
+
+    return { txHash: signature };
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
       // Check RPC reachability
@@ -148,6 +185,22 @@ export function parseMemoAnchor(memo: string): {
   const leafCount = parseInt(parts[4]!, 10);
   if (isNaN(leafCount)) return null;
   return { version, merkleRoot, leafCount };
+}
+
+/** Parse a revocation memo string back into its components. For verification. */
+export function parseRevocationMemo(memo: string): {
+  version: string;
+  publicKeyHex: string;
+  timestamp: number;
+} | null {
+  const parts = memo.split(":");
+  if (parts.length !== 5) return null;
+  if (parts[0] !== "motebit" || parts[1] !== "revocation") return null;
+  const version = parts[2]!;
+  const publicKeyHex = parts[3]!;
+  const timestamp = parseInt(parts[4]!, 10);
+  if (isNaN(timestamp)) return null;
+  return { version, publicKeyHex, timestamp };
 }
 
 export { SOLANA_MAINNET_CAIP2, SOLANA_DEVNET_CAIP2 };

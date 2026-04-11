@@ -1172,7 +1172,10 @@ export {
 export {
   computeCredentialLeaf,
   verifyCredentialAnchor,
+  verifyRevocationAnchor,
   type CredentialAnchorVerifyResult,
   type CredentialAnchorProofFields,
   type ChainAnchorVerifier,
+  type RevocationAnchorVerifyResult,
+  type RevocationAnchorProof,
 } from "./credential-anchor.js";

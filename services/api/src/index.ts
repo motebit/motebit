@@ -948,10 +948,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
     anchorSubmitter = memoSubmitter;
     credentialAnchorAddress = memoSubmitter.address;
+
+    // Wire revocation anchoring — immediate onchain submission for key events
+    const { setRevocationAnchorSubmitter } = await import("./federation.js");
+    setRevocationAnchorSubmitter(memoSubmitter);
+
     logger.info("anchoring.solana_submitter_configured", {
       address: memoSubmitter.address,
       network: memoSubmitter.network,
-      streams: ["settlement", "credential"],
+      streams: ["settlement", "credential", "revocation"],
     });
   }
 

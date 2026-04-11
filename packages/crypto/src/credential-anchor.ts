@@ -256,3 +256,125 @@ export async function verifyCredentialAnchor(
     errors,
   };
 }
+
+// === Revocation Anchoring ===
+
+/** Result of verifying an onchain revocation anchor. */
+export interface RevocationAnchorVerifyResult {
+  /** Whether the revocation anchor is valid. */
+  valid: boolean;
+  /** Individual step results. */
+  steps: {
+    /** Step 1: memo format is valid and contains the expected public key. */
+    memo_valid: boolean;
+    /** Step 2: relay's Ed25519 signature over the revocation payload is valid. */
+    relay_signature_valid: boolean;
+    /** Step 3: onchain anchor verified (null if not checked). */
+    chain_verified: boolean | null;
+  };
+  /** Error messages for failed steps. */
+  errors: string[];
+}
+
+/** Fields needed to verify a revocation anchor. */
+export interface RevocationAnchorProof {
+  /** Hex-encoded public key that was revoked. */
+  revoked_public_key: string;
+  /** Millisecond timestamp of the revocation event. */
+  timestamp: number;
+  /** Hex-encoded Ed25519 signature over the revocation payload by the relay. */
+  signature: string;
+  /** Hex-encoded Ed25519 public key of the relay that signed the revocation. */
+  relay_public_key: string;
+  /** Onchain anchor metadata, or null if not yet submitted. */
+  anchor: {
+    chain: string;
+    network: string;
+    tx_hash: string;
+  } | null;
+}
+
+/**
+ * Verify a revocation anchor — confirm a key was revoked.
+ *
+ * The revocation memo format is: "motebit:revocation:v1:{public_key_hex}:{timestamp}"
+ * The relay signs the payload "revocation:{type}:{motebit_id}:{timestamp}" with its
+ * identity key. This function verifies:
+ *
+ * 1. The relay's Ed25519 signature over the revocation event
+ * 2. Optionally, the onchain memo transaction via a callback
+ *
+ * Both steps are offline-verifiable given the relay's public key. The onchain
+ * step requires network access but ensures the relay cannot deny the revocation.
+ *
+ * @param proof - The revocation anchor proof fields
+ * @param revocationPayload - The exact signed payload string (e.g., "revocation:key_rotated:mid-xxx:1712345678")
+ * @param chainVerifier - Optional callback: given tx_hash + expected memo, verify onchain
+ */
+export async function verifyRevocationAnchor(
+  proof: RevocationAnchorProof,
+  revocationPayload: string,
+  chainVerifier?: (anchor: {
+    chain: string;
+    network: string;
+    tx_hash: string;
+    expected_memo: string;
+  }) => Promise<boolean>,
+): Promise<RevocationAnchorVerifyResult> {
+  const errors: string[] = [];
+
+  // Step 1: Memo format validation — the expected memo matches the proof fields
+  const expectedMemo = `motebit:revocation:v1:${proof.revoked_public_key}:${proof.timestamp}`;
+  const memoValid = proof.revoked_public_key.length === 64 && proof.timestamp > 0;
+  if (!memoValid) {
+    errors.push(
+      `Invalid revocation proof: public key length ${proof.revoked_public_key.length} (expected 64), timestamp ${proof.timestamp}`,
+    );
+  }
+
+  // Step 2: Relay signature verification
+  const payloadBytes = new TextEncoder().encode(revocationPayload);
+  const signatureBytes = hexToBytes(proof.signature);
+  const publicKeyBytes = hexToBytes(proof.relay_public_key);
+
+  let relaySignatureValid = false;
+  try {
+    relaySignatureValid = await ed25519Verify(signatureBytes, payloadBytes, publicKeyBytes);
+  } catch {
+    relaySignatureValid = false;
+  }
+  if (!relaySignatureValid) {
+    errors.push("Relay revocation signature verification failed");
+  }
+
+  // Step 3: Onchain anchor (optional)
+  let chainVerified: boolean | null = null;
+  if (proof.anchor && chainVerifier) {
+    try {
+      chainVerified = await chainVerifier({
+        ...proof.anchor,
+        expected_memo: expectedMemo,
+      });
+      if (!chainVerified) {
+        errors.push("Onchain revocation anchor verification failed");
+      }
+    } catch (err) {
+      chainVerified = false;
+      errors.push(
+        `Onchain revocation verification error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  const valid = memoValid && relaySignatureValid && (chainVerified === null || chainVerified);
+
+  return {
+    valid,
+    steps: {
+      memo_valid: memoValid,
+      relay_signature_valid: relaySignatureValid,
+      chain_verified: chainVerified,
+    },
+    errors,
+  };
+}

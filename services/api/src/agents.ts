@@ -597,6 +597,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       try {
         await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
           newPublicKey: publicKey,
+          revokedPublicKey: existingAgent.public_key,
         });
       } catch {
         /* best-effort */
