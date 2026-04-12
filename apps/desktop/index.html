@@ -2948,6 +2948,234 @@
     .agent-trust-badge.blocked { background: rgba(239,68,68,0.15); color: #ef4444; }
     .agent-trust-badge.unknown { background: rgba(156,163,175,0.15); color: #9ca3af; }
 
+    /* Balance bar — subtle, monospace, the marketplace orientation */
+    #agents-balance-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .agents-balance-label {
+      color: var(--text-faint);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 10px;
+    }
+    .agents-balance-value {
+      font-family: "SF Mono", "Fira Code", monospace;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+    }
+
+    /* Discover sort/filter controls */
+    .agents-discover-controls {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .agents-select {
+      flex: 1;
+      min-width: 0;
+      background: var(--bg-card);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 6px;
+      font-size: 11px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .agents-select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    /* Delegate action button on agent cards */
+    .agent-item-actions {
+      margin-top: 6px;
+      display: flex;
+      gap: 6px;
+    }
+    .agent-delegate-btn {
+      background: var(--bg-btn);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, color 0.15s;
+    }
+    .agent-delegate-btn:hover {
+      background: var(--bg-btn-hover);
+      color: var(--text-primary);
+    }
+
+    /* Delegate modal */
+    #delegate-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: var(--bg-overlay);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #delegate-backdrop.open { opacity: 1; pointer-events: auto; }
+    #delegate-dialog {
+      background: var(--bg-glass-strong);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border-input);
+      border-radius: 14px;
+      padding: 20px;
+      width: 340px;
+      max-width: calc(100vw - 32px);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .delegate-dialog-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .delegate-dialog-subtitle {
+      font-size: 10px;
+      color: var(--text-faint);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .delegate-dialog-target {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 6px 8px;
+      background: var(--bg-card);
+      border-radius: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .delegate-dialog-section {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .delegate-dialog-label {
+      font-size: 10px;
+      color: var(--text-faint);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .delegate-dialog-caps {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 140px;
+      overflow-y: auto;
+    }
+    .delegate-cap-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--text-secondary);
+    }
+    .delegate-cap-option:hover { background: var(--bg-card); }
+    .delegate-cap-option input[type="radio"] { margin: 0; }
+    .delegate-cap-price {
+      color: #c084fc;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 11px;
+    }
+    .delegate-dialog-prompt {
+      background: var(--bg-card);
+      border: 1px solid var(--border-input);
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 12px;
+      font-family: inherit;
+      color: var(--text-primary);
+      resize: vertical;
+      min-height: 60px;
+    }
+    .delegate-dialog-prompt:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .delegate-dialog-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      background: var(--bg-card);
+      border-radius: 6px;
+    }
+    .delegate-dialog-meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+    }
+    .delegate-dialog-meta-label {
+      color: var(--text-faint);
+    }
+    .delegate-dialog-meta-value {
+      font-family: "SF Mono", "Fira Code", monospace;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+    .delegate-dialog-error {
+      font-size: 11px;
+      color: #ef4444;
+      background: rgba(239,68,68,0.08);
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .delegate-dialog-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .delegate-dialog-actions button {
+      flex: 1;
+      padding: 8px 0;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .delegate-btn-submit {
+      background: var(--accent-soft);
+      color: #fff;
+    }
+    .delegate-btn-submit:hover:not(:disabled) { background: var(--accent-hover); }
+    .delegate-btn-submit:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .delegate-btn-cancel {
+      background: var(--bg-btn);
+      color: var(--text-secondary);
+    }
+    .delegate-btn-cancel:hover { background: var(--bg-btn-hover); }
+
     /* Sync status indicator */
     #sync-status {
       position: fixed;
@@ -4065,6 +4293,10 @@
       <span class="agents-panel-title">Agents</span>
       <button class="agents-panel-close" id="agents-close-btn">&times;</button>
     </div>
+    <div id="agents-balance-bar" style="display:none;">
+      <span class="agents-balance-label">Balance</span>
+      <span id="agents-balance-value" class="agents-balance-value">$0.00</span>
+    </div>
     <div class="agents-tabs">
       <button class="agents-tab active" data-tab="known">Known</button>
       <button class="agents-tab" data-tab="discover">Discover</button>
@@ -4074,8 +4306,50 @@
       <div id="agents-empty" style="font-size:12px;color:var(--text-ghost);padding:24px 16px;text-align:center;">No agents known yet. Your motebit will discover others through delegation and the agent network.</div>
     </div>
     <div id="agents-discover-pane" class="agents-pane" style="display:none;">
+      <div id="agents-discover-controls" class="agents-discover-controls" style="display:none;">
+        <select id="discover-sort" class="agents-select" aria-label="Sort agents">
+          <option value="recent">Recently seen</option>
+          <option value="price-asc">Lowest price</option>
+          <option value="price-desc">Highest price</option>
+          <option value="trust">Most trusted</option>
+          <option value="interactions">Most interactions</option>
+        </select>
+        <select id="discover-filter" class="agents-select" aria-label="Filter by capability">
+          <option value="">All capabilities</option>
+        </select>
+      </div>
       <div id="agents-discover-list" style="flex:1;overflow-y:auto;padding:0;"></div>
       <div id="agents-discover-empty" style="font-size:12px;color:var(--text-ghost);padding:24px 16px;text-align:center;">Connect to a relay to discover agents on the network.</div>
+    </div>
+  </div>
+  <div id="delegate-backdrop">
+    <div id="delegate-dialog" role="dialog" aria-modal="true" aria-label="Delegate task">
+      <div class="delegate-dialog-title">Delegate a task</div>
+      <div class="delegate-dialog-subtitle">to</div>
+      <div id="delegate-dialog-target-id" class="delegate-dialog-target"></div>
+      <div class="delegate-dialog-section">
+        <div class="delegate-dialog-label">Capability</div>
+        <div id="delegate-dialog-caps" class="delegate-dialog-caps"></div>
+      </div>
+      <div class="delegate-dialog-section">
+        <div class="delegate-dialog-label">Prompt</div>
+        <textarea id="delegate-dialog-prompt" class="delegate-dialog-prompt" rows="3" placeholder="What should this agent do?"></textarea>
+      </div>
+      <div class="delegate-dialog-meta">
+        <span class="delegate-dialog-meta-row">
+          <span class="delegate-dialog-meta-label">Estimated cost</span>
+          <span id="delegate-dialog-cost" class="delegate-dialog-meta-value">free</span>
+        </span>
+        <span class="delegate-dialog-meta-row">
+          <span class="delegate-dialog-meta-label">Your balance</span>
+          <span id="delegate-dialog-balance" class="delegate-dialog-meta-value">—</span>
+        </span>
+      </div>
+      <div id="delegate-dialog-error" class="delegate-dialog-error" style="display:none;"></div>
+      <div class="delegate-dialog-actions">
+        <button id="delegate-dialog-cancel" class="delegate-btn-cancel">Cancel</button>
+        <button id="delegate-dialog-submit" class="delegate-btn-submit">Delegate</button>
+      </div>
     </div>
   </div>
   <div id="sync-status" class="disconnected" title="Sync: Not connected" role="status" aria-label="Sync status">
