@@ -107,6 +107,19 @@ export function loadSoulColor(): AppearanceConfig | null {
 
 const SYNC_URL_KEY = "motebit-sync-url";
 
+/** Canonical relay URL. Override via VITE_RELAY_URL. */
+export const DEFAULT_RELAY_URL: string =
+  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
+    ?.VITE_RELAY_URL ?? "https://relay.motebit.com";
+
+/** Normalize a user-entered relay URL: trim, prepend https:// if no scheme. */
+export function normalizeRelayUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 export function saveSyncUrl(url: string): void {
   try {
     localStorage.setItem(SYNC_URL_KEY, url);

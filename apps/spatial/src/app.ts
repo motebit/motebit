@@ -55,6 +55,13 @@ const ttsVoiceSelect = document.getElementById("tts-voice-select") as HTMLSelect
 const vadSlider = document.getElementById("vad-sensitivity") as HTMLInputElement | null;
 const proactiveToggle = document.getElementById("proactive-toggle") as HTMLInputElement | null;
 
+function normalizeRelayUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 // Network settings
 const relayUrlInput = document.getElementById("relay-url-input") as HTMLInputElement | null;
 const showNetworkToggle = document.getElementById("show-network-toggle") as HTMLInputElement | null;
@@ -728,7 +735,7 @@ settingsSave?.addEventListener(
         ttsVoice: (ttsVoiceSelect?.value as OpenAITTSVoice) ?? "nova",
         vadSensitivity: vadSlider ? parseFloat(vadSlider.value) : 0.5,
         proactiveEnabled: proactiveToggle?.checked ?? true,
-        relayUrl: relayUrlInput?.value.trim() ?? "https://relay.motebit.com",
+        relayUrl: normalizeRelayUrl(relayUrlInput?.value ?? "") || "https://relay.motebit.com",
         showNetwork: showNetworkToggle?.checked ?? true,
         appearance: {
           colorPreset: activeColorPreset,

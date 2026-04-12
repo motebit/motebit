@@ -1,10 +1,11 @@
 import type { WebContext } from "../types";
-import { loadProxyToken, loadBalance, saveBalance, loadSyncUrl } from "../storage";
-
-/** Relay URL. Override via VITE_RELAY_URL. */
-const DEFAULT_RELAY_URL: string =
-  (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
-    ?.VITE_RELAY_URL ?? "https://relay.motebit.com";
+import {
+  loadProxyToken,
+  loadBalance,
+  saveBalance,
+  loadSyncUrl,
+  DEFAULT_RELAY_URL,
+} from "../storage";
 
 export interface SubscriptionAPI {
   updateBalanceDisplay(): void;

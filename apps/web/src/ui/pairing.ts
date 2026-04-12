@@ -9,7 +9,7 @@
  * Both flows poll the relay every 2 seconds until resolved or cancelled.
  */
 import type { WebContext } from "../types";
-import { loadSyncUrl } from "../storage";
+import { loadSyncUrl, DEFAULT_RELAY_URL, normalizeRelayUrl } from "../storage";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -59,13 +59,11 @@ function setStatus(text: string): void {
 }
 
 function getSyncUrl(): string {
-  return relayUrlInput.value.trim() || loadSyncUrl() || "";
+  return normalizeRelayUrl(relayUrlInput.value) || loadSyncUrl() || "";
 }
 
 export function initPairing(_ctx: WebContext): void {
-  // Pre-fill relay URL if saved
-  const saved = loadSyncUrl();
-  if (saved) relayUrlInput.value = saved;
+  relayUrlInput.value = loadSyncUrl() ?? DEFAULT_RELAY_URL;
 
   cancelBtn.addEventListener("click", () => {
     hide();

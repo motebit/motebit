@@ -5,7 +5,13 @@
 
 import type { WebContext } from "../types";
 import type { WebSyncStatus } from "../web-app";
-import { saveSyncUrl, loadSyncUrl, clearSyncUrl } from "../storage";
+import {
+  saveSyncUrl,
+  loadSyncUrl,
+  clearSyncUrl,
+  DEFAULT_RELAY_URL,
+  normalizeRelayUrl,
+} from "../storage";
 import type { PlanChunk } from "@motebit/runtime";
 import { renderMarkdown } from "./chat";
 
@@ -628,22 +634,19 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     syncDisconnectBtn.style.display = isActive ? "" : "none";
   }
 
-  // Restore saved relay URL
-  const savedUrl = loadSyncUrl();
-  if (savedUrl) {
-    syncRelayUrl.value = savedUrl;
-  }
+  syncRelayUrl.value = loadSyncUrl() ?? DEFAULT_RELAY_URL;
 
   // Subscribe to sync status changes
   ctx.app.onSyncStatusChange(updateSyncUI);
 
   // Connect button
   syncConnectBtn.addEventListener("click", () => {
-    const url = syncRelayUrl.value.trim();
+    const url = normalizeRelayUrl(syncRelayUrl.value);
     if (!url) {
-      syncStatusText.textContent = "Enter a relay URL";
+      syncStatusText.textContent = "Relay URL is required";
       return;
     }
+    syncRelayUrl.value = url;
     saveSyncUrl(url);
     syncStatusText.textContent = "Connecting...";
     ctx.app.startSync(url).catch((err: unknown) => {
