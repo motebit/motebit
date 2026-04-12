@@ -4,12 +4,65 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Grouping strategy: isolate blast radius.
+    #
+    # Crypto deps are security-critical — any compromise undermines the thesis,
+    # so they land as their own PR that a human reviews with the noble/scure
+    # release notes in hand.
+    #
+    # High-blast-radius ecosystem deps (TypeScript, @types/node, Vite, vitest
+    # family, ESLint, jsdom) each get their own isolated group. A major bump
+    # of any one of these typically requires tsconfig edits, type-cast
+    # fallout, or config migration — bundling them turns a reviewable PR into
+    # an unmergeable one. See PR #41 (9 simultaneous majors → CI wedge).
+    #
+    # The residual dev-major / production-major groups catch the long tail of
+    # low-blast-radius majors (test helpers, a11y utilities, lint plugins) —
+    # these may still be bundled since their combined risk is bounded.
     groups:
-      # Crypto deps are security-critical and bundled — isolate from batch updates
+      # Security-critical crypto — never bundled
       crypto:
         patterns:
           - "@noble/*"
           - "@scure/*"
+
+      # === High-blast-radius majors: each in their own group ===
+
+      typescript:
+        patterns:
+          - "typescript"
+          - "@typescript-eslint/*"
+
+      types-node:
+        patterns:
+          - "@types/node"
+
+      vite:
+        patterns:
+          - "vite"
+          - "@vitejs/*"
+          - "vite-plugin-*"
+
+      vitest:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+
+      eslint:
+        patterns:
+          - "eslint"
+
+      jsdom:
+        patterns:
+          - "jsdom"
+
+      hono:
+        patterns:
+          - "hono"
+          - "@hono/*"
+
+      # === Residual groups (long tail) ===
+
       dev-minor-patch:
         dependency-type: "development"
         update-types:
@@ -18,6 +71,19 @@ updates:
         exclude-patterns:
           - "@noble/*"
           - "@scure/*"
+          - "typescript"
+          - "@typescript-eslint/*"
+          - "@types/node"
+          - "vite"
+          - "@vitejs/*"
+          - "vite-plugin-*"
+          - "vitest"
+          - "@vitest/*"
+          - "eslint"
+          - "jsdom"
+          - "hono"
+          - "@hono/*"
+
       dev-major:
         dependency-type: "development"
         update-types:
@@ -25,6 +91,19 @@ updates:
         exclude-patterns:
           - "@noble/*"
           - "@scure/*"
+          - "typescript"
+          - "@typescript-eslint/*"
+          - "@types/node"
+          - "vite"
+          - "@vitejs/*"
+          - "vite-plugin-*"
+          - "vitest"
+          - "@vitest/*"
+          - "eslint"
+          - "jsdom"
+          - "hono"
+          - "@hono/*"
+
       production-minor-patch:
         dependency-type: "production"
         update-types:
@@ -33,6 +112,19 @@ updates:
         exclude-patterns:
           - "@noble/*"
           - "@scure/*"
+          - "typescript"
+          - "@typescript-eslint/*"
+          - "@types/node"
+          - "vite"
+          - "@vitejs/*"
+          - "vite-plugin-*"
+          - "vitest"
+          - "@vitest/*"
+          - "eslint"
+          - "jsdom"
+          - "hono"
+          - "@hono/*"
+
       production-major:
         dependency-type: "production"
         update-types:
@@ -40,6 +132,19 @@ updates:
         exclude-patterns:
           - "@noble/*"
           - "@scure/*"
+          - "typescript"
+          - "@typescript-eslint/*"
+          - "@types/node"
+          - "vite"
+          - "@vitejs/*"
+          - "vite-plugin-*"
+          - "vitest"
+          - "@vitest/*"
+          - "eslint"
+          - "jsdom"
+          - "hono"
+          - "@hono/*"
+
     open-pull-requests-limit: 10
 
   - package-ecosystem: "github-actions"

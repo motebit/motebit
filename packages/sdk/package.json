@@ -51,6 +51,8 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
+    "lint:pack": "publint --strict && attw --pack --profile esm-only",
+    "api:extract": "api-extractor run --local",
     "clean": "rm -rf dist .turbo *.tsbuildinfo",
     "prepublishOnly": "npm run build"
   },

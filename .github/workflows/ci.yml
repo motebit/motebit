@@ -31,17 +31,26 @@ jobs:
       - name: Audit
         run: pnpm audit --audit-level=critical
 
-      - name: Drift defenses (deps, specs, service/app primitives, memory)
-        run: pnpm check
-
       - name: Build
+        # Must run before drift defenses because check-api-surface shells out
+        # to api-extractor, which reads from each package's dist/index.d.ts.
         run: pnpm build
+
+      - name: Drift defenses (deps, specs, service/app primitives, API surface, changeset discipline)
+        run: pnpm check
 
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Lint
         run: pnpm lint
+
+      - name: Publish-integrity (publint + attw on every published package)
+        # Validates that package.json `files`/`exports` match what's actually
+        # shipped in dist/, and that TypeScript consumers can resolve types
+        # under Node16/Bundler/etc. resolution modes. Catches dual-package-
+        # hazard before it reaches npm.
+        run: pnpm lint:pack
 
       - name: Dead code detection
         if: always()

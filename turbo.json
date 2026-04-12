@@ -21,6 +21,15 @@
       "dependsOn": [],
       "outputs": []
     },
+    "lint:pack": {
+      "dependsOn": ["build"],
+      "outputs": []
+    },
+    "api:extract": {
+      "dependsOn": ["build"],
+      "outputs": ["etc/**"],
+      "cache": false
+    },
     "clean": {
       "cache": false
     }

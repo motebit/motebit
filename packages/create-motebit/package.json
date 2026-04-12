@@ -41,6 +41,7 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint --parser-options=project:tsconfig.eslint.json src/",
+    "lint:pack": "publint --strict",
     "clean": "rm -rf dist .turbo *.tsbuildinfo",
     "prepublishOnly": "npm run build"
   },

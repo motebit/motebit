@@ -1,0 +1,70 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/api-extractor/v7/api-extractor.schema.json",
+
+  // Base config for every motebit package that extracts a public API surface.
+  // Per-package configs extend this and override only what differs
+  // (mainMetadataPath, package name, entry point).
+  //
+  // The extracted `etc/<pkg>.api.md` file is committed to git as the canonical
+  // record of the public API. Changes to it are gated by scripts/check-api-surface.ts
+  // so no PR can silently break semver.
+
+  "mainEntryPointFilePath": "<projectFolder>/dist/index.d.ts",
+
+  "bundledPackages": [],
+
+  "apiReport": {
+    "enabled": true,
+    "reportFolder": "<projectFolder>/etc/",
+    "reportTempFolder": "<projectFolder>/etc/temp/",
+    // Matches the package name shape in our etc/ files.
+    "reportFileName": "<unscopedPackageName>.api.md"
+  },
+
+  "docModel": {
+    // Don't generate JSON docs — we don't publish API docs yet, only the .api.md diff.
+    "enabled": false
+  },
+
+  "dtsRollup": {
+    // Don't generate rolled-up .d.ts — packages already ship their own dist/index.d.ts.
+    "enabled": false
+  },
+
+  "tsdocMetadata": {
+    "enabled": false
+  },
+
+  "messages": {
+    "compilerMessageReporting": {
+      "default": {
+        "logLevel": "warning"
+      }
+    },
+    "extractorMessageReporting": {
+      "default": {
+        "logLevel": "warning"
+      },
+      // Noise in practice — internal types legitimately reference each other.
+      "ae-forgotten-export": {
+        "logLevel": "none"
+      },
+      "ae-internal-missing-underscore": {
+        "logLevel": "none"
+      },
+      // Release tags (@public, @beta, @internal) are a future refinement.
+      // Not enforcing until v1.0 stability, so suppress the warning flood.
+      "ae-missing-release-tag": {
+        "logLevel": "none"
+      }
+    },
+    "tsdocMessageReporting": {
+      // Comment-level TSDoc warnings aren't API changes — they're style
+      // issues in source comments. Silencing the whole category keeps this
+      // gate focused on actual public-surface drift, not prose nits.
+      "default": {
+        "logLevel": "none"
+      }
+    }
+  }
+}

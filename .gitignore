@@ -26,6 +26,9 @@ npm-debug.log*
 # Test coverage
 coverage/
 
+# api-extractor temp files (generated per run; etc/*.api.md is committed as baseline)
+packages/*/etc/temp/
+
 # Build artifacts
 *.tgz
 *.map

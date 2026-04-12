@@ -102,6 +102,17 @@ const GATES: ReadonlyArray<Gate> = [
     defends: "fly.toml ↔ deploy workflow ↔ .env.example ↔ source env reads",
     script: "check-deploy-parity",
   },
+  {
+    name: "check-changeset-discipline",
+    defends: "every `major` changeset must ship a non-empty ## Migration section",
+    script: "check-changeset-discipline",
+  },
+  {
+    name: "check-api-surface",
+    defends:
+      "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",
+    script: "check-api-surface",
+  },
 ];
 
 interface Result {
