@@ -1611,6 +1611,58 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
 
+  services/research:
+    dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.52.0
+        version: 0.52.0
+      '@motebit/core-identity':
+        specifier: workspace:*
+        version: link:../../packages/core-identity
+      '@motebit/encryption':
+        specifier: workspace:*
+        version: link:../../packages/encryption
+      '@motebit/identity-file':
+        specifier: workspace:*
+        version: link:../../packages/identity-file
+      '@motebit/mcp-client':
+        specifier: workspace:*
+        version: link:../../packages/mcp-client
+      '@motebit/mcp-server':
+        specifier: workspace:*
+        version: link:../../packages/mcp-server
+      '@motebit/memory-graph':
+        specifier: workspace:*
+        version: link:../../packages/memory-graph
+      '@motebit/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
+      '@motebit/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+    devDependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
   services/summarize:
     dependencies:
       '@motebit/core-identity':

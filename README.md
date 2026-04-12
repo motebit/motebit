@@ -189,14 +189,25 @@ packages/
   github-action/   GitHub Action for identity verification
 
 services/
+  # The marketplace itself — discovery, settlement, federation
   api/          Sync relay — device auth, receipt verification, budget settlement,
                 credential issuance, federation, 5-tier rate limiting
+
+  # Agents (molecules) — reason, remember, compose other agents, accumulate trust.
+  # Reference implementations of paid services anyone can ship competing versions of.
+  research/     Research agent — Claude + web search, synthesized report with citations,
+                $0.25/report, signed receipts
   code-review/  Code review agent — Claude-powered, $0.50/review, signed receipts
-  web-search/   Web search service — Brave/DuckDuckGo, $0.05/request
-  proxy/        Vercel edge CORS proxy for web app
-  read-url/     URL reader service (multi-hop delegation proof)
+
+  # Capability providers (atoms) — stateless tools with identity. Pay-per-call.
+  # Demonstrate that any function can be wrapped in a motebit and offered on the network.
+  web-search/   Web search — Brave/DuckDuckGo, $0.05/request
+  read-url/     URL reader — fetches and extracts page content
   summarize/    Conversation summarization
   embed/        ONNX embedding service
+
+  # Glue — supporting infrastructure
+  proxy/        Vercel edge CORS proxy for the web app
 
 spec/
   identity-v1.md           motebit/identity@1.0 — file format, signing, succession
