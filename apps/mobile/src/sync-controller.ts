@@ -164,7 +164,19 @@ export class MobileSyncController {
   }
 
   async discoverAgents(): Promise<
-    Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>
+    Array<{
+      motebit_id: string;
+      capabilities: string[];
+      trust_level?: string;
+      interaction_count?: number;
+      pricing?: Array<{
+        capability: string;
+        unit_cost: number;
+        currency: string;
+        per: string;
+      }> | null;
+      last_seen_at?: number;
+    }>
   > {
     if (!this._servingSyncUrl || !this._servingAuthToken) return [];
     try {
@@ -176,7 +188,19 @@ export class MobileSyncController {
       });
       if (!res.ok) return [];
       const data = (await res.json()) as {
-        agents: Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>;
+        agents: Array<{
+          motebit_id: string;
+          capabilities: string[];
+          trust_level?: string;
+          interaction_count?: number;
+          pricing?: Array<{
+            capability: string;
+            unit_cost: number;
+            currency: string;
+            per: string;
+          }> | null;
+          last_seen_at?: number;
+        }>;
       };
       return data.agents ?? [];
     } catch {

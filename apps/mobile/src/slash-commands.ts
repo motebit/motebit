@@ -35,6 +35,14 @@ interface ChatMessage {
   approvalResolved?: boolean;
 }
 
+function formatTimeAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
 export interface SlashCommandDeps {
   app: MobileApp;
   addSystemMessage: (content: string) => void;
@@ -382,18 +390,59 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
       void (async () => {
         try {
           const data = (await a.relayFetch("/api/v1/agents/discover")) as {
-            agents: Array<{ motebit_id: string; capabilities: string[] }>;
+            agents: Array<{
+              motebit_id: string;
+              capabilities: string[];
+              trust_level?: string;
+              interaction_count?: number;
+              pricing?: Array<{
+                capability: string;
+                unit_cost: number;
+                currency: string;
+                per: string;
+              }> | null;
+              last_seen_at?: number;
+            }>;
           };
           const agents = data.agents ?? [];
           if (agents.length === 0) {
             addSystemMessage("No agents found on relay.");
           } else {
-            const lines = agents
-              .slice(0, 15)
-              .map(
-                (ag) =>
-                  `  ${ag.motebit_id.slice(0, 8)}... — ${(ag.capabilities ?? []).join(", ") || "no caps"}`,
-              );
+            const lines = agents.slice(0, 15).map((ag) => {
+              // Index pricing by capability — "web_search · $0.05/search" per desktop pattern
+              const priceByCapability = new Map<
+                string,
+                { unit_cost: number; currency: string; per: string }
+              >();
+              if (Array.isArray(ag.pricing)) {
+                for (const p of ag.pricing) {
+                  priceByCapability.set(p.capability, {
+                    unit_cost: p.unit_cost,
+                    currency: p.currency,
+                    per: p.per,
+                  });
+                }
+              }
+              const caps = (ag.capabilities ?? []).map((cap) => {
+                const price = priceByCapability.get(cap);
+                if (price && price.unit_cost > 0) {
+                  return `${cap} · $${price.unit_cost.toFixed(2)}/${price.per}`;
+                }
+                return cap;
+              });
+              const capsPart = caps.length > 0 ? caps.join(", ") : "no caps";
+              const trustPart =
+                ag.trust_level != null && ag.trust_level !== ""
+                  ? typeof ag.interaction_count === "number" && ag.interaction_count > 0
+                    ? ` [${ag.trust_level.replace(/_/g, " ")} · ${ag.interaction_count} interaction${ag.interaction_count === 1 ? "" : "s"}]`
+                    : ` [${ag.trust_level.replace(/_/g, " ")}]`
+                  : "";
+              const seenPart =
+                typeof ag.last_seen_at === "number" && ag.last_seen_at > 0
+                  ? ` — seen ${formatTimeAgo(ag.last_seen_at)}`
+                  : "";
+              return `  ${ag.motebit_id.slice(0, 8)}...${trustPart} — ${capsPart}${seenPart}`;
+            });
             addSystemMessage(`Discovered agents (${agents.length}):\n${lines.join("\n")}`);
           }
         } catch (err: unknown) {

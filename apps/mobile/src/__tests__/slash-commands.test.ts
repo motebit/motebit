@@ -495,6 +495,89 @@ describe("runSlashCommand /discover", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(deps._messages[0]).toContain("Discovery error");
   });
+
+  it("renders pricing per capability", async () => {
+    const deps = makeDeps({
+      relayFetch: vi.fn(() =>
+        Promise.resolve({
+          agents: [
+            {
+              motebit_id: "aaaaabbbbcccc",
+              capabilities: ["web_search", "read_url"],
+              pricing: [
+                { capability: "web_search", unit_cost: 0.05, currency: "USD", per: "search" },
+              ],
+            },
+          ],
+        }),
+      ),
+    });
+    runSlashCommand("discover", "", deps);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps._messages[0]).toContain("web_search · $0.05/search");
+    // Unpriced capability shows plain name
+    expect(deps._messages[0]).toContain("read_url");
+  });
+
+  it("renders trust level and interaction count", async () => {
+    const deps = makeDeps({
+      relayFetch: vi.fn(() =>
+        Promise.resolve({
+          agents: [
+            {
+              motebit_id: "aaaaabbbb",
+              capabilities: ["search"],
+              trust_level: "trusted",
+              interaction_count: 12,
+            },
+          ],
+        }),
+      ),
+    });
+    runSlashCommand("discover", "", deps);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps._messages[0]).toContain("trusted · 12 interactions");
+  });
+
+  it("renders last_seen relative time", async () => {
+    const fiveMinAgo = Date.now() - 5 * 60_000;
+    const deps = makeDeps({
+      relayFetch: vi.fn(() =>
+        Promise.resolve({
+          agents: [
+            {
+              motebit_id: "aaaaabbbb",
+              capabilities: ["search"],
+              last_seen_at: fiveMinAgo,
+            },
+          ],
+        }),
+      ),
+    });
+    runSlashCommand("discover", "", deps);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps._messages[0]).toContain("seen 5m ago");
+  });
+
+  it("handles singular interaction count", async () => {
+    const deps = makeDeps({
+      relayFetch: vi.fn(() =>
+        Promise.resolve({
+          agents: [
+            {
+              motebit_id: "aaaaabbbb",
+              capabilities: ["search"],
+              trust_level: "first_contact",
+              interaction_count: 1,
+            },
+          ],
+        }),
+      ),
+    });
+    runSlashCommand("discover", "", deps);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps._messages[0]).toContain("first contact · 1 interaction]");
+  });
 });
 
 describe("runSlashCommand /serve", () => {

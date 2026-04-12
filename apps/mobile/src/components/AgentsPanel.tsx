@@ -27,6 +27,14 @@ interface DiscoveredAgent {
   motebit_id: string;
   capabilities: string[];
   trust_level?: string;
+  interaction_count?: number;
+  pricing?: Array<{
+    capability: string;
+    unit_cost: number;
+    currency: string;
+    per: string;
+  }> | null;
+  last_seen_at?: number;
 }
 
 const TRUST_COLORS: Record<string, string> = {
@@ -182,6 +190,24 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
             contentContainerStyle={styles.listContent}
             renderItem={({ item }) => {
               const trustColor = TRUST_COLORS[item.trust_level ?? "unknown"] ?? "#616161";
+              // Index pricing by capability — "web_search · $0.05/search" per desktop pattern
+              const priceByCapability = new Map<
+                string,
+                { unit_cost: number; currency: string; per: string }
+              >();
+              if (Array.isArray(item.pricing)) {
+                for (const p of item.pricing) {
+                  priceByCapability.set(p.capability, {
+                    unit_cost: p.unit_cost,
+                    currency: p.currency,
+                    per: p.per,
+                  });
+                }
+              }
+              const interactionSuffix =
+                typeof item.interaction_count === "number" && item.interaction_count > 0
+                  ? ` · ${item.interaction_count} interaction${item.interaction_count === 1 ? "" : "s"}`
+                  : "";
               return (
                 <View style={styles.agentItem}>
                   <View style={styles.agentHeader}>
@@ -190,18 +216,30 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                       <View style={[styles.trustBadge, { borderColor: trustColor }]}>
                         <Text style={[styles.trustText, { color: trustColor }]}>
                           {item.trust_level}
+                          {interactionSuffix}
                         </Text>
                       </View>
                     )}
                   </View>
                   {item.capabilities.length > 0 && (
                     <View style={styles.capsRow}>
-                      {item.capabilities.map((cap) => (
-                        <View key={cap} style={styles.capTag}>
-                          <Text style={styles.capText}>{cap}</Text>
-                        </View>
-                      ))}
+                      {item.capabilities.map((cap) => {
+                        const price = priceByCapability.get(cap);
+                        const priced = price != null && price.unit_cost > 0;
+                        return (
+                          <View key={cap} style={[styles.capTag, priced && styles.capTagPriced]}>
+                            <Text style={[styles.capText, priced && styles.capTextPriced]}>
+                              {priced
+                                ? `${cap} · $${price.unit_cost.toFixed(2)}/${price.per}`
+                                : cap}
+                            </Text>
+                          </View>
+                        );
+                      })}
                     </View>
+                  )}
+                  {typeof item.last_seen_at === "number" && item.last_seen_at > 0 && (
+                    <Text style={styles.seenText}>seen {formatTimeAgo(item.last_seen_at)}</Text>
                   )}
                 </View>
               );
@@ -326,10 +364,18 @@ function createStyles(c: ThemeColors) {
       paddingHorizontal: 6,
       paddingVertical: 2,
     },
+    capTagPriced: {
+      backgroundColor: "rgba(163,122,255,0.15)",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: "rgba(163,122,255,0.45)",
+    },
     capText: {
       fontSize: 10,
       color: c.textMuted,
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
+    capTextPriced: {
+      color: c.textPrimary,
     },
     statsRow: {
       flexDirection: "row",
