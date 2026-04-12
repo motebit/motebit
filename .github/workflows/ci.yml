@@ -64,7 +64,13 @@ jobs:
         # can balloon to 40+ competing workers and surface as timing-sensitive
         # test flakes. Cap it at the core count so vitest's per-package
         # parallelism doesn't collide with turbo's cross-package parallelism.
-        run: pnpm run test:coverage -- --concurrency=4
+        #
+        # Invoke turbo directly via `pnpm exec` rather than `pnpm run
+        # test:coverage -- --concurrency=4`. The `--` form causes pnpm to
+        # preserve `--` when forwarding to turbo, and turbo then treats `--`
+        # as "pass everything after to the task," which routes --concurrency
+        # into vitest (where it's an unknown option and fails the run).
+        run: pnpm exec turbo run test:coverage --concurrency=4
 
       - name: Coverage summary
         if: always()
