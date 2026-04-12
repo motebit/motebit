@@ -1,13 +1,25 @@
 import { defineMotebitTest } from "../../vitest.shared.js";
 
-// Floor thresholds anchored to the first measured baseline
-// (statements 29.21%, branches 46.60%, functions 68.18%, lines 29.21%).
-// render-engine is the Three.js / WebGL / WebXR adapter layer — most
-// uncovered code is GPU-side material / mesh construction that
-// requires a real (or mocked) WebGL context to exercise. The pure
-// geometry + behavior-mapping logic IS covered by the existing unit
-// tests. Raising the floor requires either a jsdom+gl-shim or a
-// headless-browser test runner.
+// Floor thresholds anchored to the 2026-04-12 baseline after adapter-mock
+// tests landed: statements 78.60%, branches 73.33%, functions 87.65%,
+// lines 78.60%.
+//
+// creature.ts and artifacts.ts are now fully covered — Three.js CPU-side
+// objects (Scene/Group/Mesh/Material) run in Node, and the two
+// WebGL-bound primitives (PMREMGenerator, CSS2DRenderer) are mocked at
+// the module boundary. The whole animation pipeline, blink state
+// machine, environment presets, artifact lifecycle, and FIFO eviction
+// are exercised end-to-end.
+//
+// The residual uncovered surface is ThreeJSAdapter.init/dispose and
+// WebXRThreeJSAdapter.init/dispose — the code paths that construct
+// `new THREE.WebGLRenderer({ canvas })`, request an XR session, and
+// drive OrbitControls. These require a live WebGL context (or a full
+// GL shim like jsdom + gl-shim + WebXR polyfill) to exercise honestly;
+// mocking THREE.WebGLRenderer at this depth produces tautological tests
+// that pass but verify nothing. Those paths remain covered by the
+// existing headless lifecycle tests (`init(null)` → render → dispose),
+// which exercise every non-WebGL method on each adapter.
 export default defineMotebitTest({
-  thresholds: { statements: 29, branches: 46, functions: 68, lines: 29 },
+  thresholds: { statements: 78, branches: 73, functions: 87, lines: 78 },
 });
