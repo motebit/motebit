@@ -31,7 +31,7 @@ import {
   bytesToHex,
   hexToBytes,
 } from "@motebit/encryption";
-import type { KeyTransferPayload } from "@motebit/protocol";
+import type { KeyTransferPayload } from "@motebit/sdk";
 import type { SecureStoreAdapter } from "./adapters/secure-store";
 import { KEYRING_KEYS } from "./storage-keys";
 

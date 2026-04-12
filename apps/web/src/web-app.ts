@@ -45,7 +45,7 @@ import {
   checkPreTransferBalance,
   formatWalletWarning,
 } from "@motebit/encryption";
-import type { KeyTransferPayload } from "@motebit/protocol";
+import type { KeyTransferPayload } from "@motebit/sdk";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
