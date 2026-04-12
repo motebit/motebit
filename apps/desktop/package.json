@@ -48,9 +48,9 @@
     "@types/better-sqlite3": "^7.6.0",
     "@types/three": "^0.170.0",
     "better-sqlite3": "^12.0.0",
-    "typescript": "^5.6.0",
-    "vite": "^6.0.0",
-    "vite-plugin-static-copy": "^3.2.0",
-    "vitest": "^2.1.0"
+    "typescript": "^6.0.2",
+    "vite": "^8.0.8",
+    "vite-plugin-static-copy": "^4.0.1",
+    "vitest": "^4.1.4"
   }
 }
