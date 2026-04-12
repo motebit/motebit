@@ -1187,7 +1187,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       const res = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount }),
+        body: JSON.stringify({ amount, return_url: window.location.origin }),
       });
       const data = (await res.json()) as { checkout_url?: string; error?: string };
       if (data.checkout_url) {

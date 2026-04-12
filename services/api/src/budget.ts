@@ -655,11 +655,28 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
     const motebitId = c.req.param("motebitId");
     const correlationId = c.get("correlationId" as never) as string;
-    const body = await c.req.json<{ amount: number }>();
+    const body = await c.req.json<{ amount: number; return_url?: string }>();
     if (typeof body.amount !== "number" || body.amount <= 0)
       throw new HTTPException(400, { message: "amount must be a positive number (in dollars)" });
     if (body.amount < 0.5)
       throw new HTTPException(400, { message: "Minimum deposit amount is $0.50" });
+
+    // Validate optional return_url (http/https only) — otherwise ignore.
+    let returnUrl: string | undefined;
+    if (typeof body.return_url === "string" && body.return_url.length > 0) {
+      try {
+        const parsed = new URL(body.return_url);
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+          returnUrl = body.return_url;
+        }
+      } catch {
+        // Invalid URL — fall through to default.
+      }
+    }
+
+    // Default landing page when the caller doesn't specify return_url.
+    // Never send users to the relay's JSON balance endpoint.
+    const defaultReturnUrl = "https://motebit.com";
 
     // Use StripeSettlementRail when available
     if (stripeRail) {
@@ -668,6 +685,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         body.amount,
         stripeConfig?.currency ?? "usd",
         `checkout:${motebitId}:${Date.now()}`,
+        returnUrl ?? defaultReturnUrl,
       );
 
       if ("redirectUrl" in result) {
@@ -685,7 +703,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     }
 
     // Fallback: direct Stripe SDK (backward compatibility during migration)
-    const baseUrl = new URL(c.req.url);
+    const landingUrl = returnUrl ?? defaultReturnUrl;
     const session = await stripeClient!.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
@@ -700,8 +718,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         },
       ],
       metadata: { motebit_id: motebitId, amount: String(body.amount) },
-      success_url: `${baseUrl.origin}/api/v1/agents/${motebitId}/balance`,
-      cancel_url: `${baseUrl.origin}/api/v1/agents/${motebitId}/balance`,
+      success_url: landingUrl,
+      cancel_url: landingUrl,
     });
 
     logger.info("stripe.checkout.created", {

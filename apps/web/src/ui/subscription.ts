@@ -156,7 +156,7 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
       const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount }),
+        body: JSON.stringify({ amount, return_url: window.location.origin }),
       });
 
       if (!res.ok) {

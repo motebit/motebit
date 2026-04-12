@@ -49,7 +49,6 @@ describe("StripeSettlementRail", () => {
       stripeClient: mockStripe as any,
       webhookSecret: "whsec_test_secret",
       currency: "usd",
-      baseUrl: "https://relay.motebit.com",
     });
   });
 
@@ -101,13 +100,25 @@ describe("StripeSettlementRail", () => {
       );
     });
 
-    it("uses success/cancel URLs from baseUrl config", async () => {
-      await rail.deposit("agent-002", 10.0, "usd", "idem-key-2");
+    it("uses caller-provided returnUrl for success/cancel when supplied", async () => {
+      await rail.deposit("agent-002", 10.0, "usd", "idem-key-2", "https://app.example.com/billing");
 
       expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          success_url: "https://relay.motebit.com/api/v1/agents/agent-002/balance",
-          cancel_url: "https://relay.motebit.com/api/v1/agents/agent-002/balance",
+          success_url: "https://app.example.com/billing",
+          cancel_url: "https://app.example.com/billing",
+        }),
+        expect.anything(),
+      );
+    });
+
+    it("defaults to https://motebit.com when returnUrl is omitted", async () => {
+      await rail.deposit("agent-002b", 10.0, "usd", "idem-key-2b");
+
+      expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success_url: "https://motebit.com",
+          cancel_url: "https://motebit.com",
         }),
         expect.anything(),
       );

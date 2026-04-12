@@ -24,8 +24,6 @@ export interface StripeRailConfig {
   webhookSecret: string;
   /** Currency code for checkout sessions. Default: "usd". */
   currency?: string;
-  /** Base URL for success/cancel redirects (e.g., "https://relay.motebit.com"). */
-  baseUrl?: string;
   /** Callback to persist proof. Injected by relay — the rail does not own storage. */
   onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 }
@@ -38,7 +36,6 @@ export class StripeSettlementRail implements DepositableSettlementRail {
   private readonly stripe: Stripe;
   readonly webhookSecret: string;
   private readonly currency: string;
-  private readonly baseUrl: string | undefined;
   private readonly onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 
   constructor(config: StripeRailConfig) {
@@ -46,7 +43,6 @@ export class StripeSettlementRail implements DepositableSettlementRail {
     this.webhookSecret = config.webhookSecret;
     this.currency = config.currency ?? "usd";
     this.onProofAttached = config.onProofAttached;
-    this.baseUrl = config.baseUrl;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -69,6 +65,12 @@ export class StripeSettlementRail implements DepositableSettlementRail {
     amount: number,
     currency: string,
     idempotencyKey: string,
+    /**
+     * Optional client-provided URL to redirect to after checkout completes.
+     * When omitted, falls back to the public canonical web app so users
+     * never land on a raw JSON response from the relay.
+     */
+    returnUrl?: string,
   ): Promise<DepositResult | { redirectUrl: string }> {
     if (amount <= 0) {
       throw new Error("Deposit amount must be positive");
@@ -76,6 +78,9 @@ export class StripeSettlementRail implements DepositableSettlementRail {
     if (amount < 0.5) {
       throw new Error("Minimum deposit amount is $0.50");
     }
+
+    const successUrl = returnUrl ?? "https://motebit.com";
+    const cancelUrl = returnUrl ?? "https://motebit.com";
 
     const session = await this.stripe.checkout.sessions.create(
       {
@@ -94,10 +99,8 @@ export class StripeSettlementRail implements DepositableSettlementRail {
           },
         ],
         metadata: { motebit_id: motebitId, amount: String(amount) },
-        success_url: this.baseUrl
-          ? `${this.baseUrl}/api/v1/agents/${motebitId}/balance`
-          : undefined,
-        cancel_url: this.baseUrl ? `${this.baseUrl}/api/v1/agents/${motebitId}/balance` : undefined,
+        success_url: successUrl,
+        cancel_url: cancelUrl,
       },
       { idempotencyKey },
     );
