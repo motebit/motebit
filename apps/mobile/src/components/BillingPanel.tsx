@@ -196,7 +196,7 @@ export function BillingPanel({
   if (status === "no_relay") {
     return (
       <View style={styles.container}>
-        <Text style={styles.muted}>Connect to a relay in Sync settings to manage billing.</Text>
+        <Text style={styles.muted}>Connect to a relay to manage billing.</Text>
       </View>
     );
   }
