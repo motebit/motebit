@@ -36,7 +36,7 @@
     "@motebit/tools": "workspace:*",
     "@motebit/voice": "workspace:*",
     "buffer": "^6.0.3",
-    "three": "^0.170.0"
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

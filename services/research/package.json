@@ -17,7 +17,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.52.0",
+    "@anthropic-ai/sdk": "^0.88.0",
     "@motebit/core-identity": "workspace:*",
     "@motebit/encryption": "workspace:*",
     "@motebit/identity-file": "workspace:*",

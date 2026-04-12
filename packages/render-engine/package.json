@@ -27,7 +27,7 @@
   "dependencies": {
     "@motebit/sdk": "workspace:*",
     "@motebit/policy-invariants": "workspace:*",
-    "three": "^0.170.0"
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
