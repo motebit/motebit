@@ -1,15 +1,21 @@
 import { defineMotebitTest } from "../../vitest.shared.js";
 
-// Floor thresholds anchored to the first measured baseline with
-// webllm-worker excluded: statements 30.09%, branches 85.96%,
-// functions 39.28%, lines 30.09%. Spatial is a WebXR AR/VR surface;
-// most uncovered code is the Three.js adapter path and the ambient
-// heartbeat / gesture recognition glue that requires a headless
-// browser with WebGL to exercise. The recent extraction split
-// spatial-app.ts into 4 sibling modules (providers, sync-controller,
-// mcp-manager, voice-commands) that ARE directly testable — raise
-// these thresholds as each gains tests.
+// Spatial is a WebXR AR/VR surface. The sibling modules (providers,
+// sync-controller, mcp-manager, voice-commands) are fully testable in
+// node and covered ≥90%. Files excluded below are browser-only: they
+// construct WebXRThreeJSAdapter, bind DOM elements, or drive WebGL /
+// gesture-recognition pipelines that require a headless browser with
+// WebGL. Their small non-browser surface (color utilities) is exercised
+// via color-utils.test.ts.
 export default defineMotebitTest({
-  coverageExclude: ["src/webllm-worker.ts"], // web worker entry, runs in browser context
-  thresholds: { statements: 30, branches: 85, functions: 39, lines: 30 },
+  coverageExclude: [
+    "src/webllm-worker.ts", // web worker entry, runs in browser context
+    "src/app.ts", // DOM entry point: binds canvas, buttons, WebXR session
+    "src/spatial-app.ts", // SpatialApp kernel: constructs WebXRThreeJSAdapter at class construction
+  ],
+  // Floor thresholds anchored to the first post-extraction measured
+  // baseline (sibling modules all ≥90%, aggregate above 85% statements).
+  // Branch threshold is pulled down only because the residual voice
+  // pipeline + encrypted-keystore paths are defensive fallbacks.
+  thresholds: { statements: 85, branches: 88, functions: 82, lines: 85 },
 });
