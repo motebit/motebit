@@ -4,7 +4,7 @@ bash scripts/check-secrets.sh
 npx lint-staged --no-stash
 
 # Auto-generate changeset if published packages have staged changes and no changeset exists
-PUBLISHED="packages/sdk packages/verify packages/create-motebit apps/cli"
+PUBLISHED="packages/sdk packages/protocol packages/crypto packages/create-motebit apps/cli"
 NEEDS_CHANGESET=false
 
 for pkg in $PUBLISHED; do
@@ -22,7 +22,8 @@ if [ "$NEEDS_CHANGESET" = true ]; then
     cat > "$CHANGESET_FILE" << 'EOF'
 ---
 "@motebit/sdk": patch
-"@motebit/verify": patch
+"@motebit/protocol": patch
+"@motebit/crypto": patch
 "create-motebit": patch
 "motebit": patch
 ---
