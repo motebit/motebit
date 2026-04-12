@@ -815,12 +815,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerDataSyncRoutes({ db: moteDb.db, app, connections });
 
   // --- A2A protocol bridge ---
-  // Federation endpoint: explicit config > Fly.io app URL > localhost fallback for dev
+  // Federation endpoint: explicit config > localhost fallback for dev. No
+  // vendor-specific derivation (formerly `https://${FLY_APP_NAME}.fly.dev`) —
+  // a hosting-vendor fallback silently leaks one particular operator's
+  // implementation into every deployment that forgets to set the env, and
+  // `relay` is a protocol role, not a Fly app. Third-party relay operators
+  // set MOTEBIT_FEDERATION_ENDPOINT_URL to their own branded URL; Motebit's
+  // canonical relay sets it to relay.motebit.com. The only acceptable
+  // fallback is localhost for local dev.
   const a2aRelayUrl =
-    federationConfig?.endpointUrl ??
-    (process.env.FLY_APP_NAME
-      ? `https://${process.env.FLY_APP_NAME}.fly.dev`
-      : `http://localhost:${process.env.PORT ?? 3000}`);
+    federationConfig?.endpointUrl ?? `http://localhost:${process.env.PORT ?? 3000}`;
   registerA2ARoutes(app, moteDb.db, {
     relayIdentity,
     relayUrl: a2aRelayUrl,
