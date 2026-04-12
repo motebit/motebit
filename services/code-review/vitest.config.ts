@@ -1,21 +1,11 @@
-import { defineConfig } from "vitest/config";
+import { defineMotebitTest } from "../../vitest.shared.js";
 
-export default defineConfig({
-  test: {
-    exclude: ["**/node_modules/**", "**/dist/**", "**/coverage/**"],
-    coverage: {
-      include: ["src/**/*.ts"],
-      exclude: ["src/__tests__/**", "src/**/*.d.ts"],
-      // Floor thresholds anchored to the first measured baseline
-      // (statements 5.06%, branches 80%, functions 40%, lines 5.06%).
-      // code-review is a Claude-powered PR review service marketed as a
-      // flagship paid capability ($0.50/review). The current coverage is
-      // way below parity with the other MCP reference services
-      // (web-search, read-url, embed all at 95-100%). The floor here
-      // prevents further regression — the follow-up work is to write
-      // end-to-end tests against a mocked Anthropic client and GitHub
-      // API to raise this to parity.
-      thresholds: { statements: 5, branches: 80, functions: 40, lines: 5 },
-    },
-  },
+// src/index.ts is the service entrypoint — it wires main(), spins up
+// the MCP server, and exits the process. Its correctness is verified
+// by deployment + the live code-review MCP service, not unit tests.
+// Every unit-testable module (github.ts, review.ts, helpers.ts) is
+// held to 100% across the board.
+export default defineMotebitTest({
+  coverageExclude: ["src/index.ts"],
+  thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
 });
