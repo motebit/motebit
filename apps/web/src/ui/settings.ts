@@ -1,6 +1,5 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, GovernanceConfig, VoiceConfig, AppearanceConfig } from "../storage";
-import { loadSyncUrl } from "../storage";
 import { DEFAULT_GOVERNANCE_CONFIG, RISK_LABELS } from "@motebit/sdk";
 import {
   saveProviderConfig,
@@ -70,10 +69,11 @@ const identityDeviceId = document.getElementById("identity-device-id") as HTMLDi
 const identityDid = document.getElementById("identity-did") as HTMLDivElement;
 const identityPublicKey = document.getElementById("identity-public-key") as HTMLDivElement;
 
-// Sovereign wallet fields (sibling to Cryptographic Identity, NOT nested)
+// Sovereign wallet address lives in Settings as part of identity (the address
+// *is* the Ed25519 public key, base58-encoded). Balance and funding live in
+// the Sovereign panel, where economic state belongs — doctrine split:
+// Settings = who you are; Sovereign panel = what you have, what's flowing.
 const walletSolanaAddress = document.getElementById("wallet-solana-address") as HTMLDivElement;
-const walletSolanaBalance = document.getElementById("wallet-solana-balance") as HTMLDivElement;
-const walletFundBtn = document.getElementById("wallet-fund-btn") as HTMLButtonElement | null;
 
 // === Provider Tab DOM ===
 const providerTabs = document.querySelectorAll<HTMLButtonElement>("#provider-tabs .provider-tab");
@@ -222,44 +222,14 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   }
 
   /**
-   * Populate the Sovereign Wallet card. Reads from the live runtime so
-   * the address and balance always reflect the currently loaded motebit.
-   * Address is available synchronously (derived from the identity key at
-   * runtime construction); balance is async and requires an RPC call.
-   *
-   * When no wallet is configured on the runtime (e.g., the web app has
-   * not yet wired Solana config, or signing keys are not set), the
-   * fields show an em dash — the UX gracefully degrades to "no wallet".
+   * Populate the Sovereign Wallet card. Derives the Solana address from the
+   * runtime's Ed25519 identity key (synchronous — no RPC). Balance rendering
+   * lives in the Sovereign panel; Settings shows identity-shaped fields only.
    */
   function populateWalletFields(): void {
     const runtime = ctx.app.getRuntime();
     const address = runtime?.getSolanaAddress() ?? null;
     walletSolanaAddress.textContent = address ?? "—";
-
-    // Balance loads async; show a placeholder while the RPC call is in flight,
-    // then update on resolve. No spinner — the placeholder is the spinner.
-    if (!runtime || !address) {
-      walletSolanaBalance.textContent = "—";
-      return;
-    }
-    walletSolanaBalance.textContent = "Loading…";
-    void runtime
-      .getSolanaBalance()
-      .then((microUsdc) => {
-        if (microUsdc == null) {
-          walletSolanaBalance.textContent = "—";
-          return;
-        }
-        // Format as USDC with 2 decimal places for readability. 6 decimals
-        // is USDC-native but shows too much precision for a balance display.
-        const usdc = Number(microUsdc) / 1_000_000;
-        walletSolanaBalance.textContent = `${usdc.toFixed(2)} USDC`;
-      })
-      .catch(() => {
-        // RPC unreachable or other error. Silent — show em dash.
-        // The user can re-open settings to retry.
-        walletSolanaBalance.textContent = "—";
-      });
   }
 
   function populateTtsVoices(): void {
@@ -402,95 +372,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   setupIdentityCopyHandlers();
 
-  // ── Fund Your Wallet button ────────────────────────────────────
-  //
-  // Click -> POST to the relay's /api/v1/onramp/session with the
-  // motebit's Solana address -> open the returned redirect URL in a
-  // new tab -> user completes the purchase on the provider's hosted
-  // page (Stripe Crypto Onramp by default) -> USDC arrives at the
-  // motebit's Solana address onchain -> balance refreshes when the
-  // user returns to this tab (window focus event).
-  //
-  // The relay is a session broker here, not a custodian. It does not
-  // see the card data, does not touch the funds — the provider
-  // handles all of that and delivers directly to the motebit's
-  // sovereign wallet.
-  walletFundBtn?.addEventListener("click", () => {
-    const address = walletSolanaAddress.textContent;
-    if (address == null || address === "" || address === "—") {
-      ctx.showToast("No wallet address — wallet is not configured");
-      return;
-    }
-
-    const runtime = ctx.app.getRuntime();
-    const motebitId = runtime?.motebitId ?? ctx.app.motebitId;
-    if (!motebitId) {
-      ctx.showToast("No motebit identity — cannot create onramp session");
-      return;
-    }
-
-    walletFundBtn.disabled = true;
-    const originalText = walletFundBtn.textContent;
-    walletFundBtn.textContent = "Opening…";
-
-    // Open blank tab synchronously (user gesture context) to avoid popup blocker.
-    // Navigate it to the Stripe URL after the fetch completes.
-    const tab = window.open("about:blank", "_blank");
-
-    void (async (): Promise<void> => {
-      try {
-        const relayUrl = loadSyncUrl() || "https://motebit-sync.fly.dev";
-        const token = await ctx.app.createSyncToken("device:auth");
-        const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (token) headers["Authorization"] = `Bearer ${token}`;
-        const response = await fetch(`${relayUrl}/api/v1/onramp/session`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            motebit_id: motebitId,
-            destination_address: address,
-          }),
-        });
-
-        if (!response.ok) {
-          tab?.close();
-          if (response.status === 503) {
-            ctx.showToast("Funding is not yet available on this relay");
-          } else {
-            ctx.showToast(`Funding failed: HTTP ${response.status}`);
-          }
-          return;
-        }
-
-        const body = (await response.json()) as {
-          redirect_url: string;
-          provider: string;
-        };
-
-        if (tab) {
-          tab.location.href = body.redirect_url;
-        } else {
-          // Fallback if popup was still blocked
-          window.open(body.redirect_url, "_blank", "noopener,noreferrer");
-        }
-
-        // One-shot focus listener: refresh balance the next time the
-        // motebit tab regains focus. Common case: user closes the
-        // onramp tab after completing the purchase.
-        const onFocus = (): void => {
-          window.removeEventListener("focus", onFocus);
-          populateWalletFields();
-        };
-        window.addEventListener("focus", onFocus);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        ctx.showToast(`Funding error: ${msg}`);
-      } finally {
-        walletFundBtn.disabled = false;
-        walletFundBtn.textContent = originalText;
-      }
-    })();
-  });
+  // Funding lives in the Sovereign panel — see openSovereignFundingFlow in
+  // ./wallet-balance.ts. Settings shows the address (identity); Sovereign
+  // shows the balance and the Fund action (economic state).
 
   // Rotate Key button
   document.getElementById("settings-rotate-key")?.addEventListener("click", () => {

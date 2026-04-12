@@ -216,29 +216,11 @@ export function SettingsModal({
 
   const identity = useMemo(() => app.getIdentityInfo(), [app]);
 
-  // Sovereign wallet state — address is sync, balance loads async.
+  // Settings = identity. The Solana address is identity (the address *is* the
+  // Ed25519 public key, base58-encoded). Live balance lives in the Sovereign
+  // panel Budget tab; this keeps Settings calm — no RPC on every modal open.
   const runtime = app.getRuntime();
   const solanaAddress = runtime?.getSolanaAddress() ?? null;
-  const [solanaBalance, setSolanaBalance] = useState<string | null>(null);
-  React.useEffect(() => {
-    if (!runtime || !solanaAddress) {
-      setSolanaBalance(null);
-      return;
-    }
-    setSolanaBalance(null); // reset while loading
-    void runtime
-      .getSolanaBalance()
-      .then((micro) => {
-        if (micro == null) {
-          setSolanaBalance("-");
-          return;
-        }
-        setSolanaBalance(`${(Number(micro) / 1_000_000).toFixed(2)} USDC`);
-      })
-      .catch(() => {
-        setSolanaBalance("-");
-      });
-  }, [runtime, solanaAddress]);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
@@ -371,7 +353,6 @@ export function SettingsModal({
               deviceId={identity.deviceId}
               publicKey={identity.publicKey}
               solanaAddress={solanaAddress}
-              solanaBalance={solanaBalance}
               onExport={() => {
                 void (async () => {
                   try {

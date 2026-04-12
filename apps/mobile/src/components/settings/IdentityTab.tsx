@@ -15,8 +15,6 @@ export interface IdentityTabProps {
   publicKey: string;
   /** Sovereign wallet Solana address (from runtime.getSolanaAddress()). Null when no rail. */
   solanaAddress?: string | null;
-  /** Sovereign wallet USDC balance string (e.g., "12.50 USDC"). Null when loading or no rail. */
-  solanaBalance?: string | null;
   onExport: () => void;
   onExportIdentity?: () => void;
   onLinkDevice?: () => void;
@@ -28,7 +26,6 @@ export function IdentityTab({
   deviceId,
   publicKey,
   solanaAddress,
-  solanaBalance,
   onExport,
   onExportIdentity,
   onLinkDevice,
@@ -149,10 +146,6 @@ export function IdentityTab({
               {copiedField === "solanaAddress" ? "Copied!" : "Copy"}
             </Text>
           </TouchableOpacity>
-          <Text style={styles.sectionTitle}>USDC Balance</Text>
-          <Text style={[styles.monoValue, { paddingVertical: 6, paddingHorizontal: 12 }]}>
-            {solanaBalance ?? "Loading\u2026"}
-          </Text>
           <Text
             style={{
               fontSize: 11,
@@ -161,7 +154,8 @@ export function IdentityTab({
               paddingBottom: 8,
             }}
           >
-            Your Ed25519 public key is your Solana address. Send USDC here to fund your motebit.
+            Your Ed25519 public key is your Solana address. Live balance and auto-sweep readout live
+            in the Sovereign panel.
           </Text>
         </>
       ) : null}

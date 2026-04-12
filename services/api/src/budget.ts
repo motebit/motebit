@@ -190,6 +190,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         pending_allocations: 0,
         dispute_window_hold: 0,
         available_for_withdrawal: 0,
+        sweep_threshold: null,
+        settlement_address: null,
         transactions: [],
       });
     const detailed = getAccountBalanceDetailed(moteDb.db, motebitId);
@@ -206,6 +208,9 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       pending_allocations: fromMicro(detailed.pending_allocations),
       dispute_window_hold: fromMicro(detailed.dispute_window_hold),
       available_for_withdrawal: fromMicro(detailed.available_for_withdrawal),
+      sweep_threshold:
+        detailed.sweep_threshold != null ? fromMicro(detailed.sweep_threshold) : null,
+      settlement_address: detailed.settlement_address,
       transactions,
     });
   });

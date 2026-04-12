@@ -48,6 +48,13 @@ interface AccountBalance {
     description?: string;
     created_at: number;
   }>;
+  dispute_window_hold?: number;
+  available_for_withdrawal?: number;
+  // Sovereign-wallet sweep config surfaced by the relay so the UI can render
+  // the "operating → sovereign" relationship alongside the balance. Null
+  // when the motebit has not declared a settlement_address + threshold.
+  sweep_threshold?: number | null;
+  settlement_address?: string | null;
 }
 
 interface LedgerEntry {
@@ -115,6 +122,10 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
   const [budgetSummary, setBudgetSummary] = useState<BudgetSummary | null>(null);
   const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocation[]>([]);
   const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null);
+  // Sovereign wallet: address is sync (derived from identity key), balance is
+  // async (RPC call). Null address = no wallet configured — render as em dash.
+  const [sovereignAddress, setSovereignAddress] = useState<string | null>(null);
+  const [sovereignBalanceUsdc, setSovereignBalanceUsdc] = useState<number | null>(null);
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
   const [successionChain, setSuccessionChain] = useState<SuccessionRecord[]>([]);
@@ -195,7 +206,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
         // Budget fetch failed
       }
 
-      // Fetch virtual account balance
+      // Fetch virtual account balance (operating balance + sweep config)
       try {
         const balanceRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/balance`);
         if (balanceRes.ok) {
@@ -204,6 +215,23 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
         }
       } catch {
         // Balance fetch failed
+      }
+
+      // Fetch sovereign wallet balance (first time on mobile — the address is
+      // derived from the identity key at runtime construction, the balance is
+      // an onchain RPC call). Silent on failure; em dash is the spinner.
+      const runtime = app.getRuntime();
+      const address = runtime?.getSolanaAddress?.() ?? null;
+      setSovereignAddress(address);
+      if (runtime && address) {
+        try {
+          const micro = await runtime.getSolanaBalance?.();
+          setSovereignBalanceUsdc(micro != null ? Number(micro) / 1_000_000 : null);
+        } catch {
+          setSovereignBalanceUsdc(null);
+        }
+      } else {
+        setSovereignBalanceUsdc(null);
       }
 
       // Fetch execution ledger entries
@@ -423,12 +451,49 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
             contentContainerStyle={styles.listContent}
             ListHeaderComponent={
               <>
+                {/* Unified Balances block — two ownership regimes side by side:
+                    sovereign reserve (onchain USDC, yours outright) and
+                    operating balance (relay ledger claim). The sweep readout
+                    teaches that the relay is a utility, not a jail — the
+                    operating balance auto-drains into the sovereign reserve
+                    above the threshold. */}
+                <View style={styles.budgetSection}>
+                  <Text style={styles.balanceLabel}>Sovereign reserve</Text>
+                  <View style={styles.balanceRow}>
+                    <Text style={styles.balanceAmount}>
+                      {sovereignBalanceUsdc != null
+                        ? sovereignBalanceUsdc.toFixed(2)
+                        : sovereignAddress
+                          ? "…"
+                          : "—"}
+                    </Text>
+                    <Text style={styles.balanceCurrency}>{sovereignAddress ? "USDC" : ""}</Text>
+                  </View>
+                  <Text style={styles.balanceNote}>
+                    {sovereignAddress ? "onchain USDC, yours" : "no wallet configured"}
+                  </Text>
+                </View>
                 {accountBalance != null && (
                   <View style={styles.budgetSection}>
+                    <Text style={styles.balanceLabel}>Operating balance</Text>
                     <View style={styles.balanceRow}>
                       <Text style={styles.balanceAmount}>{accountBalance.balance.toFixed(2)}</Text>
                       <Text style={styles.balanceCurrency}>{accountBalance.currency ?? "USD"}</Text>
                     </View>
+                    <Text style={styles.balanceNote}>
+                      relay ledger, instant settlement
+                      {accountBalance.dispute_window_hold != null &&
+                      accountBalance.dispute_window_hold > 0
+                        ? ` · on hold ${accountBalance.dispute_window_hold.toFixed(2)}`
+                        : ""}
+                    </Text>
+                    {accountBalance.sweep_threshold != null &&
+                      accountBalance.settlement_address != null && (
+                        <Text style={styles.sweepReadout}>
+                          Auto-sweep above ${accountBalance.sweep_threshold.toFixed(2)} → your
+                          sovereign wallet
+                        </Text>
+                      )}
                     {accountBalance.transactions.length > 0 && (
                       <>
                         <Text style={[styles.sectionTitle, { marginTop: 8, marginBottom: 4 }]}>
@@ -638,7 +703,7 @@ function createStyles(c: ThemeColors) {
       flexDirection: "row",
       alignItems: "baseline",
       gap: 4,
-      marginBottom: 4,
+      marginBottom: 2,
     },
     balanceAmount: {
       color: c.textPrimary,
@@ -648,6 +713,25 @@ function createStyles(c: ThemeColors) {
     balanceCurrency: {
       color: c.textMuted,
       fontSize: 12,
+    },
+    balanceLabel: {
+      color: c.textMuted,
+      fontSize: 10,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginBottom: 2,
+    },
+    balanceNote: {
+      color: c.textMuted,
+      fontSize: 10,
+      marginTop: 2,
+    },
+    sweepReadout: {
+      color: c.textMuted,
+      fontSize: 10,
+      fontStyle: "italic",
+      marginTop: 6,
+      marginBottom: 4,
     },
     budgetSection: {
       marginBottom: 8,

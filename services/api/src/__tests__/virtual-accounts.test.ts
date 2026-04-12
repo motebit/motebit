@@ -169,6 +169,50 @@ describe("Virtual Accounts", () => {
     expect(balance.transactions).toHaveLength(0);
   });
 
+  it("balance includes sweep config when agent registered with sweep_threshold + settlement_address", async () => {
+    // Sovereign-exit UX depends on surfacing the sweep relationship. The UI
+    // reads these fields to render "Auto-sweep above $X → sovereign wallet"
+    // beneath the operating balance. See /Users/daniel/.claude/plans/
+    // polymorphic-greeting-nebula.md.
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+    // Valid Solana address format (base58, 32-44 chars, no 0/O/I/l). Not a
+    // real onchain address — satisfies the format check in agents.ts.
+    // sweep_threshold is in micro-units: 50 USD = 50_000_000 micro.
+    const settlementAddress = "So11111111111111111111111111111111111111112";
+    const regRes = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: motebitId,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: ["test"],
+        settlement_address: settlementAddress,
+        sweep_threshold: 50_000_000,
+      }),
+    });
+    expect(regRes.status).toBe(200);
+    await deposit(relay, motebitId, 10);
+    const balance = (await getBalance(relay, motebitId)) as unknown as {
+      sweep_threshold: number | null;
+      settlement_address: string | null;
+    };
+    expect(balance.sweep_threshold).toBe(50);
+    expect(balance.settlement_address).toBe(settlementAddress);
+  });
+
+  it("balance returns null sweep fields when agent has no sweep configured", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
+    await deposit(relay, motebitId, 5);
+    const balance = (await getBalance(relay, motebitId)) as unknown as {
+      sweep_threshold: number | null;
+      settlement_address: string | null;
+    };
+    expect(balance.sweep_threshold).toBeNull();
+    expect(balance.settlement_address).toBeNull();
+  });
+
   it("negative deposit rejected", async () => {
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));

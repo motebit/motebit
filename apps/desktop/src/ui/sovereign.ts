@@ -87,6 +87,14 @@ interface BalanceResponse {
   balance: number;
   currency: string;
   transactions: BalanceTransaction[];
+  pending_withdrawals?: number;
+  pending_allocations?: number;
+  dispute_window_hold?: number;
+  available_for_withdrawal?: number;
+  // Sovereign-wallet sweep config surfaced by the relay so the UI can render
+  // the "operating → sovereign" relationship. Null when not configured.
+  sweep_threshold?: number | null;
+  settlement_address?: string | null;
 }
 
 interface BudgetResponse {
@@ -532,26 +540,79 @@ export function initSovereign(ctx: DesktopContext): SovereignAPI {
       budgetSummary.innerHTML = "";
       budgetAllocList.innerHTML = "";
 
-      // Balance section
-      if (balanceData) {
-        const balLabel = document.createElement("div");
-        balLabel.style.cssText =
-          "font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-faint);margin-bottom:4px;";
-        balLabel.textContent = "Balance";
-        budgetSummary.appendChild(balLabel);
+      // --- Balances section ---
+      // Two balances, two ownership regimes:
+      //   Sovereign reserve = onchain USDC at the motebit's Solana address.
+      //   Operating balance = relay ledger claim in USD.
+      // The sweep readout (when configured) teaches that the operating
+      // balance auto-drains into the sovereign reserve — the relay is a
+      // utility, not a jail. Funding affordances live in Settings →
+      // Subscription on desktop; this panel is the display surface.
+      const runtime = ctx.app.getRuntime();
+      const sovereignAddress = runtime?.getSolanaAddress?.() ?? null;
 
-        const balValue = document.createElement("div");
-        balValue.style.cssText =
-          "font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-heading);margin-bottom:8px;";
-        balValue.textContent = `${balanceData.balance.toFixed(2)} ${escapeHtml(balanceData.currency)}`;
-        budgetSummary.appendChild(balValue);
+      // Sovereign reserve row (async RPC resolution)
+      const sovRow = document.createElement("div");
+      sovRow.style.cssText =
+        "padding:10px 0;border-bottom:1px solid var(--border-light, rgba(255,255,255,0.06));";
+      sovRow.innerHTML = `
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-faint);">Sovereign reserve</div>
+        <div style="font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-heading);" id="sov-balance-sovereign">
+          ${sovereignAddress ? "Loading\u2026" : "\u2014"}
+        </div>
+        <div style="font-size:10px;color:var(--text-ghost);margin-top:2px;">
+          ${sovereignAddress ? "onchain USDC, yours" : "no wallet configured"}
+        </div>
+      `;
+      budgetSummary.appendChild(sovRow);
+      if (runtime && sovereignAddress) {
+        void runtime
+          .getSolanaBalance?.()
+          ?.then((micro) => {
+            const el = document.getElementById("sov-balance-sovereign");
+            if (!el) return;
+            el.textContent =
+              micro != null ? `${(Number(micro) / 1_000_000).toFixed(2)} USDC` : "\u2014";
+          })
+          .catch(() => {
+            const el = document.getElementById("sov-balance-sovereign");
+            if (el) el.textContent = "\u2014";
+          });
+      }
+
+      // Operating balance row
+      if (balanceData) {
+        const opRow = document.createElement("div");
+        opRow.style.cssText =
+          "padding:10px 0;border-bottom:1px solid var(--border-light, rgba(255,255,255,0.06));";
+        const disputeHold = balanceData.dispute_window_hold ?? 0;
+        const holdSuffix = disputeHold > 0 ? ` · on hold ${disputeHold.toFixed(2)}` : "";
+        opRow.innerHTML = `
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-faint);">Operating balance</div>
+          <div style="font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-heading);">
+            ${balanceData.balance.toFixed(2)} ${escapeHtml(balanceData.currency)}
+          </div>
+          <div style="font-size:10px;color:var(--text-ghost);margin-top:2px;">
+            relay ledger, instant settlement${holdSuffix}
+          </div>
+        `;
+        budgetSummary.appendChild(opRow);
+
+        // Sweep readout — the one line that teaches the relationship.
+        if (balanceData.sweep_threshold != null && balanceData.settlement_address != null) {
+          const sweepLine = document.createElement("div");
+          sweepLine.style.cssText =
+            "font-size:11px;color:var(--text-ghost);padding:6px 0 8px;font-style:italic;";
+          sweepLine.textContent = `Auto-sweep above $${balanceData.sweep_threshold.toFixed(2)} \u2192 your sovereign wallet`;
+          budgetSummary.appendChild(sweepLine);
+        }
 
         // Recent transactions (last 5)
         const recentTxns = balanceData.transactions.slice(0, 5);
         if (recentTxns.length > 0) {
           const txnHeader = document.createElement("div");
           txnHeader.style.cssText =
-            "font-size:11px;font-weight:600;color:var(--text-secondary);margin:4px 0;";
+            "font-size:11px;font-weight:600;color:var(--text-secondary);margin:8px 0 4px;";
           txnHeader.textContent = "Recent Transactions";
           budgetSummary.appendChild(txnHeader);
 

@@ -158,6 +158,10 @@ export function computeDisputeWindowHold(db: DatabaseDriver, motebitId: string):
  * balance = current ledger balance (already debited for holds/withdrawals)
  * dispute_window_hold = recent settlements not yet past the 24h dispute window
  * available_for_withdrawal = balance minus dispute window hold (floor at 0)
+ * sweep_threshold / settlement_address = sovereign-wallet sweep config from
+ *   agent_registry, exposed so surfaces can render the "operating → sovereign"
+ *   relationship alongside the balance itself. Null when not configured — the
+ *   UI should omit the sweep readout in that case.
  */
 export function getAccountBalanceDetailed(
   db: DatabaseDriver,
@@ -169,6 +173,8 @@ export function getAccountBalanceDetailed(
   pending_allocations: number;
   dispute_window_hold: number;
   available_for_withdrawal: number;
+  sweep_threshold: number | null;
+  settlement_address: string | null;
 } {
   const account = getOrCreateAccount(db, motebitId);
 
@@ -186,6 +192,27 @@ export function getAccountBalanceDetailed(
 
   const disputeHold = computeDisputeWindowHold(db, motebitId);
 
+  // agent_registry rows exist for registered motebits but not for agents that
+  // only touched the relay's economic layer (virtual accounts are lazy-created
+  // on first transaction). Treat a missing row as "no sweep configured."
+  let sweepThreshold: number | null = null;
+  let settlementAddress: string | null = null;
+  try {
+    const sweepRow = db
+      .prepare(
+        "SELECT sweep_threshold, settlement_address FROM agent_registry WHERE motebit_id = ?",
+      )
+      .get(motebitId) as
+      | { sweep_threshold: number | null; settlement_address: string | null }
+      | undefined;
+    if (sweepRow) {
+      sweepThreshold = sweepRow.sweep_threshold;
+      settlementAddress = sweepRow.settlement_address;
+    }
+  } catch {
+    // agent_registry may not exist in minimal test setups — fail open
+  }
+
   return {
     balance: account.balance,
     currency: account.currency,
@@ -193,6 +220,8 @@ export function getAccountBalanceDetailed(
     pending_allocations: pendingA.total,
     dispute_window_hold: disputeHold,
     available_for_withdrawal: Math.max(0, account.balance - disputeHold),
+    sweep_threshold: sweepThreshold,
+    settlement_address: settlementAddress,
   };
 }
 
