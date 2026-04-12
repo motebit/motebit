@@ -58,7 +58,13 @@ jobs:
         run: pnpm run check-unused
 
       - name: Test with coverage
-        run: pnpm run test:coverage
+        # --concurrency=4 matches the GitHub runner's CPU count. Turbo's
+        # default concurrency=10 oversubscribes 4-core runners: each test
+        # package spawns its own vitest worker pool, so 10 parallel packages
+        # can balloon to 40+ competing workers and surface as timing-sensitive
+        # test flakes. Cap it at the core count so vitest's per-package
+        # parallelism doesn't collide with turbo's cross-package parallelism.
+        run: pnpm run test:coverage -- --concurrency=4
 
       - name: Coverage summary
         if: always()
