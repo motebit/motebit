@@ -31,7 +31,7 @@ import {
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
 import { getRelayKeypair } from "./credentials.js";
-import type { RelayIdentity } from "./federation.js";
+import type { RelayIdentity, VerifiedSettlement } from "./federation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./index.js";
 import { createLogger } from "./logger.js";
@@ -381,15 +381,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       }
     },
 
-    onSettlementReceived(verified: {
-      taskId: string;
-      settlementId: string;
-      originRelay: string;
-      grossAmount: number;
-      receiptHash: string;
-      x402TxHash?: string;
-      x402Network?: string;
-    }) {
+    onSettlementReceived(verified: VerifiedSettlement) {
       const feeAmount = Math.round(verified.grossAmount * platformFeeRate);
       const netAmount = verified.grossAmount - feeAmount;
       moteDb.db

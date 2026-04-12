@@ -269,7 +269,7 @@ export async function handleReceiptIngestion(
   if (regRow?.public_key) {
     pubKeyHex = regRow.public_key;
   } else {
-    const devices = await identityManager.listDevices(asMotebitId(receipt.motebit_id as string));
+    const devices = await identityManager.listDevices(receipt.motebit_id);
     const device =
       (receipt.device_id != null
         ? devices.find((d) => d.device_id === receipt.device_id)
@@ -280,7 +280,7 @@ export async function handleReceiptIngestion(
   }
 
   if (!pubKeyHex) {
-    const executingId = receipt.motebit_id as string;
+    const executingId = receipt.motebit_id;
     logger.error("receipt.verification_failed", {
       correlationId: taskId,
       executingAgentId: executingId,
@@ -322,7 +322,7 @@ export async function handleReceiptIngestion(
   logger.info("receipt.verified", {
     correlationId: taskId,
     status: receipt.status,
-    motebitId: receipt.motebit_id as string,
+    motebitId: receipt.motebit_id,
   });
 
   // --- Idempotency: DB settlement check ---
@@ -338,8 +338,7 @@ export async function handleReceiptIngestion(
 
   // --- Trust record update ---
   const taskSubmitter = entry.submitted_by ?? entry.task.submitted_by;
-  const isSelfDelegation =
-    taskSubmitter != null && taskSubmitter === (receipt.motebit_id as string);
+  const isSelfDelegation = taskSubmitter != null && taskSubmitter === receipt.motebit_id;
   if (isSelfDelegation) {
     logger.info("trust.self_delegation_skipped", {
       correlationId: taskId,
@@ -349,7 +348,7 @@ export async function handleReceiptIngestion(
   }
   if (!isSelfDelegation) {
     try {
-      const executingAgentId = receipt.motebit_id as string;
+      const executingAgentId = receipt.motebit_id;
       const taskSucceeded = receipt.status === "completed";
       const taskFailed = receipt.status === "failed";
       const now = Date.now();
@@ -490,12 +489,12 @@ export async function handleReceiptIngestion(
           );
 
           if (sub.delegation_receipts && sub.delegation_receipts.length > 0) {
-            await walkReceipts(sub.motebit_id as string, sub.delegation_receipts);
+            await walkReceipts(sub.motebit_id, sub.delegation_receipts);
           }
         }
       };
 
-      await walkReceipts(receipt.motebit_id as string, receipt.delegation_receipts);
+      await walkReceipts(receipt.motebit_id, receipt.delegation_receipts);
     } catch {
       // Best-effort edge caching
     }
@@ -574,7 +573,7 @@ export async function handleReceiptIngestion(
           return;
         }
 
-        const subUnitCost = getListingUnitCost(moteDb, sub.motebit_id as string);
+        const subUnitCost = getListingUnitCost(moteDb, sub.motebit_id);
         const subGross =
           subEntry.price_snapshot ??
           (subUnitCost > 0 ? toMicro(computeGrossAmount(subUnitCost, platformFeeRate)) : 0);
@@ -634,7 +633,7 @@ export async function handleReceiptIngestion(
           if (subSettlement.amount_settled > 0) {
             creditAccount(
               moteDb.db,
-              sub.motebit_id as string,
+              sub.motebit_id,
               subSettlement.amount_settled,
               "settlement_credit",
               subSettlement.settlement_id,
@@ -746,9 +745,7 @@ export async function handleReceiptIngestion(
             | { allocation_id: string; amount_locked: number; motebit_id: string }
             | undefined);
 
-      const fallbackUnitCost = isP2pTask
-        ? 0
-        : getListingUnitCost(moteDb, receipt.motebit_id as string);
+      const fallbackUnitCost = isP2pTask ? 0 : getListingUnitCost(moteDb, receipt.motebit_id);
       const grossAmount =
         entry.price_snapshot ??
         persistentAlloc?.amount_locked ??
@@ -787,7 +784,7 @@ export async function handleReceiptIngestion(
           .prepare(
             "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",
           )
-          .all(receipt.motebit_id as string) as Array<{ latency_ms: number }>;
+          .all(receipt.motebit_id) as Array<{ latency_ms: number }>;
         const avgLatency =
           latencyRows.length > 0
             ? latencyRows.reduce((a, r) => a + r.latency_ms, 0) / latencyRows.length
@@ -797,7 +794,7 @@ export async function handleReceiptIngestion(
 
         const subjectDid = pubKeyHex
           ? hexPublicKeyToDidKey(pubKeyHex)
-          : `did:motebit:${receipt.motebit_id as string}`;
+          : `did:motebit:${receipt.motebit_id}`;
 
         const relayKeys = getRelayKeypair(relayIdentity);
         const vc = await issueReputationCredential(
@@ -818,7 +815,7 @@ export async function handleReceiptIngestion(
           vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
         credentialRow = {
           credential_id: crypto.randomUUID(),
-          subject: receipt.motebit_id as string,
+          subject: receipt.motebit_id,
           issuer: vc.issuer,
           type: credType,
           json: JSON.stringify(vc),
@@ -862,7 +859,7 @@ export async function handleReceiptIngestion(
           }
 
           {
-            const workerMotebitId = receipt.motebit_id as string;
+            const workerMotebitId = receipt.motebit_id;
 
             if (settlement.status === "refunded") {
               const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
@@ -1673,7 +1670,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         );
         const eligibleProfiles =
           excludeSet.size > 0
-            ? multiCapProfiles.filter((p) => !excludeSet.has(p.motebit_id as string))
+            ? multiCapProfiles.filter((p) => !excludeSet.has(p.motebit_id))
             : multiCapProfiles;
 
         // Phase 4: Fetch federated candidates from active peer relays (best-effort, non-blocking)
@@ -1707,8 +1704,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           peerRelayNodes = fedResult.peerRelayNodes;
           for (const fc of federatedCandidates) {
             // Filter out excluded agents from federated results too
-            if (!excludeSet.has(fc.profile.motebit_id as string)) {
-              remoteAgentRelay.set(fc.profile.motebit_id as string, fc._source_relay_endpoint);
+            if (!excludeSet.has(fc.profile.motebit_id)) {
+              remoteAgentRelay.set(fc.profile.motebit_id, fc._source_relay_endpoint);
             }
           }
         } catch {
@@ -1717,7 +1714,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
         // Merge local and federated candidates before ranking
         const federatedProfiles = federatedCandidates
-          .filter((fc) => !excludeSet.has(fc.profile.motebit_id as string))
+          .filter((fc) => !excludeSet.has(fc.profile.motebit_id))
           .map((fc) => fc.profile);
         const allProfiles = [...eligibleProfiles, ...federatedProfiles];
 
@@ -1783,7 +1780,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             // Capture routing provenance from the top-ranked agent for the response
             const topScore = selected[0]!;
             routingChoice = {
-              selected_agent: topScore.motebit_id as string,
+              selected_agent: topScore.motebit_id,
               composite_score: topScore.composite,
               sub_scores: topScore.sub_scores,
               routing_paths: topScore.routing_paths,
@@ -1792,7 +1789,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
             // Route to selected agents — local via WebSocket, remote via federation forward
             for (const sel of selected) {
-              const selId = sel.motebit_id as string;
+              const selId = sel.motebit_id;
               if (remoteAgentRelay.has(selId)) {
                 // Remote agent: forward task to peer relay
                 const peerEndpoint = remoteAgentRelay.get(selId)!;
@@ -2142,7 +2139,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       logger.error("receipt.missing_relay_task_id", {
         correlationId: taskId,
         reason: "receipt does not include relay_task_id — required for economic binding",
-        motebitId: receipt.motebit_id as string,
+        motebitId: receipt.motebit_id,
       });
       throw new TaskError(
         "TASK_INVALID_INPUT",
