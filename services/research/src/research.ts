@@ -25,7 +25,11 @@
  * molecules (fact-checkers, deep-summarizers, multi-step research) compose
  * the same primitive — they should not reinvent the transport.
  *
- * See `memory/protocol_doctrine_citations.md` for the full doctrine.
+ * Full doctrine: the citation IS the receipt — not a label next to one. Any
+ * synthesizing molecule that cites sources must return signed receipts
+ * chained through `delegation_receipts`, verifiable offline with
+ * `@motebit/crypto` and the atoms' public keys. Never emit citation strings
+ * without receipts; never emit hashes-of-URLs without proof of fetch.
  */
 
 import Anthropic from "@anthropic-ai/sdk";

@@ -50,8 +50,8 @@ function log(msg: string): void {
  * motebit_task call whose response is a valid signed receipt is pushed onto
  * the adapter's `_delegationReceipts` queue, drained here via
  * `getAndResetDelegationReceipts()`. Nothing motebit-protocol-shaped is
- * reinvented — see `memory/feedback_protocol_primitive_blindness.md` for
- * why this matters.
+ * reinvented — see CLAUDE.md "Protocol primitives belong in packages, never
+ * inline in services" for the doctrine.
  */
 async function subDelegate(
   mcpUrl: string,

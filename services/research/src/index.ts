@@ -8,8 +8,9 @@
  * `delegation_receipts` field IS the verifiable citation chain.
  *
  * Anyone with @motebit/crypto and the relevant public keys can re-derive the
- * provenance graph offline — no relay dependency. See
- * `memory/protocol_doctrine_citations.md` for the doctrine.
+ * provenance graph offline — no relay dependency.
+ *
+ * Doctrine: the citation IS the receipt — not a label next to one.
  */
 
 import * as fs from "node:fs";

@@ -12,7 +12,11 @@
  *
  * This is the protocol primitive. Services call it; never rebuild inline.
  *
- * See `memory/feedback_protocol_primitive_blindness.md` for the pattern.
+ * Doctrine (see CLAUDE.md "Protocol primitives belong in packages, never
+ * inline in services"): when a service needs protocol-shaped plumbing —
+ * signing, receipts, MCP transport, delegation — the primitive lives in a
+ * shared package. If the primitive doesn't exist yet, add it to the
+ * appropriate package. Never ship it inline in a service.
  */
 
 import { hash as sha256, signExecutionReceipt } from "@motebit/encryption";
