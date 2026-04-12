@@ -4,7 +4,7 @@
 
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import type { MotebitDatabase } from "@motebit/persistence";
+import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventStore } from "@motebit/event-log";
 import { asMotebitId } from "@motebit/sdk";
@@ -32,6 +32,42 @@ const logger = createLogger({ service: "agents" });
 
 /** Solvency proof TTL: 5 minutes. */
 const SOLVENCY_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Layer the authenticated caller's trust ledger onto a discover result list.
+ * Each agent gains `trust_level` and `interaction_count` from the caller's
+ * `agent_trust` row for that worker, when one exists.
+ *
+ * Trust is the caller's private accumulated state — only meaningful when we
+ * know who's asking. Anonymous/unauthenticated discover passes through unchanged.
+ */
+export function enrichWithCallerTrust<T extends Record<string, unknown> & { motebit_id: string }>(
+  agents: T[],
+  callerMotebitId: string | undefined,
+  db: DatabaseDriver,
+): T[] {
+  if (callerMotebitId == null || callerMotebitId === "" || agents.length === 0) {
+    return agents;
+  }
+  const placeholders = agents.map(() => "?").join(",");
+  const trustRows = db
+    .prepare(
+      `SELECT remote_motebit_id, trust_level, interaction_count
+       FROM agent_trust
+       WHERE motebit_id = ? AND remote_motebit_id IN (${placeholders})`,
+    )
+    .all(callerMotebitId, ...agents.map((a) => a.motebit_id)) as Array<{
+    remote_motebit_id: string;
+    trust_level: string;
+    interaction_count: number;
+  }>;
+  const trustByAgent = new Map(trustRows.map((t) => [t.remote_motebit_id, t]));
+  return agents.map((a) => {
+    const t = trustByAgent.get(a.motebit_id);
+    if (!t) return a;
+    return { ...a, trust_level: t.trust_level, interaction_count: t.interaction_count };
+  });
+}
 
 export interface AgentsDeps {
   app: Hono;
@@ -880,7 +916,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     ).cnt;
 
     if (activePeerCount === 0) {
-      return c.json({ agents: localResults });
+      const enriched = enrichWithCallerTrust(
+        localResults,
+        c.get("callerMotebitId" as never) as string | undefined,
+        moteDb.db,
+      );
+      return c.json({ agents: enriched });
     }
 
     // Forward to active peers
@@ -932,8 +973,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
     }
 
-    // Trim to limit
-    const final = [...merged.values()].slice(0, limit);
+    // Trim to limit, then layer in trust info for the authenticated caller.
+    // Trust is the caller's own ledger — only meaningful when we know who's asking.
+    // Federation merge produces Record<string, unknown>; narrow to the
+    // marketplace shape (every entry has a motebit_id by construction).
+    const trimmed = [...merged.values()].slice(0, limit) as Array<
+      Record<string, unknown> & { motebit_id: string }
+    >;
+    const final = enrichWithCallerTrust(
+      trimmed,
+      c.get("callerMotebitId" as never) as string | undefined,
+      moteDb.db,
+    );
     return c.json({ agents: final });
   });
 

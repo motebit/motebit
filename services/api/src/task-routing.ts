@@ -510,6 +510,11 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   }
 
   // Helper: query local agent_registry -- shared by discover endpoint and federation handler
+  //
+  // Returns the canonical "marketplace card" shape: identity + capabilities +
+  // pricing (when a service listing exists) + last_seen_at. Trust info is layered
+  // in by the discover endpoint based on the authenticated caller; queryLocalAgents
+  // itself is caller-agnostic so federation peers receive consistent data.
   function queryLocalAgents(
     capability?: string,
     motebitId?: string,
@@ -523,6 +528,10 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     endpoint_url: string;
     capabilities: string[];
     metadata: Record<string, unknown> | null;
+    /** Per-capability pricing (from relay_service_listings), null if no listing exists. */
+    pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }> | null;
+    /** Last heartbeat timestamp from agent_registry. */
+    last_seen_at: number;
   }> {
     const now = Date.now();
     const fedFilter = federatedOnly
@@ -571,6 +580,34 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         .all(now, limit) as Array<Record<string, unknown>>;
     }
 
+    // Batch-fetch service listings for these agents in one query — avoids N+1
+    const ids = rows.map((r) => r.motebit_id as string);
+    const listingByAgent = new Map<
+      string,
+      Array<{ capability: string; unit_cost: number; currency: string; per: string }>
+    >();
+    if (ids.length > 0) {
+      const placeholders = ids.map(() => "?").join(",");
+      const listingRows = db
+        .prepare(
+          `SELECT motebit_id, pricing FROM relay_service_listings WHERE motebit_id IN (${placeholders})`,
+        )
+        .all(...ids) as Array<{ motebit_id: string; pricing: string }>;
+      for (const lr of listingRows) {
+        try {
+          const parsed = JSON.parse(lr.pricing) as Array<{
+            capability: string;
+            unit_cost: number;
+            currency: string;
+            per: string;
+          }>;
+          listingByAgent.set(lr.motebit_id, parsed);
+        } catch {
+          // Malformed listing — skip; agent will appear with pricing=null
+        }
+      }
+    }
+
     return rows.map((r) => {
       const pk = r.public_key as string;
       let agentDid: string | undefined;
@@ -579,14 +616,17 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       } catch {
         // Non-fatal
       }
+      const id = r.motebit_id as string;
       return {
-        motebit_id: r.motebit_id as string,
+        motebit_id: id,
         public_key: pk,
         did: agentDid,
         endpoint_url: r.endpoint_url as string,
         capabilities: JSON.parse(r.capabilities as string) as string[],
         // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped
         metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
+        pricing: listingByAgent.get(id) ?? null,
+        last_seen_at: (r.last_heartbeat as number | null) ?? (r.registered_at as number),
       };
     });
   }

@@ -1411,7 +1411,19 @@ export class DesktopApp {
   }
 
   discoverAgents(): Promise<
-    Array<{ motebit_id: string; capabilities: string[]; trust_level?: string }>
+    Array<{
+      motebit_id: string;
+      capabilities: string[];
+      trust_level?: string;
+      interaction_count?: number;
+      pricing?: Array<{
+        capability: string;
+        unit_cost: number;
+        currency: string;
+        per: string;
+      }> | null;
+      last_seen_at?: number;
+    }>
   > {
     return this.sync.discoverAgents();
   }

@@ -123,12 +123,35 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       item.appendChild(idDiv);
 
       if (agent.capabilities.length > 0) {
+        // Index pricing by capability for O(1) lookup per tag
+        const priceByCapability = new Map<
+          string,
+          { unit_cost: number; currency: string; per: string }
+        >();
+        if (Array.isArray(agent.pricing)) {
+          for (const p of agent.pricing) {
+            priceByCapability.set(p.capability, {
+              unit_cost: p.unit_cost,
+              currency: p.currency,
+              per: p.per,
+            });
+          }
+        }
+
         const capsRow = document.createElement("div");
         capsRow.className = "agent-caps-row";
         for (const cap of agent.capabilities) {
           const tag = document.createElement("span");
           tag.className = "agent-cap-tag";
-          tag.textContent = cap;
+          const price = priceByCapability.get(cap);
+          if (price && price.unit_cost > 0) {
+            // "web_search · $0.05/search" — capability name + price + unit
+            tag.textContent = `${cap} · $${price.unit_cost.toFixed(2)}/${price.per}`;
+            tag.classList.add("priced");
+            tag.title = `${price.unit_cost} ${price.currency} per ${price.per}`;
+          } else {
+            tag.textContent = cap;
+          }
           capsRow.appendChild(tag);
         }
         item.appendChild(capsRow);
@@ -139,8 +162,18 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       if (agent.trust_level) {
         const badge = document.createElement("span");
         badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
-        badge.textContent = agent.trust_level.replace(/_/g, " ");
+        const interactionSuffix =
+          typeof agent.interaction_count === "number" && agent.interaction_count > 0
+            ? ` · ${agent.interaction_count} interaction${agent.interaction_count === 1 ? "" : "s"}`
+            : "";
+        badge.textContent = agent.trust_level.replace(/_/g, " ") + interactionSuffix;
         meta.appendChild(badge);
+      }
+      if (typeof agent.last_seen_at === "number" && agent.last_seen_at > 0) {
+        const seen = document.createElement("span");
+        seen.className = "agent-last-seen";
+        seen.textContent = `seen ${formatTimeAgo(agent.last_seen_at)}`;
+        meta.appendChild(seen);
       }
       item.appendChild(meta);
 
