@@ -1,11 +1,8 @@
-import { defineConfig } from "vitest/config";
+import { defineMotebitTest } from "../../vitest.shared.js";
 
-export default defineConfig({
-  test: {
-    exclude: ["**/node_modules/**", "**/dist/**", "**/coverage/**"],
-    coverage: {
-      include: ["src/validation.ts"],
-      thresholds: { statements: 70, branches: 60, functions: 65, lines: 70 },
-    },
-  },
+// proxy only unit-tests the validation module; everything else is the
+// Next.js edge proxy handlers exercised via E2E deploy smoke tests.
+export default defineMotebitTest({
+  coverageInclude: ["src/validation.ts"],
+  thresholds: { statements: 70, branches: 60, functions: 65, lines: 70 },
 });

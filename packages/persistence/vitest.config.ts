@@ -1,12 +1,5 @@
-import { defineConfig } from "vitest/config";
+import { defineMotebitTest } from "../../vitest.shared.js";
 
-export default defineConfig({
-  test: {
-    exclude: ["**/node_modules/**", "**/dist/**", "**/coverage/**"],
-    coverage: {
-      include: ["src/**/*.ts"],
-      exclude: ["src/__tests__/**"],
-      thresholds: { statements: 80, branches: 85, functions: 73, lines: 80 },
-    },
-  },
+export default defineMotebitTest({
+  thresholds: { statements: 80, branches: 85, functions: 73, lines: 80 },
 });
