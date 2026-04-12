@@ -7,3 +7,8 @@ dist
 pnpm-lock.yaml
 **/motebit.md
 services/proxy/tsconfig.json
+
+# api-extractor baselines are machine-generated; Prettier reformatting them
+# causes permanent divergence from the raw extractor output that the
+# check-api-surface gate compares against.
+packages/*/etc/*.api.md
