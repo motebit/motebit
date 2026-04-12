@@ -31,8 +31,8 @@ jobs:
       - name: Audit
         run: pnpm audit --audit-level=critical
 
-      - name: Check dependency architecture
-        run: pnpm check-deps
+      - name: Drift defenses (deps, specs, service/app primitives, memory)
+        run: pnpm check
 
       - name: Build
         run: pnpm build
@@ -130,6 +130,33 @@ jobs:
           name: e2e-screenshots
           path: apps/web/test-results/
           retention-days: 7
+
+  gate-effectiveness:
+    # Probe every drift-defense gate with a known-violating fixture to prove
+    # each one actually fires. Scoped to scripts/* changes + pushes to main
+    # so the expense (every gate runs under a perturbation) isn't paid on
+    # unrelated PRs — but any change to a gate or the gate list triggers it.
+    if: |
+      github.event_name == 'push' ||
+      contains(toJson(github.event.pull_request), 'scripts/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prove every gate in GATES actually fires
+        run: pnpm check-gates-effective
 
   sibling-audit:
     if: github.event_name == 'pull_request'

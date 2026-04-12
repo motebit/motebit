@@ -1,0 +1,37 @@
+name: Deploy Research Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/research/**"
+      - "packages/**"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-research-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: superfly/flyctl-actions/setup-flyctl@63da3ecc5e2793b98a3f2519b3d75d4f4c11cec2 # master
+
+      # The service self-bootstraps its identity from the persistent /data
+      # volume on first boot — no out-of-band ceremony. Required one-time
+      # setup before the first deploy:
+      #   fly apps create motebit-research
+      #   fly volumes create research_data --size 1 --region sjc
+      #   fly secrets set MOTEBIT_SYNC_URL=... MOTEBIT_API_TOKEN=... \
+      #                   ANTHROPIC_API_KEY=... \
+      #                   MOTEBIT_WEB_SEARCH_URL=... MOTEBIT_READ_URL_URL=...
+      - name: Deploy to Fly.io
+        run: flyctl deploy --config services/research/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
