@@ -21,6 +21,7 @@ import type {
   TurnContext,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
+import { verifySignedToken as defaultVerifySignedToken } from "@motebit/encryption";
 
 // ---------------------------------------------------------------------------
 // Duck-typed interfaces — match what MotebitRuntime provides
@@ -107,7 +108,11 @@ export interface WireServerDepsOptions {
   /** Local embedding function (e.g. embedText from @motebit/memory-graph). */
   embedText?: (text: string) => Promise<number[]>;
 
-  /** Token verification (e.g. verifySignedToken from @motebit/crypto). */
+  /**
+   * Token verification. Defaults to `verifySignedToken` from `@motebit/encryption`
+   * — the canonical implementation every motebit service was manually wiring.
+   * Override only for test injection or an alternative verifier.
+   */
   verifySignedToken?: (
     token: string,
     publicKey: Uint8Array,
@@ -242,10 +247,11 @@ export function wireServerDeps(
     };
   }
 
-  // Optional: signed token verification
-  if (opts.verifySignedToken) {
-    deps.verifySignedToken = opts.verifySignedToken;
-  }
+  // Signed token verification: default to the canonical implementation from
+  // @motebit/encryption. Every service previously threaded this through by
+  // hand — five identical copies of the same wire. Override still honored
+  // for tests and alternative verifiers.
+  deps.verifySignedToken = opts.verifySignedToken ?? defaultVerifySignedToken;
 
   // Caller key resolution: local trust store → relay fallback
   {

@@ -1,29 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { fromHex, loadConfig } from "../helpers.js";
-
-describe("fromHex", () => {
-  it("decodes a hex string to Uint8Array", () => {
-    const result = fromHex("deadbeef");
-    expect(result).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
-  });
-
-  it("handles an empty string", () => {
-    expect(fromHex("")).toEqual(new Uint8Array(0));
-  });
-
-  it("round-trips with all byte values", () => {
-    const hex = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0")).join("");
-    const bytes = fromHex(hex);
-    expect(bytes.length).toBe(256);
-    for (let i = 0; i < 256; i++) {
-      expect(bytes[i]).toBe(i);
-    }
-  });
-
-  it("is case-insensitive on hex digits", () => {
-    expect(fromHex("DEADBEEF")).toEqual(fromHex("deadbeef"));
-  });
-});
+import { loadConfig } from "../helpers.js";
 
 describe("loadConfig", () => {
   // Snapshot and restore every env var loadConfig reads so tests are hermetic.

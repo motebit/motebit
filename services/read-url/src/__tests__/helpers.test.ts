@@ -1,34 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { loadConfig, fromHex } from "../helpers.js";
-
-describe("fromHex", () => {
-  it("converts hex string to Uint8Array", () => {
-    const result = fromHex("deadbeef");
-    expect(result).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
-  });
-
-  it("handles all zeros", () => {
-    const result = fromHex("00000000");
-    expect(result).toEqual(new Uint8Array([0, 0, 0, 0]));
-  });
-
-  it("handles all ff", () => {
-    const result = fromHex("ffff");
-    expect(result).toEqual(new Uint8Array([255, 255]));
-  });
-
-  it("returns empty array for empty string", () => {
-    const result = fromHex("");
-    expect(result).toEqual(new Uint8Array([]));
-  });
-
-  it("handles a 32-byte Ed25519 public key hex", () => {
-    const hex = "a".repeat(64); // 32 bytes
-    const result = fromHex(hex);
-    expect(result.length).toBe(32);
-    expect(result.every((b) => b === 0xaa)).toBe(true);
-  });
-});
+import { loadConfig } from "../helpers.js";
 
 describe("loadConfig", () => {
   const savedEnv: Record<string, string | undefined> = {};

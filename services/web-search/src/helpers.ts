@@ -50,15 +50,6 @@ export function canonicalizeResults(raw: string, maxResults = 5): string {
   }
 }
 
-/** Decode hex string to Uint8Array. */
-export function fromHex(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  }
-  return bytes;
-}
-
 /** Load service configuration from environment variables. */
 export function loadConfig() {
   return {

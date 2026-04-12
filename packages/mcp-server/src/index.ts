@@ -29,6 +29,11 @@ export { StaticTokenVerifier };
 export { wireServerDeps, startServiceServer } from "./service.js";
 export { buildServiceReceipt } from "./build-receipt.js";
 export type { BuildServiceReceiptInput } from "./build-receipt.js";
+export { bootstrapAndEmitIdentity } from "./bootstrap-service.js";
+export type {
+  BootstrapAndEmitIdentityOptions,
+  BootstrapAndEmitIdentityResult,
+} from "./bootstrap-service.js";
 export type {
   ServiceRuntime,
   ServiceToolRegistry,

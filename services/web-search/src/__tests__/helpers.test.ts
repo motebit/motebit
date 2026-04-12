@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canonicalizeResults, fromHex, loadConfig } from "../helpers.js";
+import { canonicalizeResults, loadConfig } from "../helpers.js";
 
 describe("canonicalizeResults", () => {
   it("normalizes URLs, strips tracking params, and sorts by URL", () => {
@@ -100,17 +100,6 @@ describe("canonicalizeResults", () => {
       { title: "A", url: "https://a.com", snippet: "a" },
     ]);
     expect(canonicalizeResults(input)).toBe(canonicalizeResults(input));
-  });
-});
-
-describe("fromHex", () => {
-  it("converts hex to Uint8Array", () => {
-    const result = fromHex("deadbeef");
-    expect(result).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
-  });
-
-  it("handles empty string", () => {
-    expect(fromHex("")).toEqual(new Uint8Array(0));
   });
 });
 

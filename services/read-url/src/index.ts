@@ -7,7 +7,7 @@
  * ### Identity lifecycle
  *
  * The service self-bootstraps its motebit identity on first boot via
- * `bootstrapServiceIdentity()` from `@motebit/core-identity` — same
+ * `bootstrapAndEmitIdentity()` from `@motebit/mcp-server` — same
  * shared protocol every other surface (desktop/mobile/web/spatial/cli)
  * uses, just with filesystem-backed storage targeting the data dir.
  *
@@ -35,13 +35,15 @@ import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
 import type { StorageAdapters } from "@motebit/runtime";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { InMemoryToolRegistry, readUrlDefinition, createReadUrlHandler } from "@motebit/tools";
-import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
-import { generate, parseRiskLevel } from "@motebit/identity-file";
-import { verifySignedToken } from "@motebit/encryption";
-import { buildServiceReceipt } from "@motebit/mcp-server";
+import {
+  wireServerDeps,
+  startServiceServer,
+  buildServiceReceipt,
+  bootstrapAndEmitIdentity,
+} from "@motebit/mcp-server";
+import { parseRiskLevel } from "@motebit/identity-file";
 import { embedText } from "@motebit/memory-graph";
-import { loadConfig, fromHex } from "./helpers.js";
+import { loadConfig } from "./helpers.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -52,48 +54,22 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const serviceName = "motebit-read-url";
 
-  // 1. Bootstrap identity from the persistent data dir (generates on
-  //    first boot, reloads on subsequent boots). Same shared protocol
-  //    every other surface uses — filesystem is the storage adapter.
-  const bootstrap = await bootstrapServiceIdentity({
-    dataDir: path.resolve(config.dataDir),
+  // 1-2. Bootstrap identity + emit signed motebit.md. Regenerating on every
+  //      boot is deterministic except for the `created_at` field (intentionally
+  //      fresh). This is what wireServerDeps serves to inbound callers.
+  const identity = await bootstrapAndEmitIdentity({
+    dataDir: config.dataDir,
     serviceName,
+    displayName: "Read URL",
+    serviceDescription: "Minimal URL reader (second hop in multi-hop delegation proof)",
+    capabilities: ["read_url"],
   });
-  const { motebitId, deviceId, publicKeyHex, privateKeyHex } = bootstrap;
+  const { motebitId, deviceId, publicKeyHex, publicKey, identityContent } = identity;
+  const privateKeyBytes = identity.privateKey;
   log(
-    `Identity ${bootstrap.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
+    `Identity ${identity.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
       `(data dir: ${config.dataDir})`,
   );
-
-  // 2. Emit the canonical signed motebit.md identity file from the
-  //    bootstrapped state. This is what wireServerDeps serves to
-  //    inbound callers that want to verify the service's identity.
-  //    Regenerating on every boot is deterministic except for the
-  //    `created_at` field (intentionally fresh).
-  const privateKeyBytes = fromHex(privateKeyHex);
-  const identityContent = await generate(
-    {
-      motebitId,
-      ownerId: serviceName,
-      publicKeyHex,
-      devices: [
-        {
-          device_id: deviceId,
-          name: serviceName,
-          public_key: publicKeyHex,
-          registered_at: new Date().toISOString(),
-        },
-      ],
-      service: {
-        type: "service",
-        service_name: "Read URL",
-        service_description: "Minimal URL reader (second hop in multi-hop delegation proof)",
-        capabilities: ["read_url"],
-      },
-    },
-    privateKeyBytes,
-  );
-  fs.writeFileSync(bootstrap.suggestedIdentityPath, identityContent, "utf-8");
 
   // 3. Build tool registry — one tool only (read_url)
   const registry = new InMemoryToolRegistry();
@@ -161,7 +137,7 @@ async function main(): Promise<void> {
       motebitId,
       deviceId,
       privateKey: privateKeyBytes,
-      publicKey: fromHex(publicKeyHex),
+      publicKey,
       prompt,
       taskId,
       submittedAt,
@@ -182,7 +158,6 @@ async function main(): Promise<void> {
     publicKeyHex,
     identityFileContent: identityContent,
     embedText,
-    verifySignedToken,
     handleAgentTask,
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,

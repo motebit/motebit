@@ -16,13 +16,15 @@ import type { StorageAdapters } from "@motebit/runtime";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
-import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
-import { generate, parseRiskLevel } from "@motebit/identity-file";
-import { verifySignedToken } from "@motebit/encryption";
-import { buildServiceReceipt } from "@motebit/mcp-server";
+import {
+  wireServerDeps,
+  startServiceServer,
+  buildServiceReceipt,
+  bootstrapAndEmitIdentity,
+} from "@motebit/mcp-server";
+import { parseRiskLevel } from "@motebit/identity-file";
 import { embedText } from "@motebit/memory-graph";
-import { loadConfig, fromHex } from "./helpers.js";
+import { loadConfig } from "./helpers.js";
 import { parsePrReference, fetchPullRequest } from "./github.js";
 import { reviewPullRequest } from "./review.js";
 import { OAuthCredentialSource, GitHubOAuthTokenProvider } from "@motebit/mcp-client";
@@ -124,45 +126,21 @@ async function main(): Promise<void> {
     log("GitHub auth: none (public rate limit)");
   }
 
-  // 1. Bootstrap identity from the persistent data dir (generates on
-  //    first boot, reloads on subsequent boots). Shared protocol —
-  //    same bootstrap path every other surface uses.
+  // 1-2. Bootstrap identity + emit signed motebit.md in one call.
   const serviceName = "motebit-code-review";
-  const bootstrap = await bootstrapServiceIdentity({
-    dataDir: path.resolve(config.dataDir),
+  const identity = await bootstrapAndEmitIdentity({
+    dataDir: config.dataDir,
     serviceName,
+    displayName: "Code Review",
+    serviceDescription: "LLM-powered GitHub PR review with signed execution receipts",
+    capabilities: ["review_pr"],
   });
-  const { motebitId, deviceId, publicKeyHex, privateKeyHex } = bootstrap;
+  const { motebitId, publicKey, privateKey, identityContent } = identity;
+  const publicKeyHex = identity.publicKeyHex;
   log(
-    `Identity ${bootstrap.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
+    `Identity ${identity.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
       `(data dir: ${config.dataDir})`,
   );
-
-  // 2. Emit the canonical signed motebit.md from the bootstrapped state.
-  const privateKey = fromHex(privateKeyHex);
-  const identityContent = await generate(
-    {
-      motebitId,
-      ownerId: serviceName,
-      publicKeyHex,
-      devices: [
-        {
-          device_id: deviceId,
-          name: serviceName,
-          public_key: publicKeyHex,
-          registered_at: new Date().toISOString(),
-        },
-      ],
-      service: {
-        type: "service",
-        service_name: "Code Review",
-        service_description: "LLM-powered GitHub PR review with signed execution receipts",
-        capabilities: ["review_pr"],
-      },
-    },
-    privateKey,
-  );
-  fs.writeFileSync(bootstrap.suggestedIdentityPath, identityContent, "utf-8");
 
   // 2. Build tool registry
   const registry = new InMemoryToolRegistry();
@@ -250,7 +228,7 @@ async function main(): Promise<void> {
       motebitId,
       deviceId: "code-review-service",
       privateKey,
-      publicKey: fromHex(publicKeyHex),
+      publicKey,
       prompt,
       taskId,
       submittedAt,
@@ -273,7 +251,6 @@ async function main(): Promise<void> {
     publicKeyHex,
     identityFileContent: identityContent,
     embedText,
-    verifySignedToken,
     handleAgentTask,
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,

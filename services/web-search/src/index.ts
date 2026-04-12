@@ -23,14 +23,17 @@ import {
   DuckDuckGoSearchProvider,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
-import { wireServerDeps, startServiceServer, buildServiceReceipt } from "@motebit/mcp-server";
+import {
+  wireServerDeps,
+  startServiceServer,
+  buildServiceReceipt,
+  bootstrapAndEmitIdentity,
+} from "@motebit/mcp-server";
 import { McpClientAdapter } from "@motebit/mcp-client";
-import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
-import { generate, parseRiskLevel } from "@motebit/identity-file";
-import { verifySignedToken } from "@motebit/encryption";
+import { parseRiskLevel } from "@motebit/identity-file";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { embedText } from "@motebit/memory-graph";
-import { loadConfig, fromHex, canonicalizeResults } from "./helpers.js";
+import { loadConfig, canonicalizeResults } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -133,44 +136,19 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const serviceName = "motebit-web-search";
 
-  // 1. Bootstrap identity from the persistent data dir (generates on
-  //    first boot, reloads on subsequent boots). Shared protocol —
-  //    same bootstrap path every other surface uses.
-  const bootstrap = await bootstrapServiceIdentity({
-    dataDir: path.resolve(config.dataDir),
+  // 1-2. Bootstrap identity + emit signed motebit.md in one call.
+  const identity = await bootstrapAndEmitIdentity({
+    dataDir: config.dataDir,
     serviceName,
+    displayName: "Web Search",
+    serviceDescription: "Brave/DuckDuckGo web search + multi-hop delegation to read-url",
+    capabilities: ["web_search", "read_url"],
   });
-  const { motebitId, deviceId, publicKeyHex, privateKeyHex } = bootstrap;
+  const { motebitId, publicKeyHex, publicKey, privateKey, identityContent } = identity;
   log(
-    `Identity ${bootstrap.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
+    `Identity ${identity.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
       `(data dir: ${config.dataDir})`,
   );
-
-  // 2. Emit the canonical signed motebit.md from the bootstrapped state.
-  const privateKey = fromHex(privateKeyHex);
-  const identityContent = await generate(
-    {
-      motebitId,
-      ownerId: serviceName,
-      publicKeyHex,
-      devices: [
-        {
-          device_id: deviceId,
-          name: serviceName,
-          public_key: publicKeyHex,
-          registered_at: new Date().toISOString(),
-        },
-      ],
-      service: {
-        type: "service",
-        service_name: "Web Search",
-        service_description: "Brave/DuckDuckGo web search + multi-hop delegation to read-url",
-        capabilities: ["web_search", "read_url"],
-      },
-    },
-    privateKey,
-  );
-  fs.writeFileSync(bootstrap.suggestedIdentityPath, identityContent, "utf-8");
 
   // 2. Build tool registry — two tools only (read-only, R0)
   const registry = new InMemoryToolRegistry();
@@ -301,7 +279,7 @@ async function main(): Promise<void> {
       motebitId,
       deviceId: "web-search-service",
       privateKey,
-      publicKey: fromHex(publicKeyHex),
+      publicKey,
       prompt,
       taskId,
       submittedAt,
@@ -327,7 +305,6 @@ async function main(): Promise<void> {
     publicKeyHex,
     identityFileContent: identityContent,
     embedText,
-    verifySignedToken,
     handleAgentTask,
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,

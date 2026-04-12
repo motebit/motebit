@@ -17,14 +17,16 @@ import type { StorageAdapters } from "@motebit/runtime";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
-import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
-import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
-import { generate, parseRiskLevel } from "@motebit/identity-file";
-import { verifySignedToken } from "@motebit/encryption";
-import { buildServiceReceipt } from "@motebit/mcp-server";
+import {
+  wireServerDeps,
+  startServiceServer,
+  buildServiceReceipt,
+  bootstrapAndEmitIdentity,
+} from "@motebit/mcp-server";
+import { parseRiskLevel } from "@motebit/identity-file";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { embedText } from "@motebit/memory-graph";
-import { loadConfig, fromHex } from "./helpers.js";
+import { loadConfig } from "./helpers.js";
 import { research } from "./research.js";
 import type { ResearchConfig } from "./research.js";
 
@@ -94,45 +96,21 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 1. Bootstrap identity from the persistent data dir (generates on first
-  //    boot, reloads on subsequent boots). Same path every other surface uses.
+  // 1-2. Bootstrap identity + emit signed motebit.md in one call.
   const serviceName = "motebit-research";
-  const bootstrap = await bootstrapServiceIdentity({
-    dataDir: path.resolve(config.dataDir),
+  const identity = await bootstrapAndEmitIdentity({
+    dataDir: config.dataDir,
     serviceName,
+    displayName: "Research",
+    serviceDescription:
+      "Web research agent — investigates a question via motebit's web-search and read-url atoms, returns a synthesized report with a verifiable citation chain (signed delegation_receipts)",
+    capabilities: ["research"],
   });
-  const { motebitId, deviceId, publicKeyHex, privateKeyHex } = bootstrap;
+  const { motebitId, deviceId, publicKeyHex, publicKey, privateKey, identityContent } = identity;
   log(
-    `Identity ${bootstrap.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
+    `Identity ${identity.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
       `(data dir: ${config.dataDir})`,
   );
-
-  // 2. Emit the canonical signed motebit.md
-  const privateKey = fromHex(privateKeyHex);
-  const identityContent = await generate(
-    {
-      motebitId,
-      ownerId: serviceName,
-      publicKeyHex,
-      devices: [
-        {
-          device_id: deviceId,
-          name: serviceName,
-          public_key: publicKeyHex,
-          registered_at: new Date().toISOString(),
-        },
-      ],
-      service: {
-        type: "service",
-        service_name: "Research",
-        service_description:
-          "Web research agent — investigates a question via motebit's web-search and read-url atoms, returns a synthesized report with a verifiable citation chain (signed delegation_receipts)",
-        capabilities: ["research"],
-      },
-    },
-    privateKey,
-  );
-  fs.writeFileSync(bootstrap.suggestedIdentityPath, identityContent, "utf-8");
 
   // 3. Build the ResearchConfig the handler/research turn will use. Closes
   //    over the bootstrapped identity (this agent signs the bearer tokens
@@ -231,7 +209,7 @@ async function main(): Promise<void> {
       motebitId,
       deviceId: "research-service",
       privateKey,
-      publicKey: fromHex(publicKeyHex),
+      publicKey,
       prompt,
       taskId,
       submittedAt,
@@ -257,7 +235,6 @@ async function main(): Promise<void> {
     publicKeyHex,
     identityFileContent: identityContent,
     embedText,
-    verifySignedToken,
     handleAgentTask,
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,
