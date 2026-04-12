@@ -30,6 +30,8 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "check-deps": "npx tsx scripts/check-deps.ts",
     "check-unused": "knip",
+    "check-specs": "npx tsx scripts/check-spec-references.ts",
+    "check-memory": "npx tsx scripts/check-memory-freshness.ts",
     "clean": "turbo run clean",
     "changeset": "changeset",
     "version-packages": "changeset version",

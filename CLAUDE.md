@@ -114,6 +114,8 @@ These are not suggestions. They are the architectural invariants that make the m
 
 **One-pass delivery.** When a core primitive ships, implement across all surfaces in the same pass. Do not defer UI if the package boundary is stable.
 
+**Synchronization invariants are the meta-principle.** Every architectural drift the codebase has suffered has the same shape: the canonical source of truth was invisible, unenforced, or ambiguous, so sibling copies emerged and drifted independently. The codebase maintains nine invariants — protocol primitives ↔ service implementations, architectural layers ↔ dependencies, spec ↔ implementation, memory ↔ code, sibling boundaries ↔ each other, coverage thresholds ↔ measurements, capability rings ↔ surfaces, deps declarations ↔ actual use, published API ↔ consumer contract. For each, there is a canonical source, a sync owner, a when-to-check trigger, and a defense (CI gate, lint rule, script, or explicit doctrine). Never let divergence persist: if spec says X and code does Y, either fix the code or update the spec — same commit, same PR. When a new drift pattern is observed, name it and add a defense; don't just fix the instance. See `memory/architecture_synchronization_invariants.md` for the full invariant table + defense pointers.
+
 **Protocol primitives belong in packages, never inline in services.** Before writing any protocol-shaped plumbing (signing, token minting, MCP transport, receipt construction, relay task submission, crypto verification, delegation) inside a service, audit the package layer in this order:
 
 1. `@motebit/protocol` — types, algebra, deterministic math
