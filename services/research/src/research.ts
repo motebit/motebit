@@ -1,35 +1,26 @@
 /**
- * Research agent — synthesizing molecule with cryptographic citation chain.
+ * Research agent — takes a question, delegates to motebit's web-search/ and
+ * read-url/ atoms via a multi-turn Claude tool-use loop, returns a
+ * synthesized report with a signed citation chain.
  *
- * Takes a research question. Runs a multi-turn Claude tool-use loop with two
- * tools: `motebit_web_search` (delegates to motebit's web-search/) and
- * `motebit_read_url` (delegates to motebit's read-url/). Each delegation
- * goes through `@motebit/mcp-client`'s `McpClientAdapter` — the existing
- * protocol primitive that handles signed bearer token minting, the MCP
- * StreamableHTTP handshake, and **automatic capture of signed
- * ExecutionReceipts** from `motebit_task` responses.
+ * Each delegation goes through `McpClientAdapter` from `@motebit/mcp-client`,
+ * which handles bearer-token minting, the MCP StreamableHTTP handshake, and
+ * automatic capture of `ExecutionReceipt`s from `motebit_task` responses. The
+ * captured receipts accumulate into `delegation_receipts` on the top-level
+ * research receipt.
  *
- * The captured receipts are accumulated into `delegation_receipts` on the
- * research turn's top-level receipt, forming a verifiable provenance graph.
+ * The chain matters when citations are load-bearing: agent-to-agent
+ * composition, dispute evidence, regulated use (journalism, legal,
+ * compliance, academic, financial), or any consumer acting on the output
+ * without a human in the loop. In those cases, anyone with `@motebit/crypto`
+ * and the agents' public keys can verify offline that every search and
+ * fetch actually happened. For casual reading the chain is inert — the
+ * user clicks URLs directly.
  *
- * **Citations are receipts, not strings.** The chain is re-derivable offline
- * with `@motebit/crypto` alone — no relay dependency. This is the protocol
- * claim cloud-monolith research products (Perplexity Deep Research, etc.)
- * cannot make: their citations are URLs printed next to text, "trust me I
- * read this." Motebit's are signed receipts in a chain.
- *
- * **Architectural note:** The receipt-chain primitive lives in `mcp-client`
- * (see `_delegationReceipts` + `getAndResetDelegationReceipts` on
- * `McpClientAdapter`). The doctrine that "the citation IS the receipt" is
- * enforced for ANY motebit-to-motebit delegation, not just research. Future
- * molecules (fact-checkers, deep-summarizers, multi-step research) compose
- * the same primitive — they should not reinvent the transport.
- *
- * Full doctrine: the citation IS the receipt — not a label next to one. Any
- * synthesizing molecule that cites sources must return signed receipts
- * chained through `delegation_receipts`, verifiable offline with
- * `@motebit/crypto` and the atoms' public keys. Never emit citation strings
- * without receipts; never emit hashes-of-URLs without proof of fetch.
+ * The receipt-capture primitive lives in mcp-client and applies to any
+ * motebit-to-motebit delegation — not a research feature. Other composing
+ * agents (fact-checkers, deep-summarizers, chain-of-agents) use the same
+ * primitive; they should not reinvent the transport.
  */
 
 import Anthropic from "@anthropic-ai/sdk";

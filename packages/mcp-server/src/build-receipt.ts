@@ -1,22 +1,16 @@
 /**
- * `buildServiceReceipt` — canonical helper for constructing and signing an
- * `ExecutionReceipt` from inside a service's `handleAgentTask`.
+ * Canonical helper for constructing and signing an `ExecutionReceipt` from
+ * inside a service's `handleAgentTask`. Every MCP service yields a
+ * `task_result` carrying a signed receipt at the end of each turn; this is
+ * the single place receipts are built and signed.
  *
- * Every MCP service (code-review, read-url, research, summarize, web-search,
- * and any future motebit service) yields a `task_result` carrying a signed
- * `ExecutionReceipt` at the end of each `handleAgentTask` turn. Before this
- * helper existed, each service duplicated ~30 lines of receipt construction
- * + signing. The shape of the receipt is a protocol contract; duplication
- * means a new required field (trust binding, relay binding, etc.) has to be
- * updated in every service.
+ * The receipt shape is a protocol contract. Any new required field (trust
+ * binding, relay binding, additional metadata) is added here and propagates
+ * to every service automatically — services call the helper, never rebuild
+ * the receipt inline.
  *
- * This is the protocol primitive. Services call it; never rebuild inline.
- *
- * Doctrine (see CLAUDE.md "Protocol primitives belong in packages, never
- * inline in services"): when a service needs protocol-shaped plumbing —
- * signing, receipts, MCP transport, delegation — the primitive lives in a
- * shared package. If the primitive doesn't exist yet, add it to the
- * appropriate package. Never ship it inline in a service.
+ * See CLAUDE.md "Protocol primitives belong in packages, never inline in
+ * services" for the doctrine.
  */
 
 import { hash as sha256, signExecutionReceipt } from "@motebit/encryption";

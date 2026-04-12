@@ -1,16 +1,13 @@
 /**
- * Motebit Research Service
+ * Motebit Research Service — an agent that takes a research question,
+ * delegates to motebit's web-search/ and read-url/ atoms via the standard
+ * task-submission protocol, accumulates their signed `ExecutionReceipt`s,
+ * and emits a top-level receipt whose `delegation_receipts` field is the
+ * signed citation chain.
  *
- * The first **molecule** in the marketplace: an agent that takes a research
- * question, delegates to motebit's web-search/ and read-url/ atoms via the
- * standard task-submission protocol, accumulates their signed
- * ExecutionReceipts, and emits a top-level receipt whose
- * `delegation_receipts` field IS the verifiable citation chain.
- *
- * Anyone with @motebit/crypto and the relevant public keys can re-derive the
- * provenance graph offline — no relay dependency.
- *
- * Doctrine: the citation IS the receipt — not a label next to one.
+ * Synthesis logic and citation-chain doctrine live in `research.ts`. This
+ * file is the boot wiring: identity bootstrap, motebit.md generation,
+ * tool registration, runtime init, handleAgentTask handler.
  */
 
 import * as fs from "node:fs";
