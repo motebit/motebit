@@ -886,6 +886,111 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     return c.json({ ok: true });
   });
 
+  // PATCH /api/v1/agents/:motebitId/sweep-config — update auto-sweep config
+  //
+  // Lets a motebit configure when its relay virtual account balance auto-sweeps
+  // to its sovereign Solana wallet. Without this, the UI readout ("auto-sweep
+  // above $X → your sovereign wallet") is decorative — threshold can only be
+  // set at register time.
+  //
+  // PATCH semantics: explicit null clears the field; undefined preserves it.
+  // Authn: the caller's signed token must identify the same motebit_id as the
+  // path param, OR the caller holds the master token (admin override).
+  //
+  // Validation mirrors the register endpoint so the two paths can't drift:
+  // sweep_threshold is a non-negative integer in micro-units; settlement_address
+  // is 32-44 base58 chars (Solana format).
+  app.patch("/api/v1/agents/:motebitId/sweep-config", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+
+    // Authn: agent edits own config, or master token edits any
+    if (callerMotebitId && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, {
+        message: "Caller can only edit its own sweep config",
+      });
+    }
+
+    const body = await c.req.json<{
+      sweep_threshold?: number | null;
+      settlement_address?: string | null;
+    }>();
+
+    // Check the motebit exists. PATCH on a non-existent agent is 404, not
+    // insert-or-update — we don't want PATCH to side-effect a register.
+    const existing = moteDb.db
+      .prepare("SELECT motebit_id FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { motebit_id: string } | undefined;
+    if (!existing) {
+      throw new HTTPException(404, { message: "Agent not registered" });
+    }
+
+    // Validate sweep_threshold: null clears; non-negative integer micro-units
+    // otherwise. Match register validation exactly.
+    const hasThreshold = Object.prototype.hasOwnProperty.call(body, "sweep_threshold");
+    if (hasThreshold && body.sweep_threshold !== null) {
+      if (
+        typeof body.sweep_threshold !== "number" ||
+        !Number.isInteger(body.sweep_threshold) ||
+        body.sweep_threshold < 0
+      ) {
+        throw new HTTPException(400, {
+          message: "Invalid sweep_threshold: must be a non-negative integer (micro-units)",
+        });
+      }
+    }
+
+    // Validate settlement_address: null clears; 32-44 base58 chars otherwise.
+    const hasAddress = Object.prototype.hasOwnProperty.call(body, "settlement_address");
+    if (hasAddress && body.settlement_address !== null) {
+      if (
+        typeof body.settlement_address !== "string" ||
+        !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(body.settlement_address)
+      ) {
+        throw new HTTPException(400, {
+          message:
+            "Invalid settlement_address: must be a valid Solana address (32-44 chars base58)",
+        });
+      }
+    }
+
+    // Build SET clause with only provided fields. Undefined = preserve.
+    const sets: string[] = [];
+    const vals: Array<number | string | null> = [];
+    if (hasThreshold) {
+      sets.push("sweep_threshold = ?");
+      vals.push(body.sweep_threshold ?? null);
+    }
+    if (hasAddress) {
+      sets.push("settlement_address = ?");
+      vals.push(body.settlement_address ?? null);
+    }
+
+    // Empty PATCH is a no-op — return current state, don't error. Matches the
+    // idempotency spirit of PATCH with an empty body.
+    if (sets.length > 0) {
+      vals.push(motebitId);
+      moteDb.db
+        .prepare(`UPDATE agent_registry SET ${sets.join(", ")} WHERE motebit_id = ?`)
+        .run(...vals);
+    }
+
+    const updated = moteDb.db
+      .prepare(
+        "SELECT sweep_threshold, settlement_address FROM agent_registry WHERE motebit_id = ?",
+      )
+      .get(motebitId) as {
+      sweep_threshold: number | null;
+      settlement_address: string | null;
+    };
+
+    return c.json({
+      motebit_id: motebitId,
+      sweep_threshold: updated.sweep_threshold,
+      settlement_address: updated.settlement_address,
+    });
+  });
+
   // GET /api/v1/agents/discover — find agents (with optional federation forwarding)
   app.get("/api/v1/agents/discover", async (c) => {
     const capability = c.req.query("capability");

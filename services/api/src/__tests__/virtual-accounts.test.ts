@@ -213,6 +213,141 @@ describe("Virtual Accounts", () => {
     expect(balance.settlement_address).toBeNull();
   });
 
+  // Sweep-config editing — PATCH /api/v1/agents/:motebitId/sweep-config.
+  // Without these, the balance readout ships without a way to configure it,
+  // so the feature ships half-built.
+  describe("sweep-config PATCH", () => {
+    const VALID_ADDRESS = "So11111111111111111111111111111111111111112";
+    const OTHER_ADDRESS = "DSwpgjMvXhtGn6BsbqmacdBPA7DSxoUeuew7gvA5Qenk";
+
+    async function registerSimple(motebitId: string): Promise<void> {
+      await relay.app.request("/api/v1/agents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify({
+          motebit_id: motebitId,
+          endpoint_url: "http://localhost:9999/mcp",
+          capabilities: ["test"],
+        }),
+      });
+    }
+
+    async function patchSweep(motebitId: string, body: Record<string, unknown>): Promise<Response> {
+      return relay.app.request(`/api/v1/agents/${motebitId}/sweep-config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify(body),
+      });
+    }
+
+    it("master token sets threshold and address on existing agent", async () => {
+      const kp = await generateKeypair();
+      const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(kp.publicKey));
+      await registerSimple(motebitId);
+
+      const res = await patchSweep(motebitId, {
+        sweep_threshold: 25_000_000,
+        settlement_address: VALID_ADDRESS,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        sweep_threshold: number | null;
+        settlement_address: string | null;
+      };
+      expect(body.sweep_threshold).toBe(25_000_000);
+      expect(body.settlement_address).toBe(VALID_ADDRESS);
+    });
+
+    it("null threshold clears the field; address preserved", async () => {
+      const kp = await generateKeypair();
+      const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(kp.publicKey));
+      await registerSimple(motebitId);
+      await patchSweep(motebitId, {
+        sweep_threshold: 50_000_000,
+        settlement_address: VALID_ADDRESS,
+      });
+
+      const res = await patchSweep(motebitId, { sweep_threshold: null });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        sweep_threshold: number | null;
+        settlement_address: string | null;
+      };
+      expect(body.sweep_threshold).toBeNull();
+      // Address survives — undefined ≠ null in PATCH semantics
+      expect(body.settlement_address).toBe(VALID_ADDRESS);
+    });
+
+    it("updating only address preserves existing threshold", async () => {
+      const kp = await generateKeypair();
+      const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(kp.publicKey));
+      await registerSimple(motebitId);
+      await patchSweep(motebitId, {
+        sweep_threshold: 50_000_000,
+        settlement_address: VALID_ADDRESS,
+      });
+
+      const res = await patchSweep(motebitId, { settlement_address: OTHER_ADDRESS });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        sweep_threshold: number | null;
+        settlement_address: string | null;
+      };
+      expect(body.sweep_threshold).toBe(50_000_000);
+      expect(body.settlement_address).toBe(OTHER_ADDRESS);
+    });
+
+    it("rejects negative threshold", async () => {
+      const kp = await generateKeypair();
+      const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(kp.publicKey));
+      await registerSimple(motebitId);
+      const res = await patchSweep(motebitId, { sweep_threshold: -1 });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects non-integer threshold", async () => {
+      const kp = await generateKeypair();
+      const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(kp.publicKey));
+      await registerSimple(motebitId);
+      const res = await patchSweep(motebitId, { sweep_threshold: 1.5 });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects malformed settlement_address", async () => {
+      const kp = await generateKeypair();
+      const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(kp.publicKey));
+      await registerSimple(motebitId);
+      // Contains lowercase 'l' — excluded from base58
+      const res = await patchSweep(motebitId, {
+        settlement_address: "Wallet11111111111111111111111111111111111111",
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 404 when agent not registered", async () => {
+      const res = await patchSweep("never-registered-motebit", { sweep_threshold: 1_000_000 });
+      expect(res.status).toBe(404);
+    });
+
+    it("empty body is a no-op and returns current state", async () => {
+      const kp = await generateKeypair();
+      const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(kp.publicKey));
+      await registerSimple(motebitId);
+      await patchSweep(motebitId, {
+        sweep_threshold: 10_000_000,
+        settlement_address: VALID_ADDRESS,
+      });
+      const res = await patchSweep(motebitId, {});
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        sweep_threshold: number | null;
+        settlement_address: string | null;
+      };
+      expect(body.sweep_threshold).toBe(10_000_000);
+      expect(body.settlement_address).toBe(VALID_ADDRESS);
+    });
+  });
+
   it("negative deposit rejected", async () => {
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));

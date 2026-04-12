@@ -646,14 +646,151 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
         operatingRow.appendChild(fundOpLink);
         balancesSection.appendChild(operatingRow);
 
-        // --- Sweep readout ---
-        // One line teaching the relationship. Absent when not configured.
-        if (balanceData.sweep_threshold != null && balanceData.settlement_address != null) {
-          const sweepLine = document.createElement("div");
-          sweepLine.style.cssText =
-            "font-size:11px;color:var(--text-ghost);padding:4px 0 8px;font-style:italic;";
-          sweepLine.textContent = `Auto-sweep above $${balanceData.sweep_threshold.toFixed(2)} → your sovereign wallet`;
-          balancesSection.appendChild(sweepLine);
+        // --- Sweep configuration ---
+        //
+        // Three states:
+        //   (a) threshold + address set → readout with edit + disable affordances
+        //   (b) no threshold, address known → "Set auto-sweep threshold" CTA
+        //   (c) no address available (no runtime wallet) → omit entirely
+        //
+        // The inline edit pattern keeps this calm — no modal, no confirm
+        // dialog. Commits on Enter or Save click; reverts on Escape or Cancel.
+        // On first-time enablement, default the destination to the motebit's
+        // sovereign Solana address (the identity key's base58 form) — matches
+        // the sovereign-exit thesis: the default destination is your own
+        // wallet, not some relay-chosen address.
+        const effectiveAddress = balanceData.settlement_address ?? sovereignAddress;
+        if (effectiveAddress) {
+          const sweepBlock = document.createElement("div");
+          sweepBlock.style.cssText = "padding:4px 0 8px;";
+          balancesSection.appendChild(sweepBlock);
+
+          const renderSweep = (threshold: number | null, address: string): void => {
+            sweepBlock.innerHTML = "";
+            const line = document.createElement("div");
+            line.style.cssText =
+              "display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-ghost);";
+
+            if (threshold != null) {
+              // State (a): configured — readout + edit/disable
+              const txt = document.createElement("span");
+              txt.style.cssText = "font-style:italic;flex:1;";
+              txt.textContent = `Auto-sweep above $${threshold.toFixed(2)} → your sovereign wallet`;
+              line.appendChild(txt);
+
+              const editBtn = document.createElement("button");
+              editBtn.className = "btn btn-small btn-ghost";
+              editBtn.textContent = "edit";
+              editBtn.style.cssText = "font-size:10px;padding:2px 6px;";
+              editBtn.addEventListener("click", () => openEditor(threshold, address));
+              line.appendChild(editBtn);
+
+              const disableBtn = document.createElement("button");
+              disableBtn.className = "btn btn-small btn-ghost";
+              disableBtn.textContent = "disable";
+              disableBtn.style.cssText = "font-size:10px;padding:2px 6px;";
+              disableBtn.addEventListener("click", () => {
+                void commitSweep(null, undefined);
+              });
+              line.appendChild(disableBtn);
+            } else {
+              // State (b): not configured — CTA
+              const cta = document.createElement("button");
+              cta.className = "btn btn-small btn-ghost";
+              cta.style.cssText = "font-size:11px;font-style:italic;";
+              cta.textContent = "+ Set auto-sweep threshold";
+              cta.addEventListener("click", () => openEditor(null, address));
+              line.appendChild(cta);
+            }
+
+            sweepBlock.appendChild(line);
+          };
+
+          const openEditor = (currentThreshold: number | null, address: string): void => {
+            sweepBlock.innerHTML = "";
+            const editor = document.createElement("div");
+            editor.style.cssText =
+              "display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-ghost);";
+            editor.innerHTML = `
+              <span style="font-style:italic;">Auto-sweep above $</span>
+            `;
+            const input = document.createElement("input");
+            input.type = "number";
+            input.min = "0";
+            input.step = "0.01";
+            input.style.cssText =
+              "width:64px;padding:2px 6px;border:1px solid var(--border-subtle,rgba(255,255,255,0.15));border-radius:3px;background:transparent;color:var(--text-heading);font-size:11px;";
+            input.value = currentThreshold != null ? String(currentThreshold) : "";
+            input.placeholder = "50";
+            editor.appendChild(input);
+            const trailing = document.createElement("span");
+            trailing.style.cssText = "font-style:italic;flex:1;";
+            trailing.textContent = " → your sovereign wallet";
+            editor.appendChild(trailing);
+
+            const saveBtn = document.createElement("button");
+            saveBtn.className = "btn btn-small";
+            saveBtn.textContent = "save";
+            saveBtn.style.cssText = "font-size:10px;padding:2px 6px;";
+            editor.appendChild(saveBtn);
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.className = "btn btn-small btn-ghost";
+            cancelBtn.textContent = "cancel";
+            cancelBtn.style.cssText = "font-size:10px;padding:2px 6px;";
+            editor.appendChild(cancelBtn);
+
+            sweepBlock.appendChild(editor);
+            input.focus();
+            input.select();
+
+            const cancel = (): void => renderSweep(currentThreshold, address);
+            const save = (): void => {
+              const dollars = Number(input.value);
+              if (!Number.isFinite(dollars) || dollars < 0) {
+                ctx.showToast("Threshold must be a non-negative number");
+                return;
+              }
+              // Pass the address if this is a first-time enablement so the
+              // relay doesn't end up with a threshold but no destination.
+              const needsAddress = balanceData.settlement_address !== address;
+              void commitSweep(Math.round(dollars * 1_000_000), needsAddress ? address : undefined);
+            };
+
+            saveBtn.addEventListener("click", save);
+            cancelBtn.addEventListener("click", cancel);
+            input.addEventListener("keydown", (e) => {
+              if (e.key === "Enter") save();
+              else if (e.key === "Escape") cancel();
+            });
+          };
+
+          const commitSweep = async (
+            thresholdMicro: number | null,
+            addressOverride: string | undefined,
+          ): Promise<void> => {
+            try {
+              const body: Record<string, unknown> = { sweep_threshold: thresholdMicro };
+              if (addressOverride !== undefined) body.settlement_address = addressOverride;
+              const updated = (await relayFetch(
+                ctx,
+                `/api/v1/agents/${ctx.app.motebitId}/sweep-config`,
+                { method: "PATCH", body },
+              )) as { sweep_threshold: number | null; settlement_address: string | null };
+              // Relay returns threshold in micro-units; convert for render.
+              const dollars =
+                updated.sweep_threshold != null ? updated.sweep_threshold / 1_000_000 : null;
+              balanceData.sweep_threshold = dollars;
+              balanceData.settlement_address = updated.settlement_address;
+              renderSweep(dollars, updated.settlement_address ?? effectiveAddress);
+            } catch (err) {
+              ctx.showToast(
+                `Sweep update failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          };
+
+          renderSweep(balanceData.sweep_threshold, effectiveAddress);
         }
       }
 

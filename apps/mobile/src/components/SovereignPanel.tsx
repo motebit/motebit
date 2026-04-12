@@ -3,11 +3,13 @@ import {
   Modal,
   View,
   Text,
+  TextInput,
   FlatList,
   TouchableOpacity,
   StyleSheet,
   Platform,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
@@ -126,6 +128,10 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
   // async (RPC call). Null address = no wallet configured — render as em dash.
   const [sovereignAddress, setSovereignAddress] = useState<string | null>(null);
   const [sovereignBalanceUsdc, setSovereignBalanceUsdc] = useState<number | null>(null);
+  // Sweep-config editor: when editing, holds the in-flight dollar string.
+  // Null = not editing (show readout or CTA). The commit handler writes back
+  // to accountBalance so the readout re-renders without a full refresh.
+  const [sweepEditValue, setSweepEditValue] = useState<string | null>(null);
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
   const [successionChain, setSuccessionChain] = useState<SuccessionRecord[]>([]);
@@ -265,6 +271,50 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
       void refresh();
     }
   }, [visible, refresh]);
+
+  // Sweep-config commit handler — PATCHes the new threshold (and optionally
+  // a default settlement_address for first-time enablement, matching the web
+  // pattern: the default destination is the motebit's sovereign wallet, per
+  // the sovereign-exit thesis). On success, mutates accountBalance so the
+  // readout re-renders without a full refresh().
+  const commitSweep = useCallback(
+    async (thresholdMicro: number | null, addressOverride: string | undefined): Promise<void> => {
+      const syncUrl = await app.getSyncUrl();
+      const motebitId = app.motebitId;
+      if (!syncUrl || !motebitId) {
+        Alert.alert("Sweep update failed", "No relay configured");
+        return;
+      }
+      try {
+        const body: Record<string, unknown> = { sweep_threshold: thresholdMicro };
+        if (addressOverride !== undefined) body.settlement_address = addressOverride;
+        const res = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/sweep-config`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`${res.status}: ${text}`);
+        }
+        const updated = (await res.json()) as {
+          sweep_threshold: number | null;
+          settlement_address: string | null;
+        };
+        const dollars =
+          updated.sweep_threshold != null ? updated.sweep_threshold / 1_000_000 : null;
+        setAccountBalance((prev) =>
+          prev
+            ? { ...prev, sweep_threshold: dollars, settlement_address: updated.settlement_address }
+            : prev,
+        );
+        setSweepEditValue(null);
+      } catch (err) {
+        Alert.alert("Sweep update failed", err instanceof Error ? err.message : String(err));
+      }
+    },
+    [app],
+  );
 
   // Count by type
   const typeCounts: Record<string, number> = {};
@@ -487,13 +537,86 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
                         ? ` · on hold ${accountBalance.dispute_window_hold.toFixed(2)}`
                         : ""}
                     </Text>
-                    {accountBalance.sweep_threshold != null &&
-                      accountBalance.settlement_address != null && (
-                        <Text style={styles.sweepReadout}>
-                          Auto-sweep above ${accountBalance.sweep_threshold.toFixed(2)} → your
-                          sovereign wallet
-                        </Text>
-                      )}
+                    {/* Sweep-config inline editor. Three states mirror web:
+                        (a) configured → readout + edit/disable buttons
+                        (b) unset but address known → "Set auto-sweep threshold" CTA
+                        (c) no destination wallet at all → omit
+                        First-time enablement defaults the destination to the
+                        motebit's sovereign Solana address. */}
+                    {(() => {
+                      const effectiveAddress =
+                        accountBalance.settlement_address ?? sovereignAddress;
+                      if (!effectiveAddress) return null;
+                      const thresholdDollars = accountBalance.sweep_threshold;
+                      const editing = sweepEditValue !== null;
+
+                      if (editing) {
+                        return (
+                          <View style={styles.sweepEditorRow}>
+                            <Text style={styles.sweepEditorPrefix}>Auto-sweep above $</Text>
+                            <TextInput
+                              style={styles.sweepEditorInput}
+                              value={sweepEditValue ?? ""}
+                              onChangeText={setSweepEditValue}
+                              keyboardType="decimal-pad"
+                              placeholder="50"
+                              autoFocus
+                              onSubmitEditing={() => {
+                                const n = Number(sweepEditValue);
+                                if (!Number.isFinite(n) || n < 0) {
+                                  Alert.alert("Invalid threshold", "Must be non-negative number");
+                                  return;
+                                }
+                                const needsAddress =
+                                  accountBalance.settlement_address !== effectiveAddress;
+                                void commitSweep(
+                                  Math.round(n * 1_000_000),
+                                  needsAddress ? effectiveAddress : undefined,
+                                );
+                              }}
+                            />
+                            <TouchableOpacity
+                              onPress={() => setSweepEditValue(null)}
+                              style={styles.sweepEditorCancel}
+                            >
+                              <Text style={styles.sweepEditorCancelText}>cancel</Text>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      }
+
+                      if (thresholdDollars != null) {
+                        return (
+                          <View style={styles.sweepReadoutRow}>
+                            <Text style={styles.sweepReadout}>
+                              Auto-sweep above ${thresholdDollars.toFixed(2)} → your sovereign
+                              wallet
+                            </Text>
+                            <TouchableOpacity
+                              onPress={() => setSweepEditValue(String(thresholdDollars))}
+                              style={styles.sweepActionBtn}
+                            >
+                              <Text style={styles.sweepActionText}>edit</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              onPress={() => void commitSweep(null, undefined)}
+                              style={styles.sweepActionBtn}
+                            >
+                              <Text style={styles.sweepActionText}>disable</Text>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      }
+
+                      return (
+                        <TouchableOpacity
+                          onPress={() => setSweepEditValue("")}
+                          style={styles.sweepCta}
+                        >
+                          <Text style={styles.sweepCtaText}>+ Set auto-sweep threshold</Text>
+                        </TouchableOpacity>
+                      );
+                    })()}
                     {accountBalance.transactions.length > 0 && (
                       <>
                         <Text style={[styles.sectionTitle, { marginTop: 8, marginBottom: 4 }]}>
@@ -732,6 +855,74 @@ function createStyles(c: ThemeColors) {
       fontStyle: "italic",
       marginTop: 6,
       marginBottom: 4,
+      flex: 1,
+    },
+    sweepReadoutRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginTop: 6,
+      marginBottom: 4,
+    },
+    sweepActionBtn: {
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 3,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.textMuted,
+    },
+    sweepActionText: {
+      color: c.textMuted,
+      fontSize: 10,
+    },
+    sweepCta: {
+      alignSelf: "flex-start",
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      marginTop: 6,
+      marginBottom: 4,
+      borderRadius: 3,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.textMuted,
+      borderStyle: "dashed",
+    },
+    sweepCtaText: {
+      color: c.textMuted,
+      fontSize: 10,
+      fontStyle: "italic",
+    },
+    sweepEditorRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      marginTop: 6,
+      marginBottom: 4,
+    },
+    sweepEditorPrefix: {
+      color: c.textMuted,
+      fontSize: 10,
+      fontStyle: "italic",
+    },
+    sweepEditorInput: {
+      width: 64,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 3,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.textMuted,
+      color: c.textPrimary,
+      fontSize: 10,
+    },
+    sweepEditorCancel: {
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 3,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.textMuted,
+    },
+    sweepEditorCancelText: {
+      color: c.textMuted,
+      fontSize: 10,
     },
     budgetSection: {
       marginBottom: 8,

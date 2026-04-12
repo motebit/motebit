@@ -598,13 +598,154 @@ export function initSovereign(ctx: DesktopContext): SovereignAPI {
         `;
         budgetSummary.appendChild(opRow);
 
-        // Sweep readout — the one line that teaches the relationship.
-        if (balanceData.sweep_threshold != null && balanceData.settlement_address != null) {
-          const sweepLine = document.createElement("div");
-          sweepLine.style.cssText =
-            "font-size:11px;color:var(--text-ghost);padding:6px 0 8px;font-style:italic;";
-          sweepLine.textContent = `Auto-sweep above $${balanceData.sweep_threshold.toFixed(2)} \u2192 your sovereign wallet`;
-          budgetSummary.appendChild(sweepLine);
+        // --- Sweep configuration ---
+        // Inline edit pattern mirroring apps/web/src/ui/sovereign-panels.ts.
+        // Three states: configured (readout + edit/disable), not configured
+        // (CTA), no destination (omit). On first-time enable, default the
+        // destination to the motebit's sovereign Solana address — the
+        // sovereign-exit thesis means the default target is your own wallet.
+        const effectiveAddress = balanceData.settlement_address ?? sovereignAddress;
+        if (effectiveAddress) {
+          const sweepBlock = document.createElement("div");
+          sweepBlock.style.cssText = "padding:6px 0 8px;";
+          budgetSummary.appendChild(sweepBlock);
+
+          const renderSweep = (threshold: number | null, address: string): void => {
+            sweepBlock.innerHTML = "";
+            const line = document.createElement("div");
+            line.style.cssText =
+              "display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-ghost);";
+
+            if (threshold != null) {
+              const txt = document.createElement("span");
+              txt.style.cssText = "font-style:italic;flex:1;";
+              txt.textContent = `Auto-sweep above $${threshold.toFixed(2)} \u2192 your sovereign wallet`;
+              line.appendChild(txt);
+
+              const editBtn = document.createElement("button");
+              editBtn.className = "btn-ghost";
+              editBtn.textContent = "edit";
+              editBtn.style.cssText =
+                "font-size:10px;padding:2px 6px;background:transparent;border:1px solid var(--border-light, rgba(255,255,255,0.12));color:var(--text-ghost);border-radius:3px;cursor:pointer;";
+              editBtn.addEventListener("click", () => openEditor(threshold, address));
+              line.appendChild(editBtn);
+
+              const disableBtn = document.createElement("button");
+              disableBtn.className = "btn-ghost";
+              disableBtn.textContent = "disable";
+              disableBtn.style.cssText = editBtn.style.cssText;
+              disableBtn.addEventListener("click", () => {
+                void commitSweep(null, undefined);
+              });
+              line.appendChild(disableBtn);
+            } else {
+              const cta = document.createElement("button");
+              cta.style.cssText =
+                "font-size:11px;font-style:italic;padding:2px 6px;background:transparent;border:1px dashed var(--border-light, rgba(255,255,255,0.12));color:var(--text-ghost);border-radius:3px;cursor:pointer;";
+              cta.textContent = "+ Set auto-sweep threshold";
+              cta.addEventListener("click", () => openEditor(null, address));
+              line.appendChild(cta);
+            }
+
+            sweepBlock.appendChild(line);
+          };
+
+          const openEditor = (currentThreshold: number | null, address: string): void => {
+            sweepBlock.innerHTML = "";
+            const editor = document.createElement("div");
+            editor.style.cssText =
+              "display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-ghost);";
+            const prefix = document.createElement("span");
+            prefix.style.cssText = "font-style:italic;";
+            prefix.textContent = "Auto-sweep above $";
+            editor.appendChild(prefix);
+
+            const input = document.createElement("input");
+            input.type = "number";
+            input.min = "0";
+            input.step = "0.01";
+            input.style.cssText =
+              "width:64px;padding:2px 6px;border:1px solid var(--border-light, rgba(255,255,255,0.15));border-radius:3px;background:transparent;color:var(--text-heading);font-size:11px;";
+            input.value = currentThreshold != null ? String(currentThreshold) : "";
+            input.placeholder = "50";
+            editor.appendChild(input);
+
+            const trailing = document.createElement("span");
+            trailing.style.cssText = "font-style:italic;flex:1;";
+            trailing.textContent = " \u2192 your sovereign wallet";
+            editor.appendChild(trailing);
+
+            const saveBtn = document.createElement("button");
+            saveBtn.textContent = "save";
+            saveBtn.style.cssText =
+              "font-size:10px;padding:2px 6px;background:var(--accent, #4ade80);border:none;color:#000;border-radius:3px;cursor:pointer;";
+            editor.appendChild(saveBtn);
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.textContent = "cancel";
+            cancelBtn.style.cssText =
+              "font-size:10px;padding:2px 6px;background:transparent;border:1px solid var(--border-light, rgba(255,255,255,0.12));color:var(--text-ghost);border-radius:3px;cursor:pointer;";
+            editor.appendChild(cancelBtn);
+
+            sweepBlock.appendChild(editor);
+            input.focus();
+            input.select();
+
+            const cancel = (): void => renderSweep(currentThreshold, address);
+            const save = (): void => {
+              const dollars = Number(input.value);
+              if (!Number.isFinite(dollars) || dollars < 0) {
+                ctx.showToast("Threshold must be a non-negative number");
+                return;
+              }
+              const needsAddress = balanceData.settlement_address !== address;
+              void commitSweep(Math.round(dollars * 1_000_000), needsAddress ? address : undefined);
+            };
+
+            saveBtn.addEventListener("click", save);
+            cancelBtn.addEventListener("click", cancel);
+            input.addEventListener("keydown", (e) => {
+              if (e.key === "Enter") save();
+              else if (e.key === "Escape") cancel();
+            });
+          };
+
+          const commitSweep = async (
+            thresholdMicro: number | null,
+            addressOverride: string | undefined,
+          ): Promise<void> => {
+            try {
+              const body: Record<string, unknown> = { sweep_threshold: thresholdMicro };
+              if (addressOverride !== undefined) body.settlement_address = addressOverride;
+              const res = await fetch(
+                `${relay.syncUrl}/api/v1/agents/${relay.motebitId}/sweep-config`,
+                {
+                  method: "PATCH",
+                  headers: { ...relay.headers, "Content-Type": "application/json" },
+                  body: JSON.stringify(body),
+                },
+              );
+              if (!res.ok) {
+                const text = await res.text().catch(() => "");
+                throw new Error(`${res.status}: ${text}`);
+              }
+              const updated = (await res.json()) as {
+                sweep_threshold: number | null;
+                settlement_address: string | null;
+              };
+              const dollars =
+                updated.sweep_threshold != null ? updated.sweep_threshold / 1_000_000 : null;
+              balanceData.sweep_threshold = dollars;
+              balanceData.settlement_address = updated.settlement_address;
+              renderSweep(dollars, updated.settlement_address ?? effectiveAddress);
+            } catch (err) {
+              ctx.showToast(
+                `Sweep update failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          };
+
+          renderSweep(balanceData.sweep_threshold ?? null, effectiveAddress);
         }
 
         // Recent transactions (last 5)
