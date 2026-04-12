@@ -38,7 +38,8 @@ import { InMemoryToolRegistry, readUrlDefinition, createReadUrlHandler } from "@
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate, parseRiskLevel } from "@motebit/identity-file";
-import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/encryption";
+import { verifySignedToken } from "@motebit/encryption";
+import { buildServiceReceipt } from "@motebit/mcp-server";
 import { embedText } from "@motebit/memory-graph";
 import { loadConfig, fromHex } from "./helpers.js";
 
@@ -156,32 +157,21 @@ async function main(): Promise<void> {
         ? result.data
         : JSON.stringify(result.data ?? null)
       : (result.error ?? "error");
-    const enc = new TextEncoder();
-    const promptHash = await sha256(enc.encode(prompt));
-    const resultHash = await sha256(enc.encode(resultStr));
-
-    const receipt: Record<string, unknown> = {
-      task_id: taskId,
-      motebit_id: motebitId,
-      device_id: deviceId,
-      submitted_at: submittedAt,
-      completed_at: completedAt,
-      status: result.ok ? ("completed" as const) : ("failed" as const),
+    const signed = await buildServiceReceipt({
+      motebitId,
+      deviceId,
+      privateKey: privateKeyBytes,
+      publicKey: fromHex(publicKeyHex),
+      prompt,
+      taskId,
+      submittedAt,
+      completedAt,
       result: resultStr,
-      tools_used: ["read_url"],
-      memories_formed: 0,
-      prompt_hash: promptHash,
-      result_hash: resultHash,
-      ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
-      // Delegated scope — must be included before signing so it's in the canonical form
-      ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
-    };
-
-    const signed = await signExecutionReceipt(
-      receipt as Parameters<typeof signExecutionReceipt>[0],
-      privateKeyBytes,
-      fromHex(publicKeyHex),
-    );
+      ok: result.ok,
+      toolsUsed: ["read_url"],
+      relayTaskId: options?.relayTaskId,
+      delegatedScope: options?.delegatedScope,
+    });
     log(`receipt=${signed.signature.slice(0, 12)}… url="${prompt.slice(0, 60)}"`);
     yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
   };

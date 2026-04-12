@@ -27,6 +27,8 @@ export { StaticTokenVerifier };
 
 // Service scaffold — eliminates boilerplate for service motebits
 export { wireServerDeps, startServiceServer } from "./service.js";
+export { buildServiceReceipt } from "./build-receipt.js";
+export type { BuildServiceReceiptInput } from "./build-receipt.js";
 export type {
   ServiceRuntime,
   ServiceToolRegistry,

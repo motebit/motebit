@@ -21,7 +21,8 @@ import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate } from "@motebit/identity-file";
-import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/encryption";
+import { verifySignedToken } from "@motebit/encryption";
+import { buildServiceReceipt } from "@motebit/mcp-server";
 import { embedText } from "@motebit/memory-graph";
 import { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.js";
 
@@ -186,31 +187,20 @@ async function main(): Promise<void> {
         : JSON.stringify(result.data ?? null)
       : (result.error ?? "error");
 
-    const enc = new TextEncoder();
-    const promptHash = await sha256(enc.encode(prompt));
-    const resultHash = await sha256(enc.encode(resultStr));
-
-    const receiptBody: Record<string, unknown> = {
-      task_id: taskId,
-      motebit_id: motebitId,
-      device_id: "summarize-service",
-      submitted_at: submittedAt,
-      completed_at: completedAt,
-      status: result.ok ? "completed" : "failed",
-      result: resultStr,
-      tools_used: ["summarize_search"],
-      memories_formed: 0,
-      prompt_hash: promptHash,
-      result_hash: resultHash,
-    };
-    if (delegationReceipts.length > 0) {
-      receiptBody["delegation_receipts"] = delegationReceipts;
-    }
-
-    const signed = await signExecutionReceipt(
-      receiptBody as Omit<ExecutionReceipt, "signature">,
+    const signed = await buildServiceReceipt({
+      motebitId,
+      deviceId: "summarize-service",
       privateKey,
-    );
+      publicKey: fromHex(publicKeyHex),
+      prompt,
+      taskId,
+      submittedAt,
+      completedAt,
+      result: resultStr,
+      ok: result.ok,
+      toolsUsed: ["summarize_search"],
+      delegationReceipts,
+    });
     log(`receipt=${signed.signature.slice(0, 12)}… query="${prompt.slice(0, 60)}"`);
     yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
   };

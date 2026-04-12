@@ -1723,6 +1723,9 @@ importers:
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
+      '@motebit/mcp-client':
+        specifier: workspace:*
+        version: link:../../packages/mcp-client
       '@motebit/mcp-server':
         specifier: workspace:*
         version: link:../../packages/mcp-server

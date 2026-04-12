@@ -19,7 +19,8 @@ import type { ToolDefinition, ToolHandler } from "@motebit/tools";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate, parseRiskLevel } from "@motebit/identity-file";
-import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/encryption";
+import { verifySignedToken } from "@motebit/encryption";
+import { buildServiceReceipt } from "@motebit/mcp-server";
 import { embedText } from "@motebit/memory-graph";
 import { loadConfig, fromHex } from "./helpers.js";
 import { parsePrReference, fetchPullRequest } from "./github.js";
@@ -245,31 +246,20 @@ async function main(): Promise<void> {
     }
 
     const resultStr = result.ok ? (result.data ?? "") : (result.error ?? "error");
-    const enc = new TextEncoder();
-    const promptHash = await sha256(enc.encode(prompt));
-    const resultHash = await sha256(enc.encode(resultStr));
-
-    const receipt: Record<string, unknown> = {
-      task_id: taskId,
-      motebit_id: motebitId,
-      device_id: "code-review-service",
-      submitted_at: submittedAt,
-      completed_at: Date.now(),
-      status: result.ok ? ("completed" as const) : ("failed" as const),
-      result: resultStr,
-      tools_used: ["review_pr"],
-      memories_formed: 0,
-      prompt_hash: promptHash,
-      result_hash: resultHash,
-      ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
-      ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
-    };
-
-    const signed = await signExecutionReceipt(
-      receipt as Parameters<typeof signExecutionReceipt>[0],
+    const signed = await buildServiceReceipt({
+      motebitId,
+      deviceId: "code-review-service",
       privateKey,
-      fromHex(publicKeyHex),
-    );
+      publicKey: fromHex(publicKeyHex),
+      prompt,
+      taskId,
+      submittedAt,
+      result: resultStr,
+      ok: result.ok,
+      toolsUsed: ["review_pr"],
+      relayTaskId: options?.relayTaskId,
+      delegatedScope: options?.delegatedScope,
+    });
     log(
       `receipt=${signed.signature.slice(0, 12)}… pr=${prRef ? `${prRef.owner}/${prRef.repo}#${prRef.number}` : "none"}`,
     );

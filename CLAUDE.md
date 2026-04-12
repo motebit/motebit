@@ -114,6 +114,19 @@ These are not suggestions. They are the architectural invariants that make the m
 
 **One-pass delivery.** When a core primitive ships, implement across all surfaces in the same pass. Do not defer UI if the package boundary is stable.
 
+**Protocol primitives belong in packages, never inline in services.** Before writing any protocol-shaped plumbing (signing, token minting, MCP transport, receipt construction, relay task submission, crypto verification, delegation) inside a service, audit the package layer in this order:
+
+1. `@motebit/protocol` — types, algebra, deterministic math
+2. `@motebit/crypto` — signing/verifying artifacts (sign, verify, succession, credential anchor)
+3. `@motebit/encryption` — at-rest encryption, KDF, X25519, signed bearer tokens
+4. `@motebit/mcp-client` — calling another motebit as a client (`McpClientAdapter` handles bearer tokens + MCP handshake + automatic `delegation_receipts` capture)
+5. `@motebit/mcp-server` — exposing this motebit as a server, including building signed service receipts (`wireServerDeps`, `startServiceServer`, `buildServiceReceipt`)
+6. `@motebit/runtime` — agentic-loop orchestration
+7. `@motebit/core-identity` — identity bootstrap, multi-device, pairing
+8. `@motebit/identity-file` — generating/parsing/verifying motebit.md
+
+If none match, **that is the signal that a protocol primitive is missing.** Pause. Decide which package is the right home (closest existing scope). Add the primitive there with its own tests. Consume it from the service. Never ship protocol plumbing inline — it becomes "the convention" by the time the third sibling service copies it, and the real primitive gets hidden behind the copies. Smells to catch in code review: `fetch(...)` to motebit endpoints inside services, JSON-RPC method strings (`"initialize"`, `"tools/call"`) in service code, `signExecutionReceipt` called directly in service `handleAgentTask`, `canonicalJson`/`sha256` constructing protocol-shaped payloads in services.
+
 **Capability rings, not feature parity.** Ring 1 (core, identical everywhere): runtime, sdk, crypto, policy. Ring 2 (platform adapters): persistence, keyring, voice. Ring 3 (platform capabilities): MCP stdio (CLI/desktop only), 3D creature (desktop/mobile/web/spatial), daemon (CLI/desktop). The anti-pattern is shimming platform-impossible capabilities. Each surface maximizes what its platform offers.
 
 **Deletion policy.** Three classifications before removing anything flagged by tooling or review. (1) Internal workspace dependencies (`@motebit/*`): never remove from import analysis alone — they encode layer membership and protocol contracts, not just usage. Remove only when the layer contract itself changes. (2) Exports and capabilities: if it is published API, intentional vocabulary (e.g. semantic color aliases), or scaffolding for a sibling surface, preserve it. (3) Dead code: remove only when there are zero callers, it is not part of an intended API surface, it is not staged for near-term cross-surface use, and typecheck/tests pass after deletion. When uncertain, do not delete. `check-deps` (hard CI gate) governs architecture. `check-unused` (soft signal) governs external dependency hygiene. The two tools govern different domains and must not be conflated.

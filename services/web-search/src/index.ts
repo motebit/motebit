@@ -23,15 +23,12 @@ import {
   DuckDuckGoSearchProvider,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
-import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
+import { wireServerDeps, startServiceServer, buildServiceReceipt } from "@motebit/mcp-server";
+import { McpClientAdapter } from "@motebit/mcp-client";
 import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate, parseRiskLevel } from "@motebit/identity-file";
-import {
-  verifySignedToken,
-  signExecutionReceipt,
-  hash as sha256,
-  createSignedToken,
-} from "@motebit/encryption";
+import { verifySignedToken } from "@motebit/encryption";
+import type { ExecutionReceipt } from "@motebit/sdk";
 import { embedText } from "@motebit/memory-graph";
 import { loadConfig, fromHex, canonicalizeResults } from "./helpers.js";
 
@@ -45,8 +42,16 @@ function log(msg: string): void {
 }
 
 /**
- * Sub-delegate a task to another service via raw MCP StreamableHTTP.
- * Returns the parsed receipt from the remote service, or null on failure.
+ * Sub-delegate a task to another motebit service via the protocol-layer
+ * primitive — `McpClientAdapter` from `@motebit/mcp-client`. Returns the
+ * signed `ExecutionReceipt` from the remote service, or null on failure.
+ *
+ * The receipt capture happens automatically inside `McpClientAdapter` — any
+ * motebit_task call whose response is a valid signed receipt is pushed onto
+ * the adapter's `_delegationReceipts` queue, drained here via
+ * `getAndResetDelegationReceipts()`. Nothing motebit-protocol-shaped is
+ * reinvented — see `memory/feedback_protocol_primitive_blindness.md` for
+ * why this matters.
  */
 async function subDelegate(
   mcpUrl: string,
@@ -54,129 +59,69 @@ async function subDelegate(
   callerMotebitId: string,
   callerDeviceId: string,
   callerPrivateKey: Uint8Array,
-  /** Relay URL for budget allocation (optional — sub-delegates without budget if omitted). */
+  /** Relay URL for budget allocation (optional). */
   syncUrl?: string,
   /** API token for relay calls. */
   apiToken?: string,
   /** Target motebit ID for relay task submission. */
   targetMotebitId?: string,
-): Promise<Record<string, unknown> | null> {
-  try {
-    // Budget allocation: submit relay task for the sub-delegate (if relay configured)
-    let subRelayTaskId: string | undefined;
-    if (syncUrl && apiToken && targetMotebitId) {
-      try {
-        const relayHeaders: Record<string, string> = {
+): Promise<ExecutionReceipt | null> {
+  // Optional relay budget binding — best-effort, failures don't block the chain
+  let subRelayTaskId: string | undefined;
+  if (syncUrl != null && syncUrl !== "" && apiToken != null && targetMotebitId != null) {
+    try {
+      const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
+        method: "POST",
+        headers: {
           Authorization: `Bearer ${apiToken}`,
           "Content-Type": "application/json",
-        };
-        const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
-          method: "POST",
-          headers: { ...relayHeaders, "Idempotency-Key": crypto.randomUUID() },
-          body: JSON.stringify({
-            prompt,
-            submitted_by: callerMotebitId,
-            required_capabilities: ["read_url"],
-          }),
-        });
-        if (taskResp.ok) {
-          const taskBody = (await taskResp.json()) as { task_id: string };
-          subRelayTaskId = taskBody.task_id;
-          log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
-        } else {
-          log(`sub-delegation relay task failed: ${taskResp.status}`);
-        }
-      } catch (relayErr: unknown) {
-        const msg = relayErr instanceof Error ? relayErr.message : String(relayErr);
-        log(`sub-delegation relay task error: ${msg}`);
-      }
-    }
-
-    // Create signed auth token for the remote service
-    const token = await createSignedToken(
-      {
-        mid: callerMotebitId,
-        did: callerDeviceId,
-        iat: Date.now(),
-        exp: Date.now() + 5 * 60 * 1000,
-        jti: crypto.randomUUID(),
-        aud: "task:submit",
-      },
-      callerPrivateKey,
-    );
-
-    const headers = (sid?: string): Record<string, string> => ({
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      Authorization: `Bearer motebit:${token}`,
-      ...(sid ? { "Mcp-Session-Id": sid } : {}),
-    });
-
-    let sessionId: string | undefined;
-    let reqId = 0;
-
-    // Helper: send MCP request, parse response (JSON or SSE)
-    const mcpCall = async (method: string, params: unknown): Promise<unknown> => {
-      const id = ++reqId;
-      const resp = await fetch(mcpUrl, {
-        method: "POST",
-        headers: headers(sessionId),
-        body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          prompt,
+          submitted_by: callerMotebitId,
+          required_capabilities: ["read_url"],
+        }),
       });
-      const sid = resp.headers.get("mcp-session-id");
-      if (sid) sessionId = sid;
-      const ct = resp.headers.get("content-type") ?? "";
-      if (ct.includes("text/event-stream")) {
-        const text = await resp.text();
-        for (const line of text.split("\n")) {
-          if (line.startsWith("data: ")) {
-            try {
-              const parsed = JSON.parse(line.slice(6)) as { id?: number; result?: unknown };
-              if (parsed.id === id) return parsed;
-            } catch {
-              /* skip */
-            }
-          }
-        }
-        return null;
+      if (taskResp.ok) {
+        const taskBody = (await taskResp.json()) as { task_id: string };
+        subRelayTaskId = taskBody.task_id;
+        log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
+      } else {
+        log(`sub-delegation relay task failed: ${taskResp.status}`);
       }
-      if (!resp.ok) return null;
-      return resp.json();
-    };
+    } catch (relayErr: unknown) {
+      const msg = relayErr instanceof Error ? relayErr.message : String(relayErr);
+      log(`sub-delegation relay task error: ${msg}`);
+    }
+  }
 
-    // Initialize MCP session
-    const init = (await mcpCall("initialize", {
-      protocolVersion: "2025-03-26",
-      capabilities: {},
-      clientInfo: { name: "bob-subdelegation", version: "0.1.0" },
-    })) as { result?: unknown } | null;
-    if (init == null || !("result" in (init as Record<string, unknown>))) return null;
+  const adapter = new McpClientAdapter({
+    name: "read-url",
+    transport: "http",
+    url: mcpUrl,
+    motebit: true,
+    motebitType: "service",
+    callerMotebitId,
+    callerDeviceId,
+    callerPrivateKey,
+  });
 
-    // Send initialized notification
-    await fetch(mcpUrl, {
-      method: "POST",
-      headers: headers(sessionId),
-      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-    });
-
-    // Call motebit_task (with relay_task_id for budget binding if available)
-    const taskResult = (await mcpCall("tools/call", {
-      name: "motebit_task",
-      arguments: { prompt, ...(subRelayTaskId ? { relay_task_id: subRelayTaskId } : {}) },
-    })) as { result?: { content?: Array<{ type: string; text?: string }> } } | null;
-
-    if (!taskResult?.result?.content) return null;
-
-    const text = taskResult.result.content
-      .filter((c) => c.type === "text")
-      .map((c) => c.text ?? "")
-      .join("\n");
-    const cleaned = text.replace(/\n?\[motebit:[^\]]+\]\s*$/, "");
-    return JSON.parse(cleaned) as Record<string, unknown>;
+  try {
+    await adapter.connect();
+    const args: Record<string, unknown> = { prompt };
+    if (subRelayTaskId != null) args.relay_task_id = subRelayTaskId;
+    await adapter.executeTool("read-url__motebit_task", args);
+    const receipts = adapter.getAndResetDelegationReceipts();
+    return receipts[0] ?? null;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`sub-delegation failed: ${msg}`);
     return null;
+  } finally {
+    await adapter.disconnect().catch(() => {
+      /* best-effort cleanup */
+    });
   }
 }
 
@@ -313,12 +258,9 @@ async function main(): Promise<void> {
         : JSON.stringify(result.data ?? null)
       : (result.error ?? "error");
     const canonical = canonicalizeResults(resultStr);
-    const enc = new TextEncoder();
-    const promptHash = await sha256(enc.encode(prompt));
-    const resultHash = await sha256(enc.encode(canonical));
 
     // Multi-hop: sub-delegate URL reading to Charlie if configured
-    let delegationReceipts: Record<string, unknown>[] | undefined;
+    let delegationReceipts: ExecutionReceipt[] | undefined;
     if (config.delegateReadUrl && result.ok) {
       try {
         // Extract a URL to sub-delegate: from search results, or from the prompt itself
@@ -345,7 +287,7 @@ async function main(): Promise<void> {
           );
           if (charlieReceipt) {
             delegationReceipts = [charlieReceipt];
-            log(`sub-delegation receipt: ${(charlieReceipt.signature as string)?.slice(0, 12)}…`);
+            log(`sub-delegation receipt: ${charlieReceipt.signature?.slice(0, 12)}…`);
           }
         }
       } catch (subErr: unknown) {
@@ -355,31 +297,25 @@ async function main(): Promise<void> {
       }
     }
 
-    const receipt: Record<string, unknown> = {
-      task_id: taskId,
-      motebit_id: motebitId,
-      device_id: "web-search-service",
-      submitted_at: submittedAt,
-      completed_at: delegationReceipts ? Date.now() : searchCompletedAt,
-      status: result.ok ? ("completed" as const) : ("failed" as const),
-      result: canonical,
-      tools_used: ["web_search", ...(delegationReceipts ? ["read_url(delegated)"] : [])],
-      memories_formed: 0,
-      prompt_hash: promptHash,
-      result_hash: resultHash,
-      // Cryptographic binding to the relay's economic identity for this task.
-      ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
-      // Delegated scope — must be included before signing so it's in the canonical form
-      ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
-      // Nested receipts from sub-delegated work — chain of custody proof
-      ...(delegationReceipts ? { delegation_receipts: delegationReceipts } : {}),
-    };
-
-    const signed = await signExecutionReceipt(
-      receipt as Parameters<typeof signExecutionReceipt>[0],
+    const signed = await buildServiceReceipt({
+      motebitId,
+      deviceId: "web-search-service",
       privateKey,
-      fromHex(publicKeyHex),
-    );
+      publicKey: fromHex(publicKeyHex),
+      prompt,
+      taskId,
+      submittedAt,
+      completedAt: delegationReceipts ? Date.now() : searchCompletedAt,
+      // Receipt result + result_hash are over the canonical form, not the raw.
+      // buildServiceReceipt hashes whatever we pass as `result`, so passing
+      // canonical preserves the pre-existing behavior.
+      result: canonical,
+      ok: result.ok,
+      toolsUsed: ["web_search", ...(delegationReceipts ? ["read_url(delegated)"] : [])],
+      relayTaskId: options?.relayTaskId,
+      delegatedScope: options?.delegatedScope,
+      delegationReceipts,
+    });
     log(`receipt=${signed.signature.slice(0, 12)}… query="${prompt.slice(0, 60)}"`);
     yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
   };

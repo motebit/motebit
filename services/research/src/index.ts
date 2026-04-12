@@ -22,7 +22,9 @@ import type { ToolDefinition, ToolHandler } from "@motebit/tools";
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { bootstrapServiceIdentity } from "@motebit/core-identity/node";
 import { generate, parseRiskLevel } from "@motebit/identity-file";
-import { verifySignedToken, signExecutionReceipt, hash as sha256 } from "@motebit/encryption";
+import { verifySignedToken } from "@motebit/encryption";
+import { buildServiceReceipt } from "@motebit/mcp-server";
+import type { ExecutionReceipt } from "@motebit/sdk";
 import { embedText } from "@motebit/memory-graph";
 import { loadConfig, fromHex } from "./helpers.js";
 import { research } from "./research.js";
@@ -227,34 +229,23 @@ async function main(): Promise<void> {
     }
 
     const resultStr = result.ok ? (result.data ?? "") : (result.error ?? "error");
-    const enc = new TextEncoder();
-    const promptHash = await sha256(enc.encode(prompt));
-    const resultHash = await sha256(enc.encode(resultStr));
-
-    const receipt: Record<string, unknown> = {
-      task_id: taskId,
-      motebit_id: motebitId,
-      device_id: "research-service",
-      submitted_at: submittedAt,
-      completed_at: Date.now(),
-      status: result.ok ? ("completed" as const) : ("failed" as const),
+    const signed = await buildServiceReceipt({
+      motebitId,
+      deviceId: "research-service",
+      privateKey,
+      publicKey: fromHex(publicKeyHex),
+      prompt,
+      taskId,
+      submittedAt,
       result: resultStr,
-      tools_used: ["research"],
-      memories_formed: 0,
-      prompt_hash: promptHash,
-      result_hash: resultHash,
-      ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
-      ...(options?.delegatedScope ? { delegated_scope: options.delegatedScope } : {}),
+      ok: result.ok,
+      toolsUsed: ["research"],
+      relayTaskId: options?.relayTaskId,
+      delegatedScope: options?.delegatedScope,
       // The verifiable citation chain — every search and fetch is a signed
       // ExecutionReceipt from the corresponding atom service.
-      ...(delegationReceipts.length > 0 ? { delegation_receipts: delegationReceipts } : {}),
-    };
-
-    const signed = await signExecutionReceipt(
-      receipt as Parameters<typeof signExecutionReceipt>[0],
-      privateKey,
-      fromHex(publicKeyHex),
-    );
+      delegationReceipts: delegationReceipts as unknown as ExecutionReceipt[],
+    });
     log(
       `receipt=${signed.signature.slice(0, 12)}… chain=${delegationReceipts.length} question="${prompt.slice(0, 60)}"`,
     );
