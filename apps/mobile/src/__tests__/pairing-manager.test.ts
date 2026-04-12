@@ -180,9 +180,7 @@ describe("MobilePairingManager Device B (claimer) flow", () => {
 
   it("claimPairing throws if no public key", async () => {
     const mgr = new MobilePairingManager(makeDeps({ getPublicKey: () => "" }));
-    await expect(mgr.claimPairing("https://relay.test", "abc123")).rejects.toThrow(
-      /No public key/,
-    );
+    await expect(mgr.claimPairing("https://relay.test", "abc123")).rejects.toThrow(/No public key/);
   });
 
   it("pollPairingStatus forwards to client", async () => {
@@ -215,19 +213,15 @@ describe("MobilePairingManager Device B (claimer) flow", () => {
   it("completePairing with key transfer installs new identity key", async () => {
     const deps = makeDeps();
     const mgr = new MobilePairingManager(deps);
-    await mgr.completePairing(
-      { motebitId: "m-X", deviceId: "d-X" },
-      "https://relay.test",
-      {
-        keyTransfer: {
-          identity_pubkey_check: "ff".repeat(32),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        ephemeralPrivateKey: new Uint8Array(32),
-        pairingCode: "ABC123",
-        pairingId: "pid-1",
-      },
-    );
+    await mgr.completePairing({ motebitId: "m-X", deviceId: "d-X" }, "https://relay.test", {
+      keyTransfer: {
+        identity_pubkey_check: "ff".repeat(32),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      ephemeralPrivateKey: new Uint8Array(32),
+      pairingCode: "ABC123",
+      pairingId: "pid-1",
+    });
     expect(deps.setPublicKey).toHaveBeenCalledWith("ff".repeat(32));
     expect(deps.keyring._data.get("device_private_key")).toBeTruthy();
     expect(mockClientDefaults.updateDeviceKey).toHaveBeenCalled();
@@ -264,24 +258,20 @@ describe("MobilePairingManager Device B (claimer) flow", () => {
   it("completePairing swallows key transfer decryption errors", async () => {
     const deps = makeDeps();
     const encryption = await import("@motebit/encryption");
-    (
-      encryption.decryptKeyTransfer as unknown as ReturnType<typeof vi.fn>
-    ).mockRejectedValueOnce(new Error("bad key"));
+    (encryption.decryptKeyTransfer as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("bad key"),
+    );
     const mgr = new MobilePairingManager(deps);
     // Should not throw
-    await mgr.completePairing(
-      { motebitId: "m-X", deviceId: "d-X" },
-      "https://relay.test",
-      {
-        keyTransfer: {
-          identity_pubkey_check: "ff".repeat(32),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        ephemeralPrivateKey: new Uint8Array(32),
-        pairingCode: "ABC123",
-        pairingId: "pid-1",
-      },
-    );
+    await mgr.completePairing({ motebitId: "m-X", deviceId: "d-X" }, "https://relay.test", {
+      keyTransfer: {
+        identity_pubkey_check: "ff".repeat(32),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      ephemeralPrivateKey: new Uint8Array(32),
+      pairingCode: "ABC123",
+      pairingId: "pid-1",
+    });
     expect(deps.setIdentity).toHaveBeenCalled();
   });
 });

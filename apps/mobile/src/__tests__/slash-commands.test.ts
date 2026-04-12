@@ -30,7 +30,14 @@ function makeAppStub(overrides?: Record<string, unknown>) {
     getState: vi.fn(() => ({ intent: 0.5, precision: 0.7 })),
     deleteMemory: vi.fn(() => Promise.resolve()),
     getMcpServers: vi.fn(() => [
-      { name: "srv1", url: "https://a", connected: true, toolCount: 2, trusted: true, motebit: false },
+      {
+        name: "srv1",
+        url: "https://a",
+        connected: true,
+        toolCount: 2,
+        trusted: true,
+        motebit: false,
+      },
     ]),
     getMemoryGraphStats: vi.fn(() =>
       Promise.resolve({
@@ -407,7 +414,9 @@ describe("runSlashCommand /audit", () => {
       auditMemory: vi.fn(() =>
         Promise.resolve({
           nodesAudited: 10,
-          phantomCertainties: [{ node: { content: "old memory" }, decayedConfidence: 0.1, edgeCount: 5 }],
+          phantomCertainties: [
+            { node: { content: "old memory" }, decayedConfidence: 0.1, edgeCount: 5 },
+          ],
           conflicts: [{ a: { content: "a memory" }, b: { content: "b memory" } }],
           nearDeath: [{ node: { content: "dying memory" }, decayedConfidence: 0.02 }],
         }),

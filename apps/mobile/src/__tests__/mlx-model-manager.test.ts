@@ -22,10 +22,7 @@ const hoisted = vi.hoisted(() => {
       _url: string,
       dest: string,
       _opts: unknown,
-      progressCb?: (p: {
-        totalBytesWritten: number;
-        totalBytesExpectedToWrite: number;
-      }) => void,
+      progressCb?: (p: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => void,
     ) => ({
       downloadAsync: vi.fn(async () => {
         progressCb?.({ totalBytesWritten: 100, totalBytesExpectedToWrite: 100 });

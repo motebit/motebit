@@ -12,9 +12,7 @@ const tokenListeners: Array<(t: unknown) => void> = [];
 vi.mock("expo-notifications", () => ({
   getPermissionsAsync: vi.fn(() => Promise.resolve({ status: permissionStatus })),
   requestPermissionsAsync: vi.fn(() => Promise.resolve({ status: requestPermissionResult })),
-  getExpoPushTokenAsync: vi.fn(() =>
-    Promise.resolve({ data: pushTokenValue ?? "" }),
-  ),
+  getExpoPushTokenAsync: vi.fn(() => Promise.resolve({ data: pushTokenValue ?? "" })),
   addPushTokenListener: vi.fn((cb: (t: unknown) => void) => {
     tokenListeners.push(cb);
     return { remove: vi.fn() };
