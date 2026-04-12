@@ -486,6 +486,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   const logger = createLogger({ service: "relay" });
 
+  // --- Settlement rail manifest: log at boot so missing env-var gating is
+  // visible. A rail registered at config time but not listed here means the
+  // adapter silently disabled itself. Mirrors /health/ready's rails section.
+  const railManifest = railRegistry.manifest();
+  logger.info("relay.rails.manifest", {
+    count: railManifest.length,
+    rails: railManifest.map((r) => r.name),
+    by_type: railManifest.reduce<Record<string, string[]>>((acc, r) => {
+      (acc[r.railType] ??= []).push(r.name);
+      return acc;
+    }, {}),
+  });
+
   // --- Middleware (rate limiting, CORS, security headers, auth, error handling, health) ---
   const { allLimiters, wsLimiter } = registerMiddleware({
     app,
@@ -511,6 +524,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       getTaskQueueSize: () => taskQueue.size,
       taskQueueCapacity: MAX_TASK_QUEUE_SIZE,
       isDraining: () => draining,
+      getRailManifest: () => railRegistry.manifest(),
     },
   });
 

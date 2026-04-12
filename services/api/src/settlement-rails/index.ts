@@ -40,4 +40,21 @@ export class SettlementRailRegistry {
   list(): SettlementRail[] {
     return [...this.rails.values()];
   }
+
+  /**
+   * Structured manifest for health/readiness reporting and boot-time logging.
+   * Pure metadata — no network probes. Use `isAvailable()` on individual rails
+   * when provider reachability matters.
+   */
+  manifest(): ReadonlyArray<{
+    name: string;
+    railType: SettlementRail["railType"];
+    supportsDeposit: boolean;
+  }> {
+    return [...this.rails.values()].map((rail) => ({
+      name: rail.name,
+      railType: rail.railType,
+      supportsDeposit: rail.supportsDeposit,
+    }));
+  }
 }

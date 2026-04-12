@@ -33,6 +33,16 @@ export interface HealthCheckDeps {
   taskQueueCapacity: number;
   /** Whether the relay is draining (graceful shutdown in progress). */
   isDraining: () => boolean;
+  /**
+   * Registered settlement rail manifest (name, type, deposit support).
+   * Pure metadata — no network probes. Operators use this to spot silent
+   * misconfiguration (env var missing → rail not registered).
+   */
+  getRailManifest?: () => ReadonlyArray<{
+    name: string;
+    railType: "fiat" | "protocol" | "direct_asset" | "orchestration";
+    supportsDeposit: boolean;
+  }>;
 }
 
 export interface MiddlewareDeps {
@@ -314,9 +324,10 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/disputes/*/appeal", rl(writeLimiter));
   app.use("/api/v1/disputes/*", rl(readLimiter));
 
-  // Admin endpoints — dispute + settlement dashboards
+  // Admin endpoints — dispute + settlement + credential-anchoring dashboards
   app.use("/api/v1/admin/disputes", rl(expensiveLimiter));
   app.use("/api/v1/admin/settlements", rl(expensiveLimiter));
+  app.use("/api/v1/admin/credential-anchoring", rl(expensiveLimiter));
 
   // Federation peering endpoints (30 req/min per IP — write tier)
   // POST handlers also enforce per-peer rate limiting (30 req/min per relay_id) in federation.ts
@@ -519,6 +530,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
     const httpStatus = overallStatus === "ready" ? 200 : 503;
 
+    // Settlement rail manifest — registered rails only, no network probe.
+    // Operators use this to confirm expected rails are wired; missing rails
+    // here reveal env-var gaps that would otherwise surface as silent 503s.
+    const rails = hd.getRailManifest ? hd.getRailManifest() : [];
+
     return c.json(
       {
         status: overallStatus,
@@ -535,6 +551,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
             status: taskQueueStatus,
             size: queueSize,
             capacity: queueCapacity,
+          },
+          settlement_rails: {
+            status: "ok" as const,
+            count: rails.length,
+            rails,
           },
         },
       },
@@ -601,7 +622,8 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   // Admin emergency freeze — master token only
   app.use("/api/v1/admin/freeze", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/unfreeze", bearerAuth({ token: apiToken }));
-  // Admin dispute + settlement dashboards — master token only
+  // Admin dispute + settlement + credential-anchoring dashboards — master token only
   app.use("/api/v1/admin/disputes", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/settlements", bearerAuth({ token: apiToken }));
+  app.use("/api/v1/admin/credential-anchoring", bearerAuth({ token: apiToken }));
 }
