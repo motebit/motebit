@@ -470,7 +470,7 @@ async function main(): Promise<void> {
   await runtime.init();
 
   // Enable interactive delegation if relay + signing keys are available
-  const DEFAULT_SYNC_URL = "https://motebit-sync.fly.dev";
+  const DEFAULT_SYNC_URL = "https://relay.motebit.com";
   const syncUrl =
     config.syncUrl ??
     process.env["MOTEBIT_SYNC_URL"] ??

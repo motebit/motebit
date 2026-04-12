@@ -151,7 +151,7 @@ const PRESENCE_MAP: Record<PresenceState, PresenceMapping> = {
 
 // === Constants ===
 
-const DEFAULT_RELAY_URL = "https://motebit-sync.fly.dev";
+const DEFAULT_RELAY_URL = "https://relay.motebit.com";
 
 // Interior color presets — canonical source in @motebit/sdk.
 import { COLOR_PRESETS } from "@motebit/sdk";

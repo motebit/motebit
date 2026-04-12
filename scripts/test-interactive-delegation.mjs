@@ -27,7 +27,7 @@ const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
 const ALICE_ID = config.motebit_id;
 const ALICE_DEVICE = config.device_id;
 const PASSPHRASE = process.env.MOTEBIT_PASSPHRASE || "alice-test-2026";
-const RELAY = config.sync_url || "https://motebit-sync.fly.dev";
+const RELAY = config.sync_url || "https://relay.motebit.com";
 const API_TOKEN = process.env.MOTEBIT_API_TOKEN;
 
 if (!API_TOKEN) { console.error("MOTEBIT_API_TOKEN required"); process.exit(1); }

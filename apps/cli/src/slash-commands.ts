@@ -608,7 +608,7 @@ export async function handleSlashCommand(
       // /connect <url> — connect to a relay from inside the REPL
       if (!args) {
         console.log("Usage: /connect <relay-url>");
-        console.log("  Example: /connect https://motebit-sync.fly.dev");
+        console.log("  Example: /connect https://relay.motebit.com");
         break;
       }
       if (!repl?.privateKeyBytes || !repl?.deviceId) {
@@ -1561,7 +1561,7 @@ export async function handleSlashCommand(
         break;
       }
 
-      const syncUrl = getRelaySyncUrl(config, fullConfig, "https://motebit-sync.fly.dev");
+      const syncUrl = getRelaySyncUrl(config, fullConfig, "https://relay.motebit.com");
 
       // Resolve prefix to full motebit ID if needed (UUID is 36 chars)
       let targetMotebitId = rawTargetId;
@@ -1740,7 +1740,7 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposeSyncUrl = getRelaySyncUrl(config, fullConfig, "https://motebit-sync.fly.dev");
+      const proposeSyncUrl = getRelaySyncUrl(config, fullConfig, "https://relay.motebit.com");
 
       const proposeHeaders = await makeRelayHeaders(config, repl, { aud: "proposal", json: true });
 
@@ -1830,7 +1830,7 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposalsSyncUrl = getRelaySyncUrl(config, fullConfig, "https://motebit-sync.fly.dev");
+      const proposalsSyncUrl = getRelaySyncUrl(config, fullConfig, "https://relay.motebit.com");
 
       const proposalsHeaders = await makeRelayHeaders(config, repl, { aud: "proposal" });
 
@@ -1890,7 +1890,7 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposalSyncUrl = getRelaySyncUrl(config, fullConfig, "https://motebit-sync.fly.dev");
+      const proposalSyncUrl = getRelaySyncUrl(config, fullConfig, "https://relay.motebit.com");
 
       const proposalHeaders = await makeRelayHeaders(config, repl, { aud: "proposal", json: true });
 

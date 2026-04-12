@@ -4,7 +4,7 @@ import { loadProxyToken, loadBalance, saveBalance, loadSyncUrl } from "../storag
 /** Relay URL. Override via VITE_RELAY_URL. */
 const DEFAULT_RELAY_URL: string =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>).env
-    ?.VITE_RELAY_URL ?? "https://motebit-sync.fly.dev";
+    ?.VITE_RELAY_URL ?? "https://relay.motebit.com";
 
 export interface SubscriptionAPI {
   updateBalanceDisplay(): void;

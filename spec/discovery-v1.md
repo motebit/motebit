@@ -268,7 +268,7 @@ A new agent with no configured relay must find one to register with.
 ALGORITHM: BootstrapAgent()
 
 Step 1:  Read MOTEBIT_SYNC_URL environment variable
-         Default: https://motebit-sync.fly.dev
+         Default: https://relay.motebit.com
 
 Step 2:  Fetch /.well-known/motebit.json from the bootstrap URL
 
@@ -288,7 +288,7 @@ Step 5:  Persist relay URL to local config for subsequent connections
 
 ### 6.3 — Convention
 
-The reference implementation defaults to `https://motebit-sync.fly.dev`, operated by Motebit, Inc. This is a **product default**, not a protocol requirement. Alternative bootstrap endpoints are first-class. The protocol does not privilege any operator — any relay that serves valid signed metadata at `/.well-known/motebit.json` is an equally valid bootstrap target.
+The reference implementation defaults to `https://relay.motebit.com`, operated by Motebit, Inc. This is a **product default**, not a protocol requirement. Alternative bootstrap endpoints are first-class. The protocol does not privilege any operator — any relay that serves valid signed metadata at `/.well-known/motebit.json` is an equally valid bootstrap target.
 
 ---
 

@@ -33,12 +33,12 @@ flyctl secrets set \
 flyctl deploy --remote-only
 ```
 
-The relay will be live at `https://motebit-sync.fly.dev`.
+The relay will be live at `https://relay.motebit.com`.
 
 ### 4. Verify
 
 ```bash
-curl https://motebit-sync.fly.dev/health
+curl https://relay.motebit.com/health
 # → { "status": "ok" }
 ```
 

@@ -25,7 +25,7 @@ const PASSPHRASE = process.env.MOTEBIT_PASSPHRASE || "alice-test-2026";
 const BOB_MCP = "https://motebit-web-search.fly.dev/mcp";
 const BOB_ID = "019d03fd-543a-7159-a27c-f5a13225e988";
 const BOB_PUBKEY = "7e08e3c0cd406b9f244c6e320906dcd6ac92b07a05c6cfc0d6a43b0bb333f71f";
-const RELAY = "https://motebit-sync.fly.dev";
+const RELAY = "https://relay.motebit.com";
 const API_TOKEN = process.env.MOTEBIT_API_TOKEN;
 
 // ---------------------------------------------------------------------------

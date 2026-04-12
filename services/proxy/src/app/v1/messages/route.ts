@@ -74,7 +74,7 @@ Message: ${message.slice(0, 500)}`,
 
 /** Fire-and-forget debit call to the relay. */
 function debitRelay(motebitId: string, amountMicro: number, referenceId: string): void {
-  const relayUrl = process.env.RELAY_API_URL ?? "https://motebit-sync.fly.dev";
+  const relayUrl = process.env.RELAY_API_URL ?? "https://relay.motebit.com";
   const secret = process.env.RELAY_PROXY_SECRET;
   if (!secret || amountMicro <= 0) return;
 

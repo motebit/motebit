@@ -31,7 +31,7 @@ The relay discovers this service, submits the task, and settles payment on recei
 npx create-motebit . --service
 # Set environment variables:
 export ANTHROPIC_API_KEY=sk-ant-...
-export MOTEBIT_SYNC_URL=https://motebit-sync.fly.dev
+export MOTEBIT_SYNC_URL=https://relay.motebit.com
 export MOTEBIT_PRIVATE_KEY_HEX=...   # From identity generation
 export GITHUB_TOKEN=ghp_...          # Optional: 5000 req/hr vs 60
 node dist/index.js

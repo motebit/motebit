@@ -57,7 +57,7 @@ Identity: 019d... (from ./motebit.md)
 Tools loaded: fetch_url, echo
 Agent task handler enabled (direct mode — no LLM)
 MCP server running on http://localhost:3100 (StreamableHTTP). 2 tools exposed.
-Registered with relay: https://motebit-sync.fly.dev
+Registered with relay: https://relay.motebit.com
 ```
 
 Your agent is live and discoverable. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. Run `npm run self-test` to verify the full receipt loop end-to-end.

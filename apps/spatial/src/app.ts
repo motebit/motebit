@@ -146,7 +146,7 @@ const DEFAULT_SPATIAL_SETTINGS: SpatialSettings = {
   ttsVoice: "nova",
   vadSensitivity: 0.5,
   proactiveEnabled: true,
-  relayUrl: "https://motebit-sync.fly.dev",
+  relayUrl: "https://relay.motebit.com",
   showNetwork: true,
   appearance: { ...DEFAULT_APPEARANCE_CONFIG },
   maxTokens: 4096,
@@ -728,7 +728,7 @@ settingsSave?.addEventListener(
         ttsVoice: (ttsVoiceSelect?.value as OpenAITTSVoice) ?? "nova",
         vadSensitivity: vadSlider ? parseFloat(vadSlider.value) : 0.5,
         proactiveEnabled: proactiveToggle?.checked ?? true,
-        relayUrl: relayUrlInput?.value.trim() ?? "https://motebit-sync.fly.dev",
+        relayUrl: relayUrlInput?.value.trim() ?? "https://relay.motebit.com",
         showNetwork: showNetworkToggle?.checked ?? true,
         appearance: {
           colorPreset: activeColorPreset,

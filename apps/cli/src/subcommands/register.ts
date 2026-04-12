@@ -16,7 +16,7 @@ import { loadFullConfig, saveFullConfig } from "../config.js";
 import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
 import { requireMotebitId } from "./_helpers.js";
 
-const DEFAULT_SYNC_URL = "https://motebit-sync.fly.dev";
+const DEFAULT_SYNC_URL = "https://relay.motebit.com";
 
 export async function handleRegister(config: CliConfig): Promise<void> {
   const syncUrl = (config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? DEFAULT_SYNC_URL).replace(

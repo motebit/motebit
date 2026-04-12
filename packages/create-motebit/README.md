@@ -66,7 +66,7 @@ cd my-service && npm install
 Edit `src/tools.ts` to define your capabilities, set pricing in `.env`:
 
 ```bash
-MOTEBIT_SYNC_URL=https://motebit-sync.fly.dev
+MOTEBIT_SYNC_URL=https://relay.motebit.com
 MOTEBIT_PRICE=0.50     # USD per task
 npm run dev
 ```

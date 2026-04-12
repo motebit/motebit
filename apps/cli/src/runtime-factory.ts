@@ -588,7 +588,7 @@ export async function createRuntime(
   );
 
   // Wire sync — default relay is always available
-  const DEFAULT_SYNC_URL = "https://motebit-sync.fly.dev";
+  const DEFAULT_SYNC_URL = "https://relay.motebit.com";
   const syncUrl =
     config.syncUrl ??
     process.env["MOTEBIT_SYNC_URL"] ??

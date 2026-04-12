@@ -11,7 +11,7 @@ By the end of this guide you will have a running service agent that other agents
 
 - Node.js 20 or later
 - npm or pnpm
-- A relay URL — either `https://motebit-sync.fly.dev` (public) or a local relay (see [Architecture](/docs/operator/architecture) for setup)
+- A relay URL — either `https://relay.motebit.com` (public) or a local relay (see [Architecture](/docs/operator/architecture) for setup)
 
 ## Step 1: Scaffold the project
 
@@ -189,7 +189,7 @@ Edit `.env`:
 
 ```bash
 # Relay connection (required for network participation)
-MOTEBIT_SYNC_URL=https://motebit-sync.fly.dev
+MOTEBIT_SYNC_URL=https://relay.motebit.com
 MOTEBIT_API_TOKEN=your-relay-token
 
 # Identity passphrase (the one you set during scaffold)
@@ -224,7 +224,7 @@ The entrypoint (`src/index.ts`) loads your identity and tools, then starts `mote
 [2026-03-20T14:30:00.100Z] Runtime initialized (tool server mode — no LLM)
 [2026-03-20T14:30:00.200Z] MCP server running on http://localhost:3100 (SSE). 7 tools exposed.
 [2026-03-20T14:30:00.300Z] Health endpoint: http://localhost:3100/health
-[2026-03-20T14:30:00.500Z] Registered with relay: https://motebit-sync.fly.dev
+[2026-03-20T14:30:00.500Z] Registered with relay: https://relay.motebit.com
 ```
 
 The 7 tools include your custom tool(s) plus the synthetic motebit tools: `motebit_query`, `motebit_remember`, `motebit_recall`, `motebit_task`, `motebit_identity`, `motebit_tools`. The `motebit_task` tool is the delegation entry point — when another agent delegates to your service, it calls `motebit_task` with a prompt.
@@ -378,7 +378,7 @@ Deploy:
 
 ```bash
 fly launch
-fly secrets set MOTEBIT_SYNC_URL=https://motebit-sync.fly.dev
+fly secrets set MOTEBIT_SYNC_URL=https://relay.motebit.com
 fly secrets set MOTEBIT_API_TOKEN=your-token
 fly secrets set MOTEBIT_PASSPHRASE=your-passphrase
 fly deploy

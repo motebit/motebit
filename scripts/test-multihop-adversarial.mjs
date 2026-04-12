@@ -27,7 +27,7 @@ const BOB_ID = "019d03fd-543a-7159-a27c-f5a13225e988";
 const BOB_PUBKEY = "7e08e3c0cd406b9f244c6e320906dcd6ac92b07a05c6cfc0d6a43b0bb333f71f";
 const CHARLIE_ID = "019d0480-386c-7871-b21d-a2a6a8861123";
 const CHARLIE_PUBKEY = "7b4b0ed9b7e254ae557c3874f87ccc22d94461af64a63408d632f005b8c6b9ee";
-const RELAY = "https://motebit-sync.fly.dev";
+const RELAY = "https://relay.motebit.com";
 const API_TOKEN = process.env.MOTEBIT_API_TOKEN;
 
 if (!API_TOKEN) { console.error("MOTEBIT_API_TOKEN required"); process.exit(1); }

@@ -51,7 +51,7 @@ All notable changes to the published packages are documented here. This project 
 - **Precision feedback loop** — `PrecisionWeights` (selfTrust, explorationDrive, retrievalPrecision, curiosityModulation) computed from gradient via sigmoid, injected into system prompt as natural-language guidance
 - **Rate limiting** — sliding window per IP with 5 tiers (auth 30/min, read 60/min, write 30/min, public 20/min, expensive 10/min). Master token bypasses
 - **Bundle export + verification** — `motebit export` writes full directory (identity + credentials + presentation + budget + gradient), `motebit verify <dir>` validates signatures, VC proofs, VP integrity, cross-references
-- **Relay deployment** — Fly.io production at `motebit-sync.fly.dev`, CI deploy on push to main, persistent SQLite volume, health checks
+- **Relay deployment** — Fly.io production at `relay.motebit.com` (hosted on the `motebit-sync` app), CI deploy on push to main, persistent SQLite volume, health checks
 - **Credential UI** — web sovereign panel (3 tabs), desktop/mobile credentials section, 12th admin dashboard tab
 
 ### Fixed

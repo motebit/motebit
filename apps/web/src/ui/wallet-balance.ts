@@ -52,7 +52,7 @@ export async function openSovereignFundingFlow(
 ): Promise<void> {
   const tab = window.open("about:blank", "_blank");
   try {
-    const relayUrl = loadSyncUrl() || "https://motebit-sync.fly.dev";
+    const relayUrl = loadSyncUrl() || "https://relay.motebit.com";
     const token = await ctx.app.createSyncToken("device:auth");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;

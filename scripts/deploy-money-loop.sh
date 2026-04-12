@@ -7,7 +7,7 @@
 #   2. Set BRAVE_SEARCH_API_KEY in your environment (optional but recommended)
 #
 # This script will:
-#   1. Deploy the relay to motebit-sync.fly.dev
+#   1. Deploy the relay to the motebit-sync Fly app (served at relay.motebit.com)
 #   2. Bootstrap the web-search service identity
 #   3. Deploy the web-search service to motebit-web-search.fly.dev
 #   4. Register the service with the relay
@@ -49,12 +49,12 @@ ok "Fly CLI authenticated"
 API_TOKEN="${MOTEBIT_API_TOKEN:-$(openssl rand -hex 32)}"
 log "API token: ${API_TOKEN:0:8}..."
 
-RELAY_URL="https://motebit-sync.fly.dev"
+RELAY_URL="https://relay.motebit.com"
 WEB_SEARCH_URL="https://motebit-web-search.fly.dev"
 
 # --- Step 1: Deploy the relay ---
 
-log "Deploying relay to motebit-sync.fly.dev..."
+log "Deploying relay to motebit-sync Fly app (relay.motebit.com)..."
 cd "$ROOT_DIR"
 
 # Create the app if it doesn't exist

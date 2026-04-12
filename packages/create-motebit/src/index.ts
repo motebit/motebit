@@ -324,7 +324,7 @@ function makeAgentTsconfig(): string {
 
 function makeAgentEnvExample(): string {
   return `# Relay connection (required for network participation)
-MOTEBIT_SYNC_URL=https://motebit-sync.fly.dev
+MOTEBIT_SYNC_URL=https://relay.motebit.com
 MOTEBIT_API_TOKEN=
 
 # Identity passphrase (set during creation)
