@@ -163,6 +163,44 @@ const PROBES: ReadonlyArray<Probe> = [
         `# motebit/${PROBE_PREFIX}orphan@1.0\n\nOrphan spec — no implementation references.\n`,
       ),
   },
+  {
+    script: "check-changeset-discipline",
+    proves: "flags a `major` changeset that lacks a non-empty ## Migration section",
+    perturb: () =>
+      writeFixture(
+        // The gate reads .changeset/*.md, skipping README.md and CHANGELOG.md
+        // only — our prefixed fixture is picked up like any pending changeset.
+        `.changeset/${PROBE_PREFIX}major-no-migration.md`,
+        // Frontmatter declares a `major` bump on a tracked published package.
+        // Body contains nothing that looks like a ## Migration section, so the
+        // gate's "every major must teach upgraders" invariant is violated.
+        `---\n"@motebit/protocol": major\n---\n\nProbe-only major bump with no migration guide.\n`,
+      ),
+  },
+  {
+    script: "check-api-surface",
+    // Requires packages/{protocol,crypto,sdk}/dist to exist so api-extractor
+    // can read the .d.ts and produce etc/temp/*.api.md to diff against the
+    // (mutated) baseline. Pre-push and the CI gate-effectiveness job run
+    // `pnpm build` before this probe for exactly that reason — without dist/,
+    // api-extractor errors on missing input and the probe would "pass" for
+    // the wrong reason (non-zero exit without actually proving drift
+    // detection).
+    proves: "flags a committed baseline that diverges from the extracted API surface",
+    perturb: () =>
+      mutateFile(
+        // Mutating the baseline (not the source) gives us a deterministic
+        // divergence without a rebuild: dist/ is unchanged, so extractor
+        // produces the current surface in etc/temp/, which now differs from
+        // the doctored baseline. Assumes no pending `major` changeset for
+        // @motebit/protocol — otherwise the gate would accept the diff as
+        // declared-breaking and exit 0 (see check-api-surface.ts escape
+        // hatch). If a real major is ever pending while this probe runs,
+        // point the probe at a sibling package (crypto or sdk) instead.
+        "packages/protocol/etc/protocol.api.md",
+        (src) => `// ${PROBE_PREFIX}injected drift marker\n${src}`,
+      ),
+  },
 ];
 
 interface ProbeResult {

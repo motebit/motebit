@@ -3,8 +3,21 @@
 
 # Skip on tag pushes (changesets pushes 4 tags in parallel → lock conflicts)
 if git symbolic-ref -q HEAD >/dev/null 2>&1; then
+  # Full build is required before drift defenses: check-api-surface shells out
+  # to api-extractor, which reads protocol/crypto/sdk .d.ts from dist/. Turbo
+  # caches aggressively, so the second push after a build is near-instant.
+  pnpm build
+
+  # Hard gates — must match .github/workflows/ci.yml → jobs.check and
+  # jobs.gate-effectiveness. If this list diverges from CI's, the local loop
+  # stops catching what CI catches, which is the exact drift shape the gate
+  # system is designed to prevent.
   pnpm audit --audit-level=critical
-  pnpm turbo run build typecheck lint test --filter="...[origin/main]"
+  pnpm check                   # all 7 drift defenses (scripts/check.ts)
+  pnpm check-gates-effective   # prove every gate actually fires
+
+  # Typecheck/lint/test scoped to affected packages — cheaper than full run;
+  # CI's check job runs these unfiltered across the whole graph.
+  pnpm turbo run typecheck lint test --filter="...[origin/main]"
   pnpm format:check
-  pnpm check-deps
 fi
