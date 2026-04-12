@@ -95,7 +95,7 @@ export function startLinkDevice(ctx: WebContext): void {
   connectBtn.addEventListener("click", () => {
     const url = getSyncUrl();
     if (!url) {
-      setStatus("Enter a relay URL");
+      setStatus("Relay URL is required");
       return;
     }
     connectBtn.disabled = true;
@@ -205,7 +205,7 @@ export function startClaimDevice(ctx: WebContext): void {
     }
     const url = getSyncUrl();
     if (!url) {
-      setStatus("Enter a relay URL");
+      setStatus("Relay URL is required");
       return;
     }
     submitBtn.disabled = true;

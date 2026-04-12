@@ -41,7 +41,17 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { DEFAULT_MOTEBIT_CLOUD_URL } from "@motebit/sdk";
 import type { MobileApp } from "./mobile-app";
+import { ASYNC_STORAGE_KEYS } from "./storage-keys";
+
+function normalizeRelayUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
 
 export interface UsePairingDeps {
   app: MobileApp;
@@ -89,9 +99,19 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
   const [pairingStatus, setPairingStatusText] = useState("");
   const [pairingId, setPairingId] = useState<string | null>(null);
   const [pairingClaimName, setPairingClaimName] = useState("");
-  const [pairingSyncUrlInput, setPairingSyncUrlInput] = useState("");
+  const [pairingSyncUrlInput, setPairingSyncUrlInput] = useState(DEFAULT_MOTEBIT_CLOUD_URL);
+  const defaultSyncUrlRef = useRef(DEFAULT_MOTEBIT_CLOUD_URL);
   const pairingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pairingSyncUrlRef = useRef("");
+
+  useEffect(() => {
+    void AsyncStorage.getItem(ASYNC_STORAGE_KEYS.relayUrl).then((saved) => {
+      if (saved != null && saved !== "") {
+        defaultSyncUrlRef.current = saved;
+        setPairingSyncUrlInput(saved);
+      }
+    });
+  }, []);
   /** Held between claim and complete — ephemeral X25519 private key for identity key transfer. */
   const ephemeralKeyRef = useRef<Uint8Array | null>(null);
   const claimCodeRef = useRef("");
@@ -110,25 +130,26 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     setPairingCode("");
     setPairingCodeInput("");
     setPairingClaimName("");
-    setPairingSyncUrlInput("");
+    setPairingSyncUrlInput(defaultSyncUrlRef.current);
   }, [stopPairingPoll]);
 
   // Device A: initiate from settings — show pairing modal with sync URL input
   const handleInitiatePairing = useCallback(() => {
     setPairingMode("initiate");
-    setPairingSyncUrlInput("");
-    setPairingStatusText("Enter your sync relay URL");
+    setPairingSyncUrlInput(defaultSyncUrlRef.current);
+    setPairingStatusText("");
     setShowSettings(false);
     setShowPairing(true);
   }, [setShowSettings]);
 
   // Device A: after entering sync URL, generate pairing code
   const handleInitiateConnect = useCallback(async () => {
-    const url = pairingSyncUrlInput.trim();
+    const url = normalizeRelayUrl(pairingSyncUrlInput);
     if (!url) {
-      setPairingStatusText("Sync relay URL required");
+      setPairingStatusText("Relay URL is required");
       return;
     }
+    setPairingSyncUrlInput(url);
     pairingSyncUrlRef.current = url;
     setPairingStatusText("Generating code...");
     try {
@@ -165,12 +186,13 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
       return;
     }
 
-    const syncUrl = pairingSyncUrlInput.trim();
+    const syncUrl = normalizeRelayUrl(pairingSyncUrlInput);
     if (!syncUrl) {
-      setPairingStatusText("Sync relay URL required");
+      setPairingStatusText("Relay URL is required");
       return;
     }
 
+    setPairingSyncUrlInput(syncUrl);
     pairingSyncUrlRef.current = syncUrl;
     setPairingStatusText("Claiming...");
     try {
