@@ -36,7 +36,10 @@
 // and fails CI if they appear outside this file.
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha512";
-import { getSuiteEntry, type SuiteId } from "@motebit/protocol";
+// Type-only — `SuiteId` is a pure string-literal union with no runtime
+// footprint, so the erased import preserves @motebit/crypto's Layer 0
+// "zero internal deps" invariant (enforced by check-deps).
+import type { SuiteId } from "@motebit/protocol";
 
 // @noble/ed25519 v3 requires explicit SHA-512 binding. Idempotent:
 // binding twice is harmless, but some test environments import
@@ -66,22 +69,20 @@ export async function verifyBySuite(
   signatureBytes: Uint8Array,
   publicKeyBytes: Uint8Array,
 ): Promise<boolean> {
-  const entry = getSuiteEntry(suite);
-  if (!entry) return false;
-
-  switch (entry.algorithm) {
-    case "Ed25519":
+  // Exhaustive switch on the SuiteId literal union. When ML-DSA /
+  // SLH-DSA suites land as new `SuiteId` members, TypeScript will
+  // refuse to compile this switch until their arms are added.
+  switch (suite) {
+    case "motebit-jcs-ed25519-b64-v1":
+    case "motebit-jcs-ed25519-hex-v1":
+    case "motebit-jwt-ed25519-v1":
+    case "motebit-concat-ed25519-hex-v1":
+    case "eddsa-jcs-2022":
       try {
         return await ed.verifyAsync(signatureBytes, canonicalBytes, publicKeyBytes);
       } catch {
         return false;
       }
-    case "ML-DSA-44":
-    case "ML-DSA-65":
-    case "SLH-DSA-SHA2-128s":
-      throw new Error(
-        `suite not supported: ${suite} (post-quantum primitives not yet implemented; this dispatch arm is the hook for the PQ migration)`,
-      );
   }
 }
 
@@ -100,18 +101,13 @@ export async function signBySuite(
   canonicalBytes: Uint8Array,
   privateKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  const entry = getSuiteEntry(suite);
-  if (!entry) throw new Error(`unknown suite: ${suite}`);
-
-  switch (entry.algorithm) {
-    case "Ed25519":
+  switch (suite) {
+    case "motebit-jcs-ed25519-b64-v1":
+    case "motebit-jcs-ed25519-hex-v1":
+    case "motebit-jwt-ed25519-v1":
+    case "motebit-concat-ed25519-hex-v1":
+    case "eddsa-jcs-2022":
       return ed.signAsync(canonicalBytes, privateKeyBytes);
-    case "ML-DSA-44":
-    case "ML-DSA-65":
-    case "SLH-DSA-SHA2-128s":
-      throw new Error(
-        `suite not supported: ${suite} (post-quantum primitives not yet implemented)`,
-      );
   }
 }
 

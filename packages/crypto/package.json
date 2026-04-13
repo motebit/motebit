@@ -57,6 +57,7 @@
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
+    "@motebit/protocol": "workspace:*",
     "@noble/ed25519": "~3.0.1",
     "@noble/hashes": "~1.6.0",
     "@types/node": "^22.0.0",

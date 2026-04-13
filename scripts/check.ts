@@ -68,6 +68,10 @@ const EXCLUDED_CHECKS: Record<string, string> = {
     "advisory local-only report — always exits 0 and scans ~/.claude/ (user-specific auto-memory); no CI equivalent",
   "check-gates-effective":
     "meta-probe that runs every GATES entry under a deliberate perturbation — would invoke each gate a second time per PR. Runs as a separate CI job scoped to scripts/* changes.",
+  "check-suite-declared":
+    "cryptosuite agility invariant #11 (spec-side) — landed unwired during the cryptosuite-agility pass (2026-04-13). Moved into GATES when every signed spec declares a `suite` field. Run standalone with `pnpm check-suite-declared`.",
+  "check-suite-dispatch":
+    "cryptosuite agility invariant #12 (code-side) — landed unwired during the cryptosuite-agility pass (2026-04-13). Moved into GATES when every `ed.*` primitive call in @motebit/crypto is routed through suite-dispatch.ts. Run standalone with `pnpm check-suite-dispatch`.",
 };
 
 // Order matters: run fastest first so CI fails loudly on the cheapest signal.
