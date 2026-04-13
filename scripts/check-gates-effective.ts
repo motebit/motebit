@@ -242,7 +242,7 @@ ProbeArtifact {
   {
     script: "check-suite-dispatch",
     proves:
-      "flags a direct @noble/ed25519 primitive call outside packages/crypto/src/suite-dispatch.ts",
+      "flags a direct @noble/ed25519 primitive call outside packages/crypto/src/suite-dispatch.ts (scope: packages/crypto/src/, services/, apps/)",
     perturb: () =>
       writeFixture(
         // Any .ts under packages/crypto/src/ (outside suite-dispatch.ts) that
@@ -261,6 +261,22 @@ export async function probeLeak(): Promise<boolean> {
   return ed.verifyAsync(sig, msg, pub);
 }
 `,
+      ),
+  },
+  {
+    script: "check-dist-smoke",
+    proves:
+      "flags a dist binary that fails to boot (bundling regression class: CJS-in-ESM, missing exports subpath, wrong runtime dep version)",
+    perturb: () =>
+      // Swap the CLI's real dist entry with a known-crashing one.
+      // `process.exit(2)` is deterministic and distinct from the
+      // accepted exit code (0) — the gate should flag exit 2 as a
+      // non-match and fail. Cleanup restores the original dist on the
+      // next tick so subsequent probes and tests see the real binary.
+      mutateFile(
+        "apps/cli/dist/index.js",
+        () =>
+          `#!/usr/bin/env node\nconsole.error("${PROBE_PREFIX}intentional crash for dist-smoke probe");\nprocess.exit(2);\n`,
       ),
   },
   {

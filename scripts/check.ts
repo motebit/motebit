@@ -108,8 +108,14 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-suite-dispatch",
     defends:
-      "every signature primitive call in @motebit/crypto routes through suite-dispatch.ts — no implicit Ed25519 defaults (invariant #12)",
+      "every signature primitive call in @motebit/crypto, services/, and apps/ routes through suite-dispatch.ts — no implicit Ed25519 defaults (invariant #12; scope widened from packages/crypto/src/ only on 2026-04-13)",
     script: "check-suite-dispatch",
+  },
+  {
+    name: "check-dist-smoke",
+    defends:
+      "every published binary (apps/cli, packages/create-motebit) boots cleanly — catches bundling regressions before publish (invariant #13, added 2026-04-13 after @noble/hashes × @solana/web3.js slipped into apps/cli/dist/)",
+    script: "check-dist-smoke",
   },
   {
     name: "check-service-primitives",

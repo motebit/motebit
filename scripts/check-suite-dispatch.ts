@@ -32,9 +32,25 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
-const CRYPTO_SRC = join(REPO_ROOT, "packages", "crypto", "src");
 const DISPATCHER_FILE = "suite-dispatch.ts";
 const WAIVER_COMMENT = /crypto-suite:\s*intentional-primitive-call/;
+
+/**
+ * Scope of the scan. Originally `packages/crypto/src/` only — widened
+ * 2026-04-13 to include every service and app tree after the
+ * cold-install walkthrough found `services/proxy/src/validation.ts`
+ * calling `ed.verifyAsync` directly (Vercel Edge Runtime path, legit
+ * but previously invisible to the gate). Keeping the dispatcher inside
+ * packages/crypto/src/ is still the protocol contract; services and
+ * apps either route through @motebit/crypto's dispatcher or declare
+ * an explicit waiver.
+ */
+const SCAN_ROOTS = [
+  join(REPO_ROOT, "packages", "crypto", "src"),
+  join(REPO_ROOT, "services"),
+  join(REPO_ROOT, "apps"),
+];
+const DISPATCHER_ABS = join(REPO_ROOT, "packages", "crypto", "src", DISPATCHER_FILE);
 
 // Patterns that indicate a direct primitive call. Kept precise to
 // avoid false positives on strings, type imports, or destructuring.
@@ -100,23 +116,30 @@ function scanFile(abs: string): Finding[] {
 
 function main(): void {
   // Ensure the dispatcher exists; otherwise the invariant is vacuous.
-  const dispatcherPath = join(CRYPTO_SRC, DISPATCHER_FILE);
   try {
-    statSync(dispatcherPath);
+    statSync(DISPATCHER_ABS);
   } catch {
     console.error(
-      `check-suite-dispatch: dispatcher not found at ${relative(REPO_ROOT, dispatcherPath)}`,
+      `check-suite-dispatch: dispatcher not found at ${relative(REPO_ROOT, DISPATCHER_ABS)}`,
     );
     process.exit(1);
   }
 
-  const files = walkTs(CRYPTO_SRC);
+  const files: string[] = [];
+  for (const root of SCAN_ROOTS) {
+    try {
+      statSync(root);
+    } catch {
+      continue; // root may not exist (e.g. `apps/` in a trimmed checkout)
+    }
+    walkTs(root, files);
+  }
   const findings = files.flatMap(scanFile);
   const active = findings.filter((f) => !f.waived);
   const waived = findings.filter((f) => f.waived);
 
   console.log(
-    `check-suite-dispatch — scanned ${files.length} files under packages/crypto/src (excluding ${DISPATCHER_FILE})\n`,
+    `check-suite-dispatch — scanned ${files.length} files across packages/crypto/src, services/, apps/ (excluding ${DISPATCHER_FILE})\n`,
   );
 
   if (waived.length > 0) {

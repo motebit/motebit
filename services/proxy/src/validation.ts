@@ -271,8 +271,15 @@ export async function parseProxyToken(
       relayPublicKeyHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)),
     );
 
-    // Dynamic import — works in Edge Runtime
+    // Dynamic import — works in Edge Runtime.
+    //
+    // ProxyToken is a service-local artifact (not a protocol-shaped wire
+    // format), verified here on Vercel Edge where the full
+    // @motebit/crypto suite-dispatch module exceeds the edge bundle
+    // budget. If @motebit/crypto gains an edge-friendly build later,
+    // this routes through `verifyBySuite` and the waiver goes away.
     const ed = await import("@noble/ed25519");
+    // crypto-suite: intentional-primitive-call — Edge Runtime constraint; see comment above.
     const valid = await ed.verifyAsync(sigBytes, payloadBytes, pubKeyBytes);
     if (!valid) return null;
 
