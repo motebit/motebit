@@ -615,6 +615,17 @@ export interface ExecutionReceipt {
   relay_task_id?: string;
   /** Scope from the delegation token that authorized this execution, if any. */
   delegated_scope?: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` for
+   * this artifact today — the verification recipe is JCS canonicalization
+   * of the unsigned body (this object without `signature`), Ed25519
+   * primitive, base64url signature encoding, hex public-key encoding.
+   *
+   * Narrowed to the single suite today so widening requires intentional
+   * registry + type change (the plan for post-quantum migration). Verifiers
+   * reject missing or unknown suite values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
 }
 

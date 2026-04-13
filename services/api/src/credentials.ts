@@ -97,6 +97,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       memories_formed: 0,
       prompt_hash: "",
       result_hash: "",
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: "",
     }));
 

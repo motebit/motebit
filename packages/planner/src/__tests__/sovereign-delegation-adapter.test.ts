@@ -42,6 +42,7 @@ function makeReceipt(overrides?: Partial<ExecutionReceipt>): ExecutionReceipt {
     memories_formed: 0,
     prompt_hash: "abc",
     result_hash: "def",
+    suite: "motebit-jcs-ed25519-b64-v1",
     signature: "sig123",
     ...overrides,
   } as ExecutionReceipt;

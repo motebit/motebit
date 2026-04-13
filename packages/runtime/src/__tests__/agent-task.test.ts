@@ -174,6 +174,7 @@ describe("MotebitRuntime.handleAgentTask", () => {
       memories_formed: 1,
       prompt_hash: "a".repeat(64),
       result_hash: "b".repeat(64),
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
       signature: "delegate-sig",
     };
 

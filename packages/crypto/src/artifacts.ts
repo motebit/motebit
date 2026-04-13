@@ -18,6 +18,8 @@ import {
   hexToBytes,
   hash,
   isScopeNarrowed,
+  signBySuite,
+  verifyBySuite,
 } from "./signing.js";
 
 // === Execution Receipt Signing ===
@@ -43,42 +45,74 @@ export interface SignableReceipt {
   delegation_receipts?: SignableReceipt[];
   relay_task_id?: string;
   delegated_scope?: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` today —
+   * the verification recipe is JCS canonicalization of the unsigned body,
+   * Ed25519 primitive, base64url signature encoding. Every ExecutionReceipt
+   * on the wire carries this field; verifiers reject missing or unknown
+   * values fail-closed. Widening this literal to add a PQ suite is a
+   * deliberate registry change (see @motebit/protocol `SuiteId`).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
 }
 
+/** The one suite ExecutionReceipts sign under today. */
+export const EXECUTION_RECEIPT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
 /**
- * Sign an execution receipt. Produces a canonical JSON representation
- * of all fields except `signature`, signs it with Ed25519, and sets
- * the `signature` field to the base64url-encoded result.
+ * Sign an execution receipt. Stamps the cryptosuite discriminator into
+ * the receipt body, canonicalizes with JCS, dispatches the primitive
+ * signature through `signBySuite`, and encodes as base64url per the
+ * suite's rules.
+ *
+ * Callers pass a receipt *without* `signature` or `suite`; the signer
+ * owns both. The returned object is a full `SignableReceipt` with
+ * `suite` and `signature` set.
  */
-export async function signExecutionReceipt<T extends Omit<SignableReceipt, "signature">>(
+export async function signExecutionReceipt<T extends Omit<SignableReceipt, "signature" | "suite">>(
   receipt: T,
   privateKey: Uint8Array,
   publicKey?: Uint8Array,
-): Promise<T & { signature: string }> {
+): Promise<T & { suite: typeof EXECUTION_RECEIPT_SUITE; signature: string }> {
   // Embed the public key for portable verification (no relay lookup needed)
-  const body = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
+  // and stamp the suite into the signed body.
+  const withKey = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
+  const body = { ...withKey, suite: EXECUTION_RECEIPT_SUITE };
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
-  const sig = await ed25519Sign(message, privateKey);
-  return { ...body, signature: toBase64Url(sig) } as T & { signature: string };
+  const sig = await signBySuite(EXECUTION_RECEIPT_SUITE, message, privateKey);
+  return { ...body, signature: toBase64Url(sig) } as T & {
+    suite: typeof EXECUTION_RECEIPT_SUITE;
+    signature: string;
+  };
 }
 
 /**
- * Verify an execution receipt's Ed25519 signature.
- * Reconstructs the canonical JSON from all fields except `signature`
- * and verifies against the provided public key.
+ * Verify an execution receipt's signature by dispatching through the
+ * recipe named in `receipt.suite`. Reconstructs the canonical JSON from
+ * all fields except `signature` (the suite IS part of the signed body,
+ * so tampering with it breaks verification).
+ *
+ * Fail-closed on:
+ *   - unknown suite value (dispatcher rejects)
+ *   - suite other than `EXECUTION_RECEIPT_SUITE` (until a PQ variant
+ *     lands in the registry, this narrow check rejects any other
+ *     value — widens when the union widens)
+ *   - base64url decode errors
+ *   - primitive-level verification failure
  */
 export async function verifyExecutionReceipt(
   receipt: SignableReceipt,
   publicKey: Uint8Array,
 ): Promise<boolean> {
+  if (receipt.suite !== EXECUTION_RECEIPT_SUITE) return false;
   const { signature, ...body } = receipt;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
   try {
     const sig = fromBase64Url(signature);
-    return await ed25519Verify(sig, message, publicKey);
+    return await verifyBySuite(receipt.suite, message, sig, publicKey);
   } catch {
     return false;
   }
@@ -141,7 +175,7 @@ export async function signSovereignPaymentReceipt(
   privateKey: Uint8Array,
   publicKey: Uint8Array,
 ): Promise<SignableReceipt> {
-  const receipt: Omit<SignableReceipt, "signature"> = {
+  const receipt: Omit<SignableReceipt, "signature" | "suite"> = {
     task_id: `${input.rail}:tx:${input.tx_hash}`,
     motebit_id: input.payee_motebit_id,
     device_id: input.payee_device_id,
@@ -154,6 +188,7 @@ export async function signSovereignPaymentReceipt(
     prompt_hash: input.prompt_hash,
     result_hash: input.result_hash,
     // relay_task_id intentionally omitted — sovereign rail, no relay binding
+    // suite is stamped by signExecutionReceipt
   };
   return signExecutionReceipt(receipt, privateKey, publicKey);
 }

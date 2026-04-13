@@ -49,16 +49,17 @@ async function makeKeypair() {
 }
 
 async function signReceipt(
-  body: Omit<ExecutionReceipt, "signature">,
+  body: Omit<ExecutionReceipt, "signature" | "suite">,
   privateKey: Uint8Array,
 ): Promise<ExecutionReceipt> {
-  const canonical = canonicalJson(body);
+  const withSuite = { ...body, suite: "motebit-jcs-ed25519-b64-v1" as const };
+  const canonical = canonicalJson(withSuite);
   const message = new TextEncoder().encode(canonical);
   const sig = await ed.signAsync(message, privateKey);
-  return { ...body, signature: toBase64Url(sig) };
+  return { ...withSuite, signature: toBase64Url(sig) };
 }
 
-function makeReceiptBody(publicKeyHex: string): Omit<ExecutionReceipt, "signature"> {
+function makeReceiptBody(publicKeyHex: string): Omit<ExecutionReceipt, "signature" | "suite"> {
   return {
     task_id: "task-001",
     motebit_id: "01234567-89ab-cdef-0123-456789abcdef",
@@ -242,7 +243,11 @@ describe("verify — execution receipts", () => {
   it("fails on empty signature string", async () => {
     const kp = await makeKeypair();
     const body = makeReceiptBody(kp.publicKeyHex);
-    const receipt: ExecutionReceipt = { ...body, signature: "" };
+    const receipt: ExecutionReceipt = {
+      ...body,
+      suite: "motebit-jcs-ed25519-b64-v1",
+      signature: "",
+    };
 
     const result = await verify(receipt);
     expect(result.type).toBe("receipt");
@@ -253,7 +258,11 @@ describe("verify — execution receipts", () => {
   it("fails on malformed base64url signature", async () => {
     const kp = await makeKeypair();
     const body = makeReceiptBody(kp.publicKeyHex);
-    const receipt: ExecutionReceipt = { ...body, signature: "!!!not-base64!!!" };
+    const receipt: ExecutionReceipt = {
+      ...body,
+      suite: "motebit-jcs-ed25519-b64-v1",
+      signature: "!!!not-base64!!!",
+    };
 
     const result = await verify(receipt);
     expect(result.type).toBe("receipt");
@@ -265,7 +274,11 @@ describe("verify — execution receipts", () => {
     const body = makeReceiptBody(kp.publicKeyHex);
     // 32 bytes instead of 64 — valid base64url but wrong signature length
     const shortSig = toBase64Url(new Uint8Array(32));
-    const receipt: ExecutionReceipt = { ...body, signature: shortSig };
+    const receipt: ExecutionReceipt = {
+      ...body,
+      suite: "motebit-jcs-ed25519-b64-v1",
+      signature: shortSig,
+    };
 
     const result = await verify(receipt);
     expect(result.type).toBe("receipt");

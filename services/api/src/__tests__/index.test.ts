@@ -1140,6 +1140,7 @@ describe("Sync Relay — agent protocol", () => {
       memories_formed: 0,
       prompt_hash: "abc123",
       result_hash: "def456",
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: "forged-signature-value",
     };
 
@@ -1174,6 +1175,7 @@ describe("Sync Relay — agent protocol", () => {
       memories_formed: 0,
       prompt_hash: "abc123",
       result_hash: "def456",
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: "some-sig",
     };
 

@@ -332,6 +332,7 @@ describe("addDelegationEdges", () => {
       tools_used: [],
       memories_formed: 0,
       prompt_hash: "abc",
+      suite: "motebit-jcs-ed25519-b64-v1",
       result_hash: "def",
       signature: "sig",
       delegation_receipts: delegationReceipts,

@@ -40,6 +40,7 @@ function makeReceipt(
     memories_formed: 0,
     prompt_hash: "p",
     result_hash: "r",
+    suite: "motebit-jcs-ed25519-b64-v1",
     signature: "sig",
     delegation_receipts: delegationReceipts.length > 0 ? delegationReceipts : undefined,
   };

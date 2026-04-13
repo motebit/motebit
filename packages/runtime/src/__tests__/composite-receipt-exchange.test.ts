@@ -70,6 +70,7 @@ function makeFakeReceipt(): NonNullable<SovereignReceiptResponse["receipt"]> {
     prompt_hash: "p",
     result_hash: "r",
     public_key: "00",
+    suite: "motebit-jcs-ed25519-b64-v1",
     signature: "sig",
   };
 }

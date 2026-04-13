@@ -119,6 +119,7 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
     memories_formed: 0,
     prompt_hash: "abc",
     result_hash: "def",
+    suite: "motebit-jcs-ed25519-b64-v1" as const,
     signature: "sig123",
   });
 

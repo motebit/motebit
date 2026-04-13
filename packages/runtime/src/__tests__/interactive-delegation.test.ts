@@ -140,6 +140,7 @@ function fakeReceipt(overrides?: Partial<ExecutionReceipt>): ExecutionReceipt {
     memories_formed: 0,
     prompt_hash: "a".repeat(64),
     result_hash: "b".repeat(64),
+    suite: "motebit-jcs-ed25519-b64-v1",
     signature: "fake-sig-for-test",
     ...overrides,
   };

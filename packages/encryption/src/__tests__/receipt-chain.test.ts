@@ -23,8 +23,8 @@ import {
 // ---------------------------------------------------------------------------
 
 function makeReceipt(
-  overrides: Partial<Omit<SignableReceipt, "signature">> = {},
-): Omit<SignableReceipt, "signature"> {
+  overrides: Partial<Omit<SignableReceipt, "signature" | "suite">> = {},
+): Omit<SignableReceipt, "signature" | "suite"> {
   return {
     task_id: "task-001",
     motebit_id: "mote-alice",

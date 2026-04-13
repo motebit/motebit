@@ -900,6 +900,7 @@ export interface ExecutionReceipt {
     status: "completed" | "failed" | "denied";
     // (undocumented)
     submitted_at: number;
+    suite: "motebit-jcs-ed25519-b64-v1";
     // (undocumented)
     task_id: string;
     // (undocumented)

@@ -227,7 +227,7 @@ describe("createSignedToken / verifySignedToken", () => {
 // ---------------------------------------------------------------------------
 
 describe("signExecutionReceipt / verifyExecutionReceipt", () => {
-  function makeReceipt(): Omit<SignableReceipt, "signature"> {
+  function makeReceipt(): Omit<SignableReceipt, "signature" | "suite"> {
     return {
       task_id: "task-001",
       motebit_id: "mote-123",
@@ -289,6 +289,7 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
     const delegationReceipt: SignableReceipt = {
       ...makeReceipt(),
       task_id: "delegated-001",
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: "delegate-sig",
     };
     const receipt = {
@@ -321,8 +322,8 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
 
 describe("verifyReceiptChain", () => {
   function makeReceipt(
-    overrides?: Partial<Omit<SignableReceipt, "signature">>,
-  ): Omit<SignableReceipt, "signature"> {
+    overrides?: Partial<Omit<SignableReceipt, "signature" | "suite">>,
+  ): Omit<SignableReceipt, "signature" | "suite"> {
     return {
       task_id: "task-001",
       motebit_id: "mote-123",
@@ -786,6 +787,7 @@ describe("verifyExecutionReceipt error paths", () => {
       memories_formed: 0,
       prompt_hash: "a".repeat(64),
       result_hash: "b".repeat(64),
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: "!!!not-valid-base64!!!",
     };
     const valid = await verifyExecutionReceipt(receipt, kp.publicKey);

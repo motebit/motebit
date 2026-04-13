@@ -693,6 +693,7 @@ describe("verify — JSON string dispatch", () => {
       memories_formed: 0,
       prompt_hash: "abc",
       result_hash: "def",
+      suite: "motebit-jcs-ed25519-b64-v1",
     };
     const canonical = canonicalJson(receiptBody);
     const message = new TextEncoder().encode(canonical);
