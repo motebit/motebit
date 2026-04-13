@@ -45,6 +45,18 @@ Additional Markdown content MAY appear after the signature comment. It is not co
 
 ## 3. Frontmatter Fields
 
+The sections below define `MotebitIdentity` — the signed YAML object that lives inside the `---` delimiters of a `motebit.md` file. The frontmatter IS the wire format: every implementation that reads or writes a `motebit.md` file parses the same YAML shape. Additional Markdown content below the signature comment is not part of the signed identity and is not binding.
+
+#### Wire format (foundation law)
+
+Every implementation MUST accept and emit the `MotebitIdentity` frontmatter shape described across §§3.1–3.8 as a single YAML document. The top-level keys (`spec`, `motebit_id`, `created_at`, `owner_id`, `identity`, `guardian`, `governance`, `privacy`, `memory`, `type`, `service_name`, `service_description`, `service_url`, `capabilities`, `terms_url`, `devices`, `succession`) and their nested shapes are binding. The canonical JSON used by the signature (§4.1) is derived from this YAML document.
+
+The `MotebitIdentity` type in `@motebit/protocol` is the binding machine-readable form, together with `IdentityGuardian` and `KeySuccessionRecord` for the two nested documents that appear both inside the frontmatter and as standalone signed objects (§3.3, §3.8).
+
+#### Storage (reference convention — non-binding)
+
+The reference implementations persist identity files on the local filesystem (CLI/desktop: `~/.motebit/motebit.md`; mobile/web: SecureStore / IndexedDB entry), and relay registries store a parsed copy in `agents` and `devices` tables for fast lookup. Alternative implementations MAY use any transport or store, so long as the signed YAML document above round-trips unchanged.
+
 ### 3.1 — Top-level fields
 
 | Field        | Type   | Required | Description                                                                                   |

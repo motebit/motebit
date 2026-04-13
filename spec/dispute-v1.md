@@ -55,7 +55,11 @@ opened → expired
 
 Either the delegator or the worker on a completed task. The filing party must be a direct party to the task — not a sub-delegate, not a credential issuer, not a federation peer.
 
-### 4.2 Dispute Request
+### 4.2 — DisputeRequest
+
+#### Wire format (foundation law)
+
+The artifact every implementation MUST emit when filing a dispute. Field names, types, and the canonical-JSON signing order are binding.
 
 ```
 DisputeRequest {
@@ -71,6 +75,12 @@ DisputeRequest {
   signature:        string          // Ed25519 over canonical JSON of all fields except signature
 }
 ```
+
+The `DisputeRequest` type in `@motebit/protocol` is the binding machine-readable form.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay persists filed disputes in `relay_disputes(dispute_id PRIMARY KEY, task_id, allocation_id, state, filed_at, body JSON)`. Alternative implementations MAY normalize evidence references, use event sourcing, or store state on the task row itself.
 
 ### 4.3 Eligibility
 
@@ -105,7 +115,11 @@ DisputeRequest {
 | `execution_ledger`  | Timeline entries from execution-ledger@1.0                  |
 | `attestation`       | Third-party signed statement (e.g., from a federation peer) |
 
-### 5.2 Dispute Evidence
+### 5.2 — DisputeEvidence
+
+#### Wire format (foundation law)
+
+The shape every evidence submission MUST carry. The relay acts as transport — it delivers the signed document to both parties and the adjudicator — and MUST NOT alter the payload.
 
 ```
 DisputeEvidence {
@@ -118,6 +132,8 @@ DisputeEvidence {
   signature:        string          // Ed25519 over canonical JSON of all fields except signature
 }
 ```
+
+The `DisputeEvidence` type in `@motebit/protocol` is the binding machine-readable form.
 
 ### 5.3 Evidence Window
 
@@ -153,7 +169,11 @@ Federation adjudication requires a minimum 3-peer quorum from the federation gra
 
 When the agent disputes the relay itself, the agent's onchain proofs — credential anchors (credential-anchor@1.0) and settlement anchors (settlement@1.0 §7) — serve as evidence the relay cannot censor, because they exist independently on the public ledger. Adjudication MUST go to federation. If no federation peers are available, the dispute is recorded on the agent's local ledger as unresolvable, but the agent's onchain evidence exists independently and survives relay death.
 
-### 6.4 Dispute Resolution
+### 6.4 — DisputeResolution
+
+#### Wire format (foundation law)
+
+The signed verdict. A resolution that does not match this shape cannot be validated by a conformant destination or federation peer.
 
 ```
 DisputeResolution {
@@ -175,6 +195,12 @@ AdjudicatorVote {
   signature:   string          // Ed25519 by the voting peer
 }
 ```
+
+The `DisputeResolution` and `AdjudicatorVote` types in `@motebit/protocol` are the binding machine-readable forms.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay writes a single `relay_disputes` row with JSON resolution data. Federated peer votes are persisted separately in `relay_dispute_votes(dispute_id, peer_id, vote, signature)`. Alternative implementations MAY collapse them into a single document or store votes as an event log.
 
 ### 6.5 Foundation Law
 
@@ -243,7 +269,11 @@ This ensures p2p settlement has a consequence path without requiring fund custod
 
 Either party may appeal a `resolved` dispute once. The appeal window opens at `resolved_at` and runs for a bounded period. If no appeal is filed, the dispute transitions to `final` automatically.
 
-### 8.2 Dispute Appeal
+### 8.2 — DisputeAppeal
+
+#### Wire format (foundation law)
+
+The signed appeal submission. One per dispute; further recourse after the appeal is out of protocol scope.
 
 ```
 DisputeAppeal {
@@ -255,6 +285,8 @@ DisputeAppeal {
   signature:             string          // Ed25519 over canonical JSON of all fields except signature
 }
 ```
+
+The `DisputeAppeal` type in `@motebit/protocol` is the binding machine-readable form.
 
 ### 8.3 Appeal Adjudication
 

@@ -33,6 +33,21 @@ The token is split on the first `.` character. The payload precedes the dot; the
 
 ## 3. Payload Fields
 
+#### Wire format (foundation law)
+
+Every implementation MUST emit this exact JSON object shape inside the signed token. Field names are short (three letters, JWT-style) and cannot be renamed; every verifier on the network reads the same keys.
+
+```json
+{
+  "mid": "019530a1-...",
+  "did": "019530a1-...",
+  "iat": 1712959200000,
+  "exp": 1712962800000,
+  "jti": "c4b28f10-4ac6-4e7e-8bbf-19f3d6a49b0b",
+  "aud": "task:submit"
+}
+```
+
 | Field | Type   | Required | Description                                                                                            |
 | ----- | ------ | -------- | ------------------------------------------------------------------------------------------------------ |
 | `mid` | string | yes      | The agent's `motebit_id`. Binds the token to a specific identity.                                      |
@@ -43,6 +58,12 @@ The token is split on the first `.` character. The payload precedes the dot; the
 | `aud` | string | yes      | Audience claim — the endpoint or operation this token authorizes. Prevents cross-endpoint replay (§5). |
 
 All fields are required. A verifier MUST reject tokens missing any field.
+
+The canonical TypeScript binding is `SignedTokenPayload` in `@motebit/crypto`. This type is defined alongside its signing/verifying primitives because the payload is never useful without the signing algorithm. The wire shape above is the protocol law; the `@motebit/crypto` type is its reference implementation.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay does not persist signed tokens — they are short-lived, opaque bearer strings. The relay MAY maintain a `jti` deny-list (RAM or SQLite) for revoked or consumed tokens; the data structure is implementation-local and not part of the wire format. Clients persist tokens in the OS keyring for session continuity; that too is local.
 
 ---
 

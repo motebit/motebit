@@ -52,7 +52,11 @@ idle → initiated → cancelled
 
 The agent announces intent to migrate. The relay issues a migration token.
 
-### 4.1 MigrationRequest
+### 4.1 — MigrationRequest
+
+#### Wire format (foundation law)
+
+The exact request shape every implementation MUST emit when initiating migration. Field names, types, and the canonical-JSON signing order are binding.
 
 ```
 MigrationRequest {
@@ -64,7 +68,13 @@ MigrationRequest {
 }
 ```
 
-### 4.2 MigrationToken
+The `MigrationRequest` type in `@motebit/protocol` is the binding machine-readable form.
+
+### 4.2 — MigrationToken
+
+#### Wire format (foundation law)
+
+The token the source relay returns in response to a valid `MigrationRequest`. This is the portable artifact the agent presents at the destination.
 
 ```
 MigrationToken {
@@ -77,6 +87,12 @@ MigrationToken {
   signature:          string      // Ed25519 by source relay over canonical JSON of all fields except signature
 }
 ```
+
+The `MigrationToken` type in `@motebit/protocol` is the binding machine-readable form.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay persists active tokens in `relay_migration_tokens` with `(token_id PRIMARY KEY, motebit_id, expires_at, state)`. Alternative implementations MAY store state on a session record or derive expiry on the fly; only the wire shape above is protocol-binding.
 
 ### 4.3 Foundation Law
 
@@ -95,7 +111,11 @@ MigrationToken {
 
 The source relay attests to the agent's history. This is the relay's signed statement of fact about the agent's tenure.
 
-### 5.1 DepartureAttestation
+### 5.1 — DepartureAttestation
+
+#### Wire format (foundation law)
+
+The relay's signed statement of fact about the agent's tenure. Every implementation MUST emit and accept this shape so destination relays can verify attestations without coordination.
 
 ```
 DepartureAttestation {
@@ -123,6 +143,12 @@ DepartureAttestation {
 
 A valid attestation proves the source relay voluntarily signed these facts. It does not prove the facts are true — credential anchor proofs (§6) provide the independent verification layer.
 
+The `DepartureAttestation` type in `@motebit/protocol` is the binding machine-readable form.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay persists issued attestations on `relay_departures(attestation_id, motebit_id, attested_at, body JSON)` for 90 days. Alternative implementations MAY stream attestations directly to the agent without persistence; the wire shape above is what conforming peers consume.
+
 ### 5.3 Foundation Law
 
 - The relay MUST issue a DepartureAttestation for any agent with an active MigrationToken.
@@ -138,7 +164,11 @@ A valid attestation proves the source relay voluntarily signed these facts. It d
 
 The agent exports its portable reputation: verifiable credentials, onchain anchor proofs, and key succession history.
 
-### 6.1 CredentialBundle
+### 6.1 — CredentialBundle
+
+#### Wire format (foundation law)
+
+The agent-signed export of portable reputation. The destination relay reads this document and validates every entry; the source relay does not sign.
 
 ```
 CredentialBundle {
@@ -151,6 +181,8 @@ CredentialBundle {
   signature:        string                    // Ed25519 by agent over canonical JSON of all fields except signature
 }
 ```
+
+The `CredentialBundle` type in `@motebit/protocol` is the binding machine-readable form.
 
 ### 6.2 Foundation Law
 
@@ -175,9 +207,11 @@ The agent's virtual account balance is withdrawn via existing settlement rails b
 3. Withdrawal processes through the appropriate settlement rail (fiat, protocol, direct_asset, orchestration).
 4. On confirmed withdrawal, the migration advances to `departed`.
 
-### 7.2 Balance Waiver
+### 7.2 — BalanceWaiver
 
-An agent MAY waive its remaining balance to expedite departure. The waiver is a signed statement:
+An agent MAY waive its remaining balance to expedite departure. The waiver is a signed statement.
+
+#### Wire format (foundation law)
 
 ```
 BalanceWaiver {
@@ -187,6 +221,8 @@ BalanceWaiver {
   signature:      string      // Ed25519 by agent
 }
 ```
+
+The `BalanceWaiver` type in `@motebit/protocol` is the binding machine-readable form.
 
 ### 7.3 Foundation Law
 
@@ -199,7 +235,11 @@ BalanceWaiver {
 
 The agent presents its migration bundle to the destination relay for validation and onboarding.
 
-### 8.1 MigrationPresentation
+### 8.1 — MigrationPresentation
+
+#### Wire format (foundation law)
+
+The bundle the agent presents at the destination relay. A destination relay that can parse `MigrationPresentation` and the four component documents has everything it needs to validate onboarding — no out-of-band coordination with the source.
 
 ```
 MigrationPresentation {
@@ -211,6 +251,8 @@ MigrationPresentation {
   signature:                string              // Ed25519 by agent over canonical JSON of all fields except signature
 }
 ```
+
+The `MigrationPresentation` type in `@motebit/protocol` is the binding machine-readable form.
 
 ### 8.2 Validation Steps
 

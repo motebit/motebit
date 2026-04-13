@@ -22,10 +22,14 @@ The other specs define the artifacts: identity files (identity@1.0), execution r
 
 A delegator submits a task for routing and execution.
 
-### 3.1 Task Request
+### 3.1 — AgentTask
+
+#### Wire format (foundation law)
+
+The request body every implementation MUST accept on `POST /api/v1/tasks`. Field names and types are binding; unknown fields MUST be ignored (forward compatibility).
 
 ```
-TaskRequest {
+AgentTask {
   prompt:                 string      // Required, non-empty
   submitted_by:           string      // MotebitId of the delegator
   required_capabilities:  string[]    // Optional capability filter for routing
@@ -36,6 +40,12 @@ TaskRequest {
   wall_clock_ms:          number      // Optional: delegator's wall clock at submission
 }
 ```
+
+The `AgentTask` type in `@motebit/protocol` is the binding machine-readable form.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay persists submitted tasks in `relay_tasks(task_id PRIMARY KEY, submitted_by, status, body JSON)`. Alternative implementations MAY decompose the body into normalized columns or a document store.
 
 ### 3.2 Task Response
 
@@ -94,7 +104,11 @@ pending → expired
 
 The receipt format is defined in `execution-ledger@1.0`. This section specifies the delegation-specific requirements.
 
-### 5.1 Required Fields for Relay-Mediated Delegation
+### 5.1 — ExecutionReceipt
+
+#### Wire format (foundation law)
+
+Every relay-mediated receipt MUST carry these fields. The protocol-wide receipt format is defined in `execution-ledger@1.0 §11`; this section adds delegation-specific requirements (in particular, `relay_task_id` — see §5.2).
 
 ```
 ExecutionReceipt {
@@ -116,6 +130,8 @@ ExecutionReceipt {
   signature:            string      // Ed25519 over canonical JSON of all fields except signature
 }
 ```
+
+The `ExecutionReceipt` type in `@motebit/protocol` is the binding machine-readable form.
 
 ### 5.2 Relay Task ID Binding
 
@@ -161,7 +177,11 @@ disputed → settled
 2. **Settle:** On valid receipt, the relay computes `net = gross - platform_fee` and credits the worker's virtual account. The delegator is refunded any excess from the risk buffer.
 3. **Release:** On task failure, denial, or expiration, the full locked amount is returned to the delegator.
 
-### 6.3 Settlement Record
+### 6.3 — SettlementRecord
+
+#### Wire format (foundation law)
+
+The settlement record every implementation MUST emit when a task is settled. This is the audit-facing shape that crosses relay/federation boundaries; the ledger entry behind it is implementation-local.
 
 ```
 SettlementRecord {
@@ -176,6 +196,8 @@ SettlementRecord {
 }
 ```
 
+The `SettlementRecord` type in `@motebit/protocol` is the binding machine-readable form.
+
 ### 6.4 Foundation Law
 
 - No settlement without a verified receipt. The receipt's Ed25519 signature must pass before any money moves.
@@ -187,7 +209,11 @@ SettlementRecord {
 
 How agents advertise capabilities and how delegators find workers.
 
-### 7.1 Service Listing
+### 7.1 — AgentServiceListing
+
+#### Wire format (foundation law)
+
+The listing document every worker advertises at its relay. This is the shape delegators consume at discovery time.
 
 ```
 AgentServiceListing {
@@ -213,9 +239,13 @@ CapabilityPrice {
 }
 ```
 
-### 7.2 Routing Score
+The `AgentServiceListing` and `CapabilityPrice` types in `@motebit/protocol` are the binding machine-readable forms.
 
-When the relay selects a worker, it produces a routing score explaining the selection:
+### 7.2 — RouteScore
+
+#### Wire format (foundation law)
+
+When the relay selects a worker, it produces a routing score explaining the selection. The score is returned to the delegator for auditability; the routing algorithm that produced it is implementation-local.
 
 ```
 RouteScore {
@@ -232,6 +262,8 @@ RouteScore {
   selected:       boolean
 }
 ```
+
+The `RouteScore` type in `@motebit/protocol` is the binding machine-readable form.
 
 ### 7.3 Foundation Law
 

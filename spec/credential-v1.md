@@ -32,6 +32,10 @@ All credentials conform to the W3C Verifiable Credentials Data Model 2.0.
 
 ### 2.1 Verifiable Credential
 
+#### Wire format (foundation law)
+
+Motebit credentials are W3C VC 2.0 JSON documents. Every conformant implementation MUST emit this exact envelope. The type-specific fields inside `credentialSubject` are specified in §3 (and each type is named in `@motebit/protocol` as a `*Subject` interface so subject shape stays aligned across implementations).
+
 ```json
 {
   "@context": ["https://www.w3.org/ns/credentials/v2"],
@@ -69,6 +73,10 @@ All credentials conform to the W3C Verifiable Credentials Data Model 2.0.
 | `credentialStatus`  | object             | No       | Revocation status endpoint (§6)                                               |
 | `proof`             | DataIntegrityProof | Yes      | Ed25519 signature over canonical content (§5)                                 |
 
+#### Storage (reference convention — non-binding)
+
+The reference relay stores the raw signed JSON string in `relay_credentials.credential_json TEXT` along with indexed columns for issuer, subject, type, and revocation status. Alternative implementations MAY normalize `credentialSubject` into per-type tables, store as JSONB, or use a triple store. The wire document above is what crosses every HTTP boundary.
+
 ### 2.2 Verifiable Presentation
 
 Presentations bundle multiple credentials for third-party evaluation. The holder signs the presentation envelope; each contained credential retains its original issuer proof.
@@ -100,7 +108,7 @@ Presentations bundle multiple credentials for third-party evaluation. The holder
 
 ## 3. Credential Types
 
-### 3.1 AgentReputationCredential
+### 3.1 — ReputationCredentialSubject
 
 Peer-issued. The delegating agent attests to the executing agent's performance on completed tasks.
 
@@ -108,6 +116,12 @@ Peer-issued. The delegating agent attests to the executing agent's performance o
 **Subject:** The agent that executed the task.
 **Trigger:** Verified execution receipt with `status === "completed"` and result quality ≥ 0.2.
 **Constraint:** Not issued on self-delegation (delegator === executor).
+
+**Credential type token (in VC `type` array):** `AgentReputationCredential`.
+
+#### Wire format (foundation law)
+
+The `credentialSubject` object for an `AgentReputationCredential`. Every implementation MUST emit these fields with these names and types; the VC wrapper from §2.1 applies.
 
 | Field            | Type   | Range  | Description                                        |
 | ---------------- | ------ | ------ | -------------------------------------------------- |
@@ -120,13 +134,18 @@ Peer-issued. The delegating agent attests to the executing agent's performance o
 | `sample_size`    | number | ≥ 1    | Deduplicated task count for statistical confidence |
 | `measured_at`    | number | —      | Epoch milliseconds of measurement                  |
 
-### 3.2 AgentTrustCredential
+The `ReputationCredentialSubject` type in `@motebit/protocol` is the binding machine-readable form.
+
+### 3.2 — TrustCredentialSubject
 
 Peer-issued. One agent attests to its trust assessment of another agent, issued when the trust level transitions (promotion or demotion).
 
 **Issuer:** The evaluating agent.
 **Subject:** The evaluated agent.
 **Trigger:** Trust level transition after receipt verification (e.g., `first_contact` → `verified`).
+**Credential type token (in VC `type` array):** `AgentTrustCredential`.
+
+#### Wire format (foundation law)
 
 | Field               | Type   | Range | Description                                                                    |
 | ------------------- | ------ | ----- | ------------------------------------------------------------------------------ |
@@ -138,13 +157,18 @@ Peer-issued. One agent attests to its trust assessment of another agent, issued 
 | `first_seen_at`     | number | —     | Epoch milliseconds of first interaction                                        |
 | `last_seen_at`      | number | —     | Epoch milliseconds of most recent interaction                                  |
 
-### 3.3 AgentGradientCredential
+The `TrustCredentialSubject` type in `@motebit/protocol` is the binding machine-readable form.
+
+### 3.3 — GradientCredentialSubject
 
 Self-issued. The agent measures its own internal state — knowledge density, retrieval quality, curiosity pressure — and publishes a signed snapshot. Self-issued credentials are excluded from trust routing (§4.1) but are useful for introspection, monitoring, and compliance audits.
 
 **Issuer:** The agent itself.
 **Subject:** The agent itself.
 **Trigger:** Periodic housekeeping cycle.
+**Credential type token (in VC `type` array):** `AgentGradientCredential`.
+
+#### Wire format (foundation law)
 
 | Field                    | Type   | Range  | Description                                       |
 | ------------------------ | ------ | ------ | ------------------------------------------------- |
@@ -159,6 +183,8 @@ Self-issued. The agent measures its own internal state — knowledge density, re
 | `tool_efficiency`        | number | [0, 1] | Tool call success rate and latency                |
 | `curiosity_pressure`     | number | [0, 1] | Tendency to seek novel experiences                |
 | `measured_at`            | number | —      | Epoch milliseconds of snapshot                    |
+
+The `GradientCredentialSubject` type in `@motebit/protocol` is the binding machine-readable form.
 
 ---
 

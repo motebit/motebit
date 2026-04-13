@@ -44,7 +44,11 @@ This step is independent of anchoring — it verifies the credential maps to the
 
 Credentials are batched into Merkle trees for efficient onchain anchoring. One transaction anchors many credentials.
 
-### 4.1 Batch Format
+### 4.1 — CredentialAnchorBatch
+
+#### Wire format (foundation law)
+
+Every implementation MUST emit and accept this exact shape when publishing a batch record. Field names, types, and ordering of signed fields are binding.
 
 ```
 CredentialAnchorBatch {
@@ -58,6 +62,12 @@ CredentialAnchorBatch {
   signature:        string      // hex-encoded Ed25519 signature by relay
 }
 ```
+
+The TypeScript type `CredentialAnchorBatch` in `@motebit/protocol` is the binding machine-readable form.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay persists batch rows in a `relay_credential_batches` table keyed by `batch_id`, with `credential_ids` stored as JSON. Alternative implementations MAY use a separate credential-batch join table, a columnar store, or any other shape, so long as the wire format above is preserved on egress.
 
 ### 4.2 Batch Construction
 
@@ -92,7 +102,11 @@ Smaller default batch size than settlement anchoring (50 vs 100) because credent
 
 A self-verifiable proof that a specific credential was included in an anchored batch.
 
-### 5.1 Proof Format
+### 5.1 — CredentialAnchorProof
+
+#### Wire format (foundation law)
+
+Every implementation MUST emit and accept this exact shape on the `GET /api/v1/credentials/{credentialId}/anchor-proof` response boundary. The proof is self-verifiable offline from this document alone plus the credential and the relay's public key.
 
 ```
 CredentialAnchorProof {
@@ -133,6 +147,10 @@ Steps 1-3 are verifiable offline with only the credential, proof, and relay's pu
 Step 4 additionally proves the root was made immutable and public.
 
 Without step 4, the relay's signature still provides accountability — the relay signed the batch with its Ed25519 key, and that signature is non-repudiable. The onchain anchor prevents the relay from later claiming it never signed the batch (the private key could theoretically be rotated and the old batch denied).
+
+#### Storage (reference convention — non-binding)
+
+The reference relay stores `merkle_root`, `leaf_count`, `first_issued_at`, `last_issued_at`, and `signature` on the `relay_credential_batches` row; `siblings` and `layer_sizes` are reconstructed from the ordered `credential_ids` at proof-serve time. Alternative implementations MAY precompute and persist every proof, or compute them lazily. The wire format above is what crosses the boundary.
 
 ### 5.3 Reference Implementation
 

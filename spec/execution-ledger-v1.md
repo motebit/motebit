@@ -274,7 +274,11 @@ An execution receipt is the atomic proof of task execution. A single receipt pro
 
 Receipts are self-verifiable: the signer's Ed25519 public key MAY be embedded in the `public_key` field, allowing any party to verify the signature without contacting a relay or identity registry.
 
-### 11.1 — Receipt Structure
+### 11.1 — ExecutionReceipt
+
+#### Wire format (foundation law)
+
+The atomic proof of task execution. Every conformant implementation MUST emit this exact field set when signing a receipt. The receipt crosses trust boundaries, so field names, types, and signed-field ordering are binding; storage and indexing are implementation concerns.
 
 | Field                 | Type               | Required | Description                                                                                                                                |
 | --------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -294,6 +298,12 @@ Receipts are self-verifiable: the signer's Ed25519 public key MAY be embedded in
 | `relay_task_id`       | string             | no       | Relay's task identifier. Required for relay-mediated tasks. Included in the signature to bind the receipt to a specific economic contract. |
 | `delegated_scope`     | string             | no       | Scope from the delegation token that authorized this execution (§A.4).                                                                     |
 | `signature`           | string             | yes      | Base64url-encoded Ed25519 signature (§11.2).                                                                                               |
+
+The `ExecutionReceipt` type in `@motebit/protocol` is the binding machine-readable form.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay persists receipts in the `relay_settlements` and per-agent execution-ledger tables (UTF-8 canonical JSON + indexed columns for `task_id`, `motebit_id`, `status`, `completed_at`). Apps persist receipts as events in the local event log. Alternative implementations MAY store receipts in any append-only structure; the wire shape above is what crosses every boundary.
 
 ### 11.2 — Signing Algorithm
 

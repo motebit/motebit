@@ -90,8 +90,14 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-spec-coverage",
     defends:
-      "types named in spec Wire format (foundation law) sections are exported from @motebit/protocol",
+      "types named in spec Wire format (foundation law) sections are exported from @motebit/protocol; every spec has adopted the wire-vs-storage split",
     script: "check-spec-coverage",
+    // --strict promotes the grace-period warning (unstructured specs) into a
+    // hard fail. Flipped on 2026-04-13 after all twelve specs adopted the
+    // wire-vs-storage doctrine. The tenth synchronization invariant is now
+    // locked at category 2 — a new spec MUST ship with at least one
+    // "#### Wire format (foundation law)" subsection or CI fails.
+    args: ["--strict"],
   },
   {
     name: "check-service-primitives",

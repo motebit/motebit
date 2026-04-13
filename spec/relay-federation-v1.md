@@ -27,7 +27,7 @@ Federation is additive. A single relay operates identically whether or not it ha
 
 Each relay has a persistent cryptographic identity, independent of the agents it hosts.
 
-### 2.1 — Keypair
+### 2.1 — Relay Keypair
 
 | Property       | Value                                                                                                                                                                                              |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -61,7 +61,11 @@ A relay's public key can be expressed as `did:key:z6Mk...` using the same deriva
 
 Peering establishes a bilateral, authenticated relationship between two relays. Both relays must explicitly agree to peer — there is no unilateral discovery or implicit federation.
 
-### 3.1 — Handshake
+### 3.1 — Peering Handshake
+
+#### Wire format (foundation law)
+
+The three-step handshake message shape every implementation MUST emit. The propose/respond/confirm endpoints, payload fields, and signature construction below are binding — a peer that signs the wrong bytes cannot authenticate on a conformant federation.
 
 The peering handshake is a 3-step mutual authentication protocol:
 
@@ -96,6 +100,10 @@ Relay A (initiator)                         Relay B (responder)
 **Step 3 — Confirm.** Relay A verifies B's challenge signature against B's public key. If valid, A signs `relay_id:nonce_b` (A's own relay_id concatenated with `:` and B's nonce) with its own private key and sends the response. Relay B verifies A's signature. Both relays transition the peer to `active` state.
 
 If any verification fails, the handshake is aborted and the peer record is discarded.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay persists peer state in the `relay_peers` table (§3.4). Alternative implementations MAY keep peers in memory, in a config file, or in an external service registry — only the wire messages above cross the federation.
 
 ### 3.2 — Heartbeat
 

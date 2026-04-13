@@ -77,7 +77,11 @@ A relay SHOULD run reconciliation checks periodically and MUST expose a reconcil
 
 An agent that offers services registers a listing declaring its capabilities, pricing, and SLA guarantees.
 
-### 3.1 — Listing Fields
+### 3.1 — AgentServiceListing
+
+#### Wire format (foundation law)
+
+The listing shape every worker publishes and every delegator consumes. Listings are shared across federation peers; field names, types, and required-ness are binding.
 
 | Field             | Type              | Required | Description                                                      |
 | ----------------- | ----------------- | -------- | ---------------------------------------------------------------- |
@@ -91,7 +95,15 @@ An agent that offers services registers a listing declaring its capabilities, pr
 | `regulatory_risk` | number            | no       | Self-declared regulatory risk score ∈ [0, ∞). Default 0.         |
 | `updated_at`      | number            | yes      | Epoch milliseconds of last listing update.                       |
 
+The `AgentServiceListing` type in `@motebit/protocol` is the binding machine-readable form.
+
+#### Storage (reference convention — non-binding)
+
+The reference relay persists listings in `relay_service_listings(listing_id, motebit_id, body JSON)` with indexed `capabilities` via a side table. Alternative implementations MAY denormalize pricing into a separate price table or store the listing document whole. The wire shape above is what crosses federation peer boundaries.
+
 ### 3.2 — CapabilityPrice
+
+#### Wire format (foundation law)
 
 | Field        | Type   | Required | Description                                                   |
 | ------------ | ------ | -------- | ------------------------------------------------------------- |
@@ -99,6 +111,8 @@ An agent that offers services registers a listing declaring its capabilities, pr
 | `unit_cost`  | number | yes      | Cost per unit in the listing currency.                        |
 | `currency`   | string | yes      | ISO 4217 or token symbol (e.g., `"USD"`, `"USDC"`).           |
 | `per`        | string | yes      | Billing dimension: `"task"`, `"tool_call"`, or `"token"`.     |
+
+The `CapabilityPrice` type in `@motebit/protocol` is the binding machine-readable form.
 
 ### 3.3 — SLA
 

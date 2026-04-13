@@ -197,7 +197,11 @@ All of these are protocol-conformant. The curve coincidence is the cleanest defa
 
 ## 7. Sovereign Payment Receipt Format
 
-When a motebit makes a direct payment via the sovereign rail (e.g., Solana wallet-to-wallet), the payee signs a `SovereignPaymentReceipt` structurally equivalent to an `ExecutionReceipt` from `motebit/execution-ledger@1.0`, with the following field conventions:
+When a motebit makes a direct payment via the sovereign rail (e.g., Solana wallet-to-wallet), the payee signs a `SovereignPaymentReceipt` structurally equivalent to an `ExecutionReceipt` from `motebit/execution-ledger@1.0`, with the following field conventions.
+
+#### Wire format (foundation law)
+
+Every sovereign-rail implementation MUST emit a receipt that matches this shape. The `SovereignPaymentReceipt` is not a new type — it is an `ExecutionReceipt` whose `task_id` anchors to an onchain transaction (§3.3) and whose `relay_task_id` is absent (§3.4). Any party with the public ledger the rail uses can verify the receipt with no relay contact (§3.2).
 
 | Field                           | Value                                               | Notes                                                            |
 | ------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------- |
@@ -217,6 +221,12 @@ When a motebit makes a direct payment via the sovereign rail (e.g., Solana walle
 The reference helper lives in `@motebit/crypto` as `signSovereignPaymentReceipt`. Verification uses the standard `verifyExecutionReceipt` function against the embedded `public_key`. No relay lookup is required at any step.
 
 **The critical structural fact:** the receipt is signed by the _identity key_ (§3.3). The `task_id` references the wallet transaction as a data field. An implementation where identity and wallet keys are different (multisig, hardware, separate keys with binding) produces a structurally identical receipt — the signature is still made by the identity key, the wallet transaction is still referenced as data.
+
+The `ExecutionReceipt` type in `@motebit/protocol` is the binding machine-readable form for sovereign payment receipts; see `execution-ledger-v1.md §11.1` for the full field set.
+
+#### Storage (reference convention — non-binding)
+
+The reference stack persists sovereign payment receipts in each motebit's local execution ledger (event store), not in any relay database — there is no relay in the sovereign path. Apps MAY keep a separate "sovereign payments" index for UX; that index is a local convenience, not part of the wire format. The onchain transaction at `task_id`'s hash is the permanent record every party can independently verify.
 
 ---
 
