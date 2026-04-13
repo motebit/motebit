@@ -124,6 +124,9 @@ const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "trustMultiply",
     "composeTrustChain",
     "joinParallelRoutes",
+    // Cryptosuite registry — pure type guard + lookup over a frozen record
+    "isSuiteId",
+    "getSuiteEntry",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

@@ -1455,3 +1455,21 @@ export type {
   SettlementEligibility,
   SolvencyProof,
 } from "./settlement-mode.js";
+
+// === Cryptosuite Registry ===
+// Every signed wire-format artifact in motebit declares its verification
+// recipe via a `suite: SuiteId` field. Missing or unknown values are
+// rejected fail-closed. See `packages/protocol/src/crypto-suite.ts` for
+// the registry and `packages/crypto/src/suite-dispatch.ts` for the
+// verification hook. Post-quantum migration is a new registry entry,
+// not a wire-format change.
+export type {
+  SuiteId,
+  SuiteEntry,
+  SuiteStatus,
+  SuiteAlgorithm,
+  SuiteCanonicalization,
+  SuiteSignatureEncoding,
+  SuitePublicKeyEncoding,
+} from "./crypto-suite.js";
+export { SUITE_REGISTRY, ALL_SUITE_IDS, isSuiteId, getSuiteEntry } from "./crypto-suite.js";

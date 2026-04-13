@@ -165,6 +165,9 @@ export interface AgentTrustStoreAdapter {
     updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void>;
 }
 
+// @public
+export const ALL_SUITE_IDS: readonly SuiteId[];
+
 // Warning: (ae-forgotten-export) The symbol "Brand" needs to be exported by the entry point index.d.ts
 //
 // @public (undocumented)
@@ -955,6 +958,12 @@ export interface ExecutionTimelineEntry {
 // @public (undocumented)
 export type ExecutionTimelineType = "goal_started" | "plan_created" | "step_started" | "tool_invoked" | "tool_result" | "step_completed" | "step_failed" | "step_delegated" | "plan_completed" | "plan_failed" | "goal_completed" | "proposal_created" | "proposal_accepted" | "proposal_rejected" | "proposal_countered" | "collaborative_step_completed";
 
+// @public
+export function getSuiteEntry(id: SuiteId): SuiteEntry;
+
+// @public (undocumented)
+export function getSuiteEntry(id: string): SuiteEntry | undefined;
+
 // @public (undocumented)
 export interface GoalExecutionManifest {
     // (undocumented)
@@ -1063,6 +1072,9 @@ export interface InjectionWarning {
 
 // @public
 export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail;
+
+// @public
+export function isSuiteId(value: unknown): value is SuiteId;
 
 // @public
 export function joinParallelRoutes(scores: number[]): number;
@@ -1750,6 +1762,44 @@ export interface SuccessionChainResult {
     // (undocumented)
     valid: boolean;
 }
+
+// @public (undocumented)
+export const SUITE_REGISTRY: Readonly<Record<SuiteId, SuiteEntry>>;
+
+// @public
+export type SuiteAlgorithm = "Ed25519" | "ML-DSA-44" | "ML-DSA-65" | "SLH-DSA-SHA2-128s";
+
+// @public
+export type SuiteCanonicalization = "jcs" | "json-stringify" | "utf8-concat";
+
+// @public
+export interface SuiteEntry {
+    // (undocumented)
+    readonly algorithm: SuiteAlgorithm;
+    // (undocumented)
+    readonly canonicalization: SuiteCanonicalization;
+    readonly description: string;
+    // (undocumented)
+    readonly id: SuiteId;
+    // (undocumented)
+    readonly publicKeyEncoding: SuitePublicKeyEncoding;
+    // (undocumented)
+    readonly signatureEncoding: SuiteSignatureEncoding;
+    // (undocumented)
+    readonly status: SuiteStatus;
+}
+
+// @public
+export type SuiteId = "motebit-jcs-ed25519-b64-v1" | "motebit-jcs-ed25519-hex-v1" | "motebit-jwt-ed25519-v1" | "motebit-concat-ed25519-hex-v1" | "eddsa-jcs-2022";
+
+// @public
+export type SuitePublicKeyEncoding = "hex" | "multibase-did-key";
+
+// @public
+export type SuiteSignatureEncoding = "base64url" | "hex" | "multibase-base58btc";
+
+// @public
+export type SuiteStatus = "preferred" | "allowed" | "legacy";
 
 // @public
 export interface SyncConversation {
