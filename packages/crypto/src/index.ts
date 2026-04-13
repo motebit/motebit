@@ -22,13 +22,11 @@
  *   const vc = await issueReputationCredential(snapshot, privateKey, publicKey, did);
  */
 
-import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
-
-// @noble/ed25519 v3 requires explicit SHA-512 binding
-if (!ed.hashes.sha512) {
-  ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
-}
+import { verifyBySuite } from "./suite-dispatch.js";
+// The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
+// as a side effect of module load. Importing verifyBySuite here is
+// enough to guarantee that the primitive is ready before any verify
+// call in this module.
 
 // ===========================================================================
 // Types — Identity (motebit/identity@1.0 schema)
@@ -609,12 +607,17 @@ async function verifyIdentity(content: string): Promise<IdentityVerifyResult> {
 
   const frontmatterBytes = new TextEncoder().encode(parsed.rawFrontmatter);
 
-  let valid: boolean;
-  try {
-    valid = await ed.verifyAsync(sigBytes, frontmatterBytes, pubKey);
-  } catch {
-    valid = false;
-  }
+  // Identity files are signed under motebit-jcs-ed25519-hex-v1 (JCS
+  // canonicalization, hex signature encoding, hex public key). The
+  // dispatcher handles primitive verification; this function owns the
+  // hex-decoding of the sig marker (see the `<!-- motebit:sig:...:hex -->`
+  // format in spec/identity-v1.md §2).
+  const valid = await verifyBySuite(
+    "motebit-jcs-ed25519-hex-v1",
+    frontmatterBytes,
+    sigBytes,
+    pubKey,
+  );
 
   if (!valid) {
     return identityError("Signature verification failed");
@@ -647,12 +650,13 @@ async function verifyIdentity(content: string): Promise<IdentityVerifyResult> {
     } catch {
       return identityError("Invalid guardian attestation encoding");
     }
-    let attestValid: boolean;
-    try {
-      attestValid = await ed.verifyAsync(attestSig, attestMessage, guardianPubKey);
-    } catch {
-      attestValid = false;
-    }
+    // Guardian attestations share the identity-file suite: JCS + hex.
+    const attestValid = await verifyBySuite(
+      "motebit-jcs-ed25519-hex-v1",
+      attestMessage,
+      attestSig,
+      guardianPubKey,
+    );
     if (!attestValid) {
       return identityError("Guardian attestation signature verification failed");
     }
@@ -702,10 +706,16 @@ async function verifySuccessionChain(
       const payload = canonicalJson(payloadObj);
       const message = new TextEncoder().encode(payload);
 
-      // Verify new_key_signature (always required)
+      // Succession records are signed under motebit-jcs-ed25519-hex-v1
+      // (same suite as the identity frontmatter — see spec/identity-v1.md §3.8).
       const newPubKey = hexToBytes(record.new_public_key);
       const newSig = hexToBytes(record.new_key_signature);
-      const newValid = await ed.verifyAsync(newSig, message, newPubKey);
+      const newValid = await verifyBySuite(
+        "motebit-jcs-ed25519-hex-v1",
+        message,
+        newSig,
+        newPubKey,
+      );
       if (!newValid) {
         return {
           valid: false,
@@ -732,7 +742,12 @@ async function verifySuccessionChain(
         }
         const guardianPubKey = hexToBytes(guardianPublicKeyHex);
         const guardianSig = hexToBytes(record.guardian_signature);
-        const guardianValid = await ed.verifyAsync(guardianSig, message, guardianPubKey);
+        const guardianValid = await verifyBySuite(
+          "motebit-jcs-ed25519-hex-v1",
+          message,
+          guardianSig,
+          guardianPubKey,
+        );
         if (!guardianValid) {
           return {
             valid: false,
@@ -751,7 +766,12 @@ async function verifySuccessionChain(
         }
         const oldPubKey = hexToBytes(record.old_public_key);
         const oldSig = hexToBytes(record.old_key_signature);
-        const oldValid = await ed.verifyAsync(oldSig, message, oldPubKey);
+        const oldValid = await verifyBySuite(
+          "motebit-jcs-ed25519-hex-v1",
+          message,
+          oldSig,
+          oldPubKey,
+        );
         if (!oldValid) {
           return {
             valid: false,
@@ -835,12 +855,13 @@ async function verifyReceiptSignature(
 
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
-  try {
-    const valid = await ed.verifyAsync(sig, message, publicKey);
-    return { valid };
-  } catch {
-    return { valid: false, error: "Ed25519 verification threw" };
-  }
+  // ExecutionReceipts are signed under motebit-jcs-ed25519-b64-v1 (JCS
+  // canonicalization, base64url signature encoding). Older receipts
+  // that don't yet carry a `suite` field still verify here — the
+  // cryptosuite-agility pass flips this to read the artifact's own
+  // `suite` field once every receipt constructor includes it.
+  const valid = await verifyBySuite("motebit-jcs-ed25519-b64-v1", message, sig, publicKey);
+  return { valid };
 }
 
 async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult> {
@@ -952,11 +973,12 @@ async function verifyDataIntegrity(
     return false;
   }
 
-  try {
-    return await ed.verifyAsync(signature, combined, publicKey);
-  } catch {
-    return false;
-  }
+  // W3C Verifiable Credentials use the eddsa-jcs-2022 cryptosuite:
+  // JCS canonicalization over proof-options-hash || document-hash,
+  // Ed25519 signature, multibase(base58btc) encoding. The `proof.cryptosuite`
+  // field already declares this on-wire; the dispatcher routes the
+  // primitive call.
+  return verifyBySuite("eddsa-jcs-2022", combined, signature, publicKey);
 }
 
 const DEFAULT_CLOCK_SKEW_SECONDS = 60;
