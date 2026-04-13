@@ -66,6 +66,12 @@ export { WebLLMProvider } from "./providers";
 import { SpatialSyncController } from "./sync-controller";
 import { SpatialMcpManager } from "./mcp-manager";
 import { tryVoiceCommand } from "./voice-commands";
+import {
+  ActivityTracker,
+  deriveStreamActivity,
+  derivePlanActivity,
+  type ActivityLabel,
+} from "./activity";
 
 // === Configuration ===
 
@@ -200,6 +206,7 @@ export class SpatialApp {
   readonly voicePipeline: SpatialVoicePipeline;
   readonly gestures: GestureRecognizer;
   readonly heartbeat: AmbientHeartbeat;
+  readonly activity = new ActivityTracker();
 
   private runtime: MotebitRuntime | null = null;
   /** Get the runtime instance. Null before initAI completes. */
@@ -826,14 +833,40 @@ export class SpatialApp {
     if (!this.runtime) throw new Error("Runtime not initialized");
     if (!this.runtime.isAIReady) throw new Error("No provider connected");
 
-    yield* this.runtime.executePlan(goalId, prompt);
+    this.activity.set("planning");
+    try {
+      for await (const chunk of this.runtime.executePlan(goalId, prompt)) {
+        this.pushPlanActivity(chunk);
+        yield chunk;
+      }
+    } finally {
+      this.activity.clear();
+    }
   }
 
   async *resumeGoal(planId: string): AsyncGenerator<PlanChunk> {
     if (!this.runtime) throw new Error("Runtime not initialized");
     if (!this.runtime.isAIReady) throw new Error("No provider connected");
 
-    yield* this.runtime.resumePlan(planId);
+    this.activity.set("planning");
+    try {
+      for await (const chunk of this.runtime.resumePlan(planId)) {
+        this.pushPlanActivity(chunk);
+        yield chunk;
+      }
+    } finally {
+      this.activity.clear();
+    }
+  }
+
+  private pushStreamActivity(chunk: StreamChunk): void {
+    const next: ActivityLabel | undefined = deriveStreamActivity(chunk);
+    if (next !== undefined) this.activity.set(next);
+  }
+
+  private pushPlanActivity(chunk: PlanChunk): void {
+    const next: ActivityLabel | undefined = derivePlanActivity(chunk);
+    if (next !== undefined) this.activity.set(next);
   }
 
   // === Sync + Relay (delegates to SpatialSyncController in ./sync-controller.ts) ===
@@ -895,7 +928,15 @@ export class SpatialApp {
    */
   async *sendMessage(text: string): AsyncGenerator<StreamChunk> {
     if (!this.runtime) return;
-    yield* this.runtime.sendMessageStreaming(text);
+    this.activity.set("thinking");
+    try {
+      for await (const chunk of this.runtime.sendMessageStreaming(text)) {
+        this.pushStreamActivity(chunk);
+        yield chunk;
+      }
+    } finally {
+      this.activity.clear();
+    }
   }
 
   /**
@@ -913,9 +954,11 @@ export class SpatialApp {
     }
 
     this.setPresenceState("processing");
+    this.activity.set("thinking");
 
     let accumulated = "";
     for await (const chunk of this.runtime.sendMessageStreaming(text)) {
+      this.pushStreamActivity(chunk);
       if (chunk.type === "text") {
         accumulated += chunk.text;
       } else if (chunk.type === "approval_request") {
@@ -941,6 +984,7 @@ export class SpatialApp {
           approved,
           this.motebitId,
         )) {
+          this.pushStreamActivity(resumeChunk);
           if (resumeChunk.type === "text") {
             accumulated += resumeChunk.text;
           } else if (resumeChunk.type === "result") {
@@ -958,6 +1002,8 @@ export class SpatialApp {
     if (accumulated) {
       await this.voicePipeline.speak(accumulated);
     }
+
+    this.activity.clear();
 
     // Background housekeeping (memory decay, gradient computation)
     void this.runtime.housekeeping();

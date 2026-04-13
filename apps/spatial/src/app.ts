@@ -20,6 +20,11 @@ import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import { SpatialVoicePipeline } from "./voice-pipeline";
 import type { OpenAITTSVoice } from "@motebit/voice";
 import { bindHud, type ConnectionState } from "./hud";
+import {
+  CredentialSatelliteRenderer,
+  credentialsToExpression,
+  type CredentialSummary,
+} from "./credential-satellites";
 
 // === DOM elements ===
 
@@ -88,7 +93,23 @@ const voiceIndicator = document.getElementById("voice-indicator") as HTMLElement
 // === State ===
 
 const app = new SpatialApp();
+app.activity.onChange((label) => {
+  hud.setTask(label);
+});
 let lastTime = 0;
+
+// Credentials as orbiting scene objects — the first concrete spatial-
+// object renderer. Mounted lazily after the creature group exists
+// (adapter.init must have run). See credential-satellites.ts for the
+// SpatialExpression the satellite shape satisfies.
+let credentialSatellites: CredentialSatelliteRenderer | null = null;
+function ensureCredentialSatellites(): CredentialSatelliteRenderer | null {
+  if (credentialSatellites) return credentialSatellites;
+  const group = app.adapter.getCreatureGroup();
+  if (!group) return null;
+  credentialSatellites = new CredentialSatelliteRenderer(group);
+  return credentialSatellites;
+}
 
 // Gaze attention state
 let lastGazeHit = false;
@@ -813,6 +834,7 @@ function startFlatPreview(): void {
     prevTime = now;
     const time = now / 1000;
 
+    credentialSatellites?.tick(now);
     app.renderFrame(dt, time);
     requestAnimationFrame(loop);
   }
@@ -882,6 +904,8 @@ async function startAR(): Promise<void> {
         }
       }
     }
+
+    credentialSatellites?.tick(now);
 
     // Render with behavior cues from runtime (or idle cues)
     app.renderFrame(dt, t);
@@ -983,6 +1007,19 @@ async function loadCredentials(): Promise<void> {
     const creds = data.credentials ?? [];
     countEl.textContent = `${creds.length} credential${creds.length !== 1 ? "s" : ""}`;
     listEl.innerHTML = "";
+
+    // Canonical expression: credentials are satellites orbiting the creature.
+    // The 2D list rendered below is for settings/configuration; the scene
+    // is where the structured data lives.
+    const renderer = ensureCredentialSatellites();
+    if (renderer) {
+      const summaries: CredentialSummary[] = creds.map((c) => ({
+        credential_type: c.credential_type,
+        issued_at: c.issued_at,
+        credential: c.credential,
+      }));
+      renderer.setExpression(credentialsToExpression(summaries));
+    }
     for (const cred of creds) {
       const item = document.createElement("div");
       item.style.cssText =

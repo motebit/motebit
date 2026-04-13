@@ -400,6 +400,20 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     return this.renderer;
   }
 
+  /**
+   * Access the creature's THREE.Group so callers can mount spatial objects
+   * that orbit or anchor to the creature (e.g., credential satellites,
+   * federated-agent creatures, memory environment). Returns null before
+   * init or after dispose.
+   *
+   * Children added to this group inherit the creature's world position
+   * (set via setCreatureWorldPosition). Positioning satellites in group
+   * space gives them a natural orbital anchor.
+   */
+  getCreatureGroup(): THREE.Group | null {
+    return this.creatureRefs?.group ?? null;
+  }
+
   /** Whether a WebXR session is currently active. */
   isSessionActive(): boolean {
     return this.renderer?.xr.isPresenting ?? false;
