@@ -32,6 +32,7 @@
     "check-deps": "npx tsx scripts/check-deps.ts",
     "check-unused": "knip",
     "check-specs": "npx tsx scripts/check-spec-references.ts",
+    "check-spec-coverage": "npx tsx scripts/check-spec-coverage.ts",
     "check-service-primitives": "npx tsx scripts/check-service-primitives.ts",
     "check-app-primitives": "npx tsx scripts/check-app-primitives.ts",
     "check-memory": "npx tsx scripts/check-memory-freshness.ts",

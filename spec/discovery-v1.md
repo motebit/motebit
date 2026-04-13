@@ -182,6 +182,10 @@ Given a `MotebitId`, find which relay hosts the agent and how to reach it.
 
 ### 5.1 — AgentResolutionResult
 
+#### Wire format (foundation law)
+
+Every implementation MUST emit and accept this exact JSON shape on the `GET /api/v1/discover/{motebitId}` response boundary. Field names, types, and nullability are binding.
+
 ```json
 {
   "motebit_id": "019530a1-7b2c-7000-8000-000000000042",
@@ -191,7 +195,7 @@ Given a `MotebitId`, find which relay hosts the agent and how to reach it.
   "capabilities": ["web_search", "code_review"],
   "public_key": "a1b2c3d4...64 hex chars",
   "settlement_address": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
-  "settlement_modes": "relay,p2p",
+  "settlement_modes": ["relay", "p2p"],
   "resolved_via": ["019530a1-...local", "019530a1-...peer1"],
   "cached": false,
   "ttl": 300
@@ -207,10 +211,16 @@ Given a `MotebitId`, find which relay hosts the agent and how to reach it.
 | `capabilities`       | string[] | no       | Agent's advertised capabilities                                                                     |
 | `public_key`         | string   | if found | Agent's hex-encoded Ed25519 public key                                                              |
 | `settlement_address` | string   | no       | Agent's declared settlement address (e.g., Solana base58). Explicit, not inferred from `public_key` |
-| `settlement_modes`   | string   | no       | Comma-separated settlement modes the agent accepts: `"relay"`, `"relay,p2p"`. Default: `"relay"`    |
+| `settlement_modes`   | string[] | no       | Settlement modes the agent accepts. Each element is `"relay"` or `"p2p"`. Default: `["relay"]`      |
 | `resolved_via`       | string[] | yes      | Chain of `relay_id`s traversed during resolution (audit trail)                                      |
 | `cached`             | boolean  | yes      | Whether the result came from cache                                                                  |
 | `ttl`                | number   | yes      | Seconds until this result should be re-resolved                                                     |
+
+The TypeScript type in `@motebit/protocol` (`AgentResolutionResult`) is the binding machine-readable form of this table. An alternative implementation that emits a different JSON shape is not conformant.
+
+#### Storage (reference convention — non-binding)
+
+The reference implementation persists `settlement_modes` as a comma-separated string in the `agent_registry.settlement_modes TEXT` column (SQLite) and parses it to `string[]` at the HTTP boundary. This is an implementation detail. An alternative implementation MAY store the field as a JSON array, a normalized side table, or any other form, so long as the wire format above is preserved.
 
 ### 5.2 — Resolution Algorithm
 

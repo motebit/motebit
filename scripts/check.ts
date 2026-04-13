@@ -88,6 +88,12 @@ const GATES: ReadonlyArray<Gate> = [
     args: ["--strict"],
   },
   {
+    name: "check-spec-coverage",
+    defends:
+      "types named in spec Wire format (foundation law) sections are exported from @motebit/protocol",
+    script: "check-spec-coverage",
+  },
+  {
     name: "check-service-primitives",
     defends: "services must route protocol plumbing through @motebit/mcp-server",
     script: "check-service-primitives",
