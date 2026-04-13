@@ -15,9 +15,9 @@ Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Nod
 | `apps/admin` | React + Vite dashboard. 13-tab real-time monitoring — state vector, memory graph, behavior cues, event log, tool audit, goals, plans, conversations, devices, intelligence gradient, agent trust, credentials, federation. |
 | `apps/spatial` | AR/VR positioning library. Body-relative orbital mechanics, WebXR audio reactivity. |
 | `apps/docs` | Fumadocs + Next.js. This site. |
-| `packages/` | 29 shared TypeScript packages — the interior of the system. |
-| `services/api` | Sync relay server. REST + WebSocket, device auth, fan-out. |
-| `spec/` | Five open specifications — `identity-v1.md`, `execution-ledger-v1.md`, `relay-federation-v1.md`, `market-v1.md`, `credential-v1.md`. |
+| `packages/` | 31 shared TypeScript packages — the interior of the system. |
+| `services/` | Sync relay (`api`), reference paid agents (`research`, `code-review`), capability providers (`web-search`, `read-url`, `summarize`, `embed`), and the Vercel edge proxy (`proxy`). |
+| `spec/` | 12 open specifications — `identity-v1.md`, `execution-ledger-v1.md`, `relay-federation-v1.md`, `market-v1.md`, `credential-v1.md`, `settlement-v1.md`, `auth-token-v1.md`, `credential-anchor-v1.md`, `delegation-v1.md`, `discovery-v1.md`, `migration-v1.md`, `dispute-v1.md`. |
 
 ## Package layers
 
@@ -29,8 +29,9 @@ The foundation. No package in this tier imports another motebit package.
 
 | Package | Role |
 |---------|------|
-| `sdk` | Shared types — `MotebitState`, `BehaviorCues`, `MemoryNode`, `EventLogEntry`, `PolicyDecision`, `RenderSpec`. |
-| `crypto` | Protocol cryptography — Ed25519 signing, receipt/credential/delegation signing, canonical JSON, did:key. MIT. |
+| `protocol` | Network protocol — identity, receipts, credentials, delegation, settlement, trust algebra. Types, semirings, routing primitives. MIT, zero deps. |
+| `crypto` | Sign and verify every Motebit artifact — identity files, execution receipts, credentials, delegations, succession records, credential anchors. Cryptosuite-agile for post-quantum. MIT, zero monorepo deps. |
+| `sdk` | Developer contract — stable types, adapter interfaces, governance config; product vocabulary the runtime consumes (`MotebitState`, `BehaviorCues`, `RenderSpec`, etc.). Re-exports `protocol`. MIT. |
 | `encryption` | Product security — AES-256-GCM, PBKDF2 derivation, sync key derivation, deletion certificates. BSL. |
 | `core-identity` | UUID v7 identity generation, multi-device registration, Ed25519 public key binding. |
 
@@ -53,7 +54,11 @@ The interior machinery. Each engine owns one concern and communicates through ty
 | `persistence` | SQLite schema (WAL mode), adapters for events, memories, identities, audit, state, devices. |
 | `tools` | InMemoryToolRegistry, builtin tools, MCP tool merge. |
 | `mcp-client` | MCP stdio client, tool discovery, external data boundary marking. |
+| `mcp-server` | Expose a motebit as an MCP server — bearer auth, synthetic tools, signed receipt construction. |
 | `sync-engine` | Multi-device sync — HTTP/WebSocket adapters, conflict detection, retry backoff. |
+| `market` | Budget allocation, settlement, reputation aggregation, graph-based routing. |
+| `semiring` | Trust algebra — agent network graph construction, multi-objective ranking, provenance tracking, trust state transitions. |
+| `wallet-solana` | Sovereign Solana USDC rail — Ed25519 identity key IS the Solana address. RPC adapter, ATA management, SPL transfers. |
 
 ### Surface
 
@@ -62,13 +67,12 @@ The outermost layer. These packages face the renderer, the public npm registry, 
 | Package | Role |
 |---------|------|
 | `render-engine` | `RenderSpec` (droplet geometry, glass material), `ThreeJSAdapter` (organic noise, breathing, sag, audio reactivity), `WebXRThreeJSAdapter` (AR), `SpatialAdapter` (body-relative orbital mechanics). |
-| `identity-file` | Generate, parse, verify `motebit.md` — signed agent identity files (internal). |
-| `crypto` | Protocol cryptography — sign and verify all artifacts. Zero monorepo deps, MIT licensed. |
-| `create-motebit` | Public CLI — `npm create motebit`. Generates and verifies signed identity files. |
+| `identity-file` | Generate, parse, verify `motebit.md` — signed agent identity files. |
+| `create-motebit` | Public CLI — `npm create motebit` scaffolds a signed identity (`motebit.md`) or a runnable agent service (`--agent`). MIT. |
+| `planner` | PlanEngine — decomposes goals into multi-step plans with dependency tracking, plan-level reflection. |
 | `policy-invariants` | Clamping rules, state bounds validation. |
 | `browser-persistence` | In-browser storage adapters (IndexedDB) for web contexts. |
 | `github-action` | GitHub Action for verifying motebit identity files in CI. |
-| `planner` | PlanEngine — decomposes goals into multi-step plans with dependency tracking. |
 | `voice` | Voice input pipeline — VAD, transcription, audio routing. |
 
 ## Data flow
