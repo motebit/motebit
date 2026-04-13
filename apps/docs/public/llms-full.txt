@@ -175,7 +175,7 @@ Trust accumulates via W3C VC 2.0 credentials issued after successful task comple
 ## Packages (npm)
 
 - `create-motebit` — CLI scaffolder: `npm create motebit`. Generates signed identity. MIT licensed
-- `@motebit/verify` — Standalone Ed25519 verifier for motebit.md files. Zero deps. MIT licensed
+- `@motebit/crypto` — Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum. MIT licensed
 - `@motebit/protocol` — Network protocol types. MIT licensed
 - `@motebit/sdk` — Full type vocabulary. MIT licensed
 - `motebit` — Operator console CLI. BSL-1.1 licensed

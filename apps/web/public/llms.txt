@@ -9,7 +9,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 ## Quick Start
 
 - `npm create motebit` generates a signed agent identity in 30 seconds
-- `@motebit/verify` verifies any `motebit.md` identity file
+- `@motebit/crypto` signs and verifies any Motebit artifact (identity files, receipts, credentials)
 - `motebit/identity@1.0` is the open specification (MIT licensed)
 
 ## Concepts
@@ -55,7 +55,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 ## Packages
 
 - [create-motebit](https://www.npmjs.com/package/create-motebit): CLI scaffolder — `npm create motebit`. MIT licensed.
-- [@motebit/verify](https://www.npmjs.com/package/@motebit/verify): Ed25519 signature verification for motebit.md identity files. MIT licensed.
+- [@motebit/crypto](https://www.npmjs.com/package/@motebit/crypto): Sign and verify every Motebit artifact. Cryptosuite-agile for post-quantum. MIT licensed.
 
 ## Optional
 

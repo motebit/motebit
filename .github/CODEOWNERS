@@ -3,6 +3,7 @@
 
 # Protocol layer (MIT)
 spec/ @hakimlabs
-packages/verify/ @hakimlabs
-packages/create-motebit/ @hakimlabs
+packages/protocol/ @hakimlabs
+packages/crypto/ @hakimlabs
 packages/sdk/ @hakimlabs
+packages/create-motebit/ @hakimlabs

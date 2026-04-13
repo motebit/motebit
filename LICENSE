@@ -58,7 +58,7 @@ Source License:
   spec/                     Protocol specifications (MIT)
   packages/protocol/        @motebit/protocol — network protocol types (MIT)
   packages/sdk/             @motebit/sdk — full type vocabulary (MIT)
-  packages/verify/          @motebit/verify — signature verification (MIT)
+  packages/crypto/          @motebit/crypto — signing and verification (MIT)
   packages/create-motebit/  create-motebit — identity scaffolding CLI (MIT)
   packages/github-action/   motebit-verify GitHub Action (MIT)
 
