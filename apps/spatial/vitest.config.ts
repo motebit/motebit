@@ -18,4 +18,11 @@ export default defineMotebitTest({
   // Branch threshold is pulled down only because the residual voice
   // pipeline + encrypted-keystore paths are defensive fallbacks.
   thresholds: { statements: 85, branches: 88, functions: 82, lines: 85 },
+  // The spatial HUD test exercises a tiny DOM binding; vitest-environment
+  // defaults to node, so scope jsdom per-file with the /** @vitest-environment jsdom */
+  // directive in those tests. No global environment switch — keep the
+  // non-DOM modules fast.
+  extra: {
+    environmentMatchGlobs: [["src/__tests__/hud.test.ts", "jsdom"]],
+  },
 });

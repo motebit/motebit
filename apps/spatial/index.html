@@ -82,6 +82,44 @@
 
     .overlay.hidden { display: none; }
 
+    /* === HUD — read-only essentials floor === */
+    /* Doctrine: connection, balance, active task. No controls, no navigation. */
+
+    .hud {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 16px;
+      background: rgba(10, 10, 15, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      backdrop-filter: blur(10px);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      color: rgba(255, 255, 255, 0.7);
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .hud.hidden { display: none; }
+
+    .hud-field {
+      white-space: nowrap;
+    }
+
+    .hud-field[data-state="offline"] { color: rgba(255, 120, 120, 0.8); }
+    .hud-field[data-state="connecting"] { color: rgba(255, 200, 120, 0.8); }
+    .hud-field[data-state="online"] { color: rgba(140, 220, 160, 0.9); }
+
+    .hud-sep {
+      opacity: 0.3;
+    }
+
     /* === Settings Overlay === */
 
     .settings-overlay {
@@ -597,6 +635,15 @@
         </div>
       </form>
     </div>
+  </div>
+
+  <!-- HUD — read-only essentials (doctrine: no panels on spatial) -->
+  <div class="hud hidden" id="hud" role="status" aria-live="polite">
+    <span class="hud-field" id="hud-connection" data-state="offline">offline</span>
+    <span class="hud-sep">&middot;</span>
+    <span class="hud-field" id="hud-balance">— USDC</span>
+    <span class="hud-sep">&middot;</span>
+    <span class="hud-field" id="hud-task">idle</span>
   </div>
 
   <!-- Main overlay — Enter AR + status -->

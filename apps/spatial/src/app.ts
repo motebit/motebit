@@ -19,6 +19,7 @@ import { DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import { SpatialVoicePipeline } from "./voice-pipeline";
 import type { OpenAITTSVoice } from "@motebit/voice";
+import { bindHud, type ConnectionState } from "./hud";
 
 // === DOM elements ===
 
@@ -26,6 +27,8 @@ const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLElement;
 const enterButton = document.getElementById("enter-ar") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLElement;
+const hudEl = document.getElementById("hud") as HTMLElement;
+const hud = bindHud(hudEl);
 
 // Settings elements — three-mode provider UI
 const settingsOverlay = document.getElementById("settings-overlay") as HTMLElement;
@@ -415,15 +418,19 @@ async function init(): Promise<void> {
         .then((micro: bigint | null) => {
           if (micro == null) {
             balEl.textContent = "-";
+            hud.setBalance(null);
             return;
           }
           balEl.textContent = `${(Number(micro) / 1_000_000).toFixed(2)} USDC`;
+          hud.setBalance(micro);
         })
         .catch(() => {
           balEl.textContent = "-";
+          hud.setBalance(null);
         });
     } else {
       balEl.textContent = "-";
+      hud.setBalance(null);
     }
   }
 
@@ -431,7 +438,7 @@ async function init(): Promise<void> {
   if (await tryInitAI(settings)) {
     settingsOverlay.classList.add("hidden");
     void initVoiceIfEnabled(settings);
-    void app.connectRelay().then(() => void loadCredentials());
+    void connectRelayWithHud().then(() => void loadCredentials());
     renderMcpServers();
     populateWalletFields();
     showMainOverlay();
@@ -441,7 +448,7 @@ async function init(): Promise<void> {
     if (hasLocal) {
       settingsOverlay.classList.add("hidden");
       void initVoiceIfEnabled(loadSettings());
-      void app.connectRelay().then(() => void loadCredentials());
+      void connectRelayWithHud().then(() => void loadCredentials());
       renderMcpServers();
       populateWalletFields();
       showMainOverlay();
@@ -484,6 +491,7 @@ async function initVoiceIfEnabled(settings: SpatialSettings): Promise<void> {
 
 function showMainOverlay(): void {
   overlay.classList.remove("hidden");
+  hudEl.classList.remove("hidden");
 
   // Check WebXR support
   void WebXRThreeJSAdapter.isSupported().then((supported) => {
@@ -496,6 +504,19 @@ function showMainOverlay(): void {
       enterButton.addEventListener("click", () => void startAR());
     }
   });
+}
+
+function connectRelayWithHud(): Promise<void> {
+  hud.setConnection("connecting" as ConnectionState);
+  return app
+    .connectRelay()
+    .then(() => {
+      hud.setConnection("online");
+    })
+    .catch((err: unknown) => {
+      hud.setConnection("offline");
+      throw err;
+    });
 }
 
 // === Settings UI: three-mode provider picker ===
@@ -767,7 +788,7 @@ settingsSave?.addEventListener(
       }
 
       void initVoiceIfEnabled(settings);
-      void app.connectRelay().then(() => void loadCredentials());
+      void connectRelayWithHud().then(() => void loadCredentials());
       renderMcpServers();
       settingsOverlay.classList.add("hidden");
       showMainOverlay();
