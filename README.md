@@ -12,9 +12,13 @@
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/protocol-MIT-green" alt="Protocol: MIT"></a>
 </p>
 
-**A sovereign agent runtime.** Persistent identity, accumulated memory, earned trust, governed delegation — wrapped in a glass droplet that breathes.
+**Motebit is an open protocol for sovereign AI agents — and a reference runtime you can run today.**
 
-Most AI agents today are sessions. No identity that persists. No memory that compounds. No trust that accumulates. No proof of what was done. Motebit is the missing layer: a complete runtime where the intelligence is pluggable but the identity is the asset.
+Persistent cryptographic identity that survives across devices, providers, and time. Trust accumulated through signed execution receipts. Governance enforced at the agent's boundary. Verifiable proof of what got done.
+
+MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay. Motebit says who the agent is, what it's done, and what it's allowed to do.
+
+A motebit is a droplet of intelligence under surface tension — body passive, interior active. The runtime gives the droplet a body. The protocol defines its physics. [Read the thesis.](https://docs.motebit.com/docs/introduction)
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
@@ -65,10 +69,6 @@ Your agent is live and discoverable. Edit `src/tools.ts` to replace the echo too
 The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them — remove `--direct` from `package.json` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
 
 ## What it is
-
-A motebit is a droplet of intelligence under surface tension. [Read the thesis.](https://docs.motebit.com/docs/introduction)
-
-MCP defines what an agent can do. A2A defines how agents talk. x402 and AP2 define how they pay. Motebit defines who the agent is, what it's done, and what it's allowed to do — the missing identity, trust, and governance layer underneath the rest.
 
 **Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. Keys rotate via dual-signed succession records. The `motebit_id` persists across rotations, devices, and providers. Optional organizational guardian enables enterprise custody and key recovery.
 
