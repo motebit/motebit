@@ -353,7 +353,7 @@ describe("sign and verify", () => {
 describe("createSignedToken / verifySignedToken", () => {
   it("round-trips correctly", async () => {
     const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    const payload: Omit<SignedTokenPayload, "suite"> = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now(),
@@ -374,7 +374,7 @@ describe("createSignedToken / verifySignedToken", () => {
 
   it("round-trips with audience claim preserved", async () => {
     const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    const payload: Omit<SignedTokenPayload, "suite"> = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now(),
@@ -397,7 +397,7 @@ describe("createSignedToken / verifySignedToken", () => {
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
       jti: crypto.randomUUID(),
-    } as SignedTokenPayload;
+    } as Omit<SignedTokenPayload, "suite">;
     const token = await createSignedToken(payload, kp.privateKey);
     const result = await verifySignedToken(token, kp.publicKey);
     expect(result).toBeNull();
@@ -405,7 +405,7 @@ describe("createSignedToken / verifySignedToken", () => {
 
   it("rejects expired token", async () => {
     const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    const payload: Omit<SignedTokenPayload, "suite"> = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now() - 10 * 60 * 1000,
@@ -421,7 +421,7 @@ describe("createSignedToken / verifySignedToken", () => {
   it("rejects invalid signature (wrong key)", async () => {
     const kpA = await generateKeypair();
     const kpB = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    const payload: Omit<SignedTokenPayload, "suite"> = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now(),
@@ -448,7 +448,7 @@ describe("createSignedToken / verifySignedToken", () => {
       did: "device-456",
       iat: Date.now(),
       exp: Date.now() + 5 * 60 * 1000,
-    } as SignedTokenPayload;
+    } as Omit<SignedTokenPayload, "suite">;
     const token = await createSignedToken(payload, kp.privateKey);
     const result = await verifySignedToken(token, kp.publicKey);
     expect(result).toBeNull();

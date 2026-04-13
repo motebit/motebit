@@ -1042,9 +1042,12 @@ export class MotebitRuntime {
       maxRetries: opts?.maxRetries,
       onDelegationFailure: opts?.onDelegationFailure,
       createSignedToken: async (
-        payload: import("@motebit/encryption").SignedTokenPayload,
+        payload: Omit<import("@motebit/encryption").SignedTokenPayload, "suite">,
         privateKey: Uint8Array,
       ): Promise<string> => {
+        // The signer stamps `suite` — callers pass the suite-less shape,
+        // matching the inline structural type SovereignDelegationConfig
+        // declares (no cryptosuite coupling leaking into planner).
         const { createSignedToken: create } = await import("@motebit/encryption");
         return create(payload, privateKey);
       },

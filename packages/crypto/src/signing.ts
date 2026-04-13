@@ -32,7 +32,21 @@ export interface SignedTokenPayload {
   jti: string;
   /** Audience claim — binds token to a specific endpoint/operation. Prevents cross-endpoint replay. */
   aud: string;
+  /**
+   * Cryptosuite identifier. Always `"motebit-jwt-ed25519-v1"` for this
+   * token shape today. Present in the signed payload so verifiers
+   * dispatch primitive verification through `verifyBySuite` rather
+   * than assuming Ed25519. Missing or unknown values are rejected
+   * fail-closed — no legacy-no-suite path.
+   */
+  suite: "motebit-jwt-ed25519-v1";
 }
+
+/** The one suite this token shape uses. Exported as a const so the
+ * signer emits exactly this value and the verifier checks for exactly
+ * this value — no string drift risk.
+ */
+export const SIGNED_TOKEN_SUITE = "motebit-jwt-ed25519-v1" as const;
 
 // === Canonical JSON (JCS/RFC 8785) ===
 
@@ -200,41 +214,26 @@ export async function sha256(data: Uint8Array): Promise<Uint8Array> {
 }
 
 // === Ed25519 Signing ===
+//
+// The primitive sign/verify functions and keypair generation now live
+// in `./suite-dispatch.ts`, which is the one file in @motebit/crypto
+// permitted to call `ed.signAsync` / `ed.verifyAsync` directly (the
+// `check-suite-dispatch` drift gate enforces that rule). These
+// re-exports preserve the historical call sites that import from
+// signing.ts directly (especially tests and @motebit/encryption).
+// New artifact-level verifiers should prefer `verifyBySuite`.
+import { generateEd25519Keypair, signBySuite, verifyBySuite } from "./suite-dispatch.js";
+
+export {
+  ed25519Sign,
+  ed25519Verify,
+  generateEd25519Keypair,
+  signBySuite,
+  verifyBySuite,
+} from "./suite-dispatch.js";
 
 export async function generateKeypair(): Promise<KeyPair> {
-  const { secretKey, publicKey } = await ed.keygenAsync();
-  return { publicKey, privateKey: secretKey };
-}
-
-/**
- * Sign a message with an Ed25519 private key.
- *
- * Named `ed25519Sign` to avoid conflict with the artifact-level `verify()`
- * function exported from this package. Crypto re-exports as `sign`.
- */
-export async function ed25519Sign(
-  message: Uint8Array,
-  privateKey: Uint8Array,
-): Promise<Uint8Array> {
-  return ed.signAsync(message, privateKey);
-}
-
-/**
- * Verify an Ed25519 signature.
- *
- * Named `ed25519Verify` to avoid conflict with the artifact-level `verify()`
- * function exported from this package. Crypto re-exports as `verify`.
- */
-export async function ed25519Verify(
-  signature: Uint8Array,
-  message: Uint8Array,
-  publicKey: Uint8Array,
-): Promise<boolean> {
-  try {
-    return await ed.verifyAsync(signature, message, publicKey);
-  } catch {
-    return false;
-  }
+  return generateEd25519Keypair();
 }
 
 // === Signed Tokens ===
@@ -242,20 +241,37 @@ export async function ed25519Verify(
 /**
  * Create a signed token: base64url(payload) + "." + base64url(signature).
  * Default expiry: 5 minutes from now.
+ *
+ * The payload includes a fixed `suite` field (`SIGNED_TOKEN_SUITE`) so
+ * the verifier can dispatch primitive verification explicitly rather
+ * than implicitly assuming Ed25519. Callers MUST supply every other
+ * required payload field; this function does not fill defaults for
+ * `mid` / `did` / `iat` / `exp` / `jti` / `aud`.
  */
 export async function createSignedToken(
-  payload: SignedTokenPayload,
+  payload: Omit<SignedTokenPayload, "suite">,
   privateKey: Uint8Array,
 ): Promise<string> {
-  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+  const withSuite: SignedTokenPayload = { ...payload, suite: SIGNED_TOKEN_SUITE };
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(withSuite));
   const payloadB64 = toBase64Url(payloadBytes);
-  const signature = await ed25519Sign(payloadBytes, privateKey);
+  const signature = await signBySuite(SIGNED_TOKEN_SUITE, payloadBytes, privateKey);
   const sigB64 = toBase64Url(signature);
   return `${payloadB64}.${sigB64}`;
 }
 
 /**
- * Verify a signed token. Returns the parsed payload if valid and not expired, null otherwise.
+ * Verify a signed token. Returns the parsed payload if valid and not
+ * expired, null otherwise.
+ *
+ * Rejects fail-closed on:
+ *   - malformed token string (no dot separator, invalid base64url),
+ *   - missing `suite` field,
+ *   - `suite` value other than `SIGNED_TOKEN_SUITE`,
+ *   - signature mismatch,
+ *   - expired token,
+ *   - missing `jti` (replay defense),
+ *   - missing `aud` (cross-endpoint replay defense).
  */
 export async function verifySignedToken(
   token: string,
@@ -276,9 +292,8 @@ export async function verifySignedToken(
     return null;
   }
 
-  const valid = await ed25519Verify(signature, payloadBytes, publicKey);
-  if (!valid) return null;
-
+  // Parse before verify so the suite value routes the primitive call.
+  // Malformed JSON → reject.
   let payload: SignedTokenPayload;
   try {
     payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as SignedTokenPayload;
@@ -286,12 +301,14 @@ export async function verifySignedToken(
     return null;
   }
 
+  // Missing or unknown suite → reject fail-closed. No legacy-no-suite path.
+  if (payload.suite !== SIGNED_TOKEN_SUITE) return null;
+
+  const valid = await verifyBySuite(payload.suite, payloadBytes, signature, publicKey);
+  if (!valid) return null;
+
   if (payload.exp <= Date.now()) return null;
-
-  // Reject tokens without a unique nonce (jti) — prevents replay attacks
   if (!payload.jti) return null;
-
-  // Reject tokens without audience binding — prevents cross-endpoint replay
   if (!payload.aud) return null;
 
   return payload;
