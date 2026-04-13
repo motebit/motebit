@@ -8,12 +8,13 @@
 
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
+import { NO_IDENTITY_MESSAGE } from "./_helpers.js";
 
 export function handleId(): void {
   const config = loadFullConfig();
 
   if (!config.motebit_id) {
-    console.error("No identity found. Run `npm create motebit` or `motebit run` to create one.");
+    console.error(NO_IDENTITY_MESSAGE);
     process.exit(1);
   }
 

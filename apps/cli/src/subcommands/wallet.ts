@@ -21,6 +21,7 @@ import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { secureErase } from "@motebit/encryption";
 import { loadFullConfig } from "../config.js";
 import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
+import { NO_IDENTITY_MESSAGE } from "./_helpers.js";
 
 interface WalletOptions {
   /** Solana RPC endpoint. Defaults to mainnet-beta public RPC. */
@@ -60,9 +61,7 @@ export async function handleWallet(options: WalletOptions = {}): Promise<void> {
   const config = loadFullConfig();
 
   if (!config.motebit_id) {
-    console.error(
-      "No identity found. Run `motebit run` or `npm create motebit` to create one first.",
-    );
+    console.error(NO_IDENTITY_MESSAGE);
     process.exit(1);
   }
 

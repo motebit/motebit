@@ -166,7 +166,9 @@ describe("handleBalance", () => {
     await expect(handleBalance(makeConfig({ positionals: ["balance"] }))).rejects.toThrow(
       "process.exit(1)",
     );
-    expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining("no motebit identity"));
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining("No motebit identity found"),
+    );
   });
 
   it("exits with error on relay failure", async () => {

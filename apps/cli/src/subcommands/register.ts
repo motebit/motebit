@@ -14,7 +14,7 @@ import { createSignedToken, secureErase } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
-import { requireMotebitId } from "./_helpers.js";
+import { requireMotebitId, NO_IDENTITY_MESSAGE } from "./_helpers.js";
 
 const DEFAULT_SYNC_URL = "https://relay.motebit.com";
 
@@ -31,12 +31,16 @@ export async function handleRegister(config: CliConfig): Promise<void> {
   const deviceId = fullConfig.device_id;
   const publicKeyHex = fullConfig.device_public_key;
 
+  // device_id and device_public_key are written alongside motebit_id in the
+  // same interactive setup — their absence means the config is partial, and
+  // the remediation is the same as for a missing motebit_id: re-run the
+  // interactive setup so every field lands together.
   if (deviceId == null || deviceId === "") {
-    console.error("Error: no device_id found in config. Run `motebit` first.");
+    console.error(NO_IDENTITY_MESSAGE);
     process.exit(1);
   }
   if (publicKeyHex == null || publicKeyHex === "") {
-    console.error("Error: no public key found in config. Run `motebit` first.");
+    console.error(NO_IDENTITY_MESSAGE);
     process.exit(1);
   }
 

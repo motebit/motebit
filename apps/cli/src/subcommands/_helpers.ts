@@ -14,6 +14,22 @@ import { loadFullConfig, type FullConfig } from "../config.js";
 import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
 
 /**
+ * Canonical empty-state message for any CLI surface that requires an
+ * identity. One phrasing across every subcommand — prior audit found
+ * five commands giving four different phrasings, which is exactly the
+ * sibling-boundary violation this helper exists to prevent. When the
+ * onboarding flow evolves, this is the single place to update.
+ *
+ * Bare `motebit` (no args) is the canonical interactive setup: it
+ * generates an Ed25519 identity, encrypts it with a passphrase, and
+ * drops the user into the REPL. `npm create motebit` scaffolds a
+ * different thing — a standalone agent project — and is not the right
+ * path for "I want to use this CLI."
+ */
+export const NO_IDENTITY_MESSAGE =
+  "No motebit identity found. Run `motebit` (no arguments) to create one — the first run walks you through setting a passphrase and generating the keypair.";
+
+/**
  * Resolve the motebit_id from the persisted CLI config, exiting with a
  * helpful error if no identity exists. Returns the non-empty string.
  *
@@ -24,7 +40,7 @@ import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
 export function requireMotebitId(fullConfig: FullConfig): string {
   const id = fullConfig.motebit_id;
   if (id == null || id === "") {
-    console.error("Error: no motebit identity found. Run `motebit` first to create an identity.");
+    console.error(NO_IDENTITY_MESSAGE);
     process.exit(1);
   }
   return id;

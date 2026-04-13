@@ -268,6 +268,12 @@ export function printHelp(): void {
     `
 Usage: motebit [command] [options]
 
+First run:
+  motebit                   Interactive setup — creates a new Ed25519 identity
+                            (encrypted with a passphrase you choose) and drops
+                            you into a REPL. Same command from then on opens
+                            the REPL against your existing identity.
+
 Commands:
   id                        Show your identity (motebit_id, did:key, public key)
   wallet                    Show your sovereign Solana wallet (address, USDC balance)

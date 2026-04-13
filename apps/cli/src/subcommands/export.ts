@@ -45,9 +45,15 @@ export async function handleExport(config: CliConfig): Promise<void> {
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
+      // Passphrase remediation — distinct from "no identity" because the
+      // config DOES exist, it just won't decrypt. If the passphrase is
+      // remembered, try again via env; if truly lost, the only path is to
+      // delete the config and regenerate (losing the previous identity).
       console.error("Error: incorrect passphrase.");
       console.error(
-        "  Run `npm create motebit` to generate a new identity, or set MOTEBIT_PASSPHRASE env var.",
+        "  Retry with the correct passphrase, or set MOTEBIT_PASSPHRASE.\n" +
+          "  If the passphrase is lost, delete `~/.motebit/config.json` and\n" +
+          "  run `motebit` to create a new identity (the previous one is unrecoverable).",
       );
       rl.close();
       process.exit(1);

@@ -103,16 +103,30 @@ async function publishServiceListing(
 }
 
 export async function handleRun(config: CliConfig): Promise<void> {
-  const identityPath =
-    config.identity != null && config.identity !== ""
-      ? path.resolve(config.identity)
-      : path.resolve("motebit.md");
+  const explicitIdentity = config.identity != null && config.identity !== "";
+  const identityPath = explicitIdentity
+    ? path.resolve(config.identity!)
+    : path.resolve("motebit.md");
 
   let identityContent: string;
   try {
     identityContent = fs.readFileSync(identityPath, "utf-8");
   } catch {
-    console.error(`Error: cannot read identity file: ${identityPath}`);
+    // Daemon mode requires a signed motebit.md (governance fields are
+    // read from it, which aren't stored in the CLI config). If the user
+    // passed --identity <path> they need that specific file; if they
+    // didn't, point at the export path off their interactive identity.
+    if (explicitIdentity) {
+      console.error(`Error: cannot read identity file: ${identityPath}`);
+    } else {
+      console.error(
+        `No identity file at ${identityPath}.\n` +
+          "  `motebit run` is daemon mode and needs a signed motebit.md.\n" +
+          "  If you have an interactive identity already: run `motebit export`\n" +
+          "  to write one, then `motebit run --identity <path>`.\n" +
+          "  If you haven't set up yet: run `motebit` (no arguments) first.",
+      );
+    }
     process.exit(1);
   }
 
@@ -683,8 +697,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
     // Ambient mode -- use config identity
     const fullConfig = loadFullConfig();
     if (fullConfig.motebit_id == null || fullConfig.motebit_id === "") {
+      // Daemon-specific variant of NO_IDENTITY_MESSAGE: the daemon has an
+      // escape hatch (`--identity <path>`) that the REPL/subcommand paths
+      // don't, so the phrasing mentions both.
       console.error(
-        "Error: no motebit identity found. Run `motebit` first to create an identity, or use --identity <path>.",
+        "No motebit identity found. Run `motebit` (no arguments) to create one interactively, or pass `--identity <path>` to load an exported motebit.md.",
       );
       process.exit(1);
     }
