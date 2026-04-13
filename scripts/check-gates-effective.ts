@@ -41,7 +41,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { writeFileSync, unlinkSync, existsSync, readFileSync } from "node:fs";
+import { writeFileSync, unlinkSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -63,6 +63,16 @@ interface Probe {
   proves: string;
   /** Apply a violation; return a cleanup function that reverts it. */
   perturb: () => () => void;
+  /**
+   * Predicate: `true` means "the probe's gate has an escape hatch that is
+   * currently active, so running the probe would test the escape rather than
+   * the detection." When it returns `true`, the probe is skipped with an
+   * explicit note — the caller sees `⚠ skipped (escape hatch active)` rather
+   * than a silent pass. Used for check-api-surface during a pass where every
+   * published package has a pending `major` changeset (the gate's intended
+   * design: major changesets authorize API breaks).
+   */
+  skipWhen?: () => { skip: boolean; reason: string };
 }
 
 /**
@@ -178,6 +188,82 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-spec-coverage",
+    // --strict is the gate's production mode (scripts/check.ts GATES). Probe
+    // must match or we'd be proving the wrong mode.
+    args: ["--strict"],
+    proves:
+      "flags a spec whose Wire format block names a type that @motebit/protocol does not export",
+    perturb: () =>
+      writeFixture(
+        // A fixture spec with a `#### Wire format (foundation law)` block under
+        // a `### X.Y — TypeName` heading whose identifier (`ProbeOnlyNonExported`)
+        // does not appear in packages/protocol. The probe relies on the gate's
+        // regex: the section heading declares the type; check-spec-coverage
+        // asserts the protocol package exports it.
+        `spec/${PROBE_PREFIX}coverage-v1.md`,
+        `# motebit/${PROBE_PREFIX}coverage@1.0
+
+## 1. ProbeArtifact
+
+### 1.1 — ProbeOnlyNonExportedSymbol
+
+#### Wire format (foundation law)
+
+Probe-only artifact — \`ProbeOnlyNonExportedSymbol\` is not exported from \`@motebit/protocol\` by design so \`check-spec-coverage\` fails on this file.
+`,
+      ),
+  },
+  {
+    script: "check-suite-declared",
+    proves: "flags a Wire format block that declares `signature` but no `suite` field",
+    perturb: () =>
+      writeFixture(
+        // A signed wire-format artifact in pseudo-TypeScript inside a code
+        // block — the gate detects `signature` / `suite` field declarations in
+        // both markdown tables and code blocks. By declaring `signature`
+        // without `suite`, the gate's invariant-#11 rule fires.
+        `spec/${PROBE_PREFIX}suite-declared-v1.md`,
+        `# motebit/${PROBE_PREFIX}suite-declared@1.0
+
+## 1. ProbeArtifact
+
+#### Wire format (foundation law)
+
+\`\`\`
+ProbeArtifact {
+  probe_id:   string      // arbitrary
+  signature:  string      // signed but no suite — drift gate should catch this
+}
+\`\`\`
+`,
+      ),
+  },
+  {
+    script: "check-suite-dispatch",
+    proves:
+      "flags a direct @noble/ed25519 primitive call outside packages/crypto/src/suite-dispatch.ts",
+    perturb: () =>
+      writeFixture(
+        // Any .ts under packages/crypto/src/ (outside suite-dispatch.ts) that
+        // contains the forbidden pattern `ed.verifyAsync` is a violation.
+        // Use a non-top-level directory so it's picked up by the recursive
+        // walk — `scan-dir/__probe.ts` would also work, but a top-level file
+        // mirrors the way a real drift would appear in code review.
+        `packages/crypto/src/${PROBE_PREFIX}primitive-leak.ts`,
+        `// Probe-only file that leaks a primitive verify call.
+// If check-suite-dispatch is working, it refuses to accept this file.
+declare const ed: { verifyAsync(a: Uint8Array, b: Uint8Array, c: Uint8Array): Promise<boolean> };
+declare const sig: Uint8Array;
+declare const msg: Uint8Array;
+declare const pub: Uint8Array;
+export async function probeLeak(): Promise<boolean> {
+  return ed.verifyAsync(sig, msg, pub);
+}
+`,
+      ),
+  },
+  {
     script: "check-api-surface",
     // Requires packages/{protocol,crypto,sdk}/dist to exist so api-extractor
     // can read the .d.ts and produce etc/temp/*.api.md to diff against the
@@ -196,21 +282,60 @@ const PROBES: ReadonlyArray<Probe> = [
         // @motebit/protocol — otherwise the gate would accept the diff as
         // declared-breaking and exit 0 (see check-api-surface.ts escape
         // hatch). If a real major is ever pending while this probe runs,
-        // point the probe at a sibling package (crypto or sdk) instead.
+        // we skip the probe (see skipWhen below) rather than test the wrong
+        // thing; returning ok=true on a skipped probe would be a false
+        // positive ("gate is effective" when we proved nothing).
         "packages/protocol/etc/protocol.api.md",
         (src) => `// ${PROBE_PREFIX}injected drift marker\n${src}`,
       ),
+    skipWhen: () => scanChangesetsForMajor("@motebit/protocol"),
   },
 ];
+
+/**
+ * Return `{ skip: true, reason }` if a pending changeset declares a `major`
+ * bump on `pkgName`. The caller uses this to skip probes whose gate has a
+ * documented escape hatch keyed to pending majors (e.g. check-api-surface).
+ */
+function scanChangesetsForMajor(pkgName: string): { skip: boolean; reason: string } {
+  const dir = resolve(ROOT, ".changeset");
+  if (!existsSync(dir)) return { skip: false, reason: "" };
+  const entries = readdirSync(dir).filter(
+    (f) => f.endsWith(".md") && f !== "README.md" && f !== "CHANGELOG.md",
+  );
+  for (const name of entries) {
+    const body = readFileSync(resolve(dir, name), "utf-8");
+    const front = body.match(/^---\n([\s\S]*?)\n---/);
+    if (!front) continue;
+    const line = new RegExp(`^"${pkgName.replace("/", "/")}":\\s*major\\s*$`, "m");
+    if (line.test(front[1]!)) {
+      return {
+        skip: true,
+        reason: `pending \`major\` changeset for ${pkgName} activates the gate's escape hatch — probe would test the escape, not the detection`,
+      };
+    }
+  }
+  return { skip: false, reason: "" };
+}
 
 interface ProbeResult {
   probe: Probe;
   gateExitCode: number | null;
   ok: boolean;
   error?: string;
+  skipped?: { reason: string };
 }
 
 function runProbe(probe: Probe): ProbeResult {
+  // Escape-hatch check — run before perturbation so we don't touch the tree
+  // for a probe we're going to skip.
+  if (probe.skipWhen) {
+    const decision = probe.skipWhen();
+    if (decision.skip) {
+      return { probe, gateExitCode: null, ok: true, skipped: { reason: decision.reason } };
+    }
+  }
+
   let cleanup: (() => void) | null = null;
   try {
     cleanup = probe.perturb();
@@ -314,6 +439,23 @@ function main(): void {
 
   for (const probe of PROBES) {
     process.stderr.write(`\n▸ ${probe.script} — ${probe.proves}\n`);
+    // Escape-hatch check. If a gate has a documented escape hatch currently
+    // active (e.g. check-api-surface during a release with a pending major
+    // changeset), the probe would test the escape rather than the detection.
+    // Skip explicitly — an ok=true on skipped probes is a false positive.
+    if (probe.skipWhen) {
+      const decision = probe.skipWhen();
+      if (decision.skip) {
+        process.stderr.write(`  ⚠ skipped: ${decision.reason}\n`);
+        results.push({
+          probe,
+          gateExitCode: null,
+          ok: true,
+          skipped: { reason: decision.reason },
+        });
+        continue;
+      }
+    }
     // Patch runProbe's cleanup into activeCleanup so the signal handler sees it.
     // (Small duplication of runProbe's logic for this reason.)
     let cleanup: (() => void) | null = null;
@@ -351,7 +493,13 @@ function main(): void {
   // Summary
   process.stderr.write("\n─── Gate effectiveness summary ───\n");
   let anyFailed = false;
-  for (const { probe, gateExitCode, ok, error } of results) {
+  let skippedCount = 0;
+  for (const { probe, gateExitCode, ok, error, skipped } of results) {
+    if (skipped) {
+      process.stderr.write(`  ⚠ ${probe.script.padEnd(32)} skipped — ${skipped.reason}\n`);
+      skippedCount++;
+      continue;
+    }
     const status = ok ? "✓" : "✗";
     const detail = error
       ? `error: ${error}`
@@ -369,7 +517,9 @@ function main(): void {
     process.exit(1);
   }
 
-  process.stderr.write(`\nAll ${PROBES.length} gates proven effective.\n`);
+  const provenCount = PROBES.length - skippedCount;
+  const skipNote = skippedCount > 0 ? ` (${skippedCount} skipped — see ⚠ above)` : "";
+  process.stderr.write(`\n${provenCount} of ${PROBES.length} gates proven effective${skipNote}.\n`);
 }
 
 main();
