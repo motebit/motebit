@@ -1,7 +1,7 @@
 {
   "name": "@motebit/crypto",
   "version": "0.8.0",
-  "description": "Protocol cryptography — sign and verify all Motebit artifacts. Receipts, credentials, delegations, successions. Zero monorepo deps, MIT.",
+  "description": "Sign and verify every Motebit artifact — identity files, execution receipts, credentials, delegations, succession records, credential anchors. Ed25519 today, cryptosuite-agile for post-quantum tomorrow. MIT, zero monorepo dependencies.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

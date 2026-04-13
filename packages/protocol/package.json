@@ -1,7 +1,7 @@
 {
   "name": "@motebit/protocol",
   "version": "0.8.0",
-  "description": "Motebit network protocol types — identity, receipts, credentials, settlement, trust algebra. MIT, zero dependencies.",
+  "description": "Motebit protocol — identity, receipts, credentials, delegation, settlement, and trust algebra for sovereign AI agents. Types, semirings, routing primitives. MIT, zero dependencies.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

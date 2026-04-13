@@ -1,6 +1,6 @@
 # create-motebit
 
-Create a cryptographically signed agent identity.
+Scaffold a signed Motebit identity (`motebit.md`) — or a runnable agent service with `--agent`.
 
 ## Quick Start
 

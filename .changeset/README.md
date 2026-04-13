@@ -3,10 +3,10 @@
 Motebit uses [Changesets](https://github.com/changesets/changesets) to manage versioning and changelogs for the five published packages:
 
 - `@motebit/protocol` — MIT, network protocol types
-- `@motebit/crypto` — MIT, protocol cryptography
-- `@motebit/sdk` — MIT, product development kit
+- `@motebit/crypto` — MIT, sign and verify every Motebit artifact
+- `@motebit/sdk` — MIT, developer contract
 - `create-motebit` — MIT, scaffolder (`npm create motebit`)
-- `motebit` — BSL-1.1, operator CLI
+- `motebit` — BSL-1.1, reference runtime and operator console
 
 These five are in a **fixed versioning group** (`.changeset/config.json`). A `major` bump to any one of them bumps all five to the same major version. Plan your changesets with that in mind — breaking changes to the protocol cascade across the whole published surface.
 

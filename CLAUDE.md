@@ -34,10 +34,10 @@ apps/
   identity/    Identity management app. Vite, TypeScript
 
 packages/
-  protocol/           Network protocol types + semiring algebra (Layer 0, MIT, 0 deps)
-  sdk/                Full type vocabulary, re-exports protocol (Layer 0, MIT)
-  crypto/             Protocol cryptography — sign and verify all artifacts (Layer 0, MIT, 0 monorepo deps)
-  create-motebit/     CLI scaffolder: npm create motebit (Layer 0, MIT)
+  protocol/           Network protocol — identity, receipts, credentials, delegation, settlement, trust algebra. Types, semirings, routing primitives (Layer 0, MIT, 0 deps)
+  sdk/                Developer contract — stable types, adapter interfaces, governance config; re-exports @motebit/protocol (Layer 0, MIT)
+  crypto/             Sign and verify every Motebit artifact. Cryptosuite-agile for post-quantum (Layer 0, MIT, 0 monorepo deps)
+  create-motebit/     CLI scaffolder — signed identity or runnable agent service: npm create motebit (Layer 0, MIT)
   encryption/         Product security: AES-256-GCM, PBKDF2, sync keys, deletion certificates (re-exports signing from crypto)
   gradient/           Self-measurement: "What am I?" Pure narrative from gradient data (Layer 1, BSL)
   semiring/           Agent network judgment layer — routing wiring, provenance, trust transitions (BSL)
@@ -301,8 +301,8 @@ Motebit is calm software. Do not confirm what the user can already see.
 
 Five npm packages: four MIT (the open protocol), one BSL (the product):
 
-- `@motebit/protocol` — Network protocol: types, semiring algebra, routing. MIT, 0 deps.
-- `@motebit/crypto` — Protocol cryptography: sign and verify all artifacts. MIT, 0 monorepo deps (noble bundled).
-- `@motebit/sdk` — Product development kit: shared types, config, normalization, adapters. MIT, depends on protocol.
-- `create-motebit` — Scaffold signed identity. MIT, zero-deps CLI. `npm create motebit`, `--agent` for runnable project.
-- `motebit` — Operator console. BSL-1.1. REPL, daemon, MCP server, delegation, export/verify/rotate.
+- `@motebit/protocol` — Motebit protocol: identity, receipts, credentials, delegation, settlement, and trust algebra for sovereign AI agents. Types, semirings, routing primitives. MIT, 0 deps.
+- `@motebit/crypto` — Sign and verify every Motebit artifact (identity files, execution receipts, credentials, delegations, succession records, credential anchors). Ed25519 today, cryptosuite-agile for post-quantum tomorrow. MIT, 0 monorepo deps (noble bundled).
+- `@motebit/sdk` — Developer contract for building Motebit-powered agents, services, and integrations: stable types, adapter interfaces, governance config. MIT, depends on protocol.
+- `create-motebit` — Scaffold a signed Motebit identity (motebit.md) or a runnable agent service. MIT, zero-deps CLI. `npm create motebit`, `--agent` for runnable project.
+- `motebit` — Reference runtime and operator console for sovereign AI agents — REPL, daemon, delegation, MCP server. Persistent Ed25519 identity, signed execution receipts, governance at the boundary. BSL-1.1.

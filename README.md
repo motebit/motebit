@@ -68,6 +68,8 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 
 A motebit is a droplet of intelligence under surface tension. [Read the thesis.](https://docs.motebit.com/docs/introduction)
 
+MCP defines what an agent can do. A2A defines how agents talk. x402 and AP2 define how they pay. Motebit defines who the agent is, what it's done, and what it's allowed to do — the missing identity, trust, and governance layer underneath the rest.
+
 **Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. Keys rotate via dual-signed succession records. The `motebit_id` persists across rotations, devices, and providers. Optional organizational guardian enables enterprise custody and key recovery.
 
 **Memory** — Semantic graph that compounds with use. Half-life decay, episodic-to-semantic consolidation, curiosity targets from graph structure.
@@ -156,10 +158,10 @@ apps/
   docs/        Next.js — docs.motebit.com
 
 packages/
-  protocol/        Network protocol — types, algebra, routing. MIT, zero deps
-  crypto/          Protocol cryptography — sign and verify all artifacts. MIT, zero runtime deps
-  sdk/             Product development kit — types, config, normalization, adapters. MIT
-  create-motebit/  Scaffolder — MIT licensed
+  protocol/        Network protocol — identity, receipts, credentials, delegation, settlement, trust algebra. MIT, zero deps
+  crypto/          Sign and verify every Motebit artifact. Cryptosuite-agile for post-quantum. MIT, zero runtime deps
+  sdk/             Developer contract — stable types, adapter interfaces, governance config. MIT
+  create-motebit/  Scaffold a signed identity or runnable agent service. MIT
   encryption/      Product security — AES-256-GCM, PBKDF2, sync keys, deletion certificates. BSL
   runtime/         Orchestrator — wires all engines, streaming AI loop
   ai-core/         Pluggable providers: Claude, Ollama, Hybrid fallback
@@ -252,13 +254,13 @@ import type { ExecutionReceipt, MotebitState, AgentTrustRecord } from "@motebit/
 
 Five npm packages. Four MIT (the open protocol), one BSL (the product):
 
-| Package                                                                | Description                                                                | License |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
-| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Network protocol — types, algebra, routing                                 | MIT     |
-| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Protocol cryptography — sign and verify all artifacts                      | MIT     |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Product development kit — types, config, normalization, adapters           | MIT     |
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | `npm create motebit` — scaffold identity or `--agent` for runnable service | MIT     |
-| [`motebit`](https://www.npmjs.com/package/motebit)                     | Operator console — REPL, daemon, delegation, MCP server                    | BSL-1.1 |
+| Package                                                                | Description                                                                                         | License |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------- |
+| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing  | MIT     |
+| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow  | MIT     |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | MIT     |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | MIT     |
+| [`motebit`](https://www.npmjs.com/package/motebit)                     | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1 |
 
 ## Specification
 
@@ -282,10 +284,10 @@ pnpm run lint          # Lint all packages
 The **protocol layer** is MIT licensed — use it freely, build on it, implement the spec in any language:
 
 - [`spec/`](spec/) — 12 open specs (identity, execution-ledger, relay-federation, market, credential, settlement, auth-token, credential-anchor, delegation, discovery, migration, dispute)
-- [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, settlement, trust algebra)
-- [`packages/crypto/`](packages/crypto/) — sign and verify all artifacts (zero dependencies)
-- [`packages/sdk/`](packages/sdk/) — product development kit (types, config, adapters)
-- [`packages/create-motebit/`](packages/create-motebit/) — CLI scaffolder
+- [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, delegation, settlement, trust algebra)
+- [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
+- [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
+- [`packages/create-motebit/`](packages/create-motebit/) — scaffold a signed identity or runnable agent service
 
 The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
 

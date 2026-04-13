@@ -2,7 +2,7 @@
   "name": "motebit",
   "version": "0.8.0",
   "type": "module",
-  "description": "Sovereign AI agent — persistent identity, accumulated trust, governance at the boundary",
+  "description": "Reference runtime and operator console for sovereign AI agents — REPL, daemon, delegation, MCP server. Persistent Ed25519 identity, signed execution receipts, governance at the boundary.",
   "main": "./dist/index.js",
   "bin": {
     "motebit": "./dist/index.js"

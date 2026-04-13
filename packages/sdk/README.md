@@ -1,8 +1,8 @@
 # @motebit/sdk
 
-Product types for building on the Motebit runtime — state vectors, creature behavior, rendering spec, memory graph, AI provider interface.
+Developer contract for building Motebit-powered agents, services, and integrations. The MIT boundary between the open protocol and your application — stable types, adapter interfaces, governance config, plus the product vocabulary the reference runtime consumes (state vectors, creature behavior, rendering spec, memory graph, AI provider interface).
 
-Re-exports all types from [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) for convenience. If you only need protocol types (identity, receipts, credentials, settlement), use `@motebit/protocol` directly (MIT licensed).
+Re-exports all types from [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) for convenience. If you only need the protocol core (identity, receipts, credentials, settlement, trust algebra), use `@motebit/protocol` directly — both are MIT.
 
 ## Install
 
