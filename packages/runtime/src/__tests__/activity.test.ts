@@ -1,10 +1,12 @@
 /**
- * Activity derivation tests. Locks the StreamChunk → label mapping and the
- * ActivityTracker contract so the HUD's "task" field behavior is pinned.
+ * Activity derivation tests. Locks the StreamChunk → label mapping and
+ * the ActivityTracker contract so every surface's "current activity"
+ * display carries identical semantics.
  */
 import { describe, it, expect, vi } from "vitest";
-import type { StreamChunk, PlanChunk } from "@motebit/runtime";
-import { ActivityTracker, deriveStreamActivity, derivePlanActivity } from "../activity";
+import type { StreamChunk } from "../index.js";
+import type { PlanChunk } from "@motebit/planner";
+import { ActivityTracker, deriveStreamActivity, derivePlanActivity } from "../activity.js";
 
 describe("deriveStreamActivity", () => {
   it("tool_status calling → tool: name", () => {

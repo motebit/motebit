@@ -101,22 +101,33 @@ export interface SpatialDataModule<K extends SpatialKind = SpatialKind> {
   readonly name: string;
 }
 
-const modules: SpatialDataModule[] = [];
+/**
+ * Keyed-by-name registry. Idempotent on repeat registration of the same
+ * name — re-importing a module in tests or after HMR does not duplicate
+ * entries. A second call with the same name and a different kind throws:
+ * that is a programming error, not a hot-reload case.
+ */
+const modules = new Map<string, SpatialDataModule>();
 
 /**
- * Register a structured-data module's spatial expression kind. The function
- * is constrained to `SpatialKind`; calls with any other string fail to
- * compile. The registry is append-only (modules live for the process
- * lifetime) because adding a satellite class should never require tearing
- * down the scene.
+ * Register a structured-data module's spatial expression kind. The
+ * function is constrained to `SpatialKind`; calls with any other string
+ * fail to compile. Registration is idempotent by `name` so hot reload
+ * and multiple test imports don't accumulate entries.
  */
 export function registerSpatialDataModule<K extends SpatialKind>(
   module: SpatialDataModule<K>,
 ): SpatialDataModule<K> {
-  modules.push(module);
+  const existing = modules.get(module.name);
+  if (existing && existing.kind !== module.kind) {
+    throw new Error(
+      `Spatial module "${module.name}" already registered as kind="${existing.kind}"; refused to re-register as kind="${module.kind}"`,
+    );
+  }
+  modules.set(module.name, module);
   return module;
 }
 
 export function listSpatialDataModules(): readonly SpatialDataModule[] {
-  return modules;
+  return [...modules.values()];
 }

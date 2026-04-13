@@ -354,6 +354,9 @@ export class WebXRAdapter implements RenderAdapter {
   setAudioReactivity(_energy: AudioReactivity | null): void {}
   setTrustMode(_mode: import("@motebit/sdk").TrustMode): void {}
   setListeningIndicator(_active: boolean): void {}
+  getCreatureGroup(): unknown {
+    return null;
+  }
 
   dispose(): void {
     this.session = null;

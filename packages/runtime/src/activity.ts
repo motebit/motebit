@@ -1,33 +1,38 @@
 /**
  * Activity derivation — what the agent is currently doing, as a short label.
  *
- * Doctrine (CLAUDE.md, "Spatial rejects the panel metaphor"): the HUD's
- * third field — "task" — must reflect the current in-flight activity.
- * "Operator can see what the agent is currently doing" is Ring 1.
+ * Doctrine (CLAUDE.md, "Capability rings, not feature parity"):
+ * "operator can see what the agent is currently doing" is Ring 1 —
+ * every surface (CLI, desktop, mobile, web, spatial) that speaks to a
+ * motebit should be able to show a short, current-activity label.
  *
  * The runtime already emits the information via its async chunk streams
- * (StreamChunk from MotebitRuntime; PlanChunk from PlanEngine). What was
- * missing was a derivation layer mapping those chunks to a short,
- * human-readable label, plus a subscription model the HUD can bind to.
+ * (StreamChunk from MotebitRuntime; PlanChunk from PlanEngine, re-exported
+ * from @motebit/runtime). What was missing was a derivation layer mapping
+ * those chunks to a short, human-readable label, plus a subscription
+ * model any surface can bind to.
  *
- * This module is that derivation. Pure functions (deriveStreamActivity,
- * derivePlanActivity) are tested in isolation; ActivityTracker holds the
- * current label and notifies subscribers on change. The spatial HUD
- * binding in app.ts subscribes once at startup.
+ * Pure functions (`deriveStreamActivity`, `derivePlanActivity`) are
+ * testable in isolation. `ActivityTracker` holds the current label and
+ * notifies subscribers on change — surfaces subscribe once at startup.
  *
- * Labels are intentionally short (≤40 chars) because the HUD has no
- * room for prose. "thinking" is the idle-but-working default.
+ * Labels are intentionally short (≤40 chars) because the HUD-class
+ * bindings have no room for prose. "thinking" is the idle-but-working
+ * default. Returning `undefined` from a derivation means "chunk doesn't
+ * change the current activity" — the tracker keeps whatever was set.
  */
-import type { StreamChunk, PlanChunk } from "@motebit/runtime";
+import type { StreamChunk } from "./index.js";
+import type { PlanChunk } from "@motebit/planner";
 
 export type ActivityLabel = string | null;
 
 /**
- * Map a StreamChunk to an activity label, or return "unchanged" (undefined)
- * if the chunk doesn't change the current activity.
+ * Map a StreamChunk to an activity label, or return "unchanged"
+ * (undefined) if the chunk doesn't change the current activity.
  *
- * Returning null means "clear" — the agent is idle. Returning a string means
- * "set this label". Returning undefined means "keep whatever was set".
+ * Returning null means "clear" — the agent is idle. Returning a string
+ * means "set this label". Returning undefined means "keep whatever was
+ * set".
  */
 export function deriveStreamActivity(chunk: StreamChunk): ActivityLabel | undefined {
   switch (chunk.type) {
@@ -51,7 +56,8 @@ export function deriveStreamActivity(chunk: StreamChunk): ActivityLabel | undefi
 
 /**
  * Map a PlanChunk to an activity label. Plan-level activities trump
- * stream-level activities because a running plan is a longer-lived context.
+ * stream-level activities because a running plan is a longer-lived
+ * context.
  */
 export function derivePlanActivity(chunk: PlanChunk): ActivityLabel | undefined {
   switch (chunk.type) {
@@ -86,9 +92,10 @@ function truncate(s: string, max: number): string {
 
 /**
  * Holds the current activity label and fans out change notifications.
- * The HUD subscribes once; instrumented call sites push via set().
+ * Surfaces subscribe once; instrumented call sites push via `set()`.
  *
- * Idempotent — set() with the same label is a no-op (no listener churn).
+ * Idempotent — `set()` with the same label is a no-op (no listener
+ * churn). `clear()` is sugar for `set(null)`.
  */
 export class ActivityTracker {
   private _label: ActivityLabel = null;

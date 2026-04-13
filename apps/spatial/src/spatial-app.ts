@@ -71,7 +71,7 @@ import {
   deriveStreamActivity,
   derivePlanActivity,
   type ActivityLabel,
-} from "./activity";
+} from "@motebit/runtime";
 
 // === Configuration ===
 

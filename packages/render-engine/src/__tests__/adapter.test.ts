@@ -385,6 +385,11 @@ describe("ThreeJSAdapter (headless)", () => {
     adapter.render(defaultFrame({ delta_time: 0, time: 0 }));
   });
 
+  it("getCreatureGroup returns null headless (no creature refs)", async () => {
+    await adapter.init(null);
+    expect(adapter.getCreatureGroup()).toBeNull();
+  });
+
   it("render with very large time values does not crash", async () => {
     await adapter.init(null);
     adapter.render(defaultFrame({ time: 1e9 }));
@@ -495,6 +500,15 @@ describe("WebXRThreeJSAdapter", () => {
   it("getRenderer returns null after headless init", async () => {
     await adapter.init(null);
     expect(adapter.getRenderer()).toBeNull();
+  });
+
+  it("getCreatureGroup returns null before init", () => {
+    expect(adapter.getCreatureGroup()).toBeNull();
+  });
+
+  it("getCreatureGroup returns null after headless init (no canvas)", async () => {
+    await adapter.init(null);
+    expect(adapter.getCreatureGroup()).toBeNull();
   });
 
   it("startSession returns false without renderer/navigator", async () => {

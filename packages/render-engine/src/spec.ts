@@ -102,6 +102,16 @@ export interface RenderAdapter {
   setListeningIndicator(active: boolean): void;
   dispose(): void;
 
+  /**
+   * The creature's scene-graph anchor, so callers can mount spatial objects
+   * that inherit its world position (credential satellites, federated-agent
+   * creatures, memory environment). Returns null before init, after dispose,
+   * or when the adapter is headless. Declared as `unknown` to keep the
+   * RenderAdapter interface Three.js-free; concrete adapters narrow to
+   * `THREE.Group`. Callers cast at the boundary.
+   */
+  getCreatureGroup(): unknown;
+
   /** Place an HTML artifact in 3D space relative to the creature. */
   addArtifact?(spec: ArtifactSpec): ArtifactHandle | undefined;
   /** Remove an artifact by ID (triggers exit animation). */

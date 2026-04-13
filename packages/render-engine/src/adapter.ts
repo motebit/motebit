@@ -58,6 +58,9 @@ export class NullRenderAdapter implements RenderAdapter {
   setAudioReactivity(_energy: AudioReactivity | null): void {}
   setTrustMode(_mode: TrustMode): void {}
   setListeningIndicator(_active: boolean): void {}
+  getCreatureGroup(): THREE.Group | null {
+    return null;
+  }
   dispose(): void {}
 }
 
@@ -239,6 +242,18 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.controls.update();
   }
 
+  /**
+   * Desktop/web analogue of WebXRThreeJSAdapter.getCreatureGroup(). Same
+   * contract: children mounted here inherit the creature's world position.
+   * Ring 3 (3D creature) is available on desktop/web/spatial, so this
+   * accessor exists in all three surfaces — spatial scene-object modules
+   * (credential satellites, etc.) can be lifted onto desktop/web when
+   * their surface needs them.
+   */
+  getCreatureGroup(): THREE.Group | null {
+    return this.creatureRefs?.group ?? null;
+  }
+
   dispose(): void {
     if (this.creatureRefs) {
       disposeCreature(this.creatureRefs);
@@ -291,6 +306,9 @@ export class SpatialAdapter implements RenderAdapter {
   setAudioReactivity(_energy: AudioReactivity | null): void {}
   setTrustMode(_mode: TrustMode): void {}
   setListeningIndicator(_active: boolean): void {}
+  getCreatureGroup(): THREE.Group | null {
+    return null;
+  }
   dispose(): void {}
 }
 

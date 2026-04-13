@@ -403,6 +403,9 @@ export class NullRenderer implements RenderAdapter {
   setAudioReactivity(_energy: AudioReactivity | null): void {}
   setTrustMode(_mode: import("@motebit/sdk").TrustMode): void {}
   setListeningIndicator(_active: boolean): void {}
+  getCreatureGroup(): unknown {
+    return null;
+  }
   dispose(): void {}
 }
 
@@ -2107,3 +2110,11 @@ export class MotebitRuntime {
     return this.interactiveDelegation.getAndResetReceipts();
   }
 }
+
+// === Activity Tracking (Ring 1) ===
+// Surface-agnostic derivation of what the agent is currently doing, as
+// a short label. Every surface that shows "current activity" reads
+// through these primitives. See ./activity.ts for the full module.
+
+export { deriveStreamActivity, derivePlanActivity, ActivityTracker } from "./activity.js";
+export type { ActivityLabel } from "./activity.js";

@@ -11,6 +11,14 @@
  * Mirrors the pattern in services/api/src/__tests__/custody-boundary.test.ts
  * for the GuestRail / SovereignRail split. The enforcement lives in the
  * type system, not in a linter or doctrine document.
+ *
+ * Note on the test bodies: the forbidden-kind blocks are pure compile-
+ * time assertions. The `@ts-expect-error` directive is the test; there
+ * is no meaningful runtime observation to make. The `expect(true)` calls
+ * exist only so vitest counts the block as "passed"; do NOT replace them
+ * with something that looks like a value check — that would be cargo-
+ * cult and could be "fixed" by a future contributor in a way that
+ * accidentally deletes the enforcement.
  */
 import { describe, it, expect } from "vitest";
 import type { SpatialDataModule, SpatialExpression, SpatialKind } from "../spatial-expression";
@@ -26,21 +34,24 @@ describe("SpatialKind is the closed vocabulary", () => {
   it("rejects 'panel' at compile time (category-3 enforcement)", () => {
     // @ts-expect-error — "panel" is not a SpatialKind. Doctrine: spatial
     // rejects the panel metaphor; widening this union is the anti-pattern.
-    const p: SpatialKind = "panel";
-    expect(p).toBe("panel"); // runtime string is fine; type system rejects it
+    const _panel: SpatialKind = "panel";
+    void _panel;
+    expect(true).toBe(true); // compile-only assertion; see file header
   });
 
   it("rejects 'list' at compile time", () => {
     // @ts-expect-error — "list" is not a SpatialKind. Lists belong as
     // satellites (orbiting objects), not as flat rectangles.
-    const l: SpatialKind = "list";
-    expect(l).toBe("list");
+    const _list: SpatialKind = "list";
+    void _list;
+    expect(true).toBe(true);
   });
 
   it("rejects 'card' at compile time", () => {
     // @ts-expect-error — "card" is not a SpatialKind.
-    const c: SpatialKind = "card";
-    expect(c).toBe("card");
+    const _card: SpatialKind = "card";
+    void _card;
+    expect(true).toBe(true);
   });
 });
 
@@ -48,19 +59,34 @@ describe("registerSpatialDataModule constrains kind at the call site", () => {
   it("accepts a valid satellite module", () => {
     const m: SpatialDataModule<"satellite"> = registerSpatialDataModule({
       kind: "satellite",
-      name: "test-sat",
+      name: "neg-test-valid",
     });
     expect(m.kind).toBe("satellite");
   });
 
   it("rejects a 'panel' module at compile time", () => {
-    const mod = registerSpatialDataModule({
+    registerSpatialDataModule({
       // @ts-expect-error — "panel" is not a SpatialKind. Every structured
       // -data module MUST choose one of the four spatial expressions.
       kind: "panel",
-      name: "nope",
+      name: "neg-test-panel",
     });
-    expect(mod.name).toBe("nope");
+    expect(true).toBe(true);
+  });
+
+  it("registerSpatialDataModule is idempotent on repeated same-name/same-kind calls", () => {
+    const a = registerSpatialDataModule({ kind: "creature", name: "neg-test-idem" });
+    const b = registerSpatialDataModule({ kind: "creature", name: "neg-test-idem" });
+    expect(a.name).toBe(b.name);
+    const listed = listSpatialDataModules().filter((m) => m.name === "neg-test-idem");
+    expect(listed.length).toBe(1);
+  });
+
+  it("refuses to re-register the same name under a different kind", () => {
+    registerSpatialDataModule({ kind: "satellite", name: "neg-test-kind-clash" });
+    expect(() =>
+      registerSpatialDataModule({ kind: "attractor", name: "neg-test-kind-clash" }),
+    ).toThrow(/refused to re-register/);
   });
 });
 

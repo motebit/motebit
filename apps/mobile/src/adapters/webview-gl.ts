@@ -127,6 +127,17 @@ export class WebViewGLAdapter implements RenderAdapter {
     this.send({ type: "setListeningIndicator", active });
   }
 
+  /**
+   * The creature lives inside the WebView — its THREE.Group is not
+   * reachable from the React-Native side. Scene-object modules that
+   * want to mount on mobile must do so inside the WebView's HTML, via
+   * a future message-passing protocol. For now the interface is
+   * satisfied with null, matching NullRenderer's contract.
+   */
+  getCreatureGroup(): unknown {
+    return null;
+  }
+
   dispose(): void {
     this.ready = false;
     this.pendingMessages = [];
