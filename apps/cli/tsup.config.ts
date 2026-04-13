@@ -20,6 +20,13 @@ export default defineConfig({
     "ws",
     "@noble/ed25519",
     "@noble/hashes",
+    // @solana/web3.js pulls in CJS-era deps (bs58 → base-x → safe-buffer)
+    // that use dynamic `require("buffer")`, which ESM can't resolve when
+    // bundled into the CLI's esm output. Keep them external so Node
+    // resolves them at runtime via the CLI's own node_modules.
+    "@solana/web3.js",
+    "@solana/spl-token",
+    "@noble/curves",
   ],
   define: {
     __PKG_VERSION__: JSON.stringify(pkg.version),

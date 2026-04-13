@@ -54,8 +54,11 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@noble/curves": "^1.9.0",
     "@noble/ed25519": "~3.0.1",
-    "@noble/hashes": "~1.6.0",
+    "@noble/hashes": "~1.8.0",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.0",
     "sql.js": "^1.14.1",
     "ws": "^8.20.0"
   },

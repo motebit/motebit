@@ -141,12 +141,21 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
+      '@noble/curves':
+        specifier: ^1.9.0
+        version: 1.9.7
       '@noble/ed25519':
         specifier: ~3.0.1
         version: 3.0.1
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~1.8.0
+        version: 1.8.0
+      '@solana/spl-token':
+        specifier: ^0.4.9
+        version: 0.4.14(@solana/web3.js@1.98.4(bufferutil@4.1.0)(encoding@0.1.13)(typescript@5.9.3)(utf-8-validate@6.0.6))(bufferutil@4.1.0)(encoding@0.1.13)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@solana/web3.js':
+        specifier: ^1.95.0
+        version: 1.98.4(bufferutil@4.1.0)(encoding@0.1.13)(typescript@5.9.3)(utf-8-validate@6.0.6)
       sql.js:
         specifier: ^1.14.1
         version: 1.14.1
@@ -14521,7 +14530,7 @@ snapshots:
     dependencies:
       '@babel/runtime': 7.29.2
       '@noble/curves': 1.9.7
-      '@noble/hashes': 1.6.1
+      '@noble/hashes': 1.8.0
       '@solana/buffer-layout': 4.0.1
       '@solana/codecs-numbers': 2.3.0(typescript@5.9.3)
       agentkeepalive: 4.6.0
@@ -14542,7 +14551,7 @@ snapshots:
 
   '@spruceid/siwe-parser@2.1.2':
     dependencies:
-      '@noble/hashes': 1.6.1
+      '@noble/hashes': 1.8.0
       apg-js: 4.4.0
       uri-js: 4.4.1
       valid-url: 1.0.9
