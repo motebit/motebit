@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { TrustMode } from "@motebit/sdk";
 import {
   smoothDelta,
   ThreeJSAdapter,
@@ -458,6 +459,21 @@ describe("SpatialAdapter (complete)", () => {
     adapter.render(defaultFrame());
     adapter.dispose();
   });
+
+  it("getCreatureGroup returns null (spatial stub has no scene graph)", () => {
+    // SpatialAdapter is a headless stub for test/CI; it has no creature
+    // refs to expose. Contract matches NullRenderAdapter: always null.
+    expect(adapter.getCreatureGroup()).toBeNull();
+  });
+
+  it("setTrustMode does not throw", () => {
+    expect(() => adapter.setTrustMode(TrustMode.Full)).not.toThrow();
+  });
+
+  it("setListeningIndicator does not throw", () => {
+    expect(() => adapter.setListeningIndicator(true)).not.toThrow();
+    expect(() => adapter.setListeningIndicator(false)).not.toThrow();
+  });
 });
 
 // === WebXRThreeJSAdapter ===
@@ -666,7 +682,20 @@ describe("RenderAdapter interface conformance", () => {
         expect(typeof adapter.setLightEnvironment).toBe("function");
         expect(typeof adapter.setInteriorColor).toBe("function");
         expect(typeof adapter.setAudioReactivity).toBe("function");
+        expect(typeof adapter.setTrustMode).toBe("function");
+        expect(typeof adapter.setListeningIndicator).toBe("function");
+        expect(typeof adapter.getCreatureGroup).toBe("function");
         expect(typeof adapter.dispose).toBe("function");
+      });
+
+      it("getCreatureGroup returns null before init (universal contract)", () => {
+        // All adapters must return null from getCreatureGroup when they
+        // have no scene graph — pre-init, headless, or stub. This is the
+        // RenderAdapter interface contract (see spec.ts); callers rely on
+        // it to safely attempt optional scene-object mounting via
+        // `const g = adapter.getCreatureGroup(); if (g) ...`
+        const adapter = create();
+        expect(adapter.getCreatureGroup()).toBeNull();
       });
 
       it("getSpec returns canonical droplet spec", () => {
