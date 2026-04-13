@@ -592,7 +592,13 @@ importers:
       '@ricky0123/vad-web':
         specifier: ^0.0.22
         version: 0.0.22
+      three:
+        specifier: ^0.170.0
+        version: 0.170.0
     devDependencies:
+      '@types/three':
+        specifier: ^0.170.0
+        version: 0.170.0
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
