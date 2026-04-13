@@ -1,7 +1,7 @@
 /**
- * X402SettlementRail — x402 protocol as a SettlementRail adapter.
+ * X402SettlementRail — x402 protocol as a GuestRail.
  *
- * Wraps the x402 facilitator behind the SettlementRail interface.
+ * Wraps the x402 facilitator behind the GuestRail interface.
  * x402 is pay-per-request: deposits are not interactive flows — they happen
  * at the HTTP boundary via x402 middleware. The rail records completed payments
  * and can initiate withdrawals (stablecoin transfers).
@@ -10,7 +10,7 @@
  * client interface. Does not reimplement the protocol.
  */
 
-import type { SettlementRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
+import type { GuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
 import { createLogger } from "../logger.js";
 
 const logger = createLogger({ service: "x402-rail" });
@@ -46,7 +46,8 @@ export interface X402RailConfig {
   onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 }
 
-export class X402SettlementRail implements SettlementRail {
+export class X402SettlementRail implements GuestRail {
+  readonly custody = "relay" as const;
   readonly railType = "protocol" as const;
   readonly name = "x402";
   readonly supportsDeposit = false as const;

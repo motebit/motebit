@@ -23,7 +23,8 @@ interface HealthReadyBody {
       count: number;
       rails: Array<{
         name: string;
-        railType: "fiat" | "protocol" | "direct_asset" | "orchestration";
+        custody: "relay";
+        railType: "fiat" | "protocol" | "orchestration";
         supportsDeposit: boolean;
       }>;
     };

@@ -1,11 +1,14 @@
 /**
  * Settlement rail registry and barrel exports.
  *
- * Holds configured rails by name so route handlers can look up
- * the appropriate rail at runtime without coupling to specific implementations.
+ * The registry accepts only GuestRails — relay-custody rails that the relay
+ * mediates on behalf of agents. SovereignRails (agent-custody, e.g. SolanaWalletRail)
+ * live in the runtime and are never registered at the relay; the compiler
+ * rejects attempts to pass one to `register()`. That mechanical rejection is
+ * the sovereignty doctrine expressed as a type.
  */
 
-import type { SettlementRail } from "@motebit/sdk";
+import type { GuestRail } from "@motebit/sdk";
 
 export { StripeSettlementRail } from "./stripe-rail.js";
 export type { StripeRailConfig } from "./stripe-rail.js";
@@ -15,21 +18,21 @@ export { BridgeSettlementRail } from "./bridge-rail.js";
 export type { BridgeRailConfig, BridgeClient, BridgeTransfer } from "./bridge-rail.js";
 
 export class SettlementRailRegistry {
-  private readonly rails = new Map<string, SettlementRail>();
+  private readonly rails = new Map<string, GuestRail>();
 
-  /** Register a rail. Replaces any existing rail with the same name. */
-  register(rail: SettlementRail): void {
+  /** Register a guest rail. Replaces any existing rail with the same name. */
+  register(rail: GuestRail): void {
     this.rails.set(rail.name, rail);
   }
 
   /** Get a rail by name (e.g., "stripe", "x402-base"). */
-  get(name: string): SettlementRail | undefined {
+  get(name: string): GuestRail | undefined {
     return this.rails.get(name);
   }
 
   /** Get all rails of a given type (e.g., all "fiat" rails). */
-  getByType(type: string): SettlementRail[] {
-    const result: SettlementRail[] = [];
+  getByType(type: string): GuestRail[] {
+    const result: GuestRail[] = [];
     for (const rail of this.rails.values()) {
       if (rail.railType === type) result.push(rail);
     }
@@ -37,7 +40,7 @@ export class SettlementRailRegistry {
   }
 
   /** List all registered rails. */
-  list(): SettlementRail[] {
+  list(): GuestRail[] {
     return [...this.rails.values()];
   }
 
@@ -45,14 +48,19 @@ export class SettlementRailRegistry {
    * Structured manifest for health/readiness reporting and boot-time logging.
    * Pure metadata — no network probes. Use `isAvailable()` on individual rails
    * when provider reachability matters.
+   *
+   * Sovereign rails never appear here. The manifest describes what the relay
+   * can mediate, not what the agent can do on its own behalf.
    */
   manifest(): ReadonlyArray<{
     name: string;
-    railType: SettlementRail["railType"];
+    custody: "relay";
+    railType: GuestRail["railType"];
     supportsDeposit: boolean;
   }> {
     return [...this.rails.values()].map((rail) => ({
       name: rail.name,
+      custody: rail.custody,
       railType: rail.railType,
       supportsDeposit: rail.supportsDeposit,
     }));

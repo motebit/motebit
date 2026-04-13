@@ -1,6 +1,8 @@
 /**
  * SolanaWalletRail — the public, motebit-shaped interface to a
- * sovereign Solana USDC wallet.
+ * sovereign Solana USDC wallet. Implements `SovereignRail` from
+ * `@motebit/protocol` — custody is "agent", the rail is not registered
+ * at the relay, and the identity key signs every transaction.
  *
  * The rail is deliberately tiny: chain, asset, address, plus three
  * methods that delegate to the SolanaRpcAdapter. All Solana-specific
@@ -13,6 +15,7 @@
  * vendor: the agent's identity public key IS its Solana address.
  */
 
+import type { SovereignRail } from "@motebit/protocol";
 import type { SolanaRpcAdapter } from "./adapter.js";
 import type { SendUsdcResult } from "./adapter.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
@@ -53,8 +56,10 @@ export interface SolanaWalletRailConfig {
   disableAutoGas?: boolean;
 }
 
-export class SolanaWalletRail {
+export class SolanaWalletRail implements SovereignRail {
   /** Stable rail vocabulary — independent of which chain library is used. */
+  readonly custody = "agent" as const;
+  readonly name = "solana-wallet" as const;
   readonly chain = "solana" as const;
   readonly asset = "USDC" as const;
 

@@ -595,7 +595,7 @@ export interface DepartureAttestation {
 }
 
 // @public
-export interface DepositableSettlementRail extends SettlementRail {
+export interface DepositableGuestRail extends GuestRail {
     deposit(motebitId: string, amount: number, currency: string, idempotencyKey: string): Promise<DepositResult | {
         redirectUrl: string;
     }>;
@@ -1013,6 +1013,17 @@ export interface GradientCredentialSubject {
 }
 
 // @public
+export interface GuestRail extends SettlementRail {
+    attachProof(settlementId: string, proof: PaymentProof): Promise<void>;
+    // (undocumented)
+    readonly custody: "relay";
+    // (undocumented)
+    readonly railType: "fiat" | "protocol" | "orchestration";
+    readonly supportsDeposit: boolean;
+    withdraw(motebitId: string, amount: number, currency: string, destination: string, idempotencyKey: string): Promise<WithdrawalResult>;
+}
+
+// @public
 export interface IdentityGuardian {
     established_at: string;
     organization?: string;
@@ -1051,7 +1062,7 @@ export interface InjectionWarning {
 }
 
 // @public
-export function isDepositableRail(rail: SettlementRail): rail is DepositableSettlementRail;
+export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail;
 
 // @public
 export function joinParallelRoutes(scores: number[]): number;
@@ -1624,12 +1635,9 @@ export type SettlementMode = "relay" | "p2p";
 
 // @public
 export interface SettlementRail {
-    attachProof(settlementId: string, proof: PaymentProof): Promise<void>;
+    readonly custody: "relay" | "agent";
     isAvailable(): Promise<boolean>;
     readonly name: string;
-    readonly railType: "fiat" | "protocol" | "direct_asset" | "orchestration";
-    readonly supportsDeposit: boolean;
-    withdraw(motebitId: string, amount: number, currency: string, destination: string, idempotencyKey: string): Promise<WithdrawalResult>;
 }
 
 // @public (undocumented)
@@ -1683,6 +1691,16 @@ export interface SolvencyProof {
     relay_id: string;
     signature: string;
     sufficient: boolean;
+}
+
+// @public
+export interface SovereignRail extends SettlementRail {
+    readonly address: string;
+    readonly asset: string;
+    readonly chain: string;
+    // (undocumented)
+    readonly custody: "agent";
+    getBalance(): Promise<bigint>;
 }
 
 // @public (undocumented)

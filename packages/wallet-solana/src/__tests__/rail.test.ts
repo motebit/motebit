@@ -41,6 +41,12 @@ describe("SolanaWalletRail", () => {
     expect(rail.asset).toBe("USDC");
   });
 
+  it("is a sovereign (agent-custody) rail, not a guest rail", () => {
+    const rail = new SolanaWalletRail(makeAdapter());
+    expect(rail.custody).toBe("agent");
+    expect(rail.name).toBe("solana-wallet");
+  });
+
   it("derives address from the adapter (which derives from the identity seed)", () => {
     const adapter = makeAdapter({ ownAddress: "DanielsTestAddressBase58" });
     const rail = new SolanaWalletRail(adapter);

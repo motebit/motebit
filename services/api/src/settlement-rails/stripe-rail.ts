@@ -1,14 +1,14 @@
 /**
- * StripeSettlementRail — Stripe Checkout as a SettlementRail adapter.
+ * StripeSettlementRail — Stripe Checkout as a DepositableGuestRail.
  *
- * Wraps Stripe's Checkout Session API behind the SettlementRail interface.
+ * Wraps Stripe's Checkout Session API behind the GuestRail interface.
  * Deposits create interactive Checkout sessions (redirect flow).
  * Withdrawals are manual (admin-completed) — the rail records intent.
  */
 
 import type Stripe from "stripe";
 import type {
-  DepositableSettlementRail,
+  DepositableGuestRail,
   PaymentProof,
   DepositResult,
   WithdrawalResult,
@@ -28,7 +28,8 @@ export interface StripeRailConfig {
   onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 }
 
-export class StripeSettlementRail implements DepositableSettlementRail {
+export class StripeSettlementRail implements DepositableGuestRail {
+  readonly custody = "relay" as const;
   readonly railType = "fiat" as const;
   readonly name = "stripe";
   readonly supportsDeposit = true as const;

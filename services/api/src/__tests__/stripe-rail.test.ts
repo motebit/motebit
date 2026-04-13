@@ -264,7 +264,7 @@ describe("SettlementRailRegistry", () => {
 
     expect(registry.getByType("fiat")).toHaveLength(1);
     expect(registry.getByType("protocol")).toHaveLength(0);
-    expect(registry.getByType("direct_asset")).toHaveLength(0);
+    expect(registry.getByType("orchestration")).toHaveLength(0);
   });
 
   it("replaces existing rail with same name", () => {

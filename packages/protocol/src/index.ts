@@ -919,36 +919,59 @@ export interface WithdrawalResult {
 }
 
 /**
- * Settlement rail adapter — the external money movement boundary.
+ * Settlement rail — the external money-movement boundary, split by custody.
  *
- * The relay's internal ledger (virtual accounts, micro-units) handles real-time
- * balance tracking. The rail handles how money enters and exits the system.
+ * Every rail is either a GuestRail (relay holds the money, rail moves it in/out)
+ * or a SovereignRail (the agent holds the keys, the rail is the agent's own wallet).
+ * The `custody` discriminant makes this a compile-time distinction.
  *
- * Four rail types:
- * - FiatRail — traditional payment processor (Stripe Checkout)
- * - ProtocolRail — HTTP-native agent payment protocols (MPP, x402)
- * - DirectAssetRail — direct onchain stablecoin transfer (USDC on Tempo/Base/Solana)
- * - OrchestrationRail — fiat↔crypto bridging (Bridge)
+ * Doctrine: the relay's rail registry accepts only GuestRails. SovereignRails live
+ * in the agent's runtime process and are never registered at the relay, because
+ * sovereign means the agent signs its own transactions and the relay is not in
+ * the signing path. The type system enforces the doctrine — not prose.
  *
- * Not all rails support deposits. Fiat and direct-asset rails accept proactive
- * deposits. Protocol rails (x402, MPP) are pay-per-request — money moves at the
- * HTTP boundary, not through the rail. Use `supportsDeposit` discriminant for
+ * See GuestRail and SovereignRail below for their respective contracts.
+ */
+export interface SettlementRail {
+  /** Human-readable name for logging and config (e.g., "stripe", "solana-wallet"). */
+  readonly name: string;
+
+  /** Who holds the keys/funds this rail moves. Compile-time custody boundary. */
+  readonly custody: "relay" | "agent";
+
+  /** Whether this rail is currently available (provider reachable, config valid). */
+  isAvailable(): Promise<boolean>;
+}
+
+/**
+ * GuestRail — relay-custody settlement rail.
+ *
+ * The relay holds the user's money in a virtual account; a GuestRail moves it
+ * across the relay's boundary to an external system and back. The rail is a
+ * guest in the relay's economic loop — it doesn't hold the permanent ledger,
+ * it just carries money through the membrane.
+ *
+ * Three rail types:
+ * - "fiat" — traditional payment processor (Stripe Checkout)
+ * - "protocol" — HTTP-native agent payment protocols (MPP, x402)
+ * - "orchestration" — fiat↔crypto bridging (Bridge)
+ *
+ * There is no "direct_asset" GuestRail — direct onchain transfer is always
+ * sovereign (the agent signs) and belongs in SovereignRail.
+ *
+ * Not all rails support deposits. Fiat rails accept proactive deposits.
+ * Protocol rails (x402, MPP) are pay-per-request — money moves at the HTTP
+ * boundary, not through the rail. Use `supportsDeposit` discriminant for
  * runtime narrowing: `if (rail.supportsDeposit) rail.deposit(...)`.
  *
  * The relay picks the rail at routing time based on what the counterparty accepts.
  */
-export interface SettlementRail {
-  /** Rail type for routing decisions. */
-  readonly railType: "fiat" | "protocol" | "direct_asset" | "orchestration";
-
-  /** Human-readable name for logging and config (e.g., "stripe", "x402-base", "bridge"). */
-  readonly name: string;
+export interface GuestRail extends SettlementRail {
+  readonly custody: "relay";
+  readonly railType: "fiat" | "protocol" | "orchestration";
 
   /** Whether this rail supports proactive deposits. False for pay-per-request rails (x402, MPP). */
   readonly supportsDeposit: boolean;
-
-  /** Whether this rail is currently available (provider reachable, config valid). */
-  isAvailable(): Promise<boolean>;
 
   /**
    * Execute a withdrawal to an external destination.
@@ -970,10 +993,10 @@ export interface SettlementRail {
 }
 
 /**
- * A settlement rail that supports proactive deposits (Stripe Checkout, onchain transfers).
- * Use the `supportsDeposit` discriminant for runtime narrowing from `SettlementRail`.
+ * A guest rail that supports proactive deposits (Stripe Checkout).
+ * Use the `supportsDeposit` discriminant for runtime narrowing from `GuestRail`.
  */
-export interface DepositableSettlementRail extends SettlementRail {
+export interface DepositableGuestRail extends GuestRail {
   readonly supportsDeposit: true;
 
   /**
@@ -988,9 +1011,39 @@ export interface DepositableSettlementRail extends SettlementRail {
   ): Promise<DepositResult | { redirectUrl: string }>;
 }
 
-/** Type guard: narrows SettlementRail to DepositableSettlementRail. */
-export function isDepositableRail(rail: SettlementRail): rail is DepositableSettlementRail {
+/** Type guard: narrows GuestRail to DepositableGuestRail. */
+export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail {
   return rail.supportsDeposit;
+}
+
+/**
+ * SovereignRail — agent-custody settlement rail.
+ *
+ * The agent's identity key signs; the rail is the agent's own wallet. There is
+ * no third-party custodian and the relay is not in the signing path. Withdrawal
+ * from a sovereign rail is just a transfer — the funds never left the agent.
+ *
+ * Reference implementation: `SolanaWalletRail` in `@motebit/wallet-solana`.
+ * The Ed25519 identity public key is natively a valid Solana address, so the
+ * wallet address equals the motebit's identity — no second key, no key-derivation
+ * ceremony, no vendor. Future Ed25519-native chains (Aptos, Sui) implement the
+ * same interface.
+ *
+ * SovereignRails MUST NOT appear in the relay's guest rail registry. The type
+ * split is mechanical: `SettlementRailRegistry.register` accepts only `GuestRail`,
+ * so the compiler rejects attempts to register a sovereign rail at the relay.
+ * This is the sovereignty doctrine expressed as a type.
+ */
+export interface SovereignRail extends SettlementRail {
+  readonly custody: "agent";
+  /** Chain identifier (e.g., "solana"). Future: "aptos", "sui". */
+  readonly chain: string;
+  /** Asset symbol (e.g., "USDC"). */
+  readonly asset: string;
+  /** Agent's own address on this chain. Equals the motebit identity public key for Ed25519-native chains. */
+  readonly address: string;
+  /** Current balance in micro-units (1e6 = 1 unit of asset). */
+  getBalance(): Promise<bigint>;
 }
 
 // === Collaborative Plan Proposals ===

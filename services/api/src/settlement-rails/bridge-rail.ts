@@ -1,7 +1,7 @@
 /**
- * BridgeSettlementRail — Bridge.xyz orchestration as a SettlementRail adapter.
+ * BridgeSettlementRail — Bridge.xyz orchestration as a GuestRail.
  *
- * Wraps Bridge's transfer API behind the SettlementRail interface.
+ * Wraps Bridge's transfer API behind the GuestRail interface.
  * Bridge is fiat↔crypto bridging — the first orchestration rail type.
  *
  * Transfer lifecycle (13 states, 4 on happy path):
@@ -18,7 +18,7 @@
  * interface. Does not reimplement the transfer state machine.
  */
 
-import type { SettlementRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
+import type { GuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
 import { createLogger } from "../logger.js";
 
 const logger = createLogger({ service: "bridge-rail" });
@@ -103,7 +103,8 @@ export interface BridgeRailConfig {
   onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
 }
 
-export class BridgeSettlementRail implements SettlementRail {
+export class BridgeSettlementRail implements GuestRail {
+  readonly custody = "relay" as const;
   readonly railType = "orchestration" as const;
   readonly name = "bridge";
   readonly supportsDeposit = false as const;

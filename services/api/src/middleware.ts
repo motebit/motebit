@@ -40,7 +40,8 @@ export interface HealthCheckDeps {
    */
   getRailManifest?: () => ReadonlyArray<{
     name: string;
-    railType: "fiat" | "protocol" | "direct_asset" | "orchestration";
+    custody: "relay";
+    railType: "fiat" | "protocol" | "orchestration";
     supportsDeposit: boolean;
   }>;
 }
