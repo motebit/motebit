@@ -106,7 +106,7 @@ describe("create-motebit", () => {
     // motebit.md exists and contains spec
     const identity = readFileSync(join(projectDir, "motebit.md"), "utf-8");
     expect(identity).toContain("motebit/identity@1.0");
-    expect(identity).toContain("<!-- motebit:sig:Ed25519:");
+    expect(identity).toContain("<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:");
 
     // Config was written
     const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf-8"));

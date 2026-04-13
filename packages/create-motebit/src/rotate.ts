@@ -22,14 +22,6 @@ if (!ed.hashes.sha512) {
 // Encoding helpers
 // ---------------------------------------------------------------------------
 
-function toBase64Url(data: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < data.length; i++) {
-    binary += String.fromCharCode(data[i]!);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 // ---------------------------------------------------------------------------
 // Canonical JSON — must match @motebit/crypto exactly
 // ---------------------------------------------------------------------------
@@ -54,11 +46,16 @@ function canonicalJson(obj: unknown): string {
 // Key succession signing (inlined from @motebit/crypto)
 // ---------------------------------------------------------------------------
 
+/** Succession records sign under this suite (identity-file suite). */
+const KEY_SUCCESSION_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+
 export interface KeySuccessionRecord {
   old_public_key: string;
   new_public_key: string;
   timestamp: number;
   reason?: string;
+  /** Cryptosuite discriminator — must match `@motebit/protocol` SUITE_REGISTRY. */
+  suite: typeof KEY_SUCCESSION_SUITE;
   old_key_signature: string;
   new_key_signature: string;
 }
@@ -76,6 +73,7 @@ async function signKeySuccession(
     new_public_key: newPublicKeyHex,
     old_public_key: oldPublicKeyHex,
     timestamp,
+    suite: KEY_SUCCESSION_SUITE,
   };
   if (reason !== undefined) {
     obj.reason = reason;
@@ -91,6 +89,7 @@ async function signKeySuccession(
     new_public_key: newPublicKeyHex,
     timestamp,
     ...(reason !== undefined ? { reason } : {}),
+    suite: KEY_SUCCESSION_SUITE,
     old_key_signature: toHex(oldSig),
     new_key_signature: toHex(newSig),
   };
@@ -195,7 +194,10 @@ async function decryptPrivateKey(enc: EncryptedKey, passphrase: string): Promise
 // Identity file manipulation
 // ---------------------------------------------------------------------------
 
-const SIG_PREFIX = "<!-- motebit:sig:Ed25519:";
+// Identity-file signature comment format (cryptosuite-agility):
+//   <!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex} -->
+const IDENTITY_FILE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+const SIG_PREFIX = `<!-- motebit:sig:${IDENTITY_FILE_SUITE}:`;
 const SIG_SUFFIX = " -->";
 
 /**
@@ -303,8 +305,8 @@ export async function rotateKey(opts: {
   const frontmatter = `---\n${updatedYaml}\n---`;
   const frontmatterBytes = new TextEncoder().encode(updatedYaml);
   const signature = await ed.signAsync(frontmatterBytes, newPrivateKey);
-  const sigB64 = toBase64Url(signature);
-  const identityFileContent = `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
+  const sigHex = toHex(signature);
+  const identityFileContent = `${frontmatter}\n${SIG_PREFIX}${sigHex}${SIG_SUFFIX}\n`;
 
   // 8. Encrypt new private key
   const newEncryptedKey = await encryptPrivateKey(newPrivateKeyHex, opts.newPassphrase);
@@ -329,6 +331,7 @@ function buildSuccessionYaml(record: KeySuccessionRecord): string {
   if (record.reason !== undefined) {
     lines.push(`    reason: ${JSON.stringify(record.reason)}`);
   }
+  lines.push(`    suite: "${record.suite}"`);
   lines.push(`    old_key_signature: "${record.old_key_signature}"`);
   lines.push(`    new_key_signature: "${record.new_key_signature}"`);
   return lines.join("\n");

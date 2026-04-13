@@ -1,19 +1,21 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { hexToBytes, fromBase64Url, bytesToHex, verifyEd25519, verify } from "../verify.js";
 
-// Real Ed25519 keypair + signed identity for integration tests
-const TEST_PUB_HEX = "4fe75250b985dd41e0db40a06190b0d8f6d1596bfe76b3c9ddec1f3e15390abf";
-const TEST_SIG_B64URL =
-  "3AODzRS8_QiZ5ohdLb9kW9NYkhjHHAycie134OVe93RRFOy8d6AyhH93O0CuA3ijCzU7P6NfUQGIqwXXlm6WCw";
+// Identity-file signature comment format (cryptosuite-agility):
+//   <!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex} -->
+// The fixture below is generated dynamically in beforeAll() so the
+// signature stays in sync with the wire-format sig comment.
+let TEST_PUB_HEX = "";
+let TEST_SIG_HEX = "";
+let SIGNED_IDENTITY = "";
 
-const SIGNED_IDENTITY = `---
-spec: motebit/identity@1.0
+const buildFrontmatter = (pubHex: string) => `spec: motebit/identity@1.0
 motebit_id: 019abc12-3456-7890-abcd-ef0123456789
 created_at: 2026-01-15T10:00:00Z
 owner_id: owner-abc-123
 identity:
   algorithm: Ed25519
-  public_key: ${TEST_PUB_HEX}
+  public_key: ${pubHex}
 governance:
   trust_mode: guarded
   max_risk_auto: R1_DRAFT
@@ -35,13 +37,25 @@ devices:
   - device_id: dev-001
     name: laptop
     public_key: 1122334455
-    registered_at: 2026-01-15T10:00:00Z
----
+    registered_at: 2026-01-15T10:00:00Z`;
 
-# My Agent
-
-<!-- motebit:sig:Ed25519:${TEST_SIG_B64URL} -->
-`;
+beforeAll(async () => {
+  // Generate a fresh Ed25519 keypair via Web Crypto (the same primitive
+  // the verifier uses), then sign the frontmatter so the integration
+  // fixture is internally consistent.
+  const kp = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  const pubBytes = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+  TEST_PUB_HEX = bytesToHex(pubBytes);
+  const fm = buildFrontmatter(TEST_PUB_HEX);
+  const sig = new Uint8Array(
+    await crypto.subtle.sign({ name: "Ed25519" }, kp.privateKey, new TextEncoder().encode(fm)),
+  );
+  TEST_SIG_HEX = bytesToHex(sig);
+  SIGNED_IDENTITY = `---\n${fm}\n---\n\n# My Agent\n\n<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:${TEST_SIG_HEX} -->\n`;
+});
 
 describe("hexToBytes", () => {
   it("converts hex to bytes", () => {
@@ -172,7 +186,7 @@ describe("verify", () => {
   });
 
   it("rejects invalid signature encoding", async () => {
-    const bad = SIGNED_IDENTITY.replace(TEST_SIG_B64URL, "!!!invalid!!!");
+    const bad = SIGNED_IDENTITY.replace(TEST_SIG_HEX, "!!!invalid!!!");
     const result = await verify(bad);
     expect(result.valid).toBe(false);
   });

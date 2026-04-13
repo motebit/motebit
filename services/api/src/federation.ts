@@ -18,6 +18,13 @@ import {
   bytesToHex,
   hexToBytes,
 } from "@motebit/encryption";
+// Federation handshake and heartbeat messages sign under the
+// concat-ed25519-hex suite. The primitive call lives in
+// @motebit/crypto's suite-dispatch; this service reaches through
+// @motebit/encryption's sign/verify helpers (which delegate to the
+// dispatcher). The `suite` literal below is the stable contract between
+// services and the registry in @motebit/protocol.
+const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -586,7 +593,11 @@ export async function sendHeartbeats(
   const agentCount = (
     db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
   ).cnt;
-  const message = encoder.encode(`${relayIdentity.relayMotebitId}${timestamp}`);
+  // Heartbeat signing payload format (FEDERATION_SUITE = motebit-concat-ed25519-hex-v1):
+  //   `{relay_id}|{timestamp}|{suite}`  — UTF-8 concatenation, Ed25519 sign, hex encode
+  const message = encoder.encode(
+    `${relayIdentity.relayMotebitId}|${timestamp}|${FEDERATION_SUITE}`,
+  );
   const signature = await sign(message, relayIdentity.privateKey);
   const signatureHex = bytesToHex(signature);
 
@@ -1067,9 +1078,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     crypto.getRandomValues(ourNonceBytes);
     const ourNonce = bytesToHex(ourNonceBytes);
 
-    // Sign relay_id + nonce together so the challenge is bound to this specific peer.
-    // Prevents replay: a signature from one peering attempt can't be reused for another.
-    const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}`);
+    // Sign relay_id + nonce + suite together so the challenge is bound
+    // to this specific peer and to the cryptosuite. Prevents replay and
+    // cross-suite confusion.
+    const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}:${FEDERATION_SUITE}`);
     const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
 
     db.prepare(
@@ -1113,8 +1125,9 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (!peer) throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
     if (!peer.nonce) throw new HTTPException(400, { message: "No nonce stored for this peer" });
 
-    // Verify: the peer signed their own relay_id + our nonce (bound to this specific relationship)
-    const confirmMsg = new TextEncoder().encode(`${relay_id}:${peer.nonce}`);
+    // Verify: the peer signed their own relay_id + our nonce + suite
+    // (bound to this specific relationship and cryptosuite).
+    const confirmMsg = new TextEncoder().encode(`${relay_id}:${peer.nonce}:${FEDERATION_SUITE}`);
     const valid = await verify(
       hexToBytes(challenge_response),
       confirmMsg,
@@ -1172,7 +1185,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     const valid = await verify(
       hexToBytes(sig),
-      encoder.encode(`${relay_id}${timestamp}`),
+      encoder.encode(`${relay_id}|${timestamp}|${FEDERATION_SUITE}`),
       hexToBytes(peer.public_key),
     );
     if (!valid)
@@ -1216,7 +1229,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
     ).cnt;
     const responseSig = await sign(
-      encoder.encode(`${relayIdentity.relayMotebitId}${ourTimestamp}`),
+      encoder.encode(`${relayIdentity.relayMotebitId}|${ourTimestamp}|${FEDERATION_SUITE}`),
       relayIdentity.privateKey,
     );
 

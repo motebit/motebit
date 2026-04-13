@@ -53,14 +53,6 @@ export function fromHex(hex: string): Uint8Array {
   return bytes;
 }
 
-function toBase64Url(data: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < data.length; i++) {
-    binary += String.fromCharCode(data[i]!);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 // ---------------------------------------------------------------------------
 // UUID v7 (RFC 9562) — inlined to avoid monorepo dependency on core-identity
 // ---------------------------------------------------------------------------
@@ -363,7 +355,10 @@ const SERVICE_GOVERNANCE: Record<
 // Signature
 // ---------------------------------------------------------------------------
 
-const SIG_PREFIX = "<!-- motebit:sig:Ed25519:";
+// Identity-file signature comment format (cryptosuite-agility):
+//   <!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex} -->
+const IDENTITY_FILE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+const SIG_PREFIX = `<!-- motebit:sig:${IDENTITY_FILE_SUITE}:`;
 const SIG_SUFFIX = " -->";
 
 // ---------------------------------------------------------------------------
@@ -473,8 +468,8 @@ export async function generateIdentity(opts: {
   const frontmatter = `---\n${yaml}\n---`;
   const frontmatterBytes = new TextEncoder().encode(yaml);
   const signature = await ed.signAsync(frontmatterBytes, secretKey);
-  const sigB64 = toBase64Url(signature);
-  const identityFileContent = `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
+  const sigHex = toHex(signature);
+  const identityFileContent = `${frontmatter}\n${SIG_PREFIX}${sigHex}${SIG_SUFFIX}\n`;
 
   // Encrypt private key (compatible with CLI's format)
   const encryptedKey = await encryptPrivateKey(privateKeyHex, opts.passphrase);
@@ -559,6 +554,6 @@ export async function regenerateIdentityFile(opts: {
   const frontmatterBytes = new TextEncoder().encode(yaml);
   const secretKey = fromHex(opts.privateKeyHex);
   const signature = await ed.signAsync(frontmatterBytes, secretKey);
-  const sigB64 = toBase64Url(signature);
-  return `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
+  const sigHex = toHex(signature);
+  return `${frontmatter}\n${SIG_PREFIX}${sigHex}${SIG_SUFFIX}\n`;
 }

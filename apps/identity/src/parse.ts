@@ -194,7 +194,11 @@ function parseYaml(text: string): MotebitIdentityFile {
 // Public API
 // ---------------------------------------------------------------------------
 
-const SIG_PREFIX = "<!-- motebit:sig:Ed25519:";
+// Identity-file signature comment format (cryptosuite-agility):
+//   <!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex} -->
+// Legacy `motebit:sig:Ed25519:` comments are rejected fail-closed.
+const IDENTITY_FILE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+const SIG_PREFIX = `<!-- motebit:sig:${IDENTITY_FILE_SUITE}:`;
 const SIG_SUFFIX = " -->";
 
 export function parse(content: string): ParseResult {
@@ -212,7 +216,17 @@ export function parse(content: string): ParseResult {
   const frontmatter = parseYaml(rawFrontmatter);
 
   const sigStart = normalized.indexOf(SIG_PREFIX);
-  if (sigStart === -1) throw new Error("Missing signature");
+  if (sigStart === -1) {
+    if (normalized.includes("<!-- motebit:sig:Ed25519:")) {
+      throw new Error(
+        `Legacy identity-file signature format detected. ` +
+          `Re-sign under ${IDENTITY_FILE_SUITE} — no legacy fallback.`,
+      );
+    }
+    throw new Error(
+      `Missing signature comment (expected <!-- motebit:sig:${IDENTITY_FILE_SUITE}:… -->)`,
+    );
+  }
 
   const sigValueStart = sigStart + SIG_PREFIX.length;
   const sigEnd = normalized.indexOf(SIG_SUFFIX, sigValueStart);

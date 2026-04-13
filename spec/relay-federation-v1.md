@@ -95,9 +95,11 @@ Relay A (initiator)                         Relay B (responder)
 
 **Step 1 — Propose.** Relay A sends its identity and a 32-byte random nonce (`nonce_a`).
 
-**Step 2 — Respond.** Relay B validates the proposal, stores A as a pending peer, generates its own nonce (`nonce_b`), and returns a challenge: the Ed25519 signature of `relay_id:nonce_a` (the proposer's relay_id concatenated with `:` and the nonce, UTF-8 encoded) using B's private key. This proves B holds the private key corresponding to the public key it advertises. The nonce is bound to the relay_id to prevent cross-peering replay.
+**Step 2 — Respond.** Relay B validates the proposal, stores A as a pending peer, generates its own nonce (`nonce_b`), and returns a challenge: the Ed25519 signature of `{relay_id}:{nonce_a}:{suite}` (proposer's relay_id, proposer's nonce, and the cryptosuite identifier `motebit-concat-ed25519-hex-v1`, UTF-8 encoded, colon-separated) using B's private key. This proves B holds the private key corresponding to the public key it advertises. The nonce is bound to the relay_id and suite to prevent cross-peering and cross-suite replay.
 
-**Step 3 — Confirm.** Relay A verifies B's challenge signature against B's public key. If valid, A signs `relay_id:nonce_b` (A's own relay_id concatenated with `:` and B's nonce) with its own private key and sends the response. Relay B verifies A's signature. Both relays transition the peer to `active` state.
+**Step 3 — Confirm.** Relay A verifies B's challenge signature against B's public key. If valid, A signs `{relay_id}:{nonce_b}:{suite}` (A's own relay_id, B's nonce, suite identifier) with its own private key and sends the response. Relay B verifies A's signature. Both relays transition the peer to `active` state.
+
+The suite identifier for handshake challenges is `motebit-concat-ed25519-hex-v1` (see `SUITE_REGISTRY` in `@motebit/protocol`): UTF-8 concatenation of the template, Ed25519 primitive, hex signature encoding.
 
 If any verification fails, the handshake is aborted and the peer record is discarded.
 
@@ -117,7 +119,7 @@ Active peers exchange heartbeats to confirm liveness and synchronize metadata.
 | **Missed limit** | 3 consecutive missed heartbeats → `suspended`; 5 → `removed` |
 | **Action**       | Peer state transitions to `suspended` at 3, `removed` at 5   |
 
-The `signature` field is the Ed25519 signature of `relay_id || timestamp` (concatenated UTF-8 bytes). This prevents replay and spoofing.
+The `signature` field is the Ed25519 signature of `{relay_id}|{timestamp}|{suite}` (pipe-separated UTF-8 bytes, where `suite` is the cryptosuite identifier `motebit-concat-ed25519-hex-v1`). This prevents replay, spoofing, and cross-suite confusion.
 
 A suspended peer is excluded from discovery and routing until heartbeats resume. After a single successful heartbeat, the peer transitions back to `active`. A peer that reaches 5 consecutive missed heartbeats is transitioned to `removed` and requires a full handshake to re-establish.
 

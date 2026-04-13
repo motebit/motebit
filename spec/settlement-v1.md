@@ -203,20 +203,21 @@ When a motebit makes a direct payment via the sovereign rail (e.g., Solana walle
 
 Every sovereign-rail implementation MUST emit a receipt that matches this shape. The `SovereignPaymentReceipt` is not a new type — it is an `ExecutionReceipt` whose `task_id` anchors to an onchain transaction (§3.3) and whose `relay_task_id` is absent (§3.4). Any party with the public ledger the rail uses can verify the receipt with no relay contact (§3.2).
 
-| Field                           | Value                                               | Notes                                                            |
-| ------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------- |
-| `task_id`                       | `{rail}:tx:{txHash}`                                | Anchors the receipt to a specific, globally unique onchain proof |
-| `motebit_id`                    | payee's motebit ID                                  | The party signing this receipt                                   |
-| `public_key`                    | payee's Ed25519 public key (hex)                    | Embedded for portable verification without any registry lookup   |
-| `device_id`                     | payee's device ID                                   | Provenance                                                       |
-| `submitted_at` / `completed_at` | unix milliseconds                                   | Temporal binding                                                 |
-| `status`                        | `"completed"`                                       | Sovereign payments succeed atomically or not at all              |
-| `result`                        | service description + payer + amount + asset + rail | Human-readable record                                            |
-| `prompt_hash` / `result_hash`   | SHA-256                                             | Request/result integrity                                         |
-| `tools_used`                    | array                                               | Tools the payee used to render the service                       |
-| `memories_formed`               | 0                                                   | Typically                                                        |
-| `relay_task_id`                 | **undefined**                                       | Sovereign rail — no relay binding                                |
-| `signature`                     | Ed25519 signature over canonical JSON               | Signed by the payee's identity key                               |
+| Field                           | Value                                               | Notes                                                                |
+| ------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------- |
+| `task_id`                       | `{rail}:tx:{txHash}`                                | Anchors the receipt to a specific, globally unique onchain proof     |
+| `motebit_id`                    | payee's motebit ID                                  | The party signing this receipt                                       |
+| `public_key`                    | payee's Ed25519 public key (hex)                    | Embedded for portable verification without any registry lookup       |
+| `device_id`                     | payee's device ID                                   | Provenance                                                           |
+| `submitted_at` / `completed_at` | unix milliseconds                                   | Temporal binding                                                     |
+| `status`                        | `"completed"`                                       | Sovereign payments succeed atomically or not at all                  |
+| `result`                        | service description + payer + amount + asset + rail | Human-readable record                                                |
+| `prompt_hash` / `result_hash`   | SHA-256                                             | Request/result integrity                                             |
+| `tools_used`                    | array                                               | Tools the payee used to render the service                           |
+| `memories_formed`               | 0                                                   | Typically                                                            |
+| `relay_task_id`                 | **undefined**                                       | Sovereign rail — no relay binding                                    |
+| `suite`                         | `"motebit-jcs-ed25519-b64-v1"`                      | Cryptosuite identifier (see `SUITE_REGISTRY` in `@motebit/protocol`) |
+| `signature`                     | Ed25519 signature over canonical JSON               | Signed by the payee's identity key                                   |
 
 The reference helper lives in `@motebit/crypto` as `signSovereignPaymentReceipt`. Verification uses the standard `verifyExecutionReceipt` function against the embedded `public_key`. No relay lookup is required at any step.
 

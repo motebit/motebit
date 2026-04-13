@@ -64,6 +64,7 @@ MigrationRequest {
   destination_relay:  string      // Optional: URL or relay_id of intended destination
   reason:             string      // Optional: human-readable reason for migration
   requested_at:       number      // Unix ms
+  suite:              string      // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:          string      // Ed25519 by agent over canonical JSON of all fields except signature
 }
 ```
@@ -84,6 +85,7 @@ MigrationToken {
   source_relay_url:   string      // Issuing relay's canonical URL
   issued_at:          number      // Unix ms
   expires_at:         number      // Unix ms
+  suite:              string      // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:          string      // Ed25519 by source relay over canonical JSON of all fields except signature
 }
 ```
@@ -131,6 +133,7 @@ DepartureAttestation {
   credentials_issued:   number      // Total credentials issued to this agent
   balance_at_departure: number      // Virtual account balance in micro-units at attestation time
   attested_at:          number      // Unix ms
+  suite:                string      // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:            string      // Ed25519 by source relay over canonical JSON of all fields except signature
 }
 ```
@@ -178,6 +181,7 @@ CredentialBundle {
   anchor_proofs:    CredentialAnchorProof[]   // Onchain anchors (credential-anchor@1.0)
   key_succession:   KeySuccessionRecord[]     // Full key rotation history (identity@1.0)
   bundle_hash:      string                    // SHA-256 of canonical JSON of all fields except bundle_hash and signature
+  suite:            string                    // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:        string                    // Ed25519 by agent over canonical JSON of all fields except signature
 }
 ```
@@ -218,6 +222,7 @@ BalanceWaiver {
   motebit_id:     string      // Agent's MotebitId
   waived_amount:  number      // Amount waived in micro-units
   waived_at:      number      // Unix ms
+  suite:          string      // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:      string      // Ed25519 by agent
 }
 ```
@@ -248,6 +253,7 @@ MigrationPresentation {
   credential_bundle:        CredentialBundle
   identity_file:            string              // Full motebit.md content (identity@1.0)
   presented_at:             number              // Unix ms
+  suite:                    string              // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:                string              // Ed25519 by agent over canonical JSON of all fields except signature
 }
 ```

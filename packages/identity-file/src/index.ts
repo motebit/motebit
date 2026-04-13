@@ -10,7 +10,7 @@
  * YAML serialization, and risk-level bridging on top.
  */
 
-import { sign as ed25519Sign, toBase64Url, bytesToHex, canonicalJson } from "@motebit/encryption";
+import { sign as ed25519Sign, bytesToHex, canonicalJson } from "@motebit/encryption";
 export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/encryption";
 import { RiskLevel } from "@motebit/sdk";
 import { parse, verify, verifyIdentityFile } from "@motebit/crypto";
@@ -103,9 +103,17 @@ function serializeYaml(data: MotebitIdentityFile): string {
   return lines.join("\n");
 }
 
-// --- Signature Format ---
+// --- Signature Format (cryptosuite-agility) ---
+//
+// Identity-file signatures declare the cryptosuite in the comment
+// prefix: `<!-- motebit:sig:{suite_id}:{hex_signature} -->`. Today
+// every identity file is signed under `motebit-jcs-ed25519-hex-v1`
+// (hex-encoded signature over JCS-canonicalized frontmatter bytes).
+// Legacy `motebit:sig:Ed25519:` comments are rejected fail-closed by
+// `@motebit/crypto`.
 
-const SIG_PREFIX = "<!-- motebit:sig:Ed25519:";
+const IDENTITY_FILE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+const SIG_PREFIX = `<!-- motebit:sig:${IDENTITY_FILE_SUITE}:`;
 const SIG_SUFFIX = " -->";
 
 // --- Public API ---
@@ -215,9 +223,9 @@ export async function generate(opts: GenerateOptions, privateKey: Uint8Array): P
   const frontmatter = `---\n${yaml}\n---`;
   const frontmatterBytes = new TextEncoder().encode(yaml);
   const signature = await ed25519Sign(frontmatterBytes, privateKey);
-  const sigB64 = toBase64Url(signature);
+  const sigHex = bytesToHex(signature);
 
-  return `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
+  return `${frontmatter}\n${SIG_PREFIX}${sigHex}${SIG_SUFFIX}\n`;
 }
 
 export type ParseResult = ReturnType<typeof parse>;
@@ -238,9 +246,9 @@ export async function update(
   const frontmatter = `---\n${yaml}\n---`;
   const frontmatterBytes = new TextEncoder().encode(yaml);
   const signature = await ed25519Sign(frontmatterBytes, privateKey);
-  const sigB64 = toBase64Url(signature);
+  const sigHex = bytesToHex(signature);
 
-  return `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
+  return `${frontmatter}\n${SIG_PREFIX}${sigHex}${SIG_SUFFIX}\n`;
 }
 
 export interface RotateOptions {
@@ -252,6 +260,12 @@ export interface RotateOptions {
     new_public_key: string;
     timestamp: number;
     reason?: string;
+    /**
+     * Cryptosuite discriminator. Optional to maintain backward
+     * compatibility on the input surface — the rotator stamps the
+     * identity-file suite (`motebit-jcs-ed25519-hex-v1`) when omitted.
+     */
+    suite?: "motebit-jcs-ed25519-hex-v1";
     old_key_signature?: string;
     new_key_signature: string;
     recovery?: boolean;
@@ -273,17 +287,22 @@ export async function rotate(opts: RotateOptions): Promise<string> {
     public_key: bytesToHex(opts.newPublicKey),
   };
 
-  // Append succession record to existing chain (or create new chain)
+  // Append succession record to existing chain (or create new chain).
+  // Stamp the identity-file cryptosuite if the caller didn't already.
+  const stampedRecord = {
+    ...opts.successionRecord,
+    suite: opts.successionRecord.suite ?? IDENTITY_FILE_SUITE,
+  };
   const existingChain = data.succession ?? [];
-  data.succession = [...existingChain, opts.successionRecord];
+  data.succession = [...existingChain, stampedRecord];
 
   const yaml = serializeYaml(data);
   const frontmatter = `---\n${yaml}\n---`;
   const frontmatterBytes = new TextEncoder().encode(yaml);
   const signature = await ed25519Sign(frontmatterBytes, opts.newPrivateKey);
-  const sigB64 = toBase64Url(signature);
+  const sigHex = bytesToHex(signature);
 
-  return `${frontmatter}\n${SIG_PREFIX}${sigB64}${SIG_SUFFIX}\n`;
+  return `${frontmatter}\n${SIG_PREFIX}${sigHex}${SIG_SUFFIX}\n`;
 }
 
 // --- Helpers ---

@@ -96,6 +96,11 @@ export interface SuccessionRecord {
   new_public_key: string;
   timestamp: number;
   reason?: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-hex-v1"`
+   * for this artifact today — same suite as the identity frontmatter.
+   */
+  suite: "motebit-jcs-ed25519-hex-v1";
   old_key_signature?: string;
   new_key_signature: string;
   /** True when succession was authorized by guardian, not old key. */
@@ -487,7 +492,13 @@ async function sha256(data: Uint8Array): Promise<Uint8Array> {
 // Constants
 // ===========================================================================
 
-const SIG_PREFIX = "<!-- motebit:sig:Ed25519:";
+// Identity-file signature comment format (cryptosuite-agility):
+//   <!-- motebit:sig:{suite_id}:{hex_signature} -->
+// The suite value MUST be `motebit-jcs-ed25519-hex-v1` — the sole suite
+// identity files sign under today. Verifiers reject any other suite
+// value and the legacy `Ed25519:` prefix fail-closed (no legacy path).
+const IDENTITY_FILE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+const SIG_PREFIX = `<!-- motebit:sig:${IDENTITY_FILE_SUITE}:`;
 const SIG_SUFFIX = " -->";
 
 // ===========================================================================
@@ -556,7 +567,18 @@ export function parse(content: string): {
   const frontmatter = parseYaml(rawFrontmatter);
 
   const sigStart = content.indexOf(SIG_PREFIX);
-  if (sigStart === -1) throw new Error("Missing signature");
+  if (sigStart === -1) {
+    // Legacy detection — fail-closed with a clear upgrade path.
+    if (content.includes("<!-- motebit:sig:Ed25519:")) {
+      throw new Error(
+        `Legacy identity-file signature format detected (motebit:sig:Ed25519:). ` +
+          `Re-sign under ${IDENTITY_FILE_SUITE} — no legacy fallback.`,
+      );
+    }
+    throw new Error(
+      `Missing signature comment (expected <!-- motebit:sig:${IDENTITY_FILE_SUITE}:… -->)`,
+    );
+  }
 
   const sigValueStart = sigStart + SIG_PREFIX.length;
   const sigEnd = content.indexOf(SIG_SUFFIX, sigValueStart);
@@ -595,9 +617,12 @@ async function verifyIdentity(content: string): Promise<IdentityVerifyResult> {
     return identityError("Public key must be 32 bytes");
   }
 
+  // The identity-file suite (motebit-jcs-ed25519-hex-v1) encodes the
+  // signature as hex per its `signatureEncoding` contract. The sig
+  // comment format is `<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex} -->`.
   let sigBytes: Uint8Array;
   try {
-    sigBytes = fromBase64Url(parsed.signature);
+    sigBytes = hexToBytes(parsed.signature);
   } catch {
     return identityError("Invalid signature encoding");
   }
@@ -692,10 +717,21 @@ async function verifySuccessionChain(
     for (let i = 0; i < chain.length; i++) {
       const record = chain[i]!;
 
+      // Succession records MUST declare the hex suite. Reject fail-closed
+      // on missing or unknown values — no legacy path.
+      if ((record as unknown as { suite?: string }).suite !== "motebit-jcs-ed25519-hex-v1") {
+        return {
+          valid: false,
+          rotations: chain.length,
+          error: `Succession record ${i}: missing or invalid suite (expected motebit-jcs-ed25519-hex-v1)`,
+        };
+      }
+
       const payloadObj: Record<string, unknown> = {
         old_public_key: record.old_public_key,
         new_public_key: record.new_public_key,
         timestamp: record.timestamp,
+        suite: "motebit-jcs-ed25519-hex-v1",
       };
       if (record.reason !== undefined) {
         payloadObj.reason = record.reason;

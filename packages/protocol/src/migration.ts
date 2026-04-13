@@ -36,6 +36,12 @@ export interface MigrationRequest {
   reason?: string;
   /** Unix ms when the request was made. */
   requested_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` —
+   * JCS canonicalization, Ed25519 primitive, base64url signature
+   * encoding. Verifiers reject missing or unknown values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 by agent over canonical JSON of all fields except signature. */
   signature: string;
 }
@@ -60,6 +66,11 @@ export interface MigrationToken {
   issued_at: number;
   /** Unix ms. Default: 72 hours from issuance. */
   expires_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see MigrationRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 by source relay over canonical JSON of all fields except signature. */
   signature: string;
 }
@@ -98,6 +109,11 @@ export interface DepartureAttestation {
   balance_at_departure: number;
   /** Unix ms. */
   attested_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see MigrationRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 by source relay over canonical JSON of all fields except signature. */
   signature: string;
 }
@@ -125,6 +141,11 @@ export interface CredentialBundle {
   key_succession: Record<string, unknown>[];
   /** SHA-256 of canonical JSON of all fields except bundle_hash and signature. */
   bundle_hash: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see MigrationRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 by agent over canonical JSON of all fields except signature. */
   signature: string;
 }
@@ -144,6 +165,11 @@ export interface BalanceWaiver {
   waived_amount: number;
   /** Unix ms. */
   waived_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see MigrationRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 by agent. */
   signature: string;
 }
@@ -169,6 +195,11 @@ export interface MigrationPresentation {
   identity_file: string;
   /** Unix ms. */
   presented_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see MigrationRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 by agent over canonical JSON of all fields except signature. */
   signature: string;
 }

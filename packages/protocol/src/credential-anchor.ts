@@ -21,6 +21,13 @@ export interface CredentialAnchorBatch {
   first_issued_at: number;
   /** Millisecond timestamp of the latest credential in the batch. */
   last_issued_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-hex-v1"` —
+   * JCS canonicalization of the unsigned batch payload, Ed25519
+   * primitive, hex signature encoding, hex public-key encoding.
+   * Verifiers reject missing or unknown suite values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-hex-v1";
   /** Hex-encoded Ed25519 signature over the canonical batch payload. */
   signature: string;
   /** Onchain anchor metadata, or null if signed but not yet submitted. */
@@ -67,6 +74,13 @@ export interface CredentialAnchorProof {
   relay_id: string;
   /** Hex-encoded Ed25519 public key of the relay (for signature verification). */
   relay_public_key: string;
+  /**
+   * Cryptosuite discriminator for `batch_signature`. Always
+   * `"motebit-jcs-ed25519-hex-v1"` — JCS canonicalization of the batch
+   * payload, Ed25519 primitive, hex signature encoding, hex public-key
+   * encoding. Verifiers reject missing or unknown suite values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-hex-v1";
   /** Hex-encoded Ed25519 signature over the canonical batch payload. */
   batch_signature: string;
   /** Onchain anchor metadata, or null if not yet submitted. */

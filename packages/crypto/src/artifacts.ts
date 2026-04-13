@@ -419,6 +419,9 @@ export async function verifyDelegationChain(
 
 // === Key Succession (Rotation) ===
 
+/** The one suite KeySuccessionRecords sign under today. */
+export const KEY_SUCCESSION_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+
 /**
  * A key succession record proving that one Ed25519 key has been replaced by another.
  * Normal rotation: both old and new keys sign. Guardian recovery: guardian + new key sign.
@@ -428,6 +431,13 @@ export interface KeySuccessionRecord {
   new_public_key: string; // hex
   timestamp: number;
   reason?: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-hex-v1"` —
+   * JCS canonicalization of the unsigned payload, Ed25519 primitive,
+   * hex signature encoding, hex public-key encoding. Structurally
+   * compatible with `@motebit/protocol` `KeySuccessionRecord`.
+   */
+  suite: typeof KEY_SUCCESSION_SUITE;
   old_key_signature?: string; // hex — present in normal rotation, absent in guardian recovery
   new_key_signature: string; // hex, new key signs the canonical payload
   /** True when succession was authorized by guardian, not old key. */
@@ -437,7 +447,9 @@ export interface KeySuccessionRecord {
 }
 
 /**
- * Build the canonical payload for key succession signing.
+ * Build the canonical payload for key succession signing. The `suite`
+ * field is stamped into the signed body so verifiers dispatch the
+ * primitive via `verifyBySuite` rather than assuming Ed25519 implicitly.
  */
 function keySuccessionPayload(
   oldPublicKeyHex: string,
@@ -450,6 +462,7 @@ function keySuccessionPayload(
     old_public_key: oldPublicKeyHex,
     new_public_key: newPublicKeyHex,
     timestamp,
+    suite: KEY_SUCCESSION_SUITE,
   };
   if (reason !== undefined) {
     obj.reason = reason;
@@ -462,6 +475,8 @@ function keySuccessionPayload(
 
 /**
  * Create a key succession record signed by both the old and new keys.
+ * Dispatches primitive signing through `signBySuite` per the
+ * `motebit-jcs-ed25519-hex-v1` suite.
  */
 export async function signKeySuccession(
   oldPrivateKey: Uint8Array,
@@ -477,14 +492,15 @@ export async function signKeySuccession(
   const payload = keySuccessionPayload(oldPublicKeyHex, newPublicKeyHex, timestamp, reason);
   const message = new TextEncoder().encode(payload);
 
-  const oldSig = await ed25519Sign(message, oldPrivateKey);
-  const newSig = await ed25519Sign(message, newPrivateKey);
+  const oldSig = await signBySuite(KEY_SUCCESSION_SUITE, message, oldPrivateKey);
+  const newSig = await signBySuite(KEY_SUCCESSION_SUITE, message, newPrivateKey);
 
   return {
     old_public_key: oldPublicKeyHex,
     new_public_key: newPublicKeyHex,
     timestamp,
     ...(reason !== undefined ? { reason } : {}),
+    suite: KEY_SUCCESSION_SUITE,
     old_key_signature: bytesToHex(oldSig),
     new_key_signature: bytesToHex(newSig),
   };
@@ -516,14 +532,15 @@ export async function signGuardianRecoverySuccession(
   );
   const message = new TextEncoder().encode(payload);
 
-  const guardianSig = await ed25519Sign(message, guardianPrivateKey);
-  const newSig = await ed25519Sign(message, newPrivateKey);
+  const guardianSig = await signBySuite(KEY_SUCCESSION_SUITE, message, guardianPrivateKey);
+  const newSig = await signBySuite(KEY_SUCCESSION_SUITE, message, newPrivateKey);
 
   return {
     old_public_key: oldPublicKeyHex,
     new_public_key: newPublicKeyHex,
     timestamp,
     reason: effectiveReason,
+    suite: KEY_SUCCESSION_SUITE,
     new_key_signature: bytesToHex(newSig),
     recovery: true,
     guardian_signature: bytesToHex(guardianSig),
@@ -531,13 +548,16 @@ export async function signGuardianRecoverySuccession(
 }
 
 /**
- * Verify a key succession record. For normal rotation, checks old_key_signature + new_key_signature.
- * For guardian recovery (recovery: true), checks guardian_signature + new_key_signature.
+ * Verify a key succession record. For normal rotation, checks
+ * old_key_signature + new_key_signature. For guardian recovery
+ * (recovery: true), checks guardian_signature + new_key_signature.
+ * Rejects records whose `suite` is missing or not the succession suite.
  */
 export async function verifyKeySuccession(
   record: KeySuccessionRecord,
   guardianPublicKeyHex?: string,
 ): Promise<boolean> {
+  if (record.suite !== KEY_SUCCESSION_SUITE) return false;
   const payload = keySuccessionPayload(
     record.old_public_key,
     record.new_public_key,
@@ -550,19 +570,19 @@ export async function verifyKeySuccession(
   try {
     const newPubKey = hexToBytes(record.new_public_key);
     const newSig = hexToBytes(record.new_key_signature);
-    const newValid = await ed25519Verify(newSig, message, newPubKey);
+    const newValid = await verifyBySuite(record.suite, message, newSig, newPubKey);
     if (!newValid) return false;
 
     if (record.recovery) {
       if (!record.guardian_signature || !guardianPublicKeyHex) return false;
       const guardianPubKey = hexToBytes(guardianPublicKeyHex);
       const guardianSig = hexToBytes(record.guardian_signature);
-      return await ed25519Verify(guardianSig, message, guardianPubKey);
+      return await verifyBySuite(record.suite, message, guardianSig, guardianPubKey);
     } else {
       if (!record.old_key_signature) return false;
       const oldPubKey = hexToBytes(record.old_public_key);
       const oldSig = hexToBytes(record.old_key_signature);
-      return await ed25519Verify(oldSig, message, oldPubKey);
+      return await verifyBySuite(record.suite, message, oldSig, oldPubKey);
     }
   } catch {
     /* v8 ignore next */
@@ -671,9 +691,13 @@ export async function verifySuccessionChain(
 
 // === Guardian Revocation (§3.3.2) ===
 
+/** Guardian revocation shares the identity-file suite (JCS + hex). */
+export const GUARDIAN_REVOCATION_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+
 /**
  * Sign a guardian revocation payload — requires BOTH identity and guardian keys.
  * Neither party can unilaterally dissolve the custody relationship.
+ * Dispatches the primitive through `signBySuite`.
  */
 export async function signGuardianRevocation(
   identityPrivateKey: Uint8Array,
@@ -686,11 +710,15 @@ export async function signGuardianRevocation(
   timestamp: number;
 }> {
   const ts = timestamp ?? Date.now();
-  const payload = canonicalJson({ action: "guardian_revoked", timestamp: ts });
+  const payload = canonicalJson({
+    action: "guardian_revoked",
+    timestamp: ts,
+    suite: GUARDIAN_REVOCATION_SUITE,
+  });
   const message = new TextEncoder().encode(payload);
 
-  const identitySig = await ed25519Sign(message, identityPrivateKey);
-  const guardianSig = await ed25519Sign(message, guardianPrivateKey);
+  const identitySig = await signBySuite(GUARDIAN_REVOCATION_SUITE, message, identityPrivateKey);
+  const guardianSig = await signBySuite(GUARDIAN_REVOCATION_SUITE, message, guardianPrivateKey);
 
   return {
     payload,
@@ -702,6 +730,7 @@ export async function signGuardianRevocation(
 
 /**
  * Verify a guardian revocation proof — both signatures must be valid.
+ * Dispatches primitive verification through `verifyBySuite`.
  */
 export async function verifyGuardianRevocation(
   revocation: {
@@ -712,7 +741,11 @@ export async function verifyGuardianRevocation(
   identityPublicKeyHex: string,
   guardianPublicKeyHex: string,
 ): Promise<boolean> {
-  const payload = canonicalJson({ action: "guardian_revoked", timestamp: revocation.timestamp });
+  const payload = canonicalJson({
+    action: "guardian_revoked",
+    timestamp: revocation.timestamp,
+    suite: GUARDIAN_REVOCATION_SUITE,
+  });
   const message = new TextEncoder().encode(payload);
 
   try {
@@ -721,8 +754,18 @@ export async function verifyGuardianRevocation(
     const identitySig = hexToBytes(revocation.identity_signature);
     const guardianSig = hexToBytes(revocation.guardian_signature);
 
-    const identityValid = await ed25519Verify(identitySig, message, identityPub);
-    const guardianValid = await ed25519Verify(guardianSig, message, guardianPub);
+    const identityValid = await verifyBySuite(
+      GUARDIAN_REVOCATION_SUITE,
+      message,
+      identitySig,
+      identityPub,
+    );
+    const guardianValid = await verifyBySuite(
+      GUARDIAN_REVOCATION_SUITE,
+      message,
+      guardianSig,
+      guardianPub,
+    );
 
     return identityValid && guardianValid;
   } catch {
@@ -732,21 +775,30 @@ export async function verifyGuardianRevocation(
 
 // === Collaborative Receipt ===
 
+/** The one suite CollaborativeReceipts sign under today. */
+export const COLLABORATIVE_RECEIPT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
 export interface SignableCollaborativeReceipt {
   proposal_id: string;
   plan_id: string;
   participant_receipts: SignableReceipt[];
   content_hash: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` —
+   * JCS canonicalization over the signing payload, Ed25519 primitive,
+   * base64url signature encoding. Same recipe as ExecutionReceipt.
+   */
+  suite: typeof COLLABORATIVE_RECEIPT_SUITE;
   initiator_signature: string;
 }
 
 /**
  * Sign a collaborative receipt. Computes a content hash over the canonical
- * JSON of all participant receipts, then signs the aggregate with the
- * initiator's Ed25519 private key.
+ * JSON of all participant receipts, then signs the aggregate through
+ * `signBySuite` under `motebit-jcs-ed25519-b64-v1`.
  */
 export async function signCollaborativeReceipt(
-  receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature">,
+  receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature" | "suite">,
   initiatorPrivateKey: Uint8Array,
 ): Promise<SignableCollaborativeReceipt> {
   const receiptsCanonical = canonicalJson(receipt.participant_receipts);
@@ -757,28 +809,36 @@ export async function signCollaborativeReceipt(
     proposal_id: receipt.proposal_id,
     plan_id: receipt.plan_id,
     content_hash: contentHash,
+    suite: COLLABORATIVE_RECEIPT_SUITE,
   });
   const sigMessage = new TextEncoder().encode(sigPayload);
-  const sig = await ed25519Sign(sigMessage, initiatorPrivateKey);
+  const sig = await signBySuite(COLLABORATIVE_RECEIPT_SUITE, sigMessage, initiatorPrivateKey);
 
   return {
     ...receipt,
     content_hash: contentHash,
+    suite: COLLABORATIVE_RECEIPT_SUITE,
     initiator_signature: toBase64Url(sig),
   };
 }
 
 /**
  * Verify a collaborative receipt:
- * 1. Recomputes content hash from participant receipts and checks it matches.
- * 2. Verifies the initiator's Ed25519 signature over the aggregate.
- * 3. Optionally verifies each participant receipt against known keys.
+ * 1. Rejects any record whose `suite` is missing or not the collaborative suite.
+ * 2. Recomputes content hash from participant receipts and checks it matches.
+ * 3. Verifies the initiator's Ed25519 signature over the aggregate via `verifyBySuite`.
+ * 4. Optionally verifies each participant receipt against known keys.
  */
 export async function verifyCollaborativeReceipt(
   receipt: SignableCollaborativeReceipt,
   initiatorPublicKey: Uint8Array,
   participantKeys?: KnownKeys,
 ): Promise<{ valid: boolean; error?: string }> {
+  // 0. Suite discriminator check
+  if (receipt.suite !== COLLABORATIVE_RECEIPT_SUITE) {
+    return { valid: false, error: "Unknown or missing cryptosuite" };
+  }
+
   // 1. Recompute content hash
   const receiptsCanonical = canonicalJson(receipt.participant_receipts);
   const receiptsBytes = new TextEncoder().encode(receiptsCanonical);
@@ -788,16 +848,17 @@ export async function verifyCollaborativeReceipt(
     return { valid: false, error: "Content hash mismatch" };
   }
 
-  // 2. Verify initiator signature
+  // 2. Verify initiator signature (suite stamped into the signed payload)
   const sigPayload = canonicalJson({
     proposal_id: receipt.proposal_id,
     plan_id: receipt.plan_id,
     content_hash: receipt.content_hash,
+    suite: receipt.suite,
   });
   const sigMessage = new TextEncoder().encode(sigPayload);
   try {
     const sig = fromBase64Url(receipt.initiator_signature);
-    const sigValid = await ed25519Verify(sig, sigMessage, initiatorPublicKey);
+    const sigValid = await verifyBySuite(receipt.suite, sigMessage, sig, initiatorPublicKey);
     if (!sigValid) {
       return { valid: false, error: "Initiator signature invalid" };
     }

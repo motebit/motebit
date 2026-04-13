@@ -72,6 +72,7 @@ DisputeRequest {
   description:      string          // Human-readable explanation
   evidence_refs:    string[]        // At least one reference to a signed artifact
   filed_at:         number          // Unix ms
+  suite:            string          // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:        string          // Ed25519 over canonical JSON of all fields except signature
 }
 ```
@@ -129,6 +130,7 @@ DisputeEvidence {
   evidence_data:    object          // The signed artifact itself
   description:      string          // What this evidence demonstrates
   submitted_at:     number          // Unix ms
+  suite:            string          // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:        string          // Ed25519 over canonical JSON of all fields except signature
 }
 ```
@@ -185,6 +187,7 @@ DisputeResolution {
   adjudicator:         string          // MotebitId or relay ID of the adjudicating entity
   adjudicator_votes:   AdjudicatorVote[]  // For federation — empty for single-relay
   resolved_at:         number          // Unix ms
+  suite:               string          // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:           string          // Ed25519 over canonical JSON of all fields except signature
 }
 
@@ -192,6 +195,7 @@ AdjudicatorVote {
   peer_id:     string          // Federation peer MotebitId
   vote:        string          // "upheld" | "overturned" | "split"
   rationale:   string          // Per-peer explanation
+  suite:       string          // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier
   signature:   string          // Ed25519 by the voting peer
 }
 ```
@@ -282,6 +286,7 @@ DisputeAppeal {
   reason:                string          // Why the resolution is incorrect
   additional_evidence:   string[]        // Optional: new evidence refs
   appealed_at:           number          // Unix ms
+  suite:                 string          // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:             string          // Ed25519 over canonical JSON of all fields except signature
 }
 ```

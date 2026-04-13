@@ -62,6 +62,12 @@ export interface DisputeRequest {
   evidence_refs: string[];
   /** Unix ms. */
   filed_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` —
+   * JCS canonicalization, Ed25519 primitive, base64url signature
+   * encoding. Verifiers reject missing or unknown values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 over canonical JSON of all fields except signature. */
   signature: string;
 }
@@ -98,6 +104,11 @@ export interface DisputeEvidence {
   description: string;
   /** Unix ms. */
   submitted_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see DisputeRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 over canonical JSON of all fields except signature. */
   signature: string;
 }
@@ -118,6 +129,11 @@ export interface AdjudicatorVote {
   vote: DisputeOutcome;
   /** Per-peer explanation. */
   rationale: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see DisputeRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 by the voting peer. */
   signature: string;
 }
@@ -146,6 +162,11 @@ export interface DisputeResolution {
   adjudicator_votes: AdjudicatorVote[];
   /** Unix ms. */
   resolved_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see DisputeRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 over canonical JSON of all fields except signature. */
   signature: string;
 }
@@ -170,6 +191,11 @@ export interface DisputeAppeal {
   additional_evidence?: string[];
   /** Unix ms. */
   appealed_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see DisputeRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 over canonical JSON of all fields except signature. */
   signature: string;
 }

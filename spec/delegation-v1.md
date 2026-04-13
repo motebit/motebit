@@ -127,6 +127,7 @@ ExecutionReceipt {
   public_key:           string      // Ed25519 hex — enables self-verification
   delegation_receipts:  ExecutionReceipt[]  // Sub-delegations (recursive)
   delegated_scope:      string      // Authorization scope (if scoped delegation)
+  suite:                string      // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:            string      // Ed25519 over canonical JSON of all fields except signature
 }
 ```

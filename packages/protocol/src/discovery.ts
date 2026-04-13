@@ -44,6 +44,14 @@ export interface RelayMetadata {
   federation_peers?: RelayMetadataPeer[];
   /** Approximate number of registered agents. */
   agent_count?: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-hex-v1"` —
+   * JCS canonicalization of the unsigned metadata, Ed25519 primitive,
+   * hex signature encoding, hex public-key encoding. The field is
+   * included in the signed body; tampering with it breaks verification.
+   * Verifiers reject missing or unknown suite values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-hex-v1";
   /** Ed25519 signature over canonical JSON of all other fields. */
   signature: string;
 }

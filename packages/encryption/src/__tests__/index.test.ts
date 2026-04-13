@@ -924,6 +924,7 @@ describe("verifyKeySuccession", () => {
       old_public_key: "not-valid-hex",
       new_public_key: "also-not-valid-hex",
       timestamp: Date.now(),
+      suite: "motebit-jcs-ed25519-hex-v1" as const,
       old_key_signature: "aa".repeat(64),
       new_key_signature: "bb".repeat(64),
     };

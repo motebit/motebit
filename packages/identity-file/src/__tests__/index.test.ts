@@ -68,7 +68,7 @@ describe("generate → parse → verify roundtrip", () => {
 
     // Should contain frontmatter delimiters
     expect(content).toContain("---");
-    expect(content).toContain("motebit:sig:Ed25519:");
+    expect(content).toContain("motebit:sig:motebit-jcs-ed25519-hex-v1:");
 
     // Parse
     const parsed = parse(content);
@@ -195,7 +195,7 @@ describe("missing or malformed signature", () => {
 
     const result = await verify(content);
     expect(result.valid).toBe(false);
-    expect(result.error).toBe("Missing signature");
+    expect(result.error).toContain("Missing signature comment");
   });
 
   it("fails gracefully when frontmatter is missing", async () => {

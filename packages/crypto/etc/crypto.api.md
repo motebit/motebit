@@ -4,6 +4,8 @@
 
 ```ts
 
+import type { SuiteId } from '@motebit/protocol';
+
 // @public (undocumented)
 export type ArtifactType = VerifyResult["type"];
 
@@ -29,13 +31,16 @@ export type ChainAnchorVerifier = (anchor: {
 }) => Promise<boolean>;
 
 // @public
+export const COLLABORATIVE_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
 export function computeCredentialLeaf(credential: Record<string, unknown>): Promise<string>;
 
 // @public (undocumented)
 export function createPresentation(credentials: VerifiableCredential[], privateKey: Uint8Array, publicKey: Uint8Array): Promise<VerifiablePresentation>;
 
 // @public
-export function createSignedToken(payload: SignedTokenPayload, privateKey: Uint8Array): Promise<string>;
+export function createSignedToken(payload: Omit<SignedTokenPayload, "suite">, privateKey: Uint8Array): Promise<string>;
 
 // @public
 export interface CredentialAnchorProofFields {
@@ -70,6 +75,8 @@ export interface CredentialAnchorProofFields {
     relay_public_key: string;
     // (undocumented)
     siblings: string[];
+    // Warning: (ae-forgotten-export) The symbol "CREDENTIAL_ANCHOR_SUITE" needs to be exported by the entry point index.d.ts
+    suite: typeof CREDENTIAL_ANCHOR_SUITE;
 }
 
 // @public
@@ -142,8 +149,11 @@ export function didKeyToPublicKey(did: string): Uint8Array;
 // @public
 export function ed25519Sign(message: Uint8Array, privateKey: Uint8Array): Promise<Uint8Array>;
 
-// @public
+// @public (undocumented)
 export function ed25519Verify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export const EXECUTION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public (undocumented)
 export interface ExecutionReceipt {
@@ -182,6 +192,12 @@ export interface ExecutionReceipt {
 export function fromBase64Url(str: string): Uint8Array;
 
 // @public (undocumented)
+export function generateEd25519Keypair(): Promise<{
+    publicKey: Uint8Array;
+    privateKey: Uint8Array;
+}>;
+
+// @public (undocumented)
 export function generateKeypair(): Promise<KeyPair>;
 
 // @public (undocumented)
@@ -209,6 +225,9 @@ export interface GradientCredentialSubject {
     // (undocumented)
     tool_efficiency: number;
 }
+
+// @public
+export const GUARDIAN_REVOCATION_SUITE: "motebit-jcs-ed25519-hex-v1";
 
 // @public (undocumented)
 export function hash(data: Uint8Array): Promise<string>;
@@ -275,6 +294,9 @@ export function issueTrustCredential(trustRecord: {
 }, privateKey: Uint8Array, publicKey: Uint8Array, subjectDid: string, validForMs?: number, statusEndpoint?: string): Promise<VerifiableCredential<TrustCredentialSubject>>;
 
 // @public
+export const KEY_SUCCESSION_SUITE: "motebit-jcs-ed25519-hex-v1";
+
+// @public
 export interface KeyPair {
     // (undocumented)
     privateKey: Uint8Array;
@@ -296,6 +318,7 @@ export interface KeySuccessionRecord {
     // (undocumented)
     reason?: string;
     recovery?: boolean;
+    suite: typeof KEY_SUCCESSION_SUITE;
     // (undocumented)
     timestamp: number;
 }
@@ -476,6 +499,8 @@ export interface RevocationAnchorProof {
     relay_public_key: string;
     revoked_public_key: string;
     signature: string;
+    // Warning: (ae-forgotten-export) The symbol "REVOCATION_ANCHOR_SUITE" needs to be exported by the entry point index.d.ts
+    suite: typeof REVOCATION_ANCHOR_SUITE;
     timestamp: number;
 }
 
@@ -505,6 +530,7 @@ export interface SignableCollaborativeReceipt {
     plan_id: string;
     // (undocumented)
     proposal_id: string;
+    suite: typeof COLLABORATIVE_RECEIPT_SUITE;
 }
 
 // @public
@@ -536,6 +562,7 @@ export interface SignableReceipt {
     status: "completed" | "failed" | "denied";
     // (undocumented)
     submitted_at: number;
+    suite: "motebit-jcs-ed25519-b64-v1";
     // (undocumented)
     task_id: string;
     // (undocumented)
@@ -543,10 +570,16 @@ export interface SignableReceipt {
 }
 
 // @public
-export function signCollaborativeReceipt(receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature">, initiatorPrivateKey: Uint8Array): Promise<SignableCollaborativeReceipt>;
+export function signBySuite(suite: SuiteId, canonicalBytes: Uint8Array, privateKeyBytes: Uint8Array): Promise<Uint8Array>;
+
+// @public
+export function signCollaborativeReceipt(receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature" | "suite">, initiatorPrivateKey: Uint8Array): Promise<SignableCollaborativeReceipt>;
 
 // @public
 export function signDelegation(delegation: Omit<DelegationToken, "signature">, delegatorPrivateKey: Uint8Array): Promise<DelegationToken>;
+
+// @public
+export const SIGNED_TOKEN_SUITE: "motebit-jwt-ed25519-v1";
 
 // @public (undocumented)
 export interface SignedTokenPayload {
@@ -560,10 +593,12 @@ export interface SignedTokenPayload {
     jti: string;
     // (undocumented)
     mid: string;
+    suite: "motebit-jwt-ed25519-v1";
 }
 
 // @public
-export function signExecutionReceipt<T extends Omit<SignableReceipt, "signature">>(receipt: T, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
+export function signExecutionReceipt<T extends Omit<SignableReceipt, "signature" | "suite">>(receipt: T, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
+    suite: typeof EXECUTION_RECEIPT_SUITE;
     signature: string;
 }>;
 
@@ -639,6 +674,7 @@ export interface SuccessionRecord {
     // (undocumented)
     reason?: string;
     recovery?: boolean;
+    suite: "motebit-jcs-ed25519-hex-v1";
     // (undocumented)
     timestamp: number;
 }
@@ -713,6 +749,9 @@ export interface VerificationError {
 
 // @public
 export function verify(artifact: unknown, options?: VerifyOptions): Promise<VerifyResult>;
+
+// @public
+export function verifyBySuite(suite: SuiteId, canonicalBytes: Uint8Array, signatureBytes: Uint8Array, publicKeyBytes: Uint8Array): Promise<boolean>;
 
 // @public
 export function verifyCollaborativeReceipt(receipt: SignableCollaborativeReceipt, initiatorPublicKey: Uint8Array, participantKeys?: KnownKeys): Promise<{

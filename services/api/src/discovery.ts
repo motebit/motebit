@@ -92,7 +92,9 @@ export function registerDiscoveryRoutes(deps: DiscoveryDeps): void {
     }
     capabilities.push("settlement");
 
-    // Build metadata (without signature)
+    // Build metadata (without signature). The `suite` discriminator is
+    // part of the signed body so verifiers dispatch the primitive call
+    // via `verifyBySuite`.
     const metadata: Omit<RelayMetadata, "signature"> = {
       protocol_version: "1.0",
       relay_id: relayIdentity.relayMotebitId,
@@ -105,6 +107,7 @@ export function registerDiscoveryRoutes(deps: DiscoveryDeps): void {
         endpoint_url: p.endpoint_url,
       })),
       agent_count: agentCount,
+      suite: "motebit-jcs-ed25519-hex-v1",
     };
 
     if (federationConfig?.displayName) {

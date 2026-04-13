@@ -9,6 +9,7 @@ export interface AdjudicatorVote {
     peer_id: string;
     rationale: string;
     signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
     vote: DisputeOutcome;
 }
 
@@ -282,6 +283,7 @@ export interface AuditStatsSince {
 export interface BalanceWaiver {
     motebit_id: string;
     signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
     waived_amount: number;
     waived_at: number;
 }
@@ -386,6 +388,7 @@ export interface CollaborativeReceipt {
     plan_id: PlanId;
     // (undocumented)
     proposal_id: ProposalId;
+    suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -475,6 +478,7 @@ export interface CredentialAnchorBatch {
     merkle_root: string;
     relay_id: string;
     signature: string;
+    suite: "motebit-jcs-ed25519-hex-v1";
 }
 
 // @public
@@ -493,6 +497,7 @@ export interface CredentialAnchorProof {
     relay_id: string;
     relay_public_key: string;
     siblings: string[];
+    suite: "motebit-jcs-ed25519-hex-v1";
 }
 
 // @public
@@ -504,6 +509,7 @@ export interface CredentialBundle {
     key_succession: Record<string, unknown>[];
     motebit_id: string;
     signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -594,6 +600,7 @@ export interface DepartureAttestation {
     source_relay_id: string;
     source_relay_url: string;
     successful_tasks: number;
+    suite: "motebit-jcs-ed25519-b64-v1";
     trust_level: string;
 }
 
@@ -657,6 +664,7 @@ export interface DisputeAppeal {
     dispute_id: string;
     reason: string;
     signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -671,6 +679,7 @@ export interface DisputeEvidence {
     signature: string;
     submitted_at: number;
     submitted_by: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -693,6 +702,7 @@ export interface DisputeRequest {
     filed_by: string;
     respondent: string;
     signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
     task_id: string;
 }
 
@@ -707,6 +717,7 @@ export interface DisputeResolution {
     resolved_at: number;
     signature: string;
     split_ratio: number;
+    suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -1104,6 +1115,7 @@ export interface KeySuccessionRecord {
     // (undocumented)
     reason?: string;
     recovery?: boolean;
+    suite: "motebit-jcs-ed25519-hex-v1";
     // (undocumented)
     timestamp: number;
 }
@@ -1205,6 +1217,7 @@ export interface MigrationPresentation {
     migration_token: MigrationToken;
     presented_at: number;
     signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -1214,6 +1227,7 @@ export interface MigrationRequest {
     reason?: string;
     requested_at: number;
     signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -1227,6 +1241,7 @@ export interface MigrationToken {
     signature: string;
     source_relay_id: string;
     source_relay_url: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
     token_id: string;
 }
 
@@ -1534,6 +1549,7 @@ export interface RelayMetadata {
     public_key: string;
     relay_id: string;
     signature: string;
+    suite: "motebit-jcs-ed25519-hex-v1";
 }
 
 // @public

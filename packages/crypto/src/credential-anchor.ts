@@ -7,7 +7,10 @@
  * motebit/credential-anchor@1.0 §3 (leaf hash) and §5.2 (verification).
  */
 
-import { canonicalJson, sha256, ed25519Verify, hexToBytes } from "./signing.js";
+import { canonicalJson, sha256, hexToBytes, verifyBySuite } from "./signing.js";
+
+/** The one suite CredentialAnchorBatch records sign under today. */
+export const CREDENTIAL_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 
 // === Helpers (inlined — zero monorepo deps) ===
 
@@ -141,6 +144,13 @@ export interface CredentialAnchorProofFields {
   layer_sizes: number[];
   relay_id: string;
   relay_public_key: string;
+  /**
+   * Cryptosuite discriminator for `batch_signature`. Always
+   * `"motebit-jcs-ed25519-hex-v1"` — JCS canonicalization of the batch
+   * payload, Ed25519 primitive, hex signature encoding. Verifiers
+   * reject missing or unknown values fail-closed.
+   */
+  suite: typeof CREDENTIAL_ANCHOR_SUITE;
   batch_signature: string;
   anchor: {
     chain: string;
@@ -200,27 +210,41 @@ export async function verifyCredentialAnchor(
   }
 
   // Step 3: Relay attestation — relay signed the batch payload
-  // Reconstruct the exact payload signed by cutCredentialBatch
-  const batchPayload = canonicalJson({
-    batch_id: anchorProof.batch_id,
-    merkle_root: anchorProof.merkle_root,
-    leaf_count: anchorProof.leaf_count,
-    first_issued_at: anchorProof.first_issued_at,
-    last_issued_at: anchorProof.last_issued_at,
-    relay_id: anchorProof.relay_id,
-  });
-  const payloadBytes = new TextEncoder().encode(batchPayload);
-  const signatureBytes = hexToBytes(anchorProof.batch_signature);
-  const publicKeyBytes = hexToBytes(anchorProof.relay_public_key);
-
+  // Reconstruct the exact payload signed by cutCredentialBatch. The
+  // `suite` discriminator is part of the signed payload so verifiers
+  // dispatch the primitive via `verifyBySuite` rather than assuming
+  // Ed25519.
+  const suite = anchorProof.suite;
   let relaySignatureValid = false;
-  try {
-    relaySignatureValid = await ed25519Verify(signatureBytes, payloadBytes, publicKeyBytes);
-  } catch {
-    relaySignatureValid = false;
-  }
-  if (!relaySignatureValid) {
-    errors.push("Relay batch signature verification failed");
+  if (suite !== CREDENTIAL_ANCHOR_SUITE) {
+    errors.push(`Relay batch signature: missing or unsupported suite "${String(suite)}"`);
+  } else {
+    const batchPayload = canonicalJson({
+      batch_id: anchorProof.batch_id,
+      merkle_root: anchorProof.merkle_root,
+      leaf_count: anchorProof.leaf_count,
+      first_issued_at: anchorProof.first_issued_at,
+      last_issued_at: anchorProof.last_issued_at,
+      relay_id: anchorProof.relay_id,
+      suite,
+    });
+    const payloadBytes = new TextEncoder().encode(batchPayload);
+    const signatureBytes = hexToBytes(anchorProof.batch_signature);
+    const publicKeyBytes = hexToBytes(anchorProof.relay_public_key);
+
+    try {
+      relaySignatureValid = await verifyBySuite(
+        suite,
+        payloadBytes,
+        signatureBytes,
+        publicKeyBytes,
+      );
+    } catch {
+      relaySignatureValid = false;
+    }
+    if (!relaySignatureValid) {
+      errors.push("Relay batch signature verification failed");
+    }
   }
 
   // Step 4: Onchain anchor (optional — requires network access)
@@ -276,12 +300,21 @@ export interface RevocationAnchorVerifyResult {
   errors: string[];
 }
 
+/** The one suite revocation anchor events sign under today (utf8-concat). */
+export const REVOCATION_ANCHOR_SUITE = "motebit-concat-ed25519-hex-v1" as const;
+
 /** Fields needed to verify a revocation anchor. */
 export interface RevocationAnchorProof {
   /** Hex-encoded public key that was revoked. */
   revoked_public_key: string;
   /** Millisecond timestamp of the revocation event. */
   timestamp: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-concat-ed25519-hex-v1"` —
+   * UTF-8 concatenation template + Ed25519 primitive + hex signature.
+   * Same suite as federation heartbeat.
+   */
+  suite: typeof REVOCATION_ANCHOR_SUITE;
   /** Hex-encoded Ed25519 signature over the revocation payload by the relay. */
   signature: string;
   /** Hex-encoded Ed25519 public key of the relay that signed the revocation. */
@@ -332,19 +365,30 @@ export async function verifyRevocationAnchor(
     );
   }
 
-  // Step 2: Relay signature verification
-  const payloadBytes = new TextEncoder().encode(revocationPayload);
-  const signatureBytes = hexToBytes(proof.signature);
-  const publicKeyBytes = hexToBytes(proof.relay_public_key);
-
+  // Step 2: Relay signature verification — suite dispatches the primitive
   let relaySignatureValid = false;
-  try {
-    relaySignatureValid = await ed25519Verify(signatureBytes, payloadBytes, publicKeyBytes);
-  } catch {
-    relaySignatureValid = false;
-  }
-  if (!relaySignatureValid) {
-    errors.push("Relay revocation signature verification failed");
+  if (proof.suite !== REVOCATION_ANCHOR_SUITE) {
+    errors.push(
+      `Relay revocation signature: missing or unsupported suite "${String(proof.suite)}"`,
+    );
+  } else {
+    const payloadBytes = new TextEncoder().encode(revocationPayload);
+    const signatureBytes = hexToBytes(proof.signature);
+    const publicKeyBytes = hexToBytes(proof.relay_public_key);
+
+    try {
+      relaySignatureValid = await verifyBySuite(
+        proof.suite,
+        payloadBytes,
+        signatureBytes,
+        publicKeyBytes,
+      );
+    } catch {
+      relaySignatureValid = false;
+    }
+    if (!relaySignatureValid) {
+      errors.push("Relay revocation signature verification failed");
+    }
   }
 
   // Step 3: Onchain anchor (optional)

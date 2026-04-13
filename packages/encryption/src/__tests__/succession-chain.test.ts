@@ -173,6 +173,7 @@ async function createSuccessionRecordWithTimestamp(
     old_public_key: oldPublicKeyHex,
     new_public_key: newPublicKeyHex,
     timestamp,
+    suite: "motebit-jcs-ed25519-hex-v1",
   };
   if (reason !== undefined) {
     obj.reason = reason;
@@ -188,6 +189,7 @@ async function createSuccessionRecordWithTimestamp(
     new_public_key: newPublicKeyHex,
     timestamp,
     ...(reason !== undefined ? { reason } : {}),
+    suite: "motebit-jcs-ed25519-hex-v1",
     old_key_signature: bytesToHex(oldSig),
     new_key_signature: bytesToHex(newSig),
   };

@@ -679,6 +679,14 @@ export interface KeySuccessionRecord {
   new_public_key: string; // hex
   timestamp: number;
   reason?: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-hex-v1"` for
+   * this artifact today — JCS canonicalization of the unsigned payload,
+   * Ed25519 primitive, hex signature encoding, hex public-key encoding.
+   * The same suite as the identity frontmatter (spec/identity-v1.md §3.8).
+   * Verifiers reject missing or unknown suite values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-hex-v1";
   old_key_signature?: string; // hex — present in normal rotation, absent in guardian recovery
   new_key_signature: string; // hex, new key signs the canonical payload
   /** Guardian recovery: true when succession was authorized by guardian, not old key. */
@@ -1098,6 +1106,13 @@ export interface CollaborativeReceipt {
   plan_id: PlanId;
   participant_receipts: ExecutionReceipt[];
   content_hash: string;
+  /**
+   * Cryptosuite discriminator for `initiator_signature`. Always
+   * `"motebit-jcs-ed25519-b64-v1"` today — JCS canonicalization of the
+   * aggregate payload, Ed25519 primitive, base64url signature encoding.
+   * Verifiers reject missing or unknown suite values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
   initiator_signature: string;
 }
 

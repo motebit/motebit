@@ -150,6 +150,9 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       source_relay_url: federationConfig?.endpointUrl ?? "",
       issued_at: issuedAt,
       expires_at: expiresAt,
+      // Cryptosuite discriminator stamped into the signed body —
+      // matches the migration suite assignment in @motebit/protocol.
+      suite: "motebit-jcs-ed25519-b64-v1",
     };
 
     const canonical = canonicalJson(tokenPayload);
@@ -258,6 +261,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       credentials_issued: credCount?.cnt ?? 0,
       balance_at_departure: balance?.balance ?? 0,
       attested_at: attestedAt,
+      suite: "motebit-jcs-ed25519-b64-v1",
     };
 
     const canonical = canonicalJson(attestationPayload);
@@ -315,13 +319,15 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       )
       .all(motebitId) as Record<string, unknown>[];
 
-    // Build bundle (unsigned — agent signs on their end per §6.2)
+    // Build bundle (unsigned — agent signs on their end per §6.2).
+    // Suite advertised; agent stamps the same value when signing.
     const bundle: Omit<CredentialBundle, "bundle_hash" | "signature"> = {
       motebit_id: motebitId,
       exported_at: Date.now(),
       credentials: parsedCredentials,
       anchor_proofs: anchorProofs,
       key_succession: keySuccessions,
+      suite: "motebit-jcs-ed25519-b64-v1",
     };
 
     logger.info("migration.export_generated", {

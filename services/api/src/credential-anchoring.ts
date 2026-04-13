@@ -160,6 +160,10 @@ export async function cutCredentialBatch(
   const firstIssuedAt = rows[0]!.issued_at;
   const lastIssuedAt = rows[rows.length - 1]!.issued_at;
 
+  // Cryptosuite discriminator included in the signed payload so
+  // verifiers dispatch the primitive via `verifyBySuite` rather than
+  // assuming Ed25519 — matches `@motebit/crypto/credential-anchor.ts`
+  // step 3 (relay attestation).
   const batchPayload = {
     batch_id: batchId,
     merkle_root: tree.root,
@@ -167,6 +171,7 @@ export async function cutCredentialBatch(
     first_issued_at: firstIssuedAt,
     last_issued_at: lastIssuedAt,
     relay_id: relayIdentity.relayMotebitId,
+    suite: "motebit-jcs-ed25519-hex-v1" as const,
   };
   const sigBytes = new TextEncoder().encode(canonicalJson(batchPayload));
   const sig = await sign(sigBytes, relayIdentity.privateKey);
@@ -424,6 +429,7 @@ export async function getCredentialAnchorProof(
     layer_sizes: proof.layerSizes,
     relay_id: batch.relay_id,
     relay_public_key: relayPubKeyHex,
+    suite: "motebit-jcs-ed25519-hex-v1",
     batch_signature: batch.signature,
     anchor: batch.tx_hash
       ? {
@@ -501,6 +507,7 @@ export function listCredentialAnchorBatches(
     leaf_count: row.leaf_count,
     first_issued_at: row.first_issued_at,
     last_issued_at: row.last_issued_at,
+    suite: "motebit-jcs-ed25519-hex-v1" as const,
     signature: row.signature,
     anchor: row.tx_hash
       ? {
@@ -578,6 +585,7 @@ export function getCredentialAnchorBatch(
     leaf_count: row.leaf_count,
     first_issued_at: row.first_issued_at,
     last_issued_at: row.last_issued_at,
+    suite: "motebit-jcs-ed25519-hex-v1",
     signature: row.signature,
     anchor: row.tx_hash
       ? {

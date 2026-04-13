@@ -32,8 +32,13 @@ async function makeKeypair() {
   return { privateKey, publicKey, publicKeyHex: toHex(publicKey) };
 }
 
-function buildIdentityFile(yaml: string, signature: string): string {
-  return `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${signature} -->\n`;
+// Identity-file signature comment format (cryptosuite-agility):
+//   <!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex_signature} -->
+// Legacy `motebit:sig:Ed25519:` comments are rejected fail-closed by
+// @motebit/crypto — every fixture here signs under the current suite.
+const IDENTITY_FILE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+function buildIdentityFile(yaml: string, signatureHex: string): string {
+  return `---\n${yaml}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${signatureHex} -->\n`;
 }
 
 async function generateValidFile(kp?: Awaited<ReturnType<typeof makeKeypair>>) {
@@ -71,9 +76,9 @@ async function generateValidFile(kp?: Awaited<ReturnType<typeof makeKeypair>>) {
 
   const frontmatterBytes = new TextEncoder().encode(yaml);
   const signature = await ed.signAsync(frontmatterBytes, privateKey);
-  const sigB64 = toBase64Url(signature);
+  const sigHex = toHex(signature);
 
-  return { content: buildIdentityFile(yaml, sigB64), yaml, publicKeyHex };
+  return { content: buildIdentityFile(yaml, sigHex), yaml, publicKeyHex };
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +234,7 @@ describe("verify — wrong key", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp1.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(false);
@@ -251,7 +256,7 @@ describe("verify — malformed inputs", () => {
   it("returns error for missing signature", async () => {
     const result = await verify("---\nspec: test\n---\n");
     expect(result.valid).toBe(false);
-    expect(result.errors?.[0]?.message).toBe("Missing signature");
+    expect(result.errors?.[0]?.message).toContain("Missing signature comment");
   });
 
   it("returns error for missing public key", async () => {
@@ -335,7 +340,7 @@ describe("verify — files with devices", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -391,7 +396,7 @@ describe("verify — service identity", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -449,7 +454,7 @@ describe("verify — service identity", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     // Tamper: change service_name
     const tampered = content.replace("Flight Search", "Evil Service");
@@ -488,6 +493,7 @@ async function createSuccessionRecord(
     old_public_key: oldKp.publicKeyHex,
     new_public_key: newKp.publicKeyHex,
     timestamp,
+    suite: IDENTITY_FILE_SUITE,
   };
   if (reason !== undefined) {
     payloadObj.reason = reason;
@@ -503,6 +509,7 @@ async function createSuccessionRecord(
     new_public_key: newKp.publicKeyHex,
     timestamp,
     ...(reason !== undefined ? { reason } : {}),
+    suite: IDENTITY_FILE_SUITE,
     old_key_signature: toHex(oldSig),
     new_key_signature: toHex(newSig),
   };
@@ -515,6 +522,7 @@ function buildYamlWithSuccession(
     new_public_key: string;
     timestamp: number;
     reason?: string;
+    suite: string;
     old_key_signature: string;
     new_key_signature: string;
   }>,
@@ -553,6 +561,7 @@ function buildYamlWithSuccession(
     if (rec.reason !== undefined) {
       lines.push(`    reason: "${rec.reason}"`);
     }
+    lines.push(`    suite: "${rec.suite}"`);
     lines.push(`    old_key_signature: "${rec.old_key_signature}"`);
     lines.push(`    new_key_signature: "${rec.new_key_signature}"`);
   }
@@ -574,7 +583,7 @@ describe("verify — succession chain", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -594,7 +603,7 @@ describe("verify — succession chain", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -613,7 +622,7 @@ describe("verify — succession chain", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -643,7 +652,7 @@ describe("verify — succession chain", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true); // file signature is valid
@@ -663,7 +672,7 @@ describe("verify — succession chain", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kpActual.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true); // file signature is valid
@@ -783,7 +792,7 @@ describe("verifyIdentityFile — deprecated wrapper", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
@@ -822,6 +831,7 @@ describe("verify — succession chain failures", () => {
       old_public_key: kp1.publicKeyHex,
       new_public_key: kp2.publicKeyHex,
       timestamp: 1000000,
+      suite: IDENTITY_FILE_SUITE,
     };
     const payload = canonicalJson(payloadObj);
     const message = new TextEncoder().encode(payload);
@@ -834,6 +844,7 @@ describe("verify — succession chain failures", () => {
       old_public_key: kp1.publicKeyHex,
       new_public_key: kp2.publicKeyHex,
       timestamp: 1000000,
+      suite: IDENTITY_FILE_SUITE,
       old_key_signature: toHex(oldSig),
       new_key_signature: toHex(newSig),
     };
@@ -841,7 +852,7 @@ describe("verify — succession chain failures", () => {
     const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true); // file signature is valid
@@ -859,6 +870,7 @@ describe("verify — succession chain failures", () => {
       old_public_key: kp1.publicKeyHex,
       new_public_key: kp2.publicKeyHex,
       timestamp: 1000000,
+      suite: IDENTITY_FILE_SUITE,
     };
     const payload = canonicalJson(payloadObj);
     const message = new TextEncoder().encode(payload);
@@ -871,6 +883,7 @@ describe("verify — succession chain failures", () => {
       old_public_key: kp1.publicKeyHex,
       new_public_key: kp2.publicKeyHex,
       timestamp: 1000000,
+      suite: IDENTITY_FILE_SUITE,
       old_key_signature: toHex(oldSig),
       new_key_signature: toHex(newSig),
     };
@@ -878,7 +891,7 @@ describe("verify — succession chain failures", () => {
     const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -904,7 +917,7 @@ describe("verify — succession chain failures", () => {
     const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true); // file signature is valid
@@ -925,7 +938,7 @@ describe("verify — succession chain failures", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -951,9 +964,9 @@ describe("verify — identity edge cases", () => {
       `  algorithm: "Ed25519"`,
       `  public_key: "abcdef"`,
     ].join("\n");
-    // Build a valid-length base64url signature (64 bytes)
+    // Build a valid-length hex signature (64 bytes)
     const sigBytes = new Uint8Array(64);
-    const content = buildIdentityFile(yaml, toBase64Url(sigBytes));
+    const content = buildIdentityFile(yaml, toHex(sigBytes));
 
     const result = await verify(content);
     expect(result.valid).toBe(false);
@@ -968,8 +981,8 @@ describe("verify — identity edge cases", () => {
       `  algorithm: "Ed25519"`,
       `  public_key: "${kp.publicKeyHex}"`,
     ].join("\n");
-    // Create a short base64url signature (16 bytes = 22 chars in base64url)
-    const shortSig = toBase64Url(new Uint8Array(16));
+    // Create a short hex signature (16 bytes = 32 hex chars)
+    const shortSig = toHex(new Uint8Array(16));
     const content = buildIdentityFile(yaml, shortSig);
 
     const result = await verify(content);
@@ -1036,7 +1049,7 @@ describe("parse — YAML edge cases", () => {
 
     const frontmatterBytes = new TextEncoder().encode(yaml);
     const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
-    const content = buildIdentityFile(yaml, toBase64Url(signature));
+    const content = buildIdentityFile(yaml, toHex(signature));
 
     const parsed = parse(content);
     expect(parsed.frontmatter.capabilities).toEqual(["web_search", "file_read"]);
@@ -1063,6 +1076,7 @@ async function createGuardianRecoveryRecord(
     old_public_key: oldPublicKeyHex,
     new_public_key: newKp.publicKeyHex,
     timestamp,
+    suite: IDENTITY_FILE_SUITE,
   };
   payloadObj.reason = effectiveReason;
   payloadObj.recovery = true;
@@ -1077,6 +1091,7 @@ async function createGuardianRecoveryRecord(
     new_public_key: newKp.publicKeyHex,
     timestamp,
     reason: effectiveReason,
+    suite: IDENTITY_FILE_SUITE,
     new_key_signature: toHex(newSig),
     recovery: true as const,
     guardian_signature: toHex(guardianSig),
@@ -1091,6 +1106,7 @@ function buildYamlWithGuardian(
     new_public_key: string;
     timestamp: number;
     reason?: string;
+    suite: string;
     old_key_signature?: string;
     new_key_signature: string;
     recovery?: boolean;
@@ -1135,6 +1151,7 @@ function buildYamlWithGuardian(
     if (rec.reason !== undefined) {
       lines.push(`    reason: "${rec.reason}"`);
     }
+    lines.push(`    suite: "${rec.suite}"`);
     if (rec.old_key_signature) {
       lines.push(`    old_key_signature: "${rec.old_key_signature}"`);
     }
@@ -1170,8 +1187,8 @@ describe("verify — guardian recovery succession", () => {
     const yaml = buildYamlWithGuardian(kp2.publicKeyHex, guardianKp.publicKeyHex, [recoveryRecord]);
     const yamlBytes = new TextEncoder().encode(yaml);
     const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
-    const sigB64 = toBase64Url(sig);
-    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+    const sigHex = toHex(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${sigHex} -->`;
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -1201,8 +1218,8 @@ describe("verify — guardian recovery succession", () => {
     ]);
     const yamlBytes = new TextEncoder().encode(yaml);
     const sig = await ed.signAsync(yamlBytes, kp3.privateKey);
-    const sigB64 = toBase64Url(sig);
-    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+    const sigHex = toHex(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${sigHex} -->`;
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
@@ -1253,6 +1270,7 @@ describe("verify — guardian recovery succession", () => {
       `    new_public_key: "${recoveryRecord.new_public_key}"`,
       `    timestamp: ${recoveryRecord.timestamp}`,
       `    reason: "${recoveryRecord.reason}"`,
+      `    suite: "${IDENTITY_FILE_SUITE}"`,
       `    new_key_signature: "${recoveryRecord.new_key_signature}"`,
       `    recovery: true`,
       `    guardian_signature: "${recoveryRecord.guardian_signature}"`,
@@ -1260,8 +1278,8 @@ describe("verify — guardian recovery succession", () => {
 
     const yamlBytes = new TextEncoder().encode(lines);
     const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
-    const sigB64 = toBase64Url(sig);
-    const content = `---\n${lines}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+    const sigHex = toHex(sig);
+    const content = `---\n${lines}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${sigHex} -->`;
 
     const result = await verify(content);
     expect(result.valid).toBe(true); // signature is valid
@@ -1288,8 +1306,8 @@ describe("verify — guardian recovery succession", () => {
     ]);
     const yamlBytes = new TextEncoder().encode(yaml);
     const sig = await ed.signAsync(yamlBytes, kp2.privateKey);
-    const sigB64 = toBase64Url(sig);
-    const content = `---\n${yaml}\n---\n<!-- motebit:sig:Ed25519:${sigB64} -->`;
+    const sigHex = toHex(sig);
+    const content = `---\n${yaml}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${sigHex} -->`;
 
     const result = await verify(content);
     expect(result.valid).toBe(true); // file signature valid

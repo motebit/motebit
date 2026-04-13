@@ -59,6 +59,7 @@ CredentialAnchorBatch {
   credential_ids:   string[]    // ordered credential IDs (for proof reconstruction)
   first_issued_at:  number      // ms timestamp of earliest credential
   last_issued_at:   number      // ms timestamp of latest credential
+  suite:            string      // "motebit-jcs-ed25519-hex-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
   signature:        string      // hex-encoded Ed25519 signature by relay
 }
 ```
@@ -122,6 +123,7 @@ CredentialAnchorProof {
   layer_sizes:      number[]    // for odd-leaf promotion detection
   relay_id:         string      // relay that created the batch
   relay_public_key: string      // hex Ed25519 public key (for signature verification)
+  suite:            string      // "motebit-jcs-ed25519-hex-v1" — cryptosuite identifier for batch_signature (see @motebit/protocol SUITE_REGISTRY)
   batch_signature:  string      // hex Ed25519 signature over batch payload
   anchor: {                     // null if batch is signed but not yet onchain
     chain:          string      // e.g., "solana"

@@ -281,6 +281,7 @@ describe("Migration: accept-migration (destination)", () => {
       source_relay_url: "http://unreachable:9999",
       issued_at: now,
       expires_at: now + 72 * 60 * 60 * 1000,
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: "deadbeef",
     };
 
@@ -297,6 +298,7 @@ describe("Migration: accept-migration (destination)", () => {
       credentials_issued: 5,
       balance_at_departure: 0,
       attested_at: now,
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: "deadbeef",
     };
 

@@ -36,7 +36,7 @@ devices:
 
 # My Agent
 
-<!-- motebit:sig:Ed25519:dGVzdHNpZ25hdHVyZQ -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:dGVzdHNpZ25hdHVyZQ -->
 `;
 
 describe("parse", () => {
@@ -121,7 +121,9 @@ describe("parse", () => {
   });
 
   it("throws on missing signature", () => {
-    expect(() => parse("---\nspec: test\n---\nno signature here")).toThrow("Missing signature");
+    expect(() => parse("---\nspec: test\n---\nno signature here")).toThrow(
+      "Missing signature comment",
+    );
   });
 });
 
@@ -162,7 +164,7 @@ devices:
     registered_at: 2026-01-15T10:00:00Z
 ---
 
-<!-- motebit:sig:Ed25519:c2VydmljZXNpZw -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:c2VydmljZXNpZw -->
 `;
 
   it("extracts service type and metadata", () => {

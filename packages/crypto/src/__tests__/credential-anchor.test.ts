@@ -83,9 +83,13 @@ function getTestProof(
   };
 }
 
-/** Create a signed batch payload, simulating what the relay does. */
+/** Create a signed batch payload, simulating what the relay does. The
+ *  cryptosuite discriminator is stamped into the signed body so the
+ *  verifier dispatches via `verifyBySuite` rather than assuming Ed25519. */
+const CREDENTIAL_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 async function signBatchPayload(batchPayload: Record<string, unknown>, privateKey: Uint8Array) {
-  const payloadBytes = new TextEncoder().encode(canonicalJson(batchPayload));
+  const payloadWithSuite = { ...batchPayload, suite: CREDENTIAL_ANCHOR_SUITE };
+  const payloadBytes = new TextEncoder().encode(canonicalJson(payloadWithSuite));
   const sig = await ed25519Sign(payloadBytes, privateKey);
   return bytesToHex(sig);
 }
@@ -241,6 +245,7 @@ describe("verifyCredentialAnchor", () => {
       layer_sizes: merkleProof.layerSizes,
       relay_id: "relay-test",
       relay_public_key: bytesToHex(relayKeypair.publicKey),
+      suite: CREDENTIAL_ANCHOR_SUITE,
       batch_signature: batchSignature,
       anchor: null,
     });
@@ -307,6 +312,7 @@ describe("verifyCredentialAnchor", () => {
         layer_sizes: proof.layerSizes,
         relay_id: "relay-multi",
         relay_public_key: bytesToHex(relayKeypair.publicKey),
+        suite: CREDENTIAL_ANCHOR_SUITE,
         batch_signature: batchSignature,
         anchor: null,
       });
@@ -362,6 +368,7 @@ describe("verifyCredentialAnchor", () => {
       layer_sizes: proof.layerSizes,
       relay_id: "relay-test",
       relay_public_key: bytesToHex(relayKeypair.publicKey),
+      suite: CREDENTIAL_ANCHOR_SUITE,
       batch_signature: batchSignature,
       anchor: null,
     });
@@ -417,6 +424,7 @@ describe("verifyCredentialAnchor", () => {
       layer_sizes: proof.layerSizes,
       relay_id: "relay-test",
       relay_public_key: bytesToHex(wrongKeypair.publicKey),
+      suite: CREDENTIAL_ANCHOR_SUITE,
       batch_signature: batchSignature,
       anchor: null,
     });
@@ -480,6 +488,7 @@ describe("verifyCredentialAnchor", () => {
         layer_sizes: proof.layerSizes,
         relay_id: "relay-test",
         relay_public_key: bytesToHex(relayKeypair.publicKey),
+        suite: CREDENTIAL_ANCHOR_SUITE,
         batch_signature: batchSignature,
         anchor: {
           chain: "solana",
@@ -541,6 +550,7 @@ describe("verifyCredentialAnchor", () => {
       layer_sizes: proof.layerSizes,
       relay_id: "relay-test",
       relay_public_key: bytesToHex(relayKeypair.publicKey),
+      suite: CREDENTIAL_ANCHOR_SUITE,
       batch_signature: batchSignature,
       anchor: {
         chain: "solana",
@@ -568,6 +578,7 @@ describe("verifyRevocationAnchor", () => {
     const result = await verifyRevocationAnchor(
       {
         revoked_public_key: revokedKeyHex,
+        suite: "motebit-concat-ed25519-hex-v1",
         timestamp,
         signature: bytesToHex(sig),
         relay_public_key: bytesToHex(relayKeypair.publicKey),
@@ -594,6 +605,7 @@ describe("verifyRevocationAnchor", () => {
     const result = await verifyRevocationAnchor(
       {
         revoked_public_key: revokedKeyHex,
+        suite: "motebit-concat-ed25519-hex-v1",
         timestamp,
         signature: bytesToHex(sig),
         relay_public_key: bytesToHex(wrongKeypair.publicKey),
@@ -616,6 +628,7 @@ describe("verifyRevocationAnchor", () => {
     const result = await verifyRevocationAnchor(
       {
         revoked_public_key: "short",
+        suite: "motebit-concat-ed25519-hex-v1",
         timestamp,
         signature: bytesToHex(sig),
         relay_public_key: bytesToHex(relayKeypair.publicKey),
@@ -637,6 +650,7 @@ describe("verifyRevocationAnchor", () => {
     const result = await verifyRevocationAnchor(
       {
         revoked_public_key: revokedKeyHex,
+        suite: "motebit-concat-ed25519-hex-v1",
         timestamp: 0,
         signature: bytesToHex(sig),
         relay_public_key: bytesToHex(relayKeypair.publicKey),
@@ -662,6 +676,7 @@ describe("verifyRevocationAnchor", () => {
     const result = await verifyRevocationAnchor(
       {
         revoked_public_key: revokedKeyHex,
+        suite: "motebit-concat-ed25519-hex-v1",
         timestamp,
         signature: bytesToHex(sig),
         relay_public_key: bytesToHex(relayKeypair.publicKey),
@@ -694,6 +709,7 @@ describe("verifyRevocationAnchor", () => {
     const result = await verifyRevocationAnchor(
       {
         revoked_public_key: revokedKeyHex,
+        suite: "motebit-concat-ed25519-hex-v1",
         timestamp,
         signature: bytesToHex(sig),
         relay_public_key: bytesToHex(relayKeypair.publicKey),
@@ -720,6 +736,7 @@ describe("verifyRevocationAnchor", () => {
     const result = await verifyRevocationAnchor(
       {
         revoked_public_key: revokedKeyHex,
+        suite: "motebit-concat-ed25519-hex-v1",
         timestamp,
         signature: bytesToHex(sig),
         relay_public_key: bytesToHex(relayKeypair.publicKey),

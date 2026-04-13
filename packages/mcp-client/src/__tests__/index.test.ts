@@ -1355,6 +1355,7 @@ describe("McpClientAdapter — key rotation grace period", () => {
       old_public_key: "aa".repeat(32),
       new_public_key: "bb".repeat(32),
       timestamp: Date.now(),
+      suite: "motebit-jcs-ed25519-hex-v1",
       old_key_signature: "cc".repeat(64),
       new_key_signature: "dd".repeat(64),
     });
@@ -1377,6 +1378,7 @@ describe("McpClientAdapter — key rotation grace period", () => {
       old_public_key: "ff".repeat(32), // does not match pinned key
       new_public_key: "bb".repeat(32),
       timestamp: Date.now(),
+      suite: "motebit-jcs-ed25519-hex-v1",
       old_key_signature: "cc".repeat(64),
       new_key_signature: "dd".repeat(64),
     });

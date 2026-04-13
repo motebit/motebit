@@ -118,10 +118,12 @@ export async function verify(content: string): Promise<VerifyResult> {
     return { valid: false, identity: null, error: "Public key must be 32 bytes" };
   }
 
-  // Extract and validate signature
+  // Extract and validate signature.
+  // Identity-file suite (motebit-jcs-ed25519-hex-v1) encodes the
+  // signature as hex per its `signatureEncoding` contract.
   let sigBytes: Uint8Array;
   try {
-    sigBytes = fromBase64Url(parsed.signature);
+    sigBytes = hexToBytes(parsed.signature);
   } catch {
     return { valid: false, identity: null, error: "Invalid signature encoding" };
   }
