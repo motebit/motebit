@@ -85,6 +85,51 @@ by running `motebit export --regenerate` (or the CLI equivalent) after
 upgrading. The `identity.algorithm` YAML field is ignored on new
 parses and no longer emitted on export.
 
+### For consumers of `DelegationToken` (`@motebit/crypto`)
+
+`DelegationToken` carries two breaking changes beyond the suite addition.
+Public keys are now **hex-encoded** (64 chars, lowercase) instead of
+base64url — consistent with every other Ed25519-key-carrying motebit
+artifact. And `signDelegation` takes `Omit<DelegationToken, "signature"
+| "suite">` (the signer stamps the suite).
+
+```ts
+// Before
+const token = await signDelegation(
+  {
+    delegator_id,
+    delegator_public_key: toBase64Url(kp.publicKey),
+    delegate_id,
+    delegate_public_key: toBase64Url(otherKp.publicKey),
+    scope,
+    issued_at,
+    expires_at,
+  },
+  kp.privateKey,
+);
+
+// After
+const token = await signDelegation(
+  {
+    delegator_id,
+    delegator_public_key: bytesToHex(kp.publicKey),
+    delegate_id,
+    delegate_public_key: bytesToHex(otherKp.publicKey),
+    scope,
+    issued_at,
+    expires_at,
+  },
+  kp.privateKey,
+);
+// token.suite is stamped as "motebit-jcs-ed25519-b64-v1"
+```
+
+Verifiers reject tokens without `suite` (or with any value other than
+`"motebit-jcs-ed25519-b64-v1"`) fail-closed, and decode `delegator_public_key`
+from hex. Base64url-encoded tokens issued before this release do not
+verify — pre-launch, no migration tool is provided; re-issue tokens
+after upgrading.
+
 ### Running the new drift gates locally
 
 `pnpm run check` now runs ten drift gates (previously eight). Two new

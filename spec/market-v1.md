@@ -540,38 +540,50 @@ For on-chain payments, the relay integrates with the x402 protocol.
 
 A delegation token authorizes one agent to act on behalf of another within a declared scope. Tokens are signed by the delegator's Ed25519 keypair and verified by the receiving agent or relay.
 
-### 12.1 — Token Structure
+### 12.1 — DelegationToken
 
-| Field                  | Type   | Required | Description                                        |
-| ---------------------- | ------ | -------- | -------------------------------------------------- |
-| `delegator_id`         | string | yes      | `motebit_id` of the agent granting delegation.     |
-| `delegator_public_key` | string | yes      | Delegator's Ed25519 public key (base64url).        |
-| `delegate_id`          | string | yes      | `motebit_id` of the agent receiving delegation.    |
-| `delegate_public_key`  | string | yes      | Delegate's Ed25519 public key (base64url).         |
-| `scope`                | string | yes      | Authorized capabilities (§12.3).                   |
-| `issued_at`            | number | yes      | Epoch milliseconds when the token was created.     |
-| `expires_at`           | number | yes      | Epoch milliseconds when the token becomes invalid. |
-| `signature`            | string | yes      | Base64url-encoded Ed25519 signature.               |
+#### Wire format (foundation law)
+
+Every conformant implementation MUST emit and accept this exact shape when issuing or verifying a delegation token. Field names, types, encodings, and the canonical-JSON signing order are binding. The `suite` discriminator routes primitive verification through `@motebit/protocol`'s `SUITE_REGISTRY`; verifiers reject missing or unknown values fail-closed.
+
+| Field                  | Type   | Required | Description                                                                                                                                                                                                       |
+| ---------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `delegator_id`         | string | yes      | `motebit_id` of the agent granting delegation.                                                                                                                                                                    |
+| `delegator_public_key` | string | yes      | Delegator's Ed25519 public key, hex-encoded (64 characters, lowercase).                                                                                                                                           |
+| `delegate_id`          | string | yes      | `motebit_id` of the agent receiving delegation.                                                                                                                                                                   |
+| `delegate_public_key`  | string | yes      | Delegate's Ed25519 public key, hex-encoded (64 characters, lowercase).                                                                                                                                            |
+| `scope`                | string | yes      | Authorized capabilities (§12.3).                                                                                                                                                                                  |
+| `issued_at`            | number | yes      | Epoch milliseconds when the token was created.                                                                                                                                                                    |
+| `expires_at`           | number | yes      | Epoch milliseconds when the token becomes invalid.                                                                                                                                                                |
+| `suite`                | string | yes      | Cryptosuite identifier. For this artifact: `"motebit-jcs-ed25519-b64-v1"` (JCS canonicalization, Ed25519 primitive, base64url signature encoding, hex key encoding). See `SUITE_REGISTRY` in `@motebit/protocol`. |
+| `signature`            | string | yes      | Base64url-encoded Ed25519 signature.                                                                                                                                                                              |
+
+The `DelegationToken` type in `@motebit/crypto` is the binding machine-readable form. Re-exported from `@motebit/encryption` for historical call sites.
+
+#### Storage (reference convention — non-binding)
+
+The reference implementations do not persist delegation tokens — they are short-lived bearer strings carried in-memory or in transient HTTP headers and discarded after verification. Relays MAY maintain a `jti`-style deny-list for revoked tokens (see `spec/auth-token-v1.md §8.1` for the analogous pattern); the data structure is implementation-local and not part of the wire format.
 
 ### 12.2 — Signing and Verification
 
 **Signing:**
 
-1. Construct the token body: all fields **except** `signature`.
+1. Construct the token body: all fields **except** `signature`. The `suite` field is part of the signed body — the signer stamps it, the signature covers it.
 2. Serialize to canonical JSON (keys sorted lexicographically, no whitespace, `undefined` values omitted).
 3. Encode the canonical JSON string as UTF-8 bytes.
-4. `signature = Ed25519_Sign(utf8_bytes, delegator_private_key)`
+4. `signature = Ed25519_Sign(utf8_bytes, delegator_private_key)` — dispatched via `@motebit/crypto` `signBySuite(suite, bytes, key)`.
 5. Encode the 64-byte signature as base64url (RFC 4648 §5, no padding).
 
 **Verification:**
 
-1. If `expires_at < current_time_ms`, the token is expired. Reject.
-2. Decode `delegator_public_key` from base64url to a 32-byte Ed25519 public key.
-3. Extract `signature` from the token. Decode from base64url to 64 bytes.
-4. Reconstruct canonical JSON from all fields except `signature`.
-5. `valid = Ed25519_Verify(signature_bytes, canonical_json_utf8, delegator_public_key)`
+1. If `suite !== "motebit-jcs-ed25519-b64-v1"`, reject fail-closed. No legacy-no-suite path.
+2. If `expires_at < current_time_ms`, the token is expired. Reject.
+3. Decode `delegator_public_key` from hex to a 32-byte Ed25519 public key.
+4. Extract `signature` from the token. Decode from base64url to 64 bytes.
+5. Reconstruct canonical JSON from all fields except `signature`.
+6. `valid = verifyBySuite(suite, canonical_json_utf8, signature_bytes, delegator_public_key)`.
 
-Implementations MAY disable expiry checking for historical verification (e.g., auditing delegation chains after the fact).
+Implementations MAY disable expiry checking for historical verification (e.g., auditing delegation chains after the fact) — but MUST NOT disable suite verification.
 
 ### 12.3 — Scope Format
 

@@ -4,6 +4,7 @@
 
 ```ts
 
+import { DelegationToken } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
 
 // @public (undocumented)
@@ -124,24 +125,9 @@ export interface DataIntegrityProof {
 }
 
 // @public
-export interface DelegationToken {
-    // (undocumented)
-    delegate_id: string;
-    // (undocumented)
-    delegate_public_key: string;
-    // (undocumented)
-    delegator_id: string;
-    // (undocumented)
-    delegator_public_key: string;
-    // (undocumented)
-    expires_at: number;
-    // (undocumented)
-    issued_at: number;
-    // (undocumented)
-    scope: string;
-    // (undocumented)
-    signature: string;
-}
+export const DELEGATION_TOKEN_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { DelegationToken }
 
 // @public
 export function didKeyToPublicKey(did: string): Uint8Array;
@@ -576,7 +562,7 @@ export function signBySuite(suite: SuiteId, canonicalBytes: Uint8Array, privateK
 export function signCollaborativeReceipt(receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature" | "suite">, initiatorPrivateKey: Uint8Array): Promise<SignableCollaborativeReceipt>;
 
 // @public
-export function signDelegation(delegation: Omit<DelegationToken, "signature">, delegatorPrivateKey: Uint8Array): Promise<DelegationToken>;
+export function signDelegation(delegation: Omit<DelegationToken, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<DelegationToken>;
 
 // @public
 export const SIGNED_TOKEN_SUITE: "motebit-jwt-ed25519-v1";

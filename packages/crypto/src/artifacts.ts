@@ -10,8 +10,6 @@
 
 import {
   canonicalJson,
-  ed25519Sign,
-  ed25519Verify,
   toBase64Url,
   fromBase64Url,
   bytesToHex,
@@ -308,37 +306,50 @@ export async function verifyReceiptSequence(
 // === Delegation Tokens ===
 
 /**
- * A signed delegation token authorizing one entity to act on behalf of another.
- * The delegator signs (delegator_id, delegate_id, scope, issued_at, expires_at)
- * with their private key, proving they authorized the delegate.
+ * Re-export `DelegationToken` from the canonical protocol type package.
+ * The interface body lives in `@motebit/protocol` because `DelegationToken`
+ * is a wire-format type (per the synchronization-invariant doctrine,
+ * every spec-declared wire type must be exported from `@motebit/protocol`).
+ *
+ * Two statements so check-deps sees the `import type` prefix on the one
+ * line that references another workspace package — a bare
+ * `export type { X } from "..."` is technically type-only by TypeScript
+ * semantics, but the drift probe's regex only recognizes `import type`.
  */
-export interface DelegationToken {
-  delegator_id: string;
-  delegator_public_key: string; // base64url-encoded Ed25519 public key
-  delegate_id: string;
-  delegate_public_key: string; // base64url-encoded Ed25519 public key
-  scope: string; // what the delegate is authorized to do
-  issued_at: number;
-  expires_at: number;
-  signature: string; // base64url-encoded Ed25519 signature
-}
+import type { DelegationToken } from "@motebit/protocol";
+export type { DelegationToken };
+
+/** The one suite DelegationTokens sign under today. */
+export const DELEGATION_TOKEN_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 
 /**
  * Sign a delegation token. The delegator authorizes the delegate to act
- * within the given scope. The signature covers all fields except `signature`.
+ * within the given scope. Stamps the cryptosuite into the signed body,
+ * dispatches the primitive signature through `signBySuite`.
+ *
+ * Callers pass the token without `signature` or `suite`; the signer owns
+ * both. Public keys must already be hex-encoded — this signer does not
+ * transcode, so the input carries the same encoding the output will.
  */
 export async function signDelegation(
-  delegation: Omit<DelegationToken, "signature">,
+  delegation: Omit<DelegationToken, "signature" | "suite">,
   delegatorPrivateKey: Uint8Array,
 ): Promise<DelegationToken> {
-  const canonical = canonicalJson(delegation);
+  const body = { ...delegation, suite: DELEGATION_TOKEN_SUITE };
+  const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
-  const sig = await ed25519Sign(message, delegatorPrivateKey);
-  return { ...delegation, signature: toBase64Url(sig) };
+  const sig = await signBySuite(DELEGATION_TOKEN_SUITE, message, delegatorPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
 }
 
 /**
  * Verify a delegation token's signature and (optionally) expiration.
+ *
+ * Rejects fail-closed on:
+ *   - missing or unknown `suite` value (anything other than `DELEGATION_TOKEN_SUITE`)
+ *   - expired token (unless `options.checkExpiry === false`)
+ *   - malformed hex public key or base64url signature
+ *   - primitive-level verification failure
  *
  * @param delegation - The delegation token to verify
  * @param options.checkExpiry - If true (default), reject expired tokens. Pass false
@@ -349,6 +360,8 @@ export async function verifyDelegation(
   delegation: DelegationToken,
   options?: { checkExpiry?: boolean; now?: number },
 ): Promise<boolean> {
+  if (delegation.suite !== DELEGATION_TOKEN_SUITE) return false;
+
   const checkExpiry = options?.checkExpiry ?? true;
   if (checkExpiry) {
     const now = options?.now ?? Date.now();
@@ -359,9 +372,9 @@ export async function verifyDelegation(
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
   try {
-    const pubKey = fromBase64Url(delegation.delegator_public_key);
+    const pubKey = hexToBytes(delegation.delegator_public_key);
     const sig = fromBase64Url(signature);
-    return await ed25519Verify(sig, message, pubKey);
+    return await verifyBySuite(delegation.suite, message, sig, pubKey);
   } catch {
     return false;
   }

@@ -12,6 +12,7 @@ import {
   parseScopeSet,
   isScopeNarrowed,
   toBase64Url,
+  bytesToHex,
   hash,
   type SignableReceipt,
   type DelegationToken,
@@ -228,28 +229,31 @@ describe("verifyDelegation error paths", () => {
     const kp = await generateKeypair();
     const delegation: DelegationToken = {
       delegator_id: "mote-alice",
-      delegator_public_key: toBase64Url(kp.publicKey),
+      delegator_public_key: bytesToHex(kp.publicKey),
       delegate_id: "mote-bob",
-      delegate_public_key: toBase64Url(kp.publicKey),
+      delegate_public_key: bytesToHex(kp.publicKey),
       scope: "web_search",
       issued_at: Date.now(),
       expires_at: Date.now() + 3600_000,
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: "!!!not-valid-base64!!!",
     };
     const result = await verifyDelegation(delegation);
     expect(result).toBe(false);
   });
 
-  it("returns false when delegator_public_key is not valid base64url", async () => {
+  it("returns false when delegator_public_key is not valid hex", async () => {
     const kp = await generateKeypair();
     const delegation: DelegationToken = {
       delegator_id: "mote-alice",
+      // Malformed hex — hexToBytes rejects non-hex characters
       delegator_public_key: "!!!bad-key!!!",
       delegate_id: "mote-bob",
-      delegate_public_key: toBase64Url(kp.publicKey),
+      delegate_public_key: bytesToHex(kp.publicKey),
       scope: "web_search",
       issued_at: Date.now(),
       expires_at: Date.now() + 3600_000,
+      suite: "motebit-jcs-ed25519-b64-v1",
       signature: toBase64Url(new Uint8Array(64)),
     };
     const result = await verifyDelegation(delegation);
@@ -269,11 +273,11 @@ describe("verifyDelegationChain", () => {
     delegateId: string,
     scope: string = "web_search",
   ): Promise<DelegationToken> {
-    const body: Omit<DelegationToken, "signature"> = {
+    const body: Omit<DelegationToken, "signature" | "suite"> = {
       delegator_id: delegatorId,
-      delegator_public_key: toBase64Url(delegatorKp.publicKey),
+      delegator_public_key: bytesToHex(delegatorKp.publicKey),
       delegate_id: delegateId,
-      delegate_public_key: toBase64Url(delegateKp.publicKey),
+      delegate_public_key: bytesToHex(delegateKp.publicKey),
       scope,
       issued_at: Date.now(),
       expires_at: Date.now() + 3600_000,
@@ -341,11 +345,11 @@ describe("verifyDelegationChain", () => {
     const kpBogus = await generateKeypair();
 
     const delegation1 = await makeDelegation(kpAlice, kpB, "mote-alice", "mote-service-b");
-    const body2: Omit<DelegationToken, "signature"> = {
+    const body2: Omit<DelegationToken, "signature" | "suite"> = {
       delegator_id: "mote-service-b",
-      delegator_public_key: toBase64Url(kpBogus.publicKey),
+      delegator_public_key: bytesToHex(kpBogus.publicKey),
       delegate_id: "mote-service-c",
-      delegate_public_key: toBase64Url(kpC.publicKey),
+      delegate_public_key: bytesToHex(kpC.publicKey),
       scope: "read_url",
       issued_at: Date.now(),
       expires_at: Date.now() + 3600_000,
@@ -391,9 +395,9 @@ describe("verifyDelegationChain", () => {
     const expired: DelegationToken = await signDelegation(
       {
         delegator_id: "mote-alice",
-        delegator_public_key: toBase64Url(kpAlice.publicKey),
+        delegator_public_key: bytesToHex(kpAlice.publicKey),
         delegate_id: "mote-web-search",
-        delegate_public_key: toBase64Url(kpService.publicKey),
+        delegate_public_key: bytesToHex(kpService.publicKey),
         scope: "web_search",
         issued_at: Date.now() - 7200_000,
         expires_at: Date.now() - 3600_000, // expired 1 hour ago
@@ -421,9 +425,9 @@ describe("end-to-end: delegation chain with receipt sequence", () => {
     const delegation = await signDelegation(
       {
         delegator_id: "mote-alice",
-        delegator_public_key: toBase64Url(kpAlice.publicKey),
+        delegator_public_key: bytesToHex(kpAlice.publicKey),
         delegate_id: "mote-web-search",
-        delegate_public_key: toBase64Url(kpWebSearch.publicKey),
+        delegate_public_key: bytesToHex(kpWebSearch.publicKey),
         scope: "web_search",
         issued_at: Date.now(),
         expires_at: Date.now() + 3600_000,
@@ -462,7 +466,7 @@ describe("end-to-end: delegation chain with receipt sequence", () => {
     ]);
     expect(receiptResult.valid).toBe(true);
 
-    expect(toBase64Url(kpWebSearch.publicKey)).toBe(delegation.delegate_public_key);
+    expect(bytesToHex(kpWebSearch.publicKey)).toBe(delegation.delegate_public_key);
   });
 
   it("three-hop delegation with receipt sequence: Alice -> B -> C", async () => {
@@ -473,9 +477,9 @@ describe("end-to-end: delegation chain with receipt sequence", () => {
     const d1 = await signDelegation(
       {
         delegator_id: "mote-alice",
-        delegator_public_key: toBase64Url(kpAlice.publicKey),
+        delegator_public_key: bytesToHex(kpAlice.publicKey),
         delegate_id: "mote-service-b",
-        delegate_public_key: toBase64Url(kpB.publicKey),
+        delegate_public_key: bytesToHex(kpB.publicKey),
         scope: "research,read_url",
         issued_at: Date.now(),
         expires_at: Date.now() + 3600_000,
@@ -485,9 +489,9 @@ describe("end-to-end: delegation chain with receipt sequence", () => {
     const d2 = await signDelegation(
       {
         delegator_id: "mote-service-b",
-        delegator_public_key: toBase64Url(kpB.publicKey),
+        delegator_public_key: bytesToHex(kpB.publicKey),
         delegate_id: "mote-service-c",
-        delegate_public_key: toBase64Url(kpC.publicKey),
+        delegate_public_key: bytesToHex(kpC.publicKey),
         scope: "read_url",
         issued_at: Date.now(),
         expires_at: Date.now() + 3600_000,
@@ -527,8 +531,8 @@ describe("end-to-end: delegation chain with receipt sequence", () => {
     ]);
     expect(receiptResult.valid).toBe(true);
 
-    expect(toBase64Url(kpB.publicKey)).toBe(d1.delegate_public_key);
-    expect(toBase64Url(kpC.publicKey)).toBe(d2.delegate_public_key);
+    expect(bytesToHex(kpB.publicKey)).toBe(d1.delegate_public_key);
+    expect(bytesToHex(kpC.publicKey)).toBe(d2.delegate_public_key);
   });
 });
 
@@ -817,11 +821,11 @@ describe("verifyDelegationChain — scope narrowing", () => {
     delegateId: string,
     scope: string = "web_search",
   ): Promise<DelegationToken> {
-    const body: Omit<DelegationToken, "signature"> = {
+    const body: Omit<DelegationToken, "signature" | "suite"> = {
       delegator_id: delegatorId,
-      delegator_public_key: toBase64Url(delegatorKp.publicKey),
+      delegator_public_key: bytesToHex(delegatorKp.publicKey),
       delegate_id: delegateId,
-      delegate_public_key: toBase64Url(delegateKp.publicKey),
+      delegate_public_key: bytesToHex(delegateKp.publicKey),
       scope,
       issued_at: Date.now(),
       expires_at: Date.now() + 3600_000,

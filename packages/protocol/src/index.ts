@@ -154,6 +154,40 @@ export interface DelegationReceiptLike {
   delegation_receipts?: DelegationReceiptLike[];
 }
 
+/**
+ * A signed delegation token authorizing one agent to act on behalf of
+ * another within a declared scope. The delegator signs the token body
+ * (everything except `signature`) with their private key.
+ *
+ * Public keys are hex-encoded, matching every other motebit artifact
+ * that carries an Ed25519 key; the signature is base64url-encoded per
+ * the `motebit-jcs-ed25519-b64-v1` suite. `@motebit/crypto` re-exports
+ * this type alongside `signDelegation` / `verifyDelegation` helpers;
+ * the shape itself is the binding wire format.
+ *
+ * See `spec/market-v1.md §12.1` for the full spec.
+ */
+export interface DelegationToken {
+  delegator_id: string;
+  /** Delegator's Ed25519 public key, hex-encoded (64 characters, lowercase). */
+  delegator_public_key: string;
+  delegate_id: string;
+  /** Delegate's Ed25519 public key, hex-encoded (64 characters, lowercase). */
+  delegate_public_key: string;
+  /** Comma-separated capability list, or `"*"` for wildcard. See market-v1 §12.3. */
+  scope: string;
+  issued_at: number;
+  expires_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` for
+   * this artifact today. Part of the signed body — tampering breaks
+   * verification. Verifiers reject missing or unknown values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  /** Base64url-encoded Ed25519 signature. */
+  signature: string;
+}
+
 export enum SensitivityLevel {
   None = "none",
   Personal = "personal",

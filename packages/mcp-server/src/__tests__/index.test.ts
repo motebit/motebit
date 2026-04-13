@@ -1742,7 +1742,7 @@ describe("McpServerAdapter — mutual authentication", () => {
 describe("McpServerAdapter — motebit_task scope enforcement", () => {
   // Helper: create a real signed delegation token for testing
   async function createDelegationToken(scope: string): Promise<string> {
-    const { generateKeypair, signDelegation, toBase64Url } = await import("@motebit/encryption");
+    const { generateKeypair, signDelegation, bytesToHex } = await import("@motebit/encryption");
 
     const delegatorKp = await generateKeypair();
     const delegateKp = await generateKeypair();
@@ -1750,9 +1750,9 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
     const token = await signDelegation(
       {
         delegator_id: "mote-delegator",
-        delegator_public_key: toBase64Url(delegatorKp.publicKey),
+        delegator_public_key: bytesToHex(delegatorKp.publicKey),
         delegate_id: "mote-delegate",
-        delegate_public_key: toBase64Url(delegateKp.publicKey),
+        delegate_public_key: bytesToHex(delegateKp.publicKey),
         scope,
         issued_at: Date.now(),
         expires_at: Date.now() + 3600_000,
@@ -1866,15 +1866,15 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
     await adapter.start();
 
     // Create a valid token then tamper with the scope to invalidate signature
-    const { generateKeypair, signDelegation, toBase64Url } = await import("@motebit/encryption");
+    const { generateKeypair, signDelegation, bytesToHex } = await import("@motebit/encryption");
     const kp1 = await generateKeypair();
     const kp2 = await generateKeypair();
     const token = await signDelegation(
       {
         delegator_id: "a",
-        delegator_public_key: toBase64Url(kp1.publicKey),
+        delegator_public_key: bytesToHex(kp1.publicKey),
         delegate_id: "b",
-        delegate_public_key: toBase64Url(kp2.publicKey),
+        delegate_public_key: bytesToHex(kp2.publicKey),
         scope: "web_search",
         issued_at: Date.now(),
         expires_at: Date.now() + 3600_000,

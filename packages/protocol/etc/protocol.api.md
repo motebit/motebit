@@ -587,6 +587,23 @@ export interface DelegationReceiptSummary {
 }
 
 // @public
+export interface DelegationToken {
+    // (undocumented)
+    delegate_id: string;
+    delegate_public_key: string;
+    // (undocumented)
+    delegator_id: string;
+    delegator_public_key: string;
+    // (undocumented)
+    expires_at: number;
+    // (undocumented)
+    issued_at: number;
+    scope: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
 export interface DepartureAttestation {
     attestation_id: string;
     attested_at: number;
