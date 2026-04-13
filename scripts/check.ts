@@ -68,10 +68,6 @@ const EXCLUDED_CHECKS: Record<string, string> = {
     "advisory local-only report — always exits 0 and scans ~/.claude/ (user-specific auto-memory); no CI equivalent",
   "check-gates-effective":
     "meta-probe that runs every GATES entry under a deliberate perturbation — would invoke each gate a second time per PR. Runs as a separate CI job scoped to scripts/* changes.",
-  "check-suite-declared":
-    "cryptosuite agility invariant #11 (spec-side) — landed unwired during the cryptosuite-agility pass (2026-04-13). Moved into GATES when every signed spec declares a `suite` field. Run standalone with `pnpm check-suite-declared`.",
-  "check-suite-dispatch":
-    "cryptosuite agility invariant #12 (code-side) — landed unwired during the cryptosuite-agility pass (2026-04-13). Moved into GATES when every `ed.*` primitive call in @motebit/crypto is routed through suite-dispatch.ts. Run standalone with `pnpm check-suite-dispatch`.",
 };
 
 // Order matters: run fastest first so CI fails loudly on the cheapest signal.
@@ -102,6 +98,18 @@ const GATES: ReadonlyArray<Gate> = [
     // locked at category 2 — a new spec MUST ship with at least one
     // "#### Wire format (foundation law)" subsection or CI fails.
     args: ["--strict"],
+  },
+  {
+    name: "check-suite-declared",
+    defends:
+      "every signed wire-format artifact declares a `suite` field naming a @motebit/protocol-registered SuiteId (invariant #11)",
+    script: "check-suite-declared",
+  },
+  {
+    name: "check-suite-dispatch",
+    defends:
+      "every signature primitive call in @motebit/crypto routes through suite-dispatch.ts — no implicit Ed25519 defaults (invariant #12)",
+    script: "check-suite-dispatch",
   },
   {
     name: "check-service-primitives",
