@@ -18,7 +18,9 @@ Persistent cryptographic identity that survives across devices, providers, and t
 
 MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay. Motebit says who the agent is, what it's done, and what it's allowed to do.
 
-A motebit is a droplet of intelligence under surface tension — body passive, interior active. The runtime gives the droplet a body. The protocol defines its physics. [Read the thesis.](https://docs.motebit.com/docs/introduction)
+The intelligence is pluggable. The identity is the asset.
+
+A motebit is a droplet of intelligence under surface tension — body passive, interior active. A glass droplet that breathes: the runtime gives it a body, the protocol defines its physics. [Read the thesis.](https://docs.motebit.com/docs/introduction)
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
@@ -58,15 +60,15 @@ What you see:
 
 ```
 Identity: 019d... (from ./motebit.md)
-Tools loaded: fetch_url, echo
 Agent task handler enabled (direct mode — no LLM)
+Tools loaded: fetch_url, echo
 MCP server running on http://localhost:3100 (StreamableHTTP). 2 tools exposed.
 Registered with relay: https://relay.motebit.com
 ```
 
-Your agent is live and discoverable. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. Run `npm run self-test` to verify the full receipt loop end-to-end.
+Your agent is live and discoverable — an **atom** in the marketplace, a single capability with identity. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. Run `npm run self-test` to verify the full receipt loop end-to-end.
 
-The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them — remove `--direct` from `package.json` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
+The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them, becoming a **molecule** that composes other agents — remove `--direct` from `src/index.ts` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
 
 ## What it is
 
@@ -113,6 +115,18 @@ motebit migrate cancel                                     # abort migration
 
 Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to worker's wallet when trust is high enough — zero fees, relay records the audit trail. Settlement mode selected per-task by policy. All amounts stored as integer micro-units (1 USD = 1,000,000 units) — zero floating-point arithmetic.
 
+## Federation
+
+Independent relays peer so agents can discover and delegate across organizational boundaries — the marketplace becomes a network, not a silo:
+
+```bash
+motebit federation status              # Show your relay's identity
+motebit federation peer <relay-url>    # Peer with another relay
+motebit federation peers               # List active peers
+```
+
+One command peers two relays. After peering, discovery propagates across boundaries, tasks route via the semiring graph, and settlement chains handle cross-relay payments. Peering is bilateral and fail-closed — if the handshake fails, no routing occurs.
+
 ## Surfaces
 
 | Surface     | Status | Entry point                                             |
@@ -131,18 +145,6 @@ Two additional apps ship alongside the five surfaces and play narrower roles:
 
 - **Identity viewer** (`apps/identity`) — static browser tool for dropping a `motebit.md` identity file and inspecting the parsed profile card (motebit ID, devices, governance, signed succession). Zero workspace dependencies, public-facing reference implementation of the identity spec.
 - **Admin dashboard** (`apps/admin`) — React/Vite operator console for monitoring a running relay in real time (state, memory graph, event log, tool audit, gradient, trust ledger). Internal tool — operators run it locally against their relay; not deployed as a public surface.
-
-### Federation
-
-Connect independent relays so agents can discover and delegate across organizational boundaries:
-
-```bash
-motebit federation status              # Show your relay's identity
-motebit federation peer <relay-url>    # Peer with another relay
-motebit federation peers               # List active peers
-```
-
-One command peers two relays. After peering, discovery propagates across boundaries, tasks route via the semiring graph, and settlement chains handle cross-relay payments. Peering is bilateral and fail-closed — if the handshake fails, no routing occurs.
 
 ## Architecture
 
@@ -226,7 +228,7 @@ spec/
   dispute-v1.md            motebit/dispute@1.0 — evidence, adjudication, fund handling, appeal
 ```
 
-46 packages across packages, apps, and services.
+31 packages across 7 architectural layers · 8 surfaces · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.
 
 ## Verify & integrate
 
@@ -265,7 +267,7 @@ Five npm packages. Four MIT (the open protocol), one BSL (the product):
 ## Specification
 
 > [!NOTE]
-> **Motebit is a protocol first.** The `motebit.md` identity file is an [open standard](spec/identity-v1.md) (MIT) that can be verified by any tool, with or without the motebit runtime. The [cryptography library](https://www.npmjs.com/package/@motebit/crypto) is MIT licensed with zero runtime dependencies.
+> **Motebit is a protocol first.** All [12 specs](spec/) (MIT) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the MIT type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
 
 A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), registered devices, optional organizational guardian ([spec](spec/identity-v1.md) §3.3), and key succession history ([spec](spec/identity-v1.md) §3.8).
 

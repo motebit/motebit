@@ -1040,7 +1040,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const mcpServer = new McpServerAdapter(serverConfig, deps);
   await mcpServer.start();
 
-  const toolCount = runtime.getToolRegistry().list().length;
+  const toolList = runtime.getToolRegistry().list();
+  const toolCount = toolList.length;
+  if (toolCount > 0) {
+    log(`Tools loaded: ${toolList.map((t) => t.name).join(", ")}`);
+  }
   if (transport === "stdio") {
     log(`MCP server running (stdio). ${toolCount} tools exposed.`);
     log(`Policy: ${config.operator ? "operator" : "ambient"} mode.`);
