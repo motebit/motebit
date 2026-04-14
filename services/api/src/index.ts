@@ -717,6 +717,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
   });
 
+  // --- Operator transparency routes (docs/doctrine/operator-transparency.md) ---
+  // Stage 1.5: signed declaration at /.well-known/motebit-transparency.json,
+  // admin view at /api/v1/admin/transparency. Onchain anchoring deferred to
+  // Stage 2 (spec/relay-transparency-v1.md).
+  const { registerTransparencyRoutes } = await import("./transparency.js");
+  await registerTransparencyRoutes({ app, relayIdentity });
+
   // --- Proxy token + balance routes ---
   registerProxyTokenRoutes(app, moteDb.db, relayIdentity);
 

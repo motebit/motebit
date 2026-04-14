@@ -2,7 +2,7 @@
 
 The only function with a legitimate centralization premium (multi-device sync). Also: settlement, federation, discovery, rate limiting, disputes, credential anchoring.
 
-Modules: `index`, `federation`, `task-routing`, `credentials`, `pairing`, `data-sync`, `accounts`, `a2a-bridge`, `logger`, `discovery`, `migration`, `disputes`, `p2p-verifier`, `settlement-rails/*`.
+Modules: `index`, `federation`, `task-routing`, `credentials`, `pairing`, `data-sync`, `accounts`, `a2a-bridge`, `logger`, `discovery`, `migration`, `disputes`, `p2p-verifier`, `transparency`, `settlement-rails/*`.
 
 ## Rules
 
@@ -15,5 +15,6 @@ Modules: `index`, `federation`, `task-routing`, `credentials`, `pairing`, `data-
 7. **Federation circuit breaker.** Per-peer forward tracking; automatic suspension at 50% failure rate over ≥6 samples. Heartbeat handles liveness (3 missed → suspend, 5 → remove).
 8. **P2P settlement path** is policy-based (`evaluateSettlementEligibility` in `task-routing.ts`): both parties opt in via `settlement_modes`, worker declares `settlement_address`, trust ≥ 0.6, interaction count ≥ 5, no active disputes between pair. P2p tasks skip virtual-account allocation; money moves onchain; relay records audit with `settlement_mode='p2p'`. Fee: zero (explicit product policy). Async `startP2pVerifierLoop` in `p2p-verifier.ts` polls Solana RPC and transitions state.
 9. **Withdrawal hold during dispute window** (`computeDisputeWindowHold` in `accounts.ts`) sums recent relay settlements < 24h not yet disputed. `requestWithdrawal` pre-checks available balance before atomic debit. P2p settlements explicitly excluded.
+10. **Operator transparency declaration is the source of truth** (`transparency.ts` + `PRIVACY.md`). The signed JSON at `/.well-known/motebit-transparency.json` and the committed `PRIVACY.md` both derive from `DECLARATION_CONTENT`. Any code change that adds a processor, a retained field, or a retention window must update `DECLARATION_CONTENT` in the same PR — the sibling-boundary test in `__tests__/transparency.test.ts` enforces sync, but a code-vs-declaration drift (e.g., adding Sentry without naming it) the test cannot catch. Manual review for the doctrine in `docs/doctrine/operator-transparency.md`.
 
 Cross-cutting detail: [`docs/doctrine/security-boundaries.md`](../../docs/doctrine/security-boundaries.md), [`docs/doctrine/settlement-rails.md`](../../docs/doctrine/settlement-rails.md), [`docs/doctrine/protocol-model.md`](../../docs/doctrine/protocol-model.md).
