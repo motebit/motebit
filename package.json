@@ -44,6 +44,7 @@
     "check-api-surface": "npx tsx scripts/check-api-surface.ts",
     "check-changeset-discipline": "npx tsx scripts/check-changeset-discipline.ts",
     "check-docs-tree": "npx tsx scripts/check-docs-tree.ts",
+    "check-spec-mit-boundary": "npx tsx scripts/check-spec-mit-boundary.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",
     "clean": "turbo run clean",

@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Fourteen invariants are enforced today. Twelve run as hard CI gates via `pnpm check`; the remaining two are advisory (`check-memory`, `check-sibling-boundaries`).
+Fifteen invariants are enforced today. Thirteen run as hard CI gates via `pnpm check`; the remaining two are advisory (`check-memory`, `check-sibling-boundaries`).
 
 ## Inventory
 
@@ -28,6 +28,7 @@ Fourteen invariants are enforced today. Twelve run as hard CI gates via `pnpm ch
 | 12  | `@motebit/crypto` verify paths ↔ suite dispatcher      | `check-suite-dispatch.ts`                         | 2026-04-13 |
 | 13  | Published binaries ↔ dist-boot smoke                   | `check-dist-smoke.ts`                             | 2026-04-13 |
 | 14  | Architecture-docs tree ↔ filesystem + `check-deps.ts`  | `check-docs-tree.ts`                              | 2026-04-14 |
+| 15  | Spec callables ↔ MIT package exports                   | `check-spec-mit-boundary.ts`                      | 2026-04-14 |
 
 ## Incident histories
 
@@ -52,6 +53,10 @@ Every `package.json` with a `bin` entry must successfully execute `node <bin> --
 ### 14. Architecture-docs tree ↔ filesystem + `check-deps.ts`
 
 `apps/docs/content/docs/operator/architecture.mdx` contains a directory tree tagging every package with its enforced layer and MIT status. The probe parses the tree and asserts every app/package/service/spec on disk appears in the tree with a correct `[Ln]` / `[MIT]` tag. Added 2026-04-14 after a rewrite found the page had invented a 3-tier Core/Engines/Surface grouping that misplaced nine packages, a stale 13-tab admin count (real: 15), a spatial description that contradicted the compile-time doctrine, and an absent protocol surface (cryptosuite agility, rail custody, credential anchoring).
+
+### 15. Spec callables ↔ MIT package exports
+
+Every backticked callable of the form `` `functionName(...)` `` in any `spec/*.md` file must resolve to a symbol exported from an MIT package (`@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`) or appear in an explicit waiver list with a one-line reason. The probe excludes all-lowercase identifiers (snake_case SQL DDL, math notation like `trust(A,B)` or `max(x,y)`) which are not repo symbols. Added 2026-04-14 after an external reviewer asked whether protocol-only algorithms could silently drift into BSL. The probe's first run caught `deriveSyncEncryptionKey(privateKey)` in `settlement-v1.md` — a deterministic HKDF recipe that a third party must reproduce to interoperate — living only in BSL `@motebit/encryption`. The fix was to inline the recipe in the spec text (salt, info string, hash, output length) so the spec stands alone without a symbol reference. The waiver list covers documented reference-implementation pointers (e.g., `verifySignedTokenForDevice` in auth-token-v1 §9, `augmentGraphWithFederatedAgents` in relay-federation-v1 Appendix A.2), external library symbols (`getTransaction` from `@solana/web3.js`), and adapter-interface method names. Adding a waiver requires a reason that would survive code review.
 
 ## How to add a new defense
 

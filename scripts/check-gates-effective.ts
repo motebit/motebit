@@ -324,6 +324,26 @@ export async function probeLeak(): Promise<boolean> {
         ),
       ),
   },
+  {
+    script: "check-spec-mit-boundary",
+    proves:
+      "flags a backticked callable in spec/*.md whose identifier is not exported from an MIT package and not explicitly waived",
+    perturb: () =>
+      // Drop a fake camelCase callable reference into an existing spec. The
+      // probe scans backticked `fooBar(...)` patterns, skips snake_case and
+      // all-lowercase (SQL DDL + math notation), then asserts each remaining
+      // identifier is either MIT-exported or listed in WAIVED_CALLABLES. A
+      // novel camelCase name like `probeOnlyBslSymbol` satisfies neither and
+      // should flip the gate to exit 1 with a specific diagnostic.
+      writeFixture(
+        `spec/${PROBE_PREFIX}bsl-leak-v1.md`,
+        // Minimal spec-shaped fixture. The gate reads spec/*.md — any .md
+        // file here is in scope. Body mentions a callable that only BSL
+        // could plausibly own, and that no current spec has waived.
+        `# motebit/${PROBE_PREFIX}bsl-leak@1.0\n\n` +
+          `Probe-only spec. The call \`probeOnlyBslSymbol(arg)\` must trip check-spec-mit-boundary.\n`,
+      ),
+  },
 ];
 
 /**

@@ -149,6 +149,12 @@ const GATES: ReadonlyArray<Gate> = [
       "apps/docs/content/docs/operator/architecture.mdx directory tree mirrors the filesystem and scripts/check-deps.ts LAYER/MIT_PACKAGES (invariant #14, added 2026-04-14 after the architecture page was rewritten and 9 packages were previously misplaced across invented tiers)",
     script: "check-docs-tree",
   },
+  {
+    name: "check-spec-mit-boundary",
+    defends:
+      "every backticked callable referenced in spec/*.md is exported from an MIT package (protocol/crypto/sdk) or explicitly waived with a reason (invariant #15, added 2026-04-14 after an external review asked whether protocol-only algorithms could leak into BSL; the probe caught deriveSyncEncryptionKey as a real leak and forced the spec to inline the HKDF recipe)",
+    script: "check-spec-mit-boundary",
+  },
 ];
 
 interface Result {
