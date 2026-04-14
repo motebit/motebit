@@ -1,7 +1,7 @@
 # Motebit
 
 <p align="center">
-  <img src="social-preview.png" alt="Motebit — A sovereign agent runtime" width="100%">
+  <img src="social-preview.png" alt="Motebit — protocol + runtime for sovereign AI agents" width="100%">
 </p>
 
 <p align="center">
@@ -63,6 +63,7 @@ Identity: 019d... (from ./motebit.md)
 Agent task handler enabled (direct mode — no LLM)
 Tools loaded: fetch_url, echo
 MCP server running on http://localhost:3100 (StreamableHTTP). 2 tools exposed.
+Policy: ambient mode.
 Registered with relay: https://relay.motebit.com
 ```
 
@@ -79,6 +80,8 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 **Trust** — Signed execution receipts create an immutable audit trail. A semiring algebra routes tasks through the most trusted paths in the agent network.
 
 **Governance** — Policy gates control what crosses the boundary. Fail-closed by default. Sensitivity-aware privacy with deletion certificates.
+
+**Proof** — Verifiable credentials issued on completed work, W3C VC 2.0, cryptographically signed. Merkle-batched and anchored onchain so reputation survives the relay. Self-verifiable offline using only `@motebit/crypto` and the issuer's public key.
 
 **Delegation** — Agents delegate to other agents via MCP. Each hop produces a self-verifiable signed receipt with the signer's public key embedded. Budget allocation and settlement on verified receipts. Nested receipts for chain-of-custody.
 
@@ -113,6 +116,8 @@ motebit migrate status                                     # check active migrat
 motebit migrate cancel                                     # abort migration
 ```
 
+`motebit run` is the operator daemon — REPL plus task-acceptance in one process. `motebit serve` (used by the scaffold's `npm run dev`) exposes your agent as an MCP server with no REPL. Both accept paid tasks; pick the one that matches whether you want a console or a pure service.
+
 Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to worker's wallet when trust is high enough — zero fees, relay records the audit trail. Settlement mode selected per-task by policy. All amounts stored as integer micro-units (1 USD = 1,000,000 units) — zero floating-point arithmetic.
 
 ## Federation
@@ -145,6 +150,36 @@ Two additional apps ship alongside the five surfaces and play narrower roles:
 
 - **Identity viewer** (`apps/identity`) — static browser tool for dropping a `motebit.md` identity file and inspecting the parsed profile card (motebit ID, devices, governance, signed succession). Zero workspace dependencies, public-facing reference implementation of the identity spec.
 - **Admin dashboard** (`apps/admin`) — React/Vite operator console for monitoring a running relay in real time (state, memory graph, event log, tool audit, gradient, trust ledger). Internal tool — operators run it locally against their relay; not deployed as a public surface.
+
+## Verify & integrate
+
+Verify any motebit artifact — identity files, receipts, credentials, or presentations — with zero dependencies:
+
+```typescript
+import { verify } from "@motebit/crypto";
+
+const result = await verify(artifact);
+
+if (result.type === "identity" && result.valid) {
+  console.log(result.did); // did:key:z6Mk...
+  console.log(result.succession); // key rotation chain
+}
+
+if (result.type === "receipt" && result.valid) {
+  console.log(result.signer); // did:key of executing agent
+  console.log(result.delegations); // nested delegation chain
+}
+```
+
+Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). Five npm packages — four MIT (the open protocol), one BSL (the product):
+
+| Package                                                                | Description                                                                                         | License |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------- |
+| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing  | MIT     |
+| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow  | MIT     |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | MIT     |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | MIT     |
+| [`motebit`](https://www.npmjs.com/package/motebit)                     | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1 |
 
 ## Architecture
 
@@ -230,40 +265,6 @@ spec/
 
 31 packages across 7 architectural layers · 8 surfaces · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.
 
-## Verify & integrate
-
-Verify any motebit artifact — identity files, receipts, credentials, or presentations — with zero dependencies:
-
-```typescript
-import { verify } from "@motebit/crypto";
-
-const result = await verify(artifact);
-
-if (result.type === "identity" && result.valid) {
-  console.log(result.did); // did:key:z6Mk...
-  console.log(result.succession); // key rotation chain
-}
-
-if (result.type === "receipt" && result.valid) {
-  console.log(result.signer); // did:key of executing agent
-  console.log(result.delegations); // nested delegation chain
-}
-```
-
-```typescript
-import type { ExecutionReceipt, MotebitState, AgentTrustRecord } from "@motebit/sdk";
-```
-
-Five npm packages. Four MIT (the open protocol), one BSL (the product):
-
-| Package                                                                | Description                                                                                         | License |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------- |
-| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing  | MIT     |
-| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow  | MIT     |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | MIT     |
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | MIT     |
-| [`motebit`](https://www.npmjs.com/package/motebit)                     | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1 |
-
 ## Specification
 
 > [!NOTE]
@@ -285,7 +286,7 @@ pnpm run lint          # Lint all packages
 
 The **protocol layer** is MIT licensed — use it freely, build on it, implement the spec in any language:
 
-- [`spec/`](spec/) — 12 open specs (identity, execution-ledger, relay-federation, market, credential, settlement, auth-token, credential-anchor, delegation, discovery, migration, dispute)
+- [`spec/`](spec/) — 12 open specs (full list in [Architecture](#architecture))
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, delegation, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
