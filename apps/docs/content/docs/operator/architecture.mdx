@@ -1,118 +1,246 @@
 ---
 title: Architecture
-description: Monorepo structure, package layers, and data flow
+description: Monorepo structure, enforced layers, services, specs, and data flow
 ---
 
-Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every package exports from `src/index.ts`, tests live in `src/__tests__/` using Vitest, and all I/O crosses an adapter boundary so the interior never binds to a specific platform.
+Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-## Monorepo structure
+The shape is **31 packages · 7 architectural layers · 5 surfaces + 3 supporting apps · 8 services · 12 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
-| Directory | Contents |
-|-----------|----------|
-| `apps/desktop` | Tauri (Rust + webview). Flagship client. Three.js glass creature, identity bootstrap, operator mode, voice input, audio-reactive rendering, goal execution, multi-device pairing, MCP discovery with manifest pinning. |
-| `apps/cli` | Node.js REPL + daemon. Full operator console — chat, goal scheduling, tool approval queue, operator mode, `motebit export` / `verify`. |
-| `apps/mobile` | React Native + Expo. Full parity. expo-gl + Three.js rendering, SQLite adapters, dual providers (Anthropic + Ollama + Hybrid), plan-based goal execution, MCP per-server trust, approval queue UI, voice input. |
-| `apps/admin` | React + Vite dashboard. 13-tab real-time monitoring — state vector, memory graph, behavior cues, event log, tool audit, goals, plans, conversations, devices, intelligence gradient, agent trust, credentials, federation. |
-| `apps/spatial` | AR/VR positioning library. Body-relative orbital mechanics, WebXR audio reactivity. |
-| `apps/docs` | Fumadocs + Next.js. This site. |
-| `packages/` | 31 shared TypeScript packages — the interior of the system. |
-| `services/` | Sync relay (`api`), reference paid agents (`research`, `code-review`), capability providers (`web-search`, `read-url`, `summarize`, `embed`), and the Vercel edge proxy (`proxy`). |
-| `spec/` | 12 open specifications — `identity-v1.md`, `execution-ledger-v1.md`, `relay-federation-v1.md`, `market-v1.md`, `credential-v1.md`, `settlement-v1.md`, `auth-token-v1.md`, `credential-anchor-v1.md`, `delegation-v1.md`, `discovery-v1.md`, `migration-v1.md`, `dispute-v1.md`. |
+## Directory tree
 
-## Package layers
+The canonical map of the monorepo. Packages are tagged with their enforced layer (`L0`–`L6`) from `scripts/check-deps.ts`. Apps and services are tagged by role.
 
-Packages are organized into three tiers. Core has zero internal dependencies. Engines depend on core and on each other. Surface packages sit at the outermost boundary — they face the user, the network, or the renderer.
+```
+motebit/
+├── apps/
+│   ├── web/                   [surface]     Browser. IndexedDB identity, free proxy, zero install.
+│   ├── cli/                   [surface]     Operator console. REPL, daemon, delegation, MCP server.
+│   ├── desktop/               [surface]     Tauri. Three.js creature, voice, operator mode.
+│   ├── mobile/                [surface]     React Native + Expo. Full parity with desktop.
+│   ├── spatial/               [surface]     AR/VR/WebXR. Creature-as-scene, typed spatial objects.
+│   ├── admin/                 [supporting]  React + Vite dashboard. 15-tab relay monitoring.
+│   ├── identity/              [supporting]  Static browser tool for inspecting motebit.md files.
+│   └── docs/                  [supporting]  Fumadocs + Next.js. This site.
+│
+├── packages/
+│   │
+│   │   # Layer 0 — Foundation (zero internal deps)
+│   ├── protocol/              [L0 · MIT]    Types, semirings, routing primitives, crypto-suite registry.
+│   ├── sdk/                   [L0 · MIT]    Developer contract. Stable types, adapter interfaces.
+│   ├── crypto/                [L0 · MIT]    Sign/verify every motebit artifact. Suite dispatcher.
+│   ├── voice/                 [L0]          VAD, STT, TTS adapters.
+│   │
+│   │   # Layer 1 — Primitives
+│   ├── encryption/            [L1]          AES-256-GCM, PBKDF2, sync keys, deletion certs.
+│   ├── gradient/              [L1]          "What am I?" — narrative from gradient snapshots.
+│   ├── event-log/             [L1]          Append-only event sourcing with version clocks.
+│   ├── policy/                [L1]          PolicyGate, MemoryGovernor, injection defense.
+│   ├── tools/                 [L1]          ToolRegistry, builtin tools, MCP tool merge.
+│   ├── semiring/              [L1]          Agent graph, multi-objective ranking, provenance.
+│   ├── policy-invariants/     [L1]          Clamping rules, state bounds validation.
+│   ├── wallet-solana/         [L1]          Sovereign Solana USDC rail. Identity key = address.
+│   │
+│   │   # Layer 2 — Engines
+│   ├── market/                [L2]          Budget, settlement, reputation, graph routing.
+│   ├── behavior-engine/       [L2]          state → BehaviorCues (deterministic, pure).
+│   ├── state-vector/          [L2]          Tick-based EMA smoothing, hysteresis, 60 FPS interp.
+│   ├── render-engine/         [L2]          Droplet geometry, glass material, ThreeJS adapter.
+│   ├── memory-graph/          [L2]          Semantic memory, cosine similarity, half-life decay.
+│   ├── core-identity/         [L2]          UUID v7, multi-device, Ed25519 binding.
+│   ├── sync-engine/           [L2]          Multi-device sync. HTTP/WebSocket, conflict detection.
+│   ├── mcp-client/            [L2]          MCP stdio/HTTP client, credential sources, verifiers.
+│   ├── identity-file/         [L2]          Generate/parse/verify motebit.md.
+│   │
+│   │   # Layer 3 — Lower composites
+│   ├── privacy-layer/         [L3]          Retention rules, deletion certificates, export.
+│   ├── ai-core/               [L3]          Pluggable providers, agentic turn loop, context packing.
+│   ├── mcp-server/            [L3]          MCP server adapter, bearer auth, signed receipts.
+│   │
+│   │   # Layer 4 — Upper composites
+│   ├── persistence/           [L4]          SQLite (WAL), adapters for all storage types.
+│   ├── planner/               [L4]          PlanEngine — goal decomposition, plan-level reflection.
+│   ├── reflection/            [L4]          "What should I change?" — LLM reflection engine.
+│   │
+│   │   # Layer 5 — Orchestration
+│   ├── runtime/               [L5]          Agent orchestrator. Agentic loop, delegation, ledger.
+│   ├── browser-persistence/   [L5]          IndexedDB adapters for web and spatial.
+│   │
+│   │   # Layer 6 — Applications
+│   ├── create-motebit/        [L6 · MIT]    Public scaffolder. npm create motebit.
+│   │
+│   │   # Standalone — outside the layer DAG
+│   └── github-action/         [—]           GitHub Action for identity verification in CI.
+│
+├── services/
+│   ├── api/                   [relay]       Sync, settlement, federation, discovery, disputes.
+│   ├── research/              [molecule]    $0.25/report. Claude + web search, signed citation chain.
+│   ├── code-review/           [molecule]    $0.50/review. Claude-powered, signed receipts.
+│   ├── web-search/            [atom]        $0.05/request. Single-hop + multi-hop delegation proof.
+│   ├── read-url/              [atom]        Minimal read-url service. Second hop in multi-hop proof.
+│   ├── summarize/             [atom]        Conversation summarization.
+│   ├── embed/                 [atom]        ONNX embedding service.
+│   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
+│
+├── spec/                      # 12 open specifications, each motebit/<name>@1.0
+│   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
+│   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
+│   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
+│   ├── market-v1.md                         Budget, settlement, fees, trust, routing scores.
+│   ├── credential-v1.md                     W3C VC 2.0, issuance, weighting, revocation.
+│   ├── settlement-v1.md                     Foundation law, rail taxonomy, sovereign rail, security.
+│   ├── auth-token-v1.md                     Signed bearer tokens, audience binding, replay prevention.
+│   ├── credential-anchor-v1.md              Merkle batch anchoring, self-verifiable proofs.
+│   ├── delegation-v1.md                     Task submission, receipt exchange, budget lifecycle.
+│   ├── discovery-v1.md                      .well-known, DNS SRV, agent resolution, relay metadata.
+│   ├── migration-v1.md                      Departure attestation, credential export, trust bootstrap.
+│   └── dispute-v1.md                        Evidence, adjudication, fund handling, appeal, sybil defense.
+│
+└── scripts/                   # Drift-defense CI gates
+    ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.
+    ├── check-spec-coverage.ts               Spec Wire-format types exported from @motebit/protocol.
+    ├── check-suite-declared.ts              Every signed artifact declares a SuiteId.
+    ├── check-suite-dispatch.ts              Primitive calls live only in suite-dispatch.ts.
+    ├── check-dist-smoke.ts                  Every published bin executes --help in CI.
+    └── check-unused.ts                      External dependency hygiene (soft signal).
+```
 
-### Core
+## Layer rule
 
-The foundation. No package in this tier imports another motebit package.
+Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencies. Apps and services live at L6 and may depend on any layer. The canonical source of truth is the `LAYER` map in `scripts/check-deps.ts`; the tree above mirrors it. `github-action` is a standalone build artifact for the GitHub Actions runtime and sits outside the DAG.
 
-| Package | Role |
-|---------|------|
-| `protocol` | Network protocol — identity, receipts, credentials, delegation, settlement, trust algebra. Types, semirings, routing primitives. MIT, zero deps. |
-| `crypto` | Sign and verify every Motebit artifact — identity files, execution receipts, credentials, delegations, succession records, credential anchors. Cryptosuite-agile for post-quantum. MIT, zero monorepo deps. |
-| `sdk` | Developer contract — stable types, adapter interfaces, governance config; product vocabulary the runtime consumes (`MotebitState`, `BehaviorCues`, `RenderSpec`, etc.). Re-exports `protocol`. MIT. |
-| `encryption` | Product security — AES-256-GCM, PBKDF2 derivation, sync key derivation, deletion certificates. BSL. |
-| `core-identity` | UUID v7 identity generation, multi-device registration, Ed25519 public key binding. |
+## MIT / BSL boundary
 
-### Engines
+Four packages are MIT (the open protocol). `check-deps.ts` enforces that MIT packages export only types, enums, branded casts, and constants — never algorithms that would bind a competing implementation to this codebase.
 
-The interior machinery. Each engine owns one concern and communicates through typed interfaces defined in `sdk`.
+| Package | Answers | Layer |
+|---------|---------|-------|
+| `@motebit/protocol` | What is the artifact? What's the algebra? | L0 |
+| `@motebit/crypto` | How is it signed? How is it verified? | L0 |
+| `@motebit/sdk` | What interface must an implementation satisfy? | L0 |
+| `create-motebit` | How does a third party scaffold against the protocol? | L6 |
 
-| Package | Role |
-|---------|------|
-| `runtime` | Orchestrator. Wires all engines, exposes `sendMessage` / `sendMessageStreaming`. |
-| `gradient` | Self-measurement — "What am I?" Pure deterministic narrative from gradient snapshots. Precision, self-model summary, economic consequences. |
-| `reflection` | Adaptive intelligence — "What should I change?" LLM-driven reflection engine: insight extraction, memory storage, behavioral adjustment. |
-| `ai-core` | Pluggable providers (Cloud, Ollama, Hybrid), agentic turn loop, context packing. |
-| `behavior-engine` | `computeRawCues(state)` returns `BehaviorCues`. EMA smoothing, species constraints, rate limiting. |
-| `state-vector` | Tick-based EMA smoothing, hysteresis, interpolation for 60 FPS rendering. |
-| `memory-graph` | Semantic memory with cosine similarity retrieval, half-life decay (7 days default), graph edges. |
-| `event-log` | Append-only event sourcing with version clocks, compaction, replay. |
-| `policy` | PolicyGate (tool approval, budgets, audit), MemoryGovernor (sensitivity-aware), injection defense. |
-| `privacy-layer` | Retention rules by sensitivity level, deletion certificates, data export manifests. |
-| `persistence` | SQLite schema (WAL mode), adapters for events, memories, identities, audit, state, devices. |
-| `tools` | InMemoryToolRegistry, builtin tools, MCP tool merge. |
-| `mcp-client` | MCP stdio client, tool discovery, external data boundary marking. |
-| `mcp-server` | Expose a motebit as an MCP server — bearer auth, synthetic tools, signed receipt construction. |
-| `sync-engine` | Multi-device sync — HTTP/WebSocket adapters, conflict detection, retry backoff. |
-| `market` | Budget allocation, settlement, reputation aggregation, graph-based routing. |
-| `semiring` | Trust algebra — agent network graph construction, multi-objective ranking, provenance tracking, trust state transitions. |
-| `wallet-solana` | Sovereign Solana USDC rail — Ed25519 identity key IS the Solana address. RPC adapter, ATA management, SPL transfers. |
+The remaining 26 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. See `LICENSING.md` for the full boundary test and commercial terms.
 
-### Surface
+## Apps
 
-The outermost layer. These packages face the renderer, the public npm registry, or the user's terminal.
+| App | Ring | Status | Role |
+|-----|------|--------|------|
+| `web` | Surface | Live | IndexedDB identity, free proxy, zero install. Entry at [motebit.com](https://motebit.com). |
+| `cli` | Surface | Live | Operator console (npm `motebit`). REPL, daemon, delegation, MCP server mode. |
+| `desktop` | Surface | Live | Tauri glass droplet. Three.js creature, identity, operator mode, voice. |
+| `mobile` | Surface | Live | React Native + Expo. Full parity — expo-gl Three.js, SQLite adapters, plan-based goals. |
+| `spatial` | Surface | Proto | AR/VR/WebXR-first. Creature-as-scene. See *Spatial doctrine* below. |
+| `admin` | Supporting | Internal | React + Vite dashboard. 15-tab real-time monitoring of a running relay. |
+| `identity` | Supporting | Public | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile. |
+| `docs` | Supporting | Public | Fumadocs + Next.js. This site. |
 
-| Package | Role |
-|---------|------|
-| `render-engine` | `RenderSpec` (droplet geometry, glass material), `ThreeJSAdapter` (organic noise, breathing, sag, audio reactivity), `WebXRThreeJSAdapter` (AR), `SpatialAdapter` (body-relative orbital mechanics). |
-| `identity-file` | Generate, parse, verify `motebit.md` — signed agent identity files. |
-| `create-motebit` | Public CLI — `npm create motebit` scaffolds a signed identity (`motebit.md`) or a runnable agent service (`--agent`). MIT. |
-| `planner` | PlanEngine — decomposes goals into multi-step plans with dependency tracking, plan-level reflection. |
-| `policy-invariants` | Clamping rules, state bounds validation. |
-| `browser-persistence` | In-browser storage adapters (IndexedDB) for web contexts. |
-| `github-action` | GitHub Action for verifying motebit identity files in CI. |
-| `voice` | Voice input pipeline — VAD, transcription, audio routing. |
+**Capability rings, not feature parity.** Ring 1 (core, identical everywhere): `runtime`, `sdk`, `crypto`, `policy`. Ring 2 (platform adapters): `persistence`, keyring, `voice`. Ring 3 (platform capabilities): MCP stdio (CLI/desktop), 3D creature (desktop/mobile/web/spatial), daemon (CLI/desktop). A surface may express the same Ring 1 capability through a different form native to its medium — "operator can see their balance" is Ring 1; "balance renders in a rectangular panel" is Ring 3.
+
+### Spatial doctrine
+
+Spatial rejects the panel metaphor. Porting 2D panels to a headset is cargo-cult parity and surrenders the medium's only advantage. The surface ships a **functional HUD** for read-only essentials (connection state, balance, active task) and expresses structured data as **spatial objects**.
+
+The taxonomy is compile-time, not prose. `apps/spatial/src/spatial-expression.ts` declares:
+
+```ts
+export type SpatialExpression =
+  | SatelliteExpression   // orbiting objects (credentials, agents)
+  | CreatureExpression    // other agents as creatures in the scene
+  | EnvironmentExpression // memory / ambient state
+  | AttractorExpression;  // goals, tasks
+```
+
+Every structured-data module registers its kind via `registerSpatialDataModule<K extends SpatialKind>(...)`. Passing `"panel"` or `"list"` is a `tsc` error, locked by negative-type assertions in `__tests__/spatial-expression.neg.test.ts`. Credential satellites are the first shipping expression — each credential orbits the creature as a small glass orb.
+
+## Services
+
+Eight services in four roles. All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
+
+| Role | Services | Pattern |
+|------|----------|---------|
+| **Relay** | `api` | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution. |
+| **Molecules** | `research` ($0.25/report), `code-review` ($0.50/review) | Agents that reason and compose other agents. Claude-powered. Emit signed delegation receipt chains as citation proof. |
+| **Atoms** | `web-search` ($0.05/request), `read-url`, `summarize`, `embed` | Stateless capability providers. Single-hop reference implementations of the delegation spec. |
+| **Glue** | `proxy` | Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed). |
+
+Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — zero fees, relay records audit only.
+
+## Specifications
+
+All twelve specs (listed in the tree above) are MIT, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the MIT type packages — no permission required.
+
+The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
+
+## Doctrines that shape the code
+
+**The three-layer model.** Every relay function lives in exactly one of three layers: (1) **protocol** — the open spec anyone can implement, published in `spec/*.md` and consumed via MIT types; (2) **reference implementation** — BSL-1.1 code that implements the protocol; (3) **accumulated state** — trust graph, federation data, operational history. Private to the operator, never licensed.
+
+**Cryptosuite agility.** Every signed wire-format artifact carries a `suite: SuiteId` field. `SuiteId` is a closed union in `@motebit/protocol/crypto-suite.ts` — five entries today (`motebit-jcs-ed25519-b64-v1`, `motebit-jcs-ed25519-hex-v1`, `motebit-jwt-ed25519-v1`, `motebit-concat-ed25519-hex-v1`, `eddsa-jcs-2022`). Verifiers dispatch through `verifyBySuite` in `packages/crypto/src/suite-dispatch.ts` — the one file permitted to call the Ed25519 primitive directly, enforced by `check-suite-dispatch`. Post-quantum migration (ML-DSA, SLH-DSA) is a new registry entry plus a new dispatch arm, not a wire-format break.
+
+**Rail custody split.** External money movement uses three interfaces in `@motebit/protocol`, split by custody as a compile-time discriminant. `GuestRail` is relay-custody (`fiat`, `protocol`, `orchestration`) — the relay holds the user's virtual account. `SovereignRail` is agent-custody — the agent's identity key signs directly. `SettlementRailRegistry.register()` accepts only `GuestRail`: the type system refuses to let the relay sign sovereign transfers. The reference sovereign implementation is `SolanaWalletRail` in `@motebit/wallet-solana` — the motebit's Ed25519 identity key *is* its Solana address, by mathematical accident.
+
+**Fail-closed privacy.** Deny on error. Sensitivity levels (none/personal/medical/financial/secret) are enforced at storage, retrieval, sync, and context boundaries. Medical, financial, and secret memories never reach external AI providers. Relay sync redacts sensitive content. Retention rules are enforced in housekeeping with signed deletion certificates.
+
+**Adapter pattern everywhere.** Storage, rendering, AI providers, sync transport, credential sources, server verification — each has an in-memory implementation for tests and a platform-specific implementation for production (SQLite, Tauri, Expo, IndexedDB). If you can swap it without changing the engine, the boundary is correct.
+
+**Metabolic principle.** Do not build what the medium already carries. Absorb solved problems (VAD, STT, embeddings, inference) through adapter boundaries with fallback chains. Build the enzymes (identity, memory, trust, governance, agentic loops), not the glucose.
 
 ## Data flow
 
-A message enters the system and flows through a single pipeline:
+Two pipelines run through the runtime.
+
+### Local turn loop
 
 1. **User input** arrives via chat, voice, or a scheduled goal.
 2. **Runtime** receives the message and delegates to `ai-core`.
-3. **AI core** runs a streaming turn loop — it yields text chunks, tool calls, and status events as they arrive.
-4. **Tool execution** — if the model requests a tool, the call passes through the **policy gate**. Read-only tools execute automatically. Write/execute/spend tools require approval. Every decision is logged.
-5. **State vector update** — the outcome updates the 9-field state vector via EMA smoothing.
-6. **Behavior engine** — `computeRawCues(state)` produces 5 behavior cues deterministically.
-7. **Render spec** — cues are mapped to droplet geometry, glow, and motion parameters.
-8. **Platform renderer** — Three.js on desktop, expo-gl on mobile, WebXR on spatial.
+3. **AI core** runs a streaming turn loop — text chunks, tool calls, and status events yield as they arrive.
+4. **Tool execution** — the call passes through the **policy gate**. Read-only tools execute automatically; write, execute, and spend tools require approval. Every decision is logged via `event-log`.
+5. **State vector update** — the outcome updates the 9-field state vector via EMA smoothing with hysteresis.
+6. **Behavior engine** — `computeRawCues(state)` produces 5 cues deterministically.
+7. **Render spec** — cues map to droplet geometry, glass material, breathing frequency, gravity sag, interior glow.
+8. **Platform renderer** — Three.js on desktop and web, expo-gl on mobile, WebXR on spatial.
 
-The pipeline is streaming end-to-end. Text appears as it arrives. Tool status events surface in real time. The creature's glow and breathing respond to processing state within the same frame loop.
+The pipeline is streaming end-to-end. Text appears as it arrives. The creature's glow and breathing respond within the same frame loop.
 
-## The adapter pattern
+### Delegation pipeline
 
-Every I/O boundary is an interface. Storage, rendering, AI providers, sync transport — each has an in-memory implementation for tests and a platform-specific implementation for production (SQLite via better-sqlite3, Tauri invoke, expo-sqlite). The adapter is the surface tension boundary in code: the interior must not bind to a specific provider. If you can swap it without changing the engine, the boundary is correct.
+1. **Discover** — `runtime` queries the relay's discovery endpoint (or a federated peer) for agents that expose the required capability. Results are ranked by the semiring.
+2. **Budget** — `market` estimates cost and allocates budget from the delegator's virtual account. `HTTP 402` if insufficient.
+3. **Submit** — `mcp-client` calls the worker as an MCP client, injecting a signed bearer token (suite `motebit-jwt-ed25519-v1`) with audience `task:submit`. The worker's `mcp-server` verifies the token and starts executing.
+4. **Receipt** — the worker builds a signed `ExecutionReceipt` with `relay_task_id` in the signed payload and the signer's public key embedded. Multi-hop workers include nested `delegation_receipts` for chain-of-custody.
+5. **Settle** — the relay verifies the receipt's economic binding and settles the budget (5% fee). For p2p-eligible pairs, money moves onchain via `wallet-solana`; the relay records audit only.
+6. **Credential** — successful completions may produce a W3C VC 2.0 credential, Merkle-batched and anchored onchain via `SolanaMemoSubmitter` so reputation survives the relay.
 
-## Event sourcing
-
-The event log is append-only and immutable. Every state change is recorded as an `EventLogEntry` with a version clock. Multi-device ordering uses these clocks for conflict detection — if two devices produce concurrent events, the sync engine detects the fork and resolves it. After a snapshot, older events compact to save space while preserving the audit trail.
+Every step is spec-governed and self-verifiable offline with `@motebit/crypto` and the signer's public key.
 
 ## Identity flow
 
-On first launch the system bootstraps a cryptographic identity:
+On first launch the system bootstraps a cryptographic identity.
 
 1. **Generate** an Ed25519 keypair.
-2. **Store** the private key in the OS keychain (Tauri keyring on desktop, PBKDF2-encrypted file on CLI, expo-secure-store on mobile). It never leaves the device.
-3. **Register** the device against the identity (UUID v7).
-4. **Authenticate** with the sync relay using signed JWT tokens (5 min expiry, Ed25519 signature).
+2. **Store** the private key in the OS keychain — Tauri keyring on desktop, PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key never leaves the device.
+3. **Register** the device against the identity (UUID v7). Multi-device pairing uses X25519 + HKDF + AES to transfer the identity key through the relay without exposing it to the relay.
+4. **Authenticate** with the sync relay using signed bearer tokens (suite `motebit-jwt-ed25519-v1`) with required `aud` audience binding (`sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`) to prevent cross-endpoint replay.
+
+Key rotation uses dual-signed **succession records**: the old keypair signs a tombstone declaring the new keypair; both keys sign the canonical payload. Chains verify end-to-end without a centralized revocation registry. Individual revocations additionally anchor onchain via Solana Memo (`motebit:revocation:v1:{pubkey}:{ts}`) so the chain is the permanent trust root — the relay is the fast path.
 
 The identity persists across sessions, devices, and provider changes. Switching from Ollama to Anthropic changes nothing about who the agent is.
 
+## Event sourcing
+
+The event log is append-only and immutable. Every state change is recorded as an `EventLogEntry` with a version clock, assigned atomically via `appendWithClock()`. Multi-device ordering uses these clocks for conflict detection — if two devices produce concurrent events, the sync engine detects the fork and resolves it. After a snapshot, older events compact to save space while preserving the audit trail.
+
 ## State vector, behavior, rendering
 
-The state vector is 9 fields. Seven are continuous floats between 0 and 1: `attention`, `processing`, `confidence`, `affect_valence`, `affect_arousal`, `social_distance`, and `curiosity`. Two are enums: `trust_mode` and `battery_mode`. The vector updates on every tick via EMA smoothing with hysteresis to prevent jitter.
+The state vector has **9 fields**. Seven continuous floats between 0 and 1: `attention`, `processing`, `confidence`, `affect_valence`, `affect_arousal`, `social_distance`, `curiosity`. Two enums: `trust_mode`, `battery_mode`. The vector updates on every tick via EMA smoothing with hysteresis.
 
-The behavior engine maps state to 5 output cues: `hover_distance`, `drift_amplitude`, `glow_intensity`, `eye_dilation`, and `smile_curvature`. The mapping is deterministic and stateless — the same state always produces the same cues.
+The behavior engine maps state to **5 output cues**: `hover_distance`, `drift_amplitude`, `glow_intensity`, `eye_dilation`, `smile_curvature`. The mapping is deterministic and stateless — the same state always produces the same cues.
 
-The render engine translates cues into a `RenderSpec`: droplet geometry, glass material properties (transmission, IOR, iridescence), breathing frequency, gravity sag, Brownian drift amplitude, and interior glow intensity. The platform renderer (Three.js or expo-gl) consumes the spec and draws the creature at 60 FPS. The creature's visual state is a pure function of the state vector — no hidden state, no animation timelines, no imperative overrides.
+The render engine translates cues into a `RenderSpec`: droplet geometry, glass material properties (transmission, IOR, iridescence), breathing frequency, gravity sag, Brownian drift amplitude, and interior glow intensity. The platform renderer consumes the spec and draws the creature at 60 FPS. The creature's visual state is a pure function of the state vector — no hidden state, no animation timelines, no imperative overrides.
+
+## Synchronization invariants
+
+Every architectural drift this codebase has suffered has the same shape: the canonical source of truth was invisible or ambiguous, so sibling copies emerged and drifted independently. Thirteen drift defenses run in CI today — `check-deps`, `check-spec-coverage`, `check-suite-declared`, `check-suite-dispatch`, `check-dist-smoke`, and others. When a new drift pattern is observed, the response is systematized: (1) name it, (2) identify the canonical source, (3) name sync owner and trigger, (4) add a defense (CI check, lint rule, doctrine), (5) cross-reference it from affected code.
+
+This page is one such sibling. The directory tree mirrors the filesystem; the layer tags mirror `scripts/check-deps.ts`; the apps and services tables mirror their directories. If you change the source, change this page in the same PR.
