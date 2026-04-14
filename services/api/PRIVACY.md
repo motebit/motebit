@@ -18,7 +18,6 @@ Doctrine: [`docs/doctrine/operator-transparency.md`](../../docs/doctrine/operato
 Tables: `agent_registry`, `relay_identity`, `pairing_sessions`.
 
 Observable:
-
 - motebit_id (UUID v7)
 - Ed25519 public key
 - endpoint_url
@@ -35,7 +34,6 @@ Retention window: indefinite while motebit is active; expires per TTL after last
 Tables: `relay_tasks`, `relay_allocations`, `relay_settlements`, `relay_settlement_proofs`, `relay_credentials`, `relay_credential_anchor_batches`, `relay_revocation_events`, `relay_revoked_credentials`, `relay_disputes`, `relay_dispute_evidence`, `relay_dispute_resolutions`, `relay_peers`, `relay_federation_settlements`, `relay_execution_ledgers`, `relay_delegation_edges`, `relay_service_listings`, `relay_accounts`, `relay_subscriptions`, `relay_deposit_log`, `relay_refund_log`, `relay_accepted_migrations`.
 
 Observable:
-
 - every delegation request and its routing decision
 - every signed execution receipt the relay verified
 - every settlement (relay-mediated and p2p audit)
@@ -164,3 +162,4 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 The JSON form at `/.well-known/motebit-transparency.json` is signed by the relay's Ed25519 identity key under suite `motebit-jcs-ed25519-hex-v1`. Verifiers compute `sha256(canonicalJson({spec, declared_at, relay_id, relay_public_key, content}))` and check the signature against `relay_public_key`. No relay contact is required to verify a cached copy.
 
 Onchain anchoring of the declaration hash will land with `spec/relay-transparency-v1.md`. Until then the disappearance test is partially passed: a cached JSON proves what Motebit claimed at a point in time, but a coordinated deletion of the published copy and absence of a third-party cache would erase the public claim. This gap is documented in `honest_gaps` above.
+

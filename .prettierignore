@@ -12,3 +12,9 @@ services/proxy/tsconfig.json
 # causes permanent divergence from the raw extractor output that the
 # check-api-surface gate compares against.
 packages/*/etc/*.api.md
+
+# Generated from services/api/src/transparency.ts renderer; the
+# transparency sibling-boundary test asserts byte-for-byte equality
+# between the committed file and renderMarkdown() output. Prettier
+# reformatting it breaks that test.
+services/api/PRIVACY.md
