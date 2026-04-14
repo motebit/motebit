@@ -43,6 +43,11 @@ function loadConfig() {
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],
+    /** Externally-reachable URL the relay advertises for routing to this
+     * service. Falls back to `http://localhost:${port}` inside the mcp-server
+     * library, which the relay accepts but no caller can reach. Must be set
+     * to the Fly hostname in production. */
+    publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     webSearchUrl: process.env["WEB_SEARCH_URL"] ?? "http://localhost:3200",
     // Bearer token for upstream web-search MCP endpoint. When set,
     // summarize authenticates as a static MCP client. Unset in local
@@ -188,6 +193,7 @@ async function main(): Promise<void> {
     motebitType: "service",
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,
+    publicEndpointUrl: config.publicUrl,
     onStart: (port, toolCount) => {
       log(`MCP server running on http://localhost:${port}. ${toolCount} tools exposed.`);
     },
