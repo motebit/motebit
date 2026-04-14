@@ -143,6 +143,12 @@ const GATES: ReadonlyArray<Gate> = [
       "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",
     script: "check-api-surface",
   },
+  {
+    name: "check-docs-tree",
+    defends:
+      "apps/docs/content/docs/operator/architecture.mdx directory tree mirrors the filesystem and scripts/check-deps.ts LAYER/MIT_PACKAGES (invariant #14, added 2026-04-14 after the architecture page was rewritten and 9 packages were previously misplaced across invented tiers)",
+    script: "check-docs-tree",
+  },
 ];
 
 interface Result {
