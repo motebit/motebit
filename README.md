@@ -226,6 +226,7 @@ The **protocol layer** is MIT licensed — use it freely, build on it, implement
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
 - [`packages/create-motebit/`](packages/create-motebit/) — scaffold a signed identity or runnable agent service
+- [`packages/github-action/`](packages/github-action/) — GitHub Action for verifying motebit identity files in CI
 
 The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
 

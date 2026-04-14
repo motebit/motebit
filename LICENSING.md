@@ -41,7 +41,7 @@ Everything else is licensed under BSL-1.1. The source is fully visible — you c
 `ai-core` · `memory-graph` · `state-vector` · `behavior-engine` · `planner`
 
 **Identity and security:**
-`crypto` · `core-identity` · `identity-file` · `policy` · `policy-invariants` · `privacy-layer`
+`encryption` · `core-identity` · `identity-file` · `policy` · `policy-invariants` · `privacy-layer`
 
 **Infrastructure:**
 `event-log` · `persistence` · `browser-persistence` · `sync-engine` · `tools` · `voice` · `render-engine` · `mcp-client` · `mcp-server`
@@ -56,7 +56,7 @@ Everything else is licensed under BSL-1.1. The source is fully visible — you c
 `cli` · `desktop` · `mobile` · `web` · `admin` · `spatial`
 
 **Services:**
-`api` · `proxy` · `embed` · `summarize` · `web-search` · `read-url`
+`api` · `research` · `code-review` · `web-search` · `read-url` · `summarize` · `embed` · `proxy`
 
 ## Conversion
 
