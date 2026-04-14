@@ -183,87 +183,22 @@ Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`,
 
 ## Architecture
 
-```
-apps/
-  web/         Browser — IndexedDB identity, CORS proxy, glass creature
-  cli/         Node.js — REPL, daemon, goal scheduling, operator console
-  desktop/     Tauri — OS keyring, stdio MCP, full operator mode
-  mobile/      React Native — Expo, secure keychain, triple providers
-  spatial/     WebXR — 6DOF anchoring, spatial audio reactivity
-  admin/       React — operator dashboard for live relay monitoring (internal tool)
-  identity/    Vite — motebit.md identity profile viewer (public reference tool)
-  docs/        Next.js — docs.motebit.com
+**31 packages across 7 architectural layers · 8 surfaces · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
 
-packages/
-  protocol/        Network protocol — identity, receipts, credentials, delegation, settlement, trust algebra. MIT, zero deps
-  crypto/          Sign and verify every Motebit artifact. Cryptosuite-agile for post-quantum. MIT, zero runtime deps
-  sdk/             Developer contract — stable types, adapter interfaces, governance config. MIT
-  create-motebit/  Scaffold a signed identity or runnable agent service. MIT
-  encryption/      Product security — AES-256-GCM, PBKDF2, sync keys, deletion certificates. BSL
-  runtime/         Orchestrator — wires all engines, streaming AI loop
-  ai-core/         Pluggable providers: Claude, Ollama, Hybrid fallback
-  memory-graph/    Semantic memory, cosine similarity, half-life decay
-  event-log/       Append-only event sourcing, version clocks, compaction
-  state-vector/    9-field interior state, EMA smoothing, hysteresis
-  behavior-engine/ State → BehaviorCues, deterministic, species-constrained
-  policy/          PolicyGate, MemoryGovernor, injection defense, audit
-  privacy-layer/   Sensitivity levels, retention rules, deletion certificates
-  gradient/        Self-measurement — "What am I?" Pure narrative from gradient data
-  reflection/      Adaptive intelligence — "What should I change?" LLM reflection engine
-  planner/         PlanEngine: goal decomposition, plan-level reflection
-  sync-engine/     Multi-device sync, HTTP/WebSocket, conflict detection
-  market/          Budget allocation, settlement, reputation, graph routing
-  semiring/        Trust algebra — generic semirings for network routing
-  mcp-server/      Expose motebit as MCP server, bearer auth, synthetic tools
-  mcp-client/      MCP client, tool discovery, manifest pinning
-  render-engine/   Glass droplet: MeshPhysicalMaterial, breathing, sag, glow
-  core-identity/   UUID v7, multi-device registration, Ed25519 binding
-  identity-file/   Generate, parse, verify motebit.md identity files
-  tools/           ToolRegistry, builtin tools, MCP tool merge
-  policy-invariants/ Clamping rules, state bounds validation
-  persistence/     SQLite (WAL mode), adapters for all storage types
-  browser-persistence/ IndexedDB adapters for web/spatial
-  wallet-solana/   Sovereign Solana USDC rail — Ed25519 identity key IS the Solana address
-  voice/           VAD, STT, TTS adapters
-  github-action/   GitHub Action for identity verification
+**Packages** ([`packages/`](packages/)) — 31 packages on a strict layer DAG. Layer 0 is the open protocol surface (MIT, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/), [`@motebit/core-identity`](packages/core-identity/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, and the rest of the interior machinery.
 
-services/
-  # The marketplace itself — discovery, settlement, federation
-  api/          Sync relay — device auth, receipt verification, budget settlement,
-                credential issuance, federation, 5-tier rate limiting
+**Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and three supporting (`admin` dashboard, `identity` viewer, `docs` site).
 
-  # Agents (molecules) — reason, remember, compose other agents, accumulate trust.
-  # Reference implementations of paid services anyone can ship competing versions of.
-  research/     Research agent — Claude + web search, synthesized report with citations,
-                $0.25/report, signed receipts
-  code-review/  Code review agent — Claude-powered, $0.50/review, signed receipts
+**Marketplace** ([`services/`](services/)) — 8 services in four roles:
 
-  # Capability providers (atoms) — stateless tools with identity. Pay-per-call.
-  # Demonstrate that any function can be wrapped in a motebit and offered on the network.
-  web-search/   Web search — Brave/DuckDuckGo, $0.05/request
-  read-url/     URL reader — fetches and extracts page content
-  summarize/    Conversation summarization
-  embed/        ONNX embedding service
+- **The relay** — `api` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)
+- **Molecules** — agents that reason and compose other agents: `research` ($0.25/report, Claude + web search with cryptographic citation chain), `code-review` ($0.50/review, Claude-powered)
+- **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request), `read-url`, `summarize`, `embed`
+- **Glue** — `proxy` (Vercel edge CORS for the web app)
 
-  # Glue — supporting infrastructure
-  proxy/        Vercel edge CORS proxy for the web app
+**Protocol** ([`spec/`](spec/)) — 12 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `market`, `credential`, `settlement`, `auth-token`, `credential-anchor`, `delegation`, `discovery`, `migration`, `dispute`. All have a working reference implementation in this repo.
 
-spec/
-  identity-v1.md           motebit/identity@1.0 — file format, signing, succession
-  execution-ledger-v1.md   motebit/execution-ledger@1.0 — timeline, signed manifests
-  relay-federation-v1.md   motebit/relay-federation@1.0 — peering, discovery, routing
-  market-v1.md             motebit/market@1.0 — budget, settlement, fees, trust, routing
-  credential-v1.md         motebit/credential@1.0 — W3C VC 2.0, issuance, weighting, revocation
-  settlement-v1.md         motebit/settlement@1.0 — sovereign rails, onchain receipts, relay-optional
-  auth-token-v1.md         motebit/auth-token@1.0 — signed bearer tokens, audience binding
-  credential-anchor-v1.md  motebit/credential-anchor@1.0 — Merkle anchoring, self-verifiable proofs
-  delegation-v1.md         motebit/delegation@1.0 — task lifecycle, receipt exchange, budget, routing
-  discovery-v1.md          motebit/discovery@1.0 — well-known endpoint, DNS SRV, agent resolution
-  migration-v1.md          motebit/migration@1.0 — departure attestation, credential export, trust bootstrapping
-  dispute-v1.md            motebit/dispute@1.0 — evidence, adjudication, fund handling, appeal
-```
-
-31 packages across 7 architectural layers · 8 surfaces · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.
+→ Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.
 
 ## Specification
 
