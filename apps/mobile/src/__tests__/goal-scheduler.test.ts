@@ -162,13 +162,17 @@ describe("MobileGoalScheduler.goalTick (via start)", () => {
     sched.start();
     // Advance past the 5s initial delay
     await vi.advanceTimersByTimeAsync(6000);
-    // Let microtasks drain
+    // Stop before draining — under heavy concurrent load (full-monorepo
+    // turbo run) the scheduler's own rescheduled tick re-triggers
+    // runAllTimersAsync indefinitely and exhausts the 5s test timeout.
+    // In isolation the machine is fast enough that it drains before the
+    // next tick fires; in CI/pre-push it doesn't.
+    sched.stop();
     await vi.runAllTimersAsync().catch(() => {});
 
     expect(deps._goalStore.updateLastRun).toHaveBeenCalled();
     expect(deps._goalStore.insertOutcome).toHaveBeenCalled();
     expect(completeEvents.length).toBeGreaterThan(0);
-    sched.stop();
   });
 
   it("skips goals before interval elapsed", async () => {
@@ -209,9 +213,10 @@ describe("MobileGoalScheduler.goalTick (via start)", () => {
     const sched = new MobileGoalScheduler(deps);
     sched.start();
     await vi.advanceTimersByTimeAsync(6000);
+    // Stop before draining — see note on sibling test.
+    sched.stop();
     await vi.runAllTimersAsync().catch(() => {});
     expect(deps._goalStore.incrementFailures).toHaveBeenCalled();
-    sched.stop();
   });
 
   it("marks once-mode goals as completed", async () => {
