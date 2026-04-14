@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "services/embed/**"
+      # No `packages/**` trigger: embed has zero @motebit/* dependencies
+      # (only @xenova/transformers), so monorepo package changes cannot
+      # affect its build. If this service ever imports a workspace package,
+      # add `- "packages/**"` here — matching the sibling deploy-*.yml files.
   workflow_dispatch:
 
 concurrency:

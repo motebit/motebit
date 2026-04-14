@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "services/proxy/**"
+      # No `packages/**` trigger: proxy has zero @motebit/* dependencies
+      # (only @noble/ed25519, next, react, @vercel/kv), so monorepo package
+      # changes cannot affect its build. If this service ever imports a
+      # workspace package, add `- "packages/**"` here.
   workflow_dispatch:
 
 concurrency:
