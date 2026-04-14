@@ -132,14 +132,6 @@ motebit federation peers               # List active peers
 
 One command peers two relays. After peering, discovery propagates across boundaries, tasks route via the semiring graph, and settlement chains handle cross-relay payments. Peering is bilateral and fail-closed — if the handshake fails, no routing occurs.
 
-### State sovereignty
-
-Most platforms offer rented intelligence. When the API turns off, the value vanishes. Motebit offers owned state.
-
-Running a relay isn't joining our network — it's becoming the sovereign of your own. Every task your relay processes compounds into a private trust graph, a federation routing graph, and a signed execution audit you alone hold. The protocol provides the physics; you build the continent.
-
-Federation lets these sovereign continents trade and delegate without ever surrendering the data or reputation underneath. Cross-relay routing carries credentials and signed receipts, never the trust graph itself. The moat stays yours; the network still works.
-
 ## Surfaces
 
 | Surface     | Status | Entry point                                             |
@@ -236,6 +228,8 @@ The **protocol layer** is MIT licensed — use it freely, build on it, implement
 - [`packages/create-motebit/`](packages/create-motebit/) — scaffold a signed identity or runnable agent service
 
 The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
+
+The **state your relay accumulates** — trust graph, federation routing, signed execution audit — is yours alone. It is not licensed, mirrored, or visible to anyone else. The protocol is open so anyone can interoperate; the implementation is source-available so anyone can run it; the accumulated state is private so the moat compounds where it's earned.
 
 "Motebit" is a trademark of Motebit, Inc. See [TRADEMARK.md](TRADEMARK.md).
 
