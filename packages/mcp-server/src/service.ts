@@ -378,7 +378,15 @@ export interface ServiceServerConfig {
     res: import("http").ServerResponse,
     url: URL,
   ) => Promise<boolean> | boolean;
-  /** Optional logger — scaffold is silent when omitted. */
+  /**
+   * Optional logger for registration / heartbeat / shutdown events. When
+   * omitted, a default logger writes to `console.warn` with a
+   * `[motebit/mcp-server]` prefix — deliberately visible rather than silent,
+   * so registration failures surface in fly/heroku/journald output without
+   * every service wiring a custom log. Pass a function to route these events
+   * through a structured logger; pass `() => {}` to suppress entirely (not
+   * recommended — hides sybil-relevant failures).
+   */
   log?: (msg: string) => void;
 }
 
@@ -394,6 +402,12 @@ export async function startServiceServer(
   config: ServiceServerConfig,
 ): Promise<ServiceHandle> {
   const serverName = config.name ?? `motebit-service-${deps.motebitId.slice(0, 8)}`;
+
+  // Default to a visible logger. The earlier "silent when omitted" default
+  // silently hid registration failures across every deployed service —
+  // classic fail-loudly violation. Callers who want to suppress pass `() => {}`.
+  const log: (msg: string) => void =
+    config.log ?? ((msg) => console.warn(`[motebit/mcp-server] ${msg}`));
 
   const mcpServer = new McpServerAdapter(
     {
@@ -460,7 +474,7 @@ export async function startServiceServer(
           signal: AbortSignal.timeout(10_000),
         });
         if (!regResp.ok) {
-          config.log?.(
+          log(
             `Relay registration failed: ${regResp.status} ${await regResp.text().catch(() => "")}`,
           );
           return false;
@@ -486,9 +500,9 @@ export async function startServiceServer(
             },
           );
           if (listingResp.ok) {
-            config.log?.(`Published service listing`);
+            log(`Published service listing`);
           } else {
-            config.log?.(
+            log(
               `Service listing failed: ${listingResp.status} ${await listingResp.text().catch(() => "")}`,
             );
           }
@@ -497,9 +511,7 @@ export async function startServiceServer(
         }
         return true;
       } catch (err: unknown) {
-        config.log?.(
-          `Relay registration error: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        log(`Relay registration error: ${err instanceof Error ? err.message : String(err)}`);
         return false;
       } finally {
         registering = false;
@@ -525,10 +537,10 @@ export async function startServiceServer(
     try {
       const ok = await register();
       if (ok) {
-        config.log?.(`Registered with relay (capabilities: ${toolNames.join(", ")})`);
+        log(`Registered with relay (capabilities: ${toolNames.join(", ")})`);
       }
     } catch (err: unknown) {
-      config.log?.(`Relay registration error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Relay registration error: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Clock-drift-aware heartbeat timer
@@ -541,8 +553,7 @@ export async function startServiceServer(
             // Registration likely expired (process was frozen or heartbeats failed).
             // Full re-registration instead of heartbeat.
             const ok = await register();
-            if (ok)
-              config.log?.(`Re-registered with relay (stale after ${Math.round(elapsed / 1000)}s)`);
+            if (ok) log(`Re-registered with relay (stale after ${Math.round(elapsed / 1000)}s)`);
           } else {
             await heartbeat();
           }
@@ -559,9 +570,7 @@ export async function startServiceServer(
       if (elapsed >= STALE_THRESHOLD_MS) {
         const ok = await register();
         if (ok)
-          config.log?.(
-            `Re-registered with relay (health check, stale ${Math.round(elapsed / 1000)}s)`,
-          );
+          log(`Re-registered with relay (health check, stale ${Math.round(elapsed / 1000)}s)`);
       }
     };
   }
