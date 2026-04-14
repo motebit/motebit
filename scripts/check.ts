@@ -9,7 +9,6 @@
  *   check-specs             — spec ↔ implementation references
  *   check-service-primitives — services must not inline protocol plumbing
  *   check-app-primitives    — apps must not bypass the product vocabulary
- *   check-memory            — user-memory freshness (advisory, exit 0)
  *
  * Before this runner existed, CI invoked each check individually —
  * meaning a new check that was only added to package.json (but not to
@@ -64,8 +63,6 @@ interface Gate {
 const EXCLUDED_CHECKS: Record<string, string> = {
   "check-unused": "soft signal (knip) — CI uses continue-on-error, not a hard gate",
   "check-sibling-boundaries": "PR-diff scoped advisory — runs as a separate CI job",
-  "check-memory":
-    "advisory local-only report — always exits 0 and scans ~/.claude/ (user-specific auto-memory); no CI equivalent",
   "check-gates-effective":
     "meta-probe that runs every GATES entry under a deliberate perturbation — would invoke each gate a second time per PR. Runs as a separate CI job scoped to scripts/* changes.",
 };
@@ -102,19 +99,19 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-suite-declared",
     defends:
-      "every signed wire-format artifact declares a `suite` field naming a @motebit/protocol-registered SuiteId (invariant #11)",
+      "every signed wire-format artifact declares a `suite` field naming a @motebit/protocol-registered SuiteId (invariant #10)",
     script: "check-suite-declared",
   },
   {
     name: "check-suite-dispatch",
     defends:
-      "every signature primitive call in @motebit/crypto, services/, and apps/ routes through suite-dispatch.ts — no implicit Ed25519 defaults (invariant #12; scope widened from packages/crypto/src/ only on 2026-04-13)",
+      "every signature primitive call in @motebit/crypto, services/, and apps/ routes through suite-dispatch.ts — no implicit Ed25519 defaults (invariant #11; scope widened from packages/crypto/src/ only on 2026-04-13)",
     script: "check-suite-dispatch",
   },
   {
     name: "check-dist-smoke",
     defends:
-      "every published binary (apps/cli, packages/create-motebit) boots cleanly — catches bundling regressions before publish (invariant #13, added 2026-04-13 after @noble/hashes × @solana/web3.js slipped into apps/cli/dist/)",
+      "every published binary (apps/cli, packages/create-motebit) boots cleanly — catches bundling regressions before publish (invariant #12, added 2026-04-13 after @noble/hashes × @solana/web3.js slipped into apps/cli/dist/)",
     script: "check-dist-smoke",
   },
   {
@@ -146,13 +143,13 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-docs-tree",
     defends:
-      "apps/docs/content/docs/operator/architecture.mdx directory tree mirrors the filesystem and scripts/check-deps.ts LAYER/MIT_PACKAGES (invariant #14, added 2026-04-14 after the architecture page was rewritten and 9 packages were previously misplaced across invented tiers)",
+      "apps/docs/content/docs/operator/architecture.mdx directory tree mirrors the filesystem and scripts/check-deps.ts LAYER/MIT_PACKAGES (invariant #13, added 2026-04-14 after the architecture page was rewritten and 9 packages were previously misplaced across invented tiers)",
     script: "check-docs-tree",
   },
   {
     name: "check-spec-mit-boundary",
     defends:
-      "every backticked callable referenced in spec/*.md is exported from an MIT package (protocol/crypto/sdk) or explicitly waived with a reason (invariant #15, added 2026-04-14 after an external review asked whether protocol-only algorithms could leak into BSL; the probe caught deriveSyncEncryptionKey as a real leak and forced the spec to inline the HKDF recipe)",
+      "every backticked callable referenced in spec/*.md is exported from an MIT package (protocol/crypto/sdk) or explicitly waived with a reason (invariant #14, added 2026-04-14 after an external review asked whether protocol-only algorithms could leak into BSL; the probe caught deriveSyncEncryptionKey as a real leak and forced the spec to inline the HKDF recipe)",
     script: "check-spec-mit-boundary",
   },
 ];

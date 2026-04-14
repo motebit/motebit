@@ -38,7 +38,6 @@
     "check-dist-smoke": "npx tsx scripts/check-dist-smoke.ts",
     "check-service-primitives": "npx tsx scripts/check-service-primitives.ts",
     "check-app-primitives": "npx tsx scripts/check-app-primitives.ts",
-    "check-memory": "npx tsx scripts/check-memory-freshness.ts",
     "check-deploy-parity": "npx tsx scripts/check-deploy-parity.ts",
     "check-gates-effective": "npx tsx scripts/check-gates-effective.ts",
     "check-api-surface": "npx tsx scripts/check-api-surface.ts",
