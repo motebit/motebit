@@ -229,7 +229,7 @@ The **protocol layer** is MIT licensed — use it freely, build on it, implement
 
 The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
 
-The **state your relay accumulates** — trust graph, federation routing, signed execution audit — is yours alone. It is not licensed, mirrored, or visible to anyone else. The protocol is open so anyone can interoperate; the implementation is source-available so anyone can run it; the accumulated state is private so the moat compounds where it's earned.
+The **state your relay accumulates** — trust graph, federation routing, signed execution audit — is yours alone. It is not licensed, mirrored, or visible to anyone else. The protocol is open so anyone can interoperate; the implementation is source-available so anyone can run it; the accumulated state is private.
 
 "Motebit" is a trademark of Motebit, Inc. See [TRADEMARK.md](TRADEMARK.md).
 
