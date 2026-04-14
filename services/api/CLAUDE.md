@@ -1,0 +1,19 @@
+# services/api — the relay
+
+The only function with a legitimate centralization premium (multi-device sync). Also: settlement, federation, discovery, rate limiting, disputes, credential anchoring.
+
+Modules: `index`, `federation`, `task-routing`, `credentials`, `pairing`, `data-sync`, `accounts`, `a2a-bridge`, `logger`, `discovery`, `migration`, `disputes`, `p2p-verifier`, `settlement-rails/*`.
+
+## Rules
+
+1. **Never inline protocol plumbing.** Audit the package layer first: `@motebit/protocol` → `@motebit/crypto` → `@motebit/encryption` → `@motebit/mcp-client` → `@motebit/mcp-server` → `@motebit/runtime` → `@motebit/core-identity` → `@motebit/identity-file`. If none match, a primitive is missing — add it to the right package, consume here. `check-service-primitives` catches inline `fetch` to motebit endpoints, JSON-RPC strings, direct `signExecutionReceipt` calls, and `canonicalJson`/`sha256` constructing protocol-shaped payloads.
+2. **`SettlementRailRegistry.register()` accepts only `GuestRail`.** Compile-time enforcement; `__tests__/custody-boundary.test.ts` holds the `@ts-expect-error` negative proof. The `/health/ready` rail manifest advertises only guest rails. Three concrete: `StripeSettlementRail` (fiat, depositable), `X402SettlementRail` (protocol, pay-per-request), `BridgeSettlementRail` (orchestration). Sovereign rails are agent-custody and live in `@motebit/wallet-solana`.
+3. **Structured logging.** `createLogger(module)` emits JSON with `x-correlation-id` propagated through request lifecycles. Never `console.log` in production paths.
+4. **Rate limiting is per-IP, per-connection, per-peer.** 5-tier fixed window (auth 30/min, read 60/min, write 30/min, public 20/min, expensive 10/min). WebSocket 100 msg/10s per connection. Federation 30 req/min per peer. Task queue hard-capped at 100K. Per-submitter queue limit 1000/agent (HTTP 429).
+5. **Fail-closed on auth.** Signed bearer tokens require `aud` audience binding. Canonical audiences: `sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`. Unknown audience = 401. `InboundCredentialVerifier` adapter takes precedence over static `authToken`.
+6. **Relay is a convenience layer, not a trust root.** Every truth the relay asserts (credential anchor proofs, revocation memos, settlement receipts) is independently verifiable onchain without relay contact. If you add a relay-only assertion, justify why it is not protocol-shaped.
+7. **Federation circuit breaker.** Per-peer forward tracking; automatic suspension at 50% failure rate over ≥6 samples. Heartbeat handles liveness (3 missed → suspend, 5 → remove).
+8. **P2P settlement path** is policy-based (`evaluateSettlementEligibility` in `task-routing.ts`): both parties opt in via `settlement_modes`, worker declares `settlement_address`, trust ≥ 0.6, interaction count ≥ 5, no active disputes between pair. P2p tasks skip virtual-account allocation; money moves onchain; relay records audit with `settlement_mode='p2p'`. Fee: zero (explicit product policy). Async `startP2pVerifierLoop` in `p2p-verifier.ts` polls Solana RPC and transitions state.
+9. **Withdrawal hold during dispute window** (`computeDisputeWindowHold` in `accounts.ts`) sums recent relay settlements < 24h not yet disputed. `requestWithdrawal` pre-checks available balance before atomic debit. P2p settlements explicitly excluded.
+
+Cross-cutting detail: [`docs/doctrine/security-boundaries.md`](../../docs/doctrine/security-boundaries.md), [`docs/doctrine/settlement-rails.md`](../../docs/doctrine/settlement-rails.md), [`docs/doctrine/protocol-model.md`](../../docs/doctrine/protocol-model.md).
