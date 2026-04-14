@@ -205,7 +205,27 @@ Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`,
 > [!NOTE]
 > **Motebit is a protocol first.** All [12 specs](spec/) (MIT) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the MIT type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
 
-A `motebit.md` declares identity (Ed25519 public key, agent ID, `did:key`), governance (trust mode, risk thresholds), privacy (sensitivity levels, retention rules), memory (decay parameters), registered devices, optional organizational guardian ([spec](spec/identity-v1.md) §3.3), and key succession history ([spec](spec/identity-v1.md) §3.8).
+A `motebit.md` is YAML frontmatter signed with Ed25519:
+
+```yaml
+---
+spec: motebit/identity@1.0
+motebit_id: 019d4a9c-3b2e-7f81-9c5a-1f8e3d2a7b4c
+identity:
+  algorithm: Ed25519
+  public_key: 6f1c8e2b9a4d7f3e8c2b1a5d9f4e3c2b8a7d1f5e3c9b2a8d4f7e1c3b9a5d2f8e
+governance:
+  trust_mode: guarded
+  max_risk_auto: R1_DRAFT
+  deny_above: R4_MONEY
+privacy:
+  default_sensitivity: personal
+  fail_closed: true
+---
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:4f3a9c... -->
+```
+
+Beyond these fields: registered devices, memory parameters, optional organizational guardian ([spec](spec/identity-v1.md) §3.3), and key succession history ([spec](spec/identity-v1.md) §3.8). Verify any file with `@motebit/crypto`, no relay required.
 
 ## Development
 
