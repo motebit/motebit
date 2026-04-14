@@ -233,9 +233,10 @@ describe("MobileGoalScheduler.goalTick (via start)", () => {
     const sched = new MobileGoalScheduler(deps);
     sched.start();
     await vi.advanceTimersByTimeAsync(6000);
+    // Stop before draining — see note on earlier sibling tests.
+    sched.stop();
     await vi.runAllTimersAsync().catch(() => {});
     expect(deps._goalStore.setStatus).toHaveBeenCalledWith("once-1", "completed");
-    sched.stop();
   });
 
   it("suspends on approval_request and records approval event", async () => {
@@ -263,10 +264,11 @@ describe("MobileGoalScheduler.goalTick (via start)", () => {
     sched.onGoalApproval((e) => approvalEvents.push(e));
     sched.start();
     await vi.advanceTimersByTimeAsync(6000);
+    // Stop before draining — see note on earlier sibling tests.
+    sched.stop();
     await vi.runAllTimersAsync().catch(() => {});
     expect(approvalEvents.length).toBe(1);
     expect(sched.isGoalExecuting).toBe(true);
-    sched.stop();
   });
 
   it("skips tick when runtime is already processing", async () => {
