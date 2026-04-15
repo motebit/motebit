@@ -2187,9 +2187,17 @@ export class MotebitRuntime {
     options?: InvokeCapabilityOptions,
   ): AsyncGenerator<StreamChunk> {
     if (this.invokeCapabilityManager == null) {
-      throw new Error(
-        "invokeCapability is not enabled — call runtime.enableInvokeCapability(config) first",
-      );
+      // Wiring-not-done is a user-visible condition in practice (first-run
+      // state, signed-out device, cleared storage). Surface through the same
+      // `invoke_error` taxonomy every other failure uses so the chat layer's
+      // `failureCopy` renders a Motebit-native remediation instead of the
+      // chat handler's catch block leaking the raw developer message.
+      yield {
+        type: "invoke_error",
+        code: "sync_not_enabled",
+        message: "invokeCapability has not been enabled on this runtime",
+      };
+      return;
     }
     yield* this.invokeCapabilityManager.invokeCapability(capability, prompt, options);
   }

@@ -131,14 +131,23 @@ describe("invokeCapability — surface determinism", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("throws when invokeCapability is not enabled", async () => {
+  it("yields invoke_error{sync_not_enabled} when enableInvokeCapability was not called", async () => {
     const rt = new MotebitRuntime(
       { motebitId: "alice-001", tickRateHz: 0 },
       createAdapters(createMockProvider()),
     );
-    await expect(async () => {
-      for await (const _ of rt.invokeCapability("review_pr", "https://example.com")) void _;
-    }).rejects.toThrow(/invokeCapability is not enabled/);
+    const chunks = await collect(rt.invokeCapability("review_pr", "https://example.com"));
+    // Must NOT throw — the UI layer maps the chunk to user-facing copy.
+    // Throwing would leak developer-wiring language into the chat handler's
+    // catch block (historically: "invokeCapability is not enabled — call
+    // runtime.enableInvokeCapability(config) first").
+    expect(chunks).toHaveLength(1);
+    const err = chunks[0];
+    expect(err).toBeDefined();
+    if (err) {
+      expect(err.type).toBe("invoke_error");
+      if (err.type === "invoke_error") expect(err.code).toBe("sync_not_enabled");
+    }
   });
 
   // ── Happy path ───────────────────────────────────────────────────────
@@ -215,10 +224,13 @@ describe("invokeCapability — surface determinism", () => {
     expect(types[types.length - 1]).toBe("delegation_complete");
     // full_receipt on the terminal chunk — the bubble uses this to emerge.
     const final = chunks[chunks.length - 1];
-    expect(final.type).toBe("delegation_complete");
-    if (final.type === "delegation_complete") {
-      expect(final.full_receipt).toBeDefined();
-      expect(final.full_receipt?.invocation_origin).toBe("user-tap");
+    expect(final).toBeDefined();
+    if (final) {
+      expect(final.type).toBe("delegation_complete");
+      if (final.type === "delegation_complete") {
+        expect(final.full_receipt).toBeDefined();
+        expect(final.full_receipt?.invocation_origin).toBe("user-tap");
+      }
     }
   });
 
@@ -243,7 +255,7 @@ describe("invokeCapability — surface determinism", () => {
     await collect(rt.invokeCapability("review_pr", "url"));
     const stashed = rt.getAndResetInteractiveDelegationReceipts();
     expect(stashed).toHaveLength(1);
-    expect(stashed[0].invocation_origin).toBe("user-tap");
+    expect(stashed[0]?.invocation_origin).toBe("user-tap");
   });
 
   // ── Pre-flight failures ─────────────────────────────────────────────
@@ -431,9 +443,12 @@ describe("invokeCapability — surface determinism", () => {
     };
     const chunks = await collect(rt.invokeCapability("review_pr", "url"));
     const final = chunks[chunks.length - 1];
-    expect(final.type).toBe("delegation_complete");
-    if (final.type === "delegation_complete") {
-      expect(final.full_receipt?.status).toBe("failed");
+    expect(final).toBeDefined();
+    if (final) {
+      expect(final.type).toBe("delegation_complete");
+      if (final.type === "delegation_complete") {
+        expect(final.full_receipt?.status).toBe("failed");
+      }
     }
     // No invoke_error — the receipt is meaningful evidence, not a failure-to-deliver.
     expect(chunks.find((c) => c.type === "invoke_error")).toBeUndefined();

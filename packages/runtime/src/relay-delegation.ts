@@ -21,9 +21,17 @@ import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
  * retry or a fall-back invocation.
  */
 export type DelegationErrorCode =
+  /**
+   * Pre-flight. The runtime was never paired with a relay in this session —
+   * `enableInvokeCapability()` has not been called, so the deterministic
+   * path has no relay coordinates or auth-token minter. Surfaced via an
+   * `invoke_error` chunk (not a throw) so the UI can show a user-facing
+   * remediation instead of leaking developer-wiring language.
+   */
+  | "sync_not_enabled"
   /** Pre-flight. `fetch` rejected — DNS, TLS, offline. Relay unreachable. */
   | "network_unreachable"
-  /** Pre-flight. HTTP 401. Session expired or token invalid. */
+  /** Pre-flight. HTTP 401. Relay rejected the device token's signature. */
   | "auth_expired"
   /** Pre-flight. HTTP 403. Caller not authorized to invoke this capability. */
   | "unauthorized"

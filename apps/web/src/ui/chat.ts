@@ -474,6 +474,7 @@ function updateSendButton(): void {
 
 const SETTINGS_LINK = `<a href="#" class="chat-action-link" data-action="open-settings">`;
 const RELOAD_LINK = `<a href="#" class="chat-action-link" data-action="reload">`;
+const IDENTITY_LINK = `<a href="#" class="chat-action-link" data-action="open-identity">`;
 
 function formatErrorMessage(msg: string): string {
   // Rate limit — distinguish proxy free-tier from API rate limit
@@ -519,6 +520,11 @@ function formatErrorMessage(msg: string): string {
  */
 function failureCopy(code: string, retryAfterSeconds?: number): string {
   switch (code) {
+    case "sync_not_enabled":
+      // The device never paired with a relay this session. Common right after
+      // site-data clear, dev-stack restart, or first load. Remediation is to
+      // open Identity and connect — not "sign in" (no sessions here).
+      return `Relay not connected. ${IDENTITY_LINK}Connect in Identity</a> to delegate.`;
     case "network_unreachable":
       return "Relay unreachable — check your connection and try again.";
     case "auth_expired":
@@ -1061,6 +1067,12 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       // on reload so the device re-registers against the current relay
       // identity. See failureCopy("auth_expired").
       window.location.reload();
+    } else if (link.dataset.action === "open-identity") {
+      // Route to Settings → Identity (not Intelligence) for first-connect /
+      // device-pairing. See failureCopy("sync_not_enabled").
+      callbacks.openSettings();
+      const identityTab = document.querySelector<HTMLElement>('.settings-tab[data-tab="identity"]');
+      identityTab?.click();
     }
   });
 
