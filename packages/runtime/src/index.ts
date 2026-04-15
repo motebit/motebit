@@ -653,7 +653,18 @@ export class MotebitRuntime {
     this.mcpConfigs = config.mcpServers ?? [];
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     this.episodicConsolidation = config.episodicConsolidation ?? false;
-    this._signingKeys = config.signingKeys ?? null;
+    // Take OWNERSHIP of signingKeys by copying the bytes. The caller lends
+    // us their keypair; on `runtime.stop()` we zero our copy without
+    // affecting the caller's reference. Sibling of the
+    // McpClientAdapter.disconnect() bug fixed on 2026-04-15, where the
+    // same lent-buffer-erasure anti-pattern silently broke signature
+    // chains in callers that shared the key reference across lifecycles.
+    this._signingKeys = config.signingKeys
+      ? {
+          privateKey: new Uint8Array(config.signingKeys.privateKey),
+          publicKey: new Uint8Array(config.signingKeys.publicKey),
+        }
+      : null;
     // Sovereign Solana wallet rail. The runtime owns at most one instance.
     // Priority: pre-built rail (for tests / custom adapters) > inline config
     // > nothing (sovereign rail disabled). Requires signing keys either way

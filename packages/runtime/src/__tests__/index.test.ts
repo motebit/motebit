@@ -79,15 +79,20 @@ describe("MotebitRuntime", () => {
     expect(runtime.isRunning).toBe(false);
   });
 
-  it("clearSigningKeys zeros key material on stop", () => {
+  it("clearSigningKeys zeros the runtime's own copy on stop (caller's buffer is not mutated)", () => {
+    // Ownership contract: the runtime takes a COPY of signingKeys on
+    // construct. On stop, it zeros its own copy. The caller's Uint8Array
+    // reference remains intact. This test locks that contract — previously
+    // the runtime zeroed the caller's buffer (the same anti-pattern that
+    // caused the chain-1 verification bug in McpClientAdapter.disconnect()
+    // on 2026-04-15). Callers who share a signing-key reference across
+    // runtime + other code paths depend on this non-mutation invariant.
     const privateKey = new Uint8Array(32);
     const publicKey = new Uint8Array(32);
     crypto.getRandomValues(privateKey);
     crypto.getRandomValues(publicKey);
-
-    // Verify keys have non-zero data
-    expect(privateKey.some((b) => b !== 0)).toBe(true);
-    expect(publicKey.some((b) => b !== 0)).toBe(true);
+    const privateKeySnapshot = new Uint8Array(privateKey);
+    const publicKeySnapshot = new Uint8Array(publicKey);
 
     const rt = new MotebitRuntime(
       { motebitId: "key-test", signingKeys: { privateKey, publicKey } },
@@ -96,9 +101,9 @@ describe("MotebitRuntime", () => {
     rt.start();
     rt.stop();
 
-    // After stop, the Uint8Array buffers should be zeroed
-    expect(privateKey.every((b) => b === 0)).toBe(true);
-    expect(publicKey.every((b) => b === 0)).toBe(true);
+    // Caller's buffers are UNTOUCHED.
+    expect(privateKey.every((b, i) => b === privateKeySnapshot[i])).toBe(true);
+    expect(publicKey.every((b, i) => b === publicKeySnapshot[i])).toBe(true);
   });
 
   it("clearSigningKeys is safe to call multiple times", () => {
@@ -106,6 +111,7 @@ describe("MotebitRuntime", () => {
     const publicKey = new Uint8Array(32);
     crypto.getRandomValues(privateKey);
     crypto.getRandomValues(publicKey);
+    const privateKeySnapshot = new Uint8Array(privateKey);
 
     const rt = new MotebitRuntime(
       { motebitId: "key-test-2", signingKeys: { privateKey, publicKey } },
@@ -113,7 +119,8 @@ describe("MotebitRuntime", () => {
     );
     rt.clearSigningKeys();
     rt.clearSigningKeys(); // should not throw
-    expect(privateKey.every((b) => b === 0)).toBe(true);
+    // Caller's buffer stays intact across repeated clears.
+    expect(privateKey.every((b, i) => b === privateKeySnapshot[i])).toBe(true);
   });
 
   it("provides default state", () => {
