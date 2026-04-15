@@ -174,6 +174,15 @@ export default defineConfig({
     format: "es",
   },
   server: {
-    port: 3000,
+    // 5173 (Vite's default) so the web dev server doesn't collide with the
+    // relay on :3000. An earlier config pinned this to 3000, which on macOS
+    // let both processes bind via the IPv6-wildcard / IPv6-loopback quirk —
+    // `localhost:3000` then resolved to Vite, and every web→relay API call
+    // went to the wrong listener (Discover empty, chip tap never routed).
+    port: 5173,
+    // Fail loudly on port conflict instead of silently hopping to 5174+ —
+    // the canonical port is a contract with dev-up.sh and the developer's
+    // muscle memory; a drift there is exactly what this config avoids.
+    strictPort: true,
   },
 });
