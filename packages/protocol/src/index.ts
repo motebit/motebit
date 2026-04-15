@@ -622,6 +622,14 @@ export interface AgentTask {
   step_id?: string;
   /** Delegation scope — when set, restricts which tools the task can use. */
   delegated_scope?: string;
+  /**
+   * How this task was authorized for invocation. Propagated from the task
+   * submission body through the agent envelope to the outer receipt. See
+   * `IntentOrigin` for the closed value set and
+   * `docs/doctrine/surface-determinism.md` for the surface-determinism
+   * doctrine this discriminator supports.
+   */
+  invocation_origin?: IntentOrigin;
 }
 
 export interface ExecutionReceipt {

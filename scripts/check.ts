@@ -125,6 +125,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-app-primitives",
   },
   {
+    name: "check-affordance-routing",
+    defends:
+      "UI affordances (chips, buttons, slash commands, scene clicks) must invoke capabilities via `invokeCapability`, never by constructing natural-language prompts routed through the AI loop (invariant #15, added 2026-04-14 after the PR-URL chip showcase exposed the ambiguity of model-mediated routing)",
+    script: "check-affordance-routing",
+  },
+  {
     name: "check-deploy-parity",
     defends: "fly.toml ↔ deploy workflow ↔ .env.example ↔ source env reads",
     script: "check-deploy-parity",

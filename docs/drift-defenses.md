@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Fourteen invariants are enforced today. Thirteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped).
+Fifteen invariants are enforced today. Fourteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped).
 
 ## Inventory
 
@@ -28,6 +28,7 @@ Fourteen invariants are enforced today. Thirteen run as hard CI gates via `pnpm 
 | 12  | Published binaries ↔ dist-boot smoke                   | `check-dist-smoke.ts`                             | 2026-04-13 |
 | 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`  | `check-docs-tree.ts`                              | 2026-04-14 |
 | 14  | Spec callables ↔ MIT package exports                   | `check-spec-mit-boundary.ts`                      | 2026-04-14 |
+| 15  | Surface affordances ↔ deterministic invocation path    | `check-affordance-routing.ts`                     | 2026-04-14 |
 
 ## Incident histories
 
@@ -56,6 +57,10 @@ Every `package.json` with a `bin` entry must successfully execute `node <bin> --
 ### 14. Spec callables ↔ MIT package exports
 
 Every backticked callable of the form `` `functionName(...)` `` in any `spec/*.md` file must resolve to a symbol exported from an MIT package (`@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`) or appear in an explicit waiver list with a one-line reason. The probe excludes all-lowercase identifiers (snake_case SQL DDL, math notation like `trust(A,B)` or `max(x,y)`) which are not repo symbols. Added 2026-04-14 after an external reviewer asked whether protocol-only algorithms could silently drift into BSL. The probe's first run caught `deriveSyncEncryptionKey(privateKey)` in `settlement-v1.md` — a deterministic HKDF recipe that a third party must reproduce to interoperate — living only in BSL `@motebit/encryption`. The fix was to inline the recipe in the spec text (salt, info string, hash, output length) so the spec stands alone without a symbol reference. The waiver list covers documented reference-implementation pointers (e.g., `verifySignedTokenForDevice` in auth-token-v1 §9, `augmentGraphWithFederatedAgents` in relay-federation-v1 Appendix A.2), external library symbols (`getTransaction` from `@solana/web3.js`), and adapter-interface method names. Adding a waiver requires a reason that would survive code review.
+
+### 15. Surface affordances ↔ deterministic invocation path
+
+Every UI affordance that invokes a capability (chip tap, button click, slash command, scene-object click, voice opt-in) must route through `MotebitRuntime.invokeCapability(name, args)`, never by constructing a natural-language prompt and handing it to `handleSend` / `sendMessageStreaming`. The probe scans `apps/*/src/ui/**` and `apps/*/src/commands/**` for AI-loop entry points whose argument list contains a `required_capabilities` literal or a "delegate … remote agent / motebit network" phrase. Added 2026-04-14 after the PR-URL chip showcase: the chip said "Review this PR" but passed an English prompt through the AI loop; on one run the model responded with bullet-point questions instead of calling `delegate_to_agent`, producing no receipt and no audit signal. The chip lied. The drift shape was the same as inlining protocol plumbing in services — a handler pattern that "works most of the time" becoming the convention by the time a second affordance copies it. Fix: extract the submit-and-poll core into `packages/runtime/src/relay-delegation.ts`, add a typed `invokeCapability(capability, prompt, options)` entry point that yields `delegation_start → text → delegation_complete` with `full_receipt` (or a single `invoke_error` chunk on failure — no fall-through to the AI loop), stamp `invocation_origin: "user-tap"` on the relay submission so the outer receipt is signature-bound to the affordance that authorized it. Doctrine: [`docs/doctrine/surface-determinism.md`](doctrine/surface-determinism.md).
 
 ## How to add a new defense
 

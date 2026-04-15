@@ -160,20 +160,36 @@ export function buildReceiptArtifact(
   });
   root.appendChild(close);
 
+  // Initial state — replaced below by one of is-verified / is-unverified /
+  // is-failed once the chain verify completes. The pending pulse is the
+  // calm-software signal that local verification is in flight.
+  root.classList.add("is-pending");
+
   // Verify the full chain locally. Ed25519 over JCS canonical JSON via
   // @noble/ed25519 — zero network traffic, fail-closed on any error.
   const knownKeys = collectKnownKeys(receipt);
   void verifyReceiptChain(receipt, knownKeys)
     .then((tree) => {
-      if (tree.verified) {
-        root.classList.add("is-verified");
-        label.textContent = "verified locally · chain intact";
-      } else {
+      root.classList.remove("is-pending");
+      if (!tree.verified) {
         root.classList.add("is-unverified");
         label.textContent = "verification failed";
+        return;
       }
+      // Verified, but the task itself may have failed. The receipt's
+      // status is meaningful evidence — emerge it in is-failed state so
+      // the user sees "the delegation happened, the agent reported
+      // failure," not a silent-hide.
+      if (receipt.status === "failed") {
+        root.classList.add("is-failed");
+        label.textContent = "verified · completed: failed";
+        return;
+      }
+      root.classList.add("is-verified");
+      label.textContent = "verified locally · chain intact";
     })
     .catch(() => {
+      root.classList.remove("is-pending");
       root.classList.add("is-unverified");
       label.textContent = "verification failed";
     });

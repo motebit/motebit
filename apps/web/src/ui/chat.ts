@@ -286,6 +286,7 @@ export function showToast(text: string, duration = 3000): void {
 /** Human-readable tool names for chat display. */
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
   delegate_to_agent: "Delegating to agent",
+  invoke_capability: "Delegating to agent",
   recall_memories: "Searching memory",
   web_search: "Searching the web",
   read_url: "Reading page",
@@ -294,6 +295,15 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   read_file: "Reading file",
   shell_exec: "Running command",
 };
+
+/** Human-readable capability names used by chip-tap invocations. */
+const CAPABILITY_DISPLAY_NAMES: Record<string, string> = {
+  review_pr: "Review this PR",
+};
+
+function capabilityLabel(capability: string): string {
+  return CAPABILITY_DISPLAY_NAMES[capability] ?? capability;
+}
 
 function formatToolLabel(name: string, context?: string): string {
   const label = TOOL_DISPLAY_NAMES[name] ?? name;
@@ -498,6 +508,43 @@ function formatErrorMessage(msg: string): string {
   }
   // Generic fallback — still show the raw error for debugging
   return `Something went wrong: ${msg}`;
+}
+
+/**
+ * User-visible copy for deterministic invocation failures. Mirrors the
+ * failure-mode taxonomy in `docs/doctrine/surface-determinism.md`. One copy
+ * string per `DelegationErrorCode` — adding a new code to the runtime MUST
+ * come with a new line here (the chat handler never shows a raw code).
+ */
+function failureCopy(code: string, retryAfterSeconds?: number): string {
+  switch (code) {
+    case "network_unreachable":
+      return "Relay unreachable — check your connection and try again.";
+    case "auth_expired":
+      return `Session expired. ${SETTINGS_LINK}Sign in again</a> to delegate.`;
+    case "unauthorized":
+      return "Not authorized to invoke that capability.";
+    case "rate_limited": {
+      const wait = retryAfterSeconds ?? 60;
+      return `Too many requests — try again in ${wait}s.`;
+    }
+    case "insufficient_balance":
+      return "Insufficient balance. Open the Sovereign panel to fund the droplet.";
+    case "trust_threshold_unmet":
+      return "Trust below threshold for that capability. Reviews accumulate trust over time.";
+    case "no_routing":
+      return "No agents available for that capability right now. Try again later.";
+    case "malformed_request":
+      return "Internal error: malformed delegation request. Please report this.";
+    case "timeout":
+      return "The review didn't complete in time — the agent may be busy or offline.";
+    case "agent_failed":
+      return "The agent failed mid-task. Logged for the operator.";
+    case "malformed_receipt":
+      return "Agent returned a malformed receipt. Logged for the operator.";
+    default:
+      return `Delegation failed (${code}).`;
+  }
 }
 
 // === Chat Init ===
@@ -876,14 +923,95 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     await handleSend(transcript);
   }
 
-  // Wire up the PR-URL paste chip — explicit, deterministic delegation
-  // route for the `review_pr` capability. Pasting a GitHub PR URL surfaces
-  // a one-tap chip; the tap fires a worded send so the local AI delegates
-  // to the right capability rather than guessing intent.
+  /**
+   * Deterministic chip / affordance → delegation. Opens an assistant bubble,
+   * streams the result into it, emerges a receipt artifact on success, and
+   * maps `invoke_error` chunks to the failure-mode UX documented in
+   * `docs/doctrine/surface-determinism.md`. No AI in the routing path; no
+   * fall-through to `handleSend` on failure — honest degradation only.
+   */
+  async function runChipInvocation(capability: string, prompt: string): Promise<void> {
+    if (ctx.app.isProcessing) return;
+
+    addMessage("user", `${capabilityLabel(capability)}: ${prompt}`);
+    setProcessing(true);
+
+    showToolStatus("invoke_capability", capabilityLabel(capability));
+
+    let bubble: HTMLDivElement | null = null;
+    let textEl: HTMLSpanElement | null = null;
+    let accumulated = "";
+    let capturedReceipt: ExecutionReceipt | null = null;
+
+    try {
+      for await (const chunk of ctx.app.invokeCapability(capability, prompt)) {
+        switch (chunk.type) {
+          case "delegation_start":
+            // Already showing tool_status — no double-indicator.
+            break;
+          case "text": {
+            if (!bubble) {
+              bubble = document.createElement("div");
+              bubble.className = "chat-bubble assistant";
+              textEl = document.createElement("span");
+              textEl.className = "bubble-text";
+              bubble.appendChild(textEl);
+              chatLog.appendChild(bubble);
+              void bubble.offsetWidth;
+              bubble.classList.add("visible");
+            }
+            accumulated += chunk.text;
+            textEl!.innerHTML = renderMarkdown(accumulated);
+            chatLog.scrollTop = chatLog.scrollHeight;
+            break;
+          }
+          case "delegation_complete": {
+            if (chunk.full_receipt) capturedReceipt = chunk.full_receipt;
+            completeToolStatus("invoke_capability");
+            break;
+          }
+          case "invoke_error": {
+            // Reach the failure taxonomy from docs/doctrine/surface-determinism.md.
+            // Each code gets its own copy; we never fall through to the AI loop
+            // or hide the failure behind a retry.
+            completeToolStatus("invoke_capability");
+            if (bubble && !accumulated) bubble.remove();
+            addMessage("system", failureCopy(chunk.code, chunk.retryAfterSeconds));
+            return;
+          }
+        }
+      }
+    } catch (err: unknown) {
+      completeToolStatus("invoke_capability");
+      if (bubble && !accumulated) bubble.remove();
+      const msg = err instanceof Error ? err.message : String(err);
+      addMessage("system", `Delegation error: ${msg}`);
+      return;
+    } finally {
+      setProcessing(false);
+    }
+
+    // Emerge the receipt artifact after the review text settles. The 200ms
+    // beat matches the handleSend path — review as primary, receipt as
+    // witness.
+    if (capturedReceipt) {
+      const receipt = capturedReceipt;
+      const id = `receipt-${receipt.task_id}`;
+      window.setTimeout(() => {
+        const el = buildReceiptArtifact(receipt, () => {
+          void ctx.app.removeArtifact(id);
+        });
+        ctx.app.addArtifact({ id, kind: "receipt", element: el });
+      }, 200);
+    }
+  }
+
+  // Wire up the PR-URL paste chip — deterministic `review_pr` invocation.
+  // No AI in the routing path; see docs/doctrine/surface-determinism.md.
   installPrUrlChip({
     input: chatInput,
     row: chatInputRow,
-    onCommit: (textOverride) => void handleSend(textOverride),
+    onInvoke: (capability, promptText) => void runChipInvocation(capability, promptText),
   });
 
   // Wire up Enter key

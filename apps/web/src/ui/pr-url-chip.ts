@@ -3,9 +3,10 @@
  * the chat input, a glass chip emerges above the input offering a one-tap
  * "Review this PR →". Typing dismisses it; tapping commits the review.
  *
- * Explicit tap, not AI-routing heuristics: when the chip fires, it sends a
- * message that tells the local runtime what to do and why, so delegation
- * to `review_pr` is reliable rather than probabilistic.
+ * The tap routes through `WebApp.invokeCapability("review_pr", url)` —
+ * deterministic, no AI in the routing path. See
+ * `docs/doctrine/surface-determinism.md` and the `check-affordance-routing`
+ * drift gate.
  */
 
 const PR_URL_RE = /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+\/?/i;
@@ -15,8 +16,12 @@ export interface PrUrlChipDeps {
   input: HTMLInputElement;
   /** The chat input row (position:relative parent the chip anchors to). */
   row: HTMLElement;
-  /** Commit the review — typically a bound handleSend(textOverride) call. */
-  onCommit: (textOverride: string) => void;
+  /**
+   * Fire the deterministic capability invocation. Typically bound to a
+   * wrapper that calls `ctx.app.invokeCapability(capability, prompt)`
+   * and renders the resulting stream into chat.
+   */
+  onInvoke: (capability: string, prompt: string) => void;
 }
 
 /**
@@ -24,7 +29,7 @@ export interface PrUrlChipDeps {
  * Returns a teardown function (used by tests; production never uses it).
  */
 export function installPrUrlChip(deps: PrUrlChipDeps): () => void {
-  const { input, row, onCommit } = deps;
+  const { input, row, onInvoke } = deps;
   let chipEl: HTMLElement | null = null;
   let currentUrl: string | null = null;
 
@@ -69,9 +74,10 @@ export function installPrUrlChip(deps: PrUrlChipDeps): () => void {
       if (!u) return;
       dismissChip();
       input.value = "";
-      // Explicit, reliable: tell the runtime both the intent and the URL.
-      // The AI routes to `delegate_to_agent` with capability=review_pr.
-      onCommit(`Review this PR: ${u}`);
+      // Deterministic: the chip IS the action. No prompt construction, no
+      // AI-loop mediation — the capability name and the URL are all the
+      // runtime needs to delegate.
+      onInvoke("review_pr", u);
     });
 
     row.appendChild(el);

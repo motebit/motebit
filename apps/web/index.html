@@ -1341,6 +1341,20 @@
     .artifact-receipt.is-verified .receipt-verify-label { color: var(--text-primary); }
     .artifact-receipt.is-unverified .receipt-verify-dot { background: #d97560; }
     .artifact-receipt.is-unverified .receipt-verify-label { color: #d97560; }
+    /* is-failed: receipt valid, task failed — amber. Distinct from is-unverified,
+       which means the signature itself didn't verify. */
+    .artifact-receipt.is-failed .receipt-verify-dot { background: #d9a560; }
+    .artifact-receipt.is-failed .receipt-verify-label { color: #d9a560; }
+    /* is-pending: initial state, replaced by one of the above once the chain
+       verify completes. Matches the default gray dot with a slow pulse. */
+    .artifact-receipt.is-pending .receipt-verify-dot {
+      background: var(--text-ghost);
+      animation: receipt-pending-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes receipt-pending-pulse {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 1; }
+    }
     .receipt-details {
       display: none;
       margin-top: 8px;

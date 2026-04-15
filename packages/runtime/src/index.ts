@@ -91,6 +91,11 @@ import {
 import { ConversationManager } from "./conversation.js";
 import { GradientManager } from "./gradient-manager.js";
 import { InteractiveDelegationManager } from "./interactive-delegation.js";
+import {
+  InvokeCapabilityManager,
+  type InvokeCapabilityConfig,
+  type InvokeCapabilityOptions,
+} from "./invoke-capability.js";
 import { StreamingManager } from "./streaming.js";
 import type { InteractiveDelegationConfig } from "./interactive-delegation.js";
 
@@ -523,6 +528,20 @@ export type StreamChunk =
       kind: "text" | "code" | "plan" | "memory" | "receipt";
       content?: string;
       title?: string;
+    }
+  | {
+      /**
+       * Deterministic-path delegation failure. Emitted by
+       * `MotebitRuntime.invokeCapability` when the submit-and-poll helper
+       * returns `{ok: false}`. The UI maps `code` to its user-visible copy;
+       * the runtime never falls back to the AI loop on this signal. See
+       * `docs/doctrine/surface-determinism.md`.
+       */
+      type: "invoke_error";
+      code: import("./invoke-capability.js").DelegationErrorCode;
+      message: string;
+      retryAfterSeconds?: number;
+      status?: number;
     };
 
 // === Operator Mode ===
@@ -581,6 +600,14 @@ export class MotebitRuntime {
   /** Maps tool names to motebit server names (only for motebit MCP adapters). */
   private motebitToolServers = new Map<string, string>();
   private interactiveDelegation!: InteractiveDelegationManager;
+  /**
+   * Deterministic `invokeCapability` primitive — the surface-determinism
+   * path. Null until `enableInvokeCapability(config)` is called. Surfaces
+   * (chip tap, slash command, scene click, voice opt-in) consume this via
+   * `MotebitRuntime.invokeCapability`. See
+   * `docs/doctrine/surface-determinism.md`.
+   */
+  private invokeCapabilityManager: InvokeCapabilityManager | null = null;
   private keyring: KeyringAdapter | null;
   private toolAuditSink?: AuditLogSink;
   private externalToolSources = new Map<string, string[]>();
@@ -2120,6 +2147,51 @@ export class MotebitRuntime {
    */
   getAndResetInteractiveDelegationReceipts(): ExecutionReceipt[] {
     return this.interactiveDelegation.getAndResetReceipts();
+  }
+
+  /**
+   * Enable the `invokeCapability` primitive — the deterministic
+   * surface-affordance → delegation path. Idempotent. Shares the same relay
+   * coordinates as `enableInteractiveDelegation`; typical usage is to call
+   * both with the same config so AI-loop and user-tap paths route through
+   * the same relay.
+   */
+  enableInvokeCapability(config: InvokeCapabilityConfig): void {
+    if (this.invokeCapabilityManager != null) return;
+    this.invokeCapabilityManager = new InvokeCapabilityManager(
+      {
+        motebitId: this.motebitId,
+        logger: this._logger,
+        bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
+        // Shares the interactive-delegation stash so a concurrent AI loop
+        // drains user-tap receipts into its parent receipt's delegation_receipts
+        // chain — composition preserved.
+        stashReceipt: (receipt) => this.interactiveDelegation.pushReceipt(receipt),
+      },
+      config,
+    );
+  }
+
+  /**
+   * Invoke a named capability directly, bypassing the AI loop entirely. The
+   * surface-determinism primitive: a chip, button, slash command, or scene
+   * click MUST use this (never `sendMessageStreaming` with a constructed
+   * prompt). See `docs/doctrine/surface-determinism.md`.
+   *
+   * Throws if `enableInvokeCapability` has not been called — the relay
+   * coordinates must be configured before any affordance can fire.
+   */
+  async *invokeCapability(
+    capability: string,
+    prompt: string,
+    options?: InvokeCapabilityOptions,
+  ): AsyncGenerator<StreamChunk> {
+    if (this.invokeCapabilityManager == null) {
+      throw new Error(
+        "invokeCapability is not enabled — call runtime.enableInvokeCapability(config) first",
+      );
+    }
+    yield* this.invokeCapabilityManager.invokeCapability(capability, prompt, options);
   }
 }
 

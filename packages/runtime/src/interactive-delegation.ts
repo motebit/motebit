@@ -8,6 +8,8 @@
 
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 
+import { submitAndPollDelegation } from "./relay-delegation.js";
+
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */
 interface ToolRegistryWithHas extends ToolRegistry {
   has(name: string): boolean;
@@ -131,114 +133,33 @@ export class InteractiveDelegationManager {
         const prompt = args.prompt as string;
         const requiredCapabilities = args.required_capabilities as string[] | undefined;
 
-        // Build audience-specific auth tokens.
-        // The relay enforces aud binding: submit requires "task:submit",
-        // polling requires "task:query". A single token won't work for both.
-        let submitHeader: string;
-        let queryHeader: string;
+        const result = await submitAndPollDelegation({
+          motebitId,
+          syncUrl: config.syncUrl,
+          authToken: config.authToken,
+          prompt,
+          requiredCapabilities,
+          routingStrategy: config.routingStrategy,
+          invocationOrigin: "ai-loop",
+          timeoutMs,
+          logger,
+        });
+
+        if (!result.ok) {
+          return { ok: false, error: `${result.error.code}: ${result.error.message}` };
+        }
+
+        // Bump trust (best-effort)
         try {
-          const [submitToken, queryToken] = await Promise.all([
-            config.authToken("task:submit"),
-            config.authToken("task:query"),
-          ]);
-          submitHeader = `Bearer ${submitToken}`;
-          queryHeader = `Bearer ${queryToken}`;
-        } catch (err: unknown) {
-          return {
-            ok: false,
-            error: `Auth failed: ${err instanceof Error ? err.message : String(err)}`,
-          };
+          await bumpTrust(result.receipt);
+        } catch {
+          // Best-effort
         }
 
-        // Submit task to relay
-        let taskId: string;
-        let targetMotebitId: string;
-        try {
-          const body: Record<string, unknown> = {
-            prompt,
-            submitted_by: motebitId,
-          };
-          if (requiredCapabilities && requiredCapabilities.length > 0) {
-            body.required_capabilities = requiredCapabilities;
-          }
-          if (config.routingStrategy) {
-            body.routing_strategy = config.routingStrategy;
-          }
+        // Stash receipt for handleAgentTask to drain into delegation_receipts
+        stashReceipt(result.receipt);
 
-          const resp = await fetch(`${config.syncUrl}/agent/${motebitId}/task`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: submitHeader,
-              "Idempotency-Key": crypto.randomUUID(),
-            },
-            body: JSON.stringify(body),
-          });
-
-          if (!resp.ok) {
-            const text = await resp.text();
-            return { ok: false, error: `Task submission failed (${resp.status}): ${text}` };
-          }
-
-          const data = (await resp.json()) as {
-            task_id: string;
-            status: string;
-            routing_choice?: Record<string, unknown>;
-          };
-          taskId = data.task_id;
-          // Tasks are stored under Alice's motebitId (the submitter/owner)
-          targetMotebitId = motebitId;
-        } catch (err: unknown) {
-          return {
-            ok: false,
-            error: `Submission error: ${err instanceof Error ? err.message : String(err)}`,
-          };
-        }
-
-        // Poll for result
-        const POLL_INTERVAL_MS = 2000;
-        const maxPolls = Math.ceil(timeoutMs / POLL_INTERVAL_MS);
-
-        for (let i = 0; i < maxPolls; i++) {
-          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-
-          try {
-            const resp = await fetch(`${config.syncUrl}/agent/${targetMotebitId}/task/${taskId}`, {
-              headers: { Authorization: queryHeader },
-            });
-            if (!resp.ok) {
-              logger.warn("delegation poll failed", {
-                taskId,
-                status: resp.status,
-                body: await resp.text().catch(() => ""),
-              });
-              continue;
-            }
-
-            const data = (await resp.json()) as {
-              task: { status: string };
-              receipt: ExecutionReceipt | null;
-            };
-
-            if (data.receipt != null) {
-              // Bump trust (best-effort)
-              try {
-                await bumpTrust(data.receipt);
-              } catch {
-                // Best-effort
-              }
-
-              // Stash receipt for handleAgentTask to drain into delegation_receipts
-              stashReceipt(data.receipt);
-
-              return { ok: true, data: data.receipt.result ?? "Task completed (no result text)" };
-            }
-          } catch {
-            // Network hiccup — keep polling
-          }
-        }
-
-        return { ok: false, error: `Delegation timed out after ${timeoutMs / 1000}s` };
+        return { ok: true, data: result.receipt.result ?? "Task completed (no result text)" };
       },
     );
 
@@ -254,5 +175,15 @@ export class InteractiveDelegationManager {
     const result = this.receipts.slice();
     this.receipts.length = 0;
     return result;
+  }
+
+  /**
+   * Append a receipt produced by a sibling delegation path (today:
+   * `invokeCapability`). The two paths share one drain bucket so a concurrent
+   * AI loop composes all downstream receipts — AI-decided and user-tapped —
+   * into one parent receipt's `delegation_receipts` chain.
+   */
+  pushReceipt(receipt: ExecutionReceipt): void {
+    this.receipts.push(receipt);
   }
 }

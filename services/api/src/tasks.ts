@@ -1331,6 +1331,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       exclude_agents?: string[];
       /** Optional: routing strategy for candidate ranking. */
       routing_strategy?: "cost" | "quality" | "balanced";
+      /**
+       * Invocation provenance discriminator — propagated to the task envelope
+       * and, via the agent's receipt builder, onto the signed outer receipt.
+       * See `IntentOrigin` in `@motebit/protocol` and
+       * `docs/doctrine/surface-determinism.md`. Unknown values are rejected
+       * (400) so that surface-determinism callers cannot typo past the gate.
+       */
+      invocation_origin?: "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
       /** P2P: target agent for direct settlement (required with payment_proof). */
       target_agent?: string;
       /** P2P: onchain payment proof (triggers p2p settlement mode). */
@@ -1353,6 +1361,22 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         400,
       );
     }
+    const VALID_INVOCATION_ORIGINS = [
+      "user-tap",
+      "ai-loop",
+      "scheduled",
+      "agent-to-agent",
+    ] as const;
+    if (
+      body.invocation_origin != null &&
+      !VALID_INVOCATION_ORIGINS.includes(body.invocation_origin)
+    ) {
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+        `invocation_origin must be one of: ${VALID_INVOCATION_ORIGINS.join(", ")}`,
+        400,
+      );
+    }
 
     const taskId = crypto.randomUUID();
     const now = Date.now();
@@ -1370,6 +1394,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           ) as AgentTask["required_capabilities"])
         : undefined,
       step_id: body.step_id,
+      invocation_origin: body.invocation_origin,
     };
 
     // Capture the submitter identity for receipt fan-out and settlement.
@@ -1509,6 +1534,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       taskId,
       motebitId,
       capabilities: task.required_capabilities ?? [],
+      invocationOrigin: task.invocation_origin,
     });
 
     // Persist budget allocation so settlement can verify the lock exists.

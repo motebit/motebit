@@ -282,7 +282,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("402");
+    expect(result.error).toContain("insufficient_balance");
   });
 
   it("returns error on timeout (no receipt within deadline)", async () => {
@@ -316,7 +316,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("timed out");
+    expect(result.error).toContain("timeout");
   }, 10_000);
 
   it("returns error when auth token generation fails", async () => {
@@ -337,7 +337,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("Auth failed");
+    expect(result.error).toContain("auth_expired");
     expect(result.error).toContain("keyring locked");
   });
 

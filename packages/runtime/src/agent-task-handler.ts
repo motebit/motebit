@@ -259,6 +259,12 @@ export async function* handleAgentTask(
   if (delegationReceipts.length > 0) {
     receiptBody.delegation_receipts = delegationReceipts;
   }
+  // Propagate the surface-determinism discriminator from the task envelope
+  // onto the signed receipt. Signature-bound; see IntentOrigin in
+  // @motebit/protocol and docs/doctrine/surface-determinism.md.
+  if (task.invocation_origin) {
+    receiptBody.invocation_origin = task.invocation_origin;
+  }
 
   const receipt = await signExecutionReceipt(
     receiptBody as Omit<ExecutionReceipt, "signature">,

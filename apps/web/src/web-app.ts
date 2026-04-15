@@ -582,6 +582,31 @@ export class WebApp {
     }
   }
 
+  /**
+   * Deterministic surface-affordance → delegation. The chip, slash command,
+   * or scene click routes through this, never through `sendMessageStreaming`
+   * with a constructed prompt — see `docs/doctrine/surface-determinism.md`
+   * and the `check-affordance-routing` gate.
+   *
+   * Unlike `sendMessageStreaming`, does NOT require an AI provider: the chip
+   * path is purely runtime → relay → agent. Callable offline-with-relay.
+   */
+  async *invokeCapability(
+    capability: string,
+    prompt: string,
+    options?: { signal?: AbortSignal },
+  ): AsyncGenerator<StreamChunk> {
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    if (this._isProcessing) throw new Error("Already processing");
+
+    this._isProcessing = true;
+    try {
+      yield* this.runtime.invokeCapability(capability, prompt, options);
+    } finally {
+      this._isProcessing = false;
+    }
+  }
+
   // === Approval Flow ===
 
   get hasPendingApproval(): boolean {
@@ -1032,12 +1057,23 @@ export class WebApp {
 
     // Enable interactive delegation — lets the AI transparently delegate
     // tasks to remote agents during conversation.
+    const delegationAuthToken = async (audience?: string) => {
+      const aud = audience ?? "task:submit";
+      const t = await this.createSyncToken(aud);
+      return t ?? "";
+    };
     this.runtime.enableInteractiveDelegation({
       syncUrl: relayUrl,
-      authToken: async () => {
-        const t = await this.createSyncToken("task:submit");
-        return t ?? "";
-      },
+      authToken: delegationAuthToken,
+    });
+
+    // Enable the deterministic surface-determinism path — chip taps, slash
+    // commands, scene clicks. Shares the relay coordinates with interactive
+    // delegation; differs only in the invocation_origin each path stamps.
+    // See docs/doctrine/surface-determinism.md.
+    this.runtime.enableInvokeCapability({
+      syncUrl: relayUrl,
+      authToken: delegationAuthToken,
     });
 
     this._servingSyncUrl = relayUrl;
