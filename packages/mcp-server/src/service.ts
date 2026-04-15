@@ -290,11 +290,22 @@ export function wireServerDeps(
           }
         }
 
-        // 2. Relay fallback — look up device public key
+        // 2. Relay fallback — look up by motebit_id across both registries.
+        // Service-mode motebits (e.g. molecules) register via
+        // /api/v1/agents/register which writes to agent_registry. Device-mode
+        // motebits (e.g. web/mobile/desktop) register via /device/register
+        // (or the new self-attesting /api/v1/devices/register-self). Either
+        // table can hold the public key for a given motebit_id; checking only
+        // one silently rejects callers from the other class. Both tables are
+        // siblings of the same identity surface — kept in sync by the
+        // identity manager — so this lookup is a sibling fallback, not a
+        // protocol fork.
         if (syncUrl) {
+          const headers: Record<string, string> = {};
+          if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
+
+          // 2a. Device registry (`/api/v1/devices/<motebit_id>`).
           try {
-            const headers: Record<string, string> = {};
-            if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
             const resp = await fetch(`${syncUrl}/api/v1/devices/${callerMotebitId}`, { headers });
             if (resp.ok) {
               const raw: unknown = await resp.json();
@@ -304,10 +315,29 @@ export function wireServerDeps(
                   []);
               const key = arr.find((d) => d.public_key)?.public_key;
               if (key) {
-                // Relay confirmed this public key — mark as relay-verified so subsequent
-                // lookups from local trust store upgrade FirstContact → Verified.
                 relayConfirmedCallers.add(callerMotebitId);
                 return { publicKey: key, trustLevel: AgentTrustLevel.Verified };
+              }
+            }
+          } catch {
+            // Relay unreachable — try agent registry next, then fail closed
+          }
+
+          // 2b. Agent registry (`/api/v1/agents/discover?capability=…` returns
+          // an array; we filter by motebit_id). Service motebits live here.
+          // No discovery filter — we ask for everything and pick the row.
+          try {
+            const resp = await fetch(`${syncUrl}/api/v1/agents/discover`, { headers });
+            if (resp.ok) {
+              const raw = (await resp.json()) as {
+                agents?: Array<{ motebit_id?: string; public_key?: string }>;
+              };
+              const agent = raw.agents?.find(
+                (a) => a.motebit_id === callerMotebitId && a.public_key,
+              );
+              if (agent?.public_key) {
+                relayConfirmedCallers.add(callerMotebitId);
+                return { publicKey: agent.public_key, trustLevel: AgentTrustLevel.Verified };
               }
             }
           } catch {

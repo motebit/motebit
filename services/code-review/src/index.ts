@@ -162,11 +162,19 @@ async function main(): Promise<void> {
     approvalStore: moteDb.approvalStore,
   };
 
-  // Service motebit: auto-approve its own tools — review_pr is a
-  // pre-approved network read with no side effects.
+  // Service motebit: auto-approve up to R3_EXECUTE so the relay-forwarded
+  // motebit_task call (R3) plus this agent's own review_pr tool both run
+  // without a human-in-the-loop. Anything above R3 is denied.
+  //
+  // The bands path requires BOTH thresholds to be set — earlier we only set
+  // requireApprovalAbove and (with a typoed `maxRiskAuto` field that the
+  // PolicyConfig interface doesn't define), which silently fell through to
+  // the legacy two-state path with maxRiskLevel undefined → default
+  // R1_DRAFT → every R3+ tool denied. The chip-tap deterministic path
+  // surfaced this when motebit_task was rejected during MCP forwarding.
   const policyOverrides = {
-    maxRiskAuto: parseRiskLevel("R3_EXECUTE"),
     requireApprovalAbove: parseRiskLevel("R3_EXECUTE"),
+    denyAbove: parseRiskLevel("R3_EXECUTE"),
   };
 
   const runtime = new MotebitRuntime(
