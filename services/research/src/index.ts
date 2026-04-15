@@ -160,11 +160,15 @@ async function main(): Promise<void> {
     approvalStore: moteDb.approvalStore,
   };
 
-  // Service motebit: auto-approve its own tool — research is a pre-approved
-  // network-read with no side effects.
+  // Service motebit: auto-allow up to R3_EXECUTE — research is a network-read
+  // molecule that delegates to other motebits via R3 motebit_task calls.
+  // Bands path requires BOTH thresholds set; the previous form had a typoed
+  // `maxRiskAuto` field PolicyConfig does not define, falling through to
+  // the legacy path with maxRiskLevel undefined → default R1_DRAFT → every
+  // R3+ tool denied. Sibling drift fixed in code-review and read-url.
   const policyOverrides = {
-    maxRiskAuto: parseRiskLevel("R3_EXECUTE"),
     requireApprovalAbove: parseRiskLevel("R3_EXECUTE"),
+    denyAbove: parseRiskLevel("R3_EXECUTE"),
   };
 
   const runtime = new MotebitRuntime(

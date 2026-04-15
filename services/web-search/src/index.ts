@@ -186,12 +186,15 @@ async function main(): Promise<void> {
     approvalStore: moteDb.approvalStore,
   };
 
-  // Service motebit: auto-approve its own tools (web_search, read_url, motebit_task).
-  // All registered tools are pre-approved read-only operations — the service
-  // doesn't need per-call approval for its own exposed capabilities.
+  // Service motebit: auto-allow up to R3_EXECUTE for its own tools
+  // (web_search, read_url, motebit_task). Bands path requires BOTH
+  // thresholds set; the previous form had a typoed `maxRiskAuto` field
+  // PolicyConfig does not define, falling through to the legacy path with
+  // maxRiskLevel undefined → default R1_DRAFT → every R3+ tool denied.
+  // Sibling drift fixed in code-review, read-url, and research.
   const policyOverrides = {
-    maxRiskAuto: parseRiskLevel("R3_EXECUTE"),
     requireApprovalAbove: parseRiskLevel("R3_EXECUTE"),
+    denyAbove: parseRiskLevel("R3_EXECUTE"),
   };
 
   const runtime = new MotebitRuntime(

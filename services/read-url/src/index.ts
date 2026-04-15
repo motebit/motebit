@@ -99,9 +99,19 @@ async function main(): Promise<void> {
     approvalStore: moteDb.approvalStore,
   };
 
+  // Service motebit: auto-allow up to R3_EXECUTE so the relay-forwarded
+  // motebit_task call (R3) and code-review's downstream motebit_task call
+  // (also R3, when this atom is itself a delegation target) both run
+  // without a human-in-the-loop. Anything above R3 is denied.
+  //
+  // Bands path requires BOTH thresholds set — earlier code only set
+  // requireApprovalAbove with a typoed `maxRiskAuto` field that PolicyConfig
+  // does not define, falling through to the legacy two-state path with
+  // maxRiskLevel undefined → default R1_DRAFT → every R3+ tool denied.
+  // This was the sibling of the same drift in code-review.
   const policyOverrides = {
-    maxRiskAuto: parseRiskLevel("R3_EXECUTE"),
     requireApprovalAbove: parseRiskLevel("R3_EXECUTE"),
+    denyAbove: parseRiskLevel("R3_EXECUTE"),
   };
 
   const runtime = new MotebitRuntime(
