@@ -20,7 +20,54 @@ import { PROXY_BASE_URL } from "../providers";
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
 type ProviderTab = "proxy" | "anthropic" | "openai" | "ollama" | "webllm";
 
-// === Live Model Discovery ===
+// === Model Discovery ===
+//
+// Datalists drive the Model field's autocomplete dropdown. We seed each list
+// with a static fallback (the canonical models for the provider) so the
+// dropdown always has something — including offline, on dev with no proxy,
+// or when the live `/v1/models` endpoint is rate-limited or down. When the
+// live fetch succeeds, it overwrites the seed with the up-to-date list.
+
+const FALLBACK_MODELS: Record<
+  "anthropic" | "openai" | "google",
+  Array<{ id: string; name: string }>
+> = {
+  anthropic: [
+    { id: "claude-opus-4-6", name: "Claude Opus 4.6 — strongest reviews" },
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 — recommended" },
+    { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5 — fastest" },
+    { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+    { id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+  ],
+  openai: [
+    { id: "gpt-5", name: "GPT-5" },
+    { id: "gpt-4.1", name: "GPT-4.1" },
+    { id: "gpt-4o", name: "GPT-4o" },
+    { id: "o3-mini", name: "o3-mini" },
+  ],
+  google: [
+    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+    { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+    { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" },
+  ],
+};
+
+function writeDatalist(datalistId: string, models: Array<{ id: string; name: string }>): void {
+  const datalist = document.getElementById(datalistId);
+  if (!datalist) return;
+  datalist.innerHTML = models.map((m) => `<option value="${m.id}">${m.name}</option>`).join("");
+}
+
+/**
+ * Seed every provider's datalist with a fallback so the Model dropdown is
+ * never empty. Idempotent — overwrites the datalist with the same content
+ * each call. Called once during settings init.
+ */
+export function seedProviderModelLists(): void {
+  writeDatalist("anthropic-models", FALLBACK_MODELS.anthropic);
+  writeDatalist("openai-models", FALLBACK_MODELS.openai);
+  writeDatalist("google-models", FALLBACK_MODELS.google);
+}
 
 let modelFetchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -43,13 +90,9 @@ function fetchModelsForProvider(
             models?: Array<{ id: string; name: string }>;
           };
           if (!json.ok || !json.models) return;
-          const datalist = document.getElementById(datalistId);
-          if (!datalist) return;
-          datalist.innerHTML = json.models
-            .map((m) => `<option value="${m.id}">${m.name}</option>`)
-            .join("");
+          writeDatalist(datalistId, json.models);
         } catch {
-          // Silent — datalist stays with existing options
+          // Silent — datalist keeps its fallback (seedProviderModelLists)
         }
       })(),
     500,
@@ -179,6 +222,11 @@ function applyGovernanceToRuntime(ctx: WebContext, gov: GovernanceConfig): void 
 
 export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   const { colorPicker } = deps;
+
+  // Seed model dropdowns immediately — guarantees the Model field has a
+  // working datalist even when the live `/v1/models` proxy is unreachable
+  // (offline, local dev without proxy, prod proxy hiccup).
+  seedProviderModelLists();
 
   // === Tab Switching (Appearance / Intelligence) ===
 
