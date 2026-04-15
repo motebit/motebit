@@ -35,15 +35,13 @@ import {
  * signed-artifact pipeline that crosses a process boundary.
  */
 function isReceiptDebugEnabled(): boolean {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- env probe
-  const g = globalThis as any;
+  const g = globalThis as unknown as {
+    __motebit_debug_receipt_bytes?: boolean;
+    process?: { env?: Record<string, string | undefined> };
+  };
   if (g.__motebit_debug_receipt_bytes === true) return true;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- env probe
-  const proc = (globalThis as any).process;
-  if (proc?.env?.DEBUG_RECEIPT_BYTES === "1" || proc?.env?.DEBUG_RECEIPT_BYTES === "true") {
-    return true;
-  }
-  return false;
+  const flag = g.process?.env?.DEBUG_RECEIPT_BYTES;
+  return flag === "1" || flag === "true";
 }
 
 // === Execution Receipt Signing ===
