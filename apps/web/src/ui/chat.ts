@@ -473,6 +473,7 @@ function updateSendButton(): void {
 // === Error Formatting ===
 
 const SETTINGS_LINK = `<a href="#" class="chat-action-link" data-action="open-settings">`;
+const RELOAD_LINK = `<a href="#" class="chat-action-link" data-action="reload">`;
 
 function formatErrorMessage(msg: string): string {
   // Rate limit — distinguish proxy free-tier from API rate limit
@@ -521,7 +522,14 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
     case "network_unreachable":
       return "Relay unreachable — check your connection and try again.";
     case "auth_expired":
-      return `Session expired. ${SETTINGS_LINK}Sign in again</a> to delegate.`;
+      // Motebit has no "session" — the device holds a sovereign key and mints
+      // short-lived signed tokens the relay verifies against the registered
+      // public key. A 401 here means the relay rejected the signature: either
+      // the relay's state rotated (dev restart, key rotation) or the device
+      // registration is out of sync. Reloading triggers the bootstrap path
+      // which re-registers the device. NO "sign in" — that would be borrowed
+      // session-auth vocabulary this protocol does not have.
+      return `Relay rejected the device token. ${RELOAD_LINK}Reload</a> to re-register.`;
     case "unauthorized":
       return "Not authorized to invoke that capability.";
     case "rate_limited": {
@@ -1048,6 +1056,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       } else {
         callbacks.openSettings();
       }
+    } else if (link.dataset.action === "reload") {
+      // Device-token rejected by the relay — triggers the bootstrap path
+      // on reload so the device re-registers against the current relay
+      // identity. See failureCopy("auth_expired").
+      window.location.reload();
     }
   });
 
