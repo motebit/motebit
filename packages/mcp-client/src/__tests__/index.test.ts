@@ -206,14 +206,26 @@ describe("McpClientAdapter — disconnect", () => {
     expect(adapter.getTools()).toEqual([]);
   });
 
-  it("erases callerPrivateKey on disconnect", async () => {
+  it("does NOT erase callerPrivateKey on disconnect (lent, not owned)", async () => {
+    // Ownership contract: callerPrivateKey is a LENT reference — callers
+    // retain lifetime responsibility. Previously disconnect() called
+    // secureErase on this reference, silently zeroing the caller's
+    // Uint8Array mid-flow. In services like code-review that share a
+    // signing-key reference across an mcp-client adapter's lifetime AND
+    // a subsequent buildServiceReceipt call, the erasure broke the
+    // signature chain: the signer received an all-zeros seed, derived
+    // the zero-seed public key, and the outer receipt failed to verify
+    // against the embedded (real) public key. Diagnosed 2026-04-15.
+    //
+    // Contract locked here: disconnect() MUST leave callerPrivateKey
+    // byte-identical to what the caller passed in.
     const privateKey = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const snapshot = new Uint8Array(privateKey);
     const adapter = new McpClientAdapter(stdioConfig({ callerPrivateKey: privateKey }));
     await adapter.connect();
     await adapter.disconnect();
 
-    // secureErase zeroes out the bytes
-    expect(privateKey.every((b) => b === 0)).toBe(true);
+    expect(privateKey.every((b, i) => b === snapshot[i])).toBe(true);
   });
 
   it("is a no-op when not connected", async () => {
