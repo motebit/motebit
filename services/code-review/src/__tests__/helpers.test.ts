@@ -12,10 +12,8 @@ describe("loadConfig", () => {
     "MOTEBIT_API_TOKEN",
     "MOTEBIT_PUBLIC_URL",
     "ANTHROPIC_API_KEY",
-    "GITHUB_TOKEN",
-    "GITHUB_OAUTH_CLIENT_ID",
-    "GITHUB_OAUTH_CLIENT_SECRET",
-    "GITHUB_OAUTH_REFRESH_TOKEN",
+    "MOTEBIT_READ_URL_URL",
+    "MOTEBIT_READ_URL_TARGET_ID",
   ] as const;
   const snapshot: Record<string, string | undefined> = {};
   for (const key of KEYS) snapshot[key] = process.env[key];
@@ -43,10 +41,8 @@ describe("loadConfig", () => {
     expect(config.apiToken).toBeUndefined();
     expect(config.publicUrl).toBeUndefined();
     expect(config.anthropicApiKey).toBeUndefined();
-    expect(config.githubToken).toBeUndefined();
-    expect(config.githubOAuthClientId).toBeUndefined();
-    expect(config.githubOAuthClientSecret).toBeUndefined();
-    expect(config.githubOAuthRefreshToken).toBeUndefined();
+    expect(config.readUrlUrl).toBeUndefined();
+    expect(config.readUrlTargetId).toBeUndefined();
   });
 
   it("parses MOTEBIT_PORT as an integer", () => {
@@ -64,16 +60,14 @@ describe("loadConfig", () => {
     expect(loadConfig().dbPath).toBe("/custom/path.db");
   });
 
-  it("propagates all optional secret fields when set", () => {
+  it("propagates all optional fields when set", () => {
     process.env["MOTEBIT_AUTH_TOKEN"] = "auth";
     process.env["MOTEBIT_SYNC_URL"] = "https://sync";
     process.env["MOTEBIT_API_TOKEN"] = "api";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://public";
     process.env["ANTHROPIC_API_KEY"] = "sk-ant";
-    process.env["GITHUB_TOKEN"] = "ghp";
-    process.env["GITHUB_OAUTH_CLIENT_ID"] = "Iv";
-    process.env["GITHUB_OAUTH_CLIENT_SECRET"] = "secret";
-    process.env["GITHUB_OAUTH_REFRESH_TOKEN"] = "ghr";
+    process.env["MOTEBIT_READ_URL_URL"] = "http://localhost:3500/mcp";
+    process.env["MOTEBIT_READ_URL_TARGET_ID"] = "mote-rdu-abc";
 
     const config = loadConfig();
     expect(config.authToken).toBe("auth");
@@ -81,9 +75,7 @@ describe("loadConfig", () => {
     expect(config.apiToken).toBe("api");
     expect(config.publicUrl).toBe("https://public");
     expect(config.anthropicApiKey).toBe("sk-ant");
-    expect(config.githubToken).toBe("ghp");
-    expect(config.githubOAuthClientId).toBe("Iv");
-    expect(config.githubOAuthClientSecret).toBe("secret");
-    expect(config.githubOAuthRefreshToken).toBe("ghr");
+    expect(config.readUrlUrl).toBe("http://localhost:3500/mcp");
+    expect(config.readUrlTargetId).toBe("mote-rdu-abc");
   });
 });

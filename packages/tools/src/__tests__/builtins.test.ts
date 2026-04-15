@@ -355,6 +355,33 @@ describe("read_url", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("HTTP 404");
   });
+
+  it("returns text/plain content verbatim, preserving newlines", async () => {
+    // HTML-stripping would collapse "\n" to " " and destroy a diff's line
+    // structure. Plain text is passed through so callers (code-review →
+    // read-url on <pr>.patch) receive usable input.
+    const patch = [
+      "From abc123",
+      "From: author <a@example.com>",
+      "Subject: [PATCH] fix bug",
+      "",
+      "diff --git a/x b/x",
+      "@@ -1 +1 @@",
+      "-foo",
+      "+bar",
+    ].join("\n");
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "text/plain; charset=utf-8" }),
+      text: async () => patch,
+    }) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler();
+    const result = await handler({ url: "https://github.com/o/r/pull/1.patch" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toBe(patch);
+  });
 });
 
 // ---------- read_file ----------

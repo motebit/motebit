@@ -1,12 +1,14 @@
 /**
  * Motebit Code Review Service
  *
- * An LLM-powered code review agent. Fetches PR diffs from GitHub,
- * analyzes them with Claude, and returns structured reviews with
- * signed execution receipts proving provenance.
+ * An LLM-powered code review agent. Delegates the PR fetch to the
+ * `read-url` atom (producing a signed delegation receipt), then reviews
+ * the diff with Claude. The outer review receipt embeds the chain —
+ * every delegation is cryptographically verifiable by anyone holding
+ * `@motebit/crypto` and the participating agents' public keys.
  *
- * This is the first motebit service worth paying for — it delivers
- * judgment, not just retrieval.
+ * This is the first motebit molecule worth paying for — it delivers
+ * judgment layered on verifiable retrieval, not a black box.
  */
 
 import * as fs from "node:fs";
@@ -23,11 +25,12 @@ import {
   bootstrapAndEmitIdentity,
 } from "@motebit/mcp-server";
 import { parseRiskLevel } from "@motebit/identity-file";
+import type { ExecutionReceipt } from "@motebit/sdk";
 import { embedText } from "@motebit/memory-graph";
 import { loadConfig } from "./helpers.js";
-import { parsePrReference, fetchPullRequest } from "./github.js";
-import { reviewPullRequest } from "./review.js";
-import { OAuthCredentialSource, GitHubOAuthTokenProvider } from "@motebit/mcp-client";
+import { parsePrReference, prUrl } from "./github.js";
+import { reviewPrViaMotebit } from "./review-via-motebit.js";
+import type { ReviewConfig } from "./review-via-motebit.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -51,10 +54,7 @@ const reviewPrDefinition: ToolDefinition = {
   riskHint: { risk: 1 }, // R1_DRAFT — network read, no side effects
 };
 
-function createReviewPrHandler(
-  anthropicApiKey: string,
-  resolveToken: () => Promise<string | undefined>,
-): ToolHandler {
+function createReviewPrHandler(getReviewConfig: () => ReviewConfig): ToolHandler {
   return async (args: Record<string, unknown>) => {
     const owner = args["owner"] as string;
     const repo = args["repo"] as string;
@@ -65,20 +65,17 @@ function createReviewPrHandler(
     }
 
     try {
-      const token = await resolveToken();
-      const pr = await fetchPullRequest(owner, repo, prNumber, token);
+      const url = prUrl({ owner, repo, number: prNumber });
+      const r = await reviewPrViaMotebit(url, getReviewConfig());
       log(
-        `fetched PR ${owner}/${repo}#${prNumber}: "${pr.title}" (${pr.changed_files} files, +${pr.additions} -${pr.deletions})`,
+        `review ${owner}/${repo}#${prNumber}: "${r.pr.title}" — ${r.review.length} chars, ${r.delegation_receipts.length} receipts`,
       );
-
-      const review = await reviewPullRequest(pr, anthropicApiKey);
-      log(`review complete: ${review.length} chars`);
-
       return {
         ok: true,
         data: JSON.stringify({
-          pr: { owner, repo, number: prNumber, title: pr.title, author: pr.author },
-          review,
+          pr: { owner, repo, number: prNumber, title: r.pr.title, author: r.pr.author },
+          review: r.review,
+          delegation_receipts: r.delegation_receipts,
         }),
       };
     } catch (err: unknown) {
@@ -97,33 +94,11 @@ async function main(): Promise<void> {
     console.error("ANTHROPIC_API_KEY is required for the code review service.");
     process.exit(1);
   }
-
-  // GitHub token resolver: OAuth (auto-refresh) takes precedence over static token.
-  let resolveGithubToken: () => Promise<string | undefined>;
-  if (
-    config.githubOAuthClientId &&
-    config.githubOAuthClientSecret &&
-    config.githubOAuthRefreshToken
-  ) {
-    const oauthSource = new OAuthCredentialSource(
-      new GitHubOAuthTokenProvider({
-        clientId: config.githubOAuthClientId,
-        clientSecret: config.githubOAuthClientSecret,
-        initialRefreshToken: config.githubOAuthRefreshToken,
-      }),
+  if (!config.readUrlUrl) {
+    console.error(
+      "MOTEBIT_READ_URL_URL is required — code-review delegates PR fetching to the read-url atom.",
     );
-    resolveGithubToken = async () => {
-      const token = await oauthSource.getCredential({ serverUrl: "https://api.github.com" });
-      return token ?? undefined;
-    };
-    log("GitHub auth: OAuth (auto-refresh)");
-  } else if (config.githubToken) {
-    const staticToken = config.githubToken;
-    resolveGithubToken = () => Promise.resolve(staticToken);
-    log("GitHub auth: static token");
-  } else {
-    resolveGithubToken = () => Promise.resolve(undefined);
-    log("GitHub auth: none (public rate limit)");
+    process.exit(1);
   }
 
   // 1-2. Bootstrap identity + emit signed motebit.md in one call.
@@ -132,24 +107,38 @@ async function main(): Promise<void> {
     dataDir: config.dataDir,
     serviceName,
     displayName: "Code Review",
-    serviceDescription: "LLM-powered GitHub PR review with signed execution receipts",
+    serviceDescription:
+      "LLM-powered GitHub PR review. Delegates diff fetching to the read-url atom and returns a review with a verifiable delegation chain (signed delegation_receipts).",
     capabilities: ["review_pr"],
   });
-  const { motebitId, publicKey, privateKey, identityContent } = identity;
+  const { motebitId, deviceId, publicKey, privateKey, identityContent } = identity;
   const publicKeyHex = identity.publicKeyHex;
   log(
     `Identity ${identity.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
       `(data dir: ${config.dataDir})`,
   );
 
-  // 2. Build tool registry
+  // 3. Build the ReviewConfig closed over the bootstrapped identity — this
+  //    service signs the bearer tokens sent to read-url.
+  const reviewConfig: ReviewConfig = {
+    anthropicApiKey: config.anthropicApiKey,
+    readUrlUrl: config.readUrlUrl,
+    callerMotebitId: motebitId,
+    callerDeviceId: deviceId,
+    callerPrivateKey: privateKey,
+    syncUrl: config.syncUrl,
+    apiToken: config.apiToken,
+    readUrlTargetId: config.readUrlTargetId,
+  };
+
+  // 4. Build tool registry
   const registry = new InMemoryToolRegistry();
   registry.register(
     reviewPrDefinition,
-    createReviewPrHandler(config.anthropicApiKey, resolveGithubToken),
+    createReviewPrHandler(() => reviewConfig),
   );
 
-  // 3. Open database + create runtime (no AI provider — LLM used directly in tool handler)
+  // 5. Open database + create runtime
   const dbDir = path.dirname(path.resolve(config.dbPath));
   if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
   const moteDb = await openMotebitDatabase(path.resolve(config.dbPath));
@@ -187,8 +176,8 @@ async function main(): Promise<void> {
   await runtime.init();
   log("Runtime initialized (code review service)");
 
-  // 4. Wire handleAgentTask — fetch PR, analyze with Claude, sign receipt.
-  //    privateKey is unconditional (every bootstrapped service has one).
+  // 6. Wire handleAgentTask — parse prompt, delegate fetch, review, sign receipt
+  //    with the delegation chain.
   const handleAgentTask = async function* (
     prompt: string,
     options?: { delegatedScope?: string; relayTaskId?: string },
@@ -198,6 +187,7 @@ async function main(): Promise<void> {
 
     const prRef = parsePrReference(prompt);
     let result: { ok: boolean; data?: string; error?: string };
+    let delegationReceipts: ExecutionReceipt[] = [];
 
     if (!prRef) {
       result = {
@@ -207,16 +197,13 @@ async function main(): Promise<void> {
       };
     } else {
       try {
-        const token = await resolveGithubToken();
-        const pr = await fetchPullRequest(prRef.owner, prRef.repo, prRef.number, token);
+        const url = prUrl(prRef);
+        const r = await reviewPrViaMotebit(url, reviewConfig);
         log(
-          `PR ${prRef.owner}/${prRef.repo}#${prRef.number}: "${pr.title}" (${pr.changed_files} files)`,
+          `PR ${prRef.owner}/${prRef.repo}#${prRef.number}: "${r.pr.title}" — ${r.review.length} chars, ${r.delegation_receipts.length} receipts`,
         );
-
-        const review = await reviewPullRequest(pr, config.anthropicApiKey!);
-        log(`review complete: ${review.length} chars`);
-
-        result = { ok: true, data: review };
+        delegationReceipts = r.delegation_receipts;
+        result = { ok: true, data: r.review };
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         result = { ok: false, error: msg };
@@ -237,14 +224,17 @@ async function main(): Promise<void> {
       toolsUsed: ["review_pr"],
       relayTaskId: options?.relayTaskId,
       delegatedScope: options?.delegatedScope,
+      // The verifiable delegation chain — the read-url fetch is a signed
+      // ExecutionReceipt from that atom.
+      delegationReceipts,
     });
     log(
-      `receipt=${signed.signature.slice(0, 12)}… pr=${prRef ? `${prRef.owner}/${prRef.repo}#${prRef.number}` : "none"}`,
+      `receipt=${signed.signature.slice(0, 12)}… pr=${prRef ? `${prRef.owner}/${prRef.repo}#${prRef.number}` : "none"} chain=${delegationReceipts.length}`,
     );
     yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
   };
 
-  // 5. Wire deps + start server
+  // 7. Wire deps + start server
   const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.50");
   const deps = wireServerDeps(runtime, {
     motebitId,

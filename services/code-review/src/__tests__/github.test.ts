@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePrReference } from "../github.js";
+import { parsePrReference, prUrl } from "../github.js";
 
 describe("parsePrReference", () => {
   it("parses full GitHub URL", () => {
@@ -43,5 +43,19 @@ describe("parsePrReference", () => {
       "Please review the changes in anthropics/claude-code#100 for security issues",
     );
     expect(ref).toEqual({ owner: "anthropics", repo: "claude-code", number: 100 });
+  });
+});
+
+describe("prUrl", () => {
+  it("reconstructs the canonical PR URL from parsed components", () => {
+    expect(prUrl({ owner: "motebit", repo: "motebit", number: 42 })).toBe(
+      "https://github.com/motebit/motebit/pull/42",
+    );
+  });
+
+  it("round-trips with parsePrReference", () => {
+    const ref = { owner: "foo", repo: "bar.js", number: 7 };
+    const parsed = parsePrReference(prUrl(ref));
+    expect(parsed).toEqual(ref);
   });
 });

@@ -47,6 +47,14 @@ export function createReadUrlHandler(opts?: { proxyUrl?: string }): ToolHandler 
         return { ok: true, data: text.slice(0, 8000) };
       }
 
+      // Line-structured text (plain, patch, diff, csv, markdown, etc.): preserve
+      // whitespace verbatim. HTML-stripping regexes below collapse newlines and
+      // destroy the structure of anything that isn't prose.
+      if (contentType.startsWith("text/") && !contentType.includes("text/html")) {
+        const text = await res.text();
+        return { ok: true, data: text.slice(0, 64_000) };
+      }
+
       const text = await res.text();
       // Strip HTML tags for readability
       const cleaned = text

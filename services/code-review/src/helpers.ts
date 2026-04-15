@@ -13,10 +13,14 @@ export function loadConfig() {
     apiToken: process.env["MOTEBIT_API_TOKEN"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
-    githubToken: process.env["GITHUB_TOKEN"],
-    /** GitHub OAuth — takes precedence over static GITHUB_TOKEN. */
-    githubOAuthClientId: process.env["GITHUB_OAUTH_CLIENT_ID"],
-    githubOAuthClientSecret: process.env["GITHUB_OAUTH_CLIENT_SECRET"],
-    githubOAuthRefreshToken: process.env["GITHUB_OAUTH_REFRESH_TOKEN"],
+    /**
+     * URL of the motebit read-url atom (e.g. http://localhost:3500/mcp).
+     * Required — code-review is a molecule that delegates diff fetching to
+     * read-url so the response carries a signed delegation receipt. Without
+     * a readUrlUrl the service cannot produce its chain.
+     */
+    readUrlUrl: process.env["MOTEBIT_READ_URL_URL"],
+    /** Optional: motebit_id of the read-url atom for relay budget binding. */
+    readUrlTargetId: process.env["MOTEBIT_READ_URL_TARGET_ID"],
   };
 }

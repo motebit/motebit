@@ -1,10 +1,8 @@
 /**
- * GitHub API — fetch PR metadata and diff for public repos.
- * No auth required. Rate limit: 60 req/hour unauthenticated.
+ * Parsing helpers for GitHub PR references. The service no longer fetches
+ * PRs directly — that's delegated to the `read-url` atom (see
+ * review-via-motebit.ts). What remains here is shape + URL parsing.
  */
-
-const MAX_DIFF_BYTES = 100_000; // ~100KB — keeps Claude context manageable
-const GITHUB_API = "https://api.github.com";
 
 export interface PullRequestInfo {
   title: string;
@@ -50,60 +48,7 @@ export function parsePrReference(
   return null;
 }
 
-/** Fetch PR metadata (JSON) and diff (text) from GitHub API. */
-export async function fetchPullRequest(
-  owner: string,
-  repo: string,
-  prNumber: number,
-  githubToken?: string,
-): Promise<PullRequestInfo> {
-  const authHeaders: Record<string, string> = {
-    "User-Agent": "motebit-code-review",
-    ...(githubToken ? { Authorization: `token ${githubToken}` } : {}),
-  };
-
-  // Fetch metadata
-  const metaResp = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}`, {
-    headers: { ...authHeaders, Accept: "application/vnd.github+json" },
-  });
-  if (!metaResp.ok) {
-    const text = await metaResp.text().catch(() => "");
-    throw new Error(`GitHub API ${metaResp.status}: ${text.slice(0, 200)}`);
-  }
-  const meta = (await metaResp.json()) as {
-    title: string;
-    body: string | null;
-    user: { login: string };
-    base: { ref: string };
-    head: { ref: string };
-    changed_files: number;
-    additions: number;
-    deletions: number;
-  };
-
-  // Fetch diff
-  const diffResp = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}`, {
-    headers: { ...authHeaders, Accept: "application/vnd.github.diff" },
-  });
-  if (!diffResp.ok) {
-    throw new Error(`GitHub diff fetch failed: ${diffResp.status}`);
-  }
-  let diff = await diffResp.text();
-
-  // Truncate if too large
-  if (diff.length > MAX_DIFF_BYTES) {
-    diff = diff.slice(0, MAX_DIFF_BYTES) + "\n\n[... diff truncated at 100KB ...]";
-  }
-
-  return {
-    title: meta.title,
-    body: meta.body ?? "",
-    author: meta.user.login,
-    base: meta.base.ref,
-    head: meta.head.ref,
-    changed_files: meta.changed_files,
-    additions: meta.additions,
-    deletions: meta.deletions,
-    diff,
-  };
+/** Reconstruct the canonical PR URL from parsed components. */
+export function prUrl(ref: { owner: string; repo: string; number: number }): string {
+  return `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}`;
 }

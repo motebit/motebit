@@ -38,9 +38,15 @@ export async function reviewPullRequest(
 ): Promise<string> {
   const client = getClient(anthropicApiKey);
 
+  // Meta line: only include branch names when present (delegated fetch via
+  // .patch doesn't carry base/head). File count and +/- are always included —
+  // they're counted from the diff itself when stats aren't otherwise known.
+  const branches = pr.base || pr.head ? `**Base:** ${pr.base} ← ${pr.head} | ` : "";
+  const metaLine = `**Author:** ${pr.author} | ${branches}**Files:** ${pr.changed_files} | **+${pr.additions} -${pr.deletions}**`;
+
   const userMessage = [
     `# PR: ${pr.title}`,
-    `**Author:** ${pr.author} | **Base:** ${pr.base} ← ${pr.head} | **Files:** ${pr.changed_files} | **+${pr.additions} -${pr.deletions}**`,
+    metaLine,
     "",
     pr.body ? `## Description\n${pr.body}\n` : "",
     "## Diff",
