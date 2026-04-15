@@ -29,7 +29,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Audit
-        run: pnpm audit --audit-level=critical
+        # `pnpm audit` (v9.15) hits npm's legacy `/security/audits` endpoint,
+        # which npm intermittently 410/500/429-s as it pushes clients to the
+        # bulk advisory endpoint. The real fix is pnpm PR #10652 (switches to
+        # the quick endpoint with fallback) — merged 2026-02-19, only landed
+        # in v11.0.0-alpha, not backported to v10.x or v9.x.
+        # `--ignore-registry-errors` is the documented, intended workaround:
+        # the audit still runs and reports findings, only the exit code is
+        # tolerant of registry-side errors. Revisit when we upgrade pnpm or
+        # the endpoint stabilises.
+        run: pnpm audit --audit-level=critical --ignore-registry-errors
 
       - name: Build
         # Must run before drift defenses because check-api-surface shells out

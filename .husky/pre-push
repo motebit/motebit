@@ -12,10 +12,14 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # jobs.gate-effectiveness. If this list diverges from CI's, the local loop
   # stops catching what CI catches, which is the exact drift shape the gate
   # system is designed to prevent.
-  # `pnpm audit` hits npm's /security/audits endpoint which npm retired with
-  # a permanent 410 Gone (migrated to bulk advisory). Non-blocking until pnpm
-  # updates to the new endpoint. Revisit when pnpm >= version-that-fixes-it.
-  pnpm audit --audit-level=critical || echo "  ⚠ pnpm audit skipped (npm endpoint retired — see pnpm issue tracker)"
+  # `pnpm audit` (v9.15) hits npm's legacy /security/audits endpoint, which
+  # npm intermittently 410/500/429-s as it pushes clients to the bulk advisory
+  # endpoint. The real fix is pnpm PR #10652 (switches to the quick endpoint
+  # with fallback) — merged 2026-02-19, only in v11.0.0-alpha, not backported.
+  # `--ignore-registry-errors` is the documented, intended workaround: audit
+  # still runs and reports findings, only the exit code tolerates registry-
+  # side errors. Mirrors the CI workflow's audit step.
+  pnpm audit --audit-level=critical --ignore-registry-errors
   pnpm check                   # all 7 drift defenses (scripts/check.ts)
   pnpm check-gates-effective   # prove every gate actually fires
 
