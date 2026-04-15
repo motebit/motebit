@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { generateKeypair, verifyExecutionReceipt, hash as sha256 } from "@motebit/encryption";
+import {
+  generateKeypair,
+  verifyExecutionReceipt,
+  hash as sha256,
+  signExecutionReceipt,
+} from "@motebit/encryption";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { buildServiceReceipt } from "../build-receipt.js";
 
@@ -105,6 +110,98 @@ describe("buildServiceReceipt", () => {
       baseInput({ delegationReceipts: [subReceipt] }),
     )) as unknown as Record<string, unknown>;
     expect(r.delegation_receipts).toEqual([subReceipt]);
+  });
+
+  it("chain-1 round-trip: nested signExecutionReceipt + outer buildServiceReceipt verifies", async () => {
+    // Closes a test-coverage gap surfaced by the surface-determinism E2E
+    // walkthrough: every existing chain-1 test in the monorepo either uses
+    // hand-rolled signatures on the nested receipt OR signs the outer via
+    // signExecutionReceipt directly (not buildServiceReceipt). The production
+    // path that ships receipts to the relay (services/code-review/src/index.ts)
+    // composes a real-signed nested receipt with buildServiceReceipt's outer.
+    // Without this test the seam is unverified.
+    //
+    // Setup mirrors the production shape: read-url-style receipt signed via
+    // signExecutionReceipt directly (matches packages/runtime/src/agent-task-handler.ts),
+    // wrapped in code-review-style receipt via buildServiceReceipt.
+    const inner = await generateKeypair();
+    const innerSigned = await signExecutionReceipt(
+      {
+        task_id: "inner-task",
+        motebit_id: "read-url-mid",
+        device_id: "read-url-dev",
+        submitted_at: 1_700_000_000_000,
+        completed_at: 1_700_000_001_000,
+        status: "completed" as const,
+        result: "patch text content",
+        tools_used: ["read_url"],
+        memories_formed: 0,
+        prompt_hash: await sha256(new TextEncoder().encode("prompt")),
+        result_hash: await sha256(new TextEncoder().encode("result")),
+        relay_task_id: "inner-task",
+      },
+      inner.privateKey,
+      inner.publicKey,
+    );
+
+    const outerSigned = await buildServiceReceipt(
+      baseInput({
+        relayTaskId: "outer-relay-task",
+        delegationReceipts: [innerSigned as unknown as ExecutionReceipt],
+      }),
+    );
+
+    // The crypto primitive contract: the outer signature covers the entire
+    // body including the nested signed receipt. Verifying the outer with
+    // the outer's public key MUST succeed even though the nested receipt
+    // carries its own signature and public_key fields.
+    const outerValid = await verifyExecutionReceipt(outerSigned, publicKey);
+    expect(outerValid).toBe(true);
+
+    // The nested receipt remains independently verifiable.
+    const innerValid = await verifyExecutionReceipt(
+      innerSigned as unknown as ExecutionReceipt,
+      inner.publicKey,
+    );
+    expect(innerValid).toBe(true);
+  });
+
+  it("chain-1 survives a JSON round-trip (mimics MCP wire transport)", async () => {
+    // Production receipts go through MCP's text content channel:
+    // JSON.stringify on the producer side, JSON.parse on the relay side.
+    // Verify the canonical bytes the verifier reproduces match the signed
+    // bytes after that round-trip.
+    const inner = await generateKeypair();
+    const innerSigned = await signExecutionReceipt(
+      {
+        task_id: "inner-task",
+        motebit_id: "read-url-mid",
+        device_id: "read-url-dev",
+        submitted_at: 1_700_000_000_000,
+        completed_at: 1_700_000_001_000,
+        status: "completed" as const,
+        result: "patch text content",
+        tools_used: ["read_url"],
+        memories_formed: 0,
+        prompt_hash: await sha256(new TextEncoder().encode("prompt")),
+        result_hash: await sha256(new TextEncoder().encode("result")),
+        relay_task_id: "inner-task",
+      },
+      inner.privateKey,
+      inner.publicKey,
+    );
+
+    const outerSigned = await buildServiceReceipt(
+      baseInput({
+        relayTaskId: "outer-relay-task",
+        delegationReceipts: [innerSigned as unknown as ExecutionReceipt],
+      }),
+    );
+
+    const wireText = JSON.stringify(outerSigned);
+    const reconstituted = JSON.parse(wireText) as ExecutionReceipt;
+    const valid = await verifyExecutionReceipt(reconstituted, publicKey);
+    expect(valid).toBe(true);
   });
 
   it("omits invocation_origin when not provided (legacy receipts predate the field)", async () => {
