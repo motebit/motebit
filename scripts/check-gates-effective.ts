@@ -130,6 +130,26 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-affordance-routing",
+    proves:
+      "flags a UI handler that routes a capability-named prompt through handleSend (surface-determinism anti-pattern)",
+    perturb: () =>
+      writeFixture(
+        `apps/web/src/ui/${PROBE_PREFIX}affordance_violation.ts`,
+        // The gate forbids constructing a capability-naming prompt and
+        // routing it through the AI loop. A surface affordance must call
+        // `invokeCapability(name, args)` directly — see
+        // `docs/doctrine/surface-determinism.md`.
+        [
+          `declare function handleSend(text: string): void;`,
+          `export function onClick(url: string): void {`,
+          `  handleSend(\`Delegate this review to a remote agent (required_capabilities: ["review_pr"]). PR: \${url}\`);`,
+          `}`,
+          ``,
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-deploy-parity",
     proves: "flags an env var in .env.example that no source reads",
     perturb: () =>
