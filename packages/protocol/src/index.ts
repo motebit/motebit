@@ -705,6 +705,60 @@ export interface ExecutionReceipt {
  */
 export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
 
+/**
+ * Self-attesting device-to-relay registration request body.
+ *
+ * The cryptographic equivalent of a TOFU handshake: the device signs a
+ * canonical-JSON serialization of this object (with `signature` removed) using
+ * its Ed25519 private key, and the relay verifies the signature against the
+ * `public_key` carried in the same request. No prior trust anchor required —
+ * the signature proves key control, and key control proves the registrant
+ * controls this `motebit_id` going forward (until a key-rotation request
+ * explicitly changes the binding, per `spec/auth-token-v1.md` §9).
+ *
+ * Wire format (foundation law) — the spec lives at
+ * `spec/device-self-registration-v1.md`. Verifiers MUST reject requests that
+ * fall outside the ±5-minute timestamp window; the relay endpoint is
+ * intentionally auth-less because the signature IS the auth.
+ *
+ * Trust posture: a self-registered device starts at trust zero. Trust
+ * accrues through receipts, credentials, and onchain anchors — never
+ * through registration alone. See `docs/doctrine/protocol-model.md`.
+ */
+export interface DeviceRegistrationRequest {
+  /** Self-asserted identifier. Bound to `public_key` upon successful registration. */
+  motebit_id: MotebitId;
+  /** Self-asserted device identifier. Bound to `public_key` for the device's lifetime. */
+  device_id: string;
+  /** 64-char lowercase hex Ed25519 public key (32 bytes). */
+  public_key: string;
+  /** Optional human-readable label for operator panels and audit logs. */
+  device_name?: string;
+  /**
+   * Optional owner reference. Sovereign devices that own themselves SHOULD
+   * set `"self:<motebit_id>"`. Multi-tenant SDKs MAY set their tenant
+   * identifier. The relay defaults to `"self:<motebit_id>"` when absent.
+   */
+  owner_id?: string;
+  /**
+   * Epoch milliseconds at request creation. Relay rejects requests where
+   * `abs(now - timestamp) > 5 minutes` — the only replay defense at the
+   * wire level. See spec §6.1 for the threat model this defends.
+   */
+  timestamp: number;
+  /**
+   * Cryptosuite identifier. Routes through the suite-dispatch in
+   * `@motebit/crypto`; PQ migration is a registry addition, not a
+   * wire-format break.
+   */
+  suite: import("./crypto-suite.js").SuiteId;
+  /**
+   * base64url-encoded Ed25519 signature over the canonical-JSON
+   * serialization of this object with `signature` removed.
+   */
+  signature: string;
+}
+
 export interface DelegatedStepResult {
   step_id: string;
   task_id: string;

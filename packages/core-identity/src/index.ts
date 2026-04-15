@@ -144,6 +144,48 @@ export class IdentityManager {
   }
 
   /**
+   * Idempotently bind a *client-generated* `motebit_id` into the relay's
+   * identity registry. Returns the existing identity if one is already
+   * persisted under this id, otherwise creates a new one with the supplied
+   * `ownerId` and returns it.
+   *
+   * `create()` always generates a fresh UUIDv7 — it cannot accept a
+   * pre-existing identifier. This method is the bootstrap path for
+   * self-attested device registration (`spec/device-self-registration-v1.md`):
+   * the device asserts an identifier client-side, signs a request proving
+   * key control, and the relay records the binding using this method.
+   *
+   * Caller is responsible for verifying the cryptographic proof BEFORE
+   * invoking — this method trusts that the caller has already gated on
+   * signature validity. Misuse (calling without prior verification) would
+   * let any party register any motebit_id, which is exactly the binding
+   * `verifyDeviceRegistration` is designed to prevent.
+   */
+  async createWithId(motebitId: string, ownerId: string): Promise<MotebitIdentity> {
+    const existing = await this.storage.load(motebitId);
+    if (existing) return existing;
+
+    const identity: MotebitIdentity = {
+      motebit_id: motebitId,
+      created_at: Date.now(),
+      owner_id: ownerId,
+      version_clock: 0,
+    };
+
+    await this.storage.save(identity);
+
+    await this.eventStore.appendWithClock({
+      event_id: generateUUIDv7(),
+      motebit_id: identity.motebit_id,
+      timestamp: identity.created_at,
+      event_type: EventType.IdentityCreated,
+      payload: { owner_id: ownerId, source: "self_registration" },
+      tombstoned: false,
+    });
+    return identity;
+  }
+
+  /**
    * Load an existing identity. Returns null if not found.
    */
   async load(motebitId: string): Promise<MotebitIdentity | null> {
@@ -471,3 +513,12 @@ class InMemoryDeviceStore {
     return Promise.resolve([...this.devices.values()].filter((d) => d.motebit_id === motebitId));
   }
 }
+
+// === Self-Attesting Device Registration ===
+
+export {
+  registerDeviceWithRelay,
+  type RegisterWithRelayParams,
+  type RegisterWithRelayResult,
+  type RegisterWithRelayErrorCode,
+} from "./register-with-relay.js";

@@ -260,6 +260,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/agents/register", rl(authLimiter));
   app.use("/api/v1/agents/heartbeat", rl(authLimiter));
   app.use("/api/v1/agents/deregister", rl(authLimiter));
+  // Self-attesting device registration (spec/device-self-registration-v1.md):
+  // auth-less endpoint, signature is the auth — same authLimiter tier as the
+  // master-token-protected /agents/register, so a flood of signed-but-zero-trust
+  // registrations can't outpace legitimate device bootstrap.
+  app.use("/api/v1/devices/register-self", rl(authLimiter));
   app.use("/api/v1/agents/:motebitId/rotate-key", rl(writeLimiter));
   app.use("/api/v1/agents/:motebitId/succession", rl(readLimiter));
 
@@ -421,6 +426,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
     app.use("/api/v1/*", async (c, next) => {
       if (
         c.req.path.startsWith("/api/v1/agents") ||
+        // Self-attesting device registration is auth-less by design — the
+        // request's signature IS the auth (spec/device-self-registration-v1.md).
+        // The handler verifies the signature against the public key carried
+        // in the request body itself.
+        c.req.path === "/api/v1/devices/register-self" ||
         c.req.path.startsWith("/api/v1/credentials/verify") ||
         c.req.path.startsWith("/api/v1/credentials/batch-status") ||
         c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/) ||

@@ -138,9 +138,10 @@ describe("relay ↔ invocation_origin", () => {
       });
       expect(res.status).toBe(201);
       const { task_id } = (await res.json()) as { task_id: string };
-      const poll = await relay.app
-        .request(`/agent/${motebitId}/task/${task_id}`, { headers: AUTH })
-        .then((r) => r.json() as Promise<{ task: { invocation_origin?: string } }>);
+      const pollRes = await relay.app.request(`/agent/${motebitId}/task/${task_id}`, {
+        headers: AUTH,
+      });
+      const poll = (await pollRes.json()) as { task: { invocation_origin?: string } };
       expect(poll.task.invocation_origin).toBe(origin);
     }
   });

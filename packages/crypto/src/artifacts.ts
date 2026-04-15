@@ -902,3 +902,115 @@ export async function verifyCollaborativeReceipt(
 
   return { valid: true };
 }
+
+// === Device Self-Registration ===
+//
+// Self-attesting registration: the device proves it controls a private key
+// by signing a canonical-JSON serialization of its own registration request.
+// The relay verifies against the public_key carried in the same request — no
+// prior trust anchor required. Wire format and verification recipe are
+// foundation law in `spec/device-self-registration-v1.md`.
+//
+// Trust posture: a self-registered device starts at trust zero. Trust accrues
+// through receipts, credentials, and onchain anchors — never through
+// registration alone. See `docs/doctrine/protocol-model.md`.
+
+/** The one suite device-registration requests sign under today. */
+export const DEVICE_REGISTRATION_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Shape of a device-registration request for signing/verification.
+ * Structurally compatible with @motebit/protocol `DeviceRegistrationRequest`.
+ */
+export interface SignableDeviceRegistration {
+  motebit_id: string;
+  device_id: string;
+  public_key: string;
+  device_name?: string;
+  owner_id?: string;
+  timestamp: number;
+  suite: typeof DEVICE_REGISTRATION_SUITE;
+  signature: string;
+}
+
+/**
+ * Sign a device-registration request. Stamps the cryptosuite into the body,
+ * canonicalizes with JCS, dispatches the primitive signature through
+ * `signBySuite`, and encodes as base64url per the suite's rules.
+ *
+ * Callers pass the body without `signature` and (optionally) without `suite`;
+ * the signer owns both. The returned object is a complete signed request
+ * ready to POST to a relay's self-register endpoint.
+ */
+export async function signDeviceRegistration<
+  T extends Omit<SignableDeviceRegistration, "signature" | "suite">,
+>(
+  body: T,
+  privateKey: Uint8Array,
+): Promise<T & { suite: typeof DEVICE_REGISTRATION_SUITE; signature: string }> {
+  const withSuite = { ...body, suite: DEVICE_REGISTRATION_SUITE };
+  const canonical = canonicalJson(withSuite);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(DEVICE_REGISTRATION_SUITE, message, privateKey);
+  return { ...withSuite, signature: toBase64Url(sig) } as T & {
+    suite: typeof DEVICE_REGISTRATION_SUITE;
+    signature: string;
+  };
+}
+
+/**
+ * Verify a device-registration request's signature against the public key
+ * carried in the request itself. The `now` parameter (defaulting to
+ * `Date.now()`) lets tests pin the clock for replay-window assertions; in
+ * production callers pass the relay's wall-clock at request receipt.
+ *
+ * Returns a discriminated reason on failure so callers can map to wire-level
+ * status codes (per `spec/device-self-registration-v1.md` §5.1).
+ */
+export type DeviceRegistrationVerifyResult =
+  | { valid: true }
+  | { valid: false; reason: "malformed" | "stale" | "unsupported_suite" | "bad_signature" };
+
+/** Maximum drift between the signer's claimed timestamp and the verifier's clock. */
+export const DEVICE_REGISTRATION_MAX_AGE_MS = 5 * 60 * 1000;
+
+export async function verifyDeviceRegistration(
+  body: SignableDeviceRegistration,
+  now: number = Date.now(),
+): Promise<DeviceRegistrationVerifyResult> {
+  // Step 1 — shape validation. Any missing / mistyped field is "malformed".
+  if (
+    typeof body.motebit_id !== "string" ||
+    typeof body.device_id !== "string" ||
+    typeof body.public_key !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(body.public_key) ||
+    typeof body.timestamp !== "number" ||
+    typeof body.suite !== "string" ||
+    typeof body.signature !== "string"
+  ) {
+    return { valid: false, reason: "malformed" };
+  }
+  // Step 2 — replay window.
+  if (Math.abs(now - body.timestamp) > DEVICE_REGISTRATION_MAX_AGE_MS) {
+    return { valid: false, reason: "stale" };
+  }
+  // Step 3 — suite check. Only the registered suite is acceptable today;
+  // future suites add a dispatch arm in suite-dispatch.ts.
+  if (body.suite !== DEVICE_REGISTRATION_SUITE) {
+    return { valid: false, reason: "unsupported_suite" };
+  }
+  // Step 4–7 — canonicalize, decode, verify.
+  const { signature, ...bodyForSig } = body;
+  const canonical = canonicalJson(bodyForSig);
+  const message = new TextEncoder().encode(canonical);
+  let sigBytes: Uint8Array;
+  let pkBytes: Uint8Array;
+  try {
+    sigBytes = fromBase64Url(signature);
+    pkBytes = hexToBytes(body.public_key);
+  } catch {
+    return { valid: false, reason: "malformed" };
+  }
+  const ok = await verifyBySuite(body.suite, message, sigBytes, pkBytes);
+  return ok ? { valid: true } : { valid: false, reason: "bad_signature" };
+}

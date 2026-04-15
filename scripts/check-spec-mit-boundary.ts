@@ -71,6 +71,10 @@ const WAIVED_CALLABLES: Record<string, string> = {
   // Adapter-interface method names (documented interfaces, not standalone exports)
   listBySubject:
     "documented adapter method name (credential store); concrete adapter is BSL, interface shape is MIT",
+
+  // BSL reference-implementation pointers explicitly marked as such in their spec
+  registerDeviceWithRelay:
+    "device-self-registration-v1 §8 reference-implementation pointer in @motebit/core-identity (BSL); the protocol law is the §3 wire format + §4 sign/verify recipe — alternative SDKs can post the same JSON and route through whatever helper they like",
 };
 
 // Callable match: lowercase-start identifier followed by `(...)`, inside backticks.

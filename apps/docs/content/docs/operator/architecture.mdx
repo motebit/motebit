@@ -82,7 +82,7 @@ motebit/
 │   ├── embed/                 [atom]        ONNX embedding service.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 12 open specifications, each motebit/<name>@1.0
+├── spec/                      # 13 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -94,6 +94,7 @@ motebit/
 │   ├── delegation-v1.md                     Task submission, receipt exchange, budget lifecycle.
 │   ├── discovery-v1.md                      .well-known, DNS SRV, agent resolution, relay metadata.
 │   ├── migration-v1.md                      Departure attestation, credential export, trust bootstrap.
+│   ├── device-self-registration-v1.md       Self-attesting device → relay handshake, no master token required.
 │   └── dispute-v1.md                        Evidence, adjudication, fund handling, appeal, sybil defense.
 │
 └── scripts/                   # Drift-defense CI gates
@@ -168,7 +169,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All twelve specs (listed in the tree above) are MIT, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the MIT type packages — no permission required.
+All thirteen specs (listed in the tree above) are MIT, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the MIT type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 

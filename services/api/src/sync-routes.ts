@@ -12,7 +12,11 @@ import { EventType, asMotebitId } from "@motebit/sdk";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { EventStore } from "@motebit/event-log";
 import type { IdentityManager } from "@motebit/core-identity";
+import { verifyDeviceRegistration, type SignableDeviceRegistration } from "@motebit/encryption";
+import { createLogger } from "./logger.js";
 import type { ConnectedDevice } from "./index.js";
+
+const logger = createLogger({ service: "sync-routes" });
 
 // ---------------------------------------------------------------------------
 // Dependency interface
@@ -180,5 +184,96 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       return c.json({ error: "identity not found" }, 404);
     }
     return c.json(identity);
+  });
+
+  // --- Device: self-attesting registration ---
+  //
+  // Auth-less by design — the request's signature is the auth. The relay
+  // verifies the signature against the public_key in the request itself,
+  // proving the registrant controls the corresponding private key. No
+  // master token, no operator action, no out-of-band trust anchor.
+  //
+  // Wire format and verification recipe: spec/device-self-registration-v1.md.
+  // Trust posture: a self-registered device starts at trust zero. Trust
+  // accrues through receipts and credentials (docs/doctrine/protocol-model.md).
+  app.post("/api/v1/devices/register-self", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as SignableDeviceRegistration | null;
+    if (!body) {
+      throw new HTTPException(400, { message: "Body must be JSON" });
+    }
+
+    const verified = await verifyDeviceRegistration(body);
+    if (!verified.valid) {
+      logger.warn("device.self_register.rejected", {
+        motebitId: body.motebit_id,
+        reason: verified.reason,
+      });
+      return c.json(
+        { error: verified.reason, code: "DEVICE_REGISTRATION_REJECTED", reason: verified.reason },
+        400,
+      );
+    }
+
+    // Key-conflict check: the (motebit_id, public_key) binding is immutable
+    // until a deliberate key-rotation request (spec/auth-token-v1.md §9).
+    // Silently accepting a different key would let any party with the
+    // canonicalization recipe overwrite an established binding.
+    const existingDevice = await identityManager.loadDeviceById(body.device_id, body.motebit_id);
+    if (existingDevice && existingDevice.public_key !== body.public_key) {
+      logger.warn("device.self_register.key_conflict", {
+        motebitId: body.motebit_id,
+        deviceId: body.device_id,
+      });
+      return c.json(
+        {
+          error: "device exists with a different public key",
+          code: "DEVICE_KEY_CONFLICT",
+          remediation: "use /api/v1/agents/:motebit_id/rotate-key",
+        },
+        409,
+      );
+    }
+
+    // Idempotent identity + device upsert. createWithId returns the
+    // existing identity if the motebit_id is already known; the response
+    // `created` flag tells the client which path ran.
+    const ownerId = body.owner_id ?? `self:${body.motebit_id}`;
+    const beforeIdentity = await identityManager.load(body.motebit_id);
+    await identityManager.createWithId(body.motebit_id, ownerId);
+    const created = beforeIdentity == null;
+
+    if (existingDevice) {
+      // Public key matches — refresh registered_at by re-saving (idempotent).
+      await identityManager.registerDevice(
+        body.motebit_id,
+        body.device_name,
+        body.public_key,
+        body.device_id,
+      );
+    } else {
+      await identityManager.registerDevice(
+        body.motebit_id,
+        body.device_name,
+        body.public_key,
+        body.device_id,
+      );
+    }
+
+    const registeredAt = Date.now();
+    logger.info("device.self_register.ok", {
+      motebitId: body.motebit_id,
+      deviceId: body.device_id,
+      created,
+    });
+
+    return c.json(
+      {
+        motebit_id: body.motebit_id,
+        device_id: body.device_id,
+        registered_at: registeredAt,
+        created,
+      },
+      created ? 201 : 200,
+    );
   });
 }

@@ -31,6 +31,7 @@ import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import {
   bootstrapIdentity,
   rotateIdentityKeys,
+  registerDeviceWithRelay,
   type BootstrapConfigStore,
 } from "@motebit/core-identity";
 import {
@@ -1007,6 +1008,38 @@ export class WebApp {
     const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
     for (let i = 0; i < privateKeyHex.length; i += 2) {
       privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
+    }
+
+    // ── Self-attesting device registration ──────────────────────────────
+    // Before any signed-token request, ensure the relay knows this device's
+    // public key. Otherwise every subsequent fetch 401s — the relay can't
+    // verify a token signed by a key it has never seen. Idempotent: subsequent
+    // page loads re-register, the relay short-circuits on matching public_key.
+    // Spec: spec/device-self-registration-v1.md.
+    //
+    // Failures here degrade honestly via setSyncStatus("error") + a console
+    // warning; the surface-determinism path's own `sync_not_enabled` /
+    // `auth_expired` codes will surface a user-facing remediation if the
+    // user later attempts a deterministic invocation.
+    try {
+      const reg = await registerDeviceWithRelay({
+        motebitId: this._motebitId,
+        deviceId: this._deviceId,
+        publicKey: this._publicKeyHex,
+        privateKey: privKeyBytes,
+        syncUrl: relayUrl,
+        deviceName: "web",
+      });
+      if (!reg.ok) {
+        // Log once — the user-visible failure surfaces through the chip-tap
+        // path's `sync_not_enabled` copy if/when they try to invoke.
+        console.warn("[motebit] device self-registration failed:", reg.code, reg.message);
+      }
+    } catch (err: unknown) {
+      console.warn(
+        "[motebit] device self-registration threw:",
+        err instanceof Error ? err.message : String(err),
+      );
     }
 
     // Derive deterministic encryption key, then erase raw key bytes
