@@ -1338,8 +1338,14 @@ export class WebApp {
 
       const result = await cmdSelfTest(this.runtime, {
         relay: { relayUrl, authToken: token, motebitId: this._motebitId },
-        mintToken: async () => {
-          const t = await this.createSyncToken("task:submit");
+        // Honor the audience argument — the relay enforces aud binding
+        // (auth-token-v1 §5). Submitting a task uses aud=task:submit;
+        // polling its result uses aud=task:query. A single token won't
+        // satisfy both endpoints — sending a task:submit token to the
+        // /task/:id GET returns 403 (audience mismatch), exactly the
+        // cross-endpoint-replay defense the spec defines.
+        mintToken: async (audience: string) => {
+          const t = await this.createSyncToken(audience);
           return t ?? "";
         },
         timeoutMs: 30_000,
