@@ -650,6 +650,20 @@ export interface ExecutionReceipt {
   /** Scope from the delegation token that authorized this execution, if any. */
   delegated_scope?: string;
   /**
+   * How this task was authorized for invocation. Discriminates user-explicit
+   * affordances (chip tap, slash command, scene click) from AI-mediated
+   * delegations (the model called `delegate_to_agent` in its loop) and from
+   * machine-driven origins (cron, agent-to-agent). Optional and additive —
+   * absent ≡ unknown origin (legacy receipts predate the field; no
+   * back-fill). When present, the value is signature-bound: verifiers
+   * reject any tampered substitution.
+   *
+   * Carried through to the relay's task-submission body and emitted on
+   * the agent's outer receipt by `buildServiceReceipt`. Surface determinism
+   * (CLAUDE.md principle): user-tap delegations MUST set `"user-tap"`.
+   */
+  invocation_origin?: IntentOrigin;
+  /**
    * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` for
    * this artifact today — the verification recipe is JCS canonicalization
    * of the unsigned body (this object without `signature`), Ed25519
@@ -662,6 +676,26 @@ export interface ExecutionReceipt {
   suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
 }
+
+/**
+ * Provenance discriminator on `ExecutionReceipt.invocation_origin` and on
+ * relay task-submission bodies. Closed string-literal union; verifiers and
+ * routers MAY use this to score, audit, or differentiate paths.
+ *
+ *   - `"user-tap"`        — explicit user authorization via a UI affordance
+ *                           (chip, button, slash command, scene-object click,
+ *                           voice opt-in). Strongest consent signal.
+ *   - `"ai-loop"`         — the AI loop chose to delegate (e.g., the model
+ *                           called `delegate_to_agent`). Weakest consent
+ *                           signal — the user authorized the conversation,
+ *                           not the specific delegation.
+ *   - `"scheduled"`       — a cron / scheduled trigger initiated the task.
+ *   - `"agent-to-agent"`  — a downstream agent initiated as part of its own
+ *                           handleAgentTask (composition).
+ *
+ * Doctrine: `docs/doctrine/surface-determinism.md`.
+ */
+export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
 
 export interface DelegatedStepResult {
   step_id: string;

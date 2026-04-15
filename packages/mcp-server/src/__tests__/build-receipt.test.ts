@@ -107,6 +107,25 @@ describe("buildServiceReceipt", () => {
     expect(r.delegation_receipts).toEqual([subReceipt]);
   });
 
+  it("omits invocation_origin when not provided (legacy receipts predate the field)", async () => {
+    const r = (await buildServiceReceipt(baseInput())) as unknown as Record<string, unknown>;
+    expect(r.invocation_origin).toBeUndefined();
+  });
+
+  it("includes invocation_origin when provided (surface determinism discriminator)", async () => {
+    const r = (await buildServiceReceipt(
+      baseInput({ invocationOrigin: "user-tap" }),
+    )) as unknown as Record<string, unknown>;
+    expect(r.invocation_origin).toBe("user-tap");
+  });
+
+  it("invocation_origin is signature-bound — tampering invalidates the signature", async () => {
+    const r = await buildServiceReceipt(baseInput({ invocationOrigin: "user-tap" }));
+    const tampered = { ...r, invocation_origin: "ai-loop" };
+    const valid = await verifyExecutionReceipt(tampered, publicKey);
+    expect(valid).toBe(false);
+  });
+
   it("honors an explicit completedAt override", async () => {
     const r = await buildServiceReceipt(baseInput({ completedAt: 1_800_000_000_000 }));
     expect(r.completed_at).toBe(1_800_000_000_000);

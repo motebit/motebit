@@ -14,7 +14,7 @@
  */
 
 import { hash as sha256, signExecutionReceipt } from "@motebit/encryption";
-import type { ExecutionReceipt } from "@motebit/sdk";
+import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
 
 export interface BuildServiceReceiptInput {
   /** Service's motebit identity (same for every receipt this service signs). */
@@ -51,6 +51,14 @@ export interface BuildServiceReceiptInput {
   delegationReceipts?: ExecutionReceipt[];
   /** Explicit completion timestamp override. Defaults to `Date.now()` at call time. */
   completedAt?: number;
+  /**
+   * How this task was authorized for invocation. Surface determinism (CLAUDE.md
+   * principle): user-tap chips/buttons/slash-commands MUST pass `"user-tap"`;
+   * AI-loop tool calls MUST pass `"ai-loop"`; cron triggers `"scheduled"`;
+   * downstream agent composition `"agent-to-agent"`. Optional and additive
+   * — omitted means "unknown origin" on the resulting receipt.
+   */
+  invocationOrigin?: IntentOrigin;
 }
 
 /**
@@ -82,6 +90,7 @@ export async function buildServiceReceipt(
     ...(input.delegationReceipts != null && input.delegationReceipts.length > 0
       ? { delegation_receipts: input.delegationReceipts }
       : {}),
+    ...(input.invocationOrigin != null ? { invocation_origin: input.invocationOrigin } : {}),
   };
 
   return signExecutionReceipt(

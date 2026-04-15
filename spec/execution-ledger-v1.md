@@ -297,6 +297,7 @@ The atomic proof of task execution. Every conformant implementation MUST emit th
 | `delegation_receipts` | ExecutionReceipt[] | no       | Nested receipts from sub-delegations (§11.5).                                                                                                                                                   |
 | `relay_task_id`       | string             | no       | Relay's task identifier. Required for relay-mediated tasks. Included in the signature to bind the receipt to a specific economic contract.                                                      |
 | `delegated_scope`     | string             | no       | Scope from the delegation token that authorized this execution (§A.4).                                                                                                                          |
+| `invocation_origin`   | IntentOrigin       | no       | How the task was authorized for invocation (§11.7). One of: `"user-tap"`, `"ai-loop"`, `"scheduled"`, `"agent-to-agent"`. Absent ≡ unknown origin (legacy receipts).                            |
 | `suite`               | string             | yes      | Cryptosuite identifier. For this artifact: `"motebit-jcs-ed25519-b64-v1"` (JCS canonicalization, Ed25519 primitive, base64url signature encoding). See `SUITE_REGISTRY` in `@motebit/protocol`. |
 | `signature`           | string             | yes      | Base64url-encoded Ed25519 signature (§11.2).                                                                                                                                                    |
 
@@ -367,6 +368,23 @@ Each receipt in the tree is independently signed and independently verifiable. T
 For relay-mediated tasks, the `relay_task_id` field cryptographically binds the receipt to a specific task in the relay's economic ledger. Because this field is inside the Ed25519 signature, an attacker cannot replay a receipt from one task against another — the relay verifies that the receipt's `relay_task_id` matches the task being settled.
 
 Receipts submitted to a relay without `relay_task_id` MUST be rejected (HTTP 400). Receipts with a `relay_task_id` that does not match the settlement task MUST be rejected (HTTP 400).
+
+### 11.7 — Invocation Origin
+
+The `invocation_origin` field discriminates how a task was authorized. The `IntentOrigin` type is a closed string-literal union exported from `@motebit/protocol`. The four canonical values are:
+
+| Value              | Meaning                                                                                                                                                                 |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"user-tap"`       | Explicit user authorization via a UI affordance (chip tap, button click, slash command, scene-object click, voice opt-in). Strongest consent signal.                    |
+| `"ai-loop"`        | The AI loop chose to delegate (e.g., the model called `delegate_to_agent`). Weakest consent signal — the user authorized the conversation, not the specific delegation. |
+| `"scheduled"`      | A cron / scheduled trigger initiated the task without a live user.                                                                                                      |
+| `"agent-to-agent"` | A downstream agent initiated as part of its own `handleAgentTask` (composition).                                                                                        |
+
+The field is optional and additive. Absence MUST be interpreted as "unknown origin"; legacy receipts predate the field and MUST NOT be retroactively reclassified. When present, the value is signature-bound (it is included in the canonical-JSON bytes that `Ed25519_Sign` is computed over). Verifiers MUST reject receipts where the field's value at sign-time does not match its value at verify-time.
+
+The relay's task-submission body MAY carry `invocation_origin`. When present, the relay propagates the value to the executing agent via the task envelope, and the agent's outer receipt SHOULD reflect it via `buildServiceReceipt`'s `invocationOrigin` parameter (or equivalent).
+
+Surface determinism: per `docs/doctrine/surface-determinism.md`, user-tap surface affordances MUST set `"user-tap"` on their submissions. Routers MAY use the discriminator for trust scoring or differentiated audit handling; this is policy, not protocol.
 
 ---
 
