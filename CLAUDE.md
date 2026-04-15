@@ -37,6 +37,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/security-boundaries.md`](docs/doctrine/security-boundaries.md) — sybil, injection, token binding, cert pinning
 - [`docs/doctrine/settlement-rails.md`](docs/doctrine/settlement-rails.md) — custody split, concrete rails, withdrawals
 - [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — three-layer relay visibility; declared posture vs proven posture
+- [`docs/doctrine/self-attesting-system.md`](docs/doctrine/self-attesting-system.md) — every claim the system makes about itself is verifiable with the mechanisms it exposes to users
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — the root README is a surface; display stays, interior links out
 - [`docs/drift-defenses.md`](docs/drift-defenses.md) — the 14 synchronization invariants
 
