@@ -315,10 +315,13 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
 
     // Forward to the relay's native task submission endpoint.
     // The relay handles routing, budget, settlement, and receipt verification.
+    // The `Idempotency-Key` is required by the task endpoint (400 otherwise);
+    // the A2A boundary mints its own since A2A callers do not carry one.
     const internalUrl = `${relayUrl}/agent/${motebitId}/task`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: authHeader,
+      "Idempotency-Key": crypto.randomUUID(),
     };
 
     try {
