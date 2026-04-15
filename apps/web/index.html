@@ -1279,6 +1279,129 @@
     }
     .spatial-artifact-close:hover { opacity: 1; }
     .spatial-artifact { position: relative; }
+    /* Receipt artifact — the signed delegation chain rendered as a satellite.
+       Glass-matched: same backdrop tokens as siblings, just with a tabular
+       cost column and a verify-state line at the bottom. Tap the body to
+       reveal task_id/signature/suite details. */
+    .artifact-receipt .spatial-artifact-body { padding: 0; }
+    .receipt-chain {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .receipt-row {
+      display: grid;
+      grid-template-columns: 14px 1fr auto;
+      align-items: baseline;
+      column-gap: 8px;
+      font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+    }
+    .receipt-row.receipt-root {
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .receipt-row.receipt-child {
+      color: var(--text-secondary);
+    }
+    .receipt-tree {
+      color: var(--text-ghost);
+      text-align: center;
+      line-height: 1;
+    }
+    .receipt-name { letter-spacing: 0.01em; }
+    .receipt-cost {
+      font-variant-numeric: tabular-nums;
+      color: var(--text-secondary);
+    }
+    .receipt-row.receipt-root .receipt-cost { color: var(--text-primary); }
+    .receipt-verify {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(127, 127, 127, 0.15);
+      font-size: 10.5px;
+      color: var(--text-secondary);
+      letter-spacing: 0.02em;
+    }
+    .receipt-verify-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-ghost);
+      box-shadow: 0 0 0 0 rgba(120, 200, 120, 0);
+      transition: background 0.4s ease, box-shadow 0.6s ease;
+    }
+    .artifact-receipt.is-verified .receipt-verify-dot {
+      background: #4ec76b;
+      box-shadow: 0 0 0 3px rgba(78, 199, 107, 0.18);
+    }
+    .artifact-receipt.is-verified .receipt-verify-label { color: var(--text-primary); }
+    .artifact-receipt.is-unverified .receipt-verify-dot { background: #d97560; }
+    .artifact-receipt.is-unverified .receipt-verify-label { color: #d97560; }
+    .receipt-details {
+      display: none;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(127, 127, 127, 0.15);
+      font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--text-secondary);
+    }
+    .artifact-receipt.is-expanded .receipt-details { display: block; }
+    .receipt-detail-row {
+      display: grid;
+      grid-template-columns: 70px 1fr;
+      column-gap: 8px;
+      padding: 1px 0;
+    }
+    .receipt-detail-label { color: var(--text-ghost); }
+    .receipt-detail-value { word-break: break-all; }
+    .artifact-receipt .spatial-artifact-body { cursor: pointer; }
+
+    /* PR-URL paste chip — emerges above the chat input on detection. */
+    .pr-url-chip {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border: 1px solid var(--border-input-glass);
+      border-radius: 16px;
+      background: var(--bg-glass);
+      backdrop-filter: blur(24px) saturate(1.3);
+      -webkit-backdrop-filter: blur(24px) saturate(1.3);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      box-shadow: 0 2px 12px var(--shadow-sm);
+      transform-origin: 12px 100%;
+      transform: scale(1) translateY(0);
+      opacity: 1;
+      transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.25, 1),
+                  opacity 0.18s ease,
+                  background 0.15s ease;
+    }
+    .pr-url-chip.is-entering {
+      transform: scale(0.85) translateY(4px);
+      opacity: 0;
+    }
+    .pr-url-chip.is-leaving {
+      transform: scale(0.92) translateY(2px);
+      opacity: 0;
+    }
+    .pr-url-chip:hover { background: var(--bg-glass-hover); }
+    .pr-url-chip-arrow {
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 1;
+    }
+
     .plan-step-line {
       padding: 2px 0;
       opacity: 0.7;

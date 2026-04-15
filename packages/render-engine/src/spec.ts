@@ -62,7 +62,7 @@ export interface AudioReactivity {
 
 // === Spatial Canvas — Artifact Types ===
 
-export type ArtifactKind = "text" | "code" | "plan" | "memory";
+export type ArtifactKind = "text" | "code" | "plan" | "memory" | "receipt";
 
 /** Lifecycle phase for entrance/exit animations. */
 export type ArtifactPhase = "emerging" | "present" | "receding" | "gone";

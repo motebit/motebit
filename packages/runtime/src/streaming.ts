@@ -202,10 +202,13 @@ export class StreamingManager {
           this.deps.logToolUsed(chunk.name, chunk.result);
           // Emit delegation_complete for motebit MCP tools
           if (motebitServer) {
-            // Extract receipt summary if this was a motebit_task call with a receipt result
+            // Extract receipt summary if this was a motebit_task call with a receipt result.
+            // When the full signed receipt is present (motebit_task), also forward it so
+            // callers (e.g. the web receipt artifact) can render and verify the chain.
             let receiptSummary:
               | { task_id: string; status: string; tools_used: string[] }
               | undefined;
+            let fullReceipt: import("@motebit/sdk").ExecutionReceipt | undefined;
             if (chunk.result != null && typeof chunk.result === "object") {
               const r = chunk.result as Record<string, unknown>;
               if (
@@ -218,6 +221,13 @@ export class StreamingManager {
                   status: r.status,
                   tools_used: r.tools_used as string[],
                 };
+                // Full receipt discriminator: a motebit signed receipt carries
+                // `signature` + `motebit_id`. The summary above uses only the
+                // subset that existed before — forwarding the full record is
+                // additive.
+                if (typeof r.signature === "string" && typeof r.motebit_id === "string") {
+                  fullReceipt = r as unknown as import("@motebit/sdk").ExecutionReceipt;
+                }
               }
             }
             this.deps.setDelegating(false);
@@ -226,6 +236,7 @@ export class StreamingManager {
               server: motebitServer,
               tool: chunk.name,
               receipt: receiptSummary,
+              full_receipt: fullReceipt,
             };
           }
         }

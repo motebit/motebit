@@ -1,6 +1,9 @@
 import type { WebContext } from "../types";
 import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 import { StreamingTTSQueue } from "@motebit/voice";
+import type { ExecutionReceipt } from "@motebit/sdk";
+import { buildReceiptArtifact } from "./receipt-artifact";
+import { installPrUrlChip } from "./pr-url-chip";
 
 // === Lightweight Markdown Renderer ===
 
@@ -566,6 +569,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     let textEl: HTMLSpanElement | null = null;
     let accumulated = "";
     let firstChunkReceived = false;
+    // Captured from the most recent delegation_complete that carried a full
+    // signed receipt. Emerged as a spatial artifact after the result chunk
+    // so the review text stays unopposed as the primary content; the receipt
+    // bubble is the witness, not the work.
+    let capturedReceipt: ExecutionReceipt | null = null;
 
     try {
       for await (const chunk of ctx.app.sendMessageStreaming(text)) {
@@ -597,6 +605,18 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
               showToolStatus(chunk.name, chunk.context);
             } else if (chunk.status === "done") {
               completeToolStatus(chunk.name);
+            }
+            break;
+          }
+
+          case "delegation_complete": {
+            // When the delegated tool was a motebit_task with a full signed
+            // receipt, capture it for emergence as a receipt artifact after
+            // the result chunk completes. Multiple delegations in one turn
+            // keep the latest — the bubble represents the most consequential
+            // result, not the full activity log.
+            if (chunk.full_receipt) {
+              capturedReceipt = chunk.full_receipt;
             }
             break;
           }
@@ -680,6 +700,18 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
           case "result": {
             streamingTTS.flush();
+            // Emerge the receipt bubble after the review text settles. 200ms
+            // beat preserves the review-as-primary, receipt-as-witness order.
+            if (capturedReceipt) {
+              const receipt = capturedReceipt;
+              const id = `receipt-${receipt.task_id}`;
+              window.setTimeout(() => {
+                const el = buildReceiptArtifact(receipt, () => {
+                  void ctx.app.removeArtifact(id);
+                });
+                ctx.app.addArtifact({ id, kind: "receipt", element: el });
+              }, 200);
+            }
             // Show per-message cost for cloud users (calm — subtle, not distracting)
             if (chunk.result.totalTokens != null && chunk.result.totalTokens > 0 && bubble) {
               const costEl = document.createElement("div");
@@ -843,6 +875,16 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     streamingTTS.enable();
     await handleSend(transcript);
   }
+
+  // Wire up the PR-URL paste chip — explicit, deterministic delegation
+  // route for the `review_pr` capability. Pasting a GitHub PR URL surfaces
+  // a one-tap chip; the tap fires a worded send so the local AI delegates
+  // to the right capability rather than guessing intent.
+  installPrUrlChip({
+    input: chatInput,
+    row: chatInputRow,
+    onCommit: (textOverride) => void handleSend(textOverride),
+  });
 
   // Wire up Enter key
   chatInput.addEventListener("keydown", (e: KeyboardEvent) => {

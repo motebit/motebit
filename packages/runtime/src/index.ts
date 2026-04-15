@@ -506,12 +506,21 @@ export type StreamChunk =
       server: string;
       tool: string;
       receipt?: { task_id: string; status: string; tools_used: string[] };
+      /**
+       * The full signed ExecutionReceipt when the delegated tool was a
+       * motebit_task call and the result parsed as a receipt. Carries
+       * nested delegation_receipts, public_key, signature — enough to
+       * render a receipt bubble and run verifyReceiptChain in-browser
+       * without a server roundtrip. The narrower `receipt` summary above
+       * is kept for existing consumers.
+       */
+      full_receipt?: ExecutionReceipt;
     }
   | {
       type: "artifact";
       action: "add" | "remove";
       artifact_id: string;
-      kind: "text" | "code" | "plan" | "memory";
+      kind: "text" | "code" | "plan" | "memory" | "receipt";
       content?: string;
       title?: string;
     };
