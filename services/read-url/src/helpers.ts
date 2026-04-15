@@ -15,6 +15,13 @@ export function loadConfig() {
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],
+    /**
+     * MCP HTTP endpoint protection. When set, the MCP server only accepts
+     * requests carrying `Authorization: Bearer ${authToken}` (or a motebit
+     * signed token). The relay's `forwardTaskViaMcp` sends Bearer apiToken;
+     * this lets a relay-forwarded task reach this atom without spoofing.
+     */
+    authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
   };
 }

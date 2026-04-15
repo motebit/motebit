@@ -167,6 +167,11 @@ async function main(): Promise<void> {
     name: `motebit-read-url-${motebitId.slice(0, 8)}`,
     port: config.port,
     motebitType: "service",
+    // authToken protects the MCP HTTP endpoint — relay's `forwardTaskViaMcp`
+    // sends `Bearer ${MOTEBIT_API_TOKEN}` and the MCP server only accepts
+    // it when authToken is configured. Without this, every relay-forwarded
+    // task to read-url is silently 401'd by the MCP server.
+    authToken: config.authToken,
     syncUrl: config.syncUrl,
     apiToken: config.apiToken,
     publicEndpointUrl: config.publicUrl,
