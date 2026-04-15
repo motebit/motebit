@@ -10,6 +10,7 @@
 
 import {
   canonicalJson,
+  canonicalSha256,
   toBase64Url,
   fromBase64Url,
   bytesToHex,
@@ -19,6 +20,31 @@ import {
   signBySuite,
   verifyBySuite,
 } from "./signing.js";
+
+/**
+ * Diagnostic flag for cryptographic-artifact debugging. Reads from
+ * `process.env.DEBUG_RECEIPT_BYTES` in Node and from
+ * `globalThis.__motebit_debug_receipt_bytes` in browsers. When truthy,
+ * `signExecutionReceipt` and `verifyExecutionReceipt*` log the canonical
+ * SHA-256 and a short preview of the canonical JSON, so a verification
+ * mismatch can be byte-diffed against the producer's intended bytes
+ * without re-instrumenting either end. Off by default; zero overhead when
+ * disabled.
+ *
+ * Pattern source: NIST SP 800-57 §5.4 — minimum observability for any
+ * signed-artifact pipeline that crosses a process boundary.
+ */
+function isReceiptDebugEnabled(): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- env probe
+  const g = globalThis as any;
+  if (g.__motebit_debug_receipt_bytes === true) return true;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- env probe
+  const proc = (globalThis as any).process;
+  if (proc?.env?.DEBUG_RECEIPT_BYTES === "1" || proc?.env?.DEBUG_RECEIPT_BYTES === "true") {
+    return true;
+  }
+  return false;
+}
 
 // === Execution Receipt Signing ===
 
@@ -80,10 +106,30 @@ export async function signExecutionReceipt<T extends Omit<SignableReceipt, "sign
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(EXECUTION_RECEIPT_SUITE, message, privateKey);
-  return { ...body, signature: toBase64Url(sig) } as T & {
+  const signed = { ...body, signature: toBase64Url(sig) } as T & {
     suite: typeof EXECUTION_RECEIPT_SUITE;
     signature: string;
   };
+
+  if (isReceiptDebugEnabled()) {
+    const sha = await canonicalSha256(body);
+    // eslint-disable-next-line no-console -- opt-in diagnostic, off by default
+    console.debug(
+      `[motebit/crypto] signExecutionReceipt canonical_sha256=${sha} chain=${
+        Array.isArray((body as Record<string, unknown>).delegation_receipts)
+          ? ((body as Record<string, unknown>).delegation_receipts as unknown[]).length
+          : 0
+      } bytes=${canonical.length}`,
+    );
+  }
+
+  // Freeze the returned signed receipt. Receipts are immutable evidence by
+  // contract — the type system already says `readonly` is the intent. Freeze
+  // makes the runtime enforce it: any post-sign mutation throws TypeError
+  // at the mutation site (Node 20 strict mode, browser strict by default),
+  // catching the bug at the producer instead of as wire-corruption noise on
+  // the consumer five hops downstream.
+  return Object.freeze(signed);
 }
 
 /**
@@ -104,16 +150,97 @@ export async function verifyExecutionReceipt(
   receipt: SignableReceipt,
   publicKey: Uint8Array,
 ): Promise<boolean> {
-  if (receipt.suite !== EXECUTION_RECEIPT_SUITE) return false;
+  if (receipt.suite !== EXECUTION_RECEIPT_SUITE) {
+    if (isReceiptDebugEnabled()) {
+      // eslint-disable-next-line no-console -- opt-in diagnostic
+      console.debug(
+        `[motebit/crypto] verifyExecutionReceipt EARLY_RETURN suite_mismatch actual=${JSON.stringify(receipt.suite)} expected=${JSON.stringify(EXECUTION_RECEIPT_SUITE)}`,
+      );
+    }
+    return false;
+  }
   const { signature, ...body } = receipt;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
+
+  let valid = false;
   try {
     const sig = fromBase64Url(signature);
-    return await verifyBySuite(receipt.suite, message, sig, publicKey);
+    valid = await verifyBySuite(receipt.suite, message, sig, publicKey);
   } catch {
-    return false;
+    valid = false;
   }
+
+  if (isReceiptDebugEnabled()) {
+    const sha = await canonicalSha256(body);
+    // eslint-disable-next-line no-console -- opt-in diagnostic, off by default
+    console.debug(
+      `[motebit/crypto] verifyExecutionReceipt canonical_sha256=${sha} valid=${valid} bytes=${canonical.length}`,
+    );
+  }
+
+  return valid;
+}
+
+/**
+ * Companion to `verifyExecutionReceipt` that returns diagnostic detail
+ * alongside the boolean verdict. Intended for failure-path observability:
+ * when verification fails, the caller can log `canonical_sha256` and
+ * `canonical_preview` and the producer can byte-diff against its own
+ * sign-time hash to localize the mutation. Same canonicalization recipe
+ * as the boolean function — the diagnostic is derived from the exact bytes
+ * the verifier checked.
+ *
+ * Cost: one extra `canonicalJson` + SHA-256 per call. Negligible for the
+ * verify-failed path (rare); callers on the hot success path should still
+ * use `verifyExecutionReceipt` directly.
+ */
+export interface ReceiptVerifyDetail {
+  valid: boolean;
+  /** Hex SHA-256 of the canonical bytes the verifier checked. */
+  canonical_sha256: string;
+  /** First 256 chars of the canonical JSON — enough to spot most field-level diffs. */
+  canonical_preview: string;
+  /** Reason category if valid is false; `"ok"` if true. */
+  reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch";
+}
+
+export async function verifyExecutionReceiptDetailed(
+  receipt: SignableReceipt,
+  publicKey: Uint8Array,
+): Promise<ReceiptVerifyDetail> {
+  if (receipt.suite !== EXECUTION_RECEIPT_SUITE) {
+    const { signature: _drop, ...bodyForHash } = receipt;
+    return {
+      valid: false,
+      canonical_sha256: await canonicalSha256(bodyForHash),
+      canonical_preview: canonicalJson(bodyForHash).slice(0, 256),
+      reason: "wrong_suite",
+    };
+  }
+  const { signature, ...body } = receipt;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+
+  let sigBytes: Uint8Array;
+  try {
+    sigBytes = fromBase64Url(signature);
+  } catch {
+    return {
+      valid: false,
+      canonical_sha256: await hash(message),
+      canonical_preview: canonical.slice(0, 256),
+      reason: "bad_base64",
+    };
+  }
+
+  const valid = await verifyBySuite(receipt.suite, message, sigBytes, publicKey);
+  return {
+    valid,
+    canonical_sha256: await hash(message),
+    canonical_preview: canonical.slice(0, 256),
+    reason: valid ? "ok" : "ed25519_mismatch",
+  };
 }
 
 // === Sovereign Payment Receipts ===

@@ -207,6 +207,27 @@ export async function hash(data: Uint8Array): Promise<string> {
     .join("");
 }
 
+/**
+ * Canonical-bytes hash. Convenience wrapper over `canonicalJson` + SHA-256
+ * for diagnostic and audit use: lets a producer and a verifier deterministically
+ * agree on (or disagree about) the exact bytes a signature was computed over,
+ * without re-implementing the canonicalization recipe at the call site.
+ *
+ * Returns the hex SHA-256 of the UTF-8 bytes of `canonicalJson(obj)`. Stable
+ * across processes, machines, and Node versions — same input ⇒ same output,
+ * always. The only requirement on `obj` is that it be a JSON-serializable
+ * value (no functions, no symbols, no cycles).
+ *
+ * Primary use case: when a signed-artifact verification fails, both ends of
+ * the pipeline can log `canonicalSha256(body)` and the producer can confirm
+ * whether the bytes the verifier reproduced match the bytes the producer
+ * signed. A hash mismatch localizes the bug to the wire path; a hash match
+ * localizes it to the signature primitive (which is far less likely).
+ */
+export async function canonicalSha256(obj: unknown): Promise<string> {
+  return hash(new TextEncoder().encode(canonicalJson(obj)));
+}
+
 /** SHA-256 returning raw bytes (used by credential signing). */
 export async function sha256(data: Uint8Array): Promise<Uint8Array> {
   const buf = await crypto.subtle.digest("SHA-256", data as BufferSource);

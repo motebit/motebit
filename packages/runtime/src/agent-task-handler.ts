@@ -272,6 +272,27 @@ export async function* handleAgentTask(
     publicKey,
   );
 
+  // Producer self-verify gate. Mirrors the gate in
+  // packages/mcp-server/src/build-receipt.ts. If the signed receipt does
+  // not verify against its own embedded public_key, throw at the producer
+  // — the failure points at the actual mutation site (the body shape we
+  // fed signExecutionReceipt) rather than surfacing as wire corruption
+  // five hops downstream. Run with DEBUG_RECEIPT_BYTES=1 to dump canonical
+  // hashes when this fires. Skipped when publicKey was not provided (the
+  // signing flow itself omits embedding it, so there's nothing to verify
+  // against without a separate key lookup).
+  if (publicKey) {
+    const selfVerified = await verifyExecutionReceipt(receipt, publicKey);
+    if (!selfVerified) {
+      throw new Error(
+        `agent-task-handler produced a self-invalid receipt for motebit_id=${deps.motebitId} ` +
+          `task_id=${task.task_id} chain=${delegationReceipts.length} — signature verifies false ` +
+          `against embedded public_key. Body mutation between sign and return, OR canonicalization ` +
+          `bug. Run with DEBUG_RECEIPT_BYTES=1 to capture the canonical-hash mismatch.`,
+      );
+    }
+  }
+
   // Log event
   const eventTypeMap: Record<string, EventType> = {
     completed: EventType.AgentTaskCompleted,

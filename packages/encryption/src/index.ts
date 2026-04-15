@@ -15,6 +15,7 @@
 export {
   // Core primitives
   canonicalJson,
+  canonicalSha256,
   bytesToHex,
   hexToBytes,
   toBase64Url,
@@ -40,6 +41,8 @@ export {
   // Artifacts
   signExecutionReceipt,
   verifyExecutionReceipt,
+  verifyExecutionReceiptDetailed,
+  type ReceiptVerifyDetail,
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   verifyReceiptSequence,

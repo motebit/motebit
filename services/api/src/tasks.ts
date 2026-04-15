@@ -39,6 +39,7 @@ import {
   canonicalJson,
   bytesToHex,
   hexToBytes,
+  verifyExecutionReceiptDetailed,
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
 import {
@@ -312,9 +313,27 @@ export async function handleReceiptIngestion(
   }
 
   if (!receiptValid) {
+    // Diagnostic: emit the canonical bytes the verifier reproduced so the
+    // producer can byte-diff against its own sign-time hash. The producer
+    // logs the same hash via signExecutionReceipt's debug path when
+    // DEBUG_RECEIPT_BYTES=1. A hash mismatch localizes the bug to the wire
+    // path; a hash match would localize it to the signature primitive
+    // (which standalone tests rule out). See
+    // packages/crypto/src/__tests__/device-registration.test.ts and
+    // packages/mcp-server/src/__tests__/build-receipt.test.ts for the
+    // contract this gate defends.
+    const detail = await verifyExecutionReceiptDetailed(receipt, hexToBytes(pubKeyHex));
     logger.error("receipt.verification_failed", {
       correlationId: taskId,
       reason: "invalid Ed25519 signature",
+      canonical_sha256: detail.canonical_sha256,
+      canonical_preview: detail.canonical_preview,
+      detail_reason: detail.reason,
+      chain_length: Array.isArray(
+        (receipt as unknown as Record<string, unknown>).delegation_receipts,
+      )
+        ? ((receipt as unknown as Record<string, unknown>).delegation_receipts as unknown[]).length
+        : 0,
     });
     return { verified: false, reason: "invalid Ed25519 signature" };
   }

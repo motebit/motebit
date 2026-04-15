@@ -204,6 +204,74 @@ describe("buildServiceReceipt", () => {
     expect(valid).toBe(true);
   });
 
+  it("producer self-verify gate catches privateKey mutation between load and sign", async () => {
+    // Regression: on 2026-04-15, McpClientAdapter.disconnect() called
+    // `secureErase(callerPrivateKey)` on a lent reference, zeroing the
+    // caller's signing key mid-flow. buildServiceReceipt then signed with
+    // the zeroed seed while embedding the real public key, producing a
+    // receipt whose signature was valid only against the all-zeros-seed
+    // pubkey (3b6a27bc...), not the embedded one. The chain-1 verify
+    // silently failed at the relay and in the browser.
+    //
+    // The producer self-verify gate I added in `buildServiceReceipt` turns
+    // this failure mode from "silent verification failure 5 hops
+    // downstream" into "throw at the producer with a precise diagnostic".
+    // This test locks that behavior: if anything between the caller and
+    // the signing routine zeros the privateKey, `buildServiceReceipt`
+    // MUST throw rather than return a self-invalid receipt.
+    const kp = await generateKeypair();
+    const privateKeyCopy = new Uint8Array(kp.privateKey);
+
+    // Simulate an adapter that zeros the lent reference mid-flow. We do
+    // it BEFORE calling buildServiceReceipt so the input array is already
+    // all zeros by the time signing runs.
+    privateKeyCopy.fill(0);
+
+    await expect(
+      buildServiceReceipt({
+        ...baseInput(),
+        privateKey: privateKeyCopy,
+        publicKey: kp.publicKey, // still the real pub
+      }),
+    ).rejects.toThrow(/self-invalid receipt|signature verifies false/);
+  });
+
+  it("chain-1 receipt body is Object.frozen — post-sign mutation throws", async () => {
+    // The signed receipt is returned frozen by signExecutionReceipt;
+    // buildServiceReceipt preserves this. A caller who tries to mutate
+    // the receipt after signing would break the signature if the
+    // mutation reached the wire; freeze turns the silent failure into a
+    // loud TypeError at the mutation site.
+    const inner = await generateKeypair();
+    const innerSigned = await signExecutionReceipt(
+      {
+        task_id: "inner",
+        motebit_id: "r",
+        device_id: "d",
+        submitted_at: 1,
+        completed_at: 2,
+        status: "completed" as const,
+        result: "x",
+        tools_used: ["read_url"],
+        memories_formed: 0,
+        prompt_hash: await sha256(new TextEncoder().encode("p")),
+        result_hash: await sha256(new TextEncoder().encode("r")),
+        relay_task_id: "inner",
+      },
+      inner.privateKey,
+      inner.publicKey,
+    );
+
+    const signed = await buildServiceReceipt(
+      baseInput({ delegationReceipts: [innerSigned as unknown as ExecutionReceipt] }),
+    );
+
+    expect(Object.isFrozen(signed)).toBe(true);
+    expect(() => {
+      (signed as unknown as Record<string, unknown>).motebit_id = "attacker";
+    }).toThrow(TypeError);
+  });
+
   it("omits invocation_origin when not provided (legacy receipts predate the field)", async () => {
     const r = (await buildServiceReceipt(baseInput())) as unknown as Record<string, unknown>;
     expect(r.invocation_origin).toBeUndefined();

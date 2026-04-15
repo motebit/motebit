@@ -13,7 +13,7 @@
  * services" for the doctrine.
  */
 
-import { hash as sha256, signExecutionReceipt } from "@motebit/encryption";
+import { hash as sha256, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
 
 export interface BuildServiceReceiptInput {
@@ -93,9 +93,34 @@ export async function buildServiceReceipt(
     ...(input.invocationOrigin != null ? { invocation_origin: input.invocationOrigin } : {}),
   };
 
-  return signExecutionReceipt(
+  const signed = (await signExecutionReceipt(
     receipt as Parameters<typeof signExecutionReceipt>[0],
     input.privateKey,
     input.publicKey,
-  ) as Promise<ExecutionReceipt>;
+  )) as ExecutionReceipt;
+
+  // Producer self-verify gate. If the receipt we just signed doesn't verify
+  // against its own embedded public_key, the bug is at the producer — not
+  // somewhere downstream where it would surface as wire corruption five
+  // hops later. Throw immediately so the failure points at the actual
+  // mutation site (the caller that fed us a body the canonicalizer
+  // disagrees with itself about). Fail-loud, fail-now.
+  //
+  // Cost: one Ed25519 verify per signed receipt (~200 µs) — negligible.
+  // The contract: `signExecutionReceipt(body) → verify(returned, embedded_pk) === true`,
+  // for ANY body, ALWAYS. If this gate ever throws in production, that IS
+  // the bug — diagnose with DEBUG_RECEIPT_BYTES=1 to capture the canonical
+  // hash mismatch.
+  const selfVerified = await verifyExecutionReceipt(signed, input.publicKey);
+  if (!selfVerified) {
+    throw new Error(
+      `buildServiceReceipt produced a self-invalid receipt for motebit_id=${input.motebitId} ` +
+        `task_id=${input.taskId} chain=${input.delegationReceipts?.length ?? 0} — ` +
+        `signature verifies false against embedded public_key. This indicates a body mutation ` +
+        `between sign and return, OR a bug in the canonicalization recipe. Run with ` +
+        `DEBUG_RECEIPT_BYTES=1 to capture the canonical-hash mismatch.`,
+    );
+  }
+
+  return signed;
 }

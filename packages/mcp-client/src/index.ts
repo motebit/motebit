@@ -16,7 +16,7 @@ export type {
   VerificationResult,
   ServerVerifier,
 } from "@motebit/sdk";
-import { secureErase, createSignedToken, verifyKeySuccession } from "@motebit/encryption";
+import { createSignedToken, verifyKeySuccession } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { InMemoryToolRegistry } from "@motebit/tools";
 
@@ -547,10 +547,19 @@ export class McpClientAdapter {
     await this.client.close();
     this.connected = false;
     this.discoveredTools = [];
-    // Erase caller private key bytes if present
-    if (this.config.callerPrivateKey) {
-      secureErase(this.config.callerPrivateKey);
-    }
+    // NOTE: `callerPrivateKey` is a LENT reference — the adapter does not
+    // take ownership of its lifetime. Previously this method called
+    // `secureErase(this.config.callerPrivateKey)` on disconnect, which
+    // zeroed the caller's Uint8Array in place. In services like
+    // code-review that pass their signing key to an mcp-client adapter
+    // then later call `buildServiceReceipt` with the same reference, the
+    // erasure broke the signature chain: the signer received a zero seed,
+    // derived the zero-seed public key, and the outer receipt's signature
+    // didn't verify against the embedded (real) public key. Diagnosed
+    // 2026-04-15 via DEBUG_RECEIPT_BYTES=1 + IMMEDIATE_VERIFY + raw-noble
+    // correspondence check (`keys_correspond=false`, derived key was the
+    // Ed25519 pub for the all-zeros seed). The fix: callers own key
+    // lifetime; the adapter only borrows.
   }
 
   /** Run the configured server verifier. Fail-closed: disconnect on failure or error. */
