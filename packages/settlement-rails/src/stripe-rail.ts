@@ -13,9 +13,7 @@ import type {
   DepositResult,
   WithdrawalResult,
 } from "@motebit/sdk";
-import { createLogger } from "../logger.js";
-
-const logger = createLogger({ service: "stripe-rail" });
+import { type RailLogger, NOOP_LOGGER } from "./logger.js";
 
 export interface StripeRailConfig {
   /** Stripe SDK instance (pre-configured with secret key). */
@@ -26,6 +24,8 @@ export interface StripeRailConfig {
   currency?: string;
   /** Callback to persist proof. Injected by relay — the rail does not own storage. */
   onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
+  /** Structured logger. Default is silent — relay injects one carrying correlation id. */
+  logger?: RailLogger;
 }
 
 export class StripeSettlementRail implements DepositableGuestRail {
@@ -39,12 +39,14 @@ export class StripeSettlementRail implements DepositableGuestRail {
   readonly webhookSecret: string;
   private readonly currency: string;
   private readonly onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
+  private readonly logger: RailLogger;
 
   constructor(config: StripeRailConfig) {
     this.stripe = config.stripeClient;
     this.webhookSecret = config.webhookSecret;
     this.currency = config.currency ?? "usd";
     this.onProofAttached = config.onProofAttached;
+    this.logger = config.logger ?? NOOP_LOGGER;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -107,7 +109,7 @@ export class StripeSettlementRail implements DepositableGuestRail {
       { idempotencyKey },
     );
 
-    logger.info("stripe.checkout.created", {
+    this.logger.info("stripe.checkout.created", {
       motebitId,
       sessionId: session.id,
       amount,
@@ -129,7 +131,7 @@ export class StripeSettlementRail implements DepositableGuestRail {
   ): Promise<WithdrawalResult> {
     // Stripe withdrawals are manual — the admin completes them via the admin panel.
     // The rail returns a pending proof that will be updated when the admin completes.
-    logger.info("stripe.withdrawal.pending", {
+    this.logger.info("stripe.withdrawal.pending", {
       motebitId,
       amount,
       currency,
@@ -153,7 +155,7 @@ export class StripeSettlementRail implements DepositableGuestRail {
    * Called from the webhook handler after checkout.session.completed.
    */
   attachProof(settlementId: string, proof: PaymentProof): Promise<void> {
-    logger.info("stripe.proof.attached", {
+    this.logger.info("stripe.proof.attached", {
       settlementId,
       reference: proof.reference,
       railType: proof.railType,

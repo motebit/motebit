@@ -149,7 +149,7 @@ import {
   StripeSettlementRail,
   X402SettlementRail,
   BridgeSettlementRail,
-} from "./settlement-rails/index.js";
+} from "@motebit/settlement-rails";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
@@ -349,6 +349,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         webhookSecret: stripeConfig.webhookSecret,
         currency: stripeConfig.currency,
         onProofAttached: proofCallback("stripe"),
+        logger: createLogger({ service: "stripe-rail" }),
       }),
     );
   }
@@ -364,6 +365,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           network: x402Config.network,
           payToAddress: x402Config.payToAddress,
           onProofAttached: proofCallback("x402"),
+          logger: createLogger({ service: "x402-rail" }),
         }),
       );
     } catch (err) {
@@ -376,7 +378,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   if (bridgeConfig) {
     const baseUrl = bridgeConfig.baseUrl ?? "https://api.bridge.xyz/v0";
     const bridgeApiKey = bridgeConfig.apiKey;
-    const bridgeClient: import("./settlement-rails/bridge-rail.js").BridgeClient = {
+    const bridgeClient: import("@motebit/settlement-rails").BridgeClient = {
       async createTransfer(params) {
         const res = await fetch(`${baseUrl}/transfers`, {
           method: "POST",
@@ -450,6 +452,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         sourcePaymentRail: bridgeConfig.sourcePaymentRail ?? "base",
         sourceCurrency: bridgeConfig.sourceCurrency ?? "usdc",
         onProofAttached: proofCallback("bridge"),
+        logger: createLogger({ service: "bridge-rail" }),
       }),
     );
   }

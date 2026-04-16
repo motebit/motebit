@@ -31,8 +31,7 @@ import {
 } from "./accounts.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import Stripe from "stripe";
-import type { SettlementRailRegistry } from "./settlement-rails/index.js";
-import type { StripeSettlementRail } from "./settlement-rails/index.js";
+import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
 
 const logger = createLogger({ service: "budget" });
 

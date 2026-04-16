@@ -151,7 +151,7 @@ export interface TasksDeps {
   /** Platform fee rate (0–1). Defaults to SDK constant (0.05) if not provided. */
   platformFeeRate?: number;
   /** Settlement rail registry — for attaching payment proofs through the rail boundary. */
-  railRegistry?: import("./settlement-rails/index.js").SettlementRailRegistry;
+  railRegistry?: import("@motebit/settlement-rails").SettlementRailRegistry;
   /** Push adapter for waking offline mobile devices. */
   pushAdapter?: import("./push-adapter.js").PushAdapter;
 }

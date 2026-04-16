@@ -11,9 +11,7 @@
  */
 
 import type { GuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
-import { createLogger } from "../logger.js";
-
-const logger = createLogger({ service: "x402-rail" });
+import { type RailLogger, NOOP_LOGGER } from "./logger.js";
 
 /**
  * Minimal facilitator client interface.
@@ -44,6 +42,8 @@ export interface X402RailConfig {
   payToAddress: string;
   /** Callback to persist proof. Injected by relay — the rail does not own storage. */
   onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
+  /** Structured logger. Default is silent — relay injects one carrying correlation id. */
+  logger?: RailLogger;
 }
 
 export class X402SettlementRail implements GuestRail {
@@ -57,12 +57,14 @@ export class X402SettlementRail implements GuestRail {
   readonly network: string;
   readonly payToAddress: string;
   private readonly onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
+  private readonly logger: RailLogger;
 
   constructor(config: X402RailConfig) {
     this.facilitator = config.facilitatorClient;
     this.network = config.network;
     this.payToAddress = config.payToAddress;
     this.onProofAttached = config.onProofAttached;
+    this.logger = config.logger ?? NOOP_LOGGER;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -127,7 +129,7 @@ export class X402SettlementRail implements GuestRail {
       throw new Error(`x402 withdrawal failed: ${result.errorReason ?? "unknown error"}`);
     }
 
-    logger.info("x402.withdrawal.settled", {
+    this.logger.info("x402.withdrawal.settled", {
       motebitId,
       amount,
       destination,
@@ -152,7 +154,7 @@ export class X402SettlementRail implements GuestRail {
    * Called after x402 middleware captures the onAfterSettle hook data.
    */
   attachProof(settlementId: string, proof: PaymentProof): Promise<void> {
-    logger.info("x402.proof.attached", {
+    this.logger.info("x402.proof.attached", {
       settlementId,
       reference: proof.reference,
       network: proof.network,

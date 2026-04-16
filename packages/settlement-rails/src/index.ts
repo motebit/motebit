@@ -2,14 +2,15 @@
  * Settlement rail registry and barrel exports.
  *
  * The registry accepts only GuestRails — relay-custody rails that the relay
- * mediates on behalf of agents. SovereignRails (agent-custody, e.g. SolanaWalletRail)
- * live in the runtime and are never registered at the relay; the compiler
- * rejects attempts to pass one to `register()`. That mechanical rejection is
- * the sovereignty doctrine expressed as a type.
+ * mediates on behalf of agents. SovereignRails (agent-custody, e.g. SolanaWalletRail
+ * from @motebit/wallet-solana) live closer to the agent and are never registered
+ * at the relay; the compiler rejects attempts to pass one to `register()`. That
+ * mechanical rejection is the sovereignty doctrine expressed as a type.
  */
 
 import type { GuestRail } from "@motebit/sdk";
 
+export { type RailLogger, NOOP_LOGGER } from "./logger.js";
 export { StripeSettlementRail } from "./stripe-rail.js";
 export type { StripeRailConfig } from "./stripe-rail.js";
 export { X402SettlementRail } from "./x402-rail.js";

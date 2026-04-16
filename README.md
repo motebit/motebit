@@ -183,11 +183,11 @@ Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`,
 
 ## Architecture
 
-**32 packages across 7 architectural layers · 5 surfaces + 3 supporting apps · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
+**33 packages across 7 architectural layers · 5 surfaces + 3 supporting apps · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
 
 **The MIT/BSL split is algebra vs. judgment.** The MIT protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives in MIT. The `check-spec-mit-boundary` CI gate enforces this: every callable referenced in a spec must be exported from an MIT package or explicitly waived as reference-implementation convention.
 
-**Packages** ([`packages/`](packages/)) — 32 packages on a strict layer DAG. Layer 0 is the open protocol surface (MIT, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
+**Packages** ([`packages/`](packages/)) — 33 packages on a strict layer DAG. Layer 0 is the open protocol surface (MIT, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
 
 **Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and three supporting (`admin` dashboard, `identity` viewer, `docs` site).
 

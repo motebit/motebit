@@ -4,10 +4,10 @@
  * Tests the rail adapter with a mocked x402 facilitator — no real API calls.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { X402SettlementRail } from "../settlement-rails/x402-rail.js";
-import { SettlementRailRegistry } from "../settlement-rails/index.js";
+import { X402SettlementRail } from "../x402-rail.js";
+import { SettlementRailRegistry } from "../index.js";
 import { isDepositableRail } from "@motebit/sdk";
-import type { X402FacilitatorClient } from "../settlement-rails/x402-rail.js";
+import type { X402FacilitatorClient } from "../x402-rail.js";
 
 // --- Mock x402 facilitator ---
 
@@ -234,7 +234,7 @@ describe("SettlementRailRegistry with x402", () => {
   });
 
   it("isDepositableRail returns true for Stripe", async () => {
-    const { StripeSettlementRail } = await import("../settlement-rails/stripe-rail.js");
+    const { StripeSettlementRail } = await import("../stripe-rail.js");
     const stripeRail = new StripeSettlementRail({
       stripeClient: {
         balance: { retrieve: vi.fn().mockResolvedValue({}) },
@@ -249,7 +249,7 @@ describe("SettlementRailRegistry with x402", () => {
 
   it("coexists with Stripe rail in registry", async () => {
     // Importing StripeSettlementRail to verify multi-rail coexistence
-    const { StripeSettlementRail } = await import("../settlement-rails/stripe-rail.js");
+    const { StripeSettlementRail } = await import("../stripe-rail.js");
 
     const registry = new SettlementRailRegistry();
 

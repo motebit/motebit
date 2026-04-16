@@ -19,9 +19,7 @@
  */
 
 import type { GuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
-import { createLogger } from "../logger.js";
-
-const logger = createLogger({ service: "bridge-rail" });
+import { type RailLogger, NOOP_LOGGER } from "./logger.js";
 
 /** Terminal states where no further progress is possible. */
 const TERMINAL_STATES = new Set([
@@ -101,6 +99,8 @@ export interface BridgeRailConfig {
   pollIntervalMs?: number;
   /** Callback to persist proof. Injected by relay — the rail does not own storage. */
   onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
+  /** Structured logger. Default is silent — relay injects one carrying correlation id. */
+  logger?: RailLogger;
 }
 
 export class BridgeSettlementRail implements GuestRail {
@@ -117,6 +117,7 @@ export class BridgeSettlementRail implements GuestRail {
   private readonly maxPollAttempts: number;
   private readonly pollIntervalMs: number;
   private readonly onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
+  private readonly logger: RailLogger;
 
   constructor(config: BridgeRailConfig) {
     this.client = config.bridgeClient;
@@ -126,6 +127,7 @@ export class BridgeSettlementRail implements GuestRail {
     this.maxPollAttempts = config.maxPollAttempts ?? 10;
     this.pollIntervalMs = config.pollIntervalMs ?? 2000;
     this.onProofAttached = config.onProofAttached;
+    this.logger = config.logger ?? NOOP_LOGGER;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -174,7 +176,7 @@ export class BridgeSettlementRail implements GuestRail {
       idempotencyKey,
     });
 
-    logger.info("bridge.transfer.created", {
+    this.logger.info("bridge.transfer.created", {
       motebitId,
       transferId: transfer.id,
       state: transfer.state,
@@ -189,7 +191,7 @@ export class BridgeSettlementRail implements GuestRail {
         const txHash = completed.receipt?.destinationTxHash ?? completed.id;
         const network = completed.destination?.paymentRail ?? this.sourcePaymentRail;
 
-        logger.info("bridge.transfer.completed", {
+        this.logger.info("bridge.transfer.completed", {
           motebitId,
           transferId: completed.id,
           txHash,
@@ -246,7 +248,7 @@ export class BridgeSettlementRail implements GuestRail {
   }
 
   attachProof(settlementId: string, proof: PaymentProof): Promise<void> {
-    logger.info("bridge.proof.attached", {
+    this.logger.info("bridge.proof.attached", {
       settlementId,
       reference: proof.reference,
       network: proof.network,

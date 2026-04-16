@@ -1,10 +1,10 @@
 /**
  * Custody boundary — the type-level expression of the sovereignty doctrine.
  *
- * The relay's `SettlementRailRegistry` accepts only `GuestRail` (relay-custody
- * rails like Stripe, x402, Bridge). `SovereignRail` implementations (agent-custody
- * rails like `SolanaWalletRail`) must not be registerable at the relay — the
- * compiler rejects the attempt.
+ * `SettlementRailRegistry` accepts only `GuestRail` (relay-custody rails like
+ * Stripe, x402, Bridge). `SovereignRail` implementations (agent-custody rails
+ * like `SolanaWalletRail`) must not be registerable — the compiler rejects
+ * the attempt.
  *
  * This file tests both sides:
  *   1. Positive: every registered rail has custody="relay".
@@ -22,7 +22,7 @@ import {
   StripeSettlementRail,
   X402SettlementRail,
   BridgeSettlementRail,
-} from "../settlement-rails/index.js";
+} from "../index.js";
 
 describe("custody boundary", () => {
   it("every GuestRail implementation declares custody='relay'", () => {

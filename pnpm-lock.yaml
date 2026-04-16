@@ -1338,6 +1338,25 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
 
+  packages/settlement-rails:
+    dependencies:
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      stripe:
+        specifier: ^17.0.0
+        version: 17.7.0
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
   packages/state-vector:
     dependencies:
       '@motebit/policy-invariants':
@@ -1470,6 +1489,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@motebit/settlement-rails':
+        specifier: workspace:*
+        version: link:../../packages/settlement-rails
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:../../packages/wallet-solana
@@ -3185,7 +3207,7 @@ packages:
 
   '@expo/bunyan@4.0.1':
     resolution: {integrity: sha512-+Lla7nYSiHZirgK+U/uYzsLv/X+HaJienbD5AKX1UQZHYfWaP+9uuQluRB4GrEVWF0GZ7vEVp/jzaOT9k/SQlg==}
-    engines: {node: '>=0.10.0'}
+    engines: {'0': node >=0.10.0}
 
   '@expo/cli@0.22.28':
     resolution: {integrity: sha512-lvt72KNitGuixYD2l3SZmRKVu2G4zJpmg5V7WfUBNpmUU5oODBw/6qmiJ6kSLAlfDozscUk+BBGknBBzxUrwrA==}

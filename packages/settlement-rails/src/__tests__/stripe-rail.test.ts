@@ -4,8 +4,8 @@
  * Tests the rail adapter with a mocked Stripe SDK — no real API calls.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { StripeSettlementRail } from "../settlement-rails/stripe-rail.js";
-import { SettlementRailRegistry } from "../settlement-rails/index.js";
+import { StripeSettlementRail } from "../stripe-rail.js";
+import { SettlementRailRegistry } from "../index.js";
 
 // --- Mock Stripe SDK ---
 
@@ -218,6 +218,32 @@ describe("StripeSettlementRail", () => {
       expect(() => rail.constructWebhookEvent("bad-body", "bad-sig")).toThrow("Invalid signature");
     });
   });
+
+  describe("logger injection", () => {
+    it("emits events to the injected logger", async () => {
+      const events: Array<{ event: string; data?: Record<string, unknown> }> = [];
+      const railWithLogger = new StripeSettlementRail({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stripeClient: mockStripe as any,
+        webhookSecret: "whsec_test",
+        logger: {
+          info: (event, data) => events.push({ event, data }),
+          warn: () => {},
+          error: () => {},
+        },
+      });
+
+      await railWithLogger.deposit("agent-001", 25.0, "usd", "idem-log-1");
+      expect(events.some((e) => e.event === "stripe.checkout.created")).toBe(true);
+    });
+
+    it("is silent when no logger is injected", async () => {
+      const spy = vi.spyOn(console, "log");
+      await rail.deposit("agent-001", 25.0, "usd", "idem-silent");
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+  });
 });
 
 describe("SettlementRailRegistry", () => {
@@ -287,5 +313,25 @@ describe("SettlementRailRegistry", () => {
 
     expect(registry.list()).toHaveLength(1);
     expect(registry.get("stripe")).toBe(rail2);
+  });
+
+  it("manifest describes registered rails as relay-custody", () => {
+    const registry = new SettlementRailRegistry();
+    const mockStripe = createMockStripe();
+    registry.register(
+      new StripeSettlementRail({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stripeClient: mockStripe as any,
+        webhookSecret: "whsec_test",
+      }),
+    );
+    const manifest = registry.manifest();
+    expect(manifest).toHaveLength(1);
+    expect(manifest[0]).toEqual({
+      name: "stripe",
+      custody: "relay",
+      railType: "fiat",
+      supportsDeposit: true,
+    });
   });
 });
