@@ -46,6 +46,7 @@ const LAYER: Record<string, number> = {
   "@motebit/wallet-solana": 1,
   "@motebit/circuit-breaker": 1,
   "@motebit/settlement-rails": 1,
+  "@motebit/evm-rpc": 1,
 
   // Layer 2 — Engines (depend on Layer 0–1)
   "@motebit/market": 2,

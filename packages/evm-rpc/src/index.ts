@@ -1,39 +1,15 @@
 /**
- * EvmRpcAdapter — chain RPC plumbing, hidden behind a motebit-shaped interface.
+ * EvmRpcAdapter — EVM JSON-RPC plumbing behind a motebit-shaped interface.
  *
- * ## Why this adapter exists
+ * The interface exposes only what a deposit detector / log reader needs:
+ * `getBlockNumber()` and `getTransferLogs(args)`. Concrete implementations
+ * own envelope construction, fetch, hex parsing, and error translation —
+ * all failure modes (network error, non-2xx HTTP, JSON-RPC `error` field,
+ * malformed result) bubble as a single `Error`.
  *
- * Per `services/api/CLAUDE.md` rule 1, the relay must never inline protocol
- * plumbing. Rule 13 extends the doctrine to **medium plumbing** — third-party
- * webhook schemas, provider SDK churn, and here, external chain RPC protocols.
- * The deposit-detector previously constructed raw JSON-RPC payloads
- * (`eth_blockNumber`, `eth_getLogs`) and `fetch`ed them directly. That couples
- * the relay's credit/cursor state machine to EVM RPC's quirks.
- *
- * This adapter follows the same pattern as
- * `settlement-rails/x402-rail.ts` (X402FacilitatorClient) and
- * `webhooks/stripe-webhook-adapter.ts` (SubscriptionEventAdapter): the
- * interface speaks motebit, the implementation speaks the foreign protocol.
- *
- * Sibling in `@motebit/wallet-solana` (SolanaRpcAdapter) owns the Solana RPC
- * boundary for the sovereign rail. The EVM RPC boundary has no existing owner
- * — inline adapter suffices until a second consumer appears, at which point
- * package extraction is a trivial follow-up.
- *
- * ## Shape
- *
- *   - `EvmTransferLog` — motebit-shaped log record. Topic hex and amount hex
- *     are preserved verbatim; decoding to micros is the caller's
- *     responsibility (only the caller knows the token's decimals).
- *   - `EvmRpcAdapter` — interface exposing only what the detector needs:
- *     `getBlockNumber()` and `getTransferLogs(args)`.
- *   - `HttpJsonRpcEvmAdapter` — concrete implementation that owns the raw
- *     JSON-RPC envelope, `fetch` call, hex parsing, and error handling.
- *
- * All failure modes (network error, non-2xx HTTP, JSON-RPC `error` field,
- * malformed result) bubble as a single `Error`. The detector's existing
- * try/catch already collapses failures to "return 0 credits, advance no
- * cursor"; a narrow exception path matches that shape.
+ * Sibling of `@motebit/wallet-solana`'s `SolanaRpcAdapter`. Each chain's RPC
+ * boundary owns its own wire format behind a motebit-shaped contract so the
+ * relay's credit/cursor state machines never see raw JSON-RPC envelopes.
  */
 
 /**

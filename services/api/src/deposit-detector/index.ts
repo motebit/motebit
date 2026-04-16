@@ -18,10 +18,10 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "../logger.js";
 import { creditAccount } from "../accounts.js";
-import { HttpJsonRpcEvmAdapter, type EvmRpcAdapter, type EvmTransferLog } from "./rpc-adapter.js";
+import { HttpJsonRpcEvmAdapter, type EvmRpcAdapter, type EvmTransferLog } from "@motebit/evm-rpc";
 
-export type { EvmRpcAdapter, EvmTransferLog } from "./rpc-adapter.js";
-export { HttpJsonRpcEvmAdapter } from "./rpc-adapter.js";
+export type { EvmRpcAdapter, EvmTransferLog } from "@motebit/evm-rpc";
+export { HttpJsonRpcEvmAdapter } from "@motebit/evm-rpc";
 
 const logger = createLogger({ service: "deposit-detector" });
 

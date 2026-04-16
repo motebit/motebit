@@ -23,6 +23,7 @@
     "@motebit/core-identity": "workspace:*",
     "@motebit/encryption": "workspace:*",
     "@motebit/event-log": "workspace:*",
+    "@motebit/evm-rpc": "workspace:*",
     "@motebit/market": "workspace:*",
     "@motebit/persistence": "workspace:*",
     "@motebit/protocol": "workspace:*",

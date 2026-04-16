@@ -4,11 +4,10 @@
  * Verifies the JSON-RPC envelope is constructed correctly, responses are
  * parsed into motebit-shaped {@link EvmTransferLog} values, and every failure
  * mode (network / non-2xx / JSON-RPC error / malformed body) surfaces as a
- * single `Error`. The deposit detector's try/catch already collapses these
- * to "return 0 credits"; a narrow exception path matches that shape.
+ * single `Error`.
  */
 import { describe, it, expect, vi } from "vitest";
-import { HttpJsonRpcEvmAdapter } from "../deposit-detector/rpc-adapter.js";
+import { HttpJsonRpcEvmAdapter } from "../index.js";
 
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
@@ -311,5 +310,27 @@ describe("HttpJsonRpcEvmAdapter response envelope", () => {
     });
 
     await expect(adapter.getBlockNumber()).rejects.toThrow(/missing result/);
+  });
+
+  it("uses globalThis.fetch when none is injected", () => {
+    // Construction alone exercises the default-fetch branch without making a real network call.
+    const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl: "https://rpc.example" });
+    expect(adapter).toBeInstanceOf(HttpJsonRpcEvmAdapter);
+  });
+
+  it("supports requestTimeoutMs via AbortController", async () => {
+    // AbortController branch coverage — we never actually abort in this test; we
+    // just prove the config path constructs a controller when the timeout is set.
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ jsonrpc: "2.0", id: 1, result: "0x1" }));
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      requestTimeoutMs: 1000,
+      fetch: fetchFn as unknown as typeof globalThis.fetch,
+    });
+    await adapter.getBlockNumber();
+    const init = fetchFn.mock.calls[0]![1] as RequestInit;
+    expect(init.signal).toBeDefined();
   });
 });
