@@ -199,7 +199,9 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       throw new InsufficientUsdcBalanceError(balance, totalAmount);
     }
 
-    const results: SendUsdcBatchItemResult[] = new Array(items.length).fill(null);
+    const results: SendUsdcBatchItemResult[] = new Array<SendUsdcBatchItemResult>(
+      items.length,
+    ).fill({ ok: false, signature: null, slot: 0, reason: "not processed" });
     const chunkSize = Web3JsRpcAdapter.MAX_TRANSFERS_PER_TX;
     let aborted = false;
 
