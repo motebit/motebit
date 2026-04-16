@@ -118,9 +118,10 @@ if (savedVoice?.ttsVoice) setTTSVoice(savedVoice.ttsVoice);
       const bands = computeSpeechEnergy(now / 1000);
       app.setAudioReactivity(bands);
     }
-    // When TTS finishes, resume listening for the next turn
-    if (wasTTSPlaying && !playing) {
-      voiceAPI.resumeListening();
+    // Bridge TTS state to the voice session — it suspends recognition on
+    // TTS start and respawns it on TTS end so the floor hand-off is clean.
+    if (wasTTSPlaying !== playing) {
+      voiceAPI.setTtsSpeaking(playing);
     }
     wasTTSPlaying = playing;
     requestAnimationFrame(syncTTS);

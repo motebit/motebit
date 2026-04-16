@@ -54,6 +54,7 @@ const voiceTranscript = document.getElementById("voice-transcript") as HTMLSpanE
 const voiceWaveform = document.getElementById("voice-waveform") as HTMLCanvasElement | null;
 
 // === Audio State ===
+// Owned by the session: acquired on startSession, released on endSession.
 
 let audioContext: AudioContext | null = null;
 let analyserNode: AnalyserNode | null = null;
@@ -63,13 +64,32 @@ let noiseFloor = 0;
 const waveformSmoothed = new Float32Array(64);
 let waveformColor = { r: 203, g: 225, b: 255 };
 
+// === Session State ===
+// Presence mode is tenacious: click-on holds it open, click-off releases it.
+// Nothing between can tear the session down.
+//
+//   inSession        — user clicked on, has not clicked off yet. Source of truth.
+//   suspended        — TTS owns the audio floor. Recognition is paused and
+//                      audio reactivity yields to the speech-energy driver.
+//   ttsHasTakenFloor — setTtsSpeaking(true) has fired since the last final
+//                      transcript. Used by the safety timer to distinguish
+//                      "TTS never played" from "TTS already played and ended".
+//   recognition      — the short-lived Web Speech child. Respawns on every
+//                      onend while inSession && !suspended.
+
+let inSession = false;
+let suspended = false;
+let ttsHasTakenFloor = false;
+let recognition: SpeechRecognition | null = null;
+let restartTimer: ReturnType<typeof setTimeout> | null = null;
+
 // === Voice API ===
 
 export interface VoiceAPI {
   updateVoiceGlowColor(): void;
-  /** Re-enter listening after TTS finishes (continuous conversation loop). */
-  resumeListening(): void;
-  /** End the voice session entirely (mic button toggle off). */
+  /** Bridge from main.ts syncTTS — notifies when TTS starts/stops playing. */
+  setTtsSpeaking(speaking: boolean): void;
+  /** End the voice session entirely. Idempotent. */
   endSession(): void;
 }
 
@@ -85,7 +105,7 @@ export function initVoice(
   voiceCallbacks?: VoiceCallbacks,
 ): VoiceAPI {
   if (!micBtn || !inputBarWrapper) {
-    return { updateVoiceGlowColor() {}, resumeListening() {}, endSession() {} };
+    return { updateVoiceGlowColor() {}, setTtsSpeaking() {}, endSession() {} };
   }
 
   // Check for Web Speech API support
@@ -98,15 +118,11 @@ export function initVoice(
 
   if (!SpeechRecognitionCtor) {
     micBtn.style.display = "none";
-    return { updateVoiceGlowColor() {}, resumeListening() {}, endSession() {} };
+    return { updateVoiceGlowColor() {}, setTtsSpeaking() {}, endSession() {} };
   }
 
-  // Show presence circle — it's both the voice indicator and the voice input trigger
   micBtn.style.display = "flex";
   inputBarWrapper.classList.add("has-mic");
-
-  let recognition: SpeechRecognition | null = null;
-  let isListening = false;
 
   // === Audio Pipeline ===
 
@@ -209,7 +225,8 @@ export function initVoice(
     const waveY = new Float32Array(N);
 
     const draw = (timestamp: number): void => {
-      if (!isListening || !analyserNode) return;
+      // The loop lives for the entire session — not per recognition cycle.
+      if (!inSession || !analyserNode) return;
 
       const t = timestamp / 1000;
       const w = voiceWaveform.width;
@@ -273,13 +290,17 @@ export function initVoice(
       const damping = Math.max(0.15, 1 - flat2 * 0.9);
       const shimmer = 1 + (1 - smoothedFlatness) * 0.6;
 
-      // Drive creature audio reactivity
-      ctx.app.setAudioReactivity({
-        rms: gatedRms * damping,
-        low: smoothedLow * gate * damping,
-        mid: smoothedMid * gate * damping,
-        high: smoothedHigh * gate * damping * shimmer,
-      });
+      // Drive creature reactivity from mic only while we own the floor. During
+      // TTS (suspended), main.ts's syncTTS drives reactivity from synthesized
+      // speech energy — don't fight it.
+      if (!suspended) {
+        ctx.app.setAudioReactivity({
+          rms: gatedRms * damping,
+          low: smoothedLow * gate * damping,
+          mid: smoothedMid * gate * damping,
+          high: smoothedHigh * gate * damping * shimmer,
+        });
+      }
 
       // Draw waveform
       const pad = 24 * dpr;
@@ -352,75 +373,89 @@ export function initVoice(
     }
   }
 
-  // === Listening ===
+  // === Recognition Keeper ===
+  // The Web Speech API forces `continuous: false` style bursts in Chrome — the
+  // engine will stop itself on silence, on speech-end, on network blips. The
+  // session owns a keeper that respawns recognition on every onend until the
+  // user explicitly ends the session (or TTS takes the floor).
 
-  async function startListening(): Promise<void> {
-    if (isListening) return;
+  function spawnRecognition(): void {
+    if (!inSession || suspended || recognition) return;
 
-    const hasAudio = await ensureAudioPipeline();
+    const rec = new SpeechRecognitionCtor!();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = navigator.language || "en-US";
 
-    recognition = new SpeechRecognitionCtor!();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = navigator.language || "en-US";
-
-    recognition.onstart = () => {
-      isListening = true;
-      micBtn!.classList.add("active");
-      inputBarWrapper!.classList.add("listening");
+    rec.onstart = () => {
       if (voiceTranscript) {
         voiceTranscript.textContent = "";
         voiceTranscript.classList.remove("has-text");
       }
-      if (hasAudio) {
-        updateVoiceGlowColor();
-        sizeWaveformCanvas();
-        startWaveformLoop();
-      }
     };
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    rec.onresult = (event: SpeechRecognitionEvent) => {
       let final = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]!;
-        if (result.isFinal) {
-          final += result[0]!.transcript;
-        }
+        if (result.isFinal) final += result[0]!.transcript;
       }
+      if (!final) return;
 
-      if (final) {
-        pauseListening();
-        void chatAPI.handleVoiceSend(final.trim());
+      // Final captured — suspend auto-restart and hand off to chat. TTS will
+      // take the floor via setTtsSpeaking(true) and release it when the
+      // utterance ends, at which point the keeper respawns. The safety timer
+      // covers the degenerate case where TTS never plays at all (empty
+      // response, provider error, TTS disabled mid-flight).
+      suspended = true;
+      ttsHasTakenFloor = false;
+
+      void chatAPI.handleVoiceSend(final.trim()).finally(() => {
+        setTimeout(() => {
+          if (inSession && suspended && !ttsHasTakenFloor) {
+            suspended = false;
+            spawnRecognition();
+          }
+        }, 1500);
+      });
+    };
+
+    rec.onerror = (event: SpeechRecognitionErrorEvent) => {
+      // Permission-class errors kill the session; transient errors fall
+      // through to onend and get restarted like any other cycle.
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        endSession();
+        voiceCallbacks?.onPresenceToggle(false);
       }
     };
 
-    recognition.onerror = () => {
-      pauseListening();
-      // Re-enter listening if session is still active
-      if (inSession) void startListening();
+    rec.onend = () => {
+      recognition = null;
+      if (inSession && !suspended) scheduleRecognitionRestart();
     };
 
-    recognition.onend = () => {
-      // recognition.onend fires after onresult or onerror — only restart
-      // if we paused (not if a final result was already captured)
-      if (isListening) pauseListening();
-    };
-
-    recognition.start();
+    try {
+      rec.start();
+      recognition = rec;
+    } catch {
+      // "recognition has already started" race — back off and retry.
+      scheduleRecognitionRestart(300);
+    }
   }
 
-  /** Pause listening between turns — keep audio pipeline and session visuals alive. */
-  function pauseListening(): void {
-    if (!isListening) return;
-    isListening = false;
-    // Keep micBtn active and inputBarWrapper in session state — don't remove visual classes.
-    // The bar stays glowing throughout the voice session.
-    if (voiceTranscript) {
-      voiceTranscript.textContent = "";
-      voiceTranscript.classList.remove("has-text");
-    }
-    stopWaveformLoop();
+  function scheduleRecognitionRestart(delayMs = 150): void {
+    if (restartTimer != null) return;
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      spawnRecognition();
+    }, delayMs);
+  }
 
+  function killRecognition(): void {
+    if (restartTimer != null) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
     if (recognition) {
       try {
         recognition.abort();
@@ -429,38 +464,85 @@ export function initVoice(
       }
       recognition = null;
     }
-    // Audio pipeline stays alive — no pop, ready to resume
   }
 
-  /** End the voice session — release everything. */
+  // === Session Lifecycle ===
+
+  const onResize = (): void => {
+    if (inSession) sizeWaveformCanvas();
+  };
+
+  async function startSession(): Promise<void> {
+    if (inSession) return;
+    inSession = true;
+
+    const ok = await ensureAudioPipeline();
+    // The user may have clicked off (or permission denied) during the await.
+    if (!inSession) {
+      releaseAudioPipeline();
+      return;
+    }
+    if (!ok) {
+      inSession = false;
+      voiceCallbacks?.onPresenceToggle(false);
+      return;
+    }
+
+    micBtn!.classList.add("active");
+    inputBarWrapper!.classList.add("listening");
+    updateVoiceGlowColor();
+    sizeWaveformCanvas();
+    startWaveformLoop();
+    window.addEventListener("resize", onResize);
+    spawnRecognition();
+  }
+
   function endSession(): void {
-    pauseListening();
-    setStreamingTTSEnabled(false); // Stop any in-progress TTS speech
+    if (!inSession) return;
+    inSession = false;
+    suspended = false;
+    ttsHasTakenFloor = false;
+    killRecognition();
+    stopWaveformLoop();
+    window.removeEventListener("resize", onResize);
     micBtn!.classList.remove("active");
     inputBarWrapper!.classList.remove("listening");
+    if (voiceTranscript) {
+      voiceTranscript.textContent = "";
+      voiceTranscript.classList.remove("has-text");
+    }
+    setStreamingTTSEnabled(false);
     ctx.app.setAudioReactivity(null);
     releaseAudioPipeline();
-    inSession = false;
   }
 
-  let inSession = false;
+  function setTtsSpeaking(speaking: boolean): void {
+    if (speaking) {
+      suspended = true;
+      ttsHasTakenFloor = true;
+      killRecognition();
+    } else {
+      suspended = false;
+      ttsHasTakenFloor = false;
+      if (inSession) spawnRecognition();
+    }
+  }
+
+  // === Button Wiring ===
 
   micBtn.addEventListener("click", () => {
     if (inSession) {
       endSession();
       voiceCallbacks?.onPresenceToggle(false);
     } else {
-      inSession = true;
-      void startListening();
       voiceCallbacks?.onPresenceToggle(true);
+      void startSession();
     }
   });
 
   return {
     updateVoiceGlowColor,
-    resumeListening() {
-      if (inSession) void startListening();
-    },
+    setTtsSpeaking,
     endSession,
   };
 }
