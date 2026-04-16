@@ -42,7 +42,14 @@ describe("A2A Protocol Bridge", () => {
   let agentPublicKeyHex: string;
 
   beforeEach(async () => {
-    relay = await createTestRelay({ enableDeviceAuth: false });
+    // Use a random high port so the internal fetch() in the A2A handler
+    // hits a closed port → clean connection error → 500 (not the dev
+    // server on :3000 which returns 401 for unknown agents).
+    const isolatedPort = 40000 + Math.floor(Math.random() * 20000);
+    relay = await createTestRelay({
+      enableDeviceAuth: false,
+      federation: { endpointUrl: `http://127.0.0.1:${isolatedPort}` },
+    });
     const kp = await generateKeypair();
     agentPublicKeyHex = bytesToHex(kp.publicKey);
     await registerAgent(relay, MOTEBIT_ID, agentPublicKeyHex);
