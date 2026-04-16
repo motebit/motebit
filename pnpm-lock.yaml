@@ -860,6 +860,21 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
 
+  packages/deposit-detector:
+    devDependencies:
+      '@motebit/evm-rpc':
+        specifier: workspace:*
+        version: link:../evm-rpc
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
   packages/encryption:
     dependencies:
       '@motebit/crypto':
@@ -1499,6 +1514,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
+      '@motebit/deposit-detector':
+        specifier: workspace:*
+        version: link:../../packages/deposit-detector
       '@motebit/encryption':
         specifier: workspace:*
         version: link:../../packages/encryption

@@ -21,6 +21,7 @@
     "@hono/node-ws": "^1.3.0",
     "@motebit/circuit-breaker": "workspace:*",
     "@motebit/core-identity": "workspace:*",
+    "@motebit/deposit-detector": "workspace:*",
     "@motebit/encryption": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/evm-rpc": "workspace:*",
