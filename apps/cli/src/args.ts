@@ -55,6 +55,8 @@ export interface CliConfig {
   solanaRpcUrl?: string;
   /** Skip the balance query in `motebit wallet` (address-only). */
   walletAddressOnly?: boolean;
+  /** Enable TTS voice output at REPL startup. */
+  voice?: boolean;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -101,6 +103,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       all: { type: "boolean", default: false },
       "solana-rpc-url": { type: "string" },
       "address-only": { type: "boolean", default: false },
+      voice: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -190,6 +193,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     all: values.all,
     solanaRpcUrl: values["solana-rpc-url"],
     walletAddressOnly: values["address-only"],
+    voice: values.voice,
     version: values.version,
     help: values.help,
     positionals,
@@ -260,6 +264,10 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/proposals", desc: "List active proposals" },
   { usage: "/proposal <id> [accept|reject|counter]", desc: "Respond to a proposal" },
   { usage: "/operator", desc: "Show operator mode status" },
+  { usage: "/invoke <cap> <prompt>", desc: "Invoke a capability deterministically (no AI loop)" },
+  { usage: "/receipt <task-id>", desc: "Re-render an archived receipt (offline-verified)" },
+  { usage: "/voice [on|off]", desc: "Toggle TTS voice output (opt-in, off by default)" },
+  { usage: "/say <text>", desc: "Speak text via TTS (requires voice provider)" },
 ];
 
 export function printHelp(): void {

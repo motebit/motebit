@@ -4,6 +4,8 @@ import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import { formatBodyAwareness } from "@motebit/ai-core";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
 import { writeOutput, askQuestion } from "./terminal.js";
+import { archiveReceipt, renderReceipt } from "./receipt.js";
+import type { VoiceController } from "./voice.js";
 
 // Animated dots: cycles .  → .. → ... while a tool call is in flight.
 // Returns a stop function that clears the interval and writes " done\n".
@@ -24,6 +26,7 @@ function startDotAnimation(): () => void {
 export async function consumeStream(
   stream: AsyncGenerator<StreamChunk>,
   runtime: MotebitRuntime,
+  opts?: { voice?: VoiceController },
 ): Promise<void> {
   let pendingApproval: {
     tool_call_id: string;
@@ -32,6 +35,7 @@ export async function consumeStream(
     quorum?: { required: number; approvers: string[]; collected: string[] };
   } | null = null;
   let stopAnimation: (() => void) | null = null;
+  let lastCompletedReceiptResult: string | null = null;
 
   for await (const chunk of stream) {
     switch (chunk.type) {
@@ -74,10 +78,30 @@ export async function consumeStream(
           stopAnimation();
           stopAnimation = null;
         } else writeOutput(meta(" done") + "\n");
+        // Archive the signed receipt so `/receipt <task-id>` can re-render
+        // it, and emerge a CLI-native rendering right here — the "oh" beat
+        // that proves the delegation actually happened and the signature
+        // checks out locally. Mirrors the web receipt-artifact.
+        if (chunk.full_receipt) {
+          archiveReceipt(chunk.full_receipt);
+          await renderReceipt(chunk.full_receipt, (line) => writeOutput(line + "\n"));
+          if (chunk.full_receipt.status === "completed" && chunk.full_receipt.result) {
+            lastCompletedReceiptResult = chunk.full_receipt.result;
+          }
+        }
         break;
 
       case "injection_warning":
         writeOutput(`\n  ${warn("⚠")} ${warn("suspicious content in " + chunk.tool_name)}\n`);
+        break;
+
+      case "invoke_error":
+        if (stopAnimation) {
+          stopAnimation();
+          stopAnimation = null;
+        }
+        writeOutput(`\n  ${warn("[invoke failed · " + chunk.code + "]")}\n`);
+        if (chunk.message) writeOutput(`  ${dim(chunk.message)}\n`);
         break;
 
       case "result": {
@@ -119,6 +143,13 @@ export async function consumeStream(
 
     const approved = answer.trim().toLowerCase() === "y";
     writeOutput("\n" + promptColor("mote>") + " ");
-    await consumeStream(runtime.resolveApprovalVote(approved, runtime.motebitId), runtime);
+    await consumeStream(runtime.resolveApprovalVote(approved, runtime.motebitId), runtime, opts);
+  }
+
+  // Speak the delegated task's result on completion, but only if voice is
+  // opt-in enabled. Explicit policy: never auto-speak conversational text;
+  // voice is for completed task outcomes and `/say`, not every message.
+  if (opts?.voice && lastCompletedReceiptResult) {
+    void opts.voice.speakIfEnabled(lastCompletedReceiptResult);
   }
 }

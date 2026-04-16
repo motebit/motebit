@@ -63,6 +63,7 @@ import {
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
+import { VoiceController } from "./voice.js";
 
 // --- Re-exports for tests and external consumers ---
 export {
@@ -469,6 +470,11 @@ async function main(): Promise<void> {
   // Init runtime (renderer + MCP handled above)
   await runtime.init();
 
+  // Voice — opt-in only. Off by default. --voice flag or /voice on enables.
+  // Provider chain (ElevenLabs → OpenAI → system `say`/`espeak`) is built
+  // once from env keys; the controller owns the enabled flag independently.
+  const voiceController = new VoiceController({ enabled: config.voice === true });
+
   // Enable interactive delegation if relay + signing keys are available
   const DEFAULT_SYNC_URL = "https://relay.motebit.com";
   const syncUrl =
@@ -519,36 +525,48 @@ async function main(): Promise<void> {
 
     // Enable delegation with audience-scoped device tokens (submit vs query).
     // Falls back to raw API token only when device keys are unavailable.
+    // `enableInvokeCapability` is wired to the same relay coordinates so
+    // the deterministic `/invoke <cap> <prompt>` path shares transport with
+    // the AI-loop delegation path (surface-determinism doctrine).
     if (syncUrl) {
       if (privateKeyBytes && deviceId) {
         const pk = privateKeyBytes;
         const did = deviceId;
-        runtime.enableInteractiveDelegation({
+        const authToken = async (audience = "task:submit"): Promise<string> => {
+          const now = Date.now();
+          return createSignedToken(
+            {
+              mid: motebitId,
+              did,
+              iat: now,
+              exp: now + 5 * 60 * 1000,
+              jti: crypto.randomUUID(),
+              aud: audience,
+            },
+            pk,
+          );
+        };
+        const delegationCfg = {
           syncUrl,
-          authToken: async (audience = "task:submit") => {
-            const now = Date.now();
-            return createSignedToken(
-              {
-                mid: motebitId,
-                did,
-                iat: now,
-                exp: now + 5 * 60 * 1000,
-                jti: crypto.randomUUID(),
-                aud: audience,
-              },
-              pk,
-            );
-          },
-          routingStrategy: config.routingStrategy,
-        });
+          authToken,
+          ...(config.routingStrategy !== undefined
+            ? { routingStrategy: config.routingStrategy }
+            : {}),
+        };
+        runtime.enableInteractiveDelegation(delegationCfg);
+        runtime.enableInvokeCapability(delegationCfg);
       } else {
         const apiToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
         if (apiToken) {
-          runtime.enableInteractiveDelegation({
+          const delegationCfg = {
             syncUrl,
             authToken: () => Promise.resolve(apiToken),
-            routingStrategy: config.routingStrategy,
-          });
+            ...(config.routingStrategy !== undefined
+              ? { routingStrategy: config.routingStrategy }
+              : {}),
+          };
+          runtime.enableInteractiveDelegation(delegationCfg);
+          runtime.enableInvokeCapability(delegationCfg);
         }
       }
     }
@@ -674,6 +692,7 @@ async function main(): Promise<void> {
         mcpAdapters,
         privateKeyBytes,
         deviceId,
+        voice: voiceController,
       });
       console.log();
       prompt();
@@ -704,7 +723,9 @@ async function main(): Promise<void> {
         console.log();
       } else {
         writeOutput("\n" + promptColor("mote>") + " ");
-        await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime);
+        await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, {
+          voice: voiceController,
+        });
       }
       // Best-effort auto-title after enough messages
       void runtime.autoTitle();

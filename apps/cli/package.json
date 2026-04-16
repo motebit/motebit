@@ -81,6 +81,7 @@
     "@motebit/state-vector": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
+    "@motebit/voice": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0",

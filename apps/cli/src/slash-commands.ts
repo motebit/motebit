@@ -21,7 +21,7 @@ import { type CliConfig, COMMANDS } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig } from "./config.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
-import { green, yellow, red, dim, cyan, command, success } from "./colors.js";
+import { green, yellow, red, dim, cyan, command, success, warn } from "./colors.js";
 import {
   SqliteConversationSyncStoreAdapter,
   SqlitePlanSyncStoreAdapter,
@@ -35,6 +35,8 @@ import {
 } from "@motebit/sync-engine";
 import { deriveSyncEncryptionKey } from "@motebit/encryption";
 import { parseInterval } from "./intervals.js";
+import { handleInvokeCommand, handleReceiptCommand } from "./commands/invoke.js";
+import type { VoiceController } from "./voice.js";
 
 export interface ReplContext {
   moteDb: MotebitDatabase;
@@ -42,6 +44,8 @@ export interface ReplContext {
   mcpAdapters: McpClientAdapter[];
   privateKeyBytes?: Uint8Array;
   deviceId?: string;
+  /** Voice controller — optional, off by default. `/voice on` opts in. */
+  voice?: VoiceController;
 }
 
 export function isSlashCommand(input: string): boolean {
@@ -2206,6 +2210,66 @@ export async function handleSlashCommand(
         console.log(`             ${t.node.content}`);
       }
       console.log("\nThese memories are fading. Confirm or update them to reinforce.");
+      break;
+    }
+
+    case "invoke": {
+      // Deterministic capability affordance — routes through
+      // `runtime.invokeCapability`, NOT the AI loop. This is the
+      // doctrine enforced by `scripts/check-affordance-routing.ts`.
+      await handleInvokeCommand(args, { runtime, voice: repl?.voice });
+      break;
+    }
+
+    case "receipt": {
+      // Re-render an archived receipt, verified offline against the
+      // embedded public keys. Read-only; no relay, no AI loop.
+      await handleReceiptCommand(args, {});
+      break;
+    }
+
+    case "voice": {
+      const sub = args.trim().toLowerCase();
+      if (!repl?.voice) {
+        console.log(
+          warn(
+            "Voice is unavailable — no TTS providers wired. Set ELEVENLABS_API_KEY or OPENAI_API_KEY.",
+          ),
+        );
+        break;
+      }
+      if (sub === "on" || sub === "enable") {
+        repl.voice.enable();
+        console.log(green("Voice enabled."));
+      } else if (sub === "off" || sub === "disable") {
+        repl.voice.disable();
+        console.log(dim("Voice disabled."));
+      } else if (sub === "" || sub === "status") {
+        console.log(repl.voice.enabled ? green("voice: on") : dim("voice: off"));
+      } else {
+        console.log(warn("Usage: /voice [on|off|status]"));
+      }
+      break;
+    }
+
+    case "say": {
+      if (!repl?.voice) {
+        console.log(
+          warn(
+            "Voice is unavailable — no TTS providers wired. Set ELEVENLABS_API_KEY or OPENAI_API_KEY.",
+          ),
+        );
+        break;
+      }
+      if (!args.trim()) {
+        console.log(warn("Usage: /say <text>"));
+        break;
+      }
+      // Explicit opt-in for this utterance — bypass the enabled flag.
+      const result = await repl.voice.speak(args);
+      if (!result.spoke && result.error) {
+        console.log(red(`  [voice: ${result.error}]`));
+      }
       break;
     }
 
