@@ -107,6 +107,7 @@ import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { registerReceiptExchangeRoutes } from "./receipt-exchange.js";
+import { getStoredReceiptJson } from "./receipts-store.js";
 import { registerOnrampRoutes, StripeCryptoOnrampAdapter, type OnrampAdapter } from "./onramp.js";
 import { registerOfframpRoutes, BridgeOfframpAdapter, type OfframpAdapter } from "./offramp.js";
 import { createTaskRouter } from "./task-routing.js";
@@ -776,6 +777,23 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       batches,
       anchor_address: credentialAnchorAddress,
       chain_enabled: credentialAnchorConfig.submitter != null,
+    });
+  });
+
+  // Admin: byte-identical canonical JSON of a stored ExecutionReceipt.
+  // Keyed by (motebitId, taskId) — matches the composite PK in
+  // relay_receipts. Response body is the exact bytes canonicalJson
+  // produced at ingestion, so an auditor can strip `signature`,
+  // re-canonicalize the body, and re-verify Ed25519 against
+  // `public_key` without relay contact.
+  app.get("/api/v1/admin/receipts/:motebitId/:taskId", (c) => {
+    const json = getStoredReceiptJson(moteDb.db, c.req.param("motebitId"), c.req.param("taskId"));
+    if (json == null) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    return new Response(json, {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
     });
   });
 

@@ -76,6 +76,7 @@ export const DECLARATION_CONTENT = {
         "relay_allocations",
         "relay_settlements",
         "relay_settlement_proofs",
+        "relay_receipts",
         "relay_credentials",
         "relay_credential_anchor_batches",
         "relay_revocation_events",
@@ -97,6 +98,7 @@ export const DECLARATION_CONTENT = {
       observable: [
         "every delegation request and its routing decision",
         "every signed execution receipt the relay verified",
+        "full signed execution receipt JSON, byte-identical to the signer's canonical form, archived per (motebit_id, task_id) for independent audit re-verification",
         "every settlement (relay-mediated and p2p audit)",
         "every credential issued, anchored, or revoked",
         "every dispute, evidence submission, and resolution",
@@ -220,6 +222,7 @@ export const DECLARATION_CONTENT = {
   honest_gaps: [
     "onchain anchor of this declaration is not yet in place; only cached copies of the JSON survive operator deletion. See `spec/relay-transparency-v1.md` (when shipped) for the mandatory-anchor wire format.",
     "Fly.io and Vercel log retention windows are governed by their respective DPAs and are not separately enforced by motebit code.",
+    "receipts verified before the relay_receipts archive landed (migration v10) retained only `receipt_hash` in `relay_settlements`; their full canonical JSON was not preserved and cannot be reconstructed. Receipts verified on and after v10 are archived byte-identically.",
   ],
 } as const;
 

@@ -31,11 +31,12 @@ Retention window: indefinite while motebit is active; expires per TTL after last
 
 ### Operational
 
-Tables: `relay_tasks`, `relay_allocations`, `relay_settlements`, `relay_settlement_proofs`, `relay_credentials`, `relay_credential_anchor_batches`, `relay_revocation_events`, `relay_revoked_credentials`, `relay_disputes`, `relay_dispute_evidence`, `relay_dispute_resolutions`, `relay_peers`, `relay_federation_settlements`, `relay_execution_ledgers`, `relay_delegation_edges`, `relay_service_listings`, `relay_accounts`, `relay_subscriptions`, `relay_deposit_log`, `relay_refund_log`, `relay_accepted_migrations`.
+Tables: `relay_tasks`, `relay_allocations`, `relay_settlements`, `relay_settlement_proofs`, `relay_receipts`, `relay_credentials`, `relay_credential_anchor_batches`, `relay_revocation_events`, `relay_revoked_credentials`, `relay_disputes`, `relay_dispute_evidence`, `relay_dispute_resolutions`, `relay_peers`, `relay_federation_settlements`, `relay_execution_ledgers`, `relay_delegation_edges`, `relay_service_listings`, `relay_accounts`, `relay_subscriptions`, `relay_deposit_log`, `relay_refund_log`, `relay_accepted_migrations`.
 
 Observable:
 - every delegation request and its routing decision
 - every signed execution receipt the relay verified
+- full signed execution receipt JSON, byte-identical to the signer's canonical form, archived per (motebit_id, task_id) for independent audit re-verification
 - every settlement (relay-mediated and p2p audit)
 - every credential issued, anchored, or revoked
 - every dispute, evidence submission, and resolution
@@ -156,6 +157,7 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 
 - onchain anchor of this declaration is not yet in place; only cached copies of the JSON survive operator deletion. See `spec/relay-transparency-v1.md` (when shipped) for the mandatory-anchor wire format.
 - Fly.io and Vercel log retention windows are governed by their respective DPAs and are not separately enforced by motebit code.
+- receipts verified before the relay_receipts archive landed (migration v10) retained only `receipt_hash` in `relay_settlements`; their full canonical JSON was not preserved and cannot be reconstructed. Receipts verified on and after v10 are archived byte-identically.
 
 ## Verification
 

@@ -334,6 +334,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/admin/disputes", rl(expensiveLimiter));
   app.use("/api/v1/admin/settlements", rl(expensiveLimiter));
   app.use("/api/v1/admin/credential-anchoring", rl(expensiveLimiter));
+  app.use("/api/v1/admin/receipts/*", rl(expensiveLimiter));
 
   // Federation peering endpoints (30 req/min per IP — write tier)
   // POST handlers also enforce per-peer rate limiting (30 req/min per relay_id) in federation.ts
@@ -637,4 +638,7 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   app.use("/api/v1/admin/disputes", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/settlements", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/credential-anchoring", bearerAuth({ token: apiToken }));
+  // Admin receipt audit — master token only; serves byte-identical
+  // canonical JSON so an auditor can re-verify the signature offline.
+  app.use("/api/v1/admin/receipts/*", bearerAuth({ token: apiToken }));
 }

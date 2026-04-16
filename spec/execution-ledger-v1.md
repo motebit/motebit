@@ -307,6 +307,8 @@ The `ExecutionReceipt` type in `@motebit/protocol` is the binding machine-readab
 
 The reference relay persists receipts in the `relay_settlements` and per-agent execution-ledger tables (UTF-8 canonical JSON + indexed columns for `task_id`, `motebit_id`, `status`, `completed_at`). Apps persist receipts as events in the local event log. Alternative implementations MAY store receipts in any append-only structure; the wire shape above is what crosses every boundary.
 
+The reference relay also archives the full signed receipt tree in a dedicated `relay_receipts` table, keyed by `(motebit_id, task_id)` with `parent_task_id` and `depth` columns to preserve the delegation chain. The stored `receipt_json` column is the UTF-8 canonical JSON (§5, JCS) of the receipt, byte-identical to what the signer signed, so an auditor can fetch the row, strip `signature`, re-canonicalize the body, and re-verify Ed25519 against the embedded `public_key` without relay contact. Inserts are `INSERT OR IGNORE` on the composite primary key — re-submission is idempotent. Retention and redaction posture are declared in the operator transparency manifest (`docs/doctrine/operator-transparency.md`); `relay_receipts` is Operational, permanent-ledger, never mutated after write.
+
 ### 11.2 — Signing Algorithm
 
 1. Construct the receipt body: all fields **except** `signature`.

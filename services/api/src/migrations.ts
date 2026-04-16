@@ -522,4 +522,39 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 10,
+    name: "add_relay_receipts",
+    up: (db) => {
+      // Durable archive of the full signed ExecutionReceipt tree.
+      // relay_settlements keeps only receipt_hash; this table keeps the
+      // byte-identical canonical JSON so an auditor can reconstruct the
+      // chain and re-verify signatures without relay contact.
+      // See spec/execution-ledger-v1.md §11.1 Storage and
+      // docs/doctrine/operator-transparency.md "Operational".
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_receipts (
+          motebit_id        TEXT NOT NULL,
+          task_id           TEXT NOT NULL,
+          parent_task_id    TEXT,
+          depth             INTEGER NOT NULL DEFAULT 0,
+          status            TEXT NOT NULL,
+          suite             TEXT NOT NULL,
+          public_key        TEXT NOT NULL,
+          signature         TEXT NOT NULL,
+          invocation_origin TEXT,
+          receipt_json      TEXT NOT NULL,
+          received_at       INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, task_id)
+        );
+      `);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_relay_receipts_task ON relay_receipts(task_id);");
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_receipts_parent ON relay_receipts(parent_task_id, depth);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_receipts_origin ON relay_receipts(invocation_origin);",
+      );
+    },
+  },
 ];

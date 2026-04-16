@@ -61,6 +61,7 @@ import {
   type ReceiptCandidate,
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
+import { persistReceiptChain } from "./receipts-store.js";
 import type { ConnectedDevice } from "./index.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
@@ -343,6 +344,13 @@ export async function handleReceiptIngestion(
     status: receipt.status,
     motebitId: receipt.motebit_id,
   });
+
+  // --- Archive the signed receipt tree ---
+  // INSERT OR IGNORE keyed by (motebit_id, task_id). Runs before the
+  // settlement duplicate short-circuit so re-submissions still
+  // archive if the prior write failed; the composite PK keeps
+  // double-writes safe. See services/api/src/receipts-store.ts.
+  persistReceiptChain(moteDb.db, receipt);
 
   // --- Idempotency: DB settlement check ---
   const existingSettlement = moteDb.db
