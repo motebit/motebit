@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
-// Mock @motebit/voice — chat.ts imports StreamingTTSQueue from it.
+// Mock @motebit/voice — chat.ts imports StreamingTTSQueue and WebSpeechTTSProvider.
 vi.mock("@motebit/voice", () => ({
   StreamingTTSQueue: class {
     constructor(
@@ -12,6 +12,13 @@ vi.mock("@motebit/voice", () => ({
     flush() {}
     cancel() {}
     get draining() {
+      return false;
+    }
+  },
+  WebSpeechTTSProvider: class {
+    async speak() {}
+    cancel() {}
+    get speaking() {
       return false;
     }
   },

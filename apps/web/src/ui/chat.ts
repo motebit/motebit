@@ -1,6 +1,7 @@
 import type { WebContext } from "../types";
 import { hasCeilingBeenShown, markCeilingShown } from "../storage";
-import { StreamingTTSQueue } from "@motebit/voice";
+import { StreamingTTSQueue, WebSpeechTTSProvider } from "@motebit/voice";
+import type { TTSProvider } from "@motebit/voice";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { buildReceiptArtifact } from "./receipt-artifact";
 import { installPrUrlChip } from "./pr-url-chip";
@@ -61,19 +62,25 @@ export function renderMarkdown(raw: string): string {
 // === Streaming TTS ===
 
 /**
- * Thin wrapper around StreamingTTSQueue for the web surface.
- * Adds enable/disable gating, voice selection, and audioPlaying tracking
- * (consumed by main.ts syncTTS loop to detect TTS completion).
+ * Web surface wrapper around StreamingTTSQueue.
+ *
+ * Adds enable/disable gating, a swappable TTSProvider (so the surface can
+ * promote ElevenLabs / OpenAI / Web Speech behind the same seam), and an
+ * audioPlaying flag consumed by main.ts's syncTTS loop to detect when TTS
+ * actually ends. The provider itself is a pluggable adapter — never a
+ * direct SpeechSynthesis call — so swapping vendors is config, not code.
  */
 class StreamingTTS {
   private _enabled = false;
-  /** True when the browser is actually producing audio (from utterance.onstart). */
+  /** True while the queue is actively draining (first clause → last clause). */
   audioPlaying = false;
-  /** Selected voice name — matched against speechSynthesis.getVoices(). */
+  /** Opaque voice identifier — interpreted by whichever provider is active. */
   voiceName = "";
+  private provider: TTSProvider;
   private queue: StreamingTTSQueue;
 
-  constructor() {
+  constructor(provider: TTSProvider) {
+    this.provider = provider;
     this.queue = new StreamingTTSQueue(
       (text) => this.speakOne(text),
       () => {
@@ -83,6 +90,12 @@ class StreamingTTS {
         this.audioPlaying = false;
       },
     );
+  }
+
+  /** Swap the underlying TTS provider at runtime. Cancels any in-flight speech. */
+  setProvider(provider: TTSProvider): void {
+    this.cancel();
+    this.provider = provider;
   }
 
   get enabled(): boolean {
@@ -109,35 +122,32 @@ class StreamingTTS {
   }
 
   cancel(): void {
-    const wasActive = this.queue.draining || this.audioPlaying;
     this.queue.cancel();
     this.audioPlaying = false;
-    if (wasActive && typeof speechSynthesis !== "undefined") {
-      speechSynthesis.cancel();
-    }
+    this.provider.cancel();
   }
 
-  private speakOne(text: string): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const utterance = new SpeechSynthesisUtterance(text);
-      if (this.voiceName) {
-        const match = speechSynthesis.getVoices().find((v) => v.name === this.voiceName);
-        if (match) utterance.voice = match;
-      }
-      utterance.rate = 1.05;
-      utterance.pitch = 1.0;
-      utterance.volume = 0.85;
-      utterance.onstart = () => {
-        this.audioPlaying = true;
-      };
-      utterance.onend = () => resolve();
-      utterance.onerror = () => resolve();
-      speechSynthesis.speak(utterance);
-    });
+  private async speakOne(text: string): Promise<void> {
+    // Per-utterance options: voice is the only one we plumb — rate/pitch/volume
+    // differ meaningfully across providers and the canonical VoiceConfig keeps
+    // them provider-defined.
+    const options = this.voiceName ? { voice: this.voiceName } : undefined;
+    try {
+      await this.provider.speak(text, options);
+    } catch {
+      // Swallow per-clause failures so the queue keeps draining. A fallback
+      // chain (FallbackTTSProvider) should normally absorb these upstream; if
+      // all providers fail, silence is honest degradation.
+    }
   }
 }
 
-const streamingTTS = new StreamingTTS();
+const streamingTTS = new StreamingTTS(new WebSpeechTTSProvider());
+
+/** Swap the active TTS provider (e.g. when the user supplies an ElevenLabs key). */
+export function setStreamingTTSProvider(provider: TTSProvider): void {
+  streamingTTS.setProvider(provider);
+}
 
 export function setStreamingTTSEnabled(enabled: boolean): void {
   if (enabled) {

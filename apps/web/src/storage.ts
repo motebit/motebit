@@ -204,6 +204,39 @@ export function loadVoiceConfig(): VoiceConfig | null {
   return null;
 }
 
+// === TTS BYOK Keys ===
+//
+// Per-vendor TTS API keys. Kept separate from VoiceConfig because the canonical
+// VoiceConfig in @motebit/sdk crosses surfaces — secrets do not belong in its
+// type surface. Browser storage is the best we can do without OS keyring; the
+// secret never leaves this device.
+//
+// Providers are string-keyed so new adapters can land without touching storage.
+
+export type TTSVendorKey = "elevenlabs" | "openai";
+
+const TTS_KEY_PREFIX = "motebit-tts-key-";
+
+export function getTTSKey(vendor: TTSVendorKey): string | null {
+  try {
+    return localStorage.getItem(TTS_KEY_PREFIX + vendor);
+  } catch {
+    return null;
+  }
+}
+
+export function setTTSKey(vendor: TTSVendorKey, key: string | null): void {
+  try {
+    if (key == null || key === "") {
+      localStorage.removeItem(TTS_KEY_PREFIX + vendor);
+    } else {
+      localStorage.setItem(TTS_KEY_PREFIX + vendor, key);
+    }
+  } catch {
+    // localStorage unavailable
+  }
+}
+
 // === Sovereignty Ceiling CTA ===
 
 const CEILING_KEY = "motebit-ceiling-shown";
