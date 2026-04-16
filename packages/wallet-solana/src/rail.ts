@@ -17,7 +17,7 @@
 
 import type { SovereignRail } from "@motebit/protocol";
 import type { SolanaRpcAdapter } from "./adapter.js";
-import type { SendUsdcResult } from "./adapter.js";
+import type { SendUsdcResult, SendUsdcBatchItemResult } from "./adapter.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
 
 export type SendResult = SendUsdcResult;
@@ -129,6 +129,25 @@ export class SolanaWalletRail implements SovereignRail {
       await this.ensureGas();
     }
     return this.adapter.sendUsdc({ toAddress, microAmount });
+  }
+
+  /**
+   * Send USDC to multiple counterparties in as few Solana transactions
+   * as possible. One transaction with N transfer instructions pays one
+   * base fee instead of N — the endgame shape for multi-hop settlement
+   * payout on the sovereign rail.
+   *
+   * Chunking to fit Solana's 1232-byte tx limit is handled internally
+   * by the adapter. Fail-fast: if any chunk fails, remaining items are
+   * not submitted. Per-item results indicate what landed.
+   */
+  async sendBatch(
+    items: ReadonlyArray<{ toAddress: string; microAmount: bigint }>,
+  ): Promise<SendUsdcBatchItemResult[]> {
+    if (this.autoGas) {
+      await this.ensureGas();
+    }
+    return this.adapter.sendUsdcBatch(items);
   }
 
   /** Whether the RPC endpoint is reachable right now. */

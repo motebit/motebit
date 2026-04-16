@@ -27,6 +27,21 @@ export interface SendUsdcResult {
   confirmed: boolean;
 }
 
+/**
+ * Per-item outcome in a batch send. Either the item landed in a
+ * confirmed transaction (ok=true, signature present) or it failed
+ * (ok=false, reason present). Items within a single Solana transaction
+ * are atomic — they all succeed or all fail together. Items that were
+ * not submitted because a prior chunk failed return ok=false with
+ * reason "prior chunk failed."
+ */
+export interface SendUsdcBatchItemResult {
+  ok: boolean;
+  signature: string | null;
+  slot: number;
+  reason: string | null;
+}
+
 export interface SolanaRpcAdapter {
   /** The wallet's own base58 address (derived from the keypair seed). */
   readonly ownAddress: string;
@@ -45,6 +60,17 @@ export interface SolanaRpcAdapter {
    * `toAddress` is not a valid base58 public key.
    */
   sendUsdc(args: SendUsdcArgs): Promise<SendUsdcResult>;
+
+  /**
+   * Send USDC to multiple counterparties in as few Solana transactions
+   * as possible. Each transaction carries up to MAX_TRANSFERS_PER_TX
+   * transfer instructions (conservative for the 1232-byte tx limit).
+   * ATA creation instructions are prepended where needed.
+   *
+   * Chunking is internal. Fail-fast: if any chunk fails, subsequent
+   * chunks are NOT submitted; their items return ok=false.
+   */
+  sendUsdcBatch(items: readonly SendUsdcArgs[]): Promise<SendUsdcBatchItemResult[]>;
 
   /** Whether the RPC endpoint is reachable. Best-effort, no retries. */
   isReachable(): Promise<boolean>;

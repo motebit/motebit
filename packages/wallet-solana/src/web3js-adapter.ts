@@ -27,7 +27,12 @@ import {
   TokenAccountNotFoundError,
 } from "@solana/spl-token";
 
-import type { SolanaRpcAdapter, SendUsdcArgs, SendUsdcResult } from "./adapter.js";
+import type {
+  SolanaRpcAdapter,
+  SendUsdcArgs,
+  SendUsdcResult,
+  SendUsdcBatchItemResult,
+} from "./adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -167,6 +172,118 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       slot: confirmation.context.slot,
       confirmed: confirmation.value.err === null,
     };
+  }
+
+  /**
+   * Conservative max transfers per Solana transaction.
+   *
+   * Solana txns are capped at 1232 bytes including signatures. Each SPL
+   * transfer adds ~140 bytes (3 accounts + instruction data); each ATA
+   * creation adds ~240 bytes (5 accounts + instruction data). Worst case
+   * (every recipient needs a new ATA) each item costs ~380 bytes. With
+   * ~960 bytes available after header/signature/blockhash, we get ~8
+   * items in the worst case. Chunk at 8 to avoid runtime failures.
+   */
+  private static readonly MAX_TRANSFERS_PER_TX = 8;
+
+  async sendUsdcBatch(items: readonly SendUsdcArgs[]): Promise<SendUsdcBatchItemResult[]> {
+    if (items.length === 0) return [];
+    if (items.length === 1) {
+      const r = await this.sendUsdc(items[0]!);
+      return [{ ok: r.confirmed, signature: r.signature, slot: r.slot, reason: null }];
+    }
+
+    const totalAmount = items.reduce((s, i) => s + i.microAmount, 0n);
+    const balance = await this.getUsdcBalance();
+    if (balance < totalAmount) {
+      throw new InsufficientUsdcBalanceError(balance, totalAmount);
+    }
+
+    const results: SendUsdcBatchItemResult[] = new Array(items.length).fill(null);
+    const chunkSize = Web3JsRpcAdapter.MAX_TRANSFERS_PER_TX;
+    let aborted = false;
+
+    for (let start = 0; start < items.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, items.length);
+
+      if (aborted) {
+        for (let i = start; i < end; i++) {
+          results[i] = { ok: false, signature: null, slot: 0, reason: "prior chunk failed" };
+        }
+        continue;
+      }
+
+      try {
+        const tx = new Transaction();
+        const sourceAta = await getAssociatedTokenAddress(this.mint, this.keypair.publicKey);
+
+        for (let i = start; i < end; i++) {
+          const item = items[i]!;
+          let recipient: PublicKey;
+          try {
+            recipient = new PublicKey(item.toAddress);
+          } catch (err) {
+            throw new InvalidSolanaAddressError(item.toAddress, err);
+          }
+          const destAta = await getAssociatedTokenAddress(this.mint, recipient);
+
+          let destExists = false;
+          try {
+            await getAccount(this.connection, destAta, this.commitment);
+            destExists = true;
+          } catch (err) {
+            if (!(err instanceof TokenAccountNotFoundError)) throw err;
+          }
+          if (!destExists) {
+            tx.add(
+              createAssociatedTokenAccountInstruction(
+                this.keypair.publicKey,
+                destAta,
+                recipient,
+                this.mint,
+              ),
+            );
+          }
+          tx.add(
+            createTransferInstruction(sourceAta, destAta, this.keypair.publicKey, item.microAmount),
+          );
+        }
+
+        const latest = await this.connection.getLatestBlockhash(this.commitment);
+        tx.recentBlockhash = latest.blockhash;
+        tx.feePayer = this.keypair.publicKey;
+        tx.sign(this.keypair);
+
+        const signature = await this.connection.sendRawTransaction(tx.serialize());
+        const confirmation = await this.connection.confirmTransaction(
+          {
+            signature,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          },
+          this.commitment,
+        );
+
+        const ok = confirmation.value.err === null;
+        for (let i = start; i < end; i++) {
+          results[i] = {
+            ok,
+            signature,
+            slot: confirmation.context.slot,
+            reason: ok ? null : "tx failed",
+          };
+        }
+        if (!ok) aborted = true;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        for (let i = start; i < end; i++) {
+          results[i] = { ok: false, signature: null, slot: 0, reason };
+        }
+        aborted = true;
+      }
+    }
+
+    return results;
   }
 
   async isReachable(): Promise<boolean> {

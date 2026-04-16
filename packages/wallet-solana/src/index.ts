@@ -25,7 +25,11 @@ export {
   createSolanaWalletRail,
 } from "./rail.js";
 
-export { type SolanaRpcAdapter, type SendUsdcArgs } from "./adapter.js";
+export {
+  type SolanaRpcAdapter,
+  type SendUsdcArgs,
+  type SendUsdcBatchItemResult,
+} from "./adapter.js";
 
 export { Web3JsRpcAdapter } from "./web3js-adapter.js";
 

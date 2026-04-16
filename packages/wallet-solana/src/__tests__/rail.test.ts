@@ -29,6 +29,7 @@ function makeAdapter(overrides: Partial<SolanaRpcAdapter> = {}): SolanaRpcAdapte
       slot: 0,
       confirmed: true,
     }),
+    sendUsdcBatch: vi.fn().mockResolvedValue([]),
     isReachable: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
@@ -124,5 +125,46 @@ describe("InvalidSolanaAddressError", () => {
     expect(err.address).toBe("garbage");
     expect(err.message).toContain("garbage");
     expect(err.cause).toBe(cause);
+  });
+});
+
+describe("SolanaWalletRail.sendBatch", () => {
+  it("delegates to adapter.sendUsdcBatch with all items", async () => {
+    const batchResult = [
+      { ok: true, signature: "sig-1", slot: 10, reason: null },
+      { ok: true, signature: "sig-1", slot: 10, reason: null },
+    ];
+    const sendUsdcBatch = vi.fn().mockResolvedValue(batchResult);
+    const rail = new SolanaWalletRail(makeAdapter({ sendUsdcBatch }));
+
+    const results = await rail.sendBatch([
+      { toAddress: "Dest1", microAmount: 100_000n },
+      { toAddress: "Dest2", microAmount: 200_000n },
+    ]);
+
+    expect(sendUsdcBatch).toHaveBeenCalledOnce();
+    expect(sendUsdcBatch).toHaveBeenCalledWith([
+      { toAddress: "Dest1", microAmount: 100_000n },
+      { toAddress: "Dest2", microAmount: 200_000n },
+    ]);
+    expect(results).toEqual(batchResult);
+  });
+
+  it("returns per-item results including partial failure", async () => {
+    const batchResult = [
+      { ok: true, signature: "sig-A", slot: 5, reason: null },
+      { ok: false, signature: null, slot: 0, reason: "prior chunk failed" },
+    ];
+    const sendUsdcBatch = vi.fn().mockResolvedValue(batchResult);
+    const rail = new SolanaWalletRail(makeAdapter({ sendUsdcBatch }));
+
+    const results = await rail.sendBatch([
+      { toAddress: "D1", microAmount: 50_000n },
+      { toAddress: "D2", microAmount: 60_000n },
+    ]);
+
+    expect(results[0]!.ok).toBe(true);
+    expect(results[1]!.ok).toBe(false);
+    expect(results[1]!.reason).toBe("prior chunk failed");
   });
 });
