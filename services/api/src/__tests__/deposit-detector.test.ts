@@ -1,50 +1,53 @@
 /**
  * Deposit detector tests.
  *
- * Tests event-log scanning with mocked RPC — no real chain interaction.
+ * Tests event-log scanning with a mocked {@link EvmRpcAdapter} — no real
+ * chain interaction, no JSON-RPC envelope shape in the test fixtures.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
-import { detectDeposits, createDepositDetectorTable } from "../deposit-detector.js";
+import {
+  detectDeposits,
+  createDepositDetectorTable,
+  type EvmRpcAdapter,
+  type EvmTransferLog,
+} from "../deposit-detector.js";
 import { getAccountBalance } from "../accounts.js";
 
 const API_TOKEN = "test-token";
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
-// --- Mock RPC responses ---
+// --- Mock adapter helpers ---
 
-function blockNumberResponse(blockNum: number) {
+function transferLog(args: {
+  txHash: string;
+  logIndex: number;
+  from: string;
+  to: string;
+  value: bigint;
+  blockNumber: number;
+}): EvmTransferLog {
   return {
-    jsonrpc: "2.0",
-    id: 1,
-    result: "0x" + blockNum.toString(16),
+    blockNumber: BigInt(args.blockNumber),
+    txHash: args.txHash,
+    logIndex: args.logIndex,
+    fromTopic: "0x000000000000000000000000" + args.from.slice(2).toLowerCase(),
+    toTopic: "0x000000000000000000000000" + args.to.slice(2).toLowerCase(),
+    amountHex: "0x" + args.value.toString(16).padStart(64, "0"),
   };
 }
 
-function transferLogsResponse(
-  logs: Array<{
-    txHash: string;
-    logIndex: number;
-    from: string;
-    to: string;
-    value: bigint;
-    blockNumber: number;
-  }>,
-) {
+function mockAdapter(overrides: {
+  blockNumber?: bigint;
+  logs?: EvmTransferLog[];
+  getBlockNumber?: () => Promise<bigint>;
+  getTransferLogs?: () => Promise<EvmTransferLog[]>;
+}): EvmRpcAdapter {
   return {
-    jsonrpc: "2.0",
-    id: 1,
-    result: logs.map((l) => ({
-      transactionHash: l.txHash,
-      logIndex: "0x" + l.logIndex.toString(16),
-      topics: [
-        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-        "0x000000000000000000000000" + l.from.slice(2).toLowerCase(),
-        "0x000000000000000000000000" + l.to.slice(2).toLowerCase(),
-      ],
-      data: "0x" + l.value.toString(16).padStart(64, "0"),
-      blockNumber: "0x" + l.blockNumber.toString(16),
-    })),
+    getBlockNumber:
+      overrides.getBlockNumber ?? vi.fn().mockResolvedValue(overrides.blockNumber ?? BigInt(0)),
+    getTransferLogs: overrides.getTransferLogs ?? vi.fn().mockResolvedValue(overrides.logs ?? []),
   };
 }
 
@@ -102,37 +105,26 @@ describe("detectDeposits", () => {
       )
       .run("eip155:84532", "100", Date.now());
 
-    let callCount = 0;
-    const mockFetch = vi.fn().mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) {
-        // eth_blockNumber → block 110
-        return { ok: true, json: async () => blockNumberResponse(110) };
-      }
-      // eth_getLogs → one Transfer to agent wallet (5 USDC = 5_000_000 units)
-      return {
-        ok: true,
-        json: async () =>
-          transferLogsResponse([
-            {
-              txHash: "0xdeposit_tx_001",
-              logIndex: 0,
-              from: "0xSender0000000000000000000000000000000001",
-              to: walletAddr,
-              value: BigInt(5_000_000),
-              blockNumber: 105,
-            },
-          ]),
-      };
+    const rpc = mockAdapter({
+      blockNumber: BigInt(110),
+      logs: [
+        transferLog({
+          txHash: "0xdeposit_tx_001",
+          logIndex: 0,
+          from: "0xSender0000000000000000000000000000000001",
+          to: walletAddr,
+          value: BigInt(5_000_000),
+          blockNumber: 105,
+        }),
+      ],
     });
 
     const credits = await detectDeposits({
       db: relay.moteDb.db,
       chain: "eip155:84532",
-      rpcUrl: "https://sepolia.base.org",
+      rpc,
       contractAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       maxBlocksPerCycle: 1000,
-      fetchFn: mockFetch as unknown as typeof globalThis.fetch,
     });
 
     expect(credits).toBe(1);
@@ -154,6 +146,16 @@ describe("detectDeposits", () => {
       .prepare("SELECT last_block FROM relay_deposit_detector WHERE chain = ?")
       .get("eip155:84532") as { last_block: string };
     expect(cursor.last_block).toBe("110");
+
+    // Verify adapter was asked for the expected range / topic.
+    expect(rpc.getTransferLogs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromBlock: BigInt(101),
+        toBlock: BigInt(110),
+        contractAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        topic0: TRANSFER_TOPIC,
+      }),
+    );
   });
 
   it("ignores transfers to non-agent addresses", async () => {
@@ -169,34 +171,26 @@ describe("detectDeposits", () => {
       )
       .run("eip155:84532", "100", Date.now());
 
-    let callCount = 0;
-    const mockFetch = vi.fn().mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { ok: true, json: async () => blockNumberResponse(110) };
-      // Transfer to a random address, not an agent
-      return {
-        ok: true,
-        json: async () =>
-          transferLogsResponse([
-            {
-              txHash: "0xrandom_tx",
-              logIndex: 0,
-              from: "0xSender0000000000000000000000000000000001",
-              to: "0xNotAnAgent000000000000000000000000000099",
-              value: BigInt(1_000_000),
-              blockNumber: 105,
-            },
-          ]),
-      };
+    const rpc = mockAdapter({
+      blockNumber: BigInt(110),
+      logs: [
+        transferLog({
+          txHash: "0xrandom_tx",
+          logIndex: 0,
+          from: "0xSender0000000000000000000000000000000001",
+          to: "0xNotAnAgent000000000000000000000000000099",
+          value: BigInt(1_000_000),
+          blockNumber: 105,
+        }),
+      ],
     });
 
     const credits = await detectDeposits({
       db: relay.moteDb.db,
       chain: "eip155:84532",
-      rpcUrl: "https://rpc",
+      rpc,
       contractAddress: "0xUSDC",
       maxBlocksPerCycle: 1000,
-      fetchFn: mockFetch as unknown as typeof globalThis.fetch,
     });
 
     expect(credits).toBe(0);
@@ -222,35 +216,24 @@ describe("detectDeposits", () => {
       )
       .run("eip155:84532", "100", Date.now());
 
-    const transferLog = transferLogsResponse([
-      {
-        txHash: "0xsame_tx",
-        logIndex: 0,
-        from: "0xSender0000000000000000000000000000000001",
-        to: walletAddr,
-        value: BigInt(2_000_000),
-        blockNumber: 105,
-      },
-    ]);
-
-    let callCount = 0;
-    const mockFetch = vi.fn().mockImplementation(async () => {
-      callCount++;
-      // Alternate: blockNumber, then logs
-      if (callCount % 2 === 1) return { ok: true, json: async () => blockNumberResponse(110) };
-      return { ok: true, json: async () => transferLog };
+    const log = transferLog({
+      txHash: "0xsame_tx",
+      logIndex: 0,
+      from: "0xSender0000000000000000000000000000000001",
+      to: walletAddr,
+      value: BigInt(2_000_000),
+      blockNumber: 105,
     });
 
-    const fetchFn = mockFetch as unknown as typeof globalThis.fetch;
+    const rpc = mockAdapter({ blockNumber: BigInt(110), logs: [log] });
 
     // First scan
     const credits1 = await detectDeposits({
       db: relay.moteDb.db,
       chain: "eip155:84532",
-      rpcUrl: "https://rpc",
+      rpc,
       contractAddress: "0xUSDC",
       maxBlocksPerCycle: 1000,
-      fetchFn,
     });
     expect(credits1).toBe(1);
 
@@ -263,10 +246,9 @@ describe("detectDeposits", () => {
     const credits2 = await detectDeposits({
       db: relay.moteDb.db,
       chain: "eip155:84532",
-      rpcUrl: "https://rpc",
+      rpc,
       contractAddress: "0xUSDC",
       maxBlocksPerCycle: 1000,
-      fetchFn,
     });
     expect(credits2).toBe(0);
 
@@ -282,15 +264,17 @@ describe("detectDeposits", () => {
       )
       .run("eip155:84532", "100", Date.now());
 
-    const mockFetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const rpc: EvmRpcAdapter = {
+      getBlockNumber: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+      getTransferLogs: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+    };
 
     const credits = await detectDeposits({
       db: relay.moteDb.db,
       chain: "eip155:84532",
-      rpcUrl: "https://rpc",
+      rpc,
       contractAddress: "0xUSDC",
       maxBlocksPerCycle: 1000,
-      fetchFn: mockFetch as unknown as typeof globalThis.fetch,
     });
 
     expect(credits).toBe(0);
@@ -303,17 +287,14 @@ describe("detectDeposits", () => {
       )
       .run("eip155:84532", "100", Date.now());
 
-    const mockFetch = vi.fn().mockImplementation(async () => {
-      return { ok: true, json: async () => blockNumberResponse(200) };
-    });
+    const rpc = mockAdapter({ blockNumber: BigInt(200) });
 
     await detectDeposits({
       db: relay.moteDb.db,
       chain: "eip155:84532",
-      rpcUrl: "https://rpc",
+      rpc,
       contractAddress: "0xUSDC",
       maxBlocksPerCycle: 1000,
-      fetchFn: mockFetch as unknown as typeof globalThis.fetch,
     });
 
     const cursor = relay.moteDb.db
