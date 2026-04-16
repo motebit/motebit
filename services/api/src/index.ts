@@ -112,7 +112,12 @@ import {
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { registerReceiptExchangeRoutes } from "./receipt-exchange.js";
 import { getStoredReceiptJson } from "./receipts-store.js";
-import { registerOnrampRoutes, StripeCryptoOnrampAdapter, type OnrampAdapter } from "./onramp.js";
+import {
+  registerOnrampRoutes,
+  StripeCryptoOnrampAdapter,
+  HttpStripeCryptoClient,
+  type OnrampAdapter,
+} from "./onramp.js";
 import { registerOfframpRoutes, BridgeOfframpAdapter, type OfframpAdapter } from "./offramp.js";
 import { createTaskRouter } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
@@ -896,7 +901,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // See services/api/src/onramp.ts for the adapter pattern.
   const onrampAdapter: OnrampAdapter | null =
     onrampOverride ??
-    (stripeConfig ? new StripeCryptoOnrampAdapter({ secretKey: stripeConfig.secretKey }) : null);
+    (stripeConfig
+      ? new StripeCryptoOnrampAdapter({
+          client: new HttpStripeCryptoClient({ secretKey: stripeConfig.secretKey }),
+        })
+      : null);
   registerOnrampRoutes(app, onrampAdapter, process.env.SOLANA_RPC_URL);
 
   // --- Paved crypto → fiat off-ramp (Bridge by default) ---

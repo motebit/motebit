@@ -159,118 +159,26 @@ export interface OnrampAdapter {
 
 // ── Stripe Crypto Onramp adapter ──────────────────────────────────────
 
-/**
- * Concrete on-ramp adapter using Stripe's Crypto Onramp API.
- *
- * Stripe Crypto Onramp is documented at
- * https://docs.stripe.com/crypto/onramp and accessed via the
- * `/v1/crypto/onramp_sessions` REST endpoint. We call it directly
- * via `fetch` rather than the Stripe Node SDK because the SDK's
- * typed support for onramp sessions varies by version and we want
- * to avoid coupling the relay's Stripe SDK version to this module.
- *
- * The adapter takes a secret key at construction time and makes
- * authenticated POST requests to Stripe with
- * `Authorization: Bearer {secretKey}`. In production the secret
- * key lives in the `STRIPE_SECRET_KEY` environment variable.
- */
-export interface StripeCryptoOnrampConfig {
-  /** Stripe secret key (live or test). */
-  secretKey: string;
-  /**
-   * Optional custom fetch. Defaults to `globalThis.fetch`. Tests
-   * inject a custom fetch that returns canned responses so no real
-   * Stripe API calls are made during CI.
-   */
-  fetch?: typeof globalThis.fetch;
-  /**
-   * Optional Stripe API base URL. Defaults to
-   * `"https://api.stripe.com"`. Override for testing or for
-   * alternative Stripe deployments.
-   */
-  apiBase?: string;
-}
-
-export class StripeCryptoOnrampAdapter implements OnrampAdapter {
-  readonly provider = "stripe-crypto-onramp";
-
-  private readonly secretKey: string;
-  private readonly fetchFn: typeof globalThis.fetch;
-  private readonly apiBase: string;
-
-  constructor(config: StripeCryptoOnrampConfig) {
-    this.secretKey = config.secretKey;
-    this.fetchFn = config.fetch ?? globalThis.fetch;
-    this.apiBase = config.apiBase ?? "https://api.stripe.com";
-  }
-
-  async createSession(req: OnrampSessionRequest): Promise<OnrampSession> {
-    // Stripe's Crypto Onramp API uses form-encoded POST bodies with
-    // nested field syntax (e.g., `wallet_addresses[solana]=...`).
-    const body = new URLSearchParams();
-    body.set(`wallet_addresses[${req.destinationNetwork}]`, req.destinationAddress);
-    body.set("destination_currencies[0]", req.destinationCurrency);
-    body.set("destination_networks[0]", req.destinationNetwork);
-
-    if (req.amountUsd != null && req.amountUsd > 0) {
-      // Stripe's field is `source_amount` (decimal string in the source
-      // currency). Verified against docs.stripe.com/api/crypto/onramp_sessions/create.
-      body.set("source_amount", req.amountUsd.toFixed(2));
-      body.set("source_currency", "usd");
-    }
-
-    body.set("metadata[motebit_id]", req.motebitId);
-    if (req.metadata) {
-      for (const [k, v] of Object.entries(req.metadata)) {
-        body.set(`metadata[${k}]`, v);
-      }
-    }
-
-    const response = await this.fetchFn(`${this.apiBase}/v1/crypto/onramp_sessions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.secretKey}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: body.toString(),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Stripe Crypto Onramp API error: HTTP ${response.status} ${errorText}`);
-    }
-
-    const data = (await response.json()) as {
-      id?: string;
-      redirect_url?: string;
-      client_secret?: string;
-    };
-
-    if (!data.id) {
-      throw new Error("Stripe returned no session ID in the onramp response");
-    }
-
-    // Stripe returns redirect_url for the hosted flow (the one we use).
-    // The URL format is `https://crypto.link.com?session_hash=...`.
-    // If redirect_url is missing, fall back to the client_secret-based
-    // hosted URL pattern. If neither exists, throw — the session is
-    // unusable without a URL to redirect the user to.
-    const redirectUrl =
-      data.redirect_url ??
-      (data.client_secret ? `https://crypto.link.com?client_secret=${data.client_secret}` : null);
-    if (!redirectUrl) {
-      throw new Error(
-        "Stripe returned no redirect_url or client_secret — cannot redirect the user",
-      );
-    }
-
-    return {
-      sessionId: data.id,
-      redirectUrl,
-      provider: this.provider,
-    };
-  }
-}
+// The Stripe-backed OnrampAdapter lives in `./onramp/stripe-crypto-adapter.ts`
+// and its HTTP plumbing in `./onramp/stripe-crypto-client.ts`. Route
+// handlers in this module depend only on the `OnrampAdapter` interface
+// above; medium-specific knowledge (form encoding, auth headers, HTTP
+// error mapping) does not leak here. This mirrors the pattern used by
+// `webhooks/stripe-webhook-adapter.ts` and `settlement-rails/stripe-rail.ts`.
+//
+// Re-exported for consumers that build the adapter at the composition
+// root (see `services/api/src/index.ts`).
+export {
+  StripeCryptoOnrampAdapter,
+  type StripeCryptoOnrampAdapterConfig,
+} from "./onramp/stripe-crypto-adapter.js";
+export {
+  HttpStripeCryptoClient,
+  type HttpStripeCryptoClientConfig,
+  type StripeCryptoClient,
+  type StripeCryptoOnrampSession,
+  type StripeCryptoOnrampSessionParams,
+} from "./onramp/stripe-crypto-client.js";
 
 // ── Mock adapter for tests and local development ─────────────────────
 
