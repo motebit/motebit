@@ -1,28 +1,26 @@
 # Motebit
 
-A motebit is a droplet of intelligence under surface tension.
+A motebit is a droplet of intelligence under surface tension. You own the identity. The intelligence is pluggable. The body is yours.
 
-Every AI product owns the intelligence and rents you a session. Motebit inverts that. You own the identity. The intelligence is pluggable. The body is yours.
+The body is passive. The interior is active. Memory, trust, identity, tool use are interior structures. The policy gate, the privacy layer, the governance are the surface tension. Maximum interiority, minimum display.
 
-The body is passive. The interior is active. The agent lives inside the droplet — memory, trust, identity, tool use are interior structures. The policy gate, the privacy layer, the governance are the surface tension. The form doesn't change. The interior accumulates. Maximum interiority, minimum display.
-
-Read `DROPLET.md` for the physics of form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `THE_METABOLIC_PRINCIPLE.md` for what to build vs. what to absorb. Every visual and behavioral decision derives from droplet physics. If it can't be traced to surface tension, it doesn't belong.
+Read `DROPLET.md` for the physics of form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `THE_METABOLIC_PRINCIPLE.md` for what to build vs. absorb. Every decision traces to droplet physics or it doesn't belong.
 
 ## The three things no one else is building together
 
-1. **Persistent sovereign identity** — not a session token, a cryptographic entity that exists across time and devices
+1. **Persistent sovereign identity** — a cryptographic entity across time and devices, not a session token
 2. **Accumulated trust** — memory, state history, audit trails that make the agent more capable the longer it runs
-3. **Governance at the boundary** — sensitivity-aware privacy and policy that controls what crosses the surface
+3. **Governance at the boundary** — sensitivity-aware privacy and policy controlling what crosses the surface
 
-MCP defines capability but says nothing about who the agent is. A2A defines communication but has no trust accumulation. x402/AP2 defines payment but has no identity. Motebit is the missing layer underneath all three. The relay bridges all four through a single economic checkpoint — identity resolved, execution verified, money finalized.
+MCP defines capability but not identity. A2A defines communication but has no trust accumulation. x402/AP2 defines payment but has no identity. Motebit is the missing layer underneath. The relay bridges all four at a single economic checkpoint — identity resolved, execution verified, money finalized.
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript throughout. Node ≥ 20, pnpm 9.15. 31 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 3 supporting apps, 8 services (1 relay, 2 molecule agents, 4 atom providers, 1 glue), 12 open protocol specs.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 31 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 3 supporting apps, 8 services, 12 open protocol specs.
 
-Full layout, per-package roles, and the directory tree: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
+Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
-Per-directory doctrine loads lazily when Claude touches those files:
+Per-directory doctrine loads lazily:
 
 - [`packages/protocol/CLAUDE.md`](packages/protocol/CLAUDE.md) — MIT purity, types/algebra only
 - [`packages/crypto/CLAUDE.md`](packages/crypto/CLAUDE.md) — suite-dispatch is the only Ed25519 caller
@@ -33,94 +31,70 @@ Per-directory doctrine loads lazily when Claude touches those files:
 
 Cross-cutting doctrine (read on demand):
 
-- [`docs/doctrine/protocol-model.md`](docs/doctrine/protocol-model.md) — MIT/BSL/state, operational test, cryptosuite agility
-- [`docs/doctrine/security-boundaries.md`](docs/doctrine/security-boundaries.md) — sybil, injection, token binding, cert pinning
-- [`docs/doctrine/settlement-rails.md`](docs/doctrine/settlement-rails.md) — custody split, concrete rails, withdrawals
-- [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — three-layer relay visibility; declared posture vs proven posture
-- [`docs/doctrine/self-attesting-system.md`](docs/doctrine/self-attesting-system.md) — every claim the system makes about itself is verifiable with the mechanisms it exposes to users
-- [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — the root README is a surface; display stays, interior links out
-- [`docs/drift-defenses.md`](docs/drift-defenses.md) — the 14 synchronization invariants
+- [`docs/doctrine/protocol-model.md`](docs/doctrine/protocol-model.md) — MIT/BSL/state, cryptosuite agility
+- [`docs/doctrine/security-boundaries.md`](docs/doctrine/security-boundaries.md) — sybil, injection, token binding
+- [`docs/doctrine/settlement-rails.md`](docs/doctrine/settlement-rails.md) — custody split, rails, withdrawals
+- [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — declared posture vs proven posture
+- [`docs/doctrine/self-attesting-system.md`](docs/doctrine/self-attesting-system.md) — every claim is user-verifiable
+- [`docs/doctrine/surface-determinism.md`](docs/doctrine/surface-determinism.md) — affordances invoke capabilities, not prompts
+- [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out
+- [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory
 
 ## Principles
 
-These are not suggestions. They are the architectural invariants that make the monorepo coherent. Violating them breaks CI, breaks the product, or breaks the thesis.
+Architectural invariants. Violating them breaks CI, the product, or the thesis.
 
-**Metabolic principle.** Do not build what the medium already carries. Absorb solved problems (VAD, STT, embeddings, inference) through adapter boundaries with fallback chains. Build the enzymes (identity, memory, trust, governance, agentic loops), not the glucose (raw capabilities).
-
-**Adapter pattern everywhere.** All I/O abstracted. In-memory for tests, SQLite/Tauri/Expo/IndexedDB for production. The adapter is the surface tension boundary in code: the interior must not bind to a specific provider.
-
-**Fail-closed privacy.** Deny on error. Sensitivity levels (none/personal/medical/financial/secret) enforced at storage, retrieval, sync, and context boundaries. Medical/financial/secret memories never reach external AI providers. Relay sync redacts sensitive content. Retention rules enforced in housekeeping with deletion certificates.
-
-**Proof composability.** Canonical JSON → SHA-256 → Ed25519 verify. Always. External anchoring (blockchain, IPFS, x402) is additive, never gatekeeping. `@motebit/crypto` works standalone with zero monorepo deps. Do not add verification paths that require external systems.
-
-**Semiring algebra for routing.** Agent network routing is algebraic. The algebra lives in MIT `@motebit/protocol` (`Semiring<T>` interface, concrete semirings, product combinators, `WeightedDigraph<T>`, generic traversal, trust constants). The judgment lives in BSL `@motebit/semiring` (agent graph, multi-objective ranking, provenance, trust transitions). Swap the semiring to change what "best path" means. New routing concerns require only a new semiring definition — zero new algorithms.
-
-**Economic loop principle.** The relay is the economy's ledger, the rails are the membrane, agents are the workers and spenders inside the loop. Users fund at the edges (Stripe, Bridge, wallet deposit). Agents transact inside the relay via virtual accounts — allocate, execute, settle, earn, delegate, earn again. The 5% platform fee is extracted at each settlement checkpoint. Settlement rails are on/off ramps only — they never hold economic truth. The internal ledger is the circulation system. Ideal endgame: user funds a droplet once; the agent earns its own way forward. Do not build flows that require human intervention inside the loop. Deposits and withdrawals are edge operations. Everything between is agent-to-agent.
-
-**Adversarial onboarding.** Embed adversarial probes in the happy path. `--self-test` submits a self-delegation task (the exact sybil vector) through the live relay. If the security boundary breaks, onboarding breaks. When building a new boundary, ask: can the onboarding path exercise this?
-
-**Sibling boundary rule.** When you fix a boundary (auth, policy, validation, rendering), audit all sibling boundaries for the same gap in the same pass. A fix applied to one path but not its siblings is incomplete. Docs are siblings of code.
-
-**One-pass delivery.** When a core primitive ships, implement across all surfaces in the same pass. Do not defer UI if the package boundary is stable.
-
-**Deletion policy.** Three classifications before removing anything flagged by tooling or review. (1) Internal workspace dependencies (`@motebit/*`): never remove from import analysis alone — they encode layer membership and protocol contracts. Remove only when the layer contract changes. (2) Exports and capabilities: if it is published API, intentional vocabulary, or scaffolding for a sibling surface, preserve it. (3) Dead code: remove only when zero callers, not intended API, not staged for near-term cross-surface use, and typecheck/tests pass after deletion. When uncertain, do not delete. `check-deps` (hard) governs architecture; `check-unused` (soft) governs dependency hygiene. Do not conflate.
-
-**Synchronization invariants are the meta-principle.** Every drift the codebase has suffered has the same shape: the canonical source of truth was invisible, unenforced, or ambiguous, so sibling copies drifted. Fourteen invariants are defended today (thirteen hard gates via `pnpm check`, one advisory). When a new drift pattern is observed: name it, identify the canonical source, name sync owner and trigger, add a defense (CI check, lint rule, or doctrine principle), cross-reference from affected code. Never let divergence persist: if spec says X and code does Y, fix one — same commit, same PR. Inventory and incident histories: [`docs/drift-defenses.md`](docs/drift-defenses.md).
-
-**Protocol primitives belong in packages, never inline in services.** Before writing any protocol-shaped plumbing (signing, token minting, MCP transport, receipt construction, relay task submission, crypto verification, delegation) inside a service, audit the package layer in this order:
-
-1. `@motebit/protocol` — types, algebra, deterministic math
-2. `@motebit/crypto` — signing/verifying artifacts
-3. `@motebit/encryption` — at-rest encryption, KDF, X25519, signed bearer tokens
-4. `@motebit/mcp-client` — calling another motebit as a client
-5. `@motebit/mcp-server` — exposing this motebit as a server
-6. `@motebit/runtime` — agentic-loop orchestration
-7. `@motebit/core-identity` — identity bootstrap, multi-device, pairing
-8. `@motebit/identity-file` — generating/parsing/verifying motebit.md
-
-If none match, **that is the signal that a protocol primitive is missing.** Pause, add it to the right package with tests, consume from the service. Never ship protocol plumbing inline — it becomes "the convention" by the time the third sibling service copies it, and the real primitive gets hidden behind the copies. `check-service-primitives` catches inline `fetch` to motebit endpoints, JSON-RPC method strings, direct `signExecutionReceipt` calls, and `canonicalJson`/`sha256` constructing protocol-shaped payloads in services.
-
-**Surface affordances are deterministic.** When a user explicitly authorizes a delegation via a UI affordance (chip tap, button click, slash command, scene-object click, voice opt-in), the implementation must invoke the capability via the runtime's typed `invokeCapability(capability, args)` method, never by constructing a natural-language prompt and routing it through the AI loop. The affordance IS the action — auditable, deterministic, no model-inference risk in the routing path. The discrimination is enforced at the protocol level (`invocation_origin` on every receipt, `IntentOrigin` union), at the runtime level (`invokeCapability` is a separate entry point from `sendMessageStreaming`), and statically (`check-affordance-routing` blocks the anti-pattern in apps). Honest degradation, not graceful: a deterministic-path failure produces a clear system message or a failed-receipt bubble — never a fall-through to the AI loop. Doctrine: [`docs/doctrine/surface-determinism.md`](docs/doctrine/surface-determinism.md).
-
-**Capability rings, not feature parity.** Ring 1 (core, identical everywhere): runtime, sdk, crypto, policy. Ring 2 (platform adapters): persistence, keyring, voice. Ring 3 (platform capabilities): MCP stdio (CLI/desktop), 3D creature (desktop/mobile/web/spatial), daemon (CLI/desktop). The anti-pattern is shimming platform-impossible capabilities. Each surface maximizes what its platform offers. Ring 1 is about **capability**, not **form** — "operator can see their balance" is Ring 1; "balance renders in a rectangular panel" is Ring 3. A surface may express the same Ring 1 capability through a different form native to its medium.
+- **Metabolic.** Absorb solved problems (VAD, STT, embeddings, inference) through adapters with fallback. Build enzymes (identity, memory, trust, governance), not glucose. See `THE_METABOLIC_PRINCIPLE.md`.
+- **Adapter pattern everywhere.** All I/O abstracted. In-memory for tests, SQLite/Tauri/Expo/IndexedDB in production. The interior must not bind to a provider.
+- **Fail-closed privacy.** Deny on error. Sensitivity levels (none/personal/medical/financial/secret) enforced at storage, retrieval, sync, and context boundaries. Medical/financial/secret never reach external AI. Retention enforced via deletion certificates.
+- **Proof composability.** Canonical JSON → SHA-256 → Ed25519 verify. Always. External anchoring is additive, never gatekeeping. `@motebit/crypto` works standalone with zero monorepo deps.
+- **Semiring algebra for routing.** Algebra in MIT `@motebit/protocol` (`Semiring<T>`, `WeightedDigraph<T>`, traversal). Judgment in BSL `@motebit/semiring` (agent graph, ranking, provenance). Swap the semiring to change what "best path" means — no new algorithm.
+- **Economic loop.** Relay is the ledger. Rails are the membrane. Agents circulate inside via virtual accounts — allocate, execute, settle, earn. 5% fee at each settlement checkpoint. Rails are on/off ramps only; deposits and withdrawals are edge operations. Everything between is agent-to-agent.
+- **Adversarial onboarding.** Embed adversarial probes in the happy path. `--self-test` submits the self-delegation sybil vector through the live relay. If the security boundary breaks, onboarding breaks.
+- **Sibling boundary rule.** When you fix one boundary (auth, policy, validation, rendering), audit all siblings in the same pass. Docs are siblings of code.
+- **One-pass delivery.** When a core primitive ships, implement across all surfaces in the same pass. Do not defer UI if the package boundary is stable.
+- **Deletion policy.** Three classifications before removing. (1) Internal workspace deps (`@motebit/*`): never remove from import analysis alone — they encode layer membership. (2) Published API, vocabulary, or sibling-surface scaffolding: preserve. (3) Dead code: remove only when zero callers, not intended API, typecheck/tests pass. `check-deps` (hard) governs architecture; `check-unused` (soft) governs dep hygiene — do not conflate.
+- **Synchronization invariants are the meta-principle.** Every drift has the same shape: canonical truth invisible or unenforced, siblings drifted. On a new drift pattern: name it, identify canonical source, name sync owner and trigger, add a defense (CI/lint/doctrine), cross-reference. Never let spec and code diverge. Inventory: [`docs/drift-defenses.md`](docs/drift-defenses.md).
+- **Protocol primitives belong in packages, never inline in services.** Before writing protocol-shaped plumbing (signing, token minting, MCP transport, receipt construction, relay submission, verification, delegation) in a service, audit the package layer in order: `@motebit/protocol` → `crypto` → `encryption` → `mcp-client` → `mcp-server` → `runtime` → `core-identity` → `identity-file`. No match means a primitive is missing — pause, add it to the right package with tests, consume from the service. `check-service-primitives` enforces.
+- **Surface affordances are deterministic.** Explicit UI affordances (chip tap, button, slash command, scene-object click, voice opt-in) MUST invoke the runtime's typed `invokeCapability(capability, args)`, never route through the AI loop via a constructed prompt. Enforced at protocol (`invocation_origin`), runtime (`invokeCapability` vs `sendMessageStreaming`), and statically (`check-affordance-routing`). Failures degrade honestly, not gracefully. See [`docs/doctrine/surface-determinism.md`](docs/doctrine/surface-determinism.md).
+- **Capability rings, not feature parity.** Ring 1 (identical everywhere): runtime, sdk, crypto, policy. Ring 2 (platform adapters): persistence, keyring, voice. Ring 3 (platform capabilities): MCP stdio, 3D creature, daemon. Ring 1 is about capability, not form — a surface may express the same capability through a different medium-native form.
 
 ## Money model
 
-All amounts stored as integer micro-units (1 USD = 1,000,000 units). API boundary converts: `toMicro(dollars)` on ingest, `fromMicro(micro)` on egress. Zero floating-point arithmetic in the money path.
+Integer micro-units (1 USD = 1,000,000). Convert at API boundary: `toMicro(dollars)` in, `fromMicro(micro)` out. Zero floating-point in the money path.
 
 ## Commands
 
 ```bash
-pnpm build             # Build all packages (turbo)
+pnpm build             # Build all packages
 pnpm test              # Test all packages
 pnpm typecheck         # Type-check all packages
 pnpm lint              # Lint all packages
-pnpm check             # Run every hard drift gate (12 today)
+pnpm check             # Run every hard drift gate
 pnpm check-deps        # Validate layer architecture
 pnpm --filter @motebit/runtime test   # Test single package
 ```
 
 ## Conventions
 
-- All packages export from `src/index.ts`; tests in `src/__tests__/` using Vitest.
-- Error rethrows: `throw new Error("description", { cause: err })` — preserves chain.
+- Export from `src/index.ts`; tests in `src/__tests__/` using Vitest.
+- Error rethrows: `throw new Error("description", { cause: err })`.
 - Error messages: `err instanceof Error ? err.message : String(err)`.
-- Secrets in OS keyring, never config files. Config: `~/.motebit/config.json`. DB: `~/.motebit/motebit.db`.
-- CSS inline in HTML (desktop, admin), not separate stylesheets.
-- Branded ID types (`MotebitId`, `DeviceId`, etc.) enforce compile-time safety.
-- Relay uses `createLogger(module)` for structured JSON logs with `x-correlation-id`.
-- Runtime uses pluggable `logger` config (defaults to `console.warn`).
-- Dependency overrides must be upper-bounded (`>=4.59.0 <5.0.0`).
-- Inline trivial utilities (< 10 lines, no crypto/state/IO) at layer boundaries rather than importing cross-layer.
-- Event appending uses `appendWithClock()` for atomic version_clock assignment.
+- Secrets in OS keyring. Config: `~/.motebit/config.json`. DB: `~/.motebit/motebit.db`.
+- CSS inline in HTML (desktop, admin).
+- Branded ID types (`MotebitId`, `DeviceId`) for compile-time safety.
+- Relay: `createLogger(module)` with `x-correlation-id`. Runtime: pluggable `logger` (default `console.warn`).
+- Dependency overrides upper-bounded (`>=4.59.0 <5.0.0`).
+- Inline trivial utilities (< 10 lines, no crypto/state/IO) at layer boundaries rather than cross-layer import.
+- Event appending uses `appendWithClock()` for atomic `version_clock`.
 
 ## UI
 
 Motebit is calm software. Do not confirm what the user can already see.
 
-- **Silent** — modal closes, checkbox toggles, chat populates. No toast.
-- **Toast** — async outcomes the user can't observe (sync, pairing). Short-lived, never stacked.
+- **Silent** — modal closes, toggles, chat populates. No toast.
+- **Toast** — async outcomes the user can't observe (sync, pairing). Short, never stacked.
 - **System message** — errors with next steps, security warnings. Rare (≤3–4/session), actionable.
-- **Anti-patterns** — "Settings saved" after modal close, "Loading…" when content is visibly populating.
-- **Settings vs Sovereign panel — identity vs state.** Settings shows what you _are_ (identity, device, keys, configuration). The Sovereign panel shows what you _have, owe, or are doing_ (balances, allocations, credentials, execution ledger). Balances, fund affordances, live RPC reads belong in Sovereign. Static identity fields (address as public-key shadow, motebit_id, device_id) belong in Settings. When adding a display field, ask "is this what I am, or what I have?" — the answer names the panel.
-- **Audience-aware sequencing** — features that serve a subset (enterprise, power users, advanced config) go at the end of the page/flow, marked as optional. The sovereign/consumer path is primary and uninterrupted. Don't weave enterprise content into the universal narrative.
+- **Anti-patterns** — "Settings saved" after modal close; "Loading…" when content visibly populates.
+- **Settings vs Sovereign — identity vs state.** Settings: what you _are_ (identity, device, keys, config). Sovereign: what you _have, owe, or are doing_ (balances, allocations, credentials, execution ledger). Ask: "is this what I am, or what I have?"
+- **Audience-aware sequencing.** Enterprise/power-user features go at the end of the flow, marked optional. The sovereign/consumer path is primary.
