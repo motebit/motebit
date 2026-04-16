@@ -8,6 +8,8 @@ import type { StorageAdapters } from "@motebit/runtime";
 import { AnthropicProvider, OpenAIProvider } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
 import { openMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
+import type { EventStoreAdapter } from "@motebit/event-log";
+import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import {
   HttpEventStoreAdapter,
   EncryptedEventStoreAdapter,
@@ -93,11 +95,16 @@ export function getApiKey(provider: "anthropic" | "openai" | "google" = "anthrop
  * credential, and settlement signals.
  */
 export function buildStorageAdapters(moteDb: MotebitDatabase): StorageAdapters {
+  // Ring 2 privacy contract: the CLI surface's storage must expose an
+  // EventStoreAdapter and an AuditLogAdapter. Enforced statically by
+  // check-privacy-ring.
+  const eventStore: EventStoreAdapter = moteDb.eventStore;
+  const auditLog: AuditLogAdapter = moteDb.auditLog;
   return {
-    eventStore: moteDb.eventStore,
+    eventStore,
     memoryStorage: moteDb.memoryStorage,
     identityStorage: moteDb.identityStorage,
-    auditLog: moteDb.auditLog,
+    auditLog,
     stateSnapshot: moteDb.stateSnapshot,
     toolAuditSink: moteDb.toolAuditSink,
     conversationStore: moteDb.conversationStore,

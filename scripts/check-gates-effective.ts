@@ -364,6 +364,20 @@ export async function probeLeak(): Promise<boolean> {
           `Probe-only spec. The call \`probeOnlyBslSymbol(arg)\` must trip check-spec-mit-boundary.\n`,
       ),
   },
+  {
+    script: "check-privacy-ring",
+    proves:
+      "flags a surface app whose package.json drops one of the Ring 2 privacy-substrate packages (@motebit/event-log or @motebit/privacy-layer)",
+    perturb: () =>
+      // Remove `@motebit/event-log` from apps/web/package.json. The gate scans
+      // each surface's deps + devDeps and asserts both Ring 2 packages are
+      // declared; dropping one should emit a "missing-dep" finding and exit 1.
+      // Web is the probe target — a fresh declaration hygienically matches the
+      // other four surfaces. mutateFile restores byte-identical on cleanup.
+      mutateFile("apps/web/package.json", (src) =>
+        src.replace(/\s+"@motebit\/event-log":\s*"workspace:\*",/, ""),
+      ),
+  },
 ];
 
 /**

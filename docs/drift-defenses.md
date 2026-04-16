@@ -8,27 +8,28 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Fifteen invariants are enforced today. Fourteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped).
+Sixteen invariants are enforced today. Fifteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped).
 
 ## Inventory
 
-| #   | Invariant                                              | Defense                                           | Landed     |
-| --- | ------------------------------------------------------ | ------------------------------------------------- | ---------- |
-| 1   | Protocol primitives ↔ service implementations          | `check-service-primitives.ts`                     | —          |
-| 2   | Architectural layers ↔ dependencies                    | `check-deps.ts`                                   | —          |
-| 3   | Spec filenames ↔ implementation references             | `check-spec-references.ts` (`--strict`)           | —          |
-| 4   | Sibling boundaries ↔ each other                        | `check-sibling-boundaries.ts` (advisory, PR-diff) | —          |
-| 5   | Coverage thresholds ↔ measurements                     | `turbo run test:coverage`                         | —          |
-| 6   | Capability rings ↔ surfaces                            | `check-app-primitives.ts`                         | —          |
-| 7   | Deps declarations ↔ actual use                         | `knip` (soft signal)                              | —          |
-| 8   | Published API ↔ consumer contract                      | `check-api-surface.ts`                            | —          |
-| 9   | Spec Wire format types ↔ `@motebit/protocol` exports   | `check-spec-coverage.ts` (`--strict`)             | 2026-04-13 |
-| 10  | Spec Wire format signatures ↔ cryptosuite declarations | `check-suite-declared.ts`                         | 2026-04-13 |
-| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher      | `check-suite-dispatch.ts`                         | 2026-04-13 |
-| 12  | Published binaries ↔ dist-boot smoke                   | `check-dist-smoke.ts`                             | 2026-04-13 |
-| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`  | `check-docs-tree.ts`                              | 2026-04-14 |
-| 14  | Spec callables ↔ MIT package exports                   | `check-spec-mit-boundary.ts`                      | 2026-04-14 |
-| 15  | Surface affordances ↔ deterministic invocation path    | `check-affordance-routing.ts`                     | 2026-04-14 |
+| #   | Invariant                                               | Defense                                           | Landed     |
+| --- | ------------------------------------------------------- | ------------------------------------------------- | ---------- |
+| 1   | Protocol primitives ↔ service implementations           | `check-service-primitives.ts`                     | —          |
+| 2   | Architectural layers ↔ dependencies                     | `check-deps.ts`                                   | —          |
+| 3   | Spec filenames ↔ implementation references              | `check-spec-references.ts` (`--strict`)           | —          |
+| 4   | Sibling boundaries ↔ each other                         | `check-sibling-boundaries.ts` (advisory, PR-diff) | —          |
+| 5   | Coverage thresholds ↔ measurements                      | `turbo run test:coverage`                         | —          |
+| 6   | Capability rings ↔ surfaces                             | `check-app-primitives.ts`                         | —          |
+| 7   | Deps declarations ↔ actual use                          | `knip` (soft signal)                              | —          |
+| 8   | Published API ↔ consumer contract                       | `check-api-surface.ts`                            | —          |
+| 9   | Spec Wire format types ↔ `@motebit/protocol` exports    | `check-spec-coverage.ts` (`--strict`)             | 2026-04-13 |
+| 10  | Spec Wire format signatures ↔ cryptosuite declarations  | `check-suite-declared.ts`                         | 2026-04-13 |
+| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher       | `check-suite-dispatch.ts`                         | 2026-04-13 |
+| 12  | Published binaries ↔ dist-boot smoke                    | `check-dist-smoke.ts`                             | 2026-04-13 |
+| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`   | `check-docs-tree.ts`                              | 2026-04-14 |
+| 14  | Spec callables ↔ MIT package exports                    | `check-spec-mit-boundary.ts`                      | 2026-04-14 |
+| 15  | Surface affordances ↔ deterministic invocation path     | `check-affordance-routing.ts`                     | 2026-04-14 |
+| 16  | Ring 2 privacy substrate ↔ surface package declarations | `check-privacy-ring.ts`                           | 2026-04-16 |
 
 ## Incident histories
 
@@ -67,6 +68,10 @@ Every backticked callable of the form `` `functionName(...)` `` in any `spec/*.m
 ### 15. Surface affordances ↔ deterministic invocation path
 
 Every UI affordance that invokes a capability (chip tap, button click, slash command, scene-object click, voice opt-in) must route through `MotebitRuntime.invokeCapability(name, args)`, never by constructing a natural-language prompt and handing it to `handleSend` / `sendMessageStreaming`. The probe scans `apps/*/src/ui/**` and `apps/*/src/commands/**` for AI-loop entry points whose argument list contains a `required_capabilities` literal or a "delegate … remote agent / motebit network" phrase. Added 2026-04-14 after the PR-URL chip showcase: the chip said "Review this PR" but passed an English prompt through the AI loop; on one run the model responded with bullet-point questions instead of calling `delegate_to_agent`, producing no receipt and no audit signal. The chip lied. The drift shape was the same as inlining protocol plumbing in services — a handler pattern that "works most of the time" becoming the convention by the time a second affordance copies it. Fix: extract the submit-and-poll core into `packages/runtime/src/relay-delegation.ts`, add a typed `invokeCapability(capability, prompt, options)` entry point that yields `delegation_start → text → delegation_complete` with `full_receipt` (or a single `invoke_error` chunk on failure — no fall-through to the AI loop), stamp `invocation_origin: "user-tap"` on the relay submission so the outer receipt is signature-bound to the affordance that authorized it. Doctrine: [`docs/doctrine/surface-determinism.md`](doctrine/surface-determinism.md).
+
+### 16. Ring 2 privacy substrate ↔ surface package declarations
+
+Every surface app (web, cli, desktop, mobile, spatial) must declare `@motebit/event-log` and `@motebit/privacy-layer` as deps AND import at least one symbol from each somewhere non-test. Added 2026-04-16 after the birds-eye audit found that desktop + mobile honored the Ring 2 doctrine (both packages declared and wired) but web, spatial, and CLI shipped without one or both — web and spatial got the adapters transitively through `@motebit/browser-persistence`'s `createBrowserStorage()`, CLI got `auditLog` through `@motebit/persistence`'s `MotebitDatabase`, but none declared the direct dependency. The Ring 2 "fail-closed privacy" claim was mechanically unprovable on three of the five surfaces. Fix: explicit deps plus a type-level assertion at each surface's storage-assembly point (`const _auditLog: AuditLogAdapter = storage.auditLog`) that documents the contract and keeps the import honest. The gate excludes supporting apps (admin, identity, docs) whose doctrine is different — operator-facing, public static tools. Adding a new surface means adding it to `SURFACES` in `check-privacy-ring.ts`; removing one means a changeset and a doctrine update, not a quiet delete.
 
 ## How to add a new defense
 

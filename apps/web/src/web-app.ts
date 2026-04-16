@@ -25,6 +25,8 @@ import {
   IdbPlanSyncStore,
   IdbGradientStore,
 } from "@motebit/browser-persistence";
+import type { EventStoreAdapter } from "@motebit/event-log";
+import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { McpClientAdapter, AdvisoryManifestVerifier } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
@@ -165,6 +167,13 @@ export class WebApp {
 
     // Open IndexedDB storage
     const storage = await createBrowserStorage();
+    // Ring 2 privacy contract: storage must expose an EventStoreAdapter and
+    // an AuditLogAdapter so the runtime can honor the fail-closed privacy
+    // doctrine at its boundaries. Enforced statically by check-privacy-ring.
+    const _eventStore: EventStoreAdapter = storage.eventStore;
+    const _auditLog: AuditLogAdapter = storage.auditLog;
+    void _eventStore;
+    void _auditLog;
 
     // Bootstrap cryptographic identity
     const configStore: BootstrapConfigStore = {

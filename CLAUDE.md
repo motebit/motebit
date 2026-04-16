@@ -38,7 +38,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/self-attesting-system.md`](docs/doctrine/self-attesting-system.md) — every claim is user-verifiable
 - [`docs/doctrine/surface-determinism.md`](docs/doctrine/surface-determinism.md) — affordances invoke capabilities, not prompts
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out
-- [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory
+- [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory (16 today)
 
 ## Principles
 

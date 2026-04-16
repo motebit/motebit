@@ -158,6 +158,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every backticked callable referenced in spec/*.md is exported from an MIT package (protocol/crypto/sdk) or explicitly waived with a reason (invariant #14, added 2026-04-14 after an external review asked whether protocol-only algorithms could leak into BSL; the probe caught deriveSyncEncryptionKey as a real leak and forced the spec to inline the HKDF recipe)",
     script: "check-spec-mit-boundary",
   },
+  {
+    name: "check-privacy-ring",
+    defends:
+      "every surface app (web/cli/desktop/mobile/spatial) declares and imports @motebit/event-log + @motebit/privacy-layer — the Ring 2 fail-closed privacy substrate the root CLAUDE.md claims as doctrine (invariant #16, added 2026-04-16 after the birds-eye audit caught web/spatial/cli missing one or both declarations)",
+    script: "check-privacy-ring",
+  },
 ];
 
 interface Result {

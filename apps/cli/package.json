@@ -76,6 +76,7 @@
     "@motebit/persistence": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/policy": "workspace:*",
+    "@motebit/privacy-layer": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/state-vector": "workspace:*",

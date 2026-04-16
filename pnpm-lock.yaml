@@ -203,6 +203,9 @@ importers:
       '@motebit/policy':
         specifier: workspace:*
         version: link:../../packages/policy
+      '@motebit/privacy-layer':
+        specifier: workspace:*
+        version: link:../../packages/privacy-layer
       '@motebit/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -569,12 +572,18 @@ importers:
       '@motebit/encryption':
         specifier: workspace:*
         version: link:../../packages/encryption
+      '@motebit/event-log':
+        specifier: workspace:*
+        version: link:../../packages/event-log
       '@motebit/identity-file':
         specifier: workspace:*
         version: link:../../packages/identity-file
       '@motebit/mcp-client':
         specifier: workspace:*
         version: link:../../packages/mcp-client
+      '@motebit/privacy-layer':
+        specifier: workspace:*
+        version: link:../../packages/privacy-layer
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine
@@ -630,6 +639,9 @@ importers:
       '@motebit/encryption':
         specifier: workspace:*
         version: link:../../packages/encryption
+      '@motebit/event-log':
+        specifier: workspace:*
+        version: link:../../packages/event-log
       '@motebit/gradient':
         specifier: workspace:*
         version: link:../../packages/gradient
@@ -645,6 +657,9 @@ importers:
       '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../../packages/policy-invariants
+      '@motebit/privacy-layer':
+        specifier: workspace:*
+        version: link:../../packages/privacy-layer
       '@motebit/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

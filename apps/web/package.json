@@ -22,6 +22,8 @@
     "@motebit/browser-persistence": "workspace:*",
     "@motebit/core-identity": "workspace:*",
     "@motebit/encryption": "workspace:*",
+    "@motebit/event-log": "workspace:*",
+    "@motebit/privacy-layer": "workspace:*",
     "@motebit/protocol": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/planner": "workspace:*",

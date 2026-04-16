@@ -26,6 +26,8 @@
 import { MotebitRuntime, ProxySession, PLANNING_TASK_ROUTER } from "@motebit/runtime";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
+import type { EventStoreAdapter } from "@motebit/event-log";
+import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import type { StreamChunk, KeyringAdapter, StorageAdapters, RelayConfig } from "@motebit/runtime";
 import type { PlanChunk, ConversationMessage } from "@motebit/runtime";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
@@ -414,6 +416,13 @@ export class SpatialApp {
     const keyStore: BootstrapKeyStore = new EncryptedKeyStore();
     const storage = await createBrowserStorage();
     this.storage = storage;
+    // Ring 2 privacy contract: storage must expose an EventStoreAdapter and
+    // an AuditLogAdapter so the runtime can honor the fail-closed privacy
+    // doctrine at its boundaries. Enforced statically by check-privacy-ring.
+    const _eventStore: EventStoreAdapter = storage.eventStore;
+    const _auditLog: AuditLogAdapter = storage.auditLog;
+    void _eventStore;
+    void _auditLog;
 
     const result = await sharedBootstrapIdentity({
       surfaceName: "Spatial",
