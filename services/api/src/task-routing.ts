@@ -16,11 +16,12 @@ import type { ListingId } from "@motebit/sdk";
 import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/encryption";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
-import { CircuitBreaker } from "./circuit-breaker.js";
-import type { CircuitBreakerConfig, CircuitBreakerState } from "./circuit-breaker.js";
+import { CircuitBreaker } from "@motebit/circuit-breaker";
+import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "task-routing" });
+const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
 
 export interface TaskRouterDeps {
   db: DatabaseDriver;
@@ -110,7 +111,10 @@ export interface TaskRouter {
 
 export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   const { db, relayIdentity } = deps;
-  const circuitBreaker = new CircuitBreaker(deps.circuitBreakerConfig);
+  const circuitBreaker = new CircuitBreaker({
+    config: deps.circuitBreakerConfig,
+    logger: circuitBreakerLogger,
+  });
 
   // Helper: fetch recent delegation edges for multi-hop routing.
   function fetchPeerEdges(): Array<{

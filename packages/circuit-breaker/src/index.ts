@@ -1,19 +1,19 @@
 /**
- * Federation Circuit Breaker — per-peer forward health tracking.
+ * Per-peer forward-health circuit breaker — a three-state machine.
  *
- * Three-state machine per peer:
- *   CLOSED  → healthy, forwarding allowed
- *   OPEN    → failing, forwarding blocked until resetTimeout elapses
- *   HALF_OPEN → probing: limited forwarding allowed, success closes, failure re-opens
+ *   CLOSED    → healthy, forwarding allowed
+ *   OPEN      → failing, forwarding blocked until resetTimeoutMs elapses
+ *   HALF_OPEN → probing: limited forwarding allowed; success closes, failure re-opens
  *
- * Integrates with (but does not replace) heartbeat-based liveness tracking.
- * Heartbeat handles liveness (3 missed → suspend, 5 → remove).
- * Circuit breaker handles forward-path health.
+ * Generic enough for any outbound-call health guard (federation forwards,
+ * MCP client retries, webhook delivery, RPC peers). Zero I/O, deterministic
+ * when the clock is injected. Consumers supply an optional logger to emit
+ * structured state transitions in whatever shape their platform uses.
+ *
+ * Integrates with — but does not replace — liveness signals like heartbeats:
+ * liveness answers "is the peer reachable at all?"; the circuit breaker
+ * answers "is forwarding through it likely to succeed right now?".
  */
-
-import { createLogger } from "./logger.js";
-
-const logger = createLogger({ service: "relay", module: "circuit-breaker" });
 
 export type CircuitState = "closed" | "open" | "half_open";
 
@@ -38,6 +38,22 @@ export interface CircuitBreakerState {
   lastStateChangeAt: number;
 }
 
+/**
+ * Minimal shape the circuit breaker needs from a logger. Any structured
+ * logger with an `info(event, data)` signature satisfies it; callers pass
+ * their platform logger (e.g., a module-scoped `createLogger("relay")`
+ * adapter). Omit to get a silent default.
+ */
+export interface CircuitBreakerLogger {
+  info(event: string, data: Record<string, unknown>): void;
+}
+
+export interface CircuitBreakerOptions {
+  config?: Partial<CircuitBreakerConfig>;
+  now?: () => number;
+  logger?: CircuitBreakerLogger;
+}
+
 interface PeerEntry {
   state: CircuitState;
   /** Failure timestamps within the sliding window (for CLOSED state windowed counting). */
@@ -55,24 +71,28 @@ const DEFAULT_CONFIG: CircuitBreakerConfig = {
   windowMs: 120_000,
 };
 
+const NOOP_LOGGER: CircuitBreakerLogger = { info: () => {} };
+
 export class CircuitBreaker {
   private readonly peers = new Map<string, PeerEntry>();
   private readonly config: CircuitBreakerConfig;
   private readonly _now: () => number;
+  private readonly logger: CircuitBreakerLogger;
 
-  constructor(config?: Partial<CircuitBreakerConfig>, now?: () => number) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
-    this._now = now ?? (() => Date.now());
+  constructor(options: CircuitBreakerOptions = {}) {
+    this.config = { ...DEFAULT_CONFIG, ...options.config };
+    this._now = options.now ?? (() => Date.now());
+    this.logger = options.logger ?? NOOP_LOGGER;
   }
 
   /**
    * Record a successful forward to a peer.
    * In HALF_OPEN: if successThreshold met, transition to CLOSED.
-   * In CLOSED: no-op (already healthy).
+   * In CLOSED: prune stale failures from the window.
    */
   recordSuccess(peerId: string): void {
     const entry = this.peers.get(peerId);
-    if (!entry) return; // No entry = never failed = closed
+    if (!entry) return;
 
     const now = this._now();
 
@@ -82,11 +102,10 @@ export class CircuitBreaker {
         this.transition(peerId, entry, "closed", now);
       }
     } else if (entry.state === "closed") {
-      // Success in closed state: prune stale failures from the window
       this.pruneWindow(entry, now);
     }
-    // In OPEN state: success shouldn't happen (canForward returns false),
-    // but if it does, ignore — the timeout path handles OPEN → HALF_OPEN.
+    // In OPEN: success shouldn't happen (canForward returns false);
+    // the timeout path handles OPEN → HALF_OPEN.
   }
 
   /**
@@ -107,7 +126,6 @@ export class CircuitBreaker {
         lastStateChangeAt: now,
       };
       this.peers.set(peerId, entry);
-      // Check threshold even for first entry (won't trigger with default threshold=5)
       if (entry.failureTimestamps.length >= this.config.failureThreshold) {
         this.transition(peerId, entry, "open", now);
       }
@@ -117,7 +135,6 @@ export class CircuitBreaker {
     entry.lastFailureAt = now;
 
     if (entry.state === "half_open") {
-      // Any failure in half_open immediately re-opens
       this.transition(peerId, entry, "open", now);
     } else if (entry.state === "closed") {
       entry.failureTimestamps.push(now);
@@ -126,23 +143,20 @@ export class CircuitBreaker {
         this.transition(peerId, entry, "open", now);
       }
     }
-    // In OPEN state: failure is expected (we're not forwarding), ignore.
+    // In OPEN: failure is expected (we're not forwarding), ignore.
   }
 
   /**
    * Check if forwarding to a peer is allowed.
-   * CLOSED → yes
-   * OPEN → check if resetTimeout has elapsed → transition to HALF_OPEN → yes
-   * HALF_OPEN → yes (probing)
+   * CLOSED → yes. OPEN → yes once resetTimeoutMs elapses (transitions to HALF_OPEN). HALF_OPEN → yes (probing).
    */
   canForward(peerId: string): boolean {
     const entry = this.peers.get(peerId);
-    if (!entry) return true; // No entry = never failed = closed
+    if (!entry) return true;
 
     if (entry.state === "closed") return true;
     if (entry.state === "half_open") return true;
 
-    // OPEN: check if enough time has passed to probe
     const now = this._now();
     if (now - entry.lastStateChangeAt >= this.config.resetTimeoutMs) {
       this.transition(peerId, entry, "half_open", now);
@@ -152,7 +166,7 @@ export class CircuitBreaker {
     return false;
   }
 
-  /** Get the current circuit breaker state for a peer (observability). */
+  /** Current observable state for a peer. */
   getState(peerId: string): CircuitBreakerState {
     const entry = this.peers.get(peerId);
     if (!entry) {
@@ -165,7 +179,6 @@ export class CircuitBreaker {
       };
     }
 
-    // For closed state, prune the window to give accurate failure count
     if (entry.state === "closed") {
       this.pruneWindow(entry, this._now());
     }
@@ -179,13 +192,13 @@ export class CircuitBreaker {
     };
   }
 
-  /** Reset a peer's circuit breaker (e.g., after manual intervention). */
+  /** Forget a peer's state entirely (e.g., after manual intervention). */
   reset(peerId: string): void {
     this.peers.delete(peerId);
-    logger.info("circuit_breaker.reset", { peerId });
+    this.logger.info("circuit_breaker.reset", { peerId });
   }
 
-  /** Get all tracked peers and their states. */
+  /** Snapshot of every tracked peer. */
   getAllStates(): Map<string, CircuitBreakerState> {
     const result = new Map<string, CircuitBreakerState>();
     for (const peerId of this.peers.keys()) {
@@ -200,19 +213,16 @@ export class CircuitBreaker {
     entry.lastStateChangeAt = now;
 
     if (newState === "closed") {
-      // Reset all counters on close
       entry.failureTimestamps = [];
       entry.halfOpenSuccesses = 0;
     } else if (newState === "half_open") {
-      // Reset half-open success counter
       entry.halfOpenSuccesses = 0;
-    } else if (newState === "open") {
-      // Clear window timestamps — they served their purpose
+    } else {
       entry.failureTimestamps = [];
       entry.halfOpenSuccesses = 0;
     }
 
-    logger.info("circuit_breaker.state_change", {
+    this.logger.info("circuit_breaker.state_change", {
       peerId,
       from: oldState,
       to: newState,
