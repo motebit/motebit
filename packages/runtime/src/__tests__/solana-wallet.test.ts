@@ -30,6 +30,7 @@ function makeMockAdapter(overrides: Partial<SolanaRpcAdapter> = {}): SolanaRpcAd
       slot: 42,
       confirmed: true,
     })),
+    sendUsdcBatch: vi.fn().mockResolvedValue([]),
     isReachable: vi.fn().mockResolvedValue(true),
     ...overrides,
   };

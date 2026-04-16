@@ -9,23 +9,16 @@
  *   (e) the device-token-signed flow against `/agent/.../task` succeeds AFTER
  *       self-registration — proving the binding is what the verifier reads.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
-import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+// eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import {
   signDeviceRegistration,
   bytesToHex,
   generateKeypair,
   type SignableDeviceRegistration,
 } from "@motebit/encryption";
-
-beforeAll(() => {
-  if (!ed.hashes.sha512) {
-    ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
-  }
-});
 
 const API_TOKEN = "test-token";
 
