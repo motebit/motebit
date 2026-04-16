@@ -23,6 +23,7 @@ import {
   toMicro,
   fromMicro,
 } from "./accounts.js";
+import type { SubscriptionEventAdapter } from "./webhooks/stripe-webhook-adapter.js";
 
 const logger = createLogger({ service: "relay", module: "proxy-tokens" });
 
@@ -127,6 +128,15 @@ export function registerProxyTokenRoutes(
   app: Hono,
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
+  /**
+   * Webhook adapter for Stripe subscription events. When omitted, the
+   * webhook route falls back to constructing one on-demand from env
+   * (`STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`), preserving the
+   * library-embedder contract. Pass an explicit adapter to override — the
+   * standalone boot path in `createSyncRelayStandalone` wires one from the
+   * relay's shared Stripe client.
+   */
+  subscriptionEventAdapter: SubscriptionEventAdapter | null = null,
 ): void {
   // ── POST /api/v1/agents/:motebitId/proxy-token ────────────────────────
   // Issue a signed proxy token carrying the agent's current balance.
@@ -370,9 +380,19 @@ export function registerProxyTokenRoutes(
 
   // ── POST /api/v1/subscriptions/webhook ────────────────────────────────
   // Stripe webhook: credits account on new subscription + each renewal.
+  //
+  // The route handler itself is medium-agnostic — it speaks the motebit
+  // `SubscriptionEvent` vocabulary. The provider-specific parsing
+  // (signature verification, event-type mapping) lives in
+  // `webhooks/stripe-webhook-adapter.ts`. This inversion matches the
+  // `settlement-rails/stripe-rail.ts` pattern for the deposit path and
+  // isolates Stripe's API-version churn from the account-crediting logic.
   app.post("/api/v1/subscriptions/webhook", async (c) => {
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!webhookSecret) {
+    // Pre-check: when no adapter was injected, the library-embedder fallback
+    // requires STRIPE_WEBHOOK_SECRET (and STRIPE_SECRET_KEY to build the
+    // client). Check the env before header parsing so misconfigured
+    // deployments return 500 rather than 400 on every request.
+    if (!subscriptionEventAdapter && !process.env.STRIPE_WEBHOOK_SECRET) {
       return c.json({ error: "webhook not configured" }, 500);
     }
 
@@ -381,97 +401,95 @@ export function registerProxyTokenRoutes(
       return c.json({ error: "missing stripe-signature" }, 400);
     }
 
-    let event: Stripe.Event;
-    try {
-      const stripe = getStripe();
-      const rawBody = await c.req.text();
-      event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
-    } catch (err) {
-      logger.warn("webhook.signature_failed", {
-        error: err instanceof Error ? err.message : String(err),
+    let adapter = subscriptionEventAdapter;
+    if (!adapter) {
+      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeKey) {
+        return c.json({ error: "webhook not configured" }, 500);
+      }
+      const { StripeSubscriptionEventAdapter } =
+        await import("./webhooks/stripe-webhook-adapter.js");
+      adapter = new StripeSubscriptionEventAdapter({
+        stripeClient: new Stripe(stripeKey, {
+          apiVersion: "2025-03-31.basil" as Stripe.LatestApiVersion,
+        }),
+        webhookSecret,
       });
+    }
+
+    const rawBody = await c.req.text();
+    const event = await adapter.verifyAndParse(rawBody, signature);
+    if (event === null) {
       return c.json({ error: "invalid signature" }, 400);
     }
 
     try {
-      switch (event.type) {
-        case "checkout.session.completed": {
-          const session = event.data.object;
-          if (session.mode !== "subscription") break;
-
-          const motebitId = session.metadata?.motebit_id;
-          if (!motebitId) break;
-
-          const subscriptionId =
-            typeof session.subscription === "string"
-              ? session.subscription
-              : session.subscription?.id;
-          const customerId =
-            typeof session.customer === "string" ? session.customer : session.customer?.id;
-
-          if (!subscriptionId || !customerId) break;
-
-          const email =
-            (session.customer_details?.email ?? session.customer_email ?? "").toLowerCase() || null;
-
-          // Upsert subscription record
+      switch (event.kind) {
+        case "checkout_completed": {
           const now = Date.now();
           const existingRow = db
             .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
-            .get(motebitId);
+            .get(event.motebit_id);
 
           if (existingRow != null) {
             db.prepare(
               `UPDATE relay_subscriptions
                SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
                WHERE motebit_id = ?`,
-            ).run(email, customerId, subscriptionId, now, motebitId);
+            ).run(event.email, event.customer_id, event.subscription_id, now, event.motebit_id);
           } else {
             db.prepare(
               `INSERT INTO relay_subscriptions (motebit_id, email, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
                VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-            ).run(motebitId, email, customerId, subscriptionId, now, now);
+            ).run(
+              event.motebit_id,
+              event.email,
+              event.customer_id,
+              event.subscription_id,
+              now,
+              now,
+            );
           }
 
-          // Credit the account with monthly credits
-          getOrCreateAccount(db, motebitId);
-          creditAccount(
-            db,
-            motebitId,
-            toMicro(MONTHLY_CREDIT_USD),
-            "deposit",
-            `sub:${subscriptionId}:initial`,
-            `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`,
-          );
+          // Credit the account with monthly credits (idempotent via reference_id).
+          const refId = `sub:${event.subscription_id}:initial`;
+          const existingTxn = db
+            .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
+            .get(refId);
+          if (existingTxn == null) {
+            getOrCreateAccount(db, event.motebit_id);
+            creditAccount(
+              db,
+              event.motebit_id,
+              toMicro(MONTHLY_CREDIT_USD),
+              "deposit",
+              refId,
+              `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`,
+            );
+          }
 
           logger.info("subscription.activated", {
-            motebitId,
-            subscriptionId,
+            motebitId: event.motebit_id,
+            subscriptionId: event.subscription_id,
             creditUsd: MONTHLY_CREDIT_USD,
           });
           break;
         }
 
-        case "invoice.paid": {
-          // Monthly renewal — credit the account again
-          const invoice = event.data.object;
-          const subscriptionId =
-            typeof invoice.subscription === "string"
-              ? invoice.subscription
-              : invoice.subscription?.id;
-          if (!subscriptionId) break;
-
+        case "invoice_paid": {
+          // Monthly renewal — credit the account again.
           const row = db
             .prepare("SELECT motebit_id FROM relay_subscriptions WHERE stripe_subscription_id = ?")
-            .get(subscriptionId) as { motebit_id: string } | undefined;
+            .get(event.subscription_id) as { motebit_id: string } | undefined;
           if (!row) break;
 
-          // Idempotency: use invoice ID as reference
-          const refId = `sub:${subscriptionId}:${invoice.id}`;
+          // Idempotency: invoice id as reference.
+          const refId = `sub:${event.subscription_id}:${event.invoice_id}`;
           const existingTxn = db
             .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
             .get(refId);
-          if (existingTxn != null) break; // Already credited for this invoice
+          if (existingTxn != null) break;
 
           creditAccount(
             db,
@@ -484,40 +502,39 @@ export function registerProxyTokenRoutes(
 
           logger.info("subscription.renewed", {
             motebitId: row.motebit_id,
-            subscriptionId,
-            invoiceId: invoice.id,
+            subscriptionId: event.subscription_id,
+            invoiceId: event.invoice_id,
             creditUsd: MONTHLY_CREDIT_USD,
           });
           break;
         }
 
-        case "customer.subscription.deleted": {
-          const subscription = event.data.object;
-          const subId = subscription.id;
-
+        case "subscription_deleted": {
           const row = db
             .prepare("SELECT motebit_id FROM relay_subscriptions WHERE stripe_subscription_id = ?")
-            .get(subId) as { motebit_id: string } | undefined;
+            .get(event.subscription_id) as { motebit_id: string } | undefined;
           if (!row) break;
 
           db.prepare(
             "UPDATE relay_subscriptions SET status = 'cancelled', updated_at = ? WHERE stripe_subscription_id = ?",
-          ).run(Date.now(), subId);
+          ).run(Date.now(), event.subscription_id);
 
-          // Don't claw back credits — user keeps what they have until it runs out
+          // Don't claw back credits — user keeps what they have until it runs out.
           logger.info("subscription.cancelled", {
             motebitId: row.motebit_id,
-            subscriptionId: subId,
+            subscriptionId: event.subscription_id,
           });
           break;
         }
 
-        default:
+        case "ignored": {
           logger.debug("webhook.unhandled", { type: event.type });
+          break;
+        }
       }
     } catch (err) {
       logger.error("webhook.processing_failed", {
-        type: event.type,
+        kind: event.kind,
         error: err instanceof Error ? err.message : String(err),
       });
     }

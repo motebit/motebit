@@ -105,6 +105,10 @@ import {
 import { startDepositDetector } from "./deposit-detector.js";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
+import {
+  StripeSubscriptionEventAdapter,
+  type SubscriptionEventAdapter,
+} from "./webhooks/stripe-webhook-adapter.js";
 import { registerA2ARoutes } from "./a2a-bridge.js";
 import { registerReceiptExchangeRoutes } from "./receipt-exchange.js";
 import { getStoredReceiptJson } from "./receipts-store.js";
@@ -301,6 +305,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   } = config;
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
+  const subscriptionEventAdapter: SubscriptionEventAdapter | null =
+    stripeClient && stripeConfig
+      ? new StripeSubscriptionEventAdapter({
+          stripeClient,
+          webhookSecret: stripeConfig.webhookSecret,
+        })
+      : null;
 
   const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
   const eventStore = new EventStore(moteDb.eventStore);
@@ -727,7 +738,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   await registerTransparencyRoutes({ app, relayIdentity });
 
   // --- Proxy token + balance routes ---
-  registerProxyTokenRoutes(app, moteDb.db, relayIdentity);
+  registerProxyTokenRoutes(app, moteDb.db, relayIdentity, subscriptionEventAdapter);
 
   // --- Credential routes ---
   registerCredentialRoutes({
