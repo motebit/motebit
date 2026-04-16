@@ -7,10 +7,19 @@
  *
  * Pattern: follows startCredentialAnchorLoop (setInterval, emergency freeze
  * check, try-catch, structured logging).
+ *
+ * Two paths, one invariant (virtual balance debited at claim time):
+ *   - Legacy: `requestWithdrawal(...)` creates a `relay_withdrawals` row that
+ *     the admin fires manually via /api/v1/admin/withdrawals/*.
+ *   - Aggregated: `enqueuePendingWithdrawal(...)` parks the item in
+ *     `relay_pending_withdrawals`; a batch worker evaluates the per-rail
+ *     policy and fires when justified. Opt-in via `sweepRail` config —
+ *     unset keeps the legacy path, preserving behavior on existing deploys.
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
 import { computeDisputeWindowHold, requestWithdrawal } from "./accounts.js";
+import { enqueuePendingWithdrawal } from "./batch-withdrawals.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "sweep" });
@@ -26,6 +35,14 @@ export interface SweepConfig {
   intervalMs?: number;
   /** Minimum sweep amount in micro-units. Default: 1_000_000 (1 USD). */
   minSweepAmount?: number;
+  /**
+   * When set, the sweep routes eligible balances through the aggregated
+   * pending-withdrawal queue (spec/settlement-v1.md §11.2). The string is
+   * the GuestRail.name that will fire the eventual batch. When unset,
+   * the sweep keeps the legacy immediate-admin-complete path so existing
+   * deploys see no behavior change on upgrade.
+   */
+  sweepRail?: string;
 }
 
 interface SweepableAgent {
@@ -51,6 +68,7 @@ export function startSweepLoop(
 ): ReturnType<typeof setInterval> {
   const intervalMs = config.intervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
   const minSweep = config.minSweepAmount ?? MIN_SWEEP_AMOUNT;
+  const sweepRail = config.sweepRail;
 
   return setInterval(() => {
     if (isFrozen?.()) return;
@@ -89,9 +107,37 @@ export function startSweepLoop(
             const sweepAmount = available - agent.sweep_threshold;
             if (sweepAmount < minSweep) continue;
 
-            // Request withdrawal to agent's sovereign wallet.
-            // No idempotency key — the atomic debit in requestWithdrawal
-            // prevents double-spend; a duplicate sweep tick just sees lower balance.
+            // Route to the aggregation queue when the deploy opted in;
+            // otherwise preserve the legacy immediate-admin-complete path.
+            if (sweepRail != null) {
+              const pendingId = enqueuePendingWithdrawal(db, {
+                motebitId: agent.motebit_id,
+                amountMicro: sweepAmount,
+                destination: agent.settlement_address,
+                rail: sweepRail,
+                source: "sweep",
+              });
+              if (pendingId != null) {
+                swept++;
+                totalAmount += sweepAmount;
+                logger.info("sweep.pending_enqueued", {
+                  motebitId: agent.motebit_id,
+                  amount: sweepAmount,
+                  destination: agent.settlement_address,
+                  rail: sweepRail,
+                  pendingId,
+                  balanceBefore: agent.balance,
+                  threshold: agent.sweep_threshold,
+                  disputeHold,
+                });
+              }
+              continue;
+            }
+
+            // Legacy path: create a pending relay_withdrawals row that an
+            // admin completes manually. No idempotency key — the atomic
+            // debit in requestWithdrawal prevents double-spend; a duplicate
+            // sweep tick just sees lower balance.
             const result = requestWithdrawal(
               db,
               agent.motebit_id,

@@ -128,6 +128,7 @@ import { registerProposalRoutes } from "./proposals.js";
 import { registerKeyRotationRoutes } from "./key-rotation.js";
 import { registerBudgetRoutes } from "./budget.js";
 import { startSweepLoop } from "./sweep.js";
+import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
 import { registerAgentRoutes } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes } from "./tasks.js";
@@ -797,6 +798,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
   });
 
+  // Admin: pending aggregated withdrawal queue summary.
+  // Shows operators how many items are queued per rail, total aggregated
+  // value, and the age of the oldest pending row — enough to spot a
+  // policy misfire or a rail outage without querying the DB directly.
+  app.get("/api/v1/admin/pending-withdrawals", (c) => {
+    return c.json(getPendingWithdrawalsSummary(moteDb.db));
+  });
+
   // Admin: settlement stats by mode (relay vs p2p) + recent p2p settlements
   app.get("/api/v1/admin/settlements", async (c) => {
     const { getSettlementStatsByMode, getRecentP2pSettlements } = await import("./p2p-verifier.js");
@@ -1083,6 +1092,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const sweepInterval = startSweepLoop(moteDb.db, {}, () => getEmergencyFreeze());
   logger.info("sweep.started", { intervalMs: 300000 });
 
+  // --- Batch withdrawal loop (aggregated-fire policy per rail) ---
+  // Runs regardless of whether sweep is enqueueing — a future user-initiated
+  // batch opt-in would enqueue into the same queue.
+  const batchWithdrawalInterval = startBatchWithdrawalLoop(moteDb.db, railRegistry.list(), {}, () =>
+    getEmergencyFreeze(),
+  );
+
   // --- Task routes (submission, polling, receipt settlement) ---
   await registerTaskRoutes({
     app,
@@ -1183,6 +1199,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(depositDetectorInterval);
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
     clearInterval(sweepInterval);
+    clearInterval(batchWithdrawalInterval);
     receiptExchangeHub.close();
     moteDb.close();
   }

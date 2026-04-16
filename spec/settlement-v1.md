@@ -440,6 +440,24 @@ P2pPaymentProof {
 - Amount matching MUST be exact (not `>=`). Overpayment or underpayment semantics are not defined and MUST be rejected.
 - The `settlement_address` MUST be explicitly declared by the agent, not inferred from the identity key.
 
+### 11.2 Aggregated Withdrawal Execution (Implemented)
+
+As of 2026-04-15, the reference relay supports a **withdrawal aggregation layer** on top of `GuestRail.withdraw`. The default sweep (`services/api/src/sweep.ts`) fires one withdrawal per eligible agent per tick — for agents with small balances, each fire pays the rail's fixed cost. Aggregation defers sub-threshold items into a shared queue and fires on a per-rail policy.
+
+**Pending ledger.** Sweep-enqueued withdrawals live in `relay_pending_withdrawals` — keyed by `(pending_id)`, tagged with `rail`, and carrying a state machine `pending → firing → fired|failed` (also `cancelled` for operator intervention). The virtual account is debited at enqueue time; the fire path does not re-debit. A rail failure parks the row as `failed` with the debit still in place — the debit is the audit trail that funds were claimed.
+
+**Policy.** A conformant implementation MUST decide whether to fire a pending queue based on (a) the aggregated micro-unit value, (b) a per-item fee estimate in micro-units, (c) the oldest-item age in milliseconds, and (d) an operator-configurable policy threshold. The reference relay's default policy fires when the aggregated amount is at least 20× the per-item fee (fees ≤ 5%) or when the oldest pending item has waited ≥ 24 hours, subject to a $1 aggregated floor. Operators MAY override the policy per rail. The reference predicate is `shouldBatchSettle` in `packages/market/src/settlement.ts`; the policy type and defaults live alongside.
+
+**Batch primitive.** `GuestRail` gains two additive members: `supportsBatch: boolean` (discriminant) and optional `withdrawBatch(items): Promise<BatchWithdrawalResult>`. `BatchableGuestRail` is the narrowed type (`supportsBatch: true`). At fire time, the relay dispatches via `isBatchableRail(rail) ? rail.withdrawBatch(items)` : serial `rail.withdraw` in a loop. Both paths preserve the aggregation win — the serial fallback fires less often, amortizing per-fire overhead across items.
+
+**Today's rails all ship `supportsBatch = false`.** No GuestRail currently implements a native multi-item primitive: x402 settles one payment per facilitator call; Stripe payouts are admin-completed manually; Bridge's public API exposes single transfers. The interface is laid so that when a rail gains a native batch primitive, flipping the discriminant is the only code change required.
+
+**Foundation Law (unchanged).**
+
+- Aggregation is an operator convenience, not a blocker on sovereign settlement. §3.1–§3.5 invariants still hold — the sovereign path (§6) never traverses the pending queue.
+- Debit-at-enqueue is a reference-implementation invariant, not foundation law. Alternative implementations MAY choose debit-at-fire if they accept the concurrent-sweep double-spend window.
+- Per-item idempotency keys MUST be stable across retries; the composite-PK + state-machine design in the reference implementation enforces this.
+
 ---
 
 ## 12. Compatibility with External Agent Payment Protocols
@@ -482,3 +500,4 @@ Conformance does not require using the default reference implementation (§6). A
 ## Change Log
 
 - **1.0** (2026-04-08) — Initial specification. Foundation law, settlement map, rail taxonomy, default reference implementation (Ed25519/Solana), sovereign payment receipt format, compatible implementations, multi-hop coordination patterns, security model.
+- **1.0** (2026-04-15) — Additive: §11.2 Aggregated Withdrawal Execution. Reference-implementation extension; foundation law unchanged. `shouldBatchSettle` predicate in `@motebit/market`; optional `BatchableGuestRail` in `@motebit/protocol`.

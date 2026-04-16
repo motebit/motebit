@@ -108,6 +108,7 @@ export class BridgeSettlementRail implements GuestRail {
   readonly railType = "orchestration" as const;
   readonly name = "bridge";
   readonly supportsDeposit = false as const;
+  readonly supportsBatch = false as const;
 
   private readonly client: BridgeClient;
   private readonly customerId: string;

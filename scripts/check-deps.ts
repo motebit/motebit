@@ -111,6 +111,7 @@ const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "asListingId",
     "asProposalId",
     "isDepositableRail",
+    "isBatchableRail",
     // Semiring algebra — protocol-level primitives (open standard)
     "productSemiring",
     "recordSemiring",

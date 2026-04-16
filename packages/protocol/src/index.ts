@@ -1123,6 +1123,18 @@ export interface GuestRail extends SettlementRail {
   readonly supportsDeposit: boolean;
 
   /**
+   * Whether the rail exposes a single-call batch withdrawal primitive.
+   * When true, `withdrawBatch` MUST be implemented. When false (the
+   * default for every rail that ships in the reference relay today),
+   * aggregation is still a win at the relay layer — the batch worker
+   * defers sub-threshold items and fires serially once the policy
+   * clears — but the rail itself settles one item per call.
+   * Mirrors `supportsDeposit` + `DepositableGuestRail` as a
+   * discriminant narrowing to `BatchableGuestRail`.
+   */
+  readonly supportsBatch: boolean;
+
+  /**
    * Execute a withdrawal to an external destination.
    * Fail-closed: throws on any error.
    */
@@ -1135,10 +1147,51 @@ export interface GuestRail extends SettlementRail {
   ): Promise<WithdrawalResult>;
 
   /**
+   * Submit multiple withdrawals in one rail call when the rail
+   * supports a native batch primitive (e.g., a future x402 multi-
+   * authorization, a Bridge bulk-transfer). Present only when
+   * `supportsBatch` is true — narrow with `isBatchableRail`.
+   */
+  withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
+
+  /**
    * Record a payment proof with a settlement (e.g., x402 tx hash, Stripe charge ID).
    * Called after settleOnReceipt() computes the settlement record.
    */
   attachProof(settlementId: string, proof: PaymentProof): Promise<void>;
+}
+
+/**
+ * Single item within a batch withdrawal submission. Amounts are
+ * micro-units (1_000_000 = 1 unit of asset). The relay constructs
+ * one item per `relay_pending_withdrawals` row.
+ */
+export interface BatchWithdrawalItem {
+  readonly motebit_id: string;
+  readonly amount_micro: number;
+  readonly currency: string;
+  readonly destination: string;
+  readonly idempotency_key: string;
+}
+
+/**
+ * Per-item outcome of a batch withdrawal. Partial failure is
+ * first-class: a rail MAY succeed on some items and fail on others.
+ * `failed[i].reason` is a human-readable string — not part of the
+ * signed proof, just operator telemetry.
+ */
+export interface BatchWithdrawalResult {
+  readonly fired: ReadonlyArray<{ item: BatchWithdrawalItem; result: WithdrawalResult }>;
+  readonly failed: ReadonlyArray<{ item: BatchWithdrawalItem; reason: string }>;
+}
+
+/**
+ * A guest rail that supports batch withdrawal submission.
+ * Use the `supportsBatch` discriminant for runtime narrowing from `GuestRail`.
+ */
+export interface BatchableGuestRail extends GuestRail {
+  readonly supportsBatch: true;
+  withdrawBatch(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
 }
 
 /**
@@ -1163,6 +1216,11 @@ export interface DepositableGuestRail extends GuestRail {
 /** Type guard: narrows GuestRail to DepositableGuestRail. */
 export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail {
   return rail.supportsDeposit;
+}
+
+/** Type guard: narrows GuestRail to BatchableGuestRail. */
+export function isBatchableRail(rail: GuestRail): rail is BatchableGuestRail {
+  return rail.supportsBatch === true && typeof rail.withdrawBatch === "function";
 }
 
 /**

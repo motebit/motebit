@@ -557,4 +557,42 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 11,
+    name: "add_pending_withdrawals",
+    up: (db) => {
+      // Aggregation ledger for sweep-driven withdrawals. The sweep
+      // enqueues here instead of firing immediately; a batch worker
+      // groups by rail, applies the per-rail shouldBatchSettle policy,
+      // and fires serially (or via withdrawBatch on a BatchableGuestRail).
+      // See spec/settlement-v1.md §11.2 and packages/market settlement.ts.
+      //
+      // State machine: pending → firing → fired | failed; cancelled is
+      // reserved for operator intervention. Debit on the virtual account
+      // happens at enqueue time, mirroring the pre-aggregation sweep
+      // invariant — the money is held the moment it's claimed for sweep.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_pending_withdrawals (
+          pending_id      TEXT PRIMARY KEY,
+          motebit_id      TEXT NOT NULL,
+          amount_micro    INTEGER NOT NULL,
+          destination     TEXT NOT NULL,
+          rail            TEXT NOT NULL,
+          source          TEXT NOT NULL,
+          enqueued_at     INTEGER NOT NULL,
+          status          TEXT NOT NULL,
+          last_attempt_at INTEGER,
+          last_error      TEXT,
+          withdrawal_id   TEXT,
+          idempotency_key TEXT
+        );
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_rail_status ON relay_pending_withdrawals(rail, status, enqueued_at);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_motebit ON relay_pending_withdrawals(motebit_id, status);",
+      );
+    },
+  },
 ];

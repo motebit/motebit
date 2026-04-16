@@ -76,6 +76,7 @@ export interface AgentTask {
     // (undocumented)
     claimed_by?: string;
     delegated_scope?: string;
+    invocation_origin?: IntentOrigin;
     // (undocumented)
     motebit_id: MotebitId;
     // (undocumented)
@@ -286,6 +287,42 @@ export interface BalanceWaiver {
     suite: "motebit-jcs-ed25519-b64-v1";
     waived_amount: number;
     waived_at: number;
+}
+
+// @public
+export interface BatchableGuestRail extends GuestRail {
+    // (undocumented)
+    readonly supportsBatch: true;
+    // (undocumented)
+    withdrawBatch(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
+}
+
+// @public
+export interface BatchWithdrawalItem {
+    // (undocumented)
+    readonly amount_micro: number;
+    // (undocumented)
+    readonly currency: string;
+    // (undocumented)
+    readonly destination: string;
+    // (undocumented)
+    readonly idempotency_key: string;
+    // (undocumented)
+    readonly motebit_id: string;
+}
+
+// @public
+export interface BatchWithdrawalResult {
+    // (undocumented)
+    readonly failed: ReadonlyArray<{
+        item: BatchWithdrawalItem;
+        reason: string;
+    }>;
+    // (undocumented)
+    readonly fired: ReadonlyArray<{
+        item: BatchWithdrawalItem;
+        result: WithdrawalResult;
+    }>;
 }
 
 // @public (undocumented)
@@ -674,6 +711,18 @@ export interface DeviceRegistration {
 }
 
 // @public
+export interface DeviceRegistrationRequest {
+    device_id: string;
+    device_name?: string;
+    motebit_id: MotebitId;
+    owner_id?: string;
+    public_key: string;
+    signature: string;
+    suite: SuiteId;
+    timestamp: number;
+}
+
+// @public
 export interface DisputeAppeal {
     additional_evidence?: string[];
     appealed_at: number;
@@ -910,6 +959,7 @@ export interface ExecutionReceipt {
     delegation_receipts?: ExecutionReceipt[];
     // (undocumented)
     device_id: DeviceId;
+    invocation_origin?: IntentOrigin;
     // (undocumented)
     memories_formed: number;
     // (undocumented)
@@ -1057,8 +1107,10 @@ export interface GuestRail extends SettlementRail {
     readonly custody: "relay";
     // (undocumented)
     readonly railType: "fiat" | "protocol" | "orchestration";
+    readonly supportsBatch: boolean;
     readonly supportsDeposit: boolean;
     withdraw(motebitId: string, amount: number, currency: string, destination: string, idempotencyKey: string): Promise<WithdrawalResult>;
+    withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
 }
 
 // @public
@@ -1098,6 +1150,12 @@ export interface InjectionWarning {
     // (undocumented)
     structuralFlags?: string[];
 }
+
+// @public
+export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+
+// @public
+export function isBatchableRail(rail: GuestRail): rail is BatchableGuestRail;
 
 // @public
 export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail;

@@ -33,6 +33,7 @@ export class StripeSettlementRail implements DepositableGuestRail {
   readonly railType = "fiat" as const;
   readonly name = "stripe";
   readonly supportsDeposit = true as const;
+  readonly supportsBatch = false as const;
 
   private readonly stripe: Stripe;
   readonly webhookSecret: string;

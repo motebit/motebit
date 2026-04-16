@@ -33,8 +33,10 @@ export {
   computeGrossAmount,
   canTransitionAllocation,
   assertAllocationTransition,
+  shouldBatchSettle,
+  DEFAULT_BATCH_POLICY,
 } from "./settlement.js";
-export type { AllocationStatus } from "./settlement.js";
+export type { AllocationStatus, BatchPolicy } from "./settlement.js";
 export { scoreQuality } from "./quality-gate.js";
 export type { QualityScore, QualityGateConfig } from "./quality-gate.js";
 export { scoreResultQuality, QUALITY_FAILURE_THRESHOLD } from "./quality.js";

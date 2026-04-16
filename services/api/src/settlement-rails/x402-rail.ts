@@ -51,6 +51,7 @@ export class X402SettlementRail implements GuestRail {
   readonly railType = "protocol" as const;
   readonly name = "x402";
   readonly supportsDeposit = false as const;
+  readonly supportsBatch = false as const;
 
   private readonly facilitator: X402FacilitatorClient;
   readonly network: string;

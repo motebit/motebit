@@ -186,3 +186,80 @@ export function settleOnReceipt(
     settled_at: Date.now(),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Aggregated withdrawal execution — see spec/settlement-v1.md §11.2.
+//
+// The relay's sweep enqueues sub-threshold withdrawals rather than firing
+// them one at a time. A batch worker periodically evaluates each rail's
+// pending queue against this predicate and fires when the policy clears.
+// The math is pure; the defaults are operator judgment and live here
+// (BSL) alongside `settleOnReceipt` and `computeGrossAmount`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Policy controlling when an aggregated pending queue fires.
+ *
+ * All amounts in micro-units to match the relay's integer money model
+ * (1_000_000 = 1 unit of asset). No floating-point arithmetic in the
+ * money path.
+ */
+export interface BatchPolicy {
+  /**
+   * Fire when the aggregated queued amount is at least this multiple
+   * of the per-item fee estimate. 20× means fees are ≤ 5% of the fired
+   * batch value — matches the `PLATFORM_FEE_RATE` ceiling.
+   */
+  readonly feeJustificationMultiplier: number;
+  /**
+   * Fire when the oldest pending item has waited at least this long,
+   * regardless of fee justification (subject to the minimum floor).
+   */
+  readonly maxAgeMs: number;
+  /**
+   * Absolute floor — never fire below this aggregated amount, even at
+   * max age. Prevents dust withdrawals from clogging the rail.
+   */
+  readonly minAggregateMicro: number;
+}
+
+/**
+ * Reference policy used by the relay's batch worker unless an
+ * operator overrides per deployment. Chosen conservatively:
+ *   - 20× fee multiplier: fees stay at or below 5% of each fire.
+ *   - 24h age ceiling: small agents are paid within a day.
+ *   - $1 floor: no sub-dollar onchain submissions.
+ */
+export const DEFAULT_BATCH_POLICY: BatchPolicy = {
+  feeJustificationMultiplier: 20,
+  maxAgeMs: 24 * 60 * 60 * 1000,
+  minAggregateMicro: 1_000_000,
+};
+
+/**
+ * Pure predicate: should this aggregation fire now?
+ *
+ * Fires iff:
+ *   - aggregated ≥ minAggregateMicro, AND
+ *   - either aggregated ≥ multiplier × perItemFee, OR oldestAgeMs ≥ maxAgeMs.
+ *
+ * Rejects negative inputs — the relay's debit invariant guarantees
+ * non-negative aggregation, so a negative here is a programming error,
+ * not a user input error.
+ */
+export function shouldBatchSettle(
+  aggregatedMicro: number,
+  perItemFeeMicro: number,
+  oldestAgeMs: number,
+  policy: BatchPolicy = DEFAULT_BATCH_POLICY,
+): boolean {
+  if (aggregatedMicro < 0 || perItemFeeMicro < 0 || oldestAgeMs < 0) {
+    throw new Error(
+      `shouldBatchSettle invariant: non-negative inputs required ` +
+        `(aggregated=${aggregatedMicro}, perItemFee=${perItemFeeMicro}, oldestAge=${oldestAgeMs})`,
+    );
+  }
+  if (aggregatedMicro < policy.minAggregateMicro) return false;
+  if (aggregatedMicro >= policy.feeJustificationMultiplier * perItemFeeMicro) return true;
+  return oldestAgeMs >= policy.maxAgeMs;
+}
