@@ -29,6 +29,7 @@
     "@motebit/protocol": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/settlement-rails": "workspace:*",
+    "@motebit/virtual-accounts": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@x402/core": "^2.6.0",
     "@x402/evm": "^2.6.0",

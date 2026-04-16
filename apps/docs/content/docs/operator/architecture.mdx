@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **34 packages · 7 architectural layers · 5 surfaces + 3 supporting apps · 8 services · 12 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **35 packages · 7 architectural layers · 5 surfaces + 3 supporting apps · 8 services · 12 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 ## Directory tree
 
@@ -43,6 +43,7 @@ motebit/
 │   ├── circuit-breaker/       [L1]          Per-peer three-state forward-health engine. Injected clock + logger.
 │   ├── settlement-rails/      [L1]          Guest-rail triad: Stripe (fiat), x402 (protocol), Bridge (orchestration). Registry enforces custody="relay".
 │   ├── evm-rpc/               [L1]          EVM JSON-RPC boundary. `getBlockNumber` + `getTransferLogs` behind a motebit-shaped interface; injected fetch.
+│   ├── virtual-accounts/      [L1]          Per-motebit ledger: atomic credit/debit, withdrawal lifecycle, signed receipts. AccountStore inversion.
 │   │
 │   │   # Layer 2 — Engines
 │   ├── market/                [L2]          Budget, settlement, reputation, graph routing.
@@ -124,7 +125,7 @@ Four packages are MIT (the open protocol). `check-deps.ts` enforces that MIT pac
 | `@motebit/sdk` | What interface must an implementation satisfy? | L0 |
 | `create-motebit` | How does a third party scaffold against the protocol? | L6 |
 
-The remaining 29 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. See `LICENSING.md` for the full boundary test and commercial terms.
+The remaining 30 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. See `LICENSING.md` for the full boundary test and commercial terms.
 
 ## Apps
 

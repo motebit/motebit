@@ -1435,6 +1435,22 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
 
+  packages/virtual-accounts:
+    dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
   packages/voice:
     devDependencies:
       '@types/node':
@@ -1507,6 +1523,9 @@ importers:
       '@motebit/settlement-rails':
         specifier: workspace:*
         version: link:../../packages/settlement-rails
+      '@motebit/virtual-accounts':
+        specifier: workspace:*
+        version: link:../../packages/virtual-accounts
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:../../packages/wallet-solana
