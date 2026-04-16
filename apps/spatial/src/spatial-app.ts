@@ -41,6 +41,7 @@ import { generate as generateIdentityFile } from "@motebit/identity-file";
 import type {
   MotebitState,
   BehaviorCues,
+  ExecutionReceipt,
   GovernanceConfig,
   UnifiedProviderConfig,
   ProviderSpec,
@@ -227,6 +228,11 @@ export class SpatialApp {
   private attentionLevel = 0.2;
   private unsubscribeState: (() => void) | null = null;
   private _presenceState: PresenceState = "ambient";
+
+  // Receipt observers — subscribed by the spatial surface to materialize
+  // completed delegations as orbital scene objects. Fires once per
+  // `delegation_complete` chunk that carries a signed `full_receipt`.
+  private receiptListeners: Array<(r: ExecutionReceipt) => void> = [];
 
   // Network settings
   private networkSettings: SpatialNetworkSettings = {
@@ -932,10 +938,41 @@ export class SpatialApp {
     try {
       for await (const chunk of this.runtime.sendMessageStreaming(text)) {
         this.pushStreamActivity(chunk);
+        this.emitReceiptIfPresent(chunk);
         yield chunk;
       }
     } finally {
       this.activity.clear();
+    }
+  }
+
+  /**
+   * Subscribe to signed delegation receipts captured from the runtime
+   * stream. Fires on every `delegation_complete` chunk whose `full_receipt`
+   * is populated. Returns an unsubscribe function.
+   *
+   * The surface uses this to materialize receipts as orbital scene objects
+   * (see `./receipt-satellites.ts`). Keeping the capture at the
+   * `SpatialApp` seam means both the chat-send and voice-send paths feed
+   * the same observer — one subscription covers every delegation origin.
+   */
+  onReceipt(cb: (r: ExecutionReceipt) => void): () => void {
+    this.receiptListeners.push(cb);
+    return () => {
+      this.receiptListeners = this.receiptListeners.filter((l) => l !== cb);
+    };
+  }
+
+  private emitReceiptIfPresent(chunk: StreamChunk): void {
+    if (chunk.type !== "delegation_complete") return;
+    if (!chunk.full_receipt) return;
+    const receipt = chunk.full_receipt;
+    for (const cb of this.receiptListeners) {
+      try {
+        cb(receipt);
+      } catch {
+        // Listener errors must not break the stream loop.
+      }
     }
   }
 
@@ -959,6 +996,7 @@ export class SpatialApp {
     let accumulated = "";
     for await (const chunk of this.runtime.sendMessageStreaming(text)) {
       this.pushStreamActivity(chunk);
+      this.emitReceiptIfPresent(chunk);
       if (chunk.type === "text") {
         accumulated += chunk.text;
       } else if (chunk.type === "approval_request") {
@@ -985,6 +1023,7 @@ export class SpatialApp {
           this.motebitId,
         )) {
           this.pushStreamActivity(resumeChunk);
+          this.emitReceiptIfPresent(resumeChunk);
           if (resumeChunk.type === "text") {
             accumulated += resumeChunk.text;
           } else if (resumeChunk.type === "result") {

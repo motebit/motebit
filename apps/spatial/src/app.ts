@@ -25,6 +25,7 @@ import {
   credentialsToExpression,
   type CredentialSummary,
 } from "./credential-satellites";
+import { ReceiptSatelliteCoordinator } from "./receipt-satellites";
 
 // === DOM elements ===
 
@@ -110,6 +111,29 @@ function ensureCredentialSatellites(): CredentialSatelliteRenderer | null {
   credentialSatellites = new CredentialSatelliteRenderer(group);
   return credentialSatellites;
 }
+
+// Receipts as orbiting scene objects — the second spatial-object renderer.
+// Outer ring around the creature; each signed delegation becomes an orb
+// whose hue tracks local chain-verification state (amber → green / orange /
+// red). The coordinator owns the state machine and buffers receipts that
+// arrive before the creature group mounts, then flushes on first attach.
+const receiptSatellites = new ReceiptSatelliteCoordinator();
+let receiptSatellitesAttached = false;
+function ensureReceiptSatellites(): ReceiptSatelliteCoordinator {
+  if (receiptSatellitesAttached) return receiptSatellites;
+  const group = app.adapter.getCreatureGroup();
+  if (group) {
+    receiptSatellites.attach(group);
+    receiptSatellitesAttached = true;
+  }
+  return receiptSatellites;
+}
+// Subscribe immediately so receipts captured during boot are buffered even
+// before the creature group mounts. Flushed to the scene on first
+// ensureReceiptSatellites() call after adapter.init.
+app.onReceipt((receipt) => {
+  ensureReceiptSatellites().addReceipt(receipt);
+});
 
 // Gaze attention state
 let lastGazeHit = false;
@@ -835,6 +859,7 @@ function startFlatPreview(): void {
     const time = now / 1000;
 
     credentialSatellites?.tick(now);
+    receiptSatellites.tick(now);
     app.renderFrame(dt, time);
     requestAnimationFrame(loop);
   }
@@ -906,6 +931,7 @@ async function startAR(): Promise<void> {
     }
 
     credentialSatellites?.tick(now);
+    receiptSatellites.tick(now);
 
     // Render with behavior cues from runtime (or idle cues)
     app.renderFrame(dt, t);
