@@ -5,8 +5,21 @@
  * downgrades trust on failure, and provides admin reporting by settlement mode.
  *
  * Background loop pattern matches startCredentialAnchorLoop.
+ *
+ * The Solana RPC boundary lives in `@motebit/wallet-solana`. This module
+ * consumes `SolanaRpcAdapter.getTransaction`; it does NOT construct
+ * JSON-RPC payloads or call `fetch` on the RPC URL. See
+ * `services/api/CLAUDE.md` rule 1 ("Never inline protocol plumbing") —
+ * the same doctrine applies to medium plumbing (Solana RPC). When a
+ * second p2p-settling chain ships, it plugs in behind the same adapter
+ * interface.
  */
 import type { DatabaseDriver } from "@motebit/persistence";
+import {
+  Web3JsRpcAdapter,
+  type SolanaRpcAdapter,
+  type TxVerificationResult,
+} from "@motebit/wallet-solana";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "p2p-verifier" });
@@ -17,18 +30,32 @@ const logger = createLogger({ service: "relay", module: "p2p-verifier" });
 const VERIFY_INTERVAL_MS = 60_000; // 1 minute
 /** Maximum pending proofs to verify per cycle. */
 const MAX_VERIFY_PER_CYCLE = 20;
-/** How long to wait for RPC response. */
-const RPC_TIMEOUT_MS = 10_000;
+
+/**
+ * Read-only seed used to construct the Web3JsRpcAdapter for the p2p
+ * verifier. The adapter requires a 32-byte identity seed because its
+ * default use case (sending USDC) needs a Keypair — but the verifier
+ * ONLY calls `getTransaction`, which never reads the keypair. Passing
+ * the zero seed makes the read-only intent obvious; no wallet is ever
+ * derived or used on this instance.
+ */
+const READ_ONLY_SEED = new Uint8Array(32);
 
 // === Verification Loop ===
 
 export interface P2pVerifierConfig {
-  /** Solana RPC URL (e.g., from SOLANA_RPC_URL env). */
+  /** Solana RPC URL (e.g., from SOLANA_RPC_URL env). Ignored when `adapter` is provided. */
   rpcUrl: string;
   /** Override check interval (default: 60s). */
   intervalMs?: number;
   /** Override max proofs per cycle (default: 20). */
   maxPerCycle?: number;
+  /**
+   * Optional RPC adapter override — primarily for tests. When
+   * omitted, a `Web3JsRpcAdapter` is constructed from `rpcUrl` with a
+   * read-only zero-seed (see `READ_ONLY_SEED`).
+   */
+  adapter?: SolanaRpcAdapter;
 }
 
 /**
@@ -47,6 +74,17 @@ export function startP2pVerifierLoop(
 ): ReturnType<typeof setInterval> {
   const intervalMs = config.intervalMs ?? VERIFY_INTERVAL_MS;
   const maxPerCycle = config.maxPerCycle ?? MAX_VERIFY_PER_CYCLE;
+
+  // Construct the adapter once per loop. `Web3JsRpcAdapter` requires a
+  // 32-byte identity seed for its send path; the verifier only calls
+  // `getTransaction`, so a zero-seed placeholder is used — no wallet
+  // is ever derived or spent on this instance.
+  const adapter: SolanaRpcAdapter =
+    config.adapter ??
+    new Web3JsRpcAdapter({
+      rpcUrl: config.rpcUrl,
+      identitySeed: READ_ONLY_SEED,
+    });
 
   return setInterval(() => {
     if (isFrozen?.()) return;
@@ -74,47 +112,8 @@ export function startP2pVerifierLoop(
 
         for (const row of pendingRows) {
           try {
-            const result = await verifyTransactionOnChain(config.rpcUrl, row.p2p_tx_hash);
-
-            switch (result) {
-              case "verified":
-                db.prepare(
-                  `UPDATE relay_settlements
-                   SET payment_verification_status = 'verified', payment_verified_at = ?
-                   WHERE settlement_id = ?`,
-                ).run(Date.now(), row.settlement_id);
-                logger.info("p2p_verifier.verified", {
-                  settlementId: row.settlement_id,
-                  txHash: row.p2p_tx_hash,
-                });
-                break;
-
-              case "not_found": {
-                const error = "Transaction not found on Solana";
-                db.prepare(
-                  `UPDATE relay_settlements
-                   SET payment_verification_status = 'failed',
-                       payment_verified_at = ?,
-                       payment_verification_error = ?
-                   WHERE settlement_id = ?`,
-                ).run(Date.now(), error, row.settlement_id);
-                logger.warn("p2p_verifier.failed", {
-                  settlementId: row.settlement_id,
-                  txHash: row.p2p_tx_hash,
-                  error,
-                });
-                downgradeP2pTrust(db, row.task_id, row.motebit_id);
-                break;
-              }
-
-              case "rpc_error":
-                // Transient — do NOT mark as failed, do NOT downgrade trust. Retry next cycle.
-                logger.warn("p2p_verifier.rpc_error", {
-                  settlementId: row.settlement_id,
-                  txHash: row.p2p_tx_hash,
-                });
-                break;
-            }
+            const result = await adapter.getTransaction(row.p2p_tx_hash);
+            handleVerificationResult(db, row, result);
           } catch (err) {
             logger.error("p2p_verifier.check_error", {
               settlementId: row.settlement_id,
@@ -135,44 +134,69 @@ export function startP2pVerifierLoop(
 
 // === Onchain Verification ===
 
-/** Three-state verification result: verified, not_found, or rpc_error. */
-type VerifyResult = "verified" | "not_found" | "rpc_error";
-
 /**
- * Verify a Solana transaction exists and is confirmed via RPC.
+ * Map the adapter's three-state `TxVerificationResult` to the
+ * verification state machine on `relay_settlements`:
  *
- * Returns three states — not two:
- * - "verified": transaction exists and is confirmed
- * - "not_found": transaction does not exist (permanent)
- * - "rpc_error": transient RPC failure (retry next cycle, never downgrade trust)
+ *   - `confirmed` → `verified` (tx landed; amount/address match is
+ *     checked at task submission time — the verifier's job here is to
+ *     confirm the tx exists onchain, not to re-validate the proof)
+ *   - `not_found` → `failed` + trust downgrade (per spec §11.1)
+ *   - `rpc_error` → stay pending, log, retry next cycle (NEVER
+ *     downgrade — `spec/settlement-v1.md` §11.1 Foundation Law)
  */
-async function verifyTransactionOnChain(rpcUrl: string, txHash: string): Promise<VerifyResult> {
-  const body = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "getTransaction",
-    params: [
-      txHash,
-      { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 },
-    ],
-  });
+function handleVerificationResult(
+  db: DatabaseDriver,
+  row: {
+    settlement_id: string;
+    task_id: string;
+    motebit_id: string;
+    p2p_tx_hash: string;
+  },
+  result: TxVerificationResult,
+): void {
+  switch (result.status) {
+    case "confirmed":
+      db.prepare(
+        `UPDATE relay_settlements
+         SET payment_verification_status = 'verified', payment_verified_at = ?
+         WHERE settlement_id = ?`,
+      ).run(Date.now(), row.settlement_id);
+      logger.info("p2p_verifier.verified", {
+        settlementId: row.settlement_id,
+        txHash: row.p2p_tx_hash,
+        amountMicro: result.amountMicro.toString(),
+        slot: result.slot,
+      });
+      return;
 
-  const resp = await fetch(rpcUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-    signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
-  });
+    case "not_found": {
+      const error = "Transaction not found on Solana";
+      db.prepare(
+        `UPDATE relay_settlements
+         SET payment_verification_status = 'failed',
+             payment_verified_at = ?,
+             payment_verification_error = ?
+         WHERE settlement_id = ?`,
+      ).run(Date.now(), error, row.settlement_id);
+      logger.warn("p2p_verifier.failed", {
+        settlementId: row.settlement_id,
+        txHash: row.p2p_tx_hash,
+        error,
+      });
+      downgradeP2pTrust(db, row.task_id, row.motebit_id);
+      return;
+    }
 
-  if (!resp.ok) return "rpc_error";
-
-  const data = (await resp.json()) as { result: unknown; error?: unknown };
-
-  // JSON-RPC error (timeout, rate limit, internal error) — transient, retry
-  if (data.error != null) return "rpc_error";
-
-  // result is null only when the transaction genuinely doesn't exist
-  return data.result != null ? "verified" : "not_found";
+    case "rpc_error":
+      // Transient — do NOT mark as failed, do NOT downgrade trust. Retry next cycle.
+      logger.warn("p2p_verifier.rpc_error", {
+        settlementId: row.settlement_id,
+        txHash: row.p2p_tx_hash,
+        reason: result.reason,
+      });
+      return;
+  }
 }
 
 // === Trust Downgrade on Failed Verification ===
