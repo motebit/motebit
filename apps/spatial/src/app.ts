@@ -60,6 +60,9 @@ const settingsSkip = document.getElementById("settings-skip") as HTMLButtonEleme
 
 // TTS settings
 const openaiKeyInput = document.getElementById("openai-key-input") as HTMLInputElement | null;
+const elevenLabsKeyInput = document.getElementById(
+  "elevenlabs-key-input",
+) as HTMLInputElement | null;
 const ttsVoiceSelect = document.getElementById("tts-voice-select") as HTMLSelectElement | null;
 const vadSlider = document.getElementById("vad-sensitivity") as HTMLInputElement | null;
 const proactiveToggle = document.getElementById("proactive-toggle") as HTMLInputElement | null;
@@ -173,6 +176,13 @@ interface SpatialSettings {
   model: string;
   voiceEnabled: boolean;
   openaiApiKey: string;
+  /**
+   * ElevenLabs API key for BYOK TTS. BYOK is orthogonal to the chat mode
+   * (see `feedback_sovereignty_orthogonal`) — keying ElevenLabs while
+   * running motebit-cloud for chat is supported. Empty string = not keyed;
+   * the voice pipeline falls through to OpenAI / Web Speech.
+   */
+  elevenLabsApiKey: string;
   ttsVoice: OpenAITTSVoice;
   vadSensitivity: number;
   proactiveEnabled: boolean;
@@ -198,6 +208,7 @@ const DEFAULT_SPATIAL_SETTINGS: SpatialSettings = {
   model: "",
   voiceEnabled: true,
   openaiApiKey: "",
+  elevenLabsApiKey: "",
   ttsVoice: "nova",
   vadSensitivity: 0.5,
   proactiveEnabled: true,
@@ -427,6 +438,7 @@ async function init(): Promise<void> {
   modelInput.value = settings.model;
   voiceToggle.checked = settings.voiceEnabled;
   if (openaiKeyInput) openaiKeyInput.value = settings.openaiApiKey;
+  if (elevenLabsKeyInput) elevenLabsKeyInput.value = settings.elevenLabsApiKey;
   if (ttsVoiceSelect) ttsVoiceSelect.value = settings.ttsVoice;
   if (vadSlider) vadSlider.value = String(settings.vadSensitivity);
   if (proactiveToggle) proactiveToggle.checked = settings.proactiveEnabled;
@@ -523,9 +535,15 @@ async function tryInitAI(settings: SpatialSettings): Promise<boolean> {
 async function initVoiceIfEnabled(settings: SpatialSettings): Promise<void> {
   if (!settings.voiceEnabled || !SpatialVoicePipeline.isSupported()) return;
 
+  // ElevenLabs has its own voice library. Spatial only exposes OpenAI voice
+  // names in the settings select, so we don't try to route the preference
+  // through ElevenLabs (its API would 404 on "nova" / "alloy"). The L0
+  // ElevenLabs provider defaults to "Rachel" when voice is undefined, and
+  // the FallbackTTSProvider steps down to OpenAI on any error anyway.
   const started = await app.startVoice({
     openaiApiKey: settings.openaiApiKey || undefined,
     openaiVoice: settings.ttsVoice,
+    elevenLabsApiKey: settings.elevenLabsApiKey || undefined,
     vadSensitivity: settings.vadSensitivity,
   });
 
@@ -798,6 +816,7 @@ settingsSave?.addEventListener(
         model: modelInput.value.trim(),
         voiceEnabled: voiceToggle.checked,
         openaiApiKey: openaiKeyInput?.value.trim() ?? "",
+        elevenLabsApiKey: elevenLabsKeyInput?.value.trim() ?? "",
         ttsVoice: (ttsVoiceSelect?.value as OpenAITTSVoice) ?? "nova",
         vadSensitivity: vadSlider ? parseFloat(vadSlider.value) : 0.5,
         proactiveEnabled: proactiveToggle?.checked ?? true,

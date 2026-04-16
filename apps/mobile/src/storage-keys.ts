@@ -31,6 +31,13 @@ export const SECURE_STORE_KEYS = {
    */
   openaiVoiceKey: "motebit_openai_api_key",
   /**
+   * ElevenLabs API key for BYOK TTS. The name deliberately uses the
+   * `tts.<vendor>.apiKey` shape so future TTS vendors (Deepgram, Cartesia,
+   * etc.) can land under the same convention without clashing with the
+   * `motebit_*` slots that pre-date the BYOK-TTS split.
+   */
+  elevenLabsVoiceKey: "tts.elevenlabs.apiKey",
+  /**
    * OpenAI API key for BYOK chat provider (distinct from voice key above).
    * Historical name: `motebit_openai_provider_key`.
    */

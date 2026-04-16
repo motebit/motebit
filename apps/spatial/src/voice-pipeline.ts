@@ -16,6 +16,7 @@ import {
   WebSpeechSTTProvider,
   WebSpeechTTSProvider,
   OpenAITTSProvider,
+  ElevenLabsTTSProvider,
   FallbackTTSProvider,
   type STTProvider,
   type TTSProvider,
@@ -37,6 +38,18 @@ export interface VoicePipelineConfig {
   openaiApiKey?: string;
   /** OpenAI TTS voice. Default: "nova". */
   openaiVoice?: OpenAITTSVoice;
+  /**
+   * ElevenLabs API key. When present, ElevenLabs sits at the head of the TTS
+   * chain and OpenAI / Web Speech step in as fallbacks on transport or API
+   * failure. BYOK is always free — the key is orthogonal to the chat mode.
+   */
+  elevenLabsApiKey?: string;
+  /**
+   * ElevenLabs voice — either a curated name ("Rachel", "Adam", ...) or a raw
+   * voice_id. Maps onto `VoiceConfig.ttsVoice` when the user's preference is
+   * not an OpenAI-shaped name.
+   */
+  elevenLabsVoice?: string;
   /** VAD sensitivity: 0 (least sensitive) to 1 (most sensitive). Default: 0.5. */
   vadSensitivity?: number;
 }
@@ -104,6 +117,8 @@ export class SpatialVoicePipeline {
     this.config = {
       openaiApiKey: config?.openaiApiKey ?? "",
       openaiVoice: config?.openaiVoice ?? "nova",
+      elevenLabsApiKey: config?.elevenLabsApiKey ?? "",
+      elevenLabsVoice: config?.elevenLabsVoice ?? "Rachel",
       vadSensitivity: config?.vadSensitivity ?? 0.5,
     };
     if (callbacks) this.callbacks = callbacks;
@@ -282,10 +297,13 @@ export class SpatialVoicePipeline {
   updateConfig(config: Partial<VoicePipelineConfig>): void {
     if (config.openaiApiKey !== undefined) this.config.openaiApiKey = config.openaiApiKey;
     if (config.openaiVoice !== undefined) this.config.openaiVoice = config.openaiVoice;
+    if (config.elevenLabsApiKey !== undefined)
+      this.config.elevenLabsApiKey = config.elevenLabsApiKey;
+    if (config.elevenLabsVoice !== undefined) this.config.elevenLabsVoice = config.elevenLabsVoice;
     if (config.vadSensitivity !== undefined) this.config.vadSensitivity = config.vadSensitivity;
 
-    // Rebuild TTS chain if API key changed
-    if (config.openaiApiKey !== undefined) {
+    // Rebuild TTS chain if any key changed
+    if (config.openaiApiKey !== undefined || config.elevenLabsApiKey !== undefined) {
       this.tts = this.buildTTSChain();
     }
   }
@@ -303,6 +321,19 @@ export class SpatialVoicePipeline {
 
   private buildTTSChain(): TTSProvider {
     const providers: TTSProvider[] = [];
+
+    // Chain order: ElevenLabs (if keyed) → OpenAI (if keyed) → Web Speech.
+    // Matches the web surface — quality first, with each step degrading on
+    // transport/API failure rather than per-utterance recovery.
+    if (this.config.elevenLabsApiKey) {
+      providers.push(
+        new ElevenLabsTTSProvider({
+          apiKey: this.config.elevenLabsApiKey,
+          voice: this.config.elevenLabsVoice,
+          audioContext: this.audioContext ?? undefined,
+        }),
+      );
+    }
 
     if (this.config.openaiApiKey) {
       providers.push(

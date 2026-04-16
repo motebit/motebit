@@ -46,6 +46,7 @@ import type { TTSProvider, STTProvider } from "@motebit/voice";
 import { FallbackTTSProvider, StreamingTTSQueue } from "@motebit/voice";
 import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
 import { OpenAITTSProvider } from "./adapters/openai-tts";
+import { ElevenLabsTTSProvider } from "./adapters/elevenlabs-tts";
 import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
 import { AudioMonitor } from "./adapters/audio-monitor";
 import { SECURE_STORE_KEYS } from "./storage-keys";
@@ -99,17 +100,30 @@ export function useVoice(deps: UseVoiceDeps): UseVoiceResult {
 
   const initVoice = useCallback(
     async (override?: { ttsVoice?: string }) => {
-      const openaiKey = await SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiVoiceKey);
+      const [openaiKey, elevenLabsKey] = await Promise.all([
+        SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiVoiceKey),
+        SecureStore.getItemAsync(SECURE_STORE_KEYS.elevenLabsVoiceKey),
+      ]);
       const voice = override?.ttsVoice ?? voiceSettings?.ttsVoice ?? "alloy";
 
-      // Build TTS chain: OpenAI (if key available) → system TTS fallback
-      const systemTts = new ExpoSpeechTTSProvider();
-      if (openaiKey != null && openaiKey !== "") {
-        const openaiTts = new OpenAITTSProvider({ apiKey: openaiKey, voice });
-        ttsRef.current = new FallbackTTSProvider([openaiTts, systemTts]);
-      } else {
-        ttsRef.current = systemTts;
+      // Build TTS chain: ElevenLabs (if keyed) → OpenAI (if keyed) → system.
+      // Same priority ordering the web surface uses — quality → fallback.
+      // The FallbackTTSProvider steps down the chain only on transport/API
+      // failures, not on per-utterance errors.
+      const chain: TTSProvider[] = [];
+      if (elevenLabsKey != null && elevenLabsKey !== "") {
+        // ElevenLabs uses its own voice library. The mobile settings UI only
+        // exposes OpenAI voice names, so we don't forward the preference —
+        // the provider defaults to "Rachel" internally. If a user picks an
+        // ElevenLabs voice here in the future, pass it through as `voice`.
+        chain.push(new ElevenLabsTTSProvider({ apiKey: elevenLabsKey }));
       }
+      if (openaiKey != null && openaiKey !== "") {
+        chain.push(new OpenAITTSProvider({ apiKey: openaiKey, voice }));
+      }
+      chain.push(new ExpoSpeechTTSProvider());
+      ttsRef.current = chain.length === 1 ? chain[0]! : new FallbackTTSProvider(chain);
+
       // Wire streaming queue to the active TTS provider
       ttsQueueRef.current = new StreamingTTSQueue(
         (text) => ttsRef.current?.speak(text) ?? Promise.resolve(),

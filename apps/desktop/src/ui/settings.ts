@@ -19,7 +19,7 @@ import {
   type GovernanceConfig,
   type AppearanceConfig,
 } from "@motebit/sdk";
-import { byokKeyringKey, WHISPER_API_KEY_SLOT } from "./keyring-keys";
+import { byokKeyringKey, WHISPER_API_KEY_SLOT, ELEVENLABS_API_KEY_SLOT } from "./keyring-keys";
 
 // === DOM Refs ===
 
@@ -87,6 +87,12 @@ const settingsWhisperApiKey = document.getElementById(
 const settingsWhisperApiKeyToggle = document.getElementById(
   "settings-whisper-apikey-toggle",
 ) as HTMLButtonElement;
+const settingsElevenLabsApiKey = document.getElementById(
+  "settings-elevenlabs-apikey",
+) as HTMLInputElement;
+const settingsElevenLabsApiKeyToggle = document.getElementById(
+  "settings-elevenlabs-apikey-toggle",
+) as HTMLButtonElement;
 const settingsVoiceAutoSend = document.getElementById(
   "settings-voice-autosend",
 ) as HTMLInputElement;
@@ -120,6 +126,7 @@ const mcpPublicKeyInput = document.getElementById("mcp-publickey") as HTMLInputE
 
 let hasApiKeyInKeyring = false;
 let hasWhisperKeyInKeyring = false;
+let hasElevenLabsKeyInKeyring = false;
 let selectedApprovalPreset = "balanced";
 let mcpServersConfig: McpServerConfig[] = [];
 let discoveryCollisions: NameCollision[] = [];
@@ -151,6 +158,8 @@ export interface SettingsAPI {
   setHasApiKeyInKeyring(v: boolean): void;
   getHasWhisperKeyInKeyring(): boolean;
   setHasWhisperKeyInKeyring(v: boolean): void;
+  getHasElevenLabsKeyInKeyring(): boolean;
+  setHasElevenLabsKeyInKeyring(v: boolean): void;
   getSelectedApprovalPreset(): string;
   setSelectedApprovalPreset(v: string): void;
   getMcpServersConfig(): McpServerConfig[];
@@ -1642,6 +1651,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     settingsWhisperApiKey.type = "password";
     settingsWhisperApiKeyToggle.textContent = "Show";
     settingsWhisperApiKey.placeholder = hasWhisperKeyInKeyring ? "API key stored" : "sk-...";
+    settingsElevenLabsApiKey.value = "";
+    settingsElevenLabsApiKey.type = "password";
+    settingsElevenLabsApiKeyToggle.textContent = "Show";
+    settingsElevenLabsApiKey.placeholder = hasElevenLabsKeyInKeyring ? "API key stored" : "xi-...";
     settingsVoiceAutoSend.checked = voice.getVoiceAutoSend();
     settingsVoiceResponse.checked = voice.getVoiceResponseEnabled();
     settingsTtsVoice.value = voice.getTtsVoice();
@@ -1702,6 +1715,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const model = derivedModel.trim() || undefined;
     const apiKey = settingsApiKey.value.trim() || undefined;
     const whisperApiKey = settingsWhisperApiKey.value.trim() || undefined;
+    const elevenLabsApiKey = settingsElevenLabsApiKey.value.trim() || undefined;
     const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
 
     voice.setVoiceAutoSend(settingsVoiceAutoSend.checked);
@@ -1774,6 +1788,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       if (whisperApiKey != null && whisperApiKey !== "") {
         await invoke("keyring_set", { key: WHISPER_API_KEY_SLOT, value: whisperApiKey });
         hasWhisperKeyInKeyring = true;
+      }
+
+      if (elevenLabsApiKey != null && elevenLabsApiKey !== "") {
+        await invoke("keyring_set", { key: ELEVENLABS_API_KEY_SLOT, value: elevenLabsApiKey });
+        hasElevenLabsKeyInKeyring = true;
       }
 
       voice.rebuildTtsProvider(invoke as InvokeFn);
@@ -2010,6 +2029,15 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       settingsWhisperApiKeyToggle.textContent = "Show";
     }
   });
+  settingsElevenLabsApiKeyToggle.addEventListener("click", () => {
+    if (settingsElevenLabsApiKey.type === "password") {
+      settingsElevenLabsApiKey.type = "text";
+      settingsElevenLabsApiKeyToggle.textContent = "Hide";
+    } else {
+      settingsElevenLabsApiKey.type = "password";
+      settingsElevenLabsApiKeyToggle.textContent = "Show";
+    }
+  });
 
   return {
     open,
@@ -2027,6 +2055,12 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     },
     setHasWhisperKeyInKeyring(v: boolean) {
       hasWhisperKeyInKeyring = v;
+    },
+    getHasElevenLabsKeyInKeyring() {
+      return hasElevenLabsKeyInKeyring;
+    },
+    setHasElevenLabsKeyInKeyring(v: boolean) {
+      hasElevenLabsKeyInKeyring = v;
     },
     getSelectedApprovalPreset() {
       return selectedApprovalPreset;

@@ -2,6 +2,7 @@ import { MicVAD } from "@ricky0123/vad-web";
 import {
   WebSpeechTTSProvider,
   WebSpeechSTTProvider,
+  ElevenLabsTTSProvider,
   FallbackTTSProvider,
   StreamingTTSQueue,
   computeSpeechEnergy,
@@ -10,6 +11,7 @@ import type { TTSProvider } from "@motebit/voice";
 import { stripTags } from "@motebit/ai-core";
 import type { InteriorColor, InvokeFn } from "../index";
 import { TauriTTSProvider } from "../tauri-tts";
+import { ELEVENLABS_API_KEY_SLOT } from "./keyring-keys";
 import type { DesktopContext, MicState } from "../types";
 import { addMessage } from "./chat";
 
@@ -20,13 +22,53 @@ let ttsProvider: TTSProvider = webSpeechTts;
 const sttProvider = new WebSpeechSTTProvider();
 let ttsVoice = "alloy";
 
+/**
+ * Rebuild the active TTS chain. Synchronous to match the existing API, but
+ * kicks off an async keyring read for the ElevenLabs BYOK key — the provider
+ * reference is swapped in place once the key is known. Chain order:
+ *
+ *   1. ElevenLabs (L0, direct API) — if `elevenlabs_api_key` is in keyring
+ *   2. Tauri OpenAI TTS — if an `invoke` handle is available (desktop only)
+ *   3. Web Speech — always present as the terminal fallback
+ *
+ * `FallbackTTSProvider` steps down the chain only on transport/API failures,
+ * so users who set a quota-exhausted ElevenLabs key still get audio through
+ * the OpenAI adapter rather than falling silent.
+ */
 function rebuildTtsProvider(invoke?: InvokeFn): void {
-  if (invoke) {
-    const tauriTts = new TauriTTSProvider(invoke, { voice: ttsVoice });
-    ttsProvider = new FallbackTTSProvider([tauriTts, webSpeechTts]);
-  } else {
-    ttsProvider = webSpeechTts;
-  }
+  // Immediate (synchronous) chain — lands first so the caller has a working
+  // provider even if the keyring read is slow or fails.
+  const immediateChain: TTSProvider[] = [];
+  if (invoke) immediateChain.push(new TauriTTSProvider(invoke, { voice: ttsVoice }));
+  immediateChain.push(webSpeechTts);
+  ttsProvider =
+    immediateChain.length === 1 ? immediateChain[0]! : new FallbackTTSProvider(immediateChain);
+
+  if (!invoke) return;
+
+  // Async swap-in of the full chain once the ElevenLabs key is known.
+  void (async () => {
+    let elevenLabsKey: string | null = null;
+    try {
+      elevenLabsKey = await invoke<string | null>("keyring_get", {
+        key: ELEVENLABS_API_KEY_SLOT,
+      });
+    } catch {
+      // Keyring unavailable — fall through with the immediate chain.
+    }
+    if (elevenLabsKey == null || elevenLabsKey === "") return;
+
+    // Desktop's `ttsVoice` preference uses OpenAI voice names — don't forward
+    // it to ElevenLabs (which would 404 on "alloy" / "nova"). The L0 provider
+    // defaults to "Rachel" internally. Passing a raw ElevenLabs voice_id is
+    // supported by the provider shape when the surface surfaces it later.
+    const chain: TTSProvider[] = [
+      new ElevenLabsTTSProvider({ apiKey: elevenLabsKey }),
+      new TauriTTSProvider(invoke, { voice: ttsVoice }),
+      webSpeechTts,
+    ];
+    ttsProvider = new FallbackTTSProvider(chain);
+  })();
 }
 
 // === Voice State ===

@@ -31,6 +31,14 @@ export const GOOGLE_API_KEY_SLOT = "google_api_key";
 /** OpenAI Whisper API key for voice transcription. */
 export const WHISPER_API_KEY_SLOT = "whisper_api_key";
 
+/**
+ * ElevenLabs API key for BYOK TTS. Stored under the same keyring namespace
+ * as the other voice secrets so it inherits the same access pattern; when
+ * set, the webview reads it at voice init and hands it to the L0
+ * `ElevenLabsTTSProvider`, which sits at the head of the TTS chain.
+ */
+export const ELEVENLABS_API_KEY_SLOT = "elevenlabs_api_key";
+
 // === Sync ===
 
 /** Master sync token for the configured relay. */

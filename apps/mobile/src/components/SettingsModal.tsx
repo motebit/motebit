@@ -113,6 +113,7 @@ export function SettingsModal({
   const [apiKey, setApiKey] = useState("");
   const [googleKey, setGoogleKey] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
+  const [elevenLabsKey, setElevenLabsKey] = useState("");
   const [billingRelayUrl, setBillingRelayUrl] = useState<string | null>(null);
 
   // Fetch relay URL for billing panel
@@ -145,6 +146,9 @@ export function SettingsModal({
     void SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiVoiceKey).then((k) => {
       if (k != null && k !== "") setOpenaiKey(k);
     });
+    void SecureStore.getItemAsync(SECURE_STORE_KEYS.elevenLabsVoiceKey).then((k) => {
+      if (k != null && k !== "") setElevenLabsKey(k);
+    });
   }, [settings, visible]);
 
   const updateDraft = useCallback((patch: Partial<MobileSettings>) => {
@@ -164,6 +168,9 @@ export function SettingsModal({
     }
     if (openaiKey) {
       await SecureStore.setItemAsync(SECURE_STORE_KEYS.openaiVoiceKey, openaiKey);
+    }
+    if (elevenLabsKey) {
+      await SecureStore.setItemAsync(SECURE_STORE_KEYS.elevenLabsVoiceKey, elevenLabsKey);
     }
 
     // Apply governance settings to runtime (include current operator mode to preserve it)
@@ -212,7 +219,7 @@ export function SettingsModal({
     }
 
     onSave(draft, aiConfig);
-  }, [draft, apiKey, googleKey, openaiKey, app, settings, onSave]);
+  }, [draft, apiKey, googleKey, openaiKey, elevenLabsKey, app, settings, onSave]);
 
   const identity = useMemo(() => app.getIdentityInfo(), [app]);
 
@@ -308,6 +315,7 @@ export function SettingsModal({
                 localBackend={draft.localBackend ?? "apple-fm"}
                 voice={draft.voice}
                 openaiKey={openaiKey}
+                elevenLabsKey={elevenLabsKey}
                 onChangeProvider={(p) =>
                   updateDraft({
                     provider: p,
@@ -330,6 +338,7 @@ export function SettingsModal({
                 onChangeLocalBackend={(b) => updateDraft({ localBackend: b })}
                 onChangeVoice={(patch) => updateDraft({ voice: { ...draft.voice, ...patch } })}
                 onChangeOpenaiKey={setOpenaiKey}
+                onChangeElevenLabsKey={setElevenLabsKey}
               />
               <ToolsTab
                 servers={mcpServers ?? []}

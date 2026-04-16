@@ -215,6 +215,7 @@ export interface IntelligenceTabProps {
   /** Canonical voice config from `@motebit/sdk`. */
   voice: VoiceConfig;
   openaiKey: string;
+  elevenLabsKey: string;
   onChangeProvider: (p: ProviderType) => void;
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
@@ -224,6 +225,7 @@ export interface IntelligenceTabProps {
   /** Patch-style update for the nested `voice` config. */
   onChangeVoice: (patch: Partial<VoiceConfig>) => void;
   onChangeOpenaiKey: (k: string) => void;
+  onChangeElevenLabsKey: (k: string) => void;
 }
 
 export function IntelligenceTab({
@@ -235,6 +237,7 @@ export function IntelligenceTab({
   localBackend,
   voice,
   openaiKey,
+  elevenLabsKey,
   onChangeProvider,
   onChangeModel,
   onChangeApiKey,
@@ -243,6 +246,7 @@ export function IntelligenceTab({
   onChangeLocalBackend,
   onChangeVoice,
   onChangeOpenaiKey,
+  onChangeElevenLabsKey,
 }: IntelligenceTabProps): React.ReactElement {
   const colors = useTheme();
   const styles = useSettingsStyles();
@@ -562,6 +566,21 @@ export function IntelligenceTab({
       />
       <Text style={styles.voiceHint}>
         Used for Whisper STT (voice input) and OpenAI TTS (spoken responses).
+      </Text>
+
+      <Text style={styles.sectionTitle}>ElevenLabs API Key</Text>
+      <TextInput
+        style={styles.textField}
+        value={elevenLabsKey}
+        onChangeText={onChangeElevenLabsKey}
+        placeholder="xi-..."
+        placeholderTextColor={colors.inputPlaceholder}
+        secureTextEntry
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+      <Text style={styles.voiceHint}>
+        Optional. When present, ElevenLabs TTS is preferred over OpenAI.
       </Text>
     </View>
   );

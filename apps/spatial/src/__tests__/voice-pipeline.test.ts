@@ -29,6 +29,10 @@ vi.mock("@motebit/voice", () => ({
     speak: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn(),
   })),
+  ElevenLabsTTSProvider: vi.fn(() => ({
+    speak: vi.fn().mockResolvedValue(undefined),
+    cancel: vi.fn(),
+  })),
   FallbackTTSProvider: vi.fn((_providers: unknown[]) => mockTTS),
 }));
 

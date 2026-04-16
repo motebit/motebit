@@ -4594,6 +4594,14 @@
             <div style="font-size:11px;color:rgba(0,0,0,0.35);margin-top:4px;">Used for TTS voice and Whisper transcription</div>
           </div>
           <div class="settings-field" style="margin-top:10px;">
+            <label for="settings-elevenlabs-apikey">ElevenLabs API Key</label>
+            <div class="settings-key-row">
+              <input id="settings-elevenlabs-apikey" type="password" placeholder="xi-..." />
+              <button id="settings-elevenlabs-apikey-toggle" type="button">Show</button>
+            </div>
+            <div style="font-size:11px;color:rgba(0,0,0,0.35);margin-top:4px;">Optional. When set, ElevenLabs is preferred over OpenAI for TTS.</div>
+          </div>
+          <div class="settings-field" style="margin-top:10px;">
             <label for="settings-tts-voice">TTS Voice</label>
             <select id="settings-tts-voice">
               <option value="alloy">Alloy</option>

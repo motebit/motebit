@@ -31,7 +31,12 @@ import { initMemory } from "./ui/memory";
 import { initPairing } from "./ui/pairing";
 import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
-import { byokKeyringKey, LEGACY_API_KEY_SLOT, WHISPER_API_KEY_SLOT } from "./ui/keyring-keys";
+import {
+  byokKeyringKey,
+  LEGACY_API_KEY_SLOT,
+  WHISPER_API_KEY_SLOT,
+  ELEVENLABS_API_KEY_SLOT,
+} from "./ui/keyring-keys";
 import { initSovereign } from "./ui/sovereign";
 import { initTheme } from "./ui/theme";
 import { initKeyboard } from "./ui/keyboard";
@@ -755,6 +760,14 @@ async function bootstrap(): Promise<void> {
     try {
       const whisperVal = await invoke<string | null>("keyring_get", { key: WHISPER_API_KEY_SLOT });
       settings.setHasWhisperKeyInKeyring(whisperVal != null && whisperVal !== "");
+    } catch {
+      /* Keyring unavailable */
+    }
+    try {
+      const elevenVal = await invoke<string | null>("keyring_get", {
+        key: ELEVENLABS_API_KEY_SLOT,
+      });
+      settings.setHasElevenLabsKeyInKeyring(elevenVal != null && elevenVal !== "");
     } catch {
       /* Keyring unavailable */
     }
