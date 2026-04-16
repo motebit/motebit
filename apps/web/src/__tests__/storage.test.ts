@@ -27,6 +27,8 @@ import {
   needsMigration,
   loadLegacyConversations,
   markMigrationDone,
+  getTTSKey,
+  setTTSKey,
   type ProviderConfig,
   type GovernanceConfig,
   type VoiceConfig,
@@ -272,6 +274,37 @@ describe("VoiceConfig persistence", () => {
     expect(loaded?.ttsVoice).toBe("alloy");
     // Legacy blob had no `enabled` field — defaults to false.
     expect(loaded?.enabled).toBe(false);
+  });
+});
+
+describe("TTS BYOK keys", () => {
+  it("returns null when no key stored", () => {
+    expect(getTTSKey("elevenlabs")).toBeNull();
+    expect(getTTSKey("openai")).toBeNull();
+  });
+
+  it("round-trips ElevenLabs key", () => {
+    setTTSKey("elevenlabs", "sk_11labs_abc");
+    expect(getTTSKey("elevenlabs")).toBe("sk_11labs_abc");
+  });
+
+  it("round-trips OpenAI key independently of ElevenLabs", () => {
+    setTTSKey("elevenlabs", "sk_eleven");
+    setTTSKey("openai", "sk_openai");
+    expect(getTTSKey("elevenlabs")).toBe("sk_eleven");
+    expect(getTTSKey("openai")).toBe("sk_openai");
+  });
+
+  it("empty string clears the stored key", () => {
+    setTTSKey("openai", "sk_openai");
+    setTTSKey("openai", "");
+    expect(getTTSKey("openai")).toBeNull();
+  });
+
+  it("null clears the stored key", () => {
+    setTTSKey("elevenlabs", "sk_eleven");
+    setTTSKey("elevenlabs", null);
+    expect(getTTSKey("elevenlabs")).toBeNull();
   });
 });
 

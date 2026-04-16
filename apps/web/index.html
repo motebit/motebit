@@ -4900,6 +4900,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 2 17.5v-1a2.5 2.5 0 0 1 1.06-2.04A2.5 2.5 0 0 1 2 12.5v-1A2.5 2.5 0 0 1 4.5 9h.5"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 22 17.5v-1a2.5 2.5 0 0 0-1.06-2.04A2.5 2.5 0 0 0 22 12.5v-1A2.5 2.5 0 0 0 19.5 9h-.5"/></svg>
         Intelligence
       </button>
+      <button class="settings-tab" data-tab="voice" role="tab" aria-selected="false" aria-controls="pane-voice" id="tab-voice">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+        Voice
+      </button>
       <button class="settings-tab" data-tab="governance" role="tab" aria-selected="false" aria-controls="pane-governance" id="tab-governance">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         Governance
@@ -5102,13 +5106,35 @@
             </div>
           </div>
         </div>
-        <!-- Voice -->
+      </div>
+      <!-- Voice pane -->
+      <div class="settings-pane" id="pane-voice" role="tabpanel" aria-labelledby="tab-voice">
+        <div class="settings-card">
+          <div class="card-title">TTS Provider Keys</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">
+            Keys stay on this device. With no key set, the creature speaks through your browser's built-in voice.
+          </div>
+          <div class="settings-field">
+            <label for="tts-elevenlabs-key">ElevenLabs API key</label>
+            <div class="settings-key-row">
+              <input id="tts-elevenlabs-key" type="password" placeholder="sk_..." autocomplete="off" />
+              <button type="button" class="tts-key-reveal" data-target="tts-elevenlabs-key" aria-label="Show key" aria-pressed="false">Show</button>
+            </div>
+          </div>
+          <div class="settings-field">
+            <label for="tts-openai-key">OpenAI API key</label>
+            <div class="settings-key-row">
+              <input id="tts-openai-key" type="password" placeholder="sk-..." autocomplete="off" />
+              <button type="button" class="tts-key-reveal" data-target="tts-openai-key" aria-label="Show key" aria-pressed="false">Show</button>
+            </div>
+          </div>
+        </div>
         <div class="settings-card">
           <div class="card-title">Voice</div>
           <div class="settings-field">
             <label for="settings-tts-voice">TTS Voice</label>
             <select id="settings-tts-voice">
-              <option value="">Default</option>
+              <option value="">Browser default</option>
             </select>
           </div>
           <div class="settings-field">

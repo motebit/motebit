@@ -8,10 +8,14 @@ import {
   loadGovernanceConfig,
   saveVoiceConfig,
   loadVoiceConfig,
+  getTTSKey,
+  setTTSKey,
 } from "../storage";
 import { checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
 import { detectLocalInference, probeLocalModels, DEFAULT_LOCAL_ENDPOINTS } from "../bootstrap";
 import { setTTSVoice } from "./chat";
+import { rebuildTTSProvider } from "../main";
+import { ELEVENLABS_VOICES, TTS_VOICES } from "@motebit/voice";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
@@ -158,6 +162,8 @@ const govMaxCalls = document.getElementById("gov-max-calls") as HTMLSelectElemen
 const ttsVoiceSelect = document.getElementById("settings-tts-voice") as HTMLSelectElement;
 const voiceAutoSend = document.getElementById("settings-voice-autosend") as HTMLInputElement;
 const voiceResponse = document.getElementById("settings-voice-response") as HTMLInputElement;
+const ttsElevenlabsKey = document.getElementById("tts-elevenlabs-key") as HTMLInputElement | null;
+const ttsOpenaiKey = document.getElementById("tts-openai-key") as HTMLInputElement | null;
 
 // === State ===
 
@@ -280,28 +286,86 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     walletSolanaAddress.textContent = address ?? "—";
   }
 
+  /**
+   * Populate the TTS voice picker based on which BYOK keys are currently
+   * entered. The picker always reflects the *active* provider's voice space:
+   *
+   *   ElevenLabs keyed → curated `ELEVENLABS_VOICES` names
+   *   OpenAI keyed only → `TTS_VOICES`
+   *   Neither → a single "Browser default" option
+   *
+   * Re-runs on every key-field input so the menu tracks what the user is
+   * currently typing without waiting for Save. Preserves the current
+   * selection if it still exists in the new option list, otherwise falls
+   * back to the stored `ttsVoice` or the first option.
+   */
   function populateTtsVoices(): void {
-    if (typeof speechSynthesis === "undefined") return;
-    const fill = (): void => {
-      const voices = speechSynthesis.getVoices();
-      // Keep default option, clear the rest
-      while (ttsVoiceSelect.options.length > 1) ttsVoiceSelect.remove(1);
-      for (const v of voices) {
-        const opt = document.createElement("option");
-        opt.value = v.name;
-        opt.textContent = `${v.name} (${v.lang})`;
-        ttsVoiceSelect.appendChild(opt);
+    const elevenKey = ttsElevenlabsKey?.value.trim() ?? "";
+    const openaiKey = ttsOpenaiKey?.value.trim() ?? "";
+    const previous = ttsVoiceSelect.value;
+    const saved = loadVoiceConfig()?.ttsVoice ?? "";
+
+    ttsVoiceSelect.innerHTML = "";
+    const options: Array<{ value: string; label: string }> = [];
+
+    if (elevenKey) {
+      // ElevenLabs takes priority — it's the top of the fallback chain.
+      for (const name of Object.keys(ELEVENLABS_VOICES)) {
+        options.push({ value: name, label: name });
       }
-      // Restore saved selection
-      const saved = loadVoiceConfig();
-      if (saved?.ttsVoice) ttsVoiceSelect.value = saved.ttsVoice;
-    };
-    fill();
-    // Chrome loads voices async
-    if (speechSynthesis.getVoices().length === 0) {
-      speechSynthesis.addEventListener("voiceschanged", fill, { once: true });
+    } else if (openaiKey) {
+      for (const name of TTS_VOICES) {
+        options.push({ value: name, label: name });
+      }
+    } else {
+      options.push({ value: "", label: "Browser default" });
     }
+
+    for (const opt of options) {
+      const el = document.createElement("option");
+      el.value = opt.value;
+      el.textContent = opt.label;
+      ttsVoiceSelect.appendChild(el);
+    }
+
+    // Restore selection in priority order: live-edit value → stored config → first.
+    const candidates = [previous, saved].filter((v) => v !== "");
+    for (const candidate of candidates) {
+      if (options.some((o) => o.value === candidate)) {
+        ttsVoiceSelect.value = candidate;
+        return;
+      }
+    }
+    ttsVoiceSelect.value = options[0]!.value;
   }
+
+  /**
+   * Toggle password-reveal on a key input. Each reveal button carries a
+   * `data-target` pointing at the input id. Calm UI — no icon swap; we use
+   * "Show" / "Hide" text so the affordance is unambiguous without depending
+   * on a glyph set.
+   */
+  function wireKeyRevealButtons(): void {
+    document.querySelectorAll<HTMLButtonElement>(".tts-key-reveal").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const targetId = btn.dataset.target;
+        if (!targetId) return;
+        const input = document.getElementById(targetId) as HTMLInputElement | null;
+        if (!input) return;
+        const revealed = input.type === "text";
+        input.type = revealed ? "password" : "text";
+        btn.textContent = revealed ? "Show" : "Hide";
+        btn.setAttribute("aria-pressed", String(!revealed));
+      });
+    });
+  }
+
+  // Re-populate voices whenever a key field changes — the option space
+  // depends on which keys are present. Debouncing not needed; the work is
+  // <10 options and a few DOM nodes.
+  ttsElevenlabsKey?.addEventListener("input", () => populateTtsVoices());
+  ttsOpenaiKey?.addEventListener("input", () => populateTtsVoices());
+  wireKeyRevealButtons();
 
   function classifyDecision(decision: unknown): "allowed" | "denied" | "approval" {
     if (decision == null || typeof decision !== "object") return "allowed";
@@ -738,14 +802,22 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       });
     });
 
-    // Populate TTS voices
+    // Pre-fill BYOK TTS key inputs from local storage. Keys never leave
+    // this device; the inputs are the only UI path for entering them, so
+    // this mirror-load is load-bearing — with no other surface, a blank
+    // input would silently overwrite the stored key on Save.
+    if (ttsElevenlabsKey) ttsElevenlabsKey.value = getTTSKey("elevenlabs") ?? "";
+    if (ttsOpenaiKey) ttsOpenaiKey.value = getTTSKey("openai") ?? "";
+
+    // Populate TTS voices — must run *after* key fields are filled so the
+    // picker reflects the active provider's voice space on open.
     populateTtsVoices();
     const voiceConfig = loadVoiceConfig();
     if (voiceConfig) {
       voiceAutoSend.checked = voiceConfig.autoSend;
       voiceResponse.checked = voiceConfig.speakResponses;
-      // Voice select populated async — set after voices load
-      if (voiceConfig.ttsVoice) ttsVoiceSelect.value = voiceConfig.ttsVoice;
+      // Voice select already populated above; populateTtsVoices() restores
+      // the stored ttsVoice if it's still a valid option in the new space.
     }
 
     // Pre-fill from current provider config
@@ -999,6 +1071,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     saveGovernanceConfig(govCfg);
     applyGovernanceToRuntime(ctx, govCfg);
 
+    // Persist BYOK TTS keys first so the rebuild below sees fresh values.
+    // Empty-string clears the slot (setTTSKey removes the localStorage entry).
+    if (ttsElevenlabsKey) setTTSKey("elevenlabs", ttsElevenlabsKey.value.trim());
+    if (ttsOpenaiKey) setTTSKey("openai", ttsOpenaiKey.value.trim());
+
     // Save voice config. `enabled` stays whatever the stored config said —
     // the web surface doesn't expose a master voice on/off toggle yet; when
     // it does, wire it here. Defaults flow through `migrateVoiceConfig`.
@@ -1012,6 +1089,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     };
     saveVoiceConfig(voiceCfg);
     setTTSVoice(voiceCfg.ttsVoice);
+
+    // Rebuild the live TTS provider chain so BYOK key/voice edits take
+    // effect without a reload. rebuildTTSProvider re-reads storage and
+    // swaps the StreamingTTS provider in place.
+    rebuildTTSProvider();
 
     updateModelIndicator();
     updateConnectPrompt();
