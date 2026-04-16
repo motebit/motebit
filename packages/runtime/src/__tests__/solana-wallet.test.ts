@@ -31,6 +31,7 @@ function makeMockAdapter(overrides: Partial<SolanaRpcAdapter> = {}): SolanaRpcAd
       confirmed: true,
     })),
     sendUsdcBatch: vi.fn().mockResolvedValue([]),
+    getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
     isReachable: vi.fn().mockResolvedValue(true),
     ...overrides,
   };

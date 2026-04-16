@@ -32,12 +32,22 @@ import type {
   SendUsdcArgs,
   SendUsdcResult,
   SendUsdcBatchItemResult,
+  TxVerificationResult,
 } from "./adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
   InvalidSolanaAddressError,
 } from "./constants.js";
+
+/**
+ * Short-name shown on confirmed `TxVerificationResult`s. The verifier
+ * never consults it for correctness (the mint match is what matters)
+ * but the field is carried through so audit logs read naturally. When
+ * a future rail supports a second SPL asset, thread the mint through
+ * and derive this from a small registry.
+ */
+const ASSET_NAME_USDC = "USDC";
 
 export interface Web3JsRpcAdapterConfig {
   rpcUrl: string;
@@ -286,6 +296,126 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     }
 
     return results;
+  }
+
+  /**
+   * Look up a transaction by signature and classify the outcome for
+   * p2p payment verification. See `TxVerificationResult` for the
+   * discrimination contract; the summary is:
+   *
+   *   - `Connection.getTransaction` throwing → `rpc_error` (transient,
+   *     retry, never downgrade trust)
+   *   - `null` result → `not_found` (authoritative, terminal)
+   *   - result with no parseable SPL transfer → `not_found` (same
+   *     effect: no verifiable payment) with a log line for visibility
+   *   - result with an SPL transfer → `confirmed` with `from` / `to`
+   *     as **owner** addresses (resolved via `preTokenBalances` /
+   *     `postTokenBalances`, not ATA addresses) and the exact
+   *     `amountMicro`
+   *
+   * Owner discovery through the meta token balances is robust across
+   * legacy and versioned transactions. We deliberately do not decode
+   * the SPL instruction data buffer: the balance-delta approach
+   * produces the same from/to/amount without needing to own the SPL
+   * parser, and it degrades gracefully to `not_found` when the tx
+   * isn't a token transfer at all.
+   */
+  async getTransaction(signature: string): Promise<TxVerificationResult> {
+    // `getTransaction` only accepts Finality ("confirmed" | "finalized"),
+    // not the full Commitment union. Processed-level reads aren't
+    // defined for finalized tx archives, so we narrow upward to
+    // "confirmed" when the adapter is configured for "processed".
+    const finality: "confirmed" | "finalized" =
+      this.commitment === "finalized" ? "finalized" : "confirmed";
+    let resp: Awaited<ReturnType<typeof this.connection.getTransaction>> = null;
+    try {
+      resp = await this.connection.getTransaction(signature, {
+        commitment: finality,
+        maxSupportedTransactionVersion: 0,
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return { status: "rpc_error", reason };
+    }
+
+    if (resp == null) return { status: "not_found" };
+
+    // An errored tx never moved tokens — surface it as not_found so
+    // the caller treats it like a missing payment (no verifiable
+    // transfer happened).
+    if (resp.meta?.err != null) return { status: "not_found" };
+
+    const pre = resp.meta?.preTokenBalances ?? [];
+    const post = resp.meta?.postTokenBalances ?? [];
+    const mintString = this.mint.toBase58();
+
+    // Build a per-(accountIndex) delta table for balances on our mint.
+    // One side will have a negative delta (the payer), one positive
+    // (the recipient). Using the declared mint as a filter keeps any
+    // multi-asset transaction from polluting the result.
+    type Row = { owner: string; delta: bigint };
+    const rows = new Map<number, Row>();
+    const addRow = (
+      accountIndex: number,
+      owner: string | undefined,
+      amountString: string,
+      sign: 1n | -1n,
+    ): void => {
+      if (!owner) return; // owner is optional in the wire format
+      let amount: bigint;
+      try {
+        amount = BigInt(amountString);
+      } catch {
+        return;
+      }
+      const existing = rows.get(accountIndex);
+      const prior = existing?.delta ?? 0n;
+      rows.set(accountIndex, { owner, delta: prior + sign * amount });
+    };
+
+    for (const b of post) {
+      if (b.mint !== mintString) continue;
+      addRow(b.accountIndex, b.owner, b.uiTokenAmount.amount, 1n);
+    }
+    for (const b of pre) {
+      if (b.mint !== mintString) continue;
+      addRow(b.accountIndex, b.owner, b.uiTokenAmount.amount, -1n);
+    }
+
+    let from: string | null = null;
+    let to: string | null = null;
+    let amountMicro = 0n;
+    for (const { owner, delta } of rows.values()) {
+      if (delta < 0n) {
+        // A single tx could touch multiple payer accounts; we only
+        // surface a transfer when exactly one payer and one recipient
+        // are on the mint. The verifier checks for an exact match,
+        // so any ambiguity should be treated as not_found.
+        if (from != null) {
+          return { status: "not_found" };
+        }
+        from = owner;
+        amountMicro = -delta;
+      } else if (delta > 0n) {
+        if (to != null) {
+          return { status: "not_found" };
+        }
+        to = owner;
+      }
+    }
+
+    if (from == null || to == null || amountMicro === 0n) {
+      return { status: "not_found" };
+    }
+
+    return {
+      status: "confirmed",
+      from,
+      to,
+      amountMicro,
+      slot: resp.slot,
+      asset: ASSET_NAME_USDC,
+    };
   }
 
   async isReachable(): Promise<boolean> {

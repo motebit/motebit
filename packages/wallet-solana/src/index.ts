@@ -29,6 +29,7 @@ export {
   type SolanaRpcAdapter,
   type SendUsdcArgs,
   type SendUsdcBatchItemResult,
+  type TxVerificationResult,
 } from "./adapter.js";
 
 export { Web3JsRpcAdapter } from "./web3js-adapter.js";
