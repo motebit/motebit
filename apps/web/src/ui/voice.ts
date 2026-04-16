@@ -1,50 +1,40 @@
 import type { ChatAPI } from "./chat";
 import { setStreamingTTSEnabled } from "./chat";
 import type { WebContext } from "../types";
+import type { STTProvider } from "@motebit/voice";
+import { WebSpeechSTTProvider, DeepgramSTTProvider } from "@motebit/voice";
+import { getSTTKey } from "../storage";
 
-// === Web Speech API Types ===
+// === STT Provider Selection ===
+//
+// The presence session delegates speech recognition to an STTProvider. The
+// choice is made once at module load from persisted BYOK keys:
+//
+//   - If `motebit-stt-key-deepgram` is set → DeepgramSTTProvider (websocket
+//     streaming, cross-browser, multi-language, robust to silence).
+//   - Otherwise → WebSpeechSTTProvider (browser built-in; default).
+//
+// Swapping providers requires a page reload. A mid-session hot-swap would
+// need to tear down audio graphs and reconnect sockets while the keeper
+// held open, which adds complexity that this pass does not warrant —
+// settings UI (owned by another agent) can nudge users to reload.
 
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
+function createSTTProvider(): STTProvider {
+  const deepgramKey = (() => {
+    try {
+      return getSTTKey("deepgram");
+    } catch {
+      return null;
+    }
+  })();
+  if (deepgramKey != null && deepgramKey !== "") {
+    return new DeepgramSTTProvider({ apiKey: deepgramKey });
+  }
+  // WebSpeech is the default. If the browser has no SpeechRecognition, the
+  // provider surfaces onError("SpeechRecognition API not available") when
+  // start() is called — startSession catches that and ends the session.
+  return new WebSpeechSTTProvider();
 }
-
-interface SpeechRecognitionResultList {
-  length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-}
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
-  onend: (() => void) | null;
-  onstart: (() => void) | null;
-}
-
-declare const webkitSpeechRecognition: { new (): SpeechRecognition } | undefined;
 
 // === DOM Refs ===
 
@@ -74,13 +64,14 @@ let waveformColor = { r: 203, g: 225, b: 255 };
 //   ttsHasTakenFloor — setTtsSpeaking(true) has fired since the last final
 //                      transcript. Used by the safety timer to distinguish
 //                      "TTS never played" from "TTS already played and ended".
-//   recognition      — the short-lived Web Speech child. Respawns on every
-//                      onend while inSession && !suspended.
+//   stt              — the current STTProvider child. Bounded by start()/stop()
+//                      calls; the provider's own onEnd drives keeper respawn
+//                      while inSession && !suspended.
 
 let inSession = false;
 let suspended = false;
 let ttsHasTakenFloor = false;
-let recognition: SpeechRecognition | null = null;
+let stt: STTProvider | null = null;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
 // === Voice API ===
@@ -108,15 +99,22 @@ export function initVoice(
     return { updateVoiceGlowColor() {}, setTtsSpeaking() {}, endSession() {} };
   }
 
-  // Check for Web Speech API support
-  const SpeechRecognitionCtor =
-    typeof window !== "undefined" && "SpeechRecognition" in window
-      ? (window as unknown as Record<string, { new (): SpeechRecognition }>)["SpeechRecognition"]
-      : typeof webkitSpeechRecognition !== "undefined"
-        ? webkitSpeechRecognition
-        : null;
-
-  if (!SpeechRecognitionCtor) {
+  // Gate the mic button on whether *any* STT path exists. For the default
+  // WebSpeech provider that means the browser ships SpeechRecognition; for
+  // Deepgram that means a persisted API key. If neither condition holds,
+  // the button stays hidden.
+  const hasWebSpeech =
+    (typeof window !== "undefined" && "SpeechRecognition" in window) ||
+    (typeof window !== "undefined" && "webkitSpeechRecognition" in window);
+  const hasDeepgramKey = (() => {
+    try {
+      const key = getSTTKey("deepgram");
+      return key != null && key !== "";
+    } catch {
+      return false;
+    }
+  })();
+  if (!hasWebSpeech && !hasDeepgramKey) {
     micBtn.style.display = "none";
     return { updateVoiceGlowColor() {}, setTtsSpeaking() {}, endSession() {} };
   }
@@ -374,32 +372,30 @@ export function initVoice(
   }
 
   // === Recognition Keeper ===
-  // The Web Speech API forces `continuous: false` style bursts in Chrome — the
-  // engine will stop itself on silence, on speech-end, on network blips. The
-  // session owns a keeper that respawns recognition on every onend until the
-  // user explicitly ends the session (or TTS takes the floor).
+  // STT providers (WebSpeech, Deepgram) are short-lived by design — WebSpeech
+  // stops itself on silence/onend, and even Deepgram's socket can drop on
+  // transport flakes. The session owns a keeper that respawns the provider on
+  // every onEnd until the user explicitly ends the session (or TTS takes the
+  // floor). All provider-specific behavior is hidden behind STTProvider.
 
   function spawnRecognition(): void {
-    if (!inSession || suspended || recognition) return;
+    if (!inSession || suspended || stt) return;
 
-    const rec = new SpeechRecognitionCtor!();
-    rec.continuous = false;
-    rec.interimResults = true;
-    rec.lang = navigator.language || "en-US";
+    const provider = createSTTProvider();
 
-    rec.onstart = () => {
-      if (voiceTranscript) {
-        voiceTranscript.textContent = "";
-        voiceTranscript.classList.remove("has-text");
-      }
+    // interimResults=true keeps WebSpeech's onresult flowing and unlocks
+    // Deepgram's partial-hypothesis frames. continuous=false matches the
+    // burst-per-utterance pattern: we stop after the first final result
+    // and respawn via onEnd.
+    const options = {
+      language: navigator.language || "en-US",
+      continuous: false,
+      interimResults: true,
     };
 
-    rec.onresult = (event: SpeechRecognitionEvent) => {
-      let final = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i]!;
-        if (result.isFinal) final += result[0]!.transcript;
-      }
+    provider.onResult = (transcript: string, isFinal: boolean) => {
+      if (!isFinal) return;
+      const final = transcript.trim();
       if (!final) return;
 
       // Final captured — suspend auto-restart and hand off to chat. TTS will
@@ -410,7 +406,7 @@ export function initVoice(
       suspended = true;
       ttsHasTakenFloor = false;
 
-      void chatAPI.handleVoiceSend(final.trim()).finally(() => {
+      void chatAPI.handleVoiceSend(final).finally(() => {
         setTimeout(() => {
           if (inSession && suspended && !ttsHasTakenFloor) {
             suspended = false;
@@ -420,25 +416,28 @@ export function initVoice(
       });
     };
 
-    rec.onerror = (event: SpeechRecognitionErrorEvent) => {
+    provider.onError = (code: string) => {
       // Permission-class errors kill the session; transient errors fall
-      // through to onend and get restarted like any other cycle.
-      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      // through to onEnd and get restarted like any other cycle. The
+      // vocabulary ("not-allowed" / "service-not-allowed") is shared by
+      // WebSpeech and Deepgram so the keeper stays adapter-agnostic.
+      if (code === "not-allowed" || code === "service-not-allowed") {
         endSession();
         voiceCallbacks?.onPresenceToggle(false);
       }
     };
 
-    rec.onend = () => {
-      recognition = null;
+    provider.onEnd = () => {
+      stt = null;
       if (inSession && !suspended) scheduleRecognitionRestart();
     };
 
     try {
-      rec.start();
-      recognition = rec;
+      provider.start(options);
+      stt = provider;
     } catch {
-      // "recognition has already started" race — back off and retry.
+      // Provider refused to start (e.g. socket open threw synchronously).
+      // Back off and retry.
       scheduleRecognitionRestart(300);
     }
   }
@@ -456,13 +455,17 @@ export function initVoice(
       clearTimeout(restartTimer);
       restartTimer = null;
     }
-    if (recognition) {
+    if (stt) {
       try {
-        recognition.abort();
+        stt.stop();
       } catch {
         /* ignore */
       }
-      recognition = null;
+      // Clear callbacks so any in-flight onEnd doesn't respawn under us.
+      stt.onResult = null;
+      stt.onError = null;
+      stt.onEnd = null;
+      stt = null;
     }
   }
 

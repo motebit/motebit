@@ -237,6 +237,40 @@ export function setTTSKey(vendor: TTSVendorKey, key: string | null): void {
   }
 }
 
+// === STT BYOK Keys ===
+//
+// Mirrors the TTS-key storage above: per-vendor STT API keys namespaced under
+// `motebit-stt-key-<vendor>`. Kept separate from VoiceConfig for the same
+// reason — secrets don't belong in a cross-surface type. A non-empty value
+// is the signal that the voice session should construct a provider-specific
+// adapter (e.g. DeepgramSTTProvider) in place of the default WebSpeech path.
+//
+// Provider swaps take effect on page reload; see voice.ts for the rationale.
+
+export type STTVendorKey = "deepgram";
+
+const STT_KEY_PREFIX = "motebit-stt-key-";
+
+export function getSTTKey(vendor: STTVendorKey): string | null {
+  try {
+    return localStorage.getItem(STT_KEY_PREFIX + vendor);
+  } catch {
+    return null;
+  }
+}
+
+export function setSTTKey(vendor: STTVendorKey, key: string | null): void {
+  try {
+    if (key == null || key === "") {
+      localStorage.removeItem(STT_KEY_PREFIX + vendor);
+    } else {
+      localStorage.setItem(STT_KEY_PREFIX + vendor, key);
+    }
+  } catch {
+    // localStorage unavailable
+  }
+}
+
 // === Sovereignty Ceiling CTA ===
 
 const CEILING_KEY = "motebit-ceiling-shown";
