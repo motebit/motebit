@@ -278,8 +278,9 @@ export async function parseProxyToken(
     // @motebit/crypto suite-dispatch module exceeds the edge bundle
     // budget. If @motebit/crypto gains an edge-friendly build later,
     // this routes through `verifyBySuite` and the waiver goes away.
+    // See docs/drift-defenses.md §11 "Active waivers".
     const ed = await import("@noble/ed25519");
-    // crypto-suite: intentional-primitive-call — Edge Runtime constraint; see comment above.
+    // crypto-suite: intentional-primitive-call — Vercel Edge bundle budget; ProxyToken is service-local, not a protocol wire artifact.
     const valid = await ed.verifyAsync(sigBytes, payloadBytes, pubKeyBytes);
     if (!valid) return null;
 

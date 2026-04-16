@@ -44,7 +44,13 @@ Every signed wire artifact declares `suite: SuiteId` alongside `signature`, and 
 
 ### 11. `@motebit/crypto` verify paths ↔ suite dispatcher
 
-Every signature primitive call lives in `packages/crypto/src/suite-dispatch.ts`, with an optional `// crypto-suite: intentional-primitive-call` waiver for explicit escape hatches. Together with `check-suite-declared` this closes the PQ-migration trap where a spec declares a suite but the code still hardcodes Ed25519. Scope widened the same day (2026-04-13) from `packages/crypto/src/` only to also cover `services/` and `apps/`, after the Vercel Edge proxy's `ed.verifyAsync` was found outside the original scan.
+Every signature primitive call lives in `packages/crypto/src/suite-dispatch.ts`, with an optional `// crypto-suite: intentional-primitive-call — <reason>` waiver for explicit escape hatches. Together with `check-suite-declared` this closes the PQ-migration trap where a spec declares a suite but the code still hardcodes Ed25519. Scope widened the same day (2026-04-13) from `packages/crypto/src/` only to also cover `services/` and `apps/`, after the Vercel Edge proxy's `ed.verifyAsync` was found outside the original scan. The reason text (anything after the em-dash / hyphen on the waiver line) is parsed and printed by the gate so waivers are self-documenting in CI output — one way to express a waiver, no parallel exception table (2026-04-16).
+
+**Active waivers.** Each one must pass the protocol test ("is this a motebit wire artifact?") and name a revisit trigger.
+
+| File                               | Pattern          | Reason                                                                               | Revisit trigger                                                                                     |
+| ---------------------------------- | ---------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `services/proxy/src/validation.ts` | `ed.verifyAsync` | Vercel Edge bundle budget; ProxyToken is service-local, not a protocol wire artifact | `@motebit/crypto` ships an edge-friendly subpath build → route through `verifyBySuite`, drop waiver |
 
 ### 12. Published binaries ↔ dist-boot smoke
 

@@ -34,6 +34,10 @@ import { join, relative, resolve } from "node:path";
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const DISPATCHER_FILE = "suite-dispatch.ts";
 const WAIVER_COMMENT = /crypto-suite:\s*intentional-primitive-call/;
+// Optional structured reason after the waiver marker, introduced by
+// an em-dash or hyphen. Extracted and printed in the banner so `pnpm
+// check` output documents *why* each waiver exists, not just *where*.
+const WAIVER_REASON = /crypto-suite:\s*intentional-primitive-call\s*[—-]\s*(.+?)$/;
 
 /**
  * Scope of the scan. Originally `packages/crypto/src/` only — widened
@@ -69,6 +73,7 @@ interface Finding {
   pattern: string;
   context: string;
   waived: boolean;
+  reason: string | null;
 }
 
 function walkTs(dir: string, out: string[] = []): string[] {
@@ -100,13 +105,20 @@ function scanFile(abs: string): Finding[] {
     for (const { regex, name } of FORBIDDEN_PATTERNS) {
       if (regex.test(code)) {
         const prev = i > 0 ? lines[i - 1]! : "";
-        const waived = WAIVER_COMMENT.test(line) || WAIVER_COMMENT.test(prev);
+        const waiverLine = WAIVER_COMMENT.test(line)
+          ? line
+          : WAIVER_COMMENT.test(prev)
+            ? prev
+            : null;
+        const waived = waiverLine !== null;
+        const reason = waiverLine ? (WAIVER_REASON.exec(waiverLine)?.[1]?.trim() ?? null) : null;
         findings.push({
           file: rel,
           line: i + 1,
           pattern: name,
           context: line.trim(),
           waived,
+          reason,
         });
       }
     }
@@ -149,6 +161,7 @@ function main(): void {
     for (const f of waived) {
       console.log(`  ${f.file}:${f.line}  ${f.pattern}`);
       console.log(`    ${f.context}`);
+      if (f.reason) console.log(`    reason: ${f.reason}`);
     }
     console.log();
   }
