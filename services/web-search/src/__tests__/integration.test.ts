@@ -17,6 +17,7 @@ import {
   readUrlDefinition,
   createReadUrlHandler,
 } from "@motebit/tools";
+import type { SearchProvider, SearchResult } from "@motebit/tools";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import type { MotebitServerDeps } from "@motebit/mcp-server";
 import {
@@ -78,9 +79,26 @@ beforeAll(async () => {
   const verifyResult = await verifyIdentityFile(identityContent);
   expect(verifyResult.valid).toBe(true);
 
-  // 3. Build tool registry
+  // 3. Build tool registry.
+  //
+  // Use a canned-results SearchProvider, not the default DuckDuckGoSearchProvider
+  // that would reach the real network. The protocol loop under test — MCP
+  // transport, identity verification, receipt signing, the `motebit:<id>`
+  // identity tag appended to results — is independent of which backend
+  // produced the results. A real-network default here made CI flake against
+  // DDG's rate limits (timeouts at 5s on GHA IPs while locally ~800ms).
+  const stubSearchProvider: SearchProvider = {
+    async search(query: string, maxResults = 5): Promise<SearchResult[]> {
+      return Array.from({ length: Math.min(maxResults, 2) }, (_, i) => ({
+        title: `Stubbed result ${i + 1} for "${query}"`,
+        url: `https://example.test/result-${i + 1}`,
+        snippet: `Deterministic snippet ${i + 1} for integration test.`,
+      }));
+    },
+  };
+
   const registry = new InMemoryToolRegistry();
-  registry.register(webSearchDefinition, createWebSearchHandler());
+  registry.register(webSearchDefinition, createWebSearchHandler(stubSearchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());
 
   // 4. Create runtime with in-memory storage (no SQLite needed)
