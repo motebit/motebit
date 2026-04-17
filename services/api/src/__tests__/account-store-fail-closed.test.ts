@@ -68,6 +68,13 @@ class MockDriver implements DatabaseDriver {
   close(): void {
     /* no-op */
   }
+
+  transaction<T>(fn: () => T): T {
+    // Pass-through: these tests probe read-only paths that never enter
+    // a transaction on the real driver. If a future test does, make it
+    // observable by wiring in begin/commit counters.
+    return fn();
+  }
 }
 
 const TABLES_PRESENT_ROWS = (names: string[]): QueryReply => ({

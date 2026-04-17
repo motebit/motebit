@@ -2832,6 +2832,15 @@ class BetterSqliteDriver implements DatabaseDriver {
   close(): void {
     this.inner.close();
   }
+
+  transaction<T>(fn: () => T): T {
+    // better-sqlite3 exposes `db.transaction(fn)` which returns a *factory*
+    // we then invoke — it handles BEGIN/COMMIT/ROLLBACK plus savepoint-based
+    // nesting automatically. Error on fn() propagates through after rollback,
+    // matching the DatabaseDriver contract.
+    const wrapped = this.inner.transaction(fn);
+    return wrapped() as T;
+  }
 }
 /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 

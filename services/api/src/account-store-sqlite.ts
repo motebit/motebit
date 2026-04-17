@@ -447,20 +447,19 @@ export class SqliteAccountStore implements AccountStore {
     this.getOrCreateAccount(args.motebitId);
 
     // Rule 12 compound atomicity: debit + transaction-log entry + pending
-    // row all commit together or all roll back. BEGIN/COMMIT around the
-    // three writes; the UPDATE WHERE balance >= amount is the guard.
-    this.db.exec("BEGIN");
-    try {
+    // row commit together or roll back together. Delegates to
+    // DatabaseDriver.transaction — it handles BEGIN/COMMIT/ROLLBACK plus
+    // nested-call savepoint semantics. Insufficient funds returns null
+    // from the fn; the (empty) transaction commits harmlessly. Any other
+    // throw inside the fn rolls back and rethrows to the caller.
+    return this.db.transaction(() => {
       const info = this.db
         .prepare(
           "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",
         )
         .run(args.amountMicro, now, args.motebitId, args.amountMicro);
 
-      if (info.changes === 0) {
-        this.db.exec("ROLLBACK");
-        return null;
-      }
+      if (info.changes === 0) return null;
 
       const updated = this.db
         .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
@@ -501,12 +500,8 @@ export class SqliteAccountStore implements AccountStore {
           args.idempotencyKey,
         );
 
-      this.db.exec("COMMIT");
       return { pendingId, newBalance };
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    });
   }
 }
 

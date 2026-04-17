@@ -26,6 +26,12 @@ export class SqlJsDriver implements DatabaseDriver {
   private dbPath: string | null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
+  /**
+   * Nested-transaction counter. sql.js has no native `db.transaction()`
+   * helper, so we issue `BEGIN` on the outermost entry and `SAVEPOINT s_N`
+   * for each subsequent nested call — matching better-sqlite3's shape.
+   */
+  private txnDepth = 0;
 
   private constructor(db: SqlJsDatabase, dbPath: string | null) {
     this.db = db;
@@ -121,6 +127,44 @@ export class SqlJsDriver implements DatabaseDriver {
       this.flushToFile();
     }
     this.db.close();
+  }
+
+  transaction<T>(fn: () => T): T {
+    // Outer call issues BEGIN; nested calls use named savepoints so a
+    // throw in an inner call can roll back to its own boundary without
+    // aborting the outer. Matches better-sqlite3's composition shape.
+    const depth = this.txnDepth;
+    this.txnDepth = depth + 1;
+    const useSavepoint = depth > 0;
+    const label = useSavepoint ? `motebit_sp_${depth}` : null;
+
+    if (useSavepoint) {
+      this.db.run(`SAVEPOINT ${label!}`);
+    } else {
+      this.db.run("BEGIN");
+    }
+
+    try {
+      const result = fn();
+      if (useSavepoint) {
+        this.db.run(`RELEASE ${label!}`);
+      } else {
+        this.db.run("COMMIT");
+        this.scheduleDirtyFlush();
+      }
+      return result;
+    } catch (err) {
+      if (useSavepoint) {
+        // Roll back just this savepoint, then release it to clear state.
+        this.db.run(`ROLLBACK TO ${label!}`);
+        this.db.run(`RELEASE ${label!}`);
+      } else {
+        this.db.run("ROLLBACK");
+      }
+      throw err;
+    } finally {
+      this.txnDepth = depth;
+    }
   }
 
   private scheduleDirtyFlush(): void {

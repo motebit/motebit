@@ -117,7 +117,12 @@ export class SqliteDepositDetectorStore implements DepositDetectorStore {
 /**
  * Build the `onDeposit` callback that atomically records the dedup
  * entry and credits the virtual account. The two writes share a
- * BEGIN/COMMIT so a concurrent cycle can never re-credit the same log.
+ * transaction so a concurrent cycle can never re-credit the same log —
+ * the PRIMARY KEY on `(tx_hash, log_index)` is the enforcement, the
+ * transaction is the atomicity. Delegates to
+ * `DatabaseDriver.transaction` for BEGIN/COMMIT/ROLLBACK shape; the
+ * raw `exec("BEGIN")` pattern that used to live here was brittle
+ * under nesting and ROLLBACK-after-BEGIN-fail edge cases.
  */
 function buildCreditOnDepositCallback(db: DatabaseDriver): OnDeposit {
   const accountStore = sqliteAccountStoreFor(db);
@@ -125,8 +130,7 @@ function buildCreditOnDepositCallback(db: DatabaseDriver): OnDeposit {
     const microAmount = Number(deposit.amountOnchain) * USDC_ONCHAIN_TO_MICRO;
     if (microAmount <= 0) return;
 
-    db.exec("BEGIN");
-    try {
+    db.transaction(() => {
       accountStore.credit(
         deposit.motebitId,
         microAmount,
@@ -146,20 +150,16 @@ function buildCreditOnDepositCallback(db: DatabaseDriver): OnDeposit {
         deposit.blockNumber.toString(),
         Date.now(),
       );
-      db.exec("COMMIT");
+    });
 
-      logger.info("deposit.detected", {
-        agentId: deposit.motebitId,
-        chain: deposit.chain,
-        amount: microAmount,
-        from: deposit.fromAddress,
-        txHash: deposit.txHash,
-        blockNumber: deposit.blockNumber.toString(),
-      });
-    } catch (err) {
-      db.exec("ROLLBACK");
-      throw err;
-    }
+    logger.info("deposit.detected", {
+      agentId: deposit.motebitId,
+      chain: deposit.chain,
+      amount: microAmount,
+      from: deposit.fromAddress,
+      txHash: deposit.txHash,
+      blockNumber: deposit.blockNumber.toString(),
+    });
   };
 }
 
