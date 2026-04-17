@@ -24,6 +24,8 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { DeviceId, ExecutionReceipt, IntentOrigin, MotebitId } from "@motebit/protocol";
 
+import { assembleJsonSchemaFor } from "./assemble.js";
+
 /** Stable `$id` for the execution-receipt v1 wire format. External tools pin to this. */
 export const EXECUTION_RECEIPT_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/execution-receipt-v1.json";
@@ -235,52 +237,13 @@ export const _WIRE_SCHEMA_TYPE_PARITY: { forward: _ForwardCheck; reverse: _Rever
  * Build the JSON Schema (draft-07) object for ExecutionReceipt. Pure —
  * called from the build-schemas script and from the drift test.
  */
-/**
- * Pure — assemble the final JSON Schema envelope from zod-to-json-schema's
- * raw output. Extracted for testability: the happy path runs through
- * `buildExecutionReceiptJsonSchema`; a unit test exercises the "upstream
- * library changed shape" error path without mocking zod.
- */
-export function assembleJsonSchema(
-  raw: Record<string, unknown>,
-  meta: { $id: string; title: string; description: string },
-): Record<string, unknown> {
-  const definitions = raw["definitions"] as Record<string, Record<string, unknown>> | undefined;
-  if (definitions == null) {
-    throw new Error(
-      "zod-to-json-schema did not emit a definitions bag — upstream library behavior changed, fix this builder.",
-    );
-  }
-  const root = definitions["ExecutionReceipt"];
-  if (root == null) {
-    throw new Error(
-      "zod-to-json-schema did not emit definitions.ExecutionReceipt — upstream library behavior changed, fix this builder.",
-    );
-  }
-  return {
-    $schema: "http://json-schema.org/draft-07/schema#",
-    $id: meta.$id,
-    title: meta.title,
-    description: meta.description,
-    ...root,
-    definitions,
-  };
-}
-
 export function buildExecutionReceiptJsonSchema(): Record<string, unknown> {
-  // zod-to-json-schema with `name` + `$refStrategy: "root"` always wraps
-  // the named root in `definitions.ExecutionReceipt` with a top-level
-  // `$ref`. For a self-referential recursive schema the `$ref` targets
-  // its own definition — exactly the shape we want to preserve. We
-  // inline the definition onto the top level so external tools get a
-  // self-describing object while keeping `#/definitions/ExecutionReceipt`
-  // working for the nested `delegation_receipts` array.
   const raw = zodToJsonSchema(ExecutionReceiptSchema, {
     name: "ExecutionReceipt",
     $refStrategy: "root",
     target: "jsonSchema7",
   }) as Record<string, unknown>;
-  return assembleJsonSchema(raw, {
+  return assembleJsonSchemaFor("ExecutionReceipt", raw, {
     $id: EXECUTION_RECEIPT_SCHEMA_ID,
     title: "ExecutionReceipt (v1)",
     description:

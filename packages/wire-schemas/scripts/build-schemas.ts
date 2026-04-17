@@ -13,6 +13,7 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,7 @@ const SCHEMA_DIR = join(__dirname, "..", "schema");
 
 const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }> = [
   { filename: "execution-receipt-v1.json", build: buildExecutionReceiptJsonSchema },
+  { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

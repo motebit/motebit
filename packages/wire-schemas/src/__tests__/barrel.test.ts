@@ -14,15 +14,26 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(typeof barrel.ExecutionReceiptSchema.parse).toBe("function");
   });
 
-  it("re-exports EXECUTION_RECEIPT_SCHEMA_ID as a stable URL", () => {
-    expect(barrel.EXECUTION_RECEIPT_SCHEMA_ID).toMatch(
-      /^https:\/\/raw\.githubusercontent\.com\/motebit\/motebit\/main\//,
-    );
+  it("re-exports DelegationTokenSchema", () => {
+    expect(barrel.DelegationTokenSchema).toBeDefined();
+    expect(typeof barrel.DelegationTokenSchema.parse).toBe("function");
   });
 
-  it("re-exports buildExecutionReceiptJsonSchema as a function", () => {
+  it("re-exports all wire-format $id URLs as stable raw-GitHub URLs", () => {
+    const urls = [barrel.EXECUTION_RECEIPT_SCHEMA_ID, barrel.DELEGATION_TOKEN_SCHEMA_ID];
+    for (const url of urls) {
+      expect(url).toMatch(/^https:\/\/raw\.githubusercontent\.com\/motebit\/motebit\/main\//);
+    }
+  });
+
+  it("re-exports every build-*JsonSchema builder as a function", () => {
     expect(typeof barrel.buildExecutionReceiptJsonSchema).toBe("function");
-    const schema = barrel.buildExecutionReceiptJsonSchema();
-    expect(schema.title).toBe("ExecutionReceipt (v1)");
+    expect(barrel.buildExecutionReceiptJsonSchema().title).toBe("ExecutionReceipt (v1)");
+    expect(typeof barrel.buildDelegationTokenJsonSchema).toBe("function");
+    expect(barrel.buildDelegationTokenJsonSchema().title).toBe("DelegationToken (v1)");
+  });
+
+  it("re-exports the shared assemble helper", () => {
+    expect(typeof barrel.assembleJsonSchemaFor).toBe("function");
   });
 });

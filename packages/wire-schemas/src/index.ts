@@ -27,9 +27,14 @@
  * refreshes the committed JSON; the roundtrip test pins it in CI.
  */
 
+export { assembleJsonSchemaFor } from "./assemble.js";
 export {
   ExecutionReceiptSchema,
   EXECUTION_RECEIPT_SCHEMA_ID,
   buildExecutionReceiptJsonSchema,
-  assembleJsonSchema,
 } from "./execution-receipt.js";
+export {
+  DelegationTokenSchema,
+  DELEGATION_TOKEN_SCHEMA_ID,
+  buildDelegationTokenJsonSchema,
+} from "./delegation-token.js";

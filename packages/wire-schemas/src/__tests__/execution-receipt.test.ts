@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { ExecutionReceiptSchema, assembleJsonSchema } from "../execution-receipt.js";
+import { ExecutionReceiptSchema } from "../execution-receipt.js";
 
 const SAMPLE: Record<string, unknown> = {
   task_id: "01HTV8X9QZ-task-1",
@@ -80,31 +80,5 @@ describe("ExecutionReceiptSchema", () => {
       const r = ExecutionReceiptSchema.parse({ ...SAMPLE, invocation_origin: origin });
       expect(r.invocation_origin).toBe(origin);
     }
-  });
-});
-
-describe("assembleJsonSchema", () => {
-  const META = { $id: "https://example/test.json", title: "Test", description: "Test schema" };
-
-  it("assembles the happy-path schema from a definitions envelope", () => {
-    const raw = {
-      $ref: "#/definitions/ExecutionReceipt",
-      definitions: { ExecutionReceipt: { type: "object", properties: { a: { type: "string" } } } },
-    };
-    const out = assembleJsonSchema(raw, META);
-    expect(out.$id).toBe(META.$id);
-    expect(out.title).toBe(META.title);
-    expect(out.type).toBe("object");
-    expect(out.definitions).toEqual(raw.definitions);
-  });
-
-  it("throws if the raw schema has no definitions bag (upstream library changed)", () => {
-    expect(() => assembleJsonSchema({ type: "object" }, META)).toThrow(/definitions bag/);
-  });
-
-  it("throws if definitions is present but has no ExecutionReceipt key", () => {
-    expect(() => assembleJsonSchema({ definitions: { Other: { type: "object" } } }, META)).toThrow(
-      /ExecutionReceipt/,
-    );
   });
 });
