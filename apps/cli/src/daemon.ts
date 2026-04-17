@@ -45,6 +45,8 @@ import type {
 } from "@motebit/mcp-server";
 import { PlanEngine, RelayDelegationAdapter } from "@motebit/planner";
 import { GoalScheduler } from "./scheduler.js";
+import { applyMotebitYaml, resolveYamlPath } from "./subcommands/up.js";
+import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
 import { fromHex, decryptPrivateKey, promptPassphrase } from "./identity.js";
@@ -253,6 +255,75 @@ export async function handleRun(config: CliConfig): Promise<void> {
   console.log(
     `Daemon running. motebit_id: ${motebitId.slice(0, 8)}... Goals: ${goals.length}. Policy: max_risk_auto=${RiskLevel[maxRiskAuto]}, deny_above=${RiskLevel[denyAbove]}`,
   );
+
+  // ── motebit.yaml hot-reload ────────────────────────────────────────────
+  //
+  // If a motebit.yaml exists (in cwd or walking up to root), watch it and
+  // re-apply on change. The scheduler re-reads goals each tick (60s), so
+  // no IPC is needed — mutating the DB is sufficient for it to pick up
+  // adds/updates.
+  //
+  // Safety: watcher never prunes. Editors sometimes replace-on-save with a
+  // transient empty file (vim's `:w` on some plugins), which would otherwise
+  // trigger a flood of false deletes. Explicit `motebit up --prune` remains
+  // the only path that deletes.
+  const watchedYaml = resolveYamlPath(undefined);
+  let yamlDebounce: ReturnType<typeof setTimeout> | null = null;
+  let yamlApplyInFlight = false;
+  if (watchedYaml != null) {
+    console.log(`Watching ${watchedYaml} — changes will re-apply automatically.`);
+    try {
+      fs.watch(watchedYaml, () => {
+        if (yamlDebounce) clearTimeout(yamlDebounce);
+        yamlDebounce = setTimeout(() => {
+          void (async () => {
+            if (yamlApplyInFlight) return;
+            yamlApplyInFlight = true;
+            try {
+              const result = await applyMotebitYaml({
+                yamlPath: watchedYaml,
+                motebitId,
+                dbPath: config.dbPath,
+                prune: false,
+                dryRun: false,
+              });
+              if (result.kind === "parse_error") {
+                for (const d of result.diagnostics) {
+                  console.error(formatDiagnostic(d));
+                }
+                return;
+              }
+              const { add, update, prune } = result.plan;
+              const changed = add.length + update.length;
+              if (changed === 0 && !result.plan.configUnchanged) {
+                console.log("motebit.yaml: config updated");
+              } else if (changed === 0 && prune.length === 0) {
+                // True no-op — editor saved without changing content.
+                return;
+              } else {
+                const parts: string[] = [];
+                if (add.length > 0) parts.push(`${add.length} add`);
+                if (update.length > 0) parts.push(`${update.length} update`);
+                if (prune.length > 0)
+                  parts.push(`${prune.length} removed (run 'motebit up --prune' to delete)`);
+                console.log(`motebit.yaml: ${parts.join(", ")}`);
+              }
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error(`motebit.yaml reload error: ${msg}`);
+            } finally {
+              yamlApplyInFlight = false;
+            }
+          })();
+        }, 200);
+      });
+    } catch (err: unknown) {
+      // fs.watch errors on some filesystems (e.g., NFS). Non-fatal — the
+      // user can still run `motebit up` by hand.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`(hot-reload unavailable: ${msg}; use 'motebit up' manually)`);
+    }
+  }
 
   // Wire agent task handler via WebSocket (if sync URL configured)
   // Fallback chain: CLI arg > env var > config file

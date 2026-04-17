@@ -36,10 +36,11 @@ import {
   hashSourceFile,
   formatDiagnostic,
   type MotebitYamlV1,
+  type YamlDiagnostic,
 } from "../yaml-config.js";
 import { requireMotebitId } from "./_helpers.js";
 
-interface Plan {
+export interface Plan {
   add: Goal[];
   update: { before: Goal; after: Goal }[];
   prune: Goal[];
@@ -47,6 +48,15 @@ interface Plan {
   configChanges: Partial<FullConfig>;
   configUnchanged: boolean;
 }
+
+/**
+ * Outcome of an `applyMotebitYaml()` call. The caller (CLI subcommand or
+ * daemon watcher) decides how to render — `handleUp` writes to stdout
+ * with `printPlan`, the daemon writes a one-line summary to its logger.
+ */
+export type ApplyResult =
+  | { kind: "parse_error"; diagnostics: YamlDiagnostic[] }
+  | { kind: "applied"; plan: Plan; dryRun: boolean; pruneApplied: boolean };
 
 export async function handleUp(config: CliConfig): Promise<void> {
   const yamlPath = resolveYamlPath(config.file);
@@ -57,58 +67,95 @@ export async function handleUp(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const raw = fs.readFileSync(yamlPath, "utf-8");
-  const result = await parseMotebitYaml(raw, yamlPath);
-  if (!result.ok) {
+  const motebitId = requireMotebitId(loadFullConfig());
+  const result = await applyMotebitYaml({
+    yamlPath,
+    motebitId,
+    dbPath: config.dbPath,
+    prune: config.prune === true,
+    dryRun: config.dryRun === true,
+  });
+
+  if (result.kind === "parse_error") {
     for (const d of result.diagnostics) {
       console.error(formatDiagnostic(d));
     }
     process.exit(1);
   }
 
-  const motebitId = requireMotebitId(loadFullConfig());
-  const dbPath = getDbPath(config.dbPath);
-  const moteDb = await openMotebitDatabase(dbPath);
+  printPlan(result.plan, { prune: config.prune === true });
 
+  if (result.dryRun) {
+    console.log("\n(dry-run — no changes written)");
+    return;
+  }
+  if (isNoOp(result.plan) && (!result.plan.prune.length || !result.pruneApplied)) {
+    console.log("\nNo changes.");
+    return;
+  }
+  console.log("\nApplied.");
+}
+
+// ---------------------------------------------------------------------------
+// applyMotebitYaml — reusable apply function. Called by `motebit up` AND by
+// the daemon's file-watcher hot-reload path. Pure with respect to stdout —
+// the caller decides how to render the plan and result. The DB and event
+// log writes are the only side effects beyond the optional config.json
+// update for personality/governance/mcp_servers.
+//
+// Idempotency contract: running this twice with the same yaml against the
+// same DB performs zero writes the second time (deterministic goal_id +
+// hash-based diffing). The watcher relies on this to avoid log noise on
+// editor saves that don't actually change the document.
+// ---------------------------------------------------------------------------
+
+export interface ApplyOptions {
+  yamlPath: string;
+  motebitId: string;
+  dbPath: string | undefined;
+  prune: boolean;
+  dryRun: boolean;
+}
+
+export async function applyMotebitYaml(opts: ApplyOptions): Promise<ApplyResult> {
+  const raw = fs.readFileSync(opts.yamlPath, "utf-8");
+  const parsed = await parseMotebitYaml(raw, opts.yamlPath);
+  if (!parsed.ok) {
+    return { kind: "parse_error", diagnostics: parsed.diagnostics };
+  }
+
+  const moteDb = await openMotebitDatabase(getDbPath(opts.dbPath));
   try {
     const fullConfig = loadFullConfig();
-    const existingGoals = moteDb.goalStore.list(motebitId);
-    const sourceSha = hashSourceFile(yamlPath, raw);
+    const existingGoals = moteDb.goalStore.list(opts.motebitId);
+    const sourceSha = hashSourceFile(opts.yamlPath, raw);
 
     const plan = diffPlan({
-      yaml: result.data,
-      yamlPath,
+      yaml: parsed.data,
+      yamlPath: opts.yamlPath,
       sourceSha,
-      motebitId,
+      motebitId: opts.motebitId,
       existingGoals,
       currentConfig: fullConfig,
     });
 
-    printPlan(plan, { prune: config.prune === true });
-
-    if (config.dryRun === true) {
-      console.log("\n(dry-run — no changes written)");
-      return;
+    if (opts.dryRun) {
+      return { kind: "applied", plan, dryRun: true, pruneApplied: false };
     }
 
-    if (isNoOp(plan) && (!plan.prune.length || config.prune !== true)) {
-      console.log("\nNo changes.");
-      return;
-    }
-
-    // Apply config-level changes (personality, governance, mcp_servers).
+    // Config-level changes (personality, governance, mcp_servers).
     if (!plan.configUnchanged) {
       saveFullConfig({ ...fullConfig, ...plan.configChanges });
     }
 
-    // Apply goal-level changes.
+    // Goal-level changes.
     const eventStore = new EventStore(moteDb.eventStore);
     const now = Date.now();
     for (const goal of plan.add) {
       moteDb.goalStore.add(goal);
       await eventStore.append({
         event_id: crypto.randomUUID(),
-        motebit_id: motebitId,
+        motebit_id: opts.motebitId,
         timestamp: now,
         event_type: EventType.GoalCreated,
         payload: {
@@ -118,7 +165,7 @@ export async function handleUp(config: CliConfig): Promise<void> {
           prompt: goal.prompt,
           interval_ms: goal.interval_ms,
         },
-        version_clock: (await moteDb.eventStore.getLatestClock(motebitId)) + 1,
+        version_clock: (await moteDb.eventStore.getLatestClock(opts.motebitId)) + 1,
         tombstoned: false,
       });
     }
@@ -127,9 +174,9 @@ export async function handleUp(config: CliConfig): Promise<void> {
       moteDb.goalStore.add(after);
       await eventStore.append({
         event_id: crypto.randomUUID(),
-        motebit_id: motebitId,
+        motebit_id: opts.motebitId,
         timestamp: now,
-        event_type: EventType.GoalCreated, // reuse: updated goal is a new revision
+        event_type: EventType.GoalCreated, // updated goal is a new revision
         payload: {
           goal_id: after.goal_id,
           routine_id: after.routine_id,
@@ -137,16 +184,16 @@ export async function handleUp(config: CliConfig): Promise<void> {
           routine_hash: after.routine_hash,
           update: true,
         },
-        version_clock: (await moteDb.eventStore.getLatestClock(motebitId)) + 1,
+        version_clock: (await moteDb.eventStore.getLatestClock(opts.motebitId)) + 1,
         tombstoned: false,
       });
     }
-    if (config.prune === true) {
+    if (opts.prune) {
       for (const goal of plan.prune) {
         moteDb.goalStore.remove(goal.goal_id);
         await eventStore.append({
           event_id: crypto.randomUUID(),
-          motebit_id: motebitId,
+          motebit_id: opts.motebitId,
           timestamp: now,
           event_type: EventType.GoalRemoved,
           payload: {
@@ -154,16 +201,26 @@ export async function handleUp(config: CliConfig): Promise<void> {
             routine_id: goal.routine_id,
             reason: "yaml_pruned",
           },
-          version_clock: (await moteDb.eventStore.getLatestClock(motebitId)) + 1,
+          version_clock: (await moteDb.eventStore.getLatestClock(opts.motebitId)) + 1,
           tombstoned: false,
         });
       }
     }
 
-    console.log("\nApplied.");
+    return { kind: "applied", plan, dryRun: false, pruneApplied: opts.prune };
   } finally {
     moteDb.close();
   }
+}
+
+/** True if the plan would write nothing (regardless of prune flag). */
+export function isPlanEmpty(plan: Plan): boolean {
+  return (
+    plan.add.length === 0 &&
+    plan.update.length === 0 &&
+    plan.prune.length === 0 &&
+    plan.configUnchanged
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +370,7 @@ function printPlan(plan: Plan, opts: { prune: boolean }): void {
 // the ergonomics of `.env`, `package.json`, etc.
 // ---------------------------------------------------------------------------
 
-function resolveYamlPath(explicit: string | undefined): string | null {
+export function resolveYamlPath(explicit: string | undefined): string | null {
   if (explicit != null && explicit !== "") {
     const abs = path.isAbsolute(explicit) ? explicit : path.resolve(explicit);
     return fs.existsSync(abs) ? abs : null;
