@@ -50,6 +50,7 @@ const LAYER: Record<string, number> = {
   "@motebit/virtual-accounts": 1,
   "@motebit/deposit-detector": 1,
   "@motebit/self-knowledge": 1,
+  "@motebit/wire-schemas": 1,
 
   // Layer 2 — Engines (depend on Layer 0–1)
   "@motebit/market": 2,

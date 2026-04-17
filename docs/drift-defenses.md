@@ -8,33 +8,34 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Twenty-one invariants are enforced today. Fifteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); five are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
+Twenty-two invariants are enforced today. Fifteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
 
 ## Inventory
 
-| #   | Invariant                                               | Defense                                           | Landed     |
-| --- | ------------------------------------------------------- | ------------------------------------------------- | ---------- |
-| 1   | Protocol primitives ↔ service implementations           | `check-service-primitives.ts`                     | —          |
-| 2   | Architectural layers ↔ dependencies                     | `check-deps.ts`                                   | —          |
-| 3   | Spec filenames ↔ implementation references              | `check-spec-references.ts` (`--strict`)           | —          |
-| 4   | Sibling boundaries ↔ each other                         | `check-sibling-boundaries.ts` (advisory, PR-diff) | —          |
-| 5   | Coverage thresholds ↔ measurements                      | `turbo run test:coverage`                         | —          |
-| 6   | Capability rings ↔ surfaces                             | `check-app-primitives.ts`                         | —          |
-| 7   | Deps declarations ↔ actual use                          | `knip` (soft signal)                              | —          |
-| 8   | Published API ↔ consumer contract                       | `check-api-surface.ts`                            | —          |
-| 9   | Spec Wire format types ↔ `@motebit/protocol` exports    | `check-spec-coverage.ts` (`--strict`)             | 2026-04-13 |
-| 10  | Spec Wire format signatures ↔ cryptosuite declarations  | `check-suite-declared.ts`                         | 2026-04-13 |
-| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher       | `check-suite-dispatch.ts`                         | 2026-04-13 |
-| 12  | Published binaries ↔ dist-boot smoke                    | `check-dist-smoke.ts`                             | 2026-04-13 |
-| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`   | `check-docs-tree.ts`                              | 2026-04-14 |
-| 14  | Spec callables ↔ MIT package exports                    | `check-spec-mit-boundary.ts`                      | 2026-04-14 |
-| 15  | Surface affordances ↔ deterministic invocation path     | `check-affordance-routing.ts`                     | 2026-04-14 |
-| 16  | Ring 2 privacy substrate ↔ surface package declarations | `check-privacy-ring.ts`                           | 2026-04-16 |
-| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface  | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)      | 2026-04-17 |
-| 18  | Routine `every` grammar ↔ `parseInterval`               | zod `.transform()` calls `parseInterval` once     | 2026-04-17 |
-| 19  | Goal columns ↔ `routineToGoal` mapper                   | `satisfies Goal` assertion in `yaml-config.ts`    | 2026-04-17 |
-| 20  | motebit.yaml schema fields ↔ zod `.describe()` hover    | `yaml-config.test.ts` (schema walk assertion)     | 2026-04-17 |
-| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema      | `yaml-json-schema.test.ts` (roundtrip assertion)  | 2026-04-17 |
+| #   | Invariant                                               | Defense                                                        | Landed     |
+| --- | ------------------------------------------------------- | -------------------------------------------------------------- | ---------- |
+| 1   | Protocol primitives ↔ service implementations           | `check-service-primitives.ts`                                  | —          |
+| 2   | Architectural layers ↔ dependencies                     | `check-deps.ts`                                                | —          |
+| 3   | Spec filenames ↔ implementation references              | `check-spec-references.ts` (`--strict`)                        | —          |
+| 4   | Sibling boundaries ↔ each other                         | `check-sibling-boundaries.ts` (advisory, PR-diff)              | —          |
+| 5   | Coverage thresholds ↔ measurements                      | `turbo run test:coverage`                                      | —          |
+| 6   | Capability rings ↔ surfaces                             | `check-app-primitives.ts`                                      | —          |
+| 7   | Deps declarations ↔ actual use                          | `knip` (soft signal)                                           | —          |
+| 8   | Published API ↔ consumer contract                       | `check-api-surface.ts`                                         | —          |
+| 9   | Spec Wire format types ↔ `@motebit/protocol` exports    | `check-spec-coverage.ts` (`--strict`)                          | 2026-04-13 |
+| 10  | Spec Wire format signatures ↔ cryptosuite declarations  | `check-suite-declared.ts`                                      | 2026-04-13 |
+| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher       | `check-suite-dispatch.ts`                                      | 2026-04-13 |
+| 12  | Published binaries ↔ dist-boot smoke                    | `check-dist-smoke.ts`                                          | 2026-04-13 |
+| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`   | `check-docs-tree.ts`                                           | 2026-04-14 |
+| 14  | Spec callables ↔ MIT package exports                    | `check-spec-mit-boundary.ts`                                   | 2026-04-14 |
+| 15  | Surface affordances ↔ deterministic invocation path     | `check-affordance-routing.ts`                                  | 2026-04-14 |
+| 16  | Ring 2 privacy substrate ↔ surface package declarations | `check-privacy-ring.ts`                                        | 2026-04-16 |
+| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface  | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)                   | 2026-04-17 |
+| 18  | Routine `every` grammar ↔ `parseInterval`               | zod `.transform()` calls `parseInterval` once                  | 2026-04-17 |
+| 19  | Goal columns ↔ `routineToGoal` mapper                   | `satisfies Goal` assertion in `yaml-config.ts`                 | 2026-04-17 |
+| 20  | motebit.yaml schema fields ↔ zod `.describe()` hover    | `yaml-config.test.ts` (schema walk assertion)                  | 2026-04-17 |
+| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema      | `yaml-json-schema.test.ts` (roundtrip assertion)               | 2026-04-17 |
+| 22  | Wire-format types ↔ zod schemas ↔ committed JSON Schema | `@motebit/wire-schemas` 3-way pin (satisfies + roundtrip test) | 2026-04-17 |
 
 ## Incident histories
 
@@ -97,6 +98,10 @@ The `motebit lsp` language server reads `.describe()` text off the live zod sche
 ### 21. Committed `motebit-yaml-v1.json` ↔ live zod schema
 
 `apps/cli/schema/motebit-yaml-v1.json` is motebit's published JSON Schema — the contract that third-party YAML validators (VS Code's Red Hat extension, CI actions, the dashboard) resolve via its stable `$id`. It is **generated** from `MotebitYamlObjectSchema` by `pnpm --filter motebit build-schema`, but **committed** so external tools don't need the CLI installed to validate motebit.yaml. The generation-and-commit pattern introduces the exact drift vector it is designed to exploit: the zod source gains a new field, the author forgets to rebuild, and the published contract silently misreports the shape. Defense: `yaml-json-schema.test.ts` regenerates the JSON Schema in-process and asserts structural equality with the committed file; on failure it tells the author "run `pnpm --filter motebit build-schema` and commit the result." The failure message is the fix recipe. Added 2026-04-17 alongside the public protocol publication.
+
+### 22. Wire-format types ↔ zod schemas ↔ committed JSON Schema
+
+Extends invariant #21 inward. `@motebit/protocol` is MIT and type-only by invariant #10 — it cannot hold runtime validators. But third-party Python/Go/Rust implementers that want to emit or verify motebit wire artifacts (execution receipts first; discovery responses, service listings, credentials to follow) need machine-readable contracts, not TypeScript `.d.ts`. `@motebit/wire-schemas` is the Layer-1 BSL home for zod schemas that mirror every `@motebit/protocol` wire-format type plus committed JSON Schema artifacts derived from them. The three-way pin: (1) `satisfies`-style `BrandedToString<T> extends InferredReceipt` type assertions in each schema module fail `tsc --noEmit` at build time if the zod shape diverges from the `@motebit/protocol` TypeScript declaration; (2) the `drift.test.ts` roundtrip fails CI if the committed `schema/*-v1.json` drifts from the live `zodToJsonSchema(...)` output; (3) the `execution-receipt.test.ts` runtime-parse tests fail if the zod schema itself rejects receipts that real motebit emitters produce. Adding a new wire format means adding its module, adding it to the `SCHEMAS` array in `scripts/build-schemas.ts`, adding a case to `drift.test.ts` `CASES`, committing the generated JSON. Added 2026-04-17 alongside execution-receipt-v1 publication — the first machine-readable contract that lets non-motebit systems credibly participate in the protocol without bundling our runtime.
 
 ## How to add a new defense
 
