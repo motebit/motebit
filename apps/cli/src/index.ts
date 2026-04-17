@@ -50,6 +50,7 @@ import {
   handleLedger,
   handleLogs,
   handleLsp,
+  handleSchema,
   handlePs,
   handleUp,
   handleCredentials,
@@ -253,6 +254,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "lsp") {
     handleLsp();
+    return;
+  }
+
+  if (subcommand === "schema") {
+    handleSchema();
     return;
   }
 

@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Twenty invariants are enforced today. Fifteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); four are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
+Twenty-one invariants are enforced today. Fifteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); five are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
 
 ## Inventory
 
@@ -34,6 +34,7 @@ Twenty invariants are enforced today. Fifteen run as hard CI gates via `pnpm che
 | 18  | Routine `every` grammar ↔ `parseInterval`               | zod `.transform()` calls `parseInterval` once     | 2026-04-17 |
 | 19  | Goal columns ↔ `routineToGoal` mapper                   | `satisfies Goal` assertion in `yaml-config.ts`    | 2026-04-17 |
 | 20  | motebit.yaml schema fields ↔ zod `.describe()` hover    | `yaml-config.test.ts` (schema walk assertion)     | 2026-04-17 |
+| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema      | `yaml-json-schema.test.ts` (roundtrip assertion)  | 2026-04-17 |
 
 ## Incident histories
 
@@ -92,6 +93,10 @@ Adding a required column to the `Goal` interface must route through the yaml app
 ### 20. motebit.yaml schema fields ↔ zod `.describe()` hover
 
 The `motebit lsp` language server reads `.describe()` text off the live zod schema and serves it as editor hover text. If a new field ships in `MotebitYamlObjectSchema` without `.describe()`, VS Code / Cursor / Neovim silently show an empty hover — a category-2 drift where the feature works but the documentation rots invisibly. Defense: a schema-walking test (`yaml-config.test.ts` › "every field in MotebitYamlObjectSchema has a non-empty .describe()") enumerates every field in every nested object and array element, asserting each has a non-empty `findDescription(...)` value. Added 2026-04-17 alongside the LSP.
+
+### 21. Committed `motebit-yaml-v1.json` ↔ live zod schema
+
+`apps/cli/schema/motebit-yaml-v1.json` is motebit's published JSON Schema — the contract that third-party YAML validators (VS Code's Red Hat extension, CI actions, the dashboard) resolve via its stable `$id`. It is **generated** from `MotebitYamlObjectSchema` by `pnpm --filter motebit build-schema`, but **committed** so external tools don't need the CLI installed to validate motebit.yaml. The generation-and-commit pattern introduces the exact drift vector it is designed to exploit: the zod source gains a new field, the author forgets to rebuild, and the published contract silently misreports the shape. Defense: `yaml-json-schema.test.ts` regenerates the JSON Schema in-process and asserts structural equality with the committed file; on failure it tells the author "run `pnpm --filter motebit build-schema` and commit the result." The failure message is the fix recipe. Added 2026-04-17 alongside the public protocol publication.
 
 ## How to add a new defense
 

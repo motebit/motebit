@@ -336,6 +336,9 @@ Commands:
                             (LSP-speaking editors — VS Code, Cursor, Vim/
                             Neovim, JetBrains — get diagnostics, hover, and
                             completion for motebit.yaml)
+  schema                    Print the motebit.yaml JSON Schema to stdout
+                            (vendor into your project for IDE validation
+                            without fetching from GitHub)
   ledger <goal_id>          Show execution ledger for a goal [--json]
   credentials               List credentials from relay [--presentation]
   balance                   Show virtual account balance and recent transactions

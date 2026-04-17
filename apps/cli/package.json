@@ -10,6 +10,7 @@
   "files": [
     "dist/index.js",
     "dist/index.js.map",
+    "schema/motebit-yaml-v1.json",
     "LICENSE",
     "README.md"
   ],
@@ -44,6 +45,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsup",
+    "build-schema": "tsx scripts/build-schema.ts",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
