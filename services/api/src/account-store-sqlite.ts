@@ -344,6 +344,25 @@ export class SqliteAccountStore implements AccountStore {
     return row.total;
   }
 
+  /**
+   * Probe sqlite_master for the existence of all listed tables. Used to
+   * branch between the real-query path and the minimal-test-setup
+   * degraded path in `getSweepConfig` / `getUnwithdrawableHold`. Replaces
+   * the prior per-call try/catch, which over-caught — a DB-locked or
+   * schema-drift error would silently return 0 hold and open a
+   * withdrawal path the dispute window is supposed to gate. With an
+   * explicit probe, only "tables absent" triggers the degraded mode;
+   * real query errors now propagate to the caller, which is what the
+   * root CLAUDE.md's fail-closed doctrine requires.
+   */
+  private hasTables(...names: string[]): boolean {
+    const placeholders = names.map(() => "?").join(", ");
+    const rows = this.db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`)
+      .all(...names) as Array<{ name: string }>;
+    return rows.length === names.length;
+  }
+
   getSweepConfig(motebitId: string): {
     sweep_threshold: number | null;
     settlement_address: string | null;
@@ -351,43 +370,43 @@ export class SqliteAccountStore implements AccountStore {
     // agent_registry rows exist for registered motebits but not for agents
     // that only touched the relay's economic layer (virtual accounts are
     // lazy-created on first transaction). Missing row = no sweep configured.
-    try {
-      const row = this.db
-        .prepare(
-          "SELECT sweep_threshold, settlement_address FROM agent_registry WHERE motebit_id = ?",
-        )
-        .get(motebitId) as
-        | { sweep_threshold: number | null; settlement_address: string | null }
-        | undefined;
-      return row ?? { sweep_threshold: null, settlement_address: null };
-    } catch {
-      // agent_registry may not exist in minimal test setups — fail open.
+    // Missing TABLE = minimal test setup; the real query must not run.
+    if (!this.hasTables("agent_registry")) {
       return { sweep_threshold: null, settlement_address: null };
     }
+    const row = this.db
+      .prepare(
+        "SELECT sweep_threshold, settlement_address FROM agent_registry WHERE motebit_id = ?",
+      )
+      .get(motebitId) as
+      | { sweep_threshold: number | null; settlement_address: string | null }
+      | undefined;
+    return row ?? { sweep_threshold: null, settlement_address: null };
   }
 
   getUnwithdrawableHold(motebitId: string): number {
+    // Missing tables (minimal test setup) → 0 hold. Any other SQL error
+    // — schema drift, DB locked, malformed state — propagates to the
+    // caller. The withdrawal path treats an unavailable hold computation
+    // as a refusal, not as "no hold applies."
+    if (!this.hasTables("relay_settlements", "relay_disputes")) return 0;
+
     const cutoff = Date.now() - DISPUTE_WINDOW_MS;
-    try {
-      const row = this.db
-        .prepare(
-          `SELECT COALESCE(SUM(s.amount_settled), 0) as total
-           FROM relay_settlements s
-           WHERE s.motebit_id = ?
-             AND s.settled_at > ?
-             AND s.status = 'completed'
-             AND COALESCE(s.settlement_mode, 'relay') = 'relay'
-             AND s.task_id NOT IN (
-               SELECT d.task_id FROM relay_disputes d
-               WHERE d.state NOT IN ('final', 'expired')
-             )`,
-        )
-        .get(motebitId, cutoff) as { total: number };
-      return row.total;
-    } catch {
-      // relay_settlements or relay_disputes table may not exist in minimal setups.
-      return 0;
-    }
+    const row = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(s.amount_settled), 0) as total
+         FROM relay_settlements s
+         WHERE s.motebit_id = ?
+           AND s.settled_at > ?
+           AND s.status = 'completed'
+           AND COALESCE(s.settlement_mode, 'relay') = 'relay'
+           AND s.task_id NOT IN (
+             SELECT d.task_id FROM relay_disputes d
+             WHERE d.state NOT IN ('final', 'expired')
+           )`,
+      )
+      .get(motebitId, cutoff) as { total: number };
+    return row.total;
   }
 
   debitAndEnqueuePending(args: {
