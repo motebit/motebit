@@ -49,6 +49,7 @@ import {
   handleInit,
   handleLedger,
   handleLogs,
+  handleLsp,
   handlePs,
   handleUp,
   handleCredentials,
@@ -247,6 +248,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "logs") {
     await handleLogs(config);
+    return;
+  }
+
+  if (subcommand === "lsp") {
+    handleLsp();
     return;
   }
 

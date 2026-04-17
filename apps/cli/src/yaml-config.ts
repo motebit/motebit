@@ -64,40 +64,127 @@ export const NON_DECLARATIVE_KEYS = new Set<keyof FullConfig>([
  */
 const ProviderSchema = z
   .object({
-    mode: z.enum(["byok", "paid", "sovereign"]).optional(),
-    wireProtocol: z.enum(["anthropic", "openai"]).optional(),
-    model: z.string().optional(),
-    baseUrl: z.string().url().optional(),
-    maxTokens: z.number().int().positive().optional(),
+    mode: z
+      .enum(["byok", "paid", "sovereign"])
+      .optional()
+      .describe(
+        "Provider mode. `byok` = bring-your-own API key (env var). `paid` = motebit cloud. `sovereign` = local on-device model (no external calls).",
+      ),
+    wireProtocol: z
+      .enum(["anthropic", "openai"])
+      .optional()
+      .describe(
+        "Wire protocol the endpoint speaks. `anthropic` for Claude, `openai` for OpenAI-compatible endpoints (OpenAI, Ollama, LM Studio, vLLM).",
+      ),
+    model: z
+      .string()
+      .optional()
+      .describe("Model identifier, e.g. `claude-sonnet-4-6`, `gpt-5.4-mini`, `llama3.2`."),
+    baseUrl: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "Override the API base URL. Used for local inference servers (`http://localhost:11434/v1` for Ollama) or routing through a proxy.",
+      ),
+    maxTokens: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Upper bound on response length (model output tokens)."),
   })
-  .strict();
+  .strict()
+  .describe(
+    "AI provider configuration. API keys are NEVER declared here — they're read from environment variables or the OS keyring.",
+  );
 
 const GovernanceSchema = z
   .object({
-    approvalPreset: z.enum(["cautious", "balanced", "autonomous"]),
-    persistenceThreshold: z.number().min(0).max(1),
-    rejectSecrets: z.boolean(),
-    maxCallsPerTurn: z.number().int().positive(),
-    maxMemoriesPerTurn: z.number().int().positive(),
+    approvalPreset: z
+      .enum(["cautious", "balanced", "autonomous"])
+      .describe(
+        "Default gate for tool calls. `cautious` = approve every sensitive call. `balanced` = approve writes, auto-approve reads. `autonomous` = auto-approve most calls.",
+      ),
+    persistenceThreshold: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe(
+        "Memory-formation threshold [0, 1]. Higher = fewer memories formed; only strong signals persist. Typical: 0.6.",
+      ),
+    rejectSecrets: z
+      .boolean()
+      .describe(
+        "When true, the privacy layer blocks any tool call or outbound message whose content is classified as `secret`. Fail-closed: error on classifier failure.",
+      ),
+    maxCallsPerTurn: z
+      .number()
+      .int()
+      .positive()
+      .describe(
+        "Per-turn tool-call ceiling. Bounds runaway loops and protects the policy gate from exhaustion attacks.",
+      ),
+    maxMemoriesPerTurn: z
+      .number()
+      .int()
+      .positive()
+      .describe(
+        "Per-turn memory-formation ceiling. Prevents a single turn from flooding the memory graph.",
+      ),
   })
-  .strict();
+  .strict()
+  .describe("Governance at the boundary — surface-tension constraints that apply to every turn.");
 
 const McpServerSchema = z
   .object({
-    name: z.string().min(1),
-    transport: z.enum(["stdio", "http"]),
-    command: z.string().optional(),
-    args: z.array(z.string()).optional(),
-    url: z.string().url().optional(),
-    env: z.record(z.string(), z.string()).optional(),
-    trusted: z.boolean().optional(),
-    motebit: z.boolean().optional(),
-    motebitType: z.enum(["personal", "service", "collaborative"]).optional(),
+    name: z.string().min(1).describe("Local name for the MCP server. Must be unique."),
+    transport: z
+      .enum(["stdio", "http"])
+      .describe("Transport. `stdio` spawns a child process; `http` connects to a URL."),
+    command: z
+      .string()
+      .optional()
+      .describe("Executable to spawn when `transport: stdio`. E.g. `npx`, `node`, `python`."),
+    args: z
+      .array(z.string())
+      .optional()
+      .describe("Argument vector passed to `command` when `transport: stdio`."),
+    url: z
+      .string()
+      .url()
+      .optional()
+      .describe("Endpoint URL when `transport: http`. Must be a full URL including scheme."),
+    env: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe("Environment variables set for the child process (stdio transport)."),
+    trusted: z
+      .boolean()
+      .optional()
+      .describe(
+        "Auto-approve tool calls from this server. Equivalent to promoting the server into `mcp_trusted_servers`. Off by default.",
+      ),
+    motebit: z
+      .boolean()
+      .optional()
+      .describe(
+        "This server is another motebit instance — enables motebit-to-motebit transport with caller identity injected into every call.",
+      ),
+    motebitType: z
+      .enum(["personal", "service", "collaborative"])
+      .optional()
+      .describe(
+        "Semantic role of the peer motebit. `personal` = another device of yours. `service` = paid worker. `collaborative` = peer agent.",
+      ),
   })
   .strict()
   .refine((s) => (s.transport === "stdio" ? s.command != null : s.url != null), {
     message: "stdio transport requires 'command'; http transport requires 'url'",
-  });
+  })
+  .describe(
+    "MCP server — a tool source. stdio transports spawn a subprocess; http transports dial a remote endpoint.",
+  );
 
 // ---------------------------------------------------------------------------
 // Routine schema
@@ -122,7 +209,8 @@ const IntervalString = z
       });
       return z.NEVER;
     }
-  });
+  })
+  .describe("Interval string: `<n>m` minutes, `<n>h` hours, `<n>d` days. E.g. `30m`, `1h`, `7d`.");
 
 const RoutineSchema = z
   .object({
@@ -132,15 +220,44 @@ const RoutineSchema = z
       .max(64)
       .regex(/^[a-z0-9][a-z0-9_-]*$/, {
         message: "routine id must be lowercase alphanumeric with _ or - (e.g. 'daily-digest')",
-      }),
-    prompt: z.string().min(1),
-    every: IntervalString,
-    mode: z.enum(["recurring", "once"]).default("recurring"),
-    wall_clock: IntervalString.optional(),
-    project: z.string().min(1).optional(),
-    enabled: z.boolean().default(true),
+      })
+      .describe(
+        "Stable identifier for the routine. Used as the upsert key — changing the id renames the routine (old one is pruned, new one added). Lowercase alphanumeric with `-` or `_`.",
+      ),
+    prompt: z
+      .string()
+      .min(1)
+      .describe(
+        "Natural-language prompt the agent runs on each tick. Content changes update the same goal row (preserving `created_at`).",
+      ),
+    every: IntervalString.describe(
+      "Run cadence. Interval string (`<n>m`, `<n>h`, `<n>d`). E.g. `1h` = hourly.",
+    ),
+    mode: z
+      .enum(["recurring", "once"])
+      .default("recurring")
+      .describe(
+        "`recurring` runs every `every` tick forever. `once` runs a single time then marks the goal completed.",
+      ),
+    wall_clock: IntervalString.optional().describe(
+      "Hard wall-clock timeout per run. Kills the turn if it exceeds this. Default: 10m.",
+    ),
+    project: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Project identifier — groups goals that share context (shared memory scope)."),
+    enabled: z
+      .boolean()
+      .default(true)
+      .describe(
+        "Set false to pause the routine without deleting it. Preserves state and history; resumable with no data loss.",
+      ),
   })
-  .strict();
+  .strict()
+  .describe(
+    "A scheduled routine — compiles to exactly one Goal row. Changing fields other than `id` updates the same row in place.",
+  );
 
 export type MotebitYamlRoutine = z.infer<typeof RoutineSchema>;
 
@@ -157,15 +274,51 @@ export const MotebitYamlObjectSchema = z.object({
   // Pinning the version lets us rev the schema later without silently
   // interpreting v2 yaml as v1. Mismatch → the loader prints a targeted
   // error telling the user which CLI version expects which yaml version.
-  version: z.literal(1),
-  name: z.string().optional(),
-  personality_notes: z.string().optional(),
-  temperature: z.number().min(0).max(2).optional(),
-  max_tokens: z.number().int().positive().optional(),
+  version: z
+    .literal(1)
+    .describe(
+      "Schema version. Currently `1`. Pinning lets future CLI versions print a targeted error on mismatch instead of silently misinterpreting the document.",
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      "Display name for this motebit. Surfaces in the REPL banner and delegation listings.",
+    ),
+  personality_notes: z
+    .string()
+    .optional()
+    .describe(
+      "Free-form personality guidance. Appended to the system prompt on every turn. Keep short — every token here costs on every call.",
+    ),
+  temperature: z
+    .number()
+    .min(0)
+    .max(2)
+    .optional()
+    .describe(
+      "Sampling temperature for the default provider [0, 2]. Unset = model default. Only applied when explicitly set.",
+    ),
+  max_tokens: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Default max output tokens per response. Overridden by `--max-tokens` at the CLI."),
   provider: ProviderSchema.optional(),
   governance: GovernanceSchema.optional(),
-  mcp_servers: z.array(McpServerSchema).optional(),
-  routines: z.array(RoutineSchema).optional(),
+  mcp_servers: z
+    .array(McpServerSchema)
+    .optional()
+    .describe(
+      "MCP tool servers to connect on start. Each entry declares transport, endpoint, and (optionally) trust status.",
+    ),
+  routines: z
+    .array(RoutineSchema)
+    .optional()
+    .describe(
+      "Scheduled routines. Each compiles to exactly one Goal row; `id` is the upsert key. Re-running `motebit up` on unchanged yaml is a true no-op.",
+    ),
 });
 
 export const MotebitYamlSchema = MotebitYamlObjectSchema.strict().superRefine((data, ctx) => {

@@ -332,6 +332,10 @@ Commands:
   goal remove <goal_id>     Remove a scheduled goal
   goal pause <goal_id>      Pause a scheduled goal
   goal resume <goal_id>     Resume a paused goal
+  lsp                       Start the motebit.yaml Language Server over stdio
+                            (LSP-speaking editors — VS Code, Cursor, Vim/
+                            Neovim, JetBrains — get diagnostics, hover, and
+                            completion for motebit.yaml)
   ledger <goal_id>          Show execution ledger for a goal [--json]
   credentials               List credentials from relay [--presentation]
   balance                   Show virtual account balance and recent transactions

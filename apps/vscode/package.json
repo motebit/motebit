@@ -1,0 +1,47 @@
+{
+  "name": "@motebit/vscode",
+  "displayName": "Motebit",
+  "description": "motebit.yaml validation, hover, and completion — backed by the `motebit lsp` language server that ships with the motebit CLI.",
+  "version": "0.1.0",
+  "license": "BSL-1.1",
+  "private": true,
+  "publisher": "motebit",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:yaml",
+    "workspaceContains:**/motebit.yaml"
+  ],
+  "main": "./out/extension.js",
+  "type": "commonjs",
+  "contributes": {
+    "configuration": {
+      "title": "Motebit",
+      "properties": {
+        "motebit.lsp.path": {
+          "type": "string",
+          "default": "motebit",
+          "description": "Path to the `motebit` CLI. The extension spawns `<path> lsp` over stdio."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "clean": "rm -rf out .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.6.0"
+  }
+}

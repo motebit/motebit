@@ -40,6 +40,7 @@ export { handleId } from "./id.js";
 export { handleInit } from "./init.js";
 export { handleLedger } from "./ledger.js";
 export { handleLogs } from "./logs.js";
+export { handleLsp } from "./lsp.js";
 export { handlePs } from "./ps.js";
 export { handleUp } from "./up.js";
 export { handleMigrate } from "./migrate.js";

@@ -15,6 +15,7 @@
  *    diffing.
  */
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import {
   parseMotebitYaml,
   routineToGoal,
@@ -24,6 +25,7 @@ import {
   NON_DECLARATIVE_KEYS,
 } from "../yaml-config.js";
 import { diffPlan } from "../subcommands/up.js";
+import { findDescription, unwrapAll } from "../lsp/schema-walker.js";
 import type { Goal } from "@motebit/persistence";
 
 const MOTEBIT_ID = "019cd9d4-3275-7b24-8265-61ebee41d9d0";
@@ -107,6 +109,56 @@ routines:
 // ===========================================================================
 // Drift defense: schema ↔ FullConfig parity
 // ===========================================================================
+
+// ===========================================================================
+// Drift defense #20: every schema field has a non-empty .describe()
+//
+// The LSP reads zod `.describe()` text as hover documentation. If a new
+// field ships without a description, VS Code will silently show no hover
+// — a category-2 drift (the feature works, the docs don't). This test
+// walks the entire schema and asserts every leaf field has non-empty text.
+//
+// Adding a new field in yaml-config.ts without a `.describe()` fails here.
+// See docs/drift-defenses.md invariant #20.
+// ===========================================================================
+
+describe("zod schema documentation (drift defense #20)", () => {
+  it("every field in MotebitYamlObjectSchema has a non-empty .describe()", () => {
+    const missing: string[] = [];
+    walkForDescriptions(MotebitYamlObjectSchema, [], missing);
+    expect(
+      missing,
+      `Fields missing a zod .describe() — LSP hover will silently show nothing for these:\n  ${missing.join("\n  ")}`,
+    ).toEqual([]);
+  });
+});
+
+function walkForDescriptions(schema: z.ZodTypeAny, path: string[], missing: string[]): void {
+  const inner = unwrapAll(schema);
+  if (inner instanceof z.ZodObject) {
+    const shape = inner.shape as Record<string, z.ZodTypeAny>;
+    for (const [key, field] of Object.entries(shape)) {
+      const fieldPath = [...path, key];
+      if (findDescription(field) == null) {
+        missing.push(fieldPath.join("."));
+      }
+      // Recurse into nested objects / arrays of objects.
+      const fieldInner = unwrapAll(field);
+      if (fieldInner instanceof z.ZodObject) {
+        walkForDescriptions(field, fieldPath, missing);
+      } else if (fieldInner instanceof z.ZodArray) {
+        const elem = unwrapAll((fieldInner as z.ZodArray<z.ZodTypeAny>).element);
+        if (elem instanceof z.ZodObject) {
+          walkForDescriptions(
+            (fieldInner as z.ZodArray<z.ZodTypeAny>).element,
+            [...fieldPath, "[]"],
+            missing,
+          );
+        }
+      }
+    }
+  }
+}
 
 describe("NON_DECLARATIVE_KEYS parity", () => {
   // When a new FullConfig field is added, the author must either surface it
