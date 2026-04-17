@@ -186,7 +186,10 @@ export class OpenAIProvider implements IntelligenceProvider {
       model: this.config.model,
       messages,
       max_tokens: this.config.max_tokens ?? 4096,
-      temperature: this.config.temperature ?? 0.7,
+      // Only send when explicitly configured — some models (e.g. Claude
+      // Opus 4.7 via Anthropic-compat endpoints) reject the parameter.
+      // See core.ts for the same pattern on the Anthropic wire path.
+      ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
       stream: false,
     };
 
@@ -233,7 +236,10 @@ export class OpenAIProvider implements IntelligenceProvider {
       model: this.config.model,
       messages,
       max_tokens: this.config.max_tokens ?? 4096,
-      temperature: this.config.temperature ?? 0.7,
+      // Only send when explicitly configured — some models (e.g. Claude
+      // Opus 4.7 via Anthropic-compat endpoints) reject the parameter.
+      // See core.ts for the same pattern on the Anthropic wire path.
+      ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
       stream: true,
       // Ask the server to include token usage in the final SSE chunk.
       // Supported by OpenAI, Google's OpenAI-compat shim, and most local

@@ -619,7 +619,11 @@ export class AnthropicProvider implements StreamingProvider {
     const body: Record<string, unknown> = {
       model: this.config.model,
       max_tokens: this.config.max_tokens ?? 4096,
-      temperature: this.config.temperature ?? 0.7,
+      // Only send temperature when the user explicitly configured it. Claude
+      // Opus 4.7+ deprecates the parameter entirely and returns HTTP 400 when
+      // it's present. Omitting it lets each model use its own default; users
+      // who want to tune sampling still can via `config.temperature`.
+      ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
       system: systemPrompt,
       messages,
       stream: false,
@@ -675,7 +679,11 @@ export class AnthropicProvider implements StreamingProvider {
     const body: Record<string, unknown> = {
       model: this.config.model,
       max_tokens: this.config.max_tokens ?? 4096,
-      temperature: this.config.temperature ?? 0.7,
+      // Only send temperature when the user explicitly configured it. Claude
+      // Opus 4.7+ deprecates the parameter entirely and returns HTTP 400 when
+      // it's present. Omitting it lets each model use its own default; users
+      // who want to tune sampling still can via `config.temperature`.
+      ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
       system: systemPrompt,
       messages,
       stream: true,
