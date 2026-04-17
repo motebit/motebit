@@ -333,3 +333,82 @@ describe("AnthropicProvider Anthropic integration", () => {
     expect(url).toBe("https://custom-proxy.example.com/v1/messages");
   });
 });
+
+// ---------------------------------------------------------------------------
+// fetchWithConnectionTimeout — bounded initial-response timeout
+// ---------------------------------------------------------------------------
+//
+// These tests pin the contract that every chat/completions call site depends
+// on: if the server doesn't return headers within the deadline, the request
+// aborts with a visible error rather than hanging forever. The motivating
+// incident was "hello" hanging silently on motebit.com because an upstream
+// stall left the fetch unresolved and the UI showed "…" forever — silent
+// ambiguity violates fail-closed doctrine.
+
+describe("fetchWithConnectionTimeout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.unstubAllGlobals();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("forwards the AbortSignal to the underlying fetch so the caller inherits cancellation", async () => {
+    const seen: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: unknown, init: RequestInit) => {
+        if (init.signal) seen.push(init.signal);
+        return new Response("ok");
+      }),
+    );
+
+    const { fetchWithConnectionTimeout } = await import("../core");
+    await fetchWithConnectionTimeout("https://example.com", { method: "GET" }, 1000);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeInstanceOf(AbortSignal);
+    expect(seen[0]!.aborted).toBe(false);
+  });
+
+  it("aborts the fetch when the server doesn't respond within the deadline", async () => {
+    // Fetch never resolves until the caller's signal aborts — models a
+    // connected-but-silent upstream (the failure mode we actually saw).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: unknown, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        });
+      }),
+    );
+
+    const { fetchWithConnectionTimeout } = await import("../core");
+    const promise = fetchWithConnectionTimeout("https://example.com", { method: "GET" }, 5000);
+    // Attach the rejection handler *before* advancing the clock so vitest
+    // doesn't flag it as an unhandled rejection.
+    const assertion = expect(promise).rejects.toThrow(/connection timeout after 5000ms/);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
+  it("resolves normally when the server responds before the deadline", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("hello", { status: 200 })),
+    );
+
+    const { fetchWithConnectionTimeout } = await import("../core");
+    const res = await fetchWithConnectionTimeout("https://example.com", { method: "GET" }, 5000);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("hello");
+  });
+});

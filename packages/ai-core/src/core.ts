@@ -17,6 +17,48 @@ import { buildSystemPrompt as buildPrompt } from "./prompt.js";
 /** Default URL for a local Ollama instance. */
 export const DEFAULT_OLLAMA_URL = "http://localhost:11434";
 
+/**
+ * Fetch with a bounded **initial response** timeout. Aborts if the server
+ * doesn't return response headers within `connectionMs`; once headers
+ * arrive, the timer is cleared and the streaming body reads without an
+ * upper bound on total duration. Stalls mid-stream are not covered —
+ * that needs a separate per-chunk watchdog at the reader loop.
+ *
+ * Exists because a hung upstream (relay, proxy, or vendor) should
+ * surface a visible error in seconds, not a silent "…" forever. Every
+ * chat/completions call site goes through this helper.
+ */
+export async function fetchWithConnectionTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  connectionMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  // Track the reason we aborted so we can distinguish "our timeout fired"
+  // from "the caller aborted through some future composed signal." Passing
+  // an Error to `controller.abort(reason)` triggers an unhandled-rejection
+  // warning because the reason is never awaited on any chain — so we don't
+  // pass it. The rethrow below owns the message.
+  let didTimeout = false;
+  const timer = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, connectionMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (didTimeout) {
+      throw new Error(`connection timeout after ${connectionMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Default connection timeout for chat/completions requests. */
+export const CHAT_CONNECTION_TIMEOUT_MS = 30_000;
+
 export { inferStateFromText } from "./infer-state.js";
 export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "./prompt.js";
 export { trimConversation } from "./context-window.js";
@@ -531,16 +573,20 @@ export class AnthropicProvider implements StreamingProvider {
       }));
     }
 
-    const res = await fetch(`${baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.config.api_key,
-        "anthropic-version": "2023-06-01",
-        ...this.config.extra_headers,
+    const res = await fetchWithConnectionTimeout(
+      `${baseUrl}/v1/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.config.api_key,
+          "anthropic-version": "2023-06-01",
+          ...this.config.extra_headers,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    });
+      CHAT_CONNECTION_TIMEOUT_MS,
+    );
 
     if (!res.ok) {
       let errorText: string;
@@ -583,16 +629,20 @@ export class AnthropicProvider implements StreamingProvider {
       }));
     }
 
-    const res = await fetch(`${baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.config.api_key,
-        "anthropic-version": "2023-06-01",
-        ...this.config.extra_headers,
+    const res = await fetchWithConnectionTimeout(
+      `${baseUrl}/v1/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.config.api_key,
+          "anthropic-version": "2023-06-01",
+          ...this.config.extra_headers,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    });
+      CHAT_CONNECTION_TIMEOUT_MS,
+    );
 
     if (!res.ok) {
       let errorText: string;

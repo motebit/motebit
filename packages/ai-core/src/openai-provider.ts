@@ -31,7 +31,13 @@ import type {
   ToolCall,
 } from "@motebit/sdk";
 import { buildSystemPrompt as buildPrompt } from "./prompt.js";
-import { extractMemoryTags, extractStateTags, stripTags } from "./core.js";
+import {
+  extractMemoryTags,
+  extractStateTags,
+  stripTags,
+  fetchWithConnectionTimeout,
+  CHAT_CONNECTION_TIMEOUT_MS,
+} from "./core.js";
 
 /** Configuration for `OpenAIProvider`. */
 export interface OpenAIProviderConfig {
@@ -190,11 +196,15 @@ export class OpenAIProvider implements IntelligenceProvider {
 
     let res: Response;
     try {
-      res = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: this.buildHeaders(),
-        body: JSON.stringify(body),
-      });
+      res = await fetchWithConnectionTimeout(
+        `${baseUrl}/chat/completions`,
+        {
+          method: "POST",
+          headers: this.buildHeaders(),
+          body: JSON.stringify(body),
+        },
+        CHAT_CONNECTION_TIMEOUT_MS,
+      );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
@@ -237,11 +247,15 @@ export class OpenAIProvider implements IntelligenceProvider {
 
     let res: Response;
     try {
-      res = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: this.buildHeaders(),
-        body: JSON.stringify(body),
-      });
+      res = await fetchWithConnectionTimeout(
+        `${baseUrl}/chat/completions`,
+        {
+          method: "POST",
+          headers: this.buildHeaders(),
+          body: JSON.stringify(body),
+        },
+        CHAT_CONNECTION_TIMEOUT_MS,
+      );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
