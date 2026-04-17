@@ -19,7 +19,7 @@ import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { StreamingProvider } from "./index.js";
 import { inferStateFromText } from "./infer-state.js";
-import { isSelfReferential } from "./core.js";
+import { isSelfReferential, withStageTimeout, STAGE_TIMEOUTS_MS } from "./core.js";
 
 // === Constants ===
 
@@ -280,23 +280,44 @@ export async function* runTurnStreaming(
 
   // 1. Query recent events, embed user message, and fetch pinned memories in parallel.
   // These are independent — no reason to await sequentially.
+  //
+  // Each stage gets its own labeled timeout. A hung persistence adapter,
+  // stuck remote embed, or wedged memory graph must surface as a specific
+  // `StageTimeoutError` in seconds rather than hang the turn silently. See
+  // `STAGE_TIMEOUTS_MS` in core.ts for deadlines (single source of truth).
   const CONTEXT_SAFE_SENSITIVITY = [SensitivityLevel.None, SensitivityLevel.Personal];
 
   const [recentEvents, queryEmbedding, pinnedMemoriesRaw] = await Promise.all([
-    eventStore.query({ motebit_id: motebitId, limit: 10 }),
-    embedText(userMessage),
-    memoryGraph.getPinnedMemories(),
+    withStageTimeout(
+      "event_query",
+      STAGE_TIMEOUTS_MS.event_query,
+      eventStore.query({ motebit_id: motebitId, limit: 10 }),
+    ),
+    withStageTimeout(
+      "embed_user_message",
+      STAGE_TIMEOUTS_MS.embed_user_message,
+      embedText(userMessage),
+    ),
+    withStageTimeout(
+      "pinned_memories",
+      STAGE_TIMEOUTS_MS.pinned_memories,
+      memoryGraph.getPinnedMemories(),
+    ),
   ]);
 
   // 2. Similarity retrieval depends on the embedding — runs after parallel batch
   const pinnedMemories = pinnedMemoriesRaw.filter((m) =>
     CONTEXT_SAFE_SENSITIVITY.includes(m.sensitivity),
   );
-  const similarityMemories = await memoryGraph.retrieve(queryEmbedding, {
-    limit: 5,
-    strengthenCoRetrieved: true,
-    sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
-  });
+  const similarityMemories = await withStageTimeout(
+    "memory_retrieve",
+    STAGE_TIMEOUTS_MS.memory_retrieve,
+    memoryGraph.retrieve(queryEmbedding, {
+      limit: 5,
+      strengthenCoRetrieved: true,
+      sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
+    }),
+  );
 
   // Merge: pinned first (cap 5), then similarity (deduplicated)
   const pinnedIds = new Set(pinnedMemories.map((m) => m.node_id));

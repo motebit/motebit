@@ -520,6 +520,14 @@ function formatErrorMessage(msg: string): string {
   if (msg.includes("connection timeout after")) {
     return `The AI server didn't respond in time. ${SETTINGS_LINK}Try a different provider</a> or try again.`;
   }
+  // Stage timeout from @motebit/ai-core's withStageTimeout: a specific step
+  // in the turn pipeline (persistence, memory graph, embed) hung past its
+  // deadline. Caller already knows which stage from structured telemetry;
+  // the user-facing copy is intentionally stage-agnostic — "something
+  // internal is stuck" is the actionable summary.
+  if (msg.includes("timed out after") && msg.includes("stage ")) {
+    return `Something internal is stuck — reloading usually clears it. <a href="#" class="chat-action-link" data-action="reload">Reload</a>.`;
+  }
   // Safari WebKit noise — suppress known harmless DOM exceptions
   if (msg.includes("did not match the expected pattern")) {
     return ""; // Suppress — Safari IDB/streaming artifact, not a real error

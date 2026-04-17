@@ -40,7 +40,15 @@ import type {
   InteriorColor,
   AudioReactivity,
 } from "@motebit/render-engine/spec";
-import { runTurn, runTurnStreaming, TaskRouter, withTaskConfig } from "@motebit/ai-core";
+import {
+  runTurn,
+  runTurnStreaming,
+  TaskRouter,
+  withTaskConfig,
+  withStageTimeout,
+  STAGE_TIMEOUTS_MS,
+  StageTimeoutError,
+} from "@motebit/ai-core";
 import type {
   StreamingProvider,
   MotebitLoopDependencies,
@@ -1313,9 +1321,21 @@ export class MotebitRuntime {
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 
+    // Bounded-time telemetry for every turn. On any throw — stage timeout
+    // from the ai-core pipeline, provider error, tool-loop failure — we
+    // emit `chat.turn.failed` with stage/duration so a hang in any adapter
+    // (persistence, memory graph, embed) becomes a visible, specific error
+    // within seconds instead of an untyped "…" forever. See
+    // `packages/ai-core/src/core.ts#withStageTimeout`.
+    const turnStartedAt = Date.now();
+
     try {
       const trimmed = this.conversation.trimmed();
-      const { knownAgents, agentCapabilities } = await this.buildAgentContext();
+      const { knownAgents, agentCapabilities } = await withStageTimeout(
+        "build_agent_context",
+        STAGE_TIMEOUTS_MS.build_agent_context,
+        this.buildAgentContext(),
+      );
       const selfAwareness = this.buildSelfAwareness();
 
       const stream = runTurnStreaming(this.loopDeps, text, {
@@ -1337,6 +1357,21 @@ export class MotebitRuntime {
       if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
         this._isFirstConversation = false;
       }
+    } catch (err: unknown) {
+      // Telemetry only — rethrow preserves the UI error path (chat.ts
+      // maps labeled errors to user-visible system messages).
+      const stage = err instanceof StageTimeoutError ? err.stage : "unknown";
+      const errorName = err instanceof Error ? err.name : "Error";
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      this._logger.warn("chat.turn.failed", {
+        stage,
+        duration_ms: Date.now() - turnStartedAt,
+        motebit_id: this.motebitId,
+        error_name: errorName,
+        error_message: errorMessage,
+        run_id: runId,
+      });
+      throw err;
     } finally {
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });

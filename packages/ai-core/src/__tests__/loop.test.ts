@@ -904,3 +904,75 @@ describe("runTurnStreaming (agentic loop)", () => {
     expect(resultChunk.result.response).toBe("I don't need any tools for this.");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pipeline stage timeouts — regression guard for silent adapter hangs
+// ---------------------------------------------------------------------------
+//
+// The motivating incident: on motebit.com, sending "hello" showed "…"
+// forever with no error and no fetch POST in the Network tab. Something
+// upstream of the provider call — most likely a persistence or memory-graph
+// adapter — was hanging silently, and the whole chat turn died with it.
+//
+// `withStageTimeout` wraps every pre-provider await in `runTurnStreaming`
+// with a labeled deadline. These tests pin the contract: if any stage
+// adapter hangs, the turn fails with a `StageTimeoutError` naming the
+// exact stage, in bounded wall time — not an untyped hang.
+
+describe("runTurnStreaming pipeline stage timeouts", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    globalThis.fetch = originalFetch;
+  });
+
+  it("surfaces a StageTimeoutError when the event store hangs past its deadline", async () => {
+    const { StageTimeoutError, STAGE_TIMEOUTS_MS } = await import("../core");
+    const deps = makeDeps();
+    // Hang event_query. All other pre-provider stages would still resolve
+    // (in-memory), but Promise.all waits for all three — a single hang is
+    // enough to kill the turn without this guard.
+    vi.spyOn(deps.eventStore, "query").mockReturnValue(new Promise(() => {}));
+
+    // Capture the thrown error to inspect both type and the `stage` field —
+    // the stage label is the whole diagnostic point, and `toBeInstanceOf`
+    // alone wouldn't catch a regression that broadened the stage name.
+    const nextPromise = iter(deps, "hello");
+    await vi.advanceTimersByTimeAsync(STAGE_TIMEOUTS_MS.event_query + 50);
+    const err = await nextPromise;
+    expect(err).toBeInstanceOf(StageTimeoutError);
+    expect((err as InstanceType<typeof StageTimeoutError>).stage).toBe("event_query");
+  });
+
+  it("surfaces a StageTimeoutError when memoryGraph.retrieve hangs past its deadline", async () => {
+    const { StageTimeoutError, STAGE_TIMEOUTS_MS } = await import("../core");
+    const deps = makeDeps();
+    // Let the Promise.all batch resolve (event/embed/pinned all fast against
+    // in-memory stores), then hang the similarity retrieve. Models a
+    // corrupted vector index that accepts the call but never returns.
+    vi.spyOn(deps.memoryGraph, "retrieve").mockReturnValue(new Promise(() => {}));
+
+    const nextPromise = iter(deps, "hello");
+    await vi.advanceTimersByTimeAsync(STAGE_TIMEOUTS_MS.memory_retrieve + 50);
+    const err = await nextPromise;
+    expect(err).toBeInstanceOf(StageTimeoutError);
+    expect((err as InstanceType<typeof StageTimeoutError>).stage).toBe("memory_retrieve");
+  });
+});
+
+/** Run one step of a streaming turn and capture the thrown error (if any). */
+async function iter(deps: MotebitLoopDependencies, text: string): Promise<unknown> {
+  try {
+    const gen = runTurnStreaming(deps, text);
+    await gen.next();
+    return undefined;
+  } catch (err) {
+    return err;
+  }
+}

@@ -59,6 +59,66 @@ export async function fetchWithConnectionTimeout(
 /** Default connection timeout for chat/completions requests. */
 export const CHAT_CONNECTION_TIMEOUT_MS = 30_000;
 
+/**
+ * Labeled-stage timeout: race `promise` against a timer that throws a
+ * `StageTimeoutError` after `ms`. Designed for the chat-turn pipeline,
+ * where a single silent await in one adapter (IndexedDB, memory graph,
+ * embed provider) would otherwise hang the whole turn with a bare "…"
+ * and no diagnostic. Every stage gets its own wrapper so the error
+ * message names exactly which step exceeded its deadline — makes
+ * "turn hung" a 10-second bounded failure with a specific culprit.
+ *
+ * The original promise is not cancelled on timeout (there's no generic
+ * cancellation contract for user code). It continues to run; the
+ * wrapper just detaches. Callers that need true cancellation should
+ * accept an AbortSignal instead — this helper is the cheap version.
+ */
+export class StageTimeoutError extends Error {
+  constructor(
+    public readonly stage: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(`stage "${stage}" timed out after ${timeoutMs}ms`);
+    this.name = "StageTimeoutError";
+  }
+}
+
+export async function withStageTimeout<T>(
+  stage: string,
+  ms: number,
+  promise: Promise<T>,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new StageTimeoutError(stage, ms)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Default deadlines for each stage of the chat turn pipeline. Tuned to
+ * be generous enough that slow-but-working adapters succeed, tight
+ * enough that a hung adapter surfaces as a visible error in seconds.
+ * Single source of truth — changing these in one place updates both
+ * production behavior and regression tests.
+ */
+export const STAGE_TIMEOUTS_MS = {
+  /** Browser IndexedDB / SQLite query for recent events. */
+  event_query: 10_000,
+  /** Remote or local embedding of the user message. */
+  embed_user_message: 12_000,
+  /** Pinned-memory lookup from the memory graph. */
+  pinned_memories: 10_000,
+  /** Similarity search against the memory graph. */
+  memory_retrieve: 10_000,
+  /** Runtime-level agent-context assembly (pre-turn hop). */
+  build_agent_context: 10_000,
+} as const;
+
 export { inferStateFromText } from "./infer-state.js";
 export { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "./prompt.js";
 export { trimConversation } from "./context-window.js";
