@@ -32,12 +32,8 @@ import type {
 } from "@motebit/sdk";
 import { isBatchableRail } from "@motebit/sdk";
 import { shouldBatchSettle, DEFAULT_BATCH_POLICY, type BatchPolicy } from "@motebit/market";
-import {
-  debitAccount,
-  computeDisputeWindowHold,
-  getOrCreateAccount,
-  fromMicro,
-} from "./accounts.js";
+import { computeDisputeWindowHold, getOrCreateAccount, fromMicro } from "./accounts.js";
+import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "batch-withdrawals" });
@@ -81,18 +77,16 @@ interface PendingRow {
   idempotency_key: string | null;
 }
 
-const INSERT_PENDING = `
-  INSERT INTO relay_pending_withdrawals (
-    pending_id, motebit_id, amount_micro, destination, rail, source,
-    enqueued_at, status, idempotency_key
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-`;
-
 /**
  * Debit the agent's virtual account and record a pending withdrawal row.
  * Returns the pending_id on success, or null if the debit failed
  * (insufficient balance, dispute hold). Same balance invariants as the
  * pre-aggregation sweep call to `requestWithdrawal`.
+ *
+ * The debit-before-insert atomicity (Rule 12) is now expressed as a
+ * single compound primitive on `AccountStore.debitAndEnqueuePending`
+ * (@motebit/virtual-accounts). The dispute-window hold stays at the
+ * orchestration layer — it's a policy check, not a ledger invariant.
  */
 export function enqueuePendingWithdrawal(db: DatabaseDriver, params: EnqueueParams): string | null {
   const { motebitId, amountMicro, destination, rail, source, idempotencyKey } = params;
@@ -102,6 +96,10 @@ export function enqueuePendingWithdrawal(db: DatabaseDriver, params: EnqueuePara
   }
 
   // Dispute hold — funds from recent relay settlements are not sweepable.
+  // Policy-layer check; the compound primitive below enforces only the
+  // raw balance invariant. The sum must be computed before we call into
+  // the atomic write so an insufficient-hold state doesn't even attempt
+  // the debit.
   const account = getOrCreateAccount(db, motebitId);
   const disputeHold = computeDisputeWindowHold(db, motebitId);
   if (account.balance - disputeHold < amountMicro) {
@@ -114,39 +112,27 @@ export function enqueuePendingWithdrawal(db: DatabaseDriver, params: EnqueuePara
     return null;
   }
 
-  const pendingId = crypto.randomUUID();
-  const newBalance = debitAccount(
-    db,
-    motebitId,
-    amountMicro,
-    "withdrawal",
-    pendingId,
-    `Pending withdrawal ${pendingId} → ${destination} via ${rail}`,
-  );
-  if (newBalance === null) return null;
-
-  db.prepare(INSERT_PENDING).run(
-    pendingId,
+  const result = sqliteAccountStoreFor(db).debitAndEnqueuePending({
     motebitId,
     amountMicro,
     destination,
     rail,
     source,
-    Date.now(),
-    idempotencyKey ?? null,
-  );
+    idempotencyKey: idempotencyKey ?? null,
+  });
+  if (result === null) return null;
 
   logger.info("pending_withdrawal.enqueued", {
-    pendingId,
+    pendingId: result.pendingId,
     motebitId,
     amountMicro,
     destination,
     rail,
     source,
-    balanceAfter: newBalance,
+    balanceAfter: result.newBalance,
   });
 
-  return pendingId;
+  return result.pendingId;
 }
 
 /** Aggregated summary used by the admin endpoint. */

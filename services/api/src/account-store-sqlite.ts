@@ -389,6 +389,88 @@ export class SqliteAccountStore implements AccountStore {
       return 0;
     }
   }
+
+  debitAndEnqueuePending(args: {
+    motebitId: string;
+    amountMicro: number;
+    destination: string;
+    rail: string;
+    source: "sweep" | "user";
+    idempotencyKey: string | null;
+    pendingId?: string;
+    description?: string;
+  }): { pendingId: string; newBalance: number } | null {
+    const pendingId = args.pendingId ?? crypto.randomUUID();
+    const transactionId = crypto.randomUUID();
+    const now = Date.now();
+    const description =
+      args.description ?? `Pending withdrawal ${pendingId} → ${args.destination} via ${args.rail}`;
+
+    // Ensure the account row exists before the atomic UPDATE.
+    this.getOrCreateAccount(args.motebitId);
+
+    // Rule 12 compound atomicity: debit + transaction-log entry + pending
+    // row all commit together or all roll back. BEGIN/COMMIT around the
+    // three writes; the UPDATE WHERE balance >= amount is the guard.
+    this.db.exec("BEGIN");
+    try {
+      const info = this.db
+        .prepare(
+          "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",
+        )
+        .run(args.amountMicro, now, args.motebitId, args.amountMicro);
+
+      if (info.changes === 0) {
+        this.db.exec("ROLLBACK");
+        return null;
+      }
+
+      const updated = this.db
+        .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+        .get(args.motebitId) as { balance: number } | undefined;
+      const newBalance = updated?.balance ?? 0;
+
+      this.db
+        .prepare(
+          `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          transactionId,
+          args.motebitId,
+          "withdrawal",
+          -args.amountMicro,
+          newBalance,
+          pendingId,
+          description,
+          now,
+        );
+
+      this.db
+        .prepare(
+          `INSERT INTO relay_pending_withdrawals
+             (pending_id, motebit_id, amount_micro, destination, rail, source,
+              enqueued_at, status, idempotency_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        )
+        .run(
+          pendingId,
+          args.motebitId,
+          args.amountMicro,
+          args.destination,
+          args.rail,
+          args.source,
+          now,
+          args.idempotencyKey,
+        );
+
+      this.db.exec("COMMIT");
+      return { pendingId, newBalance };
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
 }
 
 // ── Singleton binding keyed by DatabaseDriver ─────────────────────────────

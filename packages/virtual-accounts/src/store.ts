@@ -95,6 +95,44 @@ export interface AccountStore {
    * SUM across `relay_settlements` minus active `relay_disputes`).
    */
   getUnwithdrawableHold(motebitId: string): number;
+
+  // ── Pending withdrawal aggregation (Rule 12 compound atomicity) ──
+  /**
+   * Atomically debit the virtual account AND insert a pending-withdrawal
+   * row. Returns `{ pendingId, newBalance }` on success, `null` on
+   * insufficient funds — never a partial state where the account is
+   * debited but no pending row exists (or vice versa).
+   *
+   * This is the Rule 12 invariant expressed at the interface level:
+   * "Aggregated withdrawals debit at enqueue time; the fire path does
+   * NOT re-debit; a rail failure parks the row as `failed` with the
+   * debit still in place — the debit is the audit trail that funds
+   * were claimed." Breaking that ordering opens a double-spend window
+   * against concurrent sweeps. The store implementation MUST preserve
+   * cross-table atomicity; a generic `withTransaction(fn)` leak is
+   * explicitly NOT part of this interface.
+   *
+   * The caller is responsible for the dispute-window-hold check before
+   * invoking this; the store honors the raw balance invariant
+   * (`balance >= amountMicro`), not the policy invariant.
+   */
+  debitAndEnqueuePending(args: {
+    motebitId: string;
+    /** Integer micro-units. Caller rejects non-positive values before calling. */
+    amountMicro: number;
+    /** Wallet address, bank account ref, or "pending" for manual. */
+    destination: string;
+    /** Rail name the batch loop will route to (e.g., "x402", "stripe"). */
+    rail: string;
+    /** Who enqueued this — sweep loop or user-initiated. */
+    source: "sweep" | "user";
+    /** Stable idempotency key for external replay protection. `null` allowed. */
+    idempotencyKey: string | null;
+    /** Caller-supplied id; the store mints one if omitted. */
+    pendingId?: string;
+    /** Caller-supplied description override for the ledger entry. */
+    description?: string;
+  }): { pendingId: string; newBalance: number } | null;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -362,6 +400,80 @@ export class InMemoryAccountStore implements AccountStore {
 
   getUnwithdrawableHold(motebitId: string): number {
     return this._unwithdrawableHold(motebitId);
+  }
+
+  debitAndEnqueuePending(args: {
+    motebitId: string;
+    amountMicro: number;
+    destination: string;
+    rail: string;
+    source: "sweep" | "user";
+    idempotencyKey: string | null;
+    pendingId?: string;
+    description?: string;
+  }): { pendingId: string; newBalance: number } | null {
+    // In-memory: the event loop serializes, so the debit + pending insert
+    // happen on one continuous tick. `debit` already honors the balance
+    // guard; if it returns null, no pending row is created and state is
+    // untouched — the Rule 12 atomicity invariant holds by construction.
+    const pendingId = args.pendingId ?? this.newPendingId();
+    const desc =
+      args.description ?? `Pending withdrawal ${pendingId} → ${args.destination} via ${args.rail}`;
+
+    const newBalance = this.debit(args.motebitId, args.amountMicro, "withdrawal", pendingId, desc);
+    if (newBalance === null) return null;
+
+    this.pendingWithdrawals.set(pendingId, {
+      pendingId,
+      motebitId: args.motebitId,
+      amountMicro: args.amountMicro,
+      destination: args.destination,
+      rail: args.rail,
+      source: args.source,
+      enqueuedAt: this._now(),
+      status: "pending",
+      idempotencyKey: args.idempotencyKey,
+    });
+
+    return { pendingId, newBalance };
+  }
+
+  /** Test helper — inspect pending-withdrawal state directly. */
+  _debugGetPendingWithdrawal(pendingId: string):
+    | {
+        pendingId: string;
+        motebitId: string;
+        amountMicro: number;
+        destination: string;
+        rail: string;
+        source: "sweep" | "user";
+        enqueuedAt: number;
+        status: "pending" | "firing" | "fired" | "failed" | "cancelled";
+        idempotencyKey: string | null;
+      }
+    | undefined {
+    return this.pendingWithdrawals.get(pendingId);
+  }
+
+  private readonly pendingWithdrawals = new Map<
+    string,
+    {
+      pendingId: string;
+      motebitId: string;
+      amountMicro: number;
+      destination: string;
+      rail: string;
+      source: "sweep" | "user";
+      enqueuedAt: number;
+      status: "pending" | "firing" | "fired" | "failed" | "cancelled";
+      idempotencyKey: string | null;
+    }
+  >();
+  private pendingCounter = 0;
+
+  private newPendingId(): string {
+    this.pendingCounter += 1;
+    return `pend-mem-${this.pendingCounter.toString(16).padStart(8, "0")}`;
   }
 
   private newTxnId(): string {

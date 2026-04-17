@@ -228,6 +228,92 @@ describe("InMemoryAccountStore — withdrawals", () => {
   });
 });
 
+describe("InMemoryAccountStore — debitAndEnqueuePending (Rule 12)", () => {
+  it("atomically debits and records the pending row on sufficient funds", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 10_000_000, "deposit", "seed", null);
+    const result = store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 3_000_000,
+      destination: "0xdead",
+      rail: "x402",
+      source: "sweep",
+      idempotencyKey: "sweep-cycle-1",
+      pendingId: "pend-1",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.pendingId).toBe("pend-1");
+    expect(result!.newBalance).toBe(7_000_000);
+
+    // Ledger reflects the debit with the pending id as reference.
+    const lastTx = store.getTransactions(ALICE)[0]!;
+    expect(lastTx.amount).toBe(-3_000_000);
+    expect(lastTx.type).toBe("withdrawal");
+    expect(lastTx.reference_id).toBe("pend-1");
+
+    // Pending row persisted with the right shape.
+    const row = store._debugGetPendingWithdrawal("pend-1")!;
+    expect(row.status).toBe("pending");
+    expect(row.rail).toBe("x402");
+    expect(row.source).toBe("sweep");
+    expect(row.amountMicro).toBe(3_000_000);
+    expect(row.idempotencyKey).toBe("sweep-cycle-1");
+  });
+
+  it("returns null on insufficient funds without touching state (Rule 12)", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 100, "deposit", "seed", null);
+    const txCountBefore = store.getTransactions(ALICE).length;
+
+    const result = store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 1_000_000,
+      destination: "0xdead",
+      rail: "x402",
+      source: "sweep",
+      idempotencyKey: null,
+      pendingId: "pend-fail",
+    });
+
+    expect(result).toBeNull();
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(100);
+    expect(store.getTransactions(ALICE)).toHaveLength(txCountBefore);
+    // No pending row was created.
+    expect(store._debugGetPendingWithdrawal("pend-fail")).toBeUndefined();
+  });
+
+  it("mints a pending id when caller omits one", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 1_000_000, "deposit", "seed", null);
+    const result = store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 100_000,
+      destination: "dst",
+      rail: "x402",
+      source: "user",
+      idempotencyKey: null,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.pendingId).toMatch(/^pend-mem-/);
+  });
+
+  it("caller-supplied description overrides the default", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 1_000_000, "deposit", "seed", null);
+    store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 100_000,
+      destination: "dst",
+      rail: "x402",
+      source: "user",
+      idempotencyKey: null,
+      pendingId: "pend-desc",
+      description: "Custom desc",
+    });
+    expect(store.getTransactions(ALICE)[0]!.description).toBe("Custom desc");
+  });
+});
+
 describe("InMemoryAccountStore — policy injection", () => {
   it("unwithdrawableHold callback is invoked per motebit", () => {
     const holds = new Map([[ALICE, 1_000]]);
