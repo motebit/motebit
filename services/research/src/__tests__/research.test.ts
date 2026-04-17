@@ -466,6 +466,43 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     }
   });
 
+  it("treats recall_self with missing query as an empty-query miss (no crash)", async () => {
+    // The self-knowledge tool schema makes `query` required, but Claude
+    // occasionally emits tool_use blocks with missing fields. The dispatcher
+    // must coerce a missing query to "" and run the normal miss branch —
+    // never throw, never silently drop the tool call.
+    const ws = new StubAtomAdapter([]);
+    const ru = new StubAtomAdapter([]);
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-no-query",
+            name: "motebit_recall_self",
+            input: {}, // no query, no limit
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "ok" }],
+      });
+
+    const result = await research("tell me something", {
+      ...baseConfig,
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+    });
+
+    expect(result.recall_self_count).toBe(1);
+    expect(ws.calls).toHaveLength(0);
+    expect(ru.calls).toHaveLength(0);
+  });
+
   it("falls through to web after an interior miss", async () => {
     const ws = new StubAtomAdapter([
       makeReceipt({
