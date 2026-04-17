@@ -514,6 +514,12 @@ function formatErrorMessage(msg: string): string {
   ) {
     return `Couldn't reach the server. ${SETTINGS_LINK}Connect your own API key</a> to chat directly with Claude.`;
   }
+  // Initial-response timeout from @motebit/ai-core's fetchWithConnectionTimeout:
+  // the upstream accepted the socket but never returned headers. Distinct from
+  // "Failed to fetch" (connection refused) — the server is reachable but stuck.
+  if (msg.includes("connection timeout after")) {
+    return `The AI server didn't respond in time. ${SETTINGS_LINK}Try a different provider</a> or try again.`;
+  }
   // Safari WebKit noise — suppress known harmless DOM exceptions
   if (msg.includes("did not match the expected pattern")) {
     return ""; // Suppress — Safari IDB/streaming artifact, not a real error
