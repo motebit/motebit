@@ -1582,6 +1582,9 @@ importers:
       '@motebit/ai-core':
         specifier: workspace:*
         version: link:../../packages/ai-core
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner

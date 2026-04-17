@@ -40,6 +40,7 @@
   },
   "devDependencies": {
     "@motebit/ai-core": "workspace:*",
+    "@motebit/crypto": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@types/node": "^22.0.0",
