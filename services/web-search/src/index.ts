@@ -22,6 +22,7 @@ import {
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   BiasedSearchProvider,
+  TavilySearchProvider,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import {
@@ -152,20 +153,31 @@ async function main(): Promise<void> {
   );
 
   // 2. Build tool registry — two tools only (read-only, R0).
-  // Site-bias wrapper: the inner Fallback chain (Brave→DDG) returns Motobilt
-  // results for a bare "motebit" query because the open index has near-zero
-  // signal for first-party content yet. BiasedSearchProvider appends site:
-  // operators for queries matching first-party terms, using the underlying
-  // provider's native syntax. Pass-through otherwise.
+  //
+  // Provider stack (outer → inner):
+  //   BiasedSearchProvider     — rewrites first-party queries to include
+  //                              site: operators before hitting the index.
+  //   FallbackSearchProvider   — chain, stop-on-first-non-empty.
+  //     ├─ Tavily (if key)     — primary. Agent-tuned ranking, structured
+  //     │                        JSON, higher recall on niche/new domains.
+  //     ├─ Brave (if key)      — fallback. Independent open-web index.
+  //     └─ DuckDuckGo          — last resort. HTML scraping, no auth.
+  //
+  // Each tier is opt-in by env var; a deploy with neither Tavily nor Brave
+  // key runs DuckDuckGo-only. Ordering Tavily first addresses the "what
+  // is Motebit?" UX: generic indexes return Motobilt (Jeep parts) for a
+  // bare "motebit" query because first-party content has near-zero
+  // open-web signal yet; Tavily's ranking is less dominated by backlink
+  // density.
   const registry = new InMemoryToolRegistry();
-  let searchProvider: SearchProvider | undefined;
-  if (config.braveApiKey) {
-    const fallback = new FallbackSearchProvider([
-      new BraveSearchProvider(config.braveApiKey),
-      new DuckDuckGoSearchProvider(),
-    ]);
-    searchProvider = new BiasedSearchProvider(fallback);
-  }
+  const chain: SearchProvider[] = [];
+  if (config.tavilyApiKey) chain.push(new TavilySearchProvider(config.tavilyApiKey));
+  if (config.braveApiKey) chain.push(new BraveSearchProvider(config.braveApiKey));
+  chain.push(new DuckDuckGoSearchProvider());
+
+  const searchProvider: SearchProvider = new BiasedSearchProvider(
+    new FallbackSearchProvider(chain),
+  );
   registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());
 

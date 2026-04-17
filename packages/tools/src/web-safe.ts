@@ -25,6 +25,10 @@ export { BraveSearchProvider } from "./providers/brave-search.js";
 export { DuckDuckGoSearchProvider } from "./providers/duckduckgo.js";
 export { ProxySearchProvider } from "./providers/proxy-search.js";
 export {
+  TavilySearchProvider,
+  type TavilySearchProviderOptions,
+} from "./providers/tavily-search.js";
+export {
   BiasedSearchProvider,
   DEFAULT_MOTEBIT_BIAS,
   type BiasRule,

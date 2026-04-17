@@ -64,6 +64,7 @@ export function loadConfig() {
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],
     braveApiKey: process.env["BRAVE_SEARCH_API_KEY"],
+    tavilyApiKey: process.env["TAVILY_API_KEY"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     delegateReadUrl: process.env["MOTEBIT_DELEGATE_READ_URL"],
     delegateTargetId: process.env["MOTEBIT_DELEGATE_TARGET_ID"],
