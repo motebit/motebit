@@ -45,7 +45,7 @@ import {
   verifyExecutionReceipt,
   createSignedToken,
 } from "@motebit/crypto";
-import type { MotebitId, DeviceId } from "@motebit/sdk";
+import type { CitedAnswer, Citation, DeviceId, ExecutionReceipt, MotebitId } from "@motebit/sdk";
 
 // ── BSL test infrastructure — server only ───────────────────────────
 // These are used to spin up Motebit's reference relay as the server
@@ -198,6 +198,120 @@ describe("MIT-only client — open-protocol proof", () => {
     const tampered = { ...parsed, result: "tampered" };
     const notOk = await verifyExecutionReceipt(tampered, pubKeyBytes);
     expect(notOk).toBe(false);
+  });
+
+  it("verifies a CitedAnswer using only MIT surface (protocol types + crypto)", async () => {
+    // The three-tier answer engine emits CitedAnswer. This test proves
+    // that an auditor can reconstruct the verification using only
+    // `@motebit/protocol` types and `@motebit/crypto` primitives — no BSL
+    // research-service code, no McpClientAdapter. The shape is the
+    // open-protocol commitment.
+    const kpResearch = await generateKeypair();
+    const kpAtom = await generateKeypair();
+
+    const enc = new TextEncoder();
+
+    // A web atom (e.g., read-url service) signs its own atom-level receipt
+    // declaring "I fetched this URL; here is what it said."
+    const atomTaskId = "atom-task-abc";
+    const atomReceipt = await signExecutionReceipt(
+      {
+        task_id: atomTaskId,
+        relay_task_id: atomTaskId,
+        motebit_id: "atom-motebit" as unknown as MotebitId,
+        public_key: bytesToHex(kpAtom.publicKey),
+        device_id: "atom-device" as unknown as DeviceId,
+        submitted_at: Date.now() - 2000,
+        completed_at: Date.now() - 1000,
+        status: "completed" as const,
+        result: "The page says Motebit is an open protocol for sovereign AI agents.",
+        tools_used: ["read_url"],
+        memories_formed: 0,
+        prompt_hash: await hash(enc.encode("https://motebit.com")),
+        result_hash: await hash(enc.encode("page-content")),
+      },
+      kpAtom.privateKey,
+      kpAtom.publicKey,
+    );
+
+    // The research motebit assembles its outer receipt, carrying the atom
+    // receipt in its delegation chain.
+    const outerTaskId = "outer-answer-1";
+    const outerReceipt = await signExecutionReceipt(
+      {
+        task_id: outerTaskId,
+        relay_task_id: outerTaskId,
+        motebit_id: "research-motebit" as unknown as MotebitId,
+        public_key: bytesToHex(kpResearch.publicKey),
+        device_id: "research-device" as unknown as DeviceId,
+        submitted_at: Date.now() - 3000,
+        completed_at: Date.now(),
+        status: "completed" as const,
+        result: "synthesized answer",
+        tools_used: ["research"],
+        memories_formed: 0,
+        prompt_hash: await hash(enc.encode("what is Motebit")),
+        result_hash: await hash(enc.encode("synthesized")),
+        delegation_receipts: [atomReceipt as unknown as ExecutionReceipt],
+      },
+      kpResearch.privateKey,
+      kpResearch.publicKey,
+    );
+
+    // The CitedAnswer carries one interior citation (no receipt) and one
+    // web citation (bound to the atom receipt by task_id).
+    const interiorCitation: Citation = {
+      text_excerpt: "Motebit is an open protocol for sovereign AI agents.",
+      source: "interior",
+      locator: "README.md#Motebit",
+    };
+    const webCitation: Citation = {
+      text_excerpt: atomReceipt.result,
+      source: "web",
+      locator: "https://motebit.com",
+      receipt_task_id: atomTaskId,
+    };
+    const answer: CitedAnswer = {
+      answer: "Motebit is an open protocol for sovereign AI agents [1][2].",
+      citations: [interiorCitation, webCitation],
+      receipt: outerReceipt as unknown as ExecutionReceipt,
+    };
+
+    // MIT-only verification path —
+    // 1. The outer receipt verifies against the research motebit's key.
+    const outerOk = await verifyExecutionReceipt(answer.receipt, kpResearch.publicKey);
+    expect(outerOk).toBe(true);
+
+    // 2. Every web citation binds to a receipt in the outer's delegation
+    //    chain; that atom receipt verifies against its own signer's key.
+    for (const citation of answer.citations) {
+      if (citation.source !== "web") continue;
+      const bound = (answer.receipt.delegation_receipts ?? []).find(
+        (r) => r.task_id === citation.receipt_task_id,
+      );
+      expect(bound).toBeDefined();
+      const atomOk = await verifyExecutionReceipt(bound!, kpAtom.publicKey);
+      expect(atomOk).toBe(true);
+    }
+
+    // 3. Interior citations are self-attested; a verifier cross-checks the
+    //    locator pattern and trusts the motebit's committed corpus hash
+    //    out-of-band. There is nothing to verify cryptographically here
+    //    — that is the point of the source tier.
+    const interiorCount = answer.citations.filter((c) => c.source === "interior").length;
+    expect(interiorCount).toBe(1);
+
+    // 4. Negative control — tampering the outer's answer text breaks the
+    //    outer signature since the consumer SHOULD embed a hash over the
+    //    cited portion. The protocol today signs the receipt, not the
+    //    free-text answer, so the answer is trust-on-first-render for the
+    //    caller — but the citations and their receipts are signed.
+    const tamperedOuter = {
+      ...answer.receipt,
+      result: "tampered synthesis",
+    } as ExecutionReceipt;
+    const tamperedOk = await verifyExecutionReceipt(tamperedOuter, kpResearch.publicKey);
+    expect(tamperedOk).toBe(false);
   });
 
   it("mints a signed bearer token using only the MIT createSignedToken primitive", async () => {

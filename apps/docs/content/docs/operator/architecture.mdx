@@ -45,6 +45,7 @@ motebit/
 │   ├── evm-rpc/               [L1]          EVM JSON-RPC boundary. `getBlockNumber` + `getTransferLogs` behind a motebit-shaped interface; injected fetch.
 │   ├── virtual-accounts/      [L1]          Per-motebit ledger: atomic credit/debit, withdrawal lifecycle, signed receipts. AccountStore inversion.
 │   ├── deposit-detector/      [L1]          EVM Transfer-event scanner. Injected EvmRpcAdapter + DepositDetectorStore + onDeposit callback.
+│   ├── self-knowledge/        [L1]          Committed BM25 corpus over motebit's public docs. Interior tier of the answer engine.
 │   │
 │   │   # Layer 2 — Engines
 │   ├── market/                [L2]          Budget, settlement, reputation, graph routing.

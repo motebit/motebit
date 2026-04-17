@@ -53,6 +53,8 @@ import {
   createReadUrlHandler,
   recallMemoriesDefinition,
   createRecallMemoriesHandler,
+  recallSelfDefinition,
+  createRecallSelfHandler,
   listEventsDefinition,
   createListEventsHandler,
   selfReflectDefinition,
@@ -61,6 +63,7 @@ import {
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
 } from "@motebit/tools";
+import { querySelfKnowledge } from "@motebit/self-knowledge";
 import type { SearchProvider } from "@motebit/tools";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { dim } from "./colors.js";
@@ -315,6 +318,19 @@ export function buildToolRegistry(
   };
 
   registry.register(recallMemoriesDefinition, createRecallMemoriesHandler(memorySearchFn));
+  registry.register(
+    recallSelfDefinition,
+    createRecallSelfHandler((query, limit) =>
+      Promise.resolve(
+        querySelfKnowledge(query, { limit }).map((h) => ({
+          source: h.source,
+          title: h.title,
+          content: h.content,
+          score: h.score,
+        })),
+      ),
+    ),
+  );
   registry.register(listEventsDefinition, createListEventsHandler(eventQueryFn));
   registry.register(
     selfReflectDefinition,

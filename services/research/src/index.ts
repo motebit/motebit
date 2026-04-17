@@ -192,13 +192,21 @@ async function main(): Promise<void> {
     try {
       const r = await research(prompt, researchConfig);
       log(
-        `research complete: ${r.report.length} chars, ${r.search_count} searches, ${r.fetch_count} fetches`,
+        `research complete: ${r.report.length} chars, ${r.recall_self_count} interior, ${r.search_count} searches, ${r.fetch_count} fetches, ${r.citations.length} citations`,
       );
       delegationReceipts = r.delegation_receipts as unknown as Record<string, unknown>[];
+      // The wire payload now carries the citation list. Interior citations
+      // are self-attested (no receipt_task_id); web citations bind to the
+      // atom receipt already in delegation_receipts via receipt_task_id.
+      // Callers build a `CitedAnswer` by pairing `result.data.report` +
+      // `result.data.citations` with the outer signed receipt this handler
+      // returns — the data is shaped so that assembly is a zero-copy map.
       result = {
         ok: true,
         data: JSON.stringify({
           report: r.report,
+          citations: r.citations,
+          recall_self_count: r.recall_self_count,
           search_count: r.search_count,
           fetch_count: r.fetch_count,
         }),

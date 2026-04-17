@@ -27,6 +27,7 @@
     "@motebit/persistence": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",
+    "@motebit/self-knowledge": "workspace:*",
     "@motebit/tools": "workspace:*"
   },
   "devDependencies": {

@@ -212,6 +212,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@motebit/self-knowledge':
+        specifier: workspace:*
+        version: link:../../packages/self-knowledge
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
@@ -672,6 +675,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@motebit/self-knowledge':
+        specifier: workspace:*
+        version: link:../../packages/self-knowledge
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
@@ -1362,6 +1368,18 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
 
+  packages/self-knowledge:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
   packages/semiring:
     dependencies:
       '@motebit/protocol':
@@ -1787,6 +1805,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@motebit/self-knowledge':
+        specifier: workspace:*
+        version: link:../../packages/self-knowledge
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools

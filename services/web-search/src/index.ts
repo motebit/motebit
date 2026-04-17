@@ -21,6 +21,7 @@ import {
   FallbackSearchProvider,
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
+  BiasedSearchProvider,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import {
@@ -150,14 +151,20 @@ async function main(): Promise<void> {
       `(data dir: ${config.dataDir})`,
   );
 
-  // 2. Build tool registry — two tools only (read-only, R0)
+  // 2. Build tool registry — two tools only (read-only, R0).
+  // Site-bias wrapper: the inner Fallback chain (Brave→DDG) returns Motobilt
+  // results for a bare "motebit" query because the open index has near-zero
+  // signal for first-party content yet. BiasedSearchProvider appends site:
+  // operators for queries matching first-party terms, using the underlying
+  // provider's native syntax. Pass-through otherwise.
   const registry = new InMemoryToolRegistry();
   let searchProvider: SearchProvider | undefined;
   if (config.braveApiKey) {
-    searchProvider = new FallbackSearchProvider([
+    const fallback = new FallbackSearchProvider([
       new BraveSearchProvider(config.braveApiKey),
       new DuckDuckGoSearchProvider(),
     ]);
+    searchProvider = new BiasedSearchProvider(fallback);
   }
   registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());

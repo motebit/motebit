@@ -11,6 +11,11 @@ export type { ShellExecConfig } from "./shell-exec.js";
 export { undoWriteDefinition, createUndoWriteHandler } from "./undo-write.js";
 export { isPathAllowed, isDirectoryAllowed } from "./path-sandbox.js";
 export { recallMemoriesDefinition, createRecallMemoriesHandler } from "./recall-memories.js";
+export {
+  recallSelfDefinition,
+  createRecallSelfHandler,
+  type RecallSelfHit,
+} from "./recall-self.js";
 export { listEventsDefinition, createListEventsHandler } from "./list-events.js";
 export { selfReflectDefinition, createSelfReflectHandler } from "./self-reflect.js";
 export type { ReflectionToolResult } from "./self-reflect.js";

@@ -25,24 +25,26 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
-import type { ExecutionReceipt } from "@motebit/sdk";
+import type { Citation, ExecutionReceipt } from "@motebit/sdk";
+import { querySelfKnowledge } from "@motebit/self-knowledge";
 
 const SYSTEM_PROMPT = `You are a research analyst. Given a question, your job is to investigate it thoroughly using the available tools and produce a clear, well-structured report.
 
-You have two tools:
-- motebit_web_search: searches the web. Returns a list of results (title, url, snippet).
-- motebit_read_url: fetches and extracts the readable content of a URL. Use this to get the substance of a result, not just the snippet.
+You have three tools, ordered by preference:
+- motebit_recall_self: searches your own committed knowledge about Motebit (docs, doctrine, architecture). INSTANT and FREE. Try this FIRST whenever the question is about Motebit, sovereignty, agent identity, or any concept native to your own documentation. If it returns a strong match, you may not need to go further.
+- motebit_web_search: searches the public web. Returns results (title, url, snippet). Use when the question needs information beyond your interior knowledge.
+- motebit_read_url: fetches and extracts the readable content of a URL. Use after web_search to get the substance of the most promising 2-4 results.
 
-Standard pattern: search, identify the most promising 2-4 URLs, read them, then synthesize. Don't read every result — pick what matters.
+Standard pattern: recall_self first for anything Motebit-related. If interior is insufficient, search the web, pick the most promising URLs, read them, synthesize. Don't read every result — pick what matters.
 
 For each report:
 
 1. **Question** — restate the question in one line.
 2. **Findings** — the substantive answer. Cite sources inline as [1], [2], etc. Be specific: numbers, dates, names, direct quotes when relevant.
 3. **Open questions** — what you couldn't answer. Skip if there are none.
-4. **Sources** — numbered list of URLs you actually read (via motebit_read_url), in order of citation. Each line: \`[N] Title — URL\`.
+4. **Sources** — numbered list: interior chunks you read (via motebit_recall_self) first, then URLs you read (via motebit_read_url), in order of citation. Each line: \`[N] Title — {locator}\` where locator is either \`interior:{source}#{title}\` or the URL.
 
-Be direct. No filler. Match depth to the question.`;
+Be direct. No filler. Match depth to the question. If nothing you looked up answers the question, say so — do not fabricate.`;
 
 let cachedClient: Anthropic | null = null;
 
@@ -63,6 +65,16 @@ export interface ResearchResult {
   report: string;
   /** Signed receipts from every delegated call, in execution order. The verifiable citation chain. */
   delegation_receipts: SignedReceipt[];
+  /**
+   * One citation per tool call that produced source content (interior recall
+   * or URL fetch; bare web_search hits are not cited — only content actually
+   * read is). Citation.source discriminates interior (self-attested, no
+   * receipt) from web (receipt-bound via receipt_task_id). Aligns 1:1 with
+   * the outer `CitedAnswer.citations` surface built by the service.
+   */
+  citations: Citation[];
+  /** Number of motebit_recall_self calls (interior tier). */
+  recall_self_count: number;
   /** Number of motebit_web_search calls. */
   search_count: number;
   /** Number of motebit_read_url calls. */
@@ -127,6 +139,19 @@ const defaultAdapterFactory: AdapterFactory = ({ name, url, config }) =>
 // === Tool definitions for Claude ===
 
 const TOOLS: Anthropic.Tool[] = [
+  {
+    name: "motebit_recall_self",
+    description:
+      "Search your own committed knowledge about Motebit (README, DROPLET, THE_SOVEREIGN_INTERIOR, THE_METABOLIC_PRINCIPLE). Instant, free, offline. ALWAYS try this before motebit_web_search when the question is about Motebit, about sovereignty, about agent identity, or about any concept that feels native to the Motebit doctrine. Returns ranked chunks with source and title.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What to look up in interior knowledge." },
+        limit: { type: "number", description: "Max chunks to return (default 3)." },
+      },
+      required: ["query"],
+    },
+  },
   {
     name: "motebit_web_search",
     description:
@@ -220,16 +245,60 @@ export async function research(question: string, config: ResearchConfig): Promis
   try {
     const messages: Anthropic.MessageParam[] = [{ role: "user", content: question }];
     const delegationReceipts: SignedReceipt[] = [];
+    const citations: Citation[] = [];
+    let recallSelfCount = 0;
     let searchCount = 0;
     let fetchCount = 0;
+    let toolCallCount = 0;
 
     /**
-     * Dispatch one Claude tool_use to its atom, capture receipt(s), and
-     * produce the tool_result block to feed back to Claude.
+     * Dispatch one Claude tool_use. Interior tier (recall_self) runs locally
+     * and emits an interior-source Citation with no receipt. Web tier calls
+     * dispatch through the atom MCP adapter, capture signed receipts, and
+     * emit a web-source Citation bound to the receipt's task_id — the
+     * verifier's anchor for "this motebit actually read this URL."
      */
     const dispatchToolUse = async (
       tu: Anthropic.ToolUseBlock,
     ): Promise<Anthropic.ToolResultBlockParam> => {
+      // ── Interior tier — synchronous, no network, no receipt. ─────────
+      if (tu.name === "motebit_recall_self") {
+        const query = (tu.input as { query?: string }).query ?? "";
+        const limit = (tu.input as { limit?: number }).limit ?? 3;
+        const hits = querySelfKnowledge(query, { limit });
+        recallSelfCount++;
+        toolCallCount++;
+
+        if (hits.length === 0) {
+          return {
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `No interior knowledge matched "${query}". Consider motebit_web_search if the question extends beyond Motebit itself.`,
+          };
+        }
+
+        // One Citation per chunk actually returned. Locator mirrors the
+        // chunk id used in the committed corpus, so a downstream verifier
+        // can rehydrate the exact text against `@motebit/self-knowledge`.
+        for (const hit of hits) {
+          citations.push({
+            text_excerpt: hit.content,
+            source: "interior",
+            locator: `${hit.source}#${hit.title}`,
+          });
+        }
+
+        const formatted = hits
+          .map(
+            (h, i) =>
+              `${i + 1}. [${h.source} · ${h.title} · score=${h.score.toFixed(2)}]\n${h.content}`,
+          )
+          .join("\n\n---\n\n");
+
+        return { type: "tool_result", tool_use_id: tu.id, content: formatted };
+      }
+
+      // ── Web tier — goes through the atom MCP adapter. ────────────────
       let adapter: AtomAdapter;
       let qualified: string;
       let prompt: string;
@@ -266,6 +335,7 @@ export async function research(question: string, config: ResearchConfig): Promis
       // Drain immediately so receipt order matches the dispatch order.
       const fresh = adapter.getAndResetDelegationReceipts();
       delegationReceipts.push(...fresh);
+      toolCallCount++;
 
       if (!result.ok || fresh.length === 0) {
         return {
@@ -281,16 +351,29 @@ export async function research(question: string, config: ResearchConfig): Promis
 
       // The receipt is the cryptographic edge; its `result` is what Claude reads.
       const receipt = fresh[fresh.length - 1]!;
-      return {
-        type: "tool_result",
-        tool_use_id: tu.id,
-        content: receiptResultText(receipt),
-      };
+      const resultText = receiptResultText(receipt);
+
+      // Only read_url hits become citations — bare search results are
+      // lookup scaffolding, not source content. The Citation's
+      // receipt_task_id binds the claim "this URL was actually fetched"
+      // to the signed atom receipt in delegation_receipts.
+      if (tu.name === "motebit_read_url") {
+        citations.push({
+          text_excerpt: resultText,
+          source: "web",
+          locator: prompt,
+          receipt_task_id: receipt.task_id,
+        });
+      }
+
+      return { type: "tool_result", tool_use_id: tu.id, content: resultText };
     };
 
     // Multi-turn loop: keep dispatching tool calls until Claude returns
-    // text-only or we hit the runaway-cost cap.
-    while (delegationReceipts.length < config.maxToolCalls) {
+    // text-only or we hit the runaway-cost cap. Interior calls count
+    // against the same budget as web calls — recall_self is cheap but
+    // not free of runaway-loop risk.
+    while (toolCallCount < config.maxToolCalls) {
       const response = await client.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 4096,
@@ -311,6 +394,8 @@ export async function research(question: string, config: ResearchConfig): Promis
         return {
           report,
           delegation_receipts: delegationReceipts,
+          citations,
+          recall_self_count: recallSelfCount,
           search_count: searchCount,
           fetch_count: fetchCount,
         };
@@ -341,6 +426,8 @@ export async function research(question: string, config: ResearchConfig): Promis
     return {
       report,
       delegation_receipts: delegationReceipts,
+      citations,
+      recall_self_count: recallSelfCount,
       search_count: searchCount,
       fetch_count: fetchCount,
     };

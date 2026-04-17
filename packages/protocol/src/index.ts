@@ -706,6 +706,84 @@ export interface ExecutionReceipt {
 export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
 
 /**
+ * Provenance tier for a citation's source. Mirrors the three-tier knowledge
+ * hierarchy of the answer engine:
+ *
+ *   - `"interior"`  — the motebit's own pre-built knowledge corpus
+ *                     (@motebit/self-knowledge). Offline, no delegation, no
+ *                     receipt — the source is the committed corpus itself.
+ *   - `"federation"` — another motebit queried through the delegation graph.
+ *                      The `receipt_task_id` field binds the citation to a
+ *                      specific signed ExecutionReceipt in the parent
+ *                      receipt's `delegation_receipts` chain.
+ *   - `"web"`       — an external URL fetched through a read-url atom. The
+ *                     `receipt_task_id` binds to the read-url atom's signed
+ *                     receipt; the claim is "this motebit actually read that
+ *                     URL," not "this URL is correct."
+ *
+ * Verifiers treat `"interior"` as self-attested (trust the corpus checksum),
+ * `"federation"` and `"web"` as receipt-attested (verify the bound receipt's
+ * signature and match its `task_id`).
+ */
+export type CitationSource = "interior" | "federation" | "web";
+
+/**
+ * One grounded citation in a `CitedAnswer`. The `text_excerpt` is the span
+ * actually incorporated into the answer; the `source` discriminator tells
+ * verifiers how to check it.
+ *
+ * Wire format (foundation law): this is the universal shape for "here is
+ * the source of one claim in my answer." Adding fields is additive; changing
+ * the discriminator or removing fields is a wire-format break.
+ */
+export interface Citation {
+  /** The span of source text the answer drew on. */
+  text_excerpt: string;
+  /** Which tier produced this source. */
+  source: CitationSource;
+  /**
+   * For `"web"`: the fetched URL.
+   * For `"interior"`: the doc path relative to the corpus (e.g., "README.md#section").
+   * For `"federation"`: the queried motebit's ID.
+   */
+  locator: string;
+  /**
+   * For `"federation"` and `"web"` — the `task_id` of the bound
+   * `ExecutionReceipt` in the parent answer's `delegation_receipts`. Undefined
+   * for `"interior"` (the committed corpus is the provenance).
+   */
+  receipt_task_id?: string;
+}
+
+/**
+ * A grounded answer with per-claim citations. Emitted by the answer-engine
+ * path (research service today; any grounded-generation surface in future).
+ *
+ * Wire format: JCS-canonicalizable. Auditors with only `@motebit/protocol`
+ * and `@motebit/crypto` can verify:
+ *   1. The outer `receipt` signature.
+ *   2. Every `citation.receipt_task_id` resolves to a receipt in
+ *      `receipt.delegation_receipts` whose own signature verifies.
+ *   3. For `"interior"` citations, the corpus hash matches the motebit's
+ *      committed self-knowledge build.
+ *
+ * The answer text is a plain string; citation-to-text alignment is the
+ * renderer's concern (e.g., numbered markers like `[1]` in `answer`).
+ */
+export interface CitedAnswer {
+  /** Natural-language answer. */
+  answer: string;
+  /** Ordered list of sources. `answer` may reference them by index. */
+  citations: Citation[];
+  /**
+   * Outer receipt signed by the emitting motebit. Its
+   * `delegation_receipts` chain carries the per-atom signatures that
+   * back each `"federation"` / `"web"` citation.
+   */
+  receipt: ExecutionReceipt;
+}
+
+/**
  * Self-attesting device-to-relay registration request body.
  *
  * The cryptographic equivalent of a TOFU handshake: the device signs a

@@ -399,7 +399,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(finalCall.system).toContain("tool budget exhausted");
   });
 
-  it("declares the two motebit tools to Claude", async () => {
+  it("declares the three-tier tool set (interior + web search + web fetch) to Claude", async () => {
     mockCreate.mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }] });
     await research("anything", {
       ...baseConfig,
@@ -408,10 +408,117 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     const call = mockCreate.mock.calls[0]![0] as { tools: Array<{ name: string }>; system: string };
     expect(call.tools.map((t) => t.name).sort()).toEqual([
       "motebit_read_url",
+      "motebit_recall_self",
       "motebit_web_search",
     ]);
+    // Interior-first guidance must be visible in the system prompt.
+    expect(call.system).toContain("motebit_recall_self");
     expect(call.system).toContain("motebit_web_search");
     expect(call.system).toContain("motebit_read_url");
+    expect(call.system).toContain("FIRST");
+  });
+
+  // ── Interior tier (Ring 1: recall_self) ──
+
+  it("recall_self runs locally with no adapter call and emits interior-source citations", async () => {
+    const ws = new StubAtomAdapter([]);
+    const ru = new StubAtomAdapter([]);
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-interior",
+            name: "motebit_recall_self",
+            input: { query: "what is motebit", limit: 2 },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "Synthesized from interior knowledge." }],
+      });
+
+    const result = await research("tell me about Motebit", {
+      ...baseConfig,
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+    });
+
+    // No web atom was touched — interior runs in-process.
+    expect(ws.calls).toHaveLength(0);
+    expect(ru.calls).toHaveLength(0);
+    // Counters reflect the tier actually used.
+    expect(result.recall_self_count).toBe(1);
+    expect(result.search_count).toBe(0);
+    expect(result.fetch_count).toBe(0);
+    // No signed receipts — interior tier is self-attested via corpus hash.
+    expect(result.delegation_receipts).toEqual([]);
+    // Citations are populated with source:"interior" and no receipt_task_id.
+    expect(result.citations.length).toBeGreaterThan(0);
+    for (const c of result.citations) {
+      expect(c.source).toBe("interior");
+      expect(c.receipt_task_id).toBeUndefined();
+      expect(c.locator).toMatch(/\.md#/);
+    }
+  });
+
+  it("falls through to web after an interior miss", async () => {
+    const ws = new StubAtomAdapter([
+      makeReceipt({
+        task_id: "search-after-miss",
+        motebit_id: "web-search-agent",
+        result: JSON.stringify([{ title: "External", url: "https://example.com" }]),
+        signature: "sig-after-miss",
+      }),
+    ]);
+    const ru = new StubAtomAdapter([]);
+
+    // Claude tries recall_self on an exotic query (will miss), then falls
+    // through to web_search, then synthesizes.
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-1",
+            name: "motebit_recall_self",
+            input: { query: "zeolite catalysts" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-2",
+            name: "motebit_web_search",
+            input: { query: "zeolite catalysts" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Synthesized from web." }] });
+
+    const result = await research("what are zeolite catalysts", {
+      ...baseConfig,
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+    });
+
+    expect(result.recall_self_count).toBe(1);
+    expect(result.search_count).toBe(1);
+    expect(result.delegation_receipts).toHaveLength(1);
+    expect(result.delegation_receipts[0]!.signature).toBe("sig-after-miss");
+    // Interior miss → no interior citations; bare web_search hits don't
+    // produce citations either (only read_url does, per the citation policy).
+    expect(result.citations).toEqual([]);
   });
 
   it("propagates Anthropic errors (adapters still disconnect)", async () => {

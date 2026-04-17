@@ -77,7 +77,10 @@ import {
   selfReflectDefinition,
   createSelfReflectHandler,
   ProxySearchProvider,
+  recallSelfDefinition,
+  createRecallSelfHandler,
 } from "@motebit/tools/web-safe";
+import { querySelfKnowledge } from "@motebit/self-knowledge";
 import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
 import { CursorPresence } from "./cursor-presence";
 import { createProvider, WebLLMProvider, PROXY_BASE_URL } from "./providers";
@@ -422,6 +425,21 @@ export class WebApp {
         const nodes = await this.runtime.memory.retrieve(embedding, { limit });
         return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
       }),
+    );
+    // Interior tier of the answer engine — BM25 over committed motebit docs.
+    // Preferred before web_search for questions about Motebit itself.
+    registry.register(
+      recallSelfDefinition,
+      createRecallSelfHandler((query, limit) =>
+        Promise.resolve(
+          querySelfKnowledge(query, { limit }).map((h) => ({
+            source: h.source,
+            title: h.title,
+            content: h.content,
+            score: h.score,
+          })),
+        ),
+      ),
     );
     registry.register(
       listEventsDefinition,

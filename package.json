@@ -48,6 +48,7 @@
     "check-docs-tree": "npx tsx scripts/check-docs-tree.ts",
     "check-spec-mit-boundary": "npx tsx scripts/check-spec-mit-boundary.ts",
     "check-privacy-ring": "npx tsx scripts/check-privacy-ring.ts",
+    "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",
     "clean": "turbo run clean",
