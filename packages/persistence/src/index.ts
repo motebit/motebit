@@ -124,7 +124,13 @@ CREATE TABLE IF NOT EXISTS goals (
   interval_ms INTEGER NOT NULL,
   last_run_at INTEGER,
   enabled INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  -- Declarative-routine metadata. NULL for imperative goals (motebit goal add);
+  -- populated when compiled from motebit.yaml by motebit up.
+  -- motebit up --prune never touches rows where routine_id IS NULL.
+  routine_id TEXT,
+  routine_source TEXT,
+  routine_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS goal_outcomes (
@@ -247,6 +253,7 @@ CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
 CREATE INDEX IF NOT EXISTS idx_devices_motebit ON devices (motebit_id);
 CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (device_token);
 CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
+CREATE INDEX IF NOT EXISTS idx_goals_routine ON goals (motebit_id, routine_id) WHERE routine_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
 CREATE INDEX IF NOT EXISTS idx_approval_queue_motebit_status ON approval_queue (motebit_id, status);
 CREATE INDEX IF NOT EXISTS idx_conversations_motebit ON conversations (motebit_id, last_active_at DESC);
@@ -999,6 +1006,20 @@ export interface Goal {
   wall_clock_ms: number | null;
   /** Project ID for grouping related goals. Goals with same project_id share context. */
   project_id: string | null;
+  /**
+   * Declarative-routine metadata. Present when this goal was compiled from a
+   * `motebit.yaml` routine via `motebit up`; null/undefined for goals added
+   * imperatively. Optional on the interface so existing callers (tests,
+   * `motebit goal add`, scheduler-internal creators) don't need to know
+   * about routines; the row mapper normalizes missing fields to null.
+   * `routine_id` is the stable yaml key; `routine_source` is the absolute
+   * yaml path; `routine_hash` is the SHA-256-truncated hash of the canonical
+   * routine JSON so `up` can detect which routines changed without rerunning
+   * unchanged ones.
+   */
+  routine_id?: string | null;
+  routine_source?: string | null;
+  routine_hash?: string | null;
 }
 
 interface GoalRow {
@@ -1016,6 +1037,9 @@ interface GoalRow {
   consecutive_failures: number;
   wall_clock_ms: number | null;
   project_id: string | null;
+  routine_id: string | null;
+  routine_source: string | null;
+  routine_hash: string | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1034,6 +1058,9 @@ function rowToGoal(row: GoalRow): Goal {
     consecutive_failures: row.consecutive_failures ?? 0,
     wall_clock_ms: row.wall_clock_ms ?? null,
     project_id: row.project_id ?? null,
+    routine_id: row.routine_id ?? null,
+    routine_source: row.routine_source ?? null,
+    routine_hash: row.routine_hash ?? null,
   };
 }
 
@@ -1052,8 +1079,8 @@ export class SqliteGoalStore {
 
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
-      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id, routine_id, routine_source, routine_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtRemove = db.prepare(`DELETE FROM goals WHERE goal_id = ?`);
     this.stmtList = db.prepare(`SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC`);
@@ -1091,6 +1118,9 @@ export class SqliteGoalStore {
       goal.consecutive_failures ?? 0,
       goal.wall_clock_ms ?? null,
       goal.project_id ?? null,
+      goal.routine_id ?? null,
+      goal.routine_source ?? null,
+      goal.routine_hash ?? null,
     );
   }
 
@@ -2753,6 +2783,19 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       "ALTER TABLE approval_queue ADD COLUMN quorum_collected TEXT NOT NULL DEFAULT '[]'",
     );
     driver.pragma("user_version = 30");
+  }
+
+  if (userVersion < 31) {
+    // Declarative-routine metadata for goals. Compiled from motebit.yaml via
+    // `motebit up`; NULL for imperatively-added goals. See CLI doctrine —
+    // `--prune` never touches rows with routine_id IS NULL.
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN routine_id TEXT");
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN routine_source TEXT");
+    migrateExec(driver, "ALTER TABLE goals ADD COLUMN routine_hash TEXT");
+    driver.exec(
+      "CREATE INDEX IF NOT EXISTS idx_goals_routine ON goals (motebit_id, routine_id) WHERE routine_id IS NOT NULL",
+    );
+    driver.pragma("user_version = 31");
   }
 
   const eventStore = new SqliteEventStore(driver);

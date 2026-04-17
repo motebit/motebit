@@ -57,6 +57,18 @@ export interface CliConfig {
   walletAddressOnly?: boolean;
   /** Enable TTS voice output at REPL startup. */
   voice?: boolean;
+  /** `motebit up`/`init` — yaml file path override. */
+  file?: string;
+  /** `motebit up` — print the plan without applying. */
+  dryRun?: boolean;
+  /** `motebit up` — actually delete routines removed from yaml. */
+  prune?: boolean;
+  /** `motebit init` — overwrite an existing motebit.yaml. */
+  force?: boolean;
+  /** `motebit logs` — follow mode, polls for new outcomes. */
+  tail?: boolean;
+  /** `motebit logs` — max number of outcomes to show. */
+  limit?: number;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -104,6 +116,12 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "solana-rpc-url": { type: "string" },
       "address-only": { type: "boolean", default: false },
       voice: { type: "boolean", default: false },
+      file: { type: "string", short: "f" },
+      "dry-run": { type: "boolean", default: false },
+      prune: { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
+      tail: { type: "boolean", default: false },
+      limit: { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -194,6 +212,12 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     solanaRpcUrl: values["solana-rpc-url"],
     walletAddressOnly: values["address-only"],
     voice: values.voice,
+    file: values.file,
+    dryRun: values["dry-run"],
+    prune: values.prune,
+    force: values.force,
+    tail: values.tail,
+    limit: values.limit != null ? parseInt(values.limit, 10) : undefined,
     version: values.version,
     help: values.help,
     positionals,

@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Sixteen invariants are enforced today. Fifteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped).
+Nineteen invariants are enforced today. Fifteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); three are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
 
 ## Inventory
 
@@ -30,6 +30,9 @@ Sixteen invariants are enforced today. Fifteen run as hard CI gates via `pnpm ch
 | 14  | Spec callables ↔ MIT package exports                    | `check-spec-mit-boundary.ts`                      | 2026-04-14 |
 | 15  | Surface affordances ↔ deterministic invocation path     | `check-affordance-routing.ts`                     | 2026-04-14 |
 | 16  | Ring 2 privacy substrate ↔ surface package declarations | `check-privacy-ring.ts`                           | 2026-04-16 |
+| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface  | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)      | 2026-04-17 |
+| 18  | Routine `every` grammar ↔ `parseInterval`               | zod `.transform()` calls `parseInterval` once     | 2026-04-17 |
+| 19  | Goal columns ↔ `routineToGoal` mapper                   | `satisfies Goal` assertion in `yaml-config.ts`    | 2026-04-17 |
 
 ## Incident histories
 
@@ -72,6 +75,18 @@ Every UI affordance that invokes a capability (chip tap, button click, slash com
 ### 16. Ring 2 privacy substrate ↔ surface package declarations
 
 Every surface app (web, cli, desktop, mobile, spatial) must declare `@motebit/event-log` and `@motebit/privacy-layer` as deps AND import at least one symbol from each somewhere non-test. Added 2026-04-16 after the birds-eye audit found that desktop + mobile honored the Ring 2 doctrine (both packages declared and wired) but web, spatial, and CLI shipped without one or both — web and spatial got the adapters transitively through `@motebit/browser-persistence`'s `createBrowserStorage()`, CLI got `auditLog` through `@motebit/persistence`'s `MotebitDatabase`, but none declared the direct dependency. The Ring 2 "fail-closed privacy" claim was mechanically unprovable on three of the five surfaces. Fix: explicit deps plus a type-level assertion at each surface's storage-assembly point (`const _auditLog: AuditLogAdapter = storage.auditLog`) that documents the contract and keeps the import honest. The gate excludes supporting apps (admin, identity, docs) whose doctrine is different — operator-facing, public static tools. Adding a new surface means adding it to `SURFACES` in `check-privacy-ring.ts`; removing one means a changeset and a doctrine update, not a quiet delete.
+
+### 17. motebit.yaml schema ↔ `FullConfig` declarative surface
+
+`motebit up` materializes a subset of `FullConfig` — personality, governance, mcp_servers — plus routines. Every `FullConfig` field must be either surfaced in `MotebitYamlObjectSchema` (declarative) or listed in `NON_DECLARATIVE_KEYS` (device-local identity state). Adding a new `FullConfig` field without a conscious declarative/non-declarative choice is the drift this catches. Defended by the unit test `apps/cli/src/__tests__/yaml-config.test.ts` — the test today asserts the two sets don't overlap; a follow-up can promote it to a type-level enumeration once ts-morph or similar is acceptable in CI. Added 2026-04-17 alongside the declarative-agent MVP.
+
+### 18. Routine `every` grammar ↔ `parseInterval`
+
+Two parsers for the same string grammar is the classic drift vector: yaml validation accepts `"5x"` because the schema only checks `z.string()`, and `parseInterval` blows up at apply time with a less specific error. Defense: the schema's `every` field uses `z.string().transform()` that **calls `parseInterval` directly** — there is literally one parser. Deleting the string form is impossible without touching `apps/cli/src/intervals.ts`. Lives in `apps/cli/src/yaml-config.ts`. Added 2026-04-17.
+
+### 19. Goal columns ↔ `routineToGoal` mapper
+
+Adding a required column to the `Goal` interface must route through the yaml apply path, or yaml-managed goals silently ship with missing fields. Defense: the `routineToGoal` return value ends with `satisfies Goal`, turning an omission into a TypeScript build-time error rather than a runtime insert failure. Mirrors the pattern at every spec-to-type seam in the monorepo. Added 2026-04-17.
 
 ## How to add a new defense
 

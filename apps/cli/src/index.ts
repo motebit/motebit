@@ -46,7 +46,11 @@ import {
   handleApprovalApprove,
   handleApprovalDeny,
   handleId,
+  handleInit,
   handleLedger,
+  handleLogs,
+  handlePs,
+  handleUp,
   handleCredentials,
   handleRegister,
   handleRotate,
@@ -223,6 +227,26 @@ async function main(): Promise<void> {
       console.error("Usage: motebit federation [status|peers|peer <url>]");
       process.exit(1);
     }
+    return;
+  }
+
+  if (subcommand === "init") {
+    handleInit(config);
+    return;
+  }
+
+  if (subcommand === "up") {
+    await handleUp(config);
+    return;
+  }
+
+  if (subcommand === "ps") {
+    await handlePs(config);
+    return;
+  }
+
+  if (subcommand === "logs") {
+    await handleLogs(config);
     return;
   }
 

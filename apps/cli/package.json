@@ -60,7 +60,9 @@
     "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.95.0",
     "sql.js": "^1.14.1",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "yaml": "^2.6.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@motebit/ai-core": "workspace:*",
