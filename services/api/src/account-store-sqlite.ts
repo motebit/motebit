@@ -400,6 +400,24 @@ export class SqliteAccountStore implements AccountStore {
     pendingId?: string;
     description?: string;
   }): { pendingId: string; newBalance: number } | null {
+    // Idempotent replay — sibling of `requestWithdrawal`'s
+    // `getWithdrawalByIdempotencyKey` check. The partial UNIQUE INDEX
+    // on (motebit_id, idempotency_key) added in migration v12 is the
+    // belt-and-suspenders against a concurrent-writer race.
+    if (args.idempotencyKey !== null) {
+      const existing = this.db
+        .prepare(
+          "SELECT pending_id FROM relay_pending_withdrawals WHERE motebit_id = ? AND idempotency_key = ?",
+        )
+        .get(args.motebitId, args.idempotencyKey) as { pending_id: string } | undefined;
+      if (existing) {
+        const account = this.db
+          .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+          .get(args.motebitId) as { balance: number } | undefined;
+        return { pendingId: existing.pending_id, newBalance: account?.balance ?? 0 };
+      }
+    }
+
     const pendingId = args.pendingId ?? crypto.randomUUID();
     const transactionId = crypto.randomUUID();
     const now = Date.now();

@@ -112,6 +112,14 @@ export interface AccountStore {
    * cross-table atomicity; a generic `withTransaction(fn)` leak is
    * explicitly NOT part of this interface.
    *
+   * Idempotent replay: when `idempotencyKey` is non-null and a prior
+   * call recorded a pending row for `(motebitId, idempotencyKey)`, the
+   * store returns `{ pendingId: existing, newBalance: current }`
+   * WITHOUT debiting a second time or inserting a second row. This
+   * mirrors the `requestWithdrawal` + `getWithdrawalByIdempotencyKey`
+   * sibling pattern; the storage layer enforces uniqueness so a retry
+   * cannot silently double-debit. `null` keys are never deduplicated.
+   *
    * The caller is responsible for the dispute-window-hold check before
    * invoking this; the store honors the raw balance invariant
    * (`balance >= amountMicro`), not the policy invariant.
@@ -412,6 +420,20 @@ export class InMemoryAccountStore implements AccountStore {
     pendingId?: string;
     description?: string;
   }): { pendingId: string; newBalance: number } | null {
+    // Idempotent replay — a prior call with this (motebitId, key) returns
+    // the same pending row without debiting again. Mirrors the
+    // `getWithdrawalByIdempotencyKey` path on `requestWithdrawal`.
+    if (args.idempotencyKey !== null) {
+      for (const row of this.pendingWithdrawals.values()) {
+        if (row.motebitId === args.motebitId && row.idempotencyKey === args.idempotencyKey) {
+          return {
+            pendingId: row.pendingId,
+            newBalance: this.accounts.get(args.motebitId)?.balance ?? 0,
+          };
+        }
+      }
+    }
+
     // In-memory: the event loop serializes, so the debit + pending insert
     // happen on one continuous tick. `debit` already honors the balance
     // guard; if it returns null, no pending row is created and state is

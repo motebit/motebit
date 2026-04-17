@@ -312,6 +312,89 @@ describe("InMemoryAccountStore — debitAndEnqueuePending (Rule 12)", () => {
     });
     expect(store.getTransactions(ALICE)[0]!.description).toBe("Custom desc");
   });
+
+  it("idempotent replay returns the same pendingId without re-debiting", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 10_000_000, "deposit", "seed", null);
+
+    const first = store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 3_000_000,
+      destination: "0xdead",
+      rail: "x402",
+      source: "user",
+      idempotencyKey: "user-req-7",
+    });
+    expect(first).not.toBeNull();
+    const txCountAfterFirst = store.getTransactions(ALICE).length;
+    const balanceAfterFirst = store.getOrCreateAccount(ALICE).balance;
+    expect(balanceAfterFirst).toBe(7_000_000);
+
+    const second = store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 3_000_000,
+      destination: "0xdead",
+      rail: "x402",
+      source: "user",
+      idempotencyKey: "user-req-7",
+    });
+    expect(second).not.toBeNull();
+    expect(second!.pendingId).toBe(first!.pendingId);
+    expect(second!.newBalance).toBe(balanceAfterFirst);
+    // No second debit, no second pending row.
+    expect(store.getTransactions(ALICE).length).toBe(txCountAfterFirst);
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(balanceAfterFirst);
+  });
+
+  it("null idempotencyKey is never deduplicated — each call is a fresh enqueue", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 10_000_000, "deposit", "seed", null);
+
+    const a = store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 1_000_000,
+      destination: "dst",
+      rail: "x402",
+      source: "sweep",
+      idempotencyKey: null,
+    });
+    const b = store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 1_000_000,
+      destination: "dst",
+      rail: "x402",
+      source: "sweep",
+      idempotencyKey: null,
+    });
+    expect(a!.pendingId).not.toBe(b!.pendingId);
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(8_000_000);
+  });
+
+  it("replay is scoped per motebit — same key under a different motebit starts fresh", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 5_000_000, "deposit", "seed", null);
+    store.credit(BOB, 5_000_000, "deposit", "seed", null);
+
+    const alice = store.debitAndEnqueuePending({
+      motebitId: ALICE,
+      amountMicro: 1_000_000,
+      destination: "d",
+      rail: "x402",
+      source: "user",
+      idempotencyKey: "shared-key",
+    });
+    const bob = store.debitAndEnqueuePending({
+      motebitId: BOB,
+      amountMicro: 1_000_000,
+      destination: "d",
+      rail: "x402",
+      source: "user",
+      idempotencyKey: "shared-key",
+    });
+    expect(alice!.pendingId).not.toBe(bob!.pendingId);
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(4_000_000);
+    expect(store.getOrCreateAccount(BOB).balance).toBe(4_000_000);
+  });
 });
 
 describe("InMemoryAccountStore — policy injection", () => {

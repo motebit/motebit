@@ -163,6 +163,17 @@ describe("relay_pending_withdrawals schema", () => {
     expect(indexNames).toContain("idx_pending_withdrawals_rail_status");
     expect(indexNames).toContain("idx_pending_withdrawals_motebit");
   });
+
+  it("migration v12 adds the partial UNIQUE idempotency index", async () => {
+    const db = await openRelay();
+    const indexes = db.prepare("PRAGMA index_list(relay_pending_withdrawals)").all() as Array<{
+      name: string;
+      unique: number;
+    }>;
+    const idem = indexes.find((i) => i.name === "idx_pending_withdrawals_idempotency");
+    expect(idem).toBeDefined();
+    expect(idem!.unique).toBe(1);
+  });
 });
 
 describe("enqueuePendingWithdrawal", () => {
@@ -208,6 +219,73 @@ describe("enqueuePendingWithdrawal", () => {
       .prepare("SELECT COUNT(*) AS n FROM relay_pending_withdrawals WHERE motebit_id = ?")
       .get("agent-b") as { n: number };
     expect(count.n).toBe(0);
+  });
+
+  it("idempotent replay returns the same pendingId without re-debiting", async () => {
+    await fundAgent(db, "agent-c", 10 * $1);
+
+    const first = enqueuePendingWithdrawal(db, {
+      motebitId: "agent-c",
+      amountMicro: 2 * $1,
+      destination: "0xdest",
+      rail: "fake",
+      source: "user",
+      idempotencyKey: "replay-probe",
+    });
+    expect(first).not.toBeNull();
+    expect(getAccountBalance(db, "agent-c")?.balance).toBe(8 * $1);
+
+    const second = enqueuePendingWithdrawal(db, {
+      motebitId: "agent-c",
+      amountMicro: 2 * $1,
+      destination: "0xdest",
+      rail: "fake",
+      source: "user",
+      idempotencyKey: "replay-probe",
+    });
+    expect(second).toBe(first);
+    // Balance did not move on replay — the debit happened exactly once.
+    expect(getAccountBalance(db, "agent-c")?.balance).toBe(8 * $1);
+    // And only one pending row exists.
+    const count = db
+      .prepare("SELECT COUNT(*) AS n FROM relay_pending_withdrawals WHERE motebit_id = ?")
+      .get("agent-c") as { n: number };
+    expect(count.n).toBe(1);
+  });
+
+  it("UNIQUE INDEX enforces (motebit_id, idempotency_key) at the schema boundary", async () => {
+    await fundAgent(db, "agent-d", 10 * $1);
+    const pendingId = enqueuePendingWithdrawal(db, {
+      motebitId: "agent-d",
+      amountMicro: 1 * $1,
+      destination: "0xdest",
+      rail: "fake",
+      source: "user",
+      idempotencyKey: "unique-probe",
+    });
+    expect(pendingId).not.toBeNull();
+
+    // A bypass attempt that skips the primitive's pre-check MUST still
+    // hit the partial UNIQUE INDEX.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO relay_pending_withdrawals
+             (pending_id, motebit_id, amount_micro, destination, rail, source,
+              enqueued_at, status, idempotency_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        )
+        .run(
+          "pend-bypass",
+          "agent-d",
+          1 * $1,
+          "0xdest",
+          "fake",
+          "user",
+          Date.now(),
+          "unique-probe",
+        ),
+    ).toThrow(/UNIQUE/);
   });
 });
 

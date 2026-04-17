@@ -595,4 +595,19 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 12,
+    name: "pending_withdrawals_idempotency_unique",
+    up: (db) => {
+      // Mirror idx_relay_withdrawals_idempotency: a partial UNIQUE INDEX
+      // keyed by (motebit_id, idempotency_key) where the key is set. The
+      // `debitAndEnqueuePending` primitive's replay semantics rest on a
+      // SELECT pre-check inside the same synchronous call; the index is
+      // belt-and-suspenders against multi-writer races and enforces the
+      // documented contract at the storage layer.
+      db.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_withdrawals_idempotency ON relay_pending_withdrawals (motebit_id, idempotency_key) WHERE idempotency_key IS NOT NULL;",
+      );
+    },
+  },
 ];
