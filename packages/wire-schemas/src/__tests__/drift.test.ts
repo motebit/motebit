@@ -20,6 +20,10 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import {
+  AGENT_SERVICE_LISTING_SCHEMA_ID,
+  buildAgentServiceListingJsonSchema,
+} from "../agent-service-listing.js";
 import { DELEGATION_TOKEN_SCHEMA_ID, buildDelegationTokenJsonSchema } from "../delegation-token.js";
 import {
   EXECUTION_RECEIPT_SCHEMA_ID,
@@ -45,6 +49,12 @@ const CASES: SchemaCase[] = [
     filename: "delegation-token-v1.json",
     expectedId: DELEGATION_TOKEN_SCHEMA_ID,
     build: buildDelegationTokenJsonSchema,
+  },
+  {
+    name: "agent-service-listing-v1",
+    filename: "agent-service-listing-v1.json",
+    expectedId: AGENT_SERVICE_LISTING_SCHEMA_ID,
+    build: buildAgentServiceListingJsonSchema,
   },
 ];
 

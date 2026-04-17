@@ -38,3 +38,8 @@ export {
   DELEGATION_TOKEN_SCHEMA_ID,
   buildDelegationTokenJsonSchema,
 } from "./delegation-token.js";
+export {
+  AgentServiceListingSchema,
+  AGENT_SERVICE_LISTING_SCHEMA_ID,
+  buildAgentServiceListingJsonSchema,
+} from "./agent-service-listing.js";
