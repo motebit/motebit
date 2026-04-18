@@ -253,7 +253,13 @@ CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
 CREATE INDEX IF NOT EXISTS idx_devices_motebit ON devices (motebit_id);
 CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (device_token);
 CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
-CREATE INDEX IF NOT EXISTS idx_goals_routine ON goals (motebit_id, routine_id) WHERE routine_id IS NOT NULL;
+-- idx_goals_routine lives in migration #31 (line ~2817). It references
+-- the migration-added routine_id column. Putting it here too crashes
+-- initSchema on any production DB at user_version < 31 because
+-- initSchema runs BEFORE migrations (line 2515 vs 2517). The "Base
+-- indexes only reference columns that exist in SCHEMA_TABLES" rule on
+-- line 244 is the architectural invariant. Deploy of 2293c7ed
+-- (2026-04-17) violated it and crashed motebit-sync on Fly until 2026-04-18.
 CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
 CREATE INDEX IF NOT EXISTS idx_approval_queue_motebit_status ON approval_queue (motebit_id, status);
 CREATE INDEX IF NOT EXISTS idx_conversations_motebit ON conversations (motebit_id, last_active_at DESC);

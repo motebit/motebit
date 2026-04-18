@@ -365,4 +365,61 @@ describe("sql.js driver (file-backed)", () => {
     expect(events[0]!.payload).toEqual({ persisted: true });
     mdb2.close();
   });
+
+  // === Migration ordering regression ===
+  //
+  // initSchema runs BEFORE the migration block (line 2515 vs 2517). A
+  // SCHEMA_INDEXES entry that references a column added by a later
+  // migration crashes openMotebitDatabase on any production DB at the
+  // older user_version, because the CREATE TABLE IF NOT EXISTS in
+  // SCHEMA_TABLES is a no-op on a pre-existing table missing that column.
+  //
+  // This is exactly what crashed motebit-sync (Fly) from 2026-04-17
+  // through 2026-04-18: commit 2293c7ed added an `idx_goals_routine`
+  // index referencing the migration-added `routine_id` column directly to
+  // SCHEMA_INDEXES. Migration 31 (which adds the column) never ran
+  // because initSchema crashed first. Fix: indexes on migration-added
+  // columns live exclusively inside their migration's `if (userVersion < N)`
+  // block; SCHEMA_INDEXES references only columns declared in
+  // SCHEMA_TABLES.
+  it("does not crash when reopening a DB at an older user_version (initSchema must not reference migration-added columns)", async () => {
+    // Open once at the current schema — runs all migrations cleanly.
+    const driver1 = await SqlJsDriver.open(dbPath);
+    const mdb1 = createMotebitDatabaseFromDriver(driver1);
+    mdb1.close();
+
+    // Simulate a production DB whose persistent volume was last written by
+    // a relay running an earlier protocol version: drop the migration-added
+    // index + columns from `goals` and rewind user_version to before
+    // migration 31. Now the table exists in its pre-migration shape.
+    // (Index must drop FIRST — SQLite refuses to drop a column referenced
+    //  by an existing index.)
+    const driver2 = await SqlJsDriver.open(dbPath);
+    driver2.exec("DROP INDEX IF EXISTS idx_goals_routine");
+    driver2.exec("ALTER TABLE goals DROP COLUMN routine_hash");
+    driver2.exec("ALTER TABLE goals DROP COLUMN routine_source");
+    driver2.exec("ALTER TABLE goals DROP COLUMN routine_id");
+    driver2.pragma("user_version = 30");
+    driver2.close();
+
+    // Reopen — this is the exact path that crashed in production.
+    // initSchema runs on the legacy goals table (no routine_id), then
+    // migration 31 catches up. If SCHEMA_INDEXES regresses to referencing
+    // a migration-added column, this throws "no such column".
+    const driver3 = await SqlJsDriver.open(dbPath);
+    const mdb3 = createMotebitDatabaseFromDriver(driver3);
+
+    // After reopen the migration must have caught up and created the
+    // column + the index it owns.
+    const cols = mdb3.db.prepare("PRAGMA table_info(goals)").all() as { name: string }[];
+    expect(cols.map((c) => c.name)).toContain("routine_id");
+    const indexes = mdb3.db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='goals'")
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain("idx_goals_routine");
+
+    const v = mdb3.db.pragma("user_version") as { user_version: number }[];
+    expect(v[0]!.user_version).toBe(32);
+    mdb3.close();
+  });
 });
