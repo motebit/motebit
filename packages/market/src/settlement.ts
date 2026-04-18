@@ -94,7 +94,23 @@ export function validateAllocation(allocation: BudgetAllocation): void {
 }
 
 /**
- * Pure: allocation + verified receipt + ledger → SettlementRecord
+ * Body of a SettlementRecord — every field except the signing triple
+ * (`issuer_relay_id`, `suite`, `signature`). The relay's call site
+ * adds those when persisting (see services/api/src/tasks.ts) by
+ * passing this body through `signSettlement` from `@motebit/encryption`.
+ *
+ * `settleOnReceipt` is a pure-math function in Layer-2 `@motebit/market`
+ * — it doesn't have access to the relay's private key, so it cannot
+ * produce a fully-signed record. The signing-triple split keeps the
+ * money math here and the cryptographic attestation at the consumer.
+ */
+export type SettlementRecordBody = Omit<
+  SettlementRecord,
+  "issuer_relay_id" | "suite" | "signature"
+>;
+
+/**
+ * Pure: allocation + verified receipt + ledger → SettlementRecordBody
  *
  * The relay extracts a platform fee (PLATFORM_FEE_RATE) from every
  * completed or partial settlement. Refunds pay zero fee.
@@ -105,6 +121,9 @@ export function validateAllocation(allocation: BudgetAllocation): void {
  *
  * An optional feeRate override allows custom fee tiers (e.g. early adopter
  * discounts, enterprise rates). Defaults to PLATFORM_FEE_RATE (5%).
+ *
+ * Returns the body without signing fields — the caller signs at the
+ * persistence boundary using `signSettlement` from `@motebit/encryption`.
  */
 export function settleOnReceipt(
   allocation: BudgetAllocation,
@@ -112,7 +131,7 @@ export function settleOnReceipt(
   ledger: GoalExecutionManifest | null,
   settlementId: SettlementId,
   feeRate: number = PLATFORM_FEE_RATE,
-): SettlementRecord {
+): SettlementRecordBody {
   if (feeRate < 0 || feeRate > 1) {
     throw new Error(`feeRate must be in [0, 1], got ${feeRate}`);
   }
