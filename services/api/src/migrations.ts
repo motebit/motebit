@@ -626,4 +626,44 @@ export const relayMigrations: Migration[] = [
       db.exec("ALTER TABLE relay_settlements ADD COLUMN signature TEXT;");
     },
   },
+  {
+    version: 14,
+    name: "agent_settlement_anchor_batches",
+    up: (db) => {
+      // Per-agent settlement Merkle anchoring (the "ceiling" alongside the
+      // signing "floor" landed in v13). Federation settlements already get
+      // batched + anchored onchain (relay-federation-v1.md §7.6); this
+      // brings per-agent settlements to feature parity so a worker can
+      // verify they were paid the right amount WITHOUT contacting the
+      // relay — just by holding the SettlementRecord, the inclusion
+      // proof, and pointing at the chain transaction.
+      //
+      // Mirrors relay_anchor_batches (federation) but as a separate table
+      // because the audiences differ: federation = inter-relay peer audit;
+      // agent settlement = worker audit of relay-as-counterparty.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_agent_anchor_batches (
+          batch_id          TEXT PRIMARY KEY,
+          relay_id          TEXT NOT NULL,
+          merkle_root       TEXT NOT NULL,
+          leaf_count        INTEGER NOT NULL,
+          first_settled_at  INTEGER NOT NULL,
+          last_settled_at   INTEGER NOT NULL,
+          signature         TEXT NOT NULL,
+          tx_hash           TEXT,
+          network           TEXT,
+          anchored_at       INTEGER,
+          status            TEXT NOT NULL DEFAULT 'signed',
+          created_at        INTEGER NOT NULL
+        );
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_agent_anchor_batches_status ON relay_agent_anchor_batches(status) WHERE status != 'confirmed';",
+      );
+      db.exec("ALTER TABLE relay_settlements ADD COLUMN anchor_batch_id TEXT;");
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_settlements_unanchored ON relay_settlements(settled_at, settlement_id) WHERE anchor_batch_id IS NULL AND signature IS NOT NULL;",
+      );
+    },
+  },
 ];

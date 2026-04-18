@@ -4,8 +4,18 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { createFederationTables } from "../federation.js";
+import { createTestRelay } from "./test-helpers.js";
+import type { SyncRelay } from "../index.js";
 import type { RelayIdentity } from "../federation.js";
-import { cutBatch, getSettlementProof, isSettlementPendingBatch } from "../anchoring.js";
+import {
+  cutAgentSettlementBatch,
+  cutBatch,
+  getAgentSettlementProof,
+  getSettlementProof,
+  isSettlementPendingBatch,
+} from "../anchoring.js";
+// eslint-disable-next-line no-restricted-imports -- tests need direct sign access
+import { signSettlement } from "@motebit/encryption";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
@@ -283,5 +293,224 @@ describe("isSettlementPendingBatch", () => {
     const id = insertSettlement(db);
     await cutBatch(db, relayIdentity);
     expect(isSettlementPendingBatch(db, id)).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Per-agent settlement Merkle anchoring (the "ceiling" parallel to the
+// federation case above; same primitives, different audience).
+//
+// Setup pattern: a full test relay (createTestRelay) instead of bare
+// federation tables, because relay_settlements is created via the
+// migration chain which depends on tables produced by the relay's
+// startup sequence (pairing_sessions, agent_registry, etc.). Federation
+// tests above can use the lighter setup because they only touch
+// federation-specific tables.
+// ===========================================================================
+
+let agentRelay: SyncRelay;
+let agentDb: DatabaseDriver;
+let agentRelayIdentity: RelayIdentity;
+
+async function insertSignedAgentSettlement(opts: {
+  settlementId?: string;
+  motebitId?: string;
+  amount?: number;
+  fee?: number;
+  settledAt?: number;
+}): Promise<string> {
+  const id = opts.settlementId ?? crypto.randomUUID();
+  const motebitId = opts.motebitId ?? `mote-${crypto.randomUUID()}`;
+  const settledAt = opts.settledAt ?? Date.now();
+  const allocId = `alloc-${id}`;
+  const receiptHash = `receipt-${id}`;
+
+  const signed = await signSettlement(
+    {
+      settlement_id: id as never,
+      allocation_id: allocId as never,
+      receipt_hash: receiptHash,
+      ledger_hash: null,
+      amount_settled: opts.amount ?? 950_000,
+      platform_fee: opts.fee ?? 50_000,
+      platform_fee_rate: 0.05,
+      status: "completed",
+      settled_at: settledAt,
+      issuer_relay_id: agentRelayIdentity.relayMotebitId,
+    },
+    agentRelayIdentity.privateKey,
+  );
+
+  agentDb
+    .prepare(
+      `INSERT INTO relay_settlements
+       (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash,
+        amount_settled, platform_fee, platform_fee_rate, status, settled_at,
+        issuer_relay_id, suite, signature)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      allocId,
+      `task-${id}`,
+      motebitId,
+      receiptHash,
+      null,
+      signed.amount_settled,
+      signed.platform_fee,
+      signed.platform_fee_rate,
+      signed.status,
+      signed.settled_at,
+      signed.issuer_relay_id,
+      signed.suite,
+      signed.signature,
+    );
+  return id;
+}
+
+describe("cutAgentSettlementBatch", () => {
+  beforeEach(async () => {
+    agentRelay = await createTestRelay();
+    agentDb = agentRelay.moteDb.db;
+    // The test relay generates its own keypair on startup; rebuild
+    // RelayIdentity around it so signed settlements verify against
+    // the relay's own key.
+    const keypair = await generateKeypair();
+    agentRelayIdentity = {
+      relayMotebitId: `relay-${crypto.randomUUID()}`,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: bytesToHex(keypair.publicKey),
+      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
+    };
+  });
+  it("returns null when no signed settlements exist", async () => {
+    const result = await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    expect(result).toBeNull();
+  });
+
+  it("cuts a batch from unanchored signed settlements", async () => {
+    await insertSignedAgentSettlement({});
+    await insertSignedAgentSettlement({});
+    await insertSignedAgentSettlement({});
+
+    const batch = await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    expect(batch).not.toBeNull();
+    expect(batch!.leaf_count).toBe(3);
+    expect(batch!.merkle_root).toMatch(/^[0-9a-f]{64}$/);
+    expect(batch!.relay_id).toBe(agentRelayIdentity.relayMotebitId);
+    expect(batch!.signature).toMatch(/^[0-9a-f]+$/);
+    expect(batch!.tx_hash).toBeNull();
+    expect(batch!.anchored_at).toBeNull();
+  });
+
+  it("assigns anchor_batch_id to all settlements in the batch", async () => {
+    const id1 = await insertSignedAgentSettlement({});
+    const id2 = await insertSignedAgentSettlement({});
+
+    const batch = await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    expect(batch).not.toBeNull();
+
+    const row1 = agentDb
+      .prepare("SELECT anchor_batch_id FROM relay_settlements WHERE settlement_id = ?")
+      .get(id1) as { anchor_batch_id: string };
+    const row2 = agentDb
+      .prepare("SELECT anchor_batch_id FROM relay_settlements WHERE settlement_id = ?")
+      .get(id2) as { anchor_batch_id: string };
+    expect(row1.anchor_batch_id).toBe(batch!.batch_id);
+    expect(row2.anchor_batch_id).toBe(batch!.batch_id);
+  });
+
+  it("does NOT batch unsigned (legacy) settlements — anchoring requires a signed leaf", async () => {
+    // Direct INSERT bypassing signSettlement → leaves signature NULL,
+    // simulating a row written before migration v13.
+    agentDb
+      .prepare(
+        `INSERT INTO relay_settlements
+         (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash,
+          amount_settled, platform_fee, platform_fee_rate, status, settled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-1",
+        "alloc-legacy",
+        "task-legacy",
+        "mote-legacy",
+        "receipt-legacy",
+        null,
+        950_000,
+        50_000,
+        0.05,
+        "completed",
+        Date.now(),
+      );
+
+    const result = await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    expect(result).toBeNull();
+    // Legacy row still unbatched, as expected.
+    const row = agentDb
+      .prepare("SELECT anchor_batch_id FROM relay_settlements WHERE settlement_id = ?")
+      .get("legacy-1") as { anchor_batch_id: string | null };
+    expect(row.anchor_batch_id).toBeNull();
+  });
+
+  it("respects maxSize when many signed settlements are pending", async () => {
+    for (let i = 0; i < 5; i++) {
+      await insertSignedAgentSettlement({});
+    }
+    const batch = await cutAgentSettlementBatch(agentDb, agentRelayIdentity, 3);
+    expect(batch).not.toBeNull();
+    expect(batch!.leaf_count).toBe(3);
+    // 2 still pending
+    const remaining = agentDb
+      .prepare(
+        "SELECT COUNT(*) as count FROM relay_settlements WHERE anchor_batch_id IS NULL AND signature IS NOT NULL",
+      )
+      .get() as { count: number };
+    expect(remaining.count).toBe(2);
+  });
+});
+
+describe("getAgentSettlementProof", () => {
+  beforeEach(async () => {
+    agentRelay = await createTestRelay();
+    agentDb = agentRelay.moteDb.db;
+    const keypair = await generateKeypair();
+    agentRelayIdentity = {
+      relayMotebitId: `relay-${crypto.randomUUID()}`,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: bytesToHex(keypair.publicKey),
+      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
+    };
+  });
+
+  it("returns null for an unbatched settlement", async () => {
+    const id = await insertSignedAgentSettlement({});
+    const proof = await getAgentSettlementProof(agentDb, id);
+    expect(proof).toBeNull();
+  });
+
+  it("returns a verifiable inclusion proof for an anchored settlement", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      ids.push(await insertSignedAgentSettlement({ settledAt: 1_000_000 + i }));
+    }
+    const batch = await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    expect(batch).not.toBeNull();
+
+    const proof = await getAgentSettlementProof(agentDb, ids[2]!);
+    expect(proof).not.toBeNull();
+    expect(proof!.batch_id).toBe(batch!.batch_id);
+    expect(proof!.merkle_root).toBe(batch!.merkle_root);
+    expect(proof!.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(proof!.proof.length).toBeGreaterThan(0);
+    expect(proof!.leaf_index).toBe(2);
+    expect(proof!.anchor.relay_id).toBe(agentRelayIdentity.relayMotebitId);
+  });
+
+  it("returns null for a non-existent settlement", async () => {
+    const proof = await getAgentSettlementProof(agentDb, "nonexistent");
+    expect(proof).toBeNull();
   });
 });

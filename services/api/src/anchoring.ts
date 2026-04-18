@@ -21,6 +21,7 @@ import {
   getMerkleProof,
   computeSettlementLeaf,
   canonicalJson,
+  sha256,
   sign,
   bytesToHex,
 } from "@motebit/encryption";
@@ -554,4 +555,322 @@ export function isSettlementPendingBatch(db: DatabaseDriver, settlementId: strin
     .get(settlementId) as { anchor_batch_id: string | null } | undefined;
 
   return row != null && row.anchor_batch_id == null;
+}
+
+// ===========================================================================
+// Per-agent settlement Merkle anchoring (the "ceiling" alongside the
+// signing "floor" landed in migration v13).
+//
+// Federation settlements (above) get batched + anchored onchain so peer
+// relays can verify cross-relay settlement amounts without trusting each
+// other. Per-agent settlements get the same treatment so a worker can
+// verify they were paid the right amount WITHOUT contacting the relay
+// — just by holding their signed SettlementRecord, the inclusion proof,
+// and the chain transaction reference.
+//
+// Self-attesting trust pyramid for agent settlements:
+//   1. Signature  (commits the relay to its claimed amounts; replaces
+//      "trust the relay's word" with "trust the relay's commitment")
+//   2. Anchor     (commits the relay to its claimed history; even an
+//      issuer-key compromise cannot retroactively rewrite anchored
+//      records because the chain transaction is immutable)
+//
+// Stored separately from federation batches (relay_agent_anchor_batches)
+// because the audiences differ — federation = peer audit, per-agent =
+// worker audit. Same Merkle primitive, different aggregation.
+// ===========================================================================
+
+interface AgentSettlementRow {
+  settlement_id: string;
+  motebit_id: string;
+  receipt_hash: string;
+  ledger_hash: string | null;
+  amount_settled: number;
+  platform_fee: number;
+  platform_fee_rate: number;
+  status: string;
+  settled_at: number;
+  issuer_relay_id: string;
+  suite: string;
+  signature: string;
+}
+
+/**
+ * Compute the leaf hash for a per-agent settlement: SHA-256 over the
+ * canonical-JSON of the signed record fields. Identical to the bytes
+ * the relay signed over (minus signature itself? — no, including
+ * signature: the leaf commits the WHOLE signed artifact).
+ *
+ * External verifiers reconstruct this by canonicalizing the
+ * SettlementRecord they hold and hashing — no relay code needed.
+ */
+async function computeAgentSettlementLeaf(row: AgentSettlementRow): Promise<string> {
+  const canonical = canonicalJson({
+    settlement_id: row.settlement_id,
+    motebit_id: row.motebit_id,
+    receipt_hash: row.receipt_hash,
+    ledger_hash: row.ledger_hash,
+    amount_settled: row.amount_settled,
+    platform_fee: row.platform_fee,
+    platform_fee_rate: row.platform_fee_rate,
+    status: row.status,
+    settled_at: row.settled_at,
+    issuer_relay_id: row.issuer_relay_id,
+    suite: row.suite,
+    signature: row.signature,
+  });
+  const h = await sha256(new TextEncoder().encode(canonical));
+  return bytesToHex(h);
+}
+
+/**
+ * Cut a batch from unanchored per-agent settlements. Returns null if
+ * none are pending. Mirrors `cutBatch` (federation) but selects from
+ * `relay_settlements` and writes to `relay_agent_anchor_batches`.
+ *
+ * Selection: only signed rows (`signature IS NOT NULL`). Pre-signing-
+ * migration legacy rows are skipped — they cannot be anchored because
+ * the leaf would not match what the relay signed (it didn't).
+ */
+export async function cutAgentSettlementBatch(
+  db: DatabaseDriver,
+  relayIdentity: RelayIdentity,
+  maxSize: number = DEFAULT_BATCH_MAX_SIZE,
+): Promise<AnchorRecord | null> {
+  const rows = db
+    .prepare(
+      `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
+              amount_settled, platform_fee, platform_fee_rate, status,
+              settled_at, issuer_relay_id, suite, signature
+       FROM relay_settlements
+       WHERE anchor_batch_id IS NULL AND signature IS NOT NULL
+       ORDER BY settled_at ASC, settlement_id ASC
+       LIMIT ?`,
+    )
+    .all(maxSize) as AgentSettlementRow[];
+
+  if (rows.length === 0) return null;
+
+  const leaves: string[] = [];
+  for (const row of rows) {
+    leaves.push(await computeAgentSettlementLeaf(row));
+  }
+
+  const tree = await buildMerkleTree(leaves);
+
+  const batchId = crypto.randomUUID();
+  const firstSettledAt = rows[0]!.settled_at;
+  const lastSettledAt = rows[rows.length - 1]!.settled_at;
+
+  const anchorPayload = {
+    batch_id: batchId,
+    merkle_root: tree.root,
+    leaf_count: rows.length,
+    first_settled_at: firstSettledAt,
+    last_settled_at: lastSettledAt,
+    relay_id: relayIdentity.relayMotebitId,
+  };
+  const sigBytes = new TextEncoder().encode(canonicalJson(anchorPayload));
+  const sig = await sign(sigBytes, relayIdentity.privateKey);
+  const signature = bytesToHex(sig);
+
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO relay_agent_anchor_batches
+       (batch_id, relay_id, merkle_root, leaf_count, first_settled_at, last_settled_at,
+        signature, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?)`,
+  ).run(
+    batchId,
+    relayIdentity.relayMotebitId,
+    tree.root,
+    rows.length,
+    firstSettledAt,
+    lastSettledAt,
+    signature,
+    now,
+  );
+
+  const assignStmt = db.prepare(
+    "UPDATE relay_settlements SET anchor_batch_id = ? WHERE settlement_id = ?",
+  );
+  for (const row of rows) {
+    assignStmt.run(batchId, row.settlement_id);
+  }
+
+  logger.info("anchoring.agent_batch_cut", {
+    batch_id: batchId,
+    leaf_count: rows.length,
+    merkle_root: tree.root,
+  });
+
+  return {
+    batch_id: batchId,
+    merkle_root: tree.root,
+    leaf_count: rows.length,
+    first_settled_at: firstSettledAt,
+    last_settled_at: lastSettledAt,
+    relay_id: relayIdentity.relayMotebitId,
+    signature,
+    tx_hash: null,
+    network: null,
+    anchored_at: null,
+  };
+}
+
+/**
+ * Submit an agent-settlement batch's Merkle root onchain. Mirrors
+ * `submitAnchorOnChain` for federation batches — same submitter
+ * abstraction (ChainAnchorSubmitter), same idempotency semantics
+ * (only acts on `status = 'signed'` batches).
+ */
+export async function submitAgentAnchorOnChain(
+  db: DatabaseDriver,
+  batchId: string,
+  submitter: ChainAnchorSubmitter,
+): Promise<boolean> {
+  const batch = db
+    .prepare(
+      "SELECT merkle_root, relay_id, leaf_count FROM relay_agent_anchor_batches WHERE batch_id = ? AND status = 'signed'",
+    )
+    .get(batchId) as { merkle_root: string; relay_id: string; leaf_count: number } | undefined;
+
+  if (!batch) return true;
+
+  try {
+    const result = await submitter.submitMerkleRoot(
+      batch.merkle_root,
+      batch.relay_id,
+      batch.leaf_count,
+    );
+    const now = Date.now();
+
+    db.prepare(
+      "UPDATE relay_agent_anchor_batches SET tx_hash = ?, network = ?, anchored_at = ?, status = 'confirmed' WHERE batch_id = ?",
+    ).run(result.txHash, submitter.network, now, batchId);
+
+    logger.info("anchoring.agent_chain_confirmed", {
+      batch_id: batchId,
+      tx_hash: result.txHash,
+      chain: submitter.chain,
+      network: submitter.network,
+    });
+
+    return true;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn("anchoring.agent_chain_submit_error", { batch_id: batchId, error: message });
+    return false;
+  }
+}
+
+/**
+ * Fetch the inclusion proof for a per-agent settlement, if anchored.
+ * Returns null if the settlement is unbatched, or if no row matches.
+ *
+ * Mirrors `getSettlementProof` (federation) but reads from
+ * `relay_settlements` + `relay_agent_anchor_batches`.
+ *
+ * The returned proof is sufficient for an external verifier to:
+ *   1. Recompute the leaf hash from the SettlementRecord they hold
+ *   2. Walk the Merkle path with `proof.siblings` + `leaf_index`
+ *   3. Compare the reconstructed root to `merkle_root` (and, if
+ *      `anchor.tx_hash` is non-null, to the value committed onchain)
+ *
+ * No relay contact required for any step beyond initially fetching
+ * the proof itself.
+ */
+export async function getAgentSettlementProof(
+  db: DatabaseDriver,
+  settlementId: string,
+): Promise<{
+  settlement_id: string;
+  leaf_hash: string;
+  proof: string[];
+  leaf_index: number;
+  merkle_root: string;
+  batch_id: string;
+  anchor: AnchorRecord;
+} | null> {
+  const settlement = db
+    .prepare(
+      `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
+              amount_settled, platform_fee, platform_fee_rate, status,
+              settled_at, issuer_relay_id, suite, signature, anchor_batch_id
+       FROM relay_settlements
+       WHERE settlement_id = ?`,
+    )
+    .get(settlementId) as (AgentSettlementRow & { anchor_batch_id: string | null }) | undefined;
+
+  if (!settlement || !settlement.anchor_batch_id) return null;
+
+  const batchId = settlement.anchor_batch_id;
+
+  const anchor = db
+    .prepare("SELECT * FROM relay_agent_anchor_batches WHERE batch_id = ?")
+    .get(batchId) as
+    | {
+        batch_id: string;
+        relay_id: string;
+        merkle_root: string;
+        leaf_count: number;
+        first_settled_at: number;
+        last_settled_at: number;
+        signature: string;
+        tx_hash: string | null;
+        network: string | null;
+        anchored_at: number | null;
+        status: string;
+      }
+    | undefined;
+
+  if (!anchor) return null;
+
+  // Reconstruct tree in the same sort order cutAgentSettlementBatch used.
+  const batchSettlements = db
+    .prepare(
+      `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
+              amount_settled, platform_fee, platform_fee_rate, status,
+              settled_at, issuer_relay_id, suite, signature
+       FROM relay_settlements
+       WHERE anchor_batch_id = ?
+       ORDER BY settled_at ASC, settlement_id ASC`,
+    )
+    .all(batchId) as AgentSettlementRow[];
+
+  const leaves: string[] = [];
+  let targetIndex = -1;
+  for (let i = 0; i < batchSettlements.length; i++) {
+    const row = batchSettlements[i]!;
+    leaves.push(await computeAgentSettlementLeaf(row));
+    if (row.settlement_id === settlementId) {
+      targetIndex = i;
+    }
+  }
+
+  if (targetIndex === -1) return null;
+
+  const tree = await buildMerkleTree(leaves);
+  const proof = getMerkleProof(tree, targetIndex);
+
+  return {
+    settlement_id: settlementId,
+    leaf_hash: proof.leaf,
+    proof: proof.siblings,
+    leaf_index: proof.index,
+    merkle_root: tree.root,
+    batch_id: batchId,
+    anchor: {
+      batch_id: anchor.batch_id,
+      merkle_root: anchor.merkle_root,
+      leaf_count: anchor.leaf_count,
+      first_settled_at: anchor.first_settled_at,
+      last_settled_at: anchor.last_settled_at,
+      relay_id: anchor.relay_id,
+      signature: anchor.signature,
+      tx_hash: anchor.tx_hash,
+      network: anchor.network,
+      anchored_at: anchor.anchored_at,
+    },
+  };
 }
