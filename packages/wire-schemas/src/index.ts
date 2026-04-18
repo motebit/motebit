@@ -95,3 +95,14 @@ export {
   DISPUTE_APPEAL_SCHEMA_ID,
   buildDisputeAppealJsonSchema,
 } from "./dispute.js";
+export {
+  ReputationCredentialSubjectSchema,
+  REPUTATION_CREDENTIAL_SUBJECT_SCHEMA_ID,
+  buildReputationCredentialSubjectJsonSchema,
+  TrustCredentialSubjectSchema,
+  TRUST_CREDENTIAL_SUBJECT_SCHEMA_ID,
+  buildTrustCredentialSubjectJsonSchema,
+  GradientCredentialSubjectSchema,
+  GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID,
+  buildGradientCredentialSubjectJsonSchema,
+} from "./credential-subjects.js";

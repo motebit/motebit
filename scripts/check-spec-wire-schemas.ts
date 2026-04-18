@@ -72,11 +72,6 @@ const WAIVERS: Record<string, string> = {
   BalanceWaiver: "TODO: schema (settlement-v1) — operator-signed balance reconciliation",
   CredentialAnchorBatch: "TODO: schema (credential-anchor-v1) — chain-anchored batch metadata",
   CredentialAnchorProof: "TODO: schema (credential-anchor-v1) — Merkle inclusion proof",
-  GradientCredentialSubject:
-    "TODO: schema (credential-v1) — VC subject body for gradient-state credentials",
-  ReputationCredentialSubject:
-    "TODO: schema (credential-v1) — VC subject body for reputation credentials",
-  TrustCredentialSubject: "TODO: schema (credential-v1) — VC subject body for trust credentials",
 };
 
 // ---------------------------------------------------------------------------

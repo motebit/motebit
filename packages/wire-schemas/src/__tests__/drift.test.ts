@@ -34,6 +34,14 @@ import {
   buildCredentialBundleJsonSchema,
 } from "../credential-bundle.js";
 import {
+  GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID,
+  REPUTATION_CREDENTIAL_SUBJECT_SCHEMA_ID,
+  TRUST_CREDENTIAL_SUBJECT_SCHEMA_ID,
+  buildGradientCredentialSubjectJsonSchema,
+  buildReputationCredentialSubjectJsonSchema,
+  buildTrustCredentialSubjectJsonSchema,
+} from "../credential-subjects.js";
+import {
   ADJUDICATOR_VOTE_SCHEMA_ID,
   DISPUTE_APPEAL_SCHEMA_ID,
   DISPUTE_EVIDENCE_SCHEMA_ID,
@@ -175,6 +183,24 @@ const CASES: SchemaCase[] = [
     filename: "dispute-appeal-v1.json",
     expectedId: DISPUTE_APPEAL_SCHEMA_ID,
     build: buildDisputeAppealJsonSchema,
+  },
+  {
+    name: "reputation-credential-subject-v1",
+    filename: "reputation-credential-subject-v1.json",
+    expectedId: REPUTATION_CREDENTIAL_SUBJECT_SCHEMA_ID,
+    build: buildReputationCredentialSubjectJsonSchema,
+  },
+  {
+    name: "trust-credential-subject-v1",
+    filename: "trust-credential-subject-v1.json",
+    expectedId: TRUST_CREDENTIAL_SUBJECT_SCHEMA_ID,
+    build: buildTrustCredentialSubjectJsonSchema,
+  },
+  {
+    name: "gradient-credential-subject-v1",
+    filename: "gradient-credential-subject-v1.json",
+    expectedId: GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID,
+    build: buildGradientCredentialSubjectJsonSchema,
   },
 ];
 
