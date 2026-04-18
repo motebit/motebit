@@ -11,6 +11,8 @@ import {
   verifySignedToken,
   signExecutionReceipt,
   verifyExecutionReceipt,
+  signSettlement,
+  verifySettlement,
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   signKeySuccession,
@@ -313,6 +315,76 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
     expect(signed.delegation_receipts).toBeUndefined();
     const valid = await verifyExecutionReceipt(signed, kp.publicKey);
     expect(valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signSettlement / verifySettlement
+// ---------------------------------------------------------------------------
+
+describe("signSettlement / verifySettlement", () => {
+  function makeSettlement() {
+    return {
+      settlement_id: "settle-001" as never,
+      allocation_id: "alloc-001" as never,
+      receipt_hash: "a".repeat(64),
+      ledger_hash: null,
+      amount_settled: 950_000,
+      platform_fee: 50_000,
+      platform_fee_rate: 0.05,
+      status: "completed" as const,
+      settled_at: 1_700_000_000_000,
+      issuer_relay_id: "relay-001",
+    };
+  }
+
+  it("round-trips correctly (sign -> verify = true)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signSettlement(makeSettlement(), kp.privateKey);
+    expect(signed.signature).toBeTruthy();
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    const valid = await verifySettlement(signed, kp.publicKey);
+    expect(valid).toBe(true);
+  });
+
+  it("detects amount tampering — relay cannot rewrite settlement amounts", async () => {
+    const kp = await generateKeypair();
+    const signed = await signSettlement(makeSettlement(), kp.privateKey);
+    const tampered = { ...signed, amount_settled: 9_999_999 };
+    const valid = await verifySettlement(tampered, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("detects fee_rate tampering — relay cannot retroactively change its declared fee", async () => {
+    const kp = await generateKeypair();
+    const signed = await signSettlement(makeSettlement(), kp.privateKey);
+    const tampered = { ...signed, platform_fee_rate: 0.5 };
+    const valid = await verifySettlement(tampered, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signSettlement(makeSettlement(), kpA.privateKey);
+    const valid = await verifySettlement(signed, kpB.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects unknown suite (no legacy-no-suite path)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signSettlement(makeSettlement(), kp.privateKey);
+    const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
+    const valid = await verifySettlement(wrongSuite, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("is deterministic (same record -> same signature)", async () => {
+    const kp = await generateKeypair();
+    const r = makeSettlement();
+    const a = await signSettlement(r, kp.privateKey);
+    const b = await signSettlement(r, kp.privateKey);
+    expect(a.signature).toBe(b.signature);
   });
 });
 

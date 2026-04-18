@@ -52,6 +52,21 @@
     "settled_at": {
       "type": "number",
       "description": "Unix timestamp in milliseconds when the settlement was committed."
+    },
+    "issuer_relay_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Motebit identity of the issuing relay — the signer of this settlement. Verifiers resolve this to a public key (via federation peer registry or a known-keys store) and check Ed25519 against the canonical body."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for settlement records: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url-encoded Ed25519 signature by `issuer_relay_id` over `canonicalJson(body)` where `body` = this record minus `signature`. Commits the relay to the exact (amount_settled, platform_fee, platform_fee_rate, status) tuple — a relay that issues inconsistent records to different observers fails self-attestation: at most one of the records verifies. See spec/delegation-v1.md §6.4 foundation law."
     }
   },
   "required": [
@@ -63,9 +78,12 @@
     "platform_fee",
     "platform_fee_rate",
     "status",
-    "settled_at"
+    "settled_at",
+    "issuer_relay_id",
+    "suite",
+    "signature"
   ],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "definitions": {
     "SettlementRecord": {
       "type": "object",
@@ -117,6 +135,21 @@
         "settled_at": {
           "type": "number",
           "description": "Unix timestamp in milliseconds when the settlement was committed."
+        },
+        "issuer_relay_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Motebit identity of the issuing relay — the signer of this settlement. Verifiers resolve this to a public key (via federation peer registry or a known-keys store) and check Ed25519 against the canonical body."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for settlement records: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature by `issuer_relay_id` over `canonicalJson(body)` where `body` = this record minus `signature`. Commits the relay to the exact (amount_settled, platform_fee, platform_fee_rate, status) tuple — a relay that issues inconsistent records to different observers fails self-attestation: at most one of the records verifies. See spec/delegation-v1.md §6.4 foundation law."
         }
       },
       "required": [
@@ -128,9 +161,12 @@
         "platform_fee",
         "platform_fee_rate",
         "status",
-        "settled_at"
+        "settled_at",
+        "issuer_relay_id",
+        "suite",
+        "signature"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     }
   }
 }

@@ -16,6 +16,9 @@ const SAMPLE: Record<string, unknown> = {
   platform_fee_rate: 0.05,
   status: "completed",
   settled_at: 1_713_456_000_000,
+  issuer_relay_id: "019cd9d4-3275-7b24-8265-relay0000001",
+  suite: "motebit-jcs-ed25519-b64-v1",
+  signature: "sig-base64url-here",
 };
 
 describe("SettlementRecordSchema", () => {
@@ -57,9 +60,26 @@ describe("SettlementRecordSchema", () => {
     expect(() => SettlementRecordSchema.parse(bad)).toThrow();
   });
 
-  it("preserves unknown top-level keys (forward-compat — unsigned envelope; see audit follow-up to sign upstream)", () => {
-    const s = SettlementRecordSchema.parse({ ...SAMPLE, future_v2_field: "preserved" });
-    expect((s as Record<string, unknown>).future_v2_field).toBe("preserved");
+  it("rejects extra top-level keys (signed wire artifact — strict; canonical bytes must match)", () => {
+    expect(() => SettlementRecordSchema.parse({ ...SAMPLE, sneak: "extra" })).toThrow();
+  });
+
+  it("rejects missing signature (signed wire artifact)", () => {
+    const bad = { ...SAMPLE };
+    delete bad.signature;
+    expect(() => SettlementRecordSchema.parse(bad)).toThrow();
+  });
+
+  it("rejects missing issuer_relay_id (verifier needs to know which key to check against)", () => {
+    const bad = { ...SAMPLE };
+    delete bad.issuer_relay_id;
+    expect(() => SettlementRecordSchema.parse(bad)).toThrow();
+  });
+
+  it("rejects unknown cryptosuite (no legacy-no-suite path)", () => {
+    expect(() =>
+      SettlementRecordSchema.parse({ ...SAMPLE, suite: "motebit-future-pqc-v7" }),
+    ).toThrow();
   });
 
   it("rejects empty receipt_hash and allocation_id", () => {

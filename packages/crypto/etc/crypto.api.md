@@ -4,7 +4,8 @@
 
 ```ts
 
-import { DelegationToken } from '@motebit/protocol';
+import type { DelegationToken } from '@motebit/protocol';
+import type { SettlementRecord } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
 
 // @public (undocumented)
@@ -21,6 +22,9 @@ export function bytesToHex(bytes: Uint8Array): string;
 
 // @public
 export function canonicalJson(obj: unknown): string;
+
+// @public
+export function canonicalSha256(obj: unknown): Promise<string>;
 
 // @public
 export type ChainAnchorVerifier = (anchor: {
@@ -128,6 +132,20 @@ export interface DataIntegrityProof {
 export const DELEGATION_TOKEN_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 export { DelegationToken }
+
+// @public
+export const DEVICE_REGISTRATION_MAX_AGE_MS: number;
+
+// @public
+export const DEVICE_REGISTRATION_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export type DeviceRegistrationVerifyResult = {
+    valid: true;
+} | {
+    valid: false;
+    reason: "malformed" | "stale" | "unsupported_suite" | "bad_signature";
+};
 
 // @public
 export function didKeyToPublicKey(did: string): Uint8Array;
@@ -443,6 +461,15 @@ export interface ReceiptVerification {
     verified: boolean;
 }
 
+// @public
+export interface ReceiptVerifyDetail {
+    canonical_preview: string;
+    canonical_sha256: string;
+    reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch";
+    // (undocumented)
+    valid: boolean;
+}
+
 // @public (undocumented)
 export interface ReceiptVerifyResult extends BaseResult {
     // (undocumented)
@@ -502,6 +529,11 @@ export interface RevocationAnchorVerifyResult {
 }
 
 // @public
+export const SETTLEMENT_RECORD_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { SettlementRecord }
+
+// @public
 export function sha256(data: Uint8Array): Promise<Uint8Array>;
 
 // @public (undocumented)
@@ -517,6 +549,26 @@ export interface SignableCollaborativeReceipt {
     // (undocumented)
     proposal_id: string;
     suite: typeof COLLABORATIVE_RECEIPT_SUITE;
+}
+
+// @public
+export interface SignableDeviceRegistration {
+    // (undocumented)
+    device_id: string;
+    // (undocumented)
+    device_name?: string;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    owner_id?: string;
+    // (undocumented)
+    public_key: string;
+    // (undocumented)
+    signature: string;
+    // (undocumented)
+    suite: typeof DEVICE_REGISTRATION_SUITE;
+    // (undocumented)
+    timestamp: number;
 }
 
 // @public
@@ -565,6 +617,12 @@ export function signCollaborativeReceipt(receipt: Omit<SignableCollaborativeRece
 export function signDelegation(delegation: Omit<DelegationToken, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<DelegationToken>;
 
 // @public
+export function signDeviceRegistration<T extends Omit<SignableDeviceRegistration, "signature" | "suite">>(body: T, privateKey: Uint8Array): Promise<T & {
+    suite: typeof DEVICE_REGISTRATION_SUITE;
+    signature: string;
+}>;
+
+// @public
 export const SIGNED_TOKEN_SUITE: "motebit-jwt-ed25519-v1";
 
 // @public (undocumented)
@@ -601,6 +659,9 @@ export function signGuardianRevocation(identityPrivateKey: Uint8Array, guardianP
 
 // @public
 export function signKeySuccession(oldPrivateKey: Uint8Array, newPrivateKey: Uint8Array, newPublicKey: Uint8Array, oldPublicKey: Uint8Array, reason?: string): Promise<KeySuccessionRecord>;
+
+// @public
+export function signSettlement(settlement: Omit<SettlementRecord, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<SettlementRecord>;
 
 // @public
 export function signSovereignPaymentReceipt(input: SovereignPaymentReceiptInput, privateKey: Uint8Array, publicKey: Uint8Array): Promise<SignableReceipt>;
@@ -760,8 +821,14 @@ export function verifyDelegationChain(chain: DelegationToken[]): Promise<{
     error?: string;
 }>;
 
+// @public (undocumented)
+export function verifyDeviceRegistration(body: SignableDeviceRegistration, now?: number): Promise<DeviceRegistrationVerifyResult>;
+
 // @public
 export function verifyExecutionReceipt(receipt: SignableReceipt, publicKey: Uint8Array): Promise<boolean>;
+
+// @public (undocumented)
+export function verifyExecutionReceiptDetailed(receipt: SignableReceipt, publicKey: Uint8Array): Promise<ReceiptVerifyDetail>;
 
 // @public
 export function verifyGuardianRevocation(revocation: {
@@ -803,6 +870,9 @@ export function verifyRevocationAnchor(proof: RevocationAnchorProof, revocationP
     tx_hash: string;
     expected_memo: string;
 }) => Promise<boolean>): Promise<RevocationAnchorVerifyResult>;
+
+// @public
+export function verifySettlement(settlement: SettlementRecord, issuerPublicKey: Uint8Array): Promise<boolean>;
 
 // @public
 export function verifySignedToken(token: string, publicKey: Uint8Array): Promise<SignedTokenPayload | null>;

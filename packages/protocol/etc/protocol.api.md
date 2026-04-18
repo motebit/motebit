@@ -1763,11 +1763,12 @@ export interface SettlementRail {
     readonly name: string;
 }
 
-// @public (undocumented)
+// @public
 export interface SettlementRecord {
     // (undocumented)
     allocation_id: AllocationId;
     amount_settled: number;
+    issuer_relay_id: string;
     // (undocumented)
     ledger_hash: string | null;
     platform_fee: number;
@@ -1778,8 +1779,10 @@ export interface SettlementRecord {
     settled_at: number;
     // (undocumented)
     settlement_id: SettlementId;
+    signature: string;
     // (undocumented)
     status: "completed" | "partial" | "refunded";
+    suite: "motebit-jcs-ed25519-b64-v1";
     x402_network?: string;
     x402_tx_hash?: string;
 }

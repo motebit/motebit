@@ -1090,6 +1090,26 @@ export interface BudgetAllocation {
  */
 export const PLATFORM_FEE_RATE = 0.05;
 
+/**
+ * Per-task settlement bookkeeping artifact.
+ *
+ * Foundation Law (services/api/CLAUDE.md rule 6):
+ * - Every truth the relay asserts (credential anchor proofs,
+ *   revocation memos, settlement receipts) is independently
+ *   verifiable onchain without relay contact.
+ *
+ * The settlement is signed by the issuing relay over the canonical
+ * JSON of all fields except `signature`. Verifiers reconstruct the
+ * canonical bytes (omitting `signature`) and check Ed25519 against
+ * the issuing relay's public key. A malicious relay therefore
+ * cannot issue inconsistent records to different observers — the
+ * signature commits the relay to the exact (amount_settled,
+ * platform_fee, platform_fee_rate, status) tuple it published.
+ *
+ * Federation settlements additionally get Merkle-batched and
+ * onchain-anchored (relay-federation-v1.md §7.6); per-agent
+ * settlements rely on the signature for self-attestation.
+ */
 export interface SettlementRecord {
   settlement_id: SettlementId;
   allocation_id: AllocationId;
@@ -1107,6 +1127,24 @@ export interface SettlementRecord {
   x402_network?: string;
   status: "completed" | "partial" | "refunded";
   settled_at: number;
+  /**
+   * Issuing relay's motebit_id. The signer of this record. Must
+   * match the public key resolvable through the relay's identity.
+   */
+  issuer_relay_id: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` —
+   * JCS canonicalization, Ed25519 primitive, base64url signature
+   * encoding. Verifiers reject missing or unknown values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  /**
+   * Base64url-encoded Ed25519 signature by the issuing relay over
+   * canonical JSON of all fields except `signature`. Lets a worker
+   * (or any auditor) prove what the relay claimed without trusting
+   * the relay's word about it.
+   */
+  signature: string;
 }
 
 // === Settlement Rails ===

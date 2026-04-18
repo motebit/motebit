@@ -555,6 +555,70 @@ export async function verifyDelegationChain(
   return { valid: true };
 }
 
+// === Settlement Records ===
+
+import type { SettlementRecord } from "@motebit/protocol";
+export type { SettlementRecord };
+
+/** The one suite SettlementRecords sign under today. */
+export const SETTLEMENT_RECORD_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Sign a settlement record. The issuing relay commits to the (amount,
+ * fee, rate, status) tuple; a malicious relay therefore cannot issue
+ * inconsistent records to different observers.
+ *
+ * Callers pass the record without `signature` or `suite`; the signer
+ * owns both.
+ *
+ * Foundation Law (services/api/CLAUDE.md rule 6): every truth the
+ * relay asserts is independently verifiable. Per-agent settlements
+ * deliver this through the signature; federation settlements
+ * additionally get Merkle-batched and onchain-anchored.
+ */
+export async function signSettlement(
+  settlement: Omit<SettlementRecord, "signature" | "suite">,
+  issuerPrivateKey: Uint8Array,
+): Promise<SettlementRecord> {
+  const body = { ...settlement, suite: SETTLEMENT_RECORD_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(SETTLEMENT_RECORD_SUITE, message, issuerPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a settlement record's signature. Reconstructs canonical JSON
+ * over all fields except `signature` and verifies Ed25519 against the
+ * issuing relay's public key.
+ *
+ * The caller supplies the public key — typically resolved from the
+ * `issuer_relay_id` via the federation peer registry or a known-keys
+ * store. The signature alone proves the record was issued by the
+ * holder of `issuerPublicKey`; trust in that key is a separate
+ * concern (federation membership, key rotation chain, etc).
+ *
+ * Fail-closed on:
+ *   - missing or unknown `suite` value
+ *   - base64url decode errors
+ *   - primitive-level verification failure
+ */
+export async function verifySettlement(
+  settlement: SettlementRecord,
+  issuerPublicKey: Uint8Array,
+): Promise<boolean> {
+  if (settlement.suite !== SETTLEMENT_RECORD_SUITE) return false;
+  const { signature, ...body } = settlement;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(settlement.suite, message, sig, issuerPublicKey);
+  } catch {
+    return false;
+  }
+}
+
 // === Key Succession (Rotation) ===
 
 /** The one suite KeySuccessionRecords sign under today. */

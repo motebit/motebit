@@ -99,15 +99,31 @@ export const SettlementRecordSchema = z
     settled_at: z
       .number()
       .describe("Unix timestamp in milliseconds when the settlement was committed."),
+    issuer_relay_id: z
+      .string()
+      .min(1)
+      .describe(
+        "Motebit identity of the issuing relay — the signer of this settlement. Verifiers resolve this to a public key (via federation peer registry or a known-keys store) and check Ed25519 against the canonical body.",
+      ),
+    suite: z
+      .literal("motebit-jcs-ed25519-b64-v1")
+      .describe(
+        "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for settlement records: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed.",
+      ),
+    signature: z
+      .string()
+      .min(1)
+      .describe(
+        "Base64url-encoded Ed25519 signature by `issuer_relay_id` over `canonicalJson(body)` where `body` = this record minus `signature`. Commits the relay to the exact (amount_settled, platform_fee, platform_fee_rate, status) tuple — a relay that issues inconsistent records to different observers fails self-attestation: at most one of the records verifies. See spec/delegation-v1.md §6.4 foundation law.",
+      ),
   })
-  // Unsigned envelope today — forward-compat per "unknown fields MUST be
-  // ignored" (delegation-v1 §3.1, applied across unsigned envelopes).
-  // NOTE (audit follow-up): the upstream TypeScript type lacks a
-  // signature/suite, so a relay can retroactively rewrite settlement
-  // history undetectably. That's a protocol-level gap (not a wire-schema
-  // gap) and tracked separately — when @motebit/protocol adds signing
-  // to SettlementRecord, this schema flips back to .strict().
-  .passthrough();
+  // Signed wire artifact — strict mode is correct. The signature
+  // covers the exact bytes of the canonicalized body; unknown fields
+  // would either break the signature (if passed through) or strip
+  // silently (lossy) — both anti-forward-compat for signed artifacts.
+  // Forward compatibility for signed artifacts comes through new
+  // SuiteIds, not unknown-field tolerance.
+  .strict();
 
 // ---------------------------------------------------------------------------
 // Type parity — drift defense #22 compile-time half

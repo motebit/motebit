@@ -194,6 +194,9 @@ SettlementRecord {
   platform_fee_rate:  number      // Rate applied (e.g. 0.05 = 5%)
   status:             string      // "completed" | "partial" | "refunded"
   settled_at:         number      // Unix ms
+  issuer_relay_id:    string      // motebit_id of the issuing relay (the signer)
+  suite:              string      // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
+  signature:          string      // Ed25519 by the issuing relay over canonical JSON of all fields except signature
 }
 ```
 
@@ -205,6 +208,7 @@ The `SettlementRecord` type in `@motebit/protocol` is the binding machine-readab
 - Platform fee rate is recorded per-settlement for auditability. Relays may set their own rate.
 - Multi-hop delegation: each hop settles independently. The platform fee applies at each level.
 - Partial settlement (e.g., 3 of 5 plan steps completed) prorates the locked amount by completion ratio.
+- Every emitted `SettlementRecord` MUST be signed by its `issuer_relay_id`. The signature covers the entire record except `signature` itself, including `amount_settled`, `platform_fee`, and `platform_fee_rate` — committing the relay to the exact values it published. A relay that issues inconsistent records to different observers (e.g. one amount to the worker, another to an auditor) fails self-attestation: at most one of the records verifies.
 
 ## 7. Agent Discovery
 
