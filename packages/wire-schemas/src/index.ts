@@ -78,3 +78,20 @@ export {
   MIGRATION_PRESENTATION_SCHEMA_ID,
   buildMigrationPresentationJsonSchema,
 } from "./migration.js";
+export {
+  DisputeRequestSchema,
+  DISPUTE_REQUEST_SCHEMA_ID,
+  buildDisputeRequestJsonSchema,
+  DisputeEvidenceSchema,
+  DISPUTE_EVIDENCE_SCHEMA_ID,
+  buildDisputeEvidenceJsonSchema,
+  AdjudicatorVoteSchema,
+  ADJUDICATOR_VOTE_SCHEMA_ID,
+  buildAdjudicatorVoteJsonSchema,
+  DisputeResolutionSchema,
+  DISPUTE_RESOLUTION_SCHEMA_ID,
+  buildDisputeResolutionJsonSchema,
+  DisputeAppealSchema,
+  DISPUTE_APPEAL_SCHEMA_ID,
+  buildDisputeAppealJsonSchema,
+} from "./dispute.js";

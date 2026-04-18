@@ -34,6 +34,18 @@ import {
   buildCredentialBundleJsonSchema,
 } from "../credential-bundle.js";
 import {
+  ADJUDICATOR_VOTE_SCHEMA_ID,
+  DISPUTE_APPEAL_SCHEMA_ID,
+  DISPUTE_EVIDENCE_SCHEMA_ID,
+  DISPUTE_REQUEST_SCHEMA_ID,
+  DISPUTE_RESOLUTION_SCHEMA_ID,
+  buildAdjudicatorVoteJsonSchema,
+  buildDisputeAppealJsonSchema,
+  buildDisputeEvidenceJsonSchema,
+  buildDisputeRequestJsonSchema,
+  buildDisputeResolutionJsonSchema,
+} from "../dispute.js";
+import {
   DEPARTURE_ATTESTATION_SCHEMA_ID,
   MIGRATION_PRESENTATION_SCHEMA_ID,
   MIGRATION_REQUEST_SCHEMA_ID,
@@ -133,6 +145,36 @@ const CASES: SchemaCase[] = [
     filename: "migration-presentation-v1.json",
     expectedId: MIGRATION_PRESENTATION_SCHEMA_ID,
     build: buildMigrationPresentationJsonSchema,
+  },
+  {
+    name: "dispute-request-v1",
+    filename: "dispute-request-v1.json",
+    expectedId: DISPUTE_REQUEST_SCHEMA_ID,
+    build: buildDisputeRequestJsonSchema,
+  },
+  {
+    name: "dispute-evidence-v1",
+    filename: "dispute-evidence-v1.json",
+    expectedId: DISPUTE_EVIDENCE_SCHEMA_ID,
+    build: buildDisputeEvidenceJsonSchema,
+  },
+  {
+    name: "adjudicator-vote-v1",
+    filename: "adjudicator-vote-v1.json",
+    expectedId: ADJUDICATOR_VOTE_SCHEMA_ID,
+    build: buildAdjudicatorVoteJsonSchema,
+  },
+  {
+    name: "dispute-resolution-v1",
+    filename: "dispute-resolution-v1.json",
+    expectedId: DISPUTE_RESOLUTION_SCHEMA_ID,
+    build: buildDisputeResolutionJsonSchema,
+  },
+  {
+    name: "dispute-appeal-v1",
+    filename: "dispute-appeal-v1.json",
+    expectedId: DISPUTE_APPEAL_SCHEMA_ID,
+    build: buildDisputeAppealJsonSchema,
   },
 ];
 

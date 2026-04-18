@@ -20,6 +20,13 @@ import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
 import { buildCredentialBundleJsonSchema } from "../src/credential-bundle.js";
 import {
+  buildAdjudicatorVoteJsonSchema,
+  buildDisputeAppealJsonSchema,
+  buildDisputeEvidenceJsonSchema,
+  buildDisputeRequestJsonSchema,
+  buildDisputeResolutionJsonSchema,
+} from "../src/dispute.js";
+import {
   buildDepartureAttestationJsonSchema,
   buildMigrationPresentationJsonSchema,
   buildMigrationRequestJsonSchema,
@@ -44,6 +51,11 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "migration-token-v1.json", build: buildMigrationTokenJsonSchema },
   { filename: "departure-attestation-v1.json", build: buildDepartureAttestationJsonSchema },
   { filename: "migration-presentation-v1.json", build: buildMigrationPresentationJsonSchema },
+  { filename: "dispute-request-v1.json", build: buildDisputeRequestJsonSchema },
+  { filename: "dispute-evidence-v1.json", build: buildDisputeEvidenceJsonSchema },
+  { filename: "adjudicator-vote-v1.json", build: buildAdjudicatorVoteJsonSchema },
+  { filename: "dispute-resolution-v1.json", build: buildDisputeResolutionJsonSchema },
+  { filename: "dispute-appeal-v1.json", build: buildDisputeAppealJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

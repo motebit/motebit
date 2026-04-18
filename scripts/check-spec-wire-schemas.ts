@@ -69,14 +69,9 @@ const WAIVERS: Record<string, string> = {
     "nested inside AgentServiceListingSchema as the pricing[] element — covered structurally",
 
   // TODO: ship as standalone schemas. Each is an open item; remove when shipped.
-  AdjudicatorVote: "TODO: schema (dispute-v1) — adjudicator vote on a dispute resolution",
   BalanceWaiver: "TODO: schema (settlement-v1) — operator-signed balance reconciliation",
   CredentialAnchorBatch: "TODO: schema (credential-anchor-v1) — chain-anchored batch metadata",
   CredentialAnchorProof: "TODO: schema (credential-anchor-v1) — Merkle inclusion proof",
-  DisputeAppeal: "TODO: schema (dispute-v1) — appeal of a dispute resolution",
-  DisputeEvidence: "TODO: schema (dispute-v1) — evidence attached to a dispute",
-  DisputeRequest: "TODO: schema (dispute-v1) — open a dispute",
-  DisputeResolution: "TODO: schema (dispute-v1) — adjudicator's resolution",
   GradientCredentialSubject:
     "TODO: schema (credential-v1) — VC subject body for gradient-state credentials",
   ReputationCredentialSubject:

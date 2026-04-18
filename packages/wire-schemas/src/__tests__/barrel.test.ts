@@ -56,6 +56,14 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(typeof barrel.MigrationPresentationSchema.parse).toBe("function");
   });
 
+  it("re-exports the dispute cluster (Request/Evidence/Vote/Resolution/Appeal)", () => {
+    expect(typeof barrel.DisputeRequestSchema.parse).toBe("function");
+    expect(typeof barrel.DisputeEvidenceSchema.parse).toBe("function");
+    expect(typeof barrel.AdjudicatorVoteSchema.parse).toBe("function");
+    expect(typeof barrel.DisputeResolutionSchema.parse).toBe("function");
+    expect(typeof barrel.DisputeAppealSchema.parse).toBe("function");
+  });
+
   it("re-exports all wire-format $id URLs as stable raw-GitHub URLs", () => {
     const urls = [
       barrel.EXECUTION_RECEIPT_SCHEMA_ID,
@@ -70,6 +78,11 @@ describe("@motebit/wire-schemas barrel", () => {
       barrel.MIGRATION_TOKEN_SCHEMA_ID,
       barrel.DEPARTURE_ATTESTATION_SCHEMA_ID,
       barrel.MIGRATION_PRESENTATION_SCHEMA_ID,
+      barrel.DISPUTE_REQUEST_SCHEMA_ID,
+      barrel.DISPUTE_EVIDENCE_SCHEMA_ID,
+      barrel.ADJUDICATOR_VOTE_SCHEMA_ID,
+      barrel.DISPUTE_RESOLUTION_SCHEMA_ID,
+      barrel.DISPUTE_APPEAL_SCHEMA_ID,
     ];
     for (const url of urls) {
       expect(url).toMatch(/^https:\/\/raw\.githubusercontent\.com\/motebit\/motebit\/main\//);
@@ -97,6 +110,11 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(barrel.buildMigrationTokenJsonSchema().title).toBe("MigrationToken (v1)");
     expect(barrel.buildDepartureAttestationJsonSchema().title).toBe("DepartureAttestation (v1)");
     expect(barrel.buildMigrationPresentationJsonSchema().title).toBe("MigrationPresentation (v1)");
+    expect(barrel.buildDisputeRequestJsonSchema().title).toBe("DisputeRequest (v1)");
+    expect(barrel.buildDisputeEvidenceJsonSchema().title).toBe("DisputeEvidence (v1)");
+    expect(barrel.buildAdjudicatorVoteJsonSchema().title).toBe("AdjudicatorVote (v1)");
+    expect(barrel.buildDisputeResolutionJsonSchema().title).toBe("DisputeResolution (v1)");
+    expect(barrel.buildDisputeAppealJsonSchema().title).toBe("DisputeAppeal (v1)");
   });
 
   it("re-exports the shared assemble helper", () => {
