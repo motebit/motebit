@@ -49,4 +49,5 @@ export { handleRegister } from "./register.js";
 export { handleRotate } from "./rotate.js";
 export { handleSchema } from "./schema.js";
 export { handleVerify } from "./verify.js";
+export { handleVerifyWire, isVerifyKind } from "./verify-wire.js";
 export { handleWallet } from "./wallet.js";

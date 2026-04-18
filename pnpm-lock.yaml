@@ -248,6 +248,9 @@ importers:
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:../../packages/wallet-solana
+      '@motebit/wire-schemas':
+        specifier: workspace:*
+        version: link:../../packages/wire-schemas
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11

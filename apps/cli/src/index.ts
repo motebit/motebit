@@ -51,6 +51,8 @@ import {
   handleLogs,
   handleLsp,
   handleSchema,
+  handleVerifyWire,
+  isVerifyKind,
   handlePs,
   handleUp,
   handleCredentials,
@@ -112,8 +114,19 @@ async function main(): Promise<void> {
   const subcommand = config.positionals[0];
 
   if (subcommand === "verify") {
-    const filePath = config.positionals[1] ?? "motebit.md";
-    await handleVerify(filePath);
+    // Two-form dispatch:
+    //   motebit verify <kind> <path>      — wire-format artifacts (receipt | token | listing)
+    //   motebit verify identity <path>    — explicit identity file
+    //   motebit verify [path]             — backward-compat: 1 arg = identity file
+    const first = config.positionals[1];
+    const second = config.positionals[2];
+    if (first === "identity") {
+      await handleVerify(second ?? "motebit.md");
+    } else if (first != null && isVerifyKind(first)) {
+      await handleVerifyWire(first, second, { json: config.json });
+    } else {
+      await handleVerify(first ?? "motebit.md");
+    }
     return;
   }
 

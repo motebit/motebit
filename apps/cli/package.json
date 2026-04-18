@@ -93,6 +93,7 @@
     "@motebit/tools": "workspace:*",
     "@motebit/voice": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
+    "@motebit/wire-schemas": "workspace:*",
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0",
     "tsx": "^4.19.0",

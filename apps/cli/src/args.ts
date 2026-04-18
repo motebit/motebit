@@ -315,6 +315,11 @@ Commands:
   export [--output <dir>]   Export identity bundle (motebit.md, credentials, budget, gradient)
     --all                   Include sensitive memories (medical/financial/secret) in export
   verify <path>             Verify a motebit.md identity file signature
+  verify <kind> <path>      Verify a wire-format artifact against the
+                            published @motebit/wire-schemas contract.
+                            Kinds: receipt | token | listing | identity.
+                            Validates schema + suite + Ed25519 signature
+                            (+ time window for tokens). [--json]
   register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
   run [--identity <path>]   Start daemon mode (uses exported motebit.md)
