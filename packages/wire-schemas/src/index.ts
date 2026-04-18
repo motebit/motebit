@@ -114,3 +114,11 @@ export {
   CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
   buildCredentialAnchorProofJsonSchema,
 } from "./credential-anchor.js";
+export {
+  AgentSettlementAnchorBatchSchema,
+  AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID,
+  buildAgentSettlementAnchorBatchJsonSchema,
+  AgentSettlementAnchorProofSchema,
+  AGENT_SETTLEMENT_ANCHOR_PROOF_SCHEMA_ID,
+  buildAgentSettlementAnchorProofJsonSchema,
+} from "./agent-settlement-anchor.js";

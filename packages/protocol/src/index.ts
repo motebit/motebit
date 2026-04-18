@@ -1738,6 +1738,20 @@ export type {
   ChainAnchorSubmitter,
 } from "./credential-anchor.js";
 
+// ── Per-Agent Settlement Anchoring (protocol-level) ────────────────────────────
+// Self-verifiable Merkle inclusion proofs for the per-agent settlement
+// "ceiling" alongside the SettlementRecord signing "floor". Worker audit
+// of relay-as-counterparty — distinct audience from federation peer audit
+// (relay-federation-v1.md §7.6) and credential portability
+// (credential-anchor-v1.md). Same Merkle primitive, different proof endpoint.
+// motebit/agent-settlement-anchor@1.0.
+
+export type {
+  AgentSettlementAnchorBatch,
+  AgentSettlementChainAnchor,
+  AgentSettlementAnchorProof,
+} from "./agent-settlement-anchor.js";
+
 // ── Discovery (protocol-level) ────────────────────────────
 // Relay metadata, DNS discovery, and agent resolution.
 // motebit/discovery@1.0.

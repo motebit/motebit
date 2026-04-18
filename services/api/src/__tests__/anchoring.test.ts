@@ -314,6 +314,39 @@ let agentRelay: SyncRelay;
 let agentDb: DatabaseDriver;
 let agentRelayIdentity: RelayIdentity;
 
+/**
+ * Spin up a test relay and reuse its real on-disk relay_identity for
+ * batch signing. The proof-serve path looks up the relay's public key
+ * from the relay_identity table; using the test relay's actual key here
+ * means the round-trip (sign batch → serve proof → verify signature)
+ * tests the production wiring instead of a synthetic shortcut.
+ */
+async function setupAgentTestRelay(): Promise<void> {
+  agentRelay = await createTestRelay();
+  agentDb = agentRelay.moteDb.db;
+  const row = agentDb.prepare("SELECT * FROM relay_identity").get() as {
+    relay_motebit_id: string;
+    public_key: string;
+    private_key_hex: string;
+    did: string;
+  };
+  const pubBytes = new Uint8Array(row.public_key.length / 2);
+  for (let i = 0; i < row.public_key.length; i += 2) {
+    pubBytes[i / 2] = parseInt(row.public_key.slice(i, i + 2), 16);
+  }
+  const privBytes = new Uint8Array(row.private_key_hex.length / 2);
+  for (let i = 0; i < row.private_key_hex.length; i += 2) {
+    privBytes[i / 2] = parseInt(row.private_key_hex.slice(i, i + 2), 16);
+  }
+  agentRelayIdentity = {
+    relayMotebitId: row.relay_motebit_id,
+    publicKey: pubBytes,
+    privateKey: privBytes,
+    publicKeyHex: row.public_key,
+    did: row.did,
+  };
+}
+
 async function insertSignedAgentSettlement(opts: {
   settlementId?: string;
   motebitId?: string;
@@ -372,19 +405,7 @@ async function insertSignedAgentSettlement(opts: {
 
 describe("cutAgentSettlementBatch", () => {
   beforeEach(async () => {
-    agentRelay = await createTestRelay();
-    agentDb = agentRelay.moteDb.db;
-    // The test relay generates its own keypair on startup; rebuild
-    // RelayIdentity around it so signed settlements verify against
-    // the relay's own key.
-    const keypair = await generateKeypair();
-    agentRelayIdentity = {
-      relayMotebitId: `relay-${crypto.randomUUID()}`,
-      publicKey: keypair.publicKey,
-      privateKey: keypair.privateKey,
-      publicKeyHex: bytesToHex(keypair.publicKey),
-      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
-    };
+    await setupAgentTestRelay();
   });
   it("returns null when no signed settlements exist", async () => {
     const result = await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
@@ -475,16 +496,7 @@ describe("cutAgentSettlementBatch", () => {
 
 describe("getAgentSettlementProof", () => {
   beforeEach(async () => {
-    agentRelay = await createTestRelay();
-    agentDb = agentRelay.moteDb.db;
-    const keypair = await generateKeypair();
-    agentRelayIdentity = {
-      relayMotebitId: `relay-${crypto.randomUUID()}`,
-      publicKey: keypair.publicKey,
-      privateKey: keypair.privateKey,
-      publicKeyHex: bytesToHex(keypair.publicKey),
-      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
-    };
+    await setupAgentTestRelay();
   });
 
   it("returns null for an unbatched settlement", async () => {
@@ -505,10 +517,15 @@ describe("getAgentSettlementProof", () => {
     expect(proof).not.toBeNull();
     expect(proof!.batch_id).toBe(batch!.batch_id);
     expect(proof!.merkle_root).toBe(batch!.merkle_root);
-    expect(proof!.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(proof!.proof.length).toBeGreaterThan(0);
+    expect(proof!.settlement_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(proof!.siblings.length).toBeGreaterThan(0);
+    expect(proof!.layer_sizes.length).toBeGreaterThan(0);
     expect(proof!.leaf_index).toBe(2);
-    expect(proof!.anchor.relay_id).toBe(agentRelayIdentity.relayMotebitId);
+    expect(proof!.relay_id).toBe(agentRelayIdentity.relayMotebitId);
+    expect(proof!.relay_public_key).toBe(agentRelayIdentity.publicKeyHex);
+    expect(proof!.suite).toBe("motebit-jcs-ed25519-hex-v1");
+    expect(proof!.batch_signature).toMatch(/^[0-9a-f]+$/);
+    expect(proof!.anchor).toBeNull(); // not yet onchain
   });
 
   it("returns null for a non-existent settlement", async () => {
@@ -519,16 +536,7 @@ describe("getAgentSettlementProof", () => {
 
 describe("isAgentSettlementPendingBatch", () => {
   beforeEach(async () => {
-    agentRelay = await createTestRelay();
-    agentDb = agentRelay.moteDb.db;
-    const keypair = await generateKeypair();
-    agentRelayIdentity = {
-      relayMotebitId: `relay-${crypto.randomUUID()}`,
-      publicKey: keypair.publicKey,
-      privateKey: keypair.privateKey,
-      publicKeyHex: bytesToHex(keypair.publicKey),
-      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
-    };
+    await setupAgentTestRelay();
   });
 
   it("returns false for a non-existent settlement", () => {
@@ -573,16 +581,7 @@ describe("isAgentSettlementPendingBatch", () => {
 
 describe("getAgentAnchorBatch", () => {
   beforeEach(async () => {
-    agentRelay = await createTestRelay();
-    agentDb = agentRelay.moteDb.db;
-    const keypair = await generateKeypair();
-    agentRelayIdentity = {
-      relayMotebitId: `relay-${crypto.randomUUID()}`,
-      publicKey: keypair.publicKey,
-      privateKey: keypair.privateKey,
-      publicKeyHex: bytesToHex(keypair.publicKey),
-      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
-    };
+    await setupAgentTestRelay();
   });
 
   it("returns null for an unknown batch_id", () => {
@@ -599,8 +598,9 @@ describe("getAgentAnchorBatch", () => {
     expect(batch!.batch_id).toBe(cut!.batch_id);
     expect(batch!.merkle_root).toBe(cut!.merkle_root);
     expect(batch!.relay_id).toBe(agentRelayIdentity.relayMotebitId);
-    expect(batch!.tx_hash).toBeNull();
-    expect(batch!.anchored_at).toBeNull();
+    expect(batch!.suite).toBe("motebit-jcs-ed25519-hex-v1");
+    expect(batch!.signature).toMatch(/^[0-9a-f]+$/);
+    expect(batch!.anchor).toBeNull(); // not yet onchain
   });
 });
 
@@ -610,16 +610,7 @@ describe("getAgentAnchorBatch", () => {
 
 describe("GET /api/v1/settlements/:settlementId/anchor-proof", () => {
   beforeEach(async () => {
-    agentRelay = await createTestRelay();
-    agentDb = agentRelay.moteDb.db;
-    const keypair = await generateKeypair();
-    agentRelayIdentity = {
-      relayMotebitId: `relay-${crypto.randomUUID()}`,
-      publicKey: keypair.publicKey,
-      privateKey: keypair.privateKey,
-      publicKeyHex: bytesToHex(keypair.publicKey),
-      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
-    };
+    await setupAgentTestRelay();
   });
 
   it("returns 404 for an unknown settlement", async () => {
@@ -644,31 +635,33 @@ describe("GET /api/v1/settlements/:settlementId/anchor-proof", () => {
     expect(res.status).toBe(200);
     const proof = (await res.json()) as {
       settlement_id: string;
-      leaf_hash: string;
-      proof: string[];
+      settlement_hash: string;
+      siblings: string[];
+      layer_sizes: number[];
       leaf_index: number;
       merkle_root: string;
       batch_id: string;
+      relay_id: string;
+      relay_public_key: string;
+      suite: string;
+      batch_signature: string;
+      anchor: unknown;
     };
+    // Spec'd shape — spec/agent-settlement-anchor-v1.md §5.1
     expect(proof.settlement_id).toBe(id);
-    expect(proof.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(proof.settlement_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(proof.merkle_root).toMatch(/^[0-9a-f]{64}$/);
     expect(typeof proof.batch_id).toBe("string");
+    expect(proof.suite).toBe("motebit-jcs-ed25519-hex-v1");
+    expect(proof.relay_public_key).toBe(agentRelayIdentity.publicKeyHex);
+    expect(proof.batch_signature).toMatch(/^[0-9a-f]+$/);
+    expect(proof.anchor).toBeNull();
   });
 });
 
 describe("GET /api/v1/settlement-anchors/:batchId", () => {
   beforeEach(async () => {
-    agentRelay = await createTestRelay();
-    agentDb = agentRelay.moteDb.db;
-    const keypair = await generateKeypair();
-    agentRelayIdentity = {
-      relayMotebitId: `relay-${crypto.randomUUID()}`,
-      publicKey: keypair.publicKey,
-      privateKey: keypair.privateKey,
-      publicKeyHex: bytesToHex(keypair.publicKey),
-      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
-    };
+    await setupAgentTestRelay();
   });
 
   it("returns 404 for an unknown batch", async () => {
@@ -686,9 +679,16 @@ describe("GET /api/v1/settlement-anchors/:batchId", () => {
       merkle_root: string;
       leaf_count: number;
       relay_id: string;
+      suite: string;
+      signature: string;
+      anchor: unknown;
     };
+    // Spec'd shape — spec/agent-settlement-anchor-v1.md §4.1
     expect(batch.batch_id).toBe(cut!.batch_id);
     expect(batch.leaf_count).toBe(1);
     expect(batch.relay_id).toBe(agentRelayIdentity.relayMotebitId);
+    expect(batch.suite).toBe("motebit-jcs-ed25519-hex-v1");
+    expect(batch.signature).toMatch(/^[0-9a-f]+$/);
+    expect(batch.anchor).toBeNull(); // not yet onchain
   });
 });

@@ -22,6 +22,10 @@ import {
   buildCredentialAnchorBatchJsonSchema,
   buildCredentialAnchorProofJsonSchema,
 } from "../src/credential-anchor.js";
+import {
+  buildAgentSettlementAnchorBatchJsonSchema,
+  buildAgentSettlementAnchorProofJsonSchema,
+} from "../src/agent-settlement-anchor.js";
 import { buildCredentialBundleJsonSchema } from "../src/credential-bundle.js";
 import {
   buildGradientCredentialSubjectJsonSchema,
@@ -79,6 +83,14 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "credential-anchor-batch-v1.json", build: buildCredentialAnchorBatchJsonSchema },
   { filename: "credential-anchor-proof-v1.json", build: buildCredentialAnchorProofJsonSchema },
+  {
+    filename: "agent-settlement-anchor-batch-v1.json",
+    build: buildAgentSettlementAnchorBatchJsonSchema,
+  },
+  {
+    filename: "agent-settlement-anchor-proof-v1.json",
+    build: buildAgentSettlementAnchorProofJsonSchema,
+  },
 ];
 
 for (const { filename, build } of SCHEMAS) {

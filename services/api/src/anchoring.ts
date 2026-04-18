@@ -16,6 +16,11 @@
 
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { ChainAnchorSubmitter } from "@motebit/sdk";
+import type {
+  AgentSettlementAnchorBatch,
+  AgentSettlementAnchorProof,
+  AgentSettlementChainAnchor,
+} from "@motebit/protocol";
 import {
   buildMerkleTree,
   getMerkleProof,
@@ -27,6 +32,11 @@ import {
 } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+
+/** Cryptosuite for the per-agent settlement anchor batch + proof artifacts.
+ *  Matches spec/agent-settlement-anchor-v1.md §4.1 / §5.1 — JCS canonicalization,
+ *  Ed25519 primitive, hex signature encoding, hex public-key encoding. */
+const AGENT_SETTLEMENT_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 
 const logger = createLogger({ service: "relay", module: "anchoring" });
 
@@ -785,11 +795,15 @@ export function isAgentSettlementPendingBatch(db: DatabaseDriver, settlementId: 
 }
 
 /**
- * Fetch a per-agent anchor batch by id. Returns the batch metadata for
- * external auditors who want to verify the batch independently — the
- * Merkle root + signature are what get committed onchain.
+ * Fetch a per-agent anchor batch by id. Returns the spec'd
+ * `AgentSettlementAnchorBatch` (spec/agent-settlement-anchor-v1.md §4.1)
+ * for external auditors who want to verify the batch independently —
+ * the Merkle root + signature are what get committed onchain.
  */
-export function getAgentAnchorBatch(db: DatabaseDriver, batchId: string): AnchorRecord | null {
+export function getAgentAnchorBatch(
+  db: DatabaseDriver,
+  batchId: string,
+): AgentSettlementAnchorBatch | null {
   const row = db
     .prepare("SELECT * FROM relay_agent_anchor_batches WHERE batch_id = ?")
     .get(batchId) as
@@ -810,14 +824,46 @@ export function getAgentAnchorBatch(db: DatabaseDriver, batchId: string): Anchor
   if (!row) return null;
   return {
     batch_id: row.batch_id,
+    relay_id: row.relay_id,
     merkle_root: row.merkle_root,
     leaf_count: row.leaf_count,
     first_settled_at: row.first_settled_at,
     last_settled_at: row.last_settled_at,
-    relay_id: row.relay_id,
+    suite: AGENT_SETTLEMENT_ANCHOR_SUITE,
     signature: row.signature,
-    tx_hash: row.tx_hash,
+    anchor: chainAnchorFromRow(row),
+  };
+}
+
+/** Resolve relay public key (hex) from the relay_identity table. Mirrors
+ *  the helper used by credential-anchoring.ts so the per-agent proof endpoint
+ *  is self-contained for the verifier. */
+function getRelayPublicKeyHex(db: DatabaseDriver, relayId: string): string {
+  const row = db
+    .prepare("SELECT public_key FROM relay_identity WHERE relay_motebit_id = ?")
+    .get(relayId) as { public_key: string } | undefined;
+  if (!row) {
+    throw new Error(`Relay identity not found for ${relayId}`);
+  }
+  return row.public_key;
+}
+
+/** Build a CAIP-2-derived `AgentSettlementChainAnchor` from the batch row, or
+ *  null if the batch hasn't been submitted onchain yet. Chain is the prefix of
+ *  the CAIP-2 network (e.g. `eip155:8453` → chain `eip155`) per CAIP-2 §1. */
+function chainAnchorFromRow(row: {
+  tx_hash: string | null;
+  network: string | null;
+  anchored_at: number | null;
+}): AgentSettlementChainAnchor | null {
+  if (row.tx_hash == null || row.network == null || row.anchored_at == null) {
+    return null;
+  }
+  const chain = row.network.split(":")[0] ?? row.network;
+  return {
+    chain,
     network: row.network,
+    tx_hash: row.tx_hash,
     anchored_at: row.anchored_at,
   };
 }
@@ -933,15 +979,7 @@ export function startAgentSettlementAnchorLoop(
 export async function getAgentSettlementProof(
   db: DatabaseDriver,
   settlementId: string,
-): Promise<{
-  settlement_id: string;
-  leaf_hash: string;
-  proof: string[];
-  leaf_index: number;
-  merkle_root: string;
-  batch_id: string;
-  anchor: AnchorRecord;
-} | null> {
+): Promise<AgentSettlementAnchorProof | null> {
   const settlement = db
     .prepare(
       `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
@@ -1005,22 +1043,19 @@ export async function getAgentSettlementProof(
 
   return {
     settlement_id: settlementId,
-    leaf_hash: proof.leaf,
-    proof: proof.siblings,
-    leaf_index: proof.index,
-    merkle_root: tree.root,
+    settlement_hash: proof.leaf,
     batch_id: batchId,
-    anchor: {
-      batch_id: anchor.batch_id,
-      merkle_root: anchor.merkle_root,
-      leaf_count: anchor.leaf_count,
-      first_settled_at: anchor.first_settled_at,
-      last_settled_at: anchor.last_settled_at,
-      relay_id: anchor.relay_id,
-      signature: anchor.signature,
-      tx_hash: anchor.tx_hash,
-      network: anchor.network,
-      anchored_at: anchor.anchored_at,
-    },
+    merkle_root: tree.root,
+    leaf_count: anchor.leaf_count,
+    first_settled_at: anchor.first_settled_at,
+    last_settled_at: anchor.last_settled_at,
+    leaf_index: proof.index,
+    siblings: proof.siblings,
+    layer_sizes: proof.layerSizes,
+    relay_id: anchor.relay_id,
+    relay_public_key: getRelayPublicKeyHex(db, anchor.relay_id),
+    suite: AGENT_SETTLEMENT_ANCHOR_SUITE,
+    batch_signature: anchor.signature,
+    anchor: chainAnchorFromRow(anchor),
   };
 }

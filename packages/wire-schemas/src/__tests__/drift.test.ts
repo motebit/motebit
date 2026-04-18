@@ -36,6 +36,12 @@ import {
   buildCredentialAnchorProofJsonSchema,
 } from "../credential-anchor.js";
 import {
+  AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID,
+  AGENT_SETTLEMENT_ANCHOR_PROOF_SCHEMA_ID,
+  buildAgentSettlementAnchorBatchJsonSchema,
+  buildAgentSettlementAnchorProofJsonSchema,
+} from "../agent-settlement-anchor.js";
+import {
   CREDENTIAL_BUNDLE_SCHEMA_ID,
   buildCredentialBundleJsonSchema,
 } from "../credential-bundle.js";
@@ -219,6 +225,18 @@ const CASES: SchemaCase[] = [
     filename: "credential-anchor-proof-v1.json",
     expectedId: CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
     build: buildCredentialAnchorProofJsonSchema,
+  },
+  {
+    name: "agent-settlement-anchor-batch-v1",
+    filename: "agent-settlement-anchor-batch-v1.json",
+    expectedId: AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID,
+    build: buildAgentSettlementAnchorBatchJsonSchema,
+  },
+  {
+    name: "agent-settlement-anchor-proof-v1",
+    filename: "agent-settlement-anchor-proof-v1.json",
+    expectedId: AGENT_SETTLEMENT_ANCHOR_PROOF_SCHEMA_ID,
+    build: buildAgentSettlementAnchorProofJsonSchema,
   },
 ];
 
