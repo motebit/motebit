@@ -36,6 +36,7 @@ import {
   hexPublicKeyToDidKey,
   issueReputationCredential,
   sign,
+  signSettlement,
   canonicalJson,
   bytesToHex,
   hexToBytes,
@@ -629,26 +630,48 @@ export async function handleReceiptIngestion(
         subSettlement.amount_settled = Math.round(subSettlement.amount_settled);
         subSettlement.platform_fee = Math.round(subSettlement.platform_fee);
 
+        // Self-attesting sub-settlement. Sign BEFORE the synchronous
+        // BEGIN/COMMIT block — see the canonical settlement site for the
+        // concurrency rationale (await inside transaction interleaves).
+        const signedSubSettlement = await signSettlement(
+          {
+            settlement_id: subSettlement.settlement_id,
+            allocation_id: subSettlement.allocation_id,
+            receipt_hash: subSettlement.receipt_hash,
+            ledger_hash: subSettlement.ledger_hash,
+            amount_settled: subSettlement.amount_settled,
+            platform_fee: subSettlement.platform_fee,
+            platform_fee_rate: subSettlement.platform_fee_rate,
+            status: subSettlement.status,
+            settled_at: subSettlement.settled_at,
+            issuer_relay_id: relayIdentity.relayMotebitId,
+          },
+          relayIdentity.privateKey,
+        );
+
         try {
           moteDb.db.exec("BEGIN");
           moteDb.db
             .prepare(
               `INSERT OR IGNORE INTO relay_settlements
-             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, issuer_relay_id, suite, signature)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
-              subSettlement.settlement_id,
-              subSettlement.allocation_id,
+              signedSubSettlement.settlement_id,
+              signedSubSettlement.allocation_id,
               subRelayTaskId,
               sub.motebit_id,
-              subSettlement.receipt_hash,
-              subSettlement.ledger_hash,
-              subSettlement.amount_settled,
-              subSettlement.platform_fee,
-              subSettlement.platform_fee_rate,
-              subSettlement.status,
-              subSettlement.settled_at,
+              signedSubSettlement.receipt_hash,
+              signedSubSettlement.ledger_hash,
+              signedSubSettlement.amount_settled,
+              signedSubSettlement.platform_fee,
+              signedSubSettlement.platform_fee_rate,
+              signedSubSettlement.status,
+              signedSubSettlement.settled_at,
+              signedSubSettlement.issuer_relay_id,
+              signedSubSettlement.suite,
+              signedSubSettlement.signature,
             );
 
           moteDb.db
@@ -734,13 +757,38 @@ export async function handleReceiptIngestion(
       // Inserted inside the settlement try-block so it shares the error boundary (#10).
       if (entry.settlement_mode === "p2p") {
         const p2pSettlementId = crypto.randomUUID();
+        const p2pSettledAt = Date.now();
+
+        // P2P audit settlement still gets self-attested. Even though
+        // money moves onchain (relay isn't custodian), the relay is
+        // committing to "I observed this task settle peer-to-peer at
+        // amount 0 / fee 0 with status completed." A worker (or auditor)
+        // re-presenting this record needs to verify the relay actually
+        // claimed it.
+        const signedP2pAudit = await signSettlement(
+          {
+            settlement_id: p2pSettlementId as never,
+            allocation_id: `p2p-${taskId}` as never,
+            receipt_hash: receipt.result_hash ?? "",
+            ledger_hash: null,
+            amount_settled: 0,
+            platform_fee: 0,
+            platform_fee_rate: 0,
+            status: "completed",
+            settled_at: p2pSettledAt,
+            issuer_relay_id: relayIdentity.relayMotebitId,
+          },
+          relayIdentity.privateKey,
+        );
+
         moteDb.db
           .prepare(
             `INSERT OR IGNORE INTO relay_settlements
              (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
               amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-              settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
+              issuer_relay_id, suite, signature)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             p2pSettlementId,
@@ -752,11 +800,14 @@ export async function handleReceiptIngestion(
             0,
             0,
             "completed",
-            Date.now(),
+            p2pSettledAt,
             "p2p",
             entry.p2p_payment_proof?.tx_hash ?? null,
             "pending",
             entry.submitted_by ?? null,
+            signedP2pAudit.issuer_relay_id,
+            signedP2pAudit.suite,
+            signedP2pAudit.signature,
           );
       }
 
@@ -850,31 +901,67 @@ export async function handleReceiptIngestion(
         };
       }
 
+      // Self-attesting settlement (audit follow-up #1, delegation-v1
+      // §6.4): the relay signs the canonical body so a worker (or any
+      // auditor) can prove what was claimed without trusting the
+      // relay's word about it. SettlementRecord wire format MUST carry
+      // signature/suite/issuer_relay_id; the columns are persisted so
+      // the audit-emission path can reconstruct + verify.
+      //
+      // CRITICAL: signSettlement is async (Ed25519 over canonical bytes).
+      // Compute it OUTSIDE the synchronous BEGIN/COMMIT block — placing
+      // an await inside the transaction lets concurrent receipts
+      // interleave their transactions and corrupts INSERT-OR-IGNORE
+      // semantics (caught by the money-loop-concurrency test on first
+      // attempt; signed-but-uninserted settlements would silently drop).
+      const signedSettlement = !isP2pTask
+        ? await signSettlement(
+            {
+              settlement_id: settlement.settlement_id,
+              allocation_id: settlement.allocation_id,
+              receipt_hash: settlement.receipt_hash,
+              ledger_hash: settlement.ledger_hash,
+              amount_settled: settlement.amount_settled,
+              platform_fee: settlement.platform_fee,
+              platform_fee_rate: settlement.platform_fee_rate,
+              status: settlement.status,
+              settled_at: settlement.settled_at,
+              ...(entry.x402_tx_hash != null ? { x402_tx_hash: entry.x402_tx_hash } : {}),
+              ...(entry.x402_network != null ? { x402_network: entry.x402_network } : {}),
+              issuer_relay_id: relayIdentity.relayMotebitId,
+            },
+            relayIdentity.privateKey,
+          )
+        : null;
+
       moteDb.db.exec("BEGIN");
       try {
         // Relay settlement: INSERT record + credit/refund virtual accounts.
         // P2P tasks skip this — their audit record was inserted above.
-        if (!isP2pTask) {
+        if (!isP2pTask && signedSettlement != null) {
           moteDb.db
             .prepare(
               `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, x402_tx_hash, x402_network)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, x402_tx_hash, x402_network, issuer_relay_id, suite, signature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
-              settlement.settlement_id,
-              settlement.allocation_id,
+              signedSettlement.settlement_id,
+              signedSettlement.allocation_id,
               taskId,
               motebitId,
-              settlement.receipt_hash,
-              settlement.ledger_hash,
-              settlement.amount_settled,
-              settlement.platform_fee,
-              settlement.platform_fee_rate,
-              settlement.status,
-              settlement.settled_at,
+              signedSettlement.receipt_hash,
+              signedSettlement.ledger_hash,
+              signedSettlement.amount_settled,
+              signedSettlement.platform_fee,
+              signedSettlement.platform_fee_rate,
+              signedSettlement.status,
+              signedSettlement.settled_at,
               entry.x402_tx_hash ?? null,
               entry.x402_network ?? null,
+              signedSettlement.issuer_relay_id,
+              signedSettlement.suite,
+              signedSettlement.signature,
             );
 
           if (persistentAlloc) {

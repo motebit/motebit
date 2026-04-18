@@ -610,4 +610,20 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 13,
+    name: "settlements_signature_columns",
+    up: (db) => {
+      // Self-attesting settlements (audit follow-up #1).
+      // SettlementRecord wire format now MUST be signed by the issuing relay
+      // (delegation-v1.md §6.4 foundation law). Adds the three required
+      // columns to relay_settlements; nullable for backward-compat with rows
+      // written before this migration. Going forward, every INSERT into
+      // relay_settlements MUST populate signature/suite/issuer_relay_id —
+      // the audit-emission path filters out NULL-signature legacy rows.
+      db.exec("ALTER TABLE relay_settlements ADD COLUMN issuer_relay_id TEXT;");
+      db.exec("ALTER TABLE relay_settlements ADD COLUMN suite TEXT;");
+      db.exec("ALTER TABLE relay_settlements ADD COLUMN signature TEXT;");
+    },
+  },
 ];
