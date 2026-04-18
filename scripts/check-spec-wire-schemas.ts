@@ -87,7 +87,6 @@ const WAIVERS: Record<string, string> = {
   ReputationCredentialSubject:
     "TODO: schema (credential-v1) — VC subject body for reputation credentials",
   RouteScore: "TODO: schema (market-v1) — discovery composite score envelope",
-  SettlementRecord: "TODO: schema (settlement-v1) — per-task settlement bookkeeping",
   TrustCredentialSubject: "TODO: schema (credential-v1) — VC subject body for trust credentials",
 };
 

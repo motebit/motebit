@@ -49,3 +49,8 @@ export {
   buildAgentResolutionResultJsonSchema,
 } from "./agent-resolution-result.js";
 export { AgentTaskSchema, AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "./agent-task.js";
+export {
+  SettlementRecordSchema,
+  SETTLEMENT_RECORD_SCHEMA_ID,
+  buildSettlementRecordJsonSchema,
+} from "./settlement-record.js";

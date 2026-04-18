@@ -29,6 +29,10 @@ import {
   buildAgentServiceListingJsonSchema,
 } from "../agent-service-listing.js";
 import { AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "../agent-task.js";
+import {
+  SETTLEMENT_RECORD_SCHEMA_ID,
+  buildSettlementRecordJsonSchema,
+} from "../settlement-record.js";
 import { DELEGATION_TOKEN_SCHEMA_ID, buildDelegationTokenJsonSchema } from "../delegation-token.js";
 import {
   EXECUTION_RECEIPT_SCHEMA_ID,
@@ -72,6 +76,12 @@ const CASES: SchemaCase[] = [
     filename: "agent-task-v1.json",
     expectedId: AGENT_TASK_SCHEMA_ID,
     build: buildAgentTaskJsonSchema,
+  },
+  {
+    name: "settlement-record-v1",
+    filename: "settlement-record-v1.json",
+    expectedId: SETTLEMENT_RECORD_SCHEMA_ID,
+    build: buildSettlementRecordJsonSchema,
   },
 ];
 
