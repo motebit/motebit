@@ -570,7 +570,7 @@ export interface StreamingProvider extends IntelligenceProvider {
   readonly temperature?: number;
   readonly maxTokens?: number;
   setModel(model: string): void;
-  setTemperature?(temperature: number): void;
+  setTemperature?(temperature: number | undefined): void;
   setMaxTokens?(maxTokens: number): void;
   generateStream(
     contextPack: ContextPack,
@@ -603,7 +603,9 @@ export class AnthropicProvider implements StreamingProvider {
     this.config.model = model;
   }
 
-  setTemperature(temperature: number): void {
+  setTemperature(temperature: number | undefined): void {
+    // Undefined clears the field → request body omits it → model uses its
+    // default (required for Claude Opus 4.7+, which rejects the parameter).
     this.config.temperature = temperature;
   }
 

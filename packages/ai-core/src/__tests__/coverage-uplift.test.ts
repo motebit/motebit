@@ -220,7 +220,14 @@ describe("withTaskConfig — tier-to-concrete resolution + fallback restore", ()
     expect(current).toBe("claude-sonnet-4-5");
   });
 
-  it("restores to 0.7/4096 when originals were undefined", async () => {
+  it("restores temperature to undefined when the saved value was undefined", async () => {
+    // Regression for the motebit.com HTTP 400 on 2026-04-18: the restore
+    // path used to set temperature to 0.7 as a fallback when the original
+    // was undefined. Because Claude Opus 4.7+ rejects any temperature
+    // value, that poisoned the provider for every subsequent call after
+    // one reflection/planning task ran. The fix: pass undefined through
+    // verbatim so the provider's request body omits the field, letting
+    // the model use its own default.
     let model = "m";
     let temp: number | undefined; // undefined
     let max: number | undefined; // undefined
@@ -237,7 +244,7 @@ describe("withTaskConfig — tier-to-concrete resolution + fallback restore", ()
       setModel: (m: string) => {
         model = m;
       },
-      setTemperature: (t: number) => {
+      setTemperature: (t: number | undefined) => {
         temp = t;
       },
       setMaxTokens: (mt: number) => {
@@ -252,7 +259,7 @@ describe("withTaskConfig — tier-to-concrete resolution + fallback restore", ()
       { model: "other", temperature: 0.1, maxTokens: 128 },
       async () => undefined,
     );
-    expect(temp).toBe(0.7);
+    expect(temp).toBeUndefined();
     expect(max).toBe(4096);
   });
 });

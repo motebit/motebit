@@ -169,7 +169,11 @@ export class OpenAIProvider implements IntelligenceProvider {
     this.config.model = model;
   }
 
-  setTemperature(temperature: number): void {
+  setTemperature(temperature: number | undefined): void {
+    // Undefined clears the field → request body omits it → backend uses its
+    // default. Symmetric with AnthropicProvider.setTemperature; both call
+    // sites (withTaskConfig apply + restore) rely on undefined being a
+    // valid clearing value to avoid reintroducing a deprecated parameter.
     this.config.temperature = temperature;
   }
 

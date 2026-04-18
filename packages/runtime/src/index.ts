@@ -165,8 +165,17 @@ export type { TaskRouterConfig, TaskType, ResolvedTaskConfig } from "@motebit/ai
 export const PLANNING_TASK_ROUTER: TaskRouterConfig = {
   default: { model: "default" },
   overrides: {
-    planning: { model: "strongest", temperature: 0.3 },
-    plan_reflection: { model: "strongest", temperature: 0.5 },
+    // Historical note: planning + plan_reflection carried hardcoded
+    // temperatures (0.3 and 0.5). Claude Opus 4.7+ deprecates the
+    // `temperature` parameter and returns HTTP 400 when it's present,
+    // so those values poisoned the provider on motebit.com the moment
+    // a reflection task ran. Removed 2026-04-18 in favor of letting the
+    // model use its own default — the same principle 89f3b978
+    // (ai-core) established for AnthropicProvider.generate. If a future
+    // task genuinely needs temperature tuning, set it here and verify
+    // compatibility with every model tier that task resolves to.
+    planning: { model: "strongest" },
+    plan_reflection: { model: "strongest" },
   },
 };
 export type {

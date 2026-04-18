@@ -88,18 +88,22 @@ describe("TaskRouter.resolve()", () => {
     });
   });
 
-  it("falls back to built-in defaults when default config omits temperature and maxTokens", () => {
+  it("omits temperature when unspecified so providers fall back to model defaults", () => {
     const router = new TaskRouter({
       default: { model: "claude-sonnet-4-5-20250929" },
     });
 
     const config = router.resolve("conversation");
 
+    // Claude Opus 4.7+ rejects any temperature value — undefined is the
+    // signal for "let the model use its own default." `?? 0.7` fallback
+    // here was the upstream cause of the motebit.com HTTP 400 on the
+    // third turn. maxTokens still falls back (it's not deprecated).
     expect(config).toEqual({
       model: "claude-sonnet-4-5-20250929",
-      temperature: 0.7, // built-in default
-      maxTokens: 4096, // built-in default
+      maxTokens: 4096,
     });
+    expect(config.temperature).toBeUndefined();
   });
 
   it("resolves different task types independently", () => {

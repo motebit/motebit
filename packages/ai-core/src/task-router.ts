@@ -36,10 +36,24 @@ export interface TaskProfile {
 
 // === Resolved Config ===
 
-/** The fully-resolved model configuration for a task — no optional fields. */
+/**
+ * The resolved model configuration for a task.
+ *
+ * `temperature` is optional by design: Claude Opus 4.7+ deprecates the
+ * parameter and returns HTTP 400 when it's present. `undefined` here means
+ * "let the model use its own default" — the provider omits the field from
+ * the request body. Tasks that want to tune sampling set a number
+ * explicitly; everything else flows through as undefined end-to-end.
+ *
+ * Propagation invariant: if this field is undefined at resolve time,
+ * `withTaskConfig` MUST NOT call `provider.setTemperature` (setting to
+ * any number re-introduces the 400). The restore path MUST preserve the
+ * original saved value verbatim, including undefined — the pre-2026-04-18
+ * fallback-to-0.7 behavior was what broke the third-turn chat on motebit.com.
+ */
 export interface ResolvedTaskConfig {
   model: string;
-  temperature: number;
+  temperature?: number;
   maxTokens: number;
 }
 
@@ -72,9 +86,13 @@ export class TaskRouter {
    */
   resolve(taskType: TaskType): ResolvedTaskConfig {
     const override = this.config.overrides?.[taskType];
+    // temperature propagates undefined deliberately — see ResolvedTaskConfig docstring.
+    // The old `?? 0.7` fallback here was the upstream cause of the
+    // "temperature is deprecated for this model" 400 on motebit.com.
+    const temperature = override?.temperature ?? this.config.default.temperature;
     return {
       model: override?.model ?? this.config.default.model,
-      temperature: override?.temperature ?? this.config.default.temperature ?? 0.7,
+      ...(temperature !== undefined && { temperature }),
       maxTokens: override?.maxTokens ?? this.config.default.maxTokens ?? 4096,
     };
   }
@@ -159,7 +177,7 @@ interface ConfigurableProvider extends IntelligenceProvider {
   readonly temperature?: number;
   readonly maxTokens?: number;
   setModel(model: string): void;
-  setTemperature?(temperature: number): void;
+  setTemperature?(temperature: number | undefined): void;
   setMaxTokens?(maxTokens: number): void;
 }
 
@@ -199,9 +217,11 @@ export async function withTaskConfig<T>(
       ? resolveModelTier(taskConfig.model, savedModel)
       : taskConfig.model;
 
-    // Apply task config
+    // Apply task config. Only touch temperature when the task explicitly
+    // set one — otherwise the provider keeps its saved value (which may be
+    // undefined by design; see ResolvedTaskConfig docstring).
     provider.setModel(resolvedModel);
-    if (typeof provider.setTemperature === "function") {
+    if (typeof provider.setTemperature === "function" && taskConfig.temperature !== undefined) {
       provider.setTemperature(taskConfig.temperature);
     }
     if (typeof provider.setMaxTokens === "function") {
@@ -210,12 +230,16 @@ export async function withTaskConfig<T>(
 
     return await fn(provider);
   } finally {
-    // Restore originals
+    // Restore originals. Pass undefined through verbatim — setTemperature
+    // now accepts `number | undefined` specifically so this restore path
+    // can clear a borrowed temperature back to "model default". The old
+    // `savedTemperature ?? 0.7` fallback silently re-introduced a
+    // deprecated parameter that Claude Opus 4.7+ rejects with HTTP 400,
+    // and because it ran in finally it poisoned the provider for every
+    // subsequent call — not just the task that borrowed it.
     provider.setModel(savedModel);
     if (typeof provider.setTemperature === "function") {
-      // Restore to saved value; if it was undefined, the provider's generate()
-      // will fall back to its built-in default (0.7)
-      provider.setTemperature(savedTemperature ?? 0.7);
+      provider.setTemperature(savedTemperature);
     }
     if (typeof provider.setMaxTokens === "function") {
       provider.setMaxTokens(savedMaxTokens ?? 4096);
