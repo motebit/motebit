@@ -30,6 +30,12 @@ import {
 } from "../agent-service-listing.js";
 import { AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "../agent-task.js";
 import {
+  CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
+  CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
+  buildCredentialAnchorBatchJsonSchema,
+  buildCredentialAnchorProofJsonSchema,
+} from "../credential-anchor.js";
+import {
   CREDENTIAL_BUNDLE_SCHEMA_ID,
   buildCredentialBundleJsonSchema,
 } from "../credential-bundle.js";
@@ -201,6 +207,18 @@ const CASES: SchemaCase[] = [
     filename: "gradient-credential-subject-v1.json",
     expectedId: GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID,
     build: buildGradientCredentialSubjectJsonSchema,
+  },
+  {
+    name: "credential-anchor-batch-v1",
+    filename: "credential-anchor-batch-v1.json",
+    expectedId: CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
+    build: buildCredentialAnchorBatchJsonSchema,
+  },
+  {
+    name: "credential-anchor-proof-v1",
+    filename: "credential-anchor-proof-v1.json",
+    expectedId: CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
+    build: buildCredentialAnchorProofJsonSchema,
   },
 ];
 

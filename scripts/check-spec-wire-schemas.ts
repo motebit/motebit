@@ -70,8 +70,6 @@ const WAIVERS: Record<string, string> = {
 
   // TODO: ship as standalone schemas. Each is an open item; remove when shipped.
   BalanceWaiver: "TODO: schema (settlement-v1) — operator-signed balance reconciliation",
-  CredentialAnchorBatch: "TODO: schema (credential-anchor-v1) — chain-anchored batch metadata",
-  CredentialAnchorProof: "TODO: schema (credential-anchor-v1) — Merkle inclusion proof",
 };
 
 // ---------------------------------------------------------------------------

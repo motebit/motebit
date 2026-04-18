@@ -18,6 +18,10 @@ import { buildAgentServiceListingJsonSchema } from "../src/agent-service-listing
 import { buildAgentTaskJsonSchema } from "../src/agent-task.js";
 import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
+import {
+  buildCredentialAnchorBatchJsonSchema,
+  buildCredentialAnchorProofJsonSchema,
+} from "../src/credential-anchor.js";
 import { buildCredentialBundleJsonSchema } from "../src/credential-bundle.js";
 import {
   buildGradientCredentialSubjectJsonSchema,
@@ -73,6 +77,8 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
     filename: "gradient-credential-subject-v1.json",
     build: buildGradientCredentialSubjectJsonSchema,
   },
+  { filename: "credential-anchor-batch-v1.json", build: buildCredentialAnchorBatchJsonSchema },
+  { filename: "credential-anchor-proof-v1.json", build: buildCredentialAnchorProofJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

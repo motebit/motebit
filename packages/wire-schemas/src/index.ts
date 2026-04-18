@@ -106,3 +106,11 @@ export {
   GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID,
   buildGradientCredentialSubjectJsonSchema,
 } from "./credential-subjects.js";
+export {
+  CredentialAnchorBatchSchema,
+  CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
+  buildCredentialAnchorBatchJsonSchema,
+  CredentialAnchorProofSchema,
+  CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
+  buildCredentialAnchorProofJsonSchema,
+} from "./credential-anchor.js";
