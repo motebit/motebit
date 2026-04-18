@@ -235,6 +235,32 @@ Probe-only artifact — \`ProbeOnlyNonExportedSymbol\` is not exported from \`@m
       ),
   },
   {
+    script: "check-spec-wire-schemas",
+    proves:
+      "flags a spec wire-format type that has no matching <TypeName>Schema export from @motebit/wire-schemas (and no entry in WAIVERS)",
+    perturb: () =>
+      writeFixture(
+        // Fixture spec with a `#### Wire format (foundation law)` block that
+        // declares a type name (`ProbeOnlyUnschematizedType`) which has no
+        // matching `ProbeOnlyUnschematizedTypeSchema` export in
+        // @motebit/wire-schemas and no entry in the WAIVERS table.
+        // check-spec-wire-schemas extracts the type name via the section
+        // heading regex and asserts the schema-or-waiver pairing — the gate
+        // fails because neither side exists.
+        `spec/${PROBE_PREFIX}wire-schemas-v1.md`,
+        `# motebit/${PROBE_PREFIX}wire-schemas@1.0
+
+## 1. ProbeArtifact
+
+### 1.1 — ProbeOnlyUnschematizedType
+
+#### Wire format (foundation law)
+
+Probe-only artifact — \`ProbeOnlyUnschematizedType\` has no matching schema in \`@motebit/wire-schemas\` and no entry in the gate's WAIVERS table by design, so \`check-spec-wire-schemas\` fails on this file.
+`,
+      ),
+  },
+  {
     script: "check-suite-declared",
     proves: "flags a Wire format block that declares `signature` but no `suite` field",
     perturb: () =>
