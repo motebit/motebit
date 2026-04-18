@@ -33,6 +33,16 @@ import {
   CREDENTIAL_BUNDLE_SCHEMA_ID,
   buildCredentialBundleJsonSchema,
 } from "../credential-bundle.js";
+import {
+  DEPARTURE_ATTESTATION_SCHEMA_ID,
+  MIGRATION_PRESENTATION_SCHEMA_ID,
+  MIGRATION_REQUEST_SCHEMA_ID,
+  MIGRATION_TOKEN_SCHEMA_ID,
+  buildDepartureAttestationJsonSchema,
+  buildMigrationPresentationJsonSchema,
+  buildMigrationRequestJsonSchema,
+  buildMigrationTokenJsonSchema,
+} from "../migration.js";
 import { ROUTE_SCORE_SCHEMA_ID, buildRouteScoreJsonSchema } from "../route-score.js";
 import {
   SETTLEMENT_RECORD_SCHEMA_ID,
@@ -99,6 +109,30 @@ const CASES: SchemaCase[] = [
     filename: "credential-bundle-v1.json",
     expectedId: CREDENTIAL_BUNDLE_SCHEMA_ID,
     build: buildCredentialBundleJsonSchema,
+  },
+  {
+    name: "migration-request-v1",
+    filename: "migration-request-v1.json",
+    expectedId: MIGRATION_REQUEST_SCHEMA_ID,
+    build: buildMigrationRequestJsonSchema,
+  },
+  {
+    name: "migration-token-v1",
+    filename: "migration-token-v1.json",
+    expectedId: MIGRATION_TOKEN_SCHEMA_ID,
+    build: buildMigrationTokenJsonSchema,
+  },
+  {
+    name: "departure-attestation-v1",
+    filename: "departure-attestation-v1.json",
+    expectedId: DEPARTURE_ATTESTATION_SCHEMA_ID,
+    build: buildDepartureAttestationJsonSchema,
+  },
+  {
+    name: "migration-presentation-v1",
+    filename: "migration-presentation-v1.json",
+    expectedId: MIGRATION_PRESENTATION_SCHEMA_ID,
+    build: buildMigrationPresentationJsonSchema,
   },
 ];
 

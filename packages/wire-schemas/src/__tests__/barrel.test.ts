@@ -49,6 +49,13 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(typeof barrel.CredentialBundleSchema.parse).toBe("function");
   });
 
+  it("re-exports the migration cluster (Request/Token/Attestation/Presentation)", () => {
+    expect(typeof barrel.MigrationRequestSchema.parse).toBe("function");
+    expect(typeof barrel.MigrationTokenSchema.parse).toBe("function");
+    expect(typeof barrel.DepartureAttestationSchema.parse).toBe("function");
+    expect(typeof barrel.MigrationPresentationSchema.parse).toBe("function");
+  });
+
   it("re-exports all wire-format $id URLs as stable raw-GitHub URLs", () => {
     const urls = [
       barrel.EXECUTION_RECEIPT_SCHEMA_ID,
@@ -59,6 +66,10 @@ describe("@motebit/wire-schemas barrel", () => {
       barrel.SETTLEMENT_RECORD_SCHEMA_ID,
       barrel.ROUTE_SCORE_SCHEMA_ID,
       barrel.CREDENTIAL_BUNDLE_SCHEMA_ID,
+      barrel.MIGRATION_REQUEST_SCHEMA_ID,
+      barrel.MIGRATION_TOKEN_SCHEMA_ID,
+      barrel.DEPARTURE_ATTESTATION_SCHEMA_ID,
+      barrel.MIGRATION_PRESENTATION_SCHEMA_ID,
     ];
     for (const url of urls) {
       expect(url).toMatch(/^https:\/\/raw\.githubusercontent\.com\/motebit\/motebit\/main\//);
@@ -82,6 +93,10 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(barrel.buildRouteScoreJsonSchema().title).toBe("RouteScore (v1)");
     expect(typeof barrel.buildCredentialBundleJsonSchema).toBe("function");
     expect(barrel.buildCredentialBundleJsonSchema().title).toBe("CredentialBundle (v1)");
+    expect(barrel.buildMigrationRequestJsonSchema().title).toBe("MigrationRequest (v1)");
+    expect(barrel.buildMigrationTokenJsonSchema().title).toBe("MigrationToken (v1)");
+    expect(barrel.buildDepartureAttestationJsonSchema().title).toBe("DepartureAttestation (v1)");
+    expect(barrel.buildMigrationPresentationJsonSchema().title).toBe("MigrationPresentation (v1)");
   });
 
   it("re-exports the shared assemble helper", () => {

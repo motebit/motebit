@@ -19,6 +19,12 @@ import { buildAgentTaskJsonSchema } from "../src/agent-task.js";
 import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
 import { buildCredentialBundleJsonSchema } from "../src/credential-bundle.js";
+import {
+  buildDepartureAttestationJsonSchema,
+  buildMigrationPresentationJsonSchema,
+  buildMigrationRequestJsonSchema,
+  buildMigrationTokenJsonSchema,
+} from "../src/migration.js";
 import { buildRouteScoreJsonSchema } from "../src/route-score.js";
 import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
 
@@ -34,6 +40,10 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "settlement-record-v1.json", build: buildSettlementRecordJsonSchema },
   { filename: "route-score-v1.json", build: buildRouteScoreJsonSchema },
   { filename: "credential-bundle-v1.json", build: buildCredentialBundleJsonSchema },
+  { filename: "migration-request-v1.json", build: buildMigrationRequestJsonSchema },
+  { filename: "migration-token-v1.json", build: buildMigrationTokenJsonSchema },
+  { filename: "departure-attestation-v1.json", build: buildDepartureAttestationJsonSchema },
+  { filename: "migration-presentation-v1.json", build: buildMigrationPresentationJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

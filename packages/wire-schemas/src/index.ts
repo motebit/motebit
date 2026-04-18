@@ -64,3 +64,17 @@ export {
   CREDENTIAL_BUNDLE_SCHEMA_ID,
   buildCredentialBundleJsonSchema,
 } from "./credential-bundle.js";
+export {
+  MigrationRequestSchema,
+  MIGRATION_REQUEST_SCHEMA_ID,
+  buildMigrationRequestJsonSchema,
+  MigrationTokenSchema,
+  MIGRATION_TOKEN_SCHEMA_ID,
+  buildMigrationTokenJsonSchema,
+  DepartureAttestationSchema,
+  DEPARTURE_ATTESTATION_SCHEMA_ID,
+  buildDepartureAttestationJsonSchema,
+  MigrationPresentationSchema,
+  MIGRATION_PRESENTATION_SCHEMA_ID,
+  buildMigrationPresentationJsonSchema,
+} from "./migration.js";

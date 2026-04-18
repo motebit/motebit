@@ -73,16 +73,12 @@ const WAIVERS: Record<string, string> = {
   BalanceWaiver: "TODO: schema (settlement-v1) — operator-signed balance reconciliation",
   CredentialAnchorBatch: "TODO: schema (credential-anchor-v1) — chain-anchored batch metadata",
   CredentialAnchorProof: "TODO: schema (credential-anchor-v1) — Merkle inclusion proof",
-  DepartureAttestation: "TODO: schema (relay-federation-v1) — peer departure signal",
   DisputeAppeal: "TODO: schema (dispute-v1) — appeal of a dispute resolution",
   DisputeEvidence: "TODO: schema (dispute-v1) — evidence attached to a dispute",
   DisputeRequest: "TODO: schema (dispute-v1) — open a dispute",
   DisputeResolution: "TODO: schema (dispute-v1) — adjudicator's resolution",
   GradientCredentialSubject:
     "TODO: schema (credential-v1) — VC subject body for gradient-state credentials",
-  MigrationPresentation: "TODO: schema (migration-v1) — VC presentation for identity migration",
-  MigrationRequest: "TODO: schema (migration-v1) — relay-side migration request",
-  MigrationToken: "TODO: schema (migration-v1) — signed migration authorization",
   ReputationCredentialSubject:
     "TODO: schema (credential-v1) — VC subject body for reputation credentials",
   TrustCredentialSubject: "TODO: schema (credential-v1) — VC subject body for trust credentials",
