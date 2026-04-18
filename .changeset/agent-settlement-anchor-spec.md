@@ -37,7 +37,7 @@ without bundling motebit:
   `{leaf_hash, proof, ...}` (older federation-style vocabulary).
   Per-agent now matches the credential-anchor convention:
   `{settlement_hash, siblings, layer_sizes, relay_id,
- relay_public_key, suite, batch_signature, anchor: {...} | null}`.
+relay_public_key, suite, batch_signature, anchor: {...} | null}`.
   Hours-old code, zero external consumers, alignment matters more
   than churn.
 
