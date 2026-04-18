@@ -275,7 +275,12 @@ describe("verify listing", () => {
     expect(report.checks.find((c) => c.name === "signature")?.detail).toMatch(/n\/a/);
   });
 
-  it("rejects a listing with extra keys (strict)", async () => {
+  it("preserves extra top-level keys on a listing (forward-compat per audit drift #1)", async () => {
+    // AgentServiceListing is an unsigned envelope — the spec mandates
+    // "unknown fields MUST be ignored (forward compatibility)" so a v1
+    // verifier accepts a v2 listing carrying new fields. Inner objects
+    // (`sla`, `pricing[]`) are still strict because they're protocol-
+    // defined closed surfaces.
     const listing = {
       listing_id: "x",
       motebit_id: "y",
@@ -284,7 +289,23 @@ describe("verify listing", () => {
       sla: { max_latency_ms: 1, availability_guarantee: 1 },
       description: "",
       updated_at: 0,
-      extra: "nope",
+      future_v2_field: "preserved",
+    };
+    const path = writeJson("listing.json", listing);
+    const report = await verifyWire("listing", path);
+    expect(report.ok).toBe(true);
+    expect(report.checks.find((c) => c.name === "schema")?.ok).toBe(true);
+  });
+
+  it("rejects a listing whose nested `sla` carries unknown keys (inner closed surfaces stay strict)", async () => {
+    const listing = {
+      listing_id: "x",
+      motebit_id: "y",
+      capabilities: [],
+      pricing: [],
+      sla: { max_latency_ms: 1, availability_guarantee: 1, sneak: "no" },
+      description: "",
+      updated_at: 0,
     };
     const path = writeJson("listing.json", listing);
     const report = await verifyWire("listing", path);
