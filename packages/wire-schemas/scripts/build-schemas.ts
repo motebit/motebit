@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { buildAgentResolutionResultJsonSchema } from "../src/agent-resolution-result.js";
 import { buildAgentServiceListingJsonSchema } from "../src/agent-service-listing.js";
+import { buildAgentTaskJsonSchema } from "../src/agent-task.js";
 import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
 
@@ -26,6 +27,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
   { filename: "agent-service-listing-v1.json", build: buildAgentServiceListingJsonSchema },
   { filename: "agent-resolution-result-v1.json", build: buildAgentResolutionResultJsonSchema },
+  { filename: "agent-task-v1.json", build: buildAgentTaskJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

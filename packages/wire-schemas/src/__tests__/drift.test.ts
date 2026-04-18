@@ -28,6 +28,7 @@ import {
   AGENT_SERVICE_LISTING_SCHEMA_ID,
   buildAgentServiceListingJsonSchema,
 } from "../agent-service-listing.js";
+import { AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "../agent-task.js";
 import { DELEGATION_TOKEN_SCHEMA_ID, buildDelegationTokenJsonSchema } from "../delegation-token.js";
 import {
   EXECUTION_RECEIPT_SCHEMA_ID,
@@ -65,6 +66,12 @@ const CASES: SchemaCase[] = [
     filename: "agent-resolution-result-v1.json",
     expectedId: AGENT_RESOLUTION_RESULT_SCHEMA_ID,
     build: buildAgentResolutionResultJsonSchema,
+  },
+  {
+    name: "agent-task-v1",
+    filename: "agent-task-v1.json",
+    expectedId: AGENT_TASK_SCHEMA_ID,
+    build: buildAgentTaskJsonSchema,
   },
 ];
 

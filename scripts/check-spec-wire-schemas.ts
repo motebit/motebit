@@ -70,7 +70,6 @@ const WAIVERS: Record<string, string> = {
 
   // TODO: ship as standalone schemas. Each is an open item; remove when shipped.
   AdjudicatorVote: "TODO: schema (dispute-v1) — adjudicator vote on a dispute resolution",
-  AgentTask: "TODO: schema (market-v1) — task envelope dispatched to executing agents",
   BalanceWaiver: "TODO: schema (settlement-v1) — operator-signed balance reconciliation",
   CredentialAnchorBatch: "TODO: schema (credential-anchor-v1) — chain-anchored batch metadata",
   CredentialAnchorProof: "TODO: schema (credential-anchor-v1) — Merkle inclusion proof",

@@ -48,3 +48,4 @@ export {
   AGENT_RESOLUTION_RESULT_SCHEMA_ID,
   buildAgentResolutionResultJsonSchema,
 } from "./agent-resolution-result.js";
+export { AgentTaskSchema, AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "./agent-task.js";
