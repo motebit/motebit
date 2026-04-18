@@ -24,11 +24,17 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(typeof barrel.AgentServiceListingSchema.parse).toBe("function");
   });
 
+  it("re-exports AgentResolutionResultSchema", () => {
+    expect(barrel.AgentResolutionResultSchema).toBeDefined();
+    expect(typeof barrel.AgentResolutionResultSchema.parse).toBe("function");
+  });
+
   it("re-exports all wire-format $id URLs as stable raw-GitHub URLs", () => {
     const urls = [
       barrel.EXECUTION_RECEIPT_SCHEMA_ID,
       barrel.DELEGATION_TOKEN_SCHEMA_ID,
       barrel.AGENT_SERVICE_LISTING_SCHEMA_ID,
+      barrel.AGENT_RESOLUTION_RESULT_SCHEMA_ID,
     ];
     for (const url of urls) {
       expect(url).toMatch(/^https:\/\/raw\.githubusercontent\.com\/motebit\/motebit\/main\//);
@@ -42,6 +48,8 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(barrel.buildDelegationTokenJsonSchema().title).toBe("DelegationToken (v1)");
     expect(typeof barrel.buildAgentServiceListingJsonSchema).toBe("function");
     expect(barrel.buildAgentServiceListingJsonSchema().title).toBe("AgentServiceListing (v1)");
+    expect(typeof barrel.buildAgentResolutionResultJsonSchema).toBe("function");
+    expect(barrel.buildAgentResolutionResultJsonSchema().title).toBe("AgentResolutionResult (v1)");
   });
 
   it("re-exports the shared assemble helper", () => {

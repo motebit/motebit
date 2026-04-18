@@ -43,3 +43,8 @@ export {
   AGENT_SERVICE_LISTING_SCHEMA_ID,
   buildAgentServiceListingJsonSchema,
 } from "./agent-service-listing.js";
+export {
+  AgentResolutionResultSchema,
+  AGENT_RESOLUTION_RESULT_SCHEMA_ID,
+  buildAgentResolutionResultJsonSchema,
+} from "./agent-resolution-result.js";

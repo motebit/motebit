@@ -21,6 +21,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  AGENT_RESOLUTION_RESULT_SCHEMA_ID,
+  buildAgentResolutionResultJsonSchema,
+} from "../agent-resolution-result.js";
+import {
   AGENT_SERVICE_LISTING_SCHEMA_ID,
   buildAgentServiceListingJsonSchema,
 } from "../agent-service-listing.js";
@@ -55,6 +59,12 @@ const CASES: SchemaCase[] = [
     filename: "agent-service-listing-v1.json",
     expectedId: AGENT_SERVICE_LISTING_SCHEMA_ID,
     build: buildAgentServiceListingJsonSchema,
+  },
+  {
+    name: "agent-resolution-result-v1",
+    filename: "agent-resolution-result-v1.json",
+    expectedId: AGENT_RESOLUTION_RESULT_SCHEMA_ID,
+    build: buildAgentResolutionResultJsonSchema,
   },
 ];
 

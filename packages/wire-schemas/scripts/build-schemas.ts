@@ -13,6 +13,7 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildAgentResolutionResultJsonSchema } from "../src/agent-resolution-result.js";
 import { buildAgentServiceListingJsonSchema } from "../src/agent-service-listing.js";
 import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
@@ -24,6 +25,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "execution-receipt-v1.json", build: buildExecutionReceiptJsonSchema },
   { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
   { filename: "agent-service-listing-v1.json", build: buildAgentServiceListingJsonSchema },
+  { filename: "agent-resolution-result-v1.json", build: buildAgentResolutionResultJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {
