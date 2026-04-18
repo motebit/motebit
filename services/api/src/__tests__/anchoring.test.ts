@@ -10,8 +10,10 @@ import type { RelayIdentity } from "../federation.js";
 import {
   cutAgentSettlementBatch,
   cutBatch,
+  getAgentAnchorBatch,
   getAgentSettlementProof,
   getSettlementProof,
+  isAgentSettlementPendingBatch,
   isSettlementPendingBatch,
 } from "../anchoring.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct sign access
@@ -512,5 +514,181 @@ describe("getAgentSettlementProof", () => {
   it("returns null for a non-existent settlement", async () => {
     const proof = await getAgentSettlementProof(agentDb, "nonexistent");
     expect(proof).toBeNull();
+  });
+});
+
+describe("isAgentSettlementPendingBatch", () => {
+  beforeEach(async () => {
+    agentRelay = await createTestRelay();
+    agentDb = agentRelay.moteDb.db;
+    const keypair = await generateKeypair();
+    agentRelayIdentity = {
+      relayMotebitId: `relay-${crypto.randomUUID()}`,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: bytesToHex(keypair.publicKey),
+      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
+    };
+  });
+
+  it("returns false for a non-existent settlement", () => {
+    expect(isAgentSettlementPendingBatch(agentDb, "nonexistent")).toBe(false);
+  });
+
+  it("returns true for a signed unbatched settlement", async () => {
+    const id = await insertSignedAgentSettlement({});
+    expect(isAgentSettlementPendingBatch(agentDb, id)).toBe(true);
+  });
+
+  it("returns false after the settlement is batched", async () => {
+    const id = await insertSignedAgentSettlement({});
+    await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    expect(isAgentSettlementPendingBatch(agentDb, id)).toBe(false);
+  });
+
+  it("returns false for an unsigned legacy row (cannot be batched)", async () => {
+    agentDb
+      .prepare(
+        `INSERT INTO relay_settlements
+           (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash,
+            amount_settled, platform_fee, platform_fee_rate, status, settled_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-2",
+        "alloc-legacy-2",
+        "task-legacy-2",
+        "mote-legacy-2",
+        "rh",
+        null,
+        0,
+        0,
+        0,
+        "completed",
+        1,
+      );
+    expect(isAgentSettlementPendingBatch(agentDb, "legacy-2")).toBe(false);
+  });
+});
+
+describe("getAgentAnchorBatch", () => {
+  beforeEach(async () => {
+    agentRelay = await createTestRelay();
+    agentDb = agentRelay.moteDb.db;
+    const keypair = await generateKeypair();
+    agentRelayIdentity = {
+      relayMotebitId: `relay-${crypto.randomUUID()}`,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: bytesToHex(keypair.publicKey),
+      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
+    };
+  });
+
+  it("returns null for an unknown batch_id", () => {
+    expect(getAgentAnchorBatch(agentDb, "nonexistent")).toBeNull();
+  });
+
+  it("returns the batch metadata after cut", async () => {
+    await insertSignedAgentSettlement({});
+    await insertSignedAgentSettlement({});
+    const cut = await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    expect(cut).not.toBeNull();
+    const batch = getAgentAnchorBatch(agentDb, cut!.batch_id);
+    expect(batch).not.toBeNull();
+    expect(batch!.batch_id).toBe(cut!.batch_id);
+    expect(batch!.merkle_root).toBe(cut!.merkle_root);
+    expect(batch!.relay_id).toBe(agentRelayIdentity.relayMotebitId);
+    expect(batch!.tx_hash).toBeNull();
+    expect(batch!.anchored_at).toBeNull();
+  });
+});
+
+// ===========================================================================
+// HTTP endpoint integration tests for the per-agent anchor proof routes.
+// ===========================================================================
+
+describe("GET /api/v1/settlements/:settlementId/anchor-proof", () => {
+  beforeEach(async () => {
+    agentRelay = await createTestRelay();
+    agentDb = agentRelay.moteDb.db;
+    const keypair = await generateKeypair();
+    agentRelayIdentity = {
+      relayMotebitId: `relay-${crypto.randomUUID()}`,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: bytesToHex(keypair.publicKey),
+      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
+    };
+  });
+
+  it("returns 404 for an unknown settlement", async () => {
+    const res = await agentRelay.app.request("/api/v1/settlements/unknown-id/anchor-proof");
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 202 with Retry-After when settlement is signed but not yet batched", async () => {
+    const id = await insertSignedAgentSettlement({});
+    const res = await agentRelay.app.request(`/api/v1/settlements/${id}/anchor-proof`);
+    expect(res.status).toBe(202);
+    expect(res.headers.get("Retry-After")).toBe("60");
+    const body = (await res.json()) as { status: string };
+    expect(body.status).toBe("pending");
+  });
+
+  it("returns 200 with the inclusion proof after batching", async () => {
+    const id = await insertSignedAgentSettlement({});
+    await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+
+    const res = await agentRelay.app.request(`/api/v1/settlements/${id}/anchor-proof`);
+    expect(res.status).toBe(200);
+    const proof = (await res.json()) as {
+      settlement_id: string;
+      leaf_hash: string;
+      proof: string[];
+      leaf_index: number;
+      merkle_root: string;
+      batch_id: string;
+    };
+    expect(proof.settlement_id).toBe(id);
+    expect(proof.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(proof.merkle_root).toMatch(/^[0-9a-f]{64}$/);
+    expect(typeof proof.batch_id).toBe("string");
+  });
+});
+
+describe("GET /api/v1/settlement-anchors/:batchId", () => {
+  beforeEach(async () => {
+    agentRelay = await createTestRelay();
+    agentDb = agentRelay.moteDb.db;
+    const keypair = await generateKeypair();
+    agentRelayIdentity = {
+      relayMotebitId: `relay-${crypto.randomUUID()}`,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: bytesToHex(keypair.publicKey),
+      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
+    };
+  });
+
+  it("returns 404 for an unknown batch", async () => {
+    const res = await agentRelay.app.request("/api/v1/settlement-anchors/unknown-batch");
+    expect(res.status).toBe(404);
+  });
+
+  it("returns the batch metadata after a cut", async () => {
+    await insertSignedAgentSettlement({});
+    const cut = await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    const res = await agentRelay.app.request(`/api/v1/settlement-anchors/${cut!.batch_id}`);
+    expect(res.status).toBe(200);
+    const batch = (await res.json()) as {
+      batch_id: string;
+      merkle_root: string;
+      leaf_count: number;
+      relay_id: string;
+    };
+    expect(batch.batch_id).toBe(cut!.batch_id);
+    expect(batch.leaf_count).toBe(1);
+    expect(batch.relay_id).toBe(agentRelayIdentity.relayMotebitId);
   });
 });

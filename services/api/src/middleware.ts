@@ -306,6 +306,13 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/credentials/:credentialId/status", rl(publicLimiter));
   app.use("/api/v1/credentials/batch-status", rl(readLimiter));
 
+  // Public anchor proof endpoints — auditor flood protection without auth
+  // gating (CLAUDE.md rule 6). Same publicLimiter tier as credential status.
+  app.use("/api/v1/credentials/:credentialId/anchor-proof", rl(publicLimiter));
+  app.use("/api/v1/credential-anchors/:batchId", rl(publicLimiter));
+  app.use("/api/v1/settlements/:settlementId/anchor-proof", rl(publicLimiter));
+  app.use("/api/v1/settlement-anchors/:batchId", rl(publicLimiter));
+
   // Write endpoints: revocation (30 req/min)
   app.use("/api/v1/agents/:motebitId/revoke-tokens", rl(writeLimiter));
   app.use("/api/v1/agents/:motebitId/revoke-credential", rl(writeLimiter));
@@ -436,6 +443,14 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         c.req.path.startsWith("/api/v1/credentials/verify") ||
         c.req.path.startsWith("/api/v1/credentials/batch-status") ||
         c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/) ||
+        // Anchor proof endpoints are public protocol artifacts (services/api
+        // CLAUDE.md rule 6 — every truth the relay asserts is independently
+        // verifiable onchain without relay contact). An external auditor
+        // will not hold a relay-issued bearer token.
+        c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/anchor-proof/) ||
+        c.req.path.startsWith("/api/v1/credential-anchors/") ||
+        c.req.path.match(/\/api\/v1\/settlements\/[^/]+\/anchor-proof/) ||
+        c.req.path.startsWith("/api/v1/settlement-anchors/") ||
         c.req.path.startsWith("/api/v1/stripe/") ||
         c.req.path.startsWith("/api/v1/bridge/") ||
         c.req.path.startsWith("/api/v1/subscriptions/") ||

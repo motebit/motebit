@@ -765,6 +765,156 @@ export async function submitAgentAnchorOnChain(
 }
 
 /**
+ * True iff a per-agent settlement exists, was signed, and has NOT yet
+ * been included in an anchor batch. Used to return HTTP 202 with
+ * Retry-After on the proof endpoint — the batching loop will pick it
+ * up on the next tick.
+ *
+ * Returns false for legacy unsigned rows because they cannot be
+ * batched (the leaf wouldn't match what the relay signed, since it
+ * didn't sign it). For unsigned rows the proof endpoint returns 404.
+ */
+export function isAgentSettlementPendingBatch(db: DatabaseDriver, settlementId: string): boolean {
+  const row = db
+    .prepare("SELECT anchor_batch_id, signature FROM relay_settlements WHERE settlement_id = ?")
+    .get(settlementId) as { anchor_batch_id: string | null; signature: string | null } | undefined;
+
+  if (row == null) return false;
+  if (row.signature == null) return false;
+  return row.anchor_batch_id == null;
+}
+
+/**
+ * Fetch a per-agent anchor batch by id. Returns the batch metadata for
+ * external auditors who want to verify the batch independently — the
+ * Merkle root + signature are what get committed onchain.
+ */
+export function getAgentAnchorBatch(db: DatabaseDriver, batchId: string): AnchorRecord | null {
+  const row = db
+    .prepare("SELECT * FROM relay_agent_anchor_batches WHERE batch_id = ?")
+    .get(batchId) as
+    | {
+        batch_id: string;
+        relay_id: string;
+        merkle_root: string;
+        leaf_count: number;
+        first_settled_at: number;
+        last_settled_at: number;
+        signature: string;
+        tx_hash: string | null;
+        network: string | null;
+        anchored_at: number | null;
+      }
+    | undefined;
+
+  if (!row) return null;
+  return {
+    batch_id: row.batch_id,
+    merkle_root: row.merkle_root,
+    leaf_count: row.leaf_count,
+    first_settled_at: row.first_settled_at,
+    last_settled_at: row.last_settled_at,
+    relay_id: row.relay_id,
+    signature: row.signature,
+    tx_hash: row.tx_hash,
+    network: row.network,
+    anchored_at: row.anchored_at,
+  };
+}
+
+/**
+ * Periodic batching loop for per-agent settlements. Same trigger
+ * semantics as `startBatchAnchorLoop` (federation): cut a batch when
+ * either the count threshold or the time threshold fires; submit the
+ * Merkle root onchain when a submitter is configured; retry previously
+ * failed submissions on each tick.
+ *
+ * Returns the setInterval handle so the caller can clearInterval on
+ * shutdown.
+ */
+export function startAgentSettlementAnchorLoop(
+  db: DatabaseDriver,
+  relayIdentity: RelayIdentity,
+  config: AnchoringConfig = {},
+  isFrozen?: () => boolean,
+): ReturnType<typeof setInterval> {
+  const maxSize = config.batchMaxSize ?? DEFAULT_BATCH_MAX_SIZE;
+  const intervalMs = config.batchIntervalMs ?? DEFAULT_BATCH_INTERVAL_MS;
+  const checkIntervalMs = Math.min(60_000, intervalMs);
+
+  // Same submitter-resolution logic as the federation loop. Both loops
+  // share the same ChainAnchorSubmitter abstraction; configure once at
+  // startup and inject into both.
+  const submitter =
+    config.submitter ??
+    (config.chainRpcUrl && config.contractAddress
+      ? new EvmContractSubmitter({
+          chainRpcUrl: config.chainRpcUrl,
+          contractAddress: config.contractAddress,
+          chainNetwork: config.chainNetwork,
+        })
+      : undefined);
+
+  return setInterval(() => {
+    if (isFrozen?.()) return;
+
+    void (async () => {
+      try {
+        // Count unanchored signed settlements. Filter on
+        // signature IS NOT NULL — pre-v13 unsigned legacy rows are not
+        // batchable (their leaf wouldn't match what the relay signed,
+        // because it didn't).
+        const countRow = db
+          .prepare(
+            "SELECT COUNT(*) as cnt FROM relay_settlements WHERE anchor_batch_id IS NULL AND signature IS NOT NULL",
+          )
+          .get() as { cnt: number };
+
+        if (countRow.cnt === 0) return;
+
+        let batch: AnchorRecord | null = null;
+        if (countRow.cnt >= maxSize) {
+          // Trigger 1: count threshold
+          batch = await cutAgentSettlementBatch(db, relayIdentity, maxSize);
+        } else {
+          // Trigger 2: time threshold — check oldest unanchored signed settlement
+          const oldest = db
+            .prepare(
+              "SELECT MIN(settled_at) as oldest FROM relay_settlements WHERE anchor_batch_id IS NULL AND signature IS NOT NULL",
+            )
+            .get() as { oldest: number | null };
+
+          if (oldest.oldest != null && Date.now() - oldest.oldest >= intervalMs) {
+            batch = await cutAgentSettlementBatch(db, relayIdentity, maxSize);
+          }
+        }
+
+        // Attempt onchain submission for newly cut batch
+        if (batch && submitter) {
+          await submitAgentAnchorOnChain(db, batch.batch_id, submitter);
+        }
+
+        // Retry previously failed submissions
+        if (submitter) {
+          const failedBatches = db
+            .prepare(
+              "SELECT batch_id FROM relay_agent_anchor_batches WHERE status = 'signed' AND tx_hash IS NULL",
+            )
+            .all() as { batch_id: string }[];
+
+          for (const fb of failedBatches) {
+            await submitAgentAnchorOnChain(db, fb.batch_id, submitter);
+          }
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error("anchoring.agent_loop_error", { error: message });
+      }
+    })();
+  }, checkIntervalMs);
+}
+
+/**
  * Fetch the inclusion proof for a per-agent settlement, if anchored.
  * Returns null if the settlement is unbatched, or if no row matches.
  *

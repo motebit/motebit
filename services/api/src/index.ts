@@ -92,7 +92,13 @@ import {
   startSettlementRetryLoop,
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
-import { startBatchAnchorLoop } from "./anchoring.js";
+import {
+  getAgentAnchorBatch,
+  getAgentSettlementProof,
+  isAgentSettlementPendingBatch,
+  startAgentSettlementAnchorLoop,
+  startBatchAnchorLoop,
+} from "./anchoring.js";
 import {
   startCredentialAnchorLoop,
   getCredentialAnchorProof,
@@ -788,6 +794,40 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json(batch);
   });
 
+  // --- Per-agent settlement anchor proof routes (audit follow-up #1, ceiling) ---
+  // Self-attesting trust pyramid for per-agent settlements:
+  //   - Signed SettlementRecord (workers fetch via existing settlement queries)
+  //   - Merkle inclusion proof (this endpoint)
+  //   - Onchain anchor reference (carried inside the proof)
+  // External verifier flow: fetch SettlementRecord + proof + chain tx → verify
+  // signature → reconstruct leaf → walk Merkle path → compare root to chain.
+  // No relay contact needed beyond the initial proof fetch.
+  app.get("/api/v1/settlements/:settlementId/anchor-proof", async (c) => {
+    const settlementId = c.req.param("settlementId");
+
+    if (isAgentSettlementPendingBatch(moteDb.db, settlementId)) {
+      return c.json({ status: "pending", message: "Settlement not yet batched" }, 202, {
+        "Retry-After": "60",
+      });
+    }
+
+    const proof = await getAgentSettlementProof(moteDb.db, settlementId);
+    if (!proof) {
+      return c.json({ error: "Settlement not found or not batched" }, 404);
+    }
+
+    return c.json(proof);
+  });
+
+  app.get("/api/v1/settlement-anchors/:batchId", (c) => {
+    const batchId = c.req.param("batchId");
+    const batch = getAgentAnchorBatch(moteDb.db, batchId);
+    if (!batch) {
+      return c.json({ error: "Batch not found" }, 404);
+    }
+    return c.json(batch);
+  });
+
   // Admin: credential anchoring overview (batches, stats, anchor address)
   app.get("/api/v1/admin/credential-anchoring", (c) => {
     const stats = getCredentialAnchoringStats(moteDb.db);
@@ -1085,6 +1125,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     () => getEmergencyFreeze(),
   );
 
+  // --- Per-agent settlement anchor batching (the "ceiling" parallel
+  // to federation; closes services/api/CLAUDE.md rule 6 "independently
+  // verifiable onchain without relay contact" for per-agent settlements).
+  // Same submitter, same trigger semantics as the federation loop above.
+  const agentAnchorInterval = startAgentSettlementAnchorLoop(
+    moteDb.db,
+    relayIdentity,
+    { submitter: anchorSubmitter },
+    () => getEmergencyFreeze(),
+  );
+
   // --- Credential anchor batching (credential-anchor-v1.md) ---
   credentialAnchorConfig.submitter = anchorSubmitter;
   const credentialAnchorInterval = startCredentialAnchorLoop(
@@ -1218,6 +1269,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(heartbeatInterval);
     clearInterval(settlementRetryInterval);
     clearInterval(batchAnchorInterval);
+    clearInterval(agentAnchorInterval);
     clearInterval(credentialAnchorInterval);
     clearInterval(depositDetectorInterval);
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
