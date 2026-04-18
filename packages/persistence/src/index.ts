@@ -2285,6 +2285,16 @@ interface SettlementRow {
   platform_fee_rate: number;
   status: string;
   settled_at: number;
+  // Self-attestation columns added by the audit-#1 schema migration.
+  // Nullable in the DB for backward-compat with rows persisted before
+  // SettlementRecord became signed; required in the wire format. Legacy
+  // rows return through `rowToSettlement` with empty strings, which will
+  // fail wire-schema validation downstream — that's the intended fail-
+  // closed signal that the row predates self-attestation and shouldn't
+  // be re-emitted as a current-protocol artifact.
+  issuer_relay_id: string | null;
+  suite: string | null;
+  signature: string | null;
 }
 
 function rowToSettlement(row: SettlementRow): SettlementRecord {
@@ -2298,6 +2308,14 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
     platform_fee_rate: row.platform_fee_rate,
     status: row.status as SettlementRecord["status"],
     settled_at: row.settled_at,
+    // Pre-audit-#1 rows persisted before SettlementRecord became signed
+    // surface as empty strings here. Wire-schema validation downstream
+    // rejects them — that's the intended fail-closed signal that the
+    // row predates self-attestation. Future work: a separate
+    // `LegacySettlementRecord` type if upstream needs to distinguish.
+    issuer_relay_id: row.issuer_relay_id ?? "",
+    suite: (row.suite as SettlementRecord["suite"] | null) ?? "motebit-jcs-ed25519-b64-v1",
+    signature: row.signature ?? "",
   };
 }
 
@@ -2310,8 +2328,8 @@ export class SqliteSettlementStore {
     this.stmtGet = db.prepare(`SELECT * FROM settlements WHERE settlement_id = ?`);
     this.stmtCreate = db.prepare(
       `INSERT INTO settlements
-       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, issuer_relay_id, suite, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtListByAllocation = db.prepare(
       `SELECT * FROM settlements WHERE allocation_id = ? ORDER BY settled_at DESC`,
@@ -2334,6 +2352,9 @@ export class SqliteSettlementStore {
       settlement.platform_fee_rate,
       settlement.status,
       settlement.settled_at,
+      settlement.issuer_relay_id,
+      settlement.suite,
+      settlement.signature,
     );
   }
 
@@ -2796,6 +2817,20 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
       "CREATE INDEX IF NOT EXISTS idx_goals_routine ON goals (motebit_id, routine_id) WHERE routine_id IS NOT NULL",
     );
     driver.pragma("user_version = 31");
+  }
+
+  if (userVersion < 32) {
+    // Self-attesting settlements (audit follow-up #1, delegation-v1 §6.4):
+    // SettlementRecord wire format now MUST carry issuer_relay_id + suite +
+    // signature. Adds the three columns to the local persistence settlements
+    // table; nullable for backward-compat with rows persisted before the
+    // protocol-layer change. `rowToSettlement` surfaces legacy NULLs as
+    // empty strings — wire-schema validation downstream rejects them, the
+    // intended fail-closed signal that the row predates self-attestation.
+    migrateExec(driver, "ALTER TABLE settlements ADD COLUMN issuer_relay_id TEXT");
+    migrateExec(driver, "ALTER TABLE settlements ADD COLUMN suite TEXT");
+    migrateExec(driver, "ALTER TABLE settlements ADD COLUMN signature TEXT");
+    driver.pragma("user_version = 32");
   }
 
   const eventStore = new SqliteEventStore(driver);

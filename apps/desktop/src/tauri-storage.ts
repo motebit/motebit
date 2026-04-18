@@ -1668,6 +1668,14 @@ interface SettlementRow {
   x402_network: string | null;
   status: string;
   settled_at: number;
+  // Self-attestation columns added by audit-#1 schema migration. Nullable in
+  // the local Tauri DB for backward-compat with rows persisted before the
+  // protocol-layer change. Legacy NULLs surface as empty strings — wire-
+  // schema validation downstream rejects them, the intended fail-closed
+  // signal that the row predates self-attestation.
+  issuer_relay_id: string | null;
+  suite: string | null;
+  signature: string | null;
 }
 
 function rowToSettlement(row: SettlementRow): SettlementRecord {
@@ -1681,6 +1689,9 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
     platform_fee_rate: row.platform_fee_rate,
     status: row.status as SettlementRecord["status"],
     settled_at: row.settled_at,
+    issuer_relay_id: row.issuer_relay_id ?? "",
+    suite: (row.suite as SettlementRecord["suite"] | null) ?? "motebit-jcs-ed25519-b64-v1",
+    signature: row.signature ?? "",
   };
   if (row.x402_tx_hash !== null) record.x402_tx_hash = row.x402_tx_hash;
   if (row.x402_network !== null) record.x402_network = row.x402_network;
@@ -1703,8 +1714,8 @@ export class TauriSettlementStore implements SettlementStoreAdapter {
   async create(settlement: SettlementRecord): Promise<void> {
     await dbExecute(
       this.invoke,
-      `INSERT OR REPLACE INTO settlements (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, x402_tx_hash, x402_network, status, settled_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO settlements (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, x402_tx_hash, x402_network, status, settled_at, issuer_relay_id, suite, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         settlement.settlement_id,
         settlement.allocation_id,
@@ -1717,6 +1728,9 @@ export class TauriSettlementStore implements SettlementStoreAdapter {
         settlement.x402_network ?? null,
         settlement.status,
         settlement.settled_at,
+        settlement.issuer_relay_id,
+        settlement.suite,
+        settlement.signature,
       ],
     );
   }

@@ -18,6 +18,9 @@ describe("IdbSettlementStore", () => {
       platform_fee_rate: 0.05,
       status: "completed",
       settled_at: Date.now(),
+      issuer_relay_id: "relay-test",
+      suite: "motebit-jcs-ed25519-b64-v1",
+      signature: "sig-test",
       ...overrides,
     };
   }
