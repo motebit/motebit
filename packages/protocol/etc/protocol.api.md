@@ -6,6 +6,7 @@
 
 // @public
 export interface AdjudicatorVote {
+    dispute_id: string;
     peer_id: string;
     rationale: string;
     signature: string;
@@ -391,6 +392,24 @@ export interface ChainAnchorSubmitter {
     submitMerkleRoot(root: string, relayId: string, leafCount: number): Promise<{
         txHash: string;
     }>;
+}
+
+// @public
+export interface Citation {
+    locator: string;
+    receipt_task_id?: string;
+    source: CitationSource;
+    text_excerpt: string;
+}
+
+// @public
+export type CitationSource = "interior" | "federation" | "web";
+
+// @public
+export interface CitedAnswer {
+    answer: string;
+    citations: Citation[];
+    receipt: ExecutionReceipt;
 }
 
 // @public (undocumented)

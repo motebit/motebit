@@ -121,8 +121,20 @@ export interface DisputeEvidence {
  * Foundation Law (§6.5):
  * - Federation resolution must include individual AdjudicatorVote entries
  * - Aggregated-only verdicts are rejected
+ * - Each vote signature MUST cover `dispute_id` — votes are not portable
+ *   across disputes (a malicious adjudicator collecting old votes from
+ *   other disputes cannot stuff them into a new resolution because the
+ *   dispute_id binding breaks the signature).
  */
 export interface AdjudicatorVote {
+  /**
+   * Dispute this vote applies to. Signature-bound: the canonical body
+   * includes this field, so a vote signed for dispute A is rejected
+   * on submission to dispute B (the relay/aggregator reconstructs the
+   * canonical bytes against the target dispute_id and the signature
+   * fails to verify against the wrong binding).
+   */
+  dispute_id: string;
   /** Federation peer MotebitId. */
   peer_id: string;
   /** Vote outcome. */
@@ -134,7 +146,7 @@ export interface AdjudicatorVote {
    * (see DisputeRequest for the full recipe).
    */
   suite: "motebit-jcs-ed25519-b64-v1";
-  /** Ed25519 by the voting peer. */
+  /** Ed25519 by the voting peer over canonical JSON of all fields except signature. */
   signature: string;
 }
 

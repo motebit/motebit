@@ -192,11 +192,12 @@ DisputeResolution {
 }
 
 AdjudicatorVote {
+  dispute_id:  string          // Dispute this vote applies to — signature-bound, prevents replay across disputes
   peer_id:     string          // Federation peer MotebitId
   vote:        string          // "upheld" | "overturned" | "split"
   rationale:   string          // Per-peer explanation
   suite:       string          // "motebit-jcs-ed25519-b64-v1" — cryptosuite identifier
-  signature:   string          // Ed25519 by the voting peer
+  signature:   string          // Ed25519 by the voting peer over canonical JSON of all fields except signature
 }
 ```
 
@@ -211,6 +212,7 @@ The reference relay writes a single `relay_disputes` row with JSON resolution da
 - Resolution must include a signed rationale. A bare verdict without explanation is rejected.
 - Federation resolution must include individual `AdjudicatorVote` entries from each participating peer. Aggregated-only verdicts are rejected.
 - A relay must not self-adjudicate when it is the defendant. Violation is a federation-level trust event.
+- Each `AdjudicatorVote` signature MUST cover its `dispute_id`. Votes are not portable across disputes — a malicious adjudicator collecting old votes from other disputes cannot stuff them into a new resolution because the dispute_id binding breaks the signature.
 
 ### 6.6 Convention
 

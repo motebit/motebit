@@ -133,6 +133,7 @@ describe("DisputeEvidenceSchema", () => {
 
 describe("AdjudicatorVoteSchema", () => {
   const SAMPLE: Record<string, unknown> = {
+    dispute_id: "01HTV8X9QZ-dispute-1",
     peer_id: "019cd9d4-3275-7b24-8265-peer00000001",
     vote: "upheld",
     rationale: "Evidence clearly shows the receipt was tampered.",
@@ -143,6 +144,17 @@ describe("AdjudicatorVoteSchema", () => {
   it("parses a valid vote", () => {
     const v = AdjudicatorVoteSchema.parse(SAMPLE);
     expect(v.vote).toBe("upheld");
+    expect(v.dispute_id).toBe("01HTV8X9QZ-dispute-1");
+  });
+
+  it("rejects a vote without dispute_id (replay-safety: signature MUST cover dispute_id per §6.5)", () => {
+    const bad = { ...SAMPLE };
+    delete bad.dispute_id;
+    expect(() => AdjudicatorVoteSchema.parse(bad)).toThrow();
+  });
+
+  it("rejects an empty dispute_id", () => {
+    expect(() => AdjudicatorVoteSchema.parse({ ...SAMPLE, dispute_id: "" })).toThrow();
   });
 
   it("accepts every defined outcome", () => {
@@ -168,6 +180,7 @@ describe("AdjudicatorVoteSchema", () => {
 
 describe("DisputeResolutionSchema", () => {
   const VOTE = {
+    dispute_id: "01HTV8X9QZ-dispute-1",
     peer_id: "peer-1",
     vote: "upheld" as const,
     rationale: "ok",

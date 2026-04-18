@@ -274,6 +274,12 @@ export function buildDisputeEvidenceJsonSchema(): Record<string, unknown> {
 
 export const AdjudicatorVoteSchema = z
   .object({
+    dispute_id: z
+      .string()
+      .min(1)
+      .describe(
+        "Dispute this vote applies to. Signature-bound: the canonical body includes this field, so a vote signed for dispute A cannot be replayed into dispute B (foundation law §6.5). A malicious adjudicator collecting old votes from other disputes cannot stuff them into a new resolution because the dispute_id binding breaks the per-vote signature.",
+      ),
     peer_id: z
       .string()
       .min(1)
@@ -285,7 +291,9 @@ export const AdjudicatorVoteSchema = z
         "Per-peer explanation of the vote. Optional in practice (empty string permitted) but encouraged so the resolution's auditability is meaningful.",
       ),
     suite: suiteField(),
-    signature: signatureField("Signed by the voting peer."),
+    signature: signatureField(
+      "Signed by the voting peer over canonical JSON of all fields except signature. The signature covers `dispute_id` (foundation law §6.5: votes are not portable across disputes).",
+    ),
   })
   .strict();
 
