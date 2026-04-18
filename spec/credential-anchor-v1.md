@@ -239,19 +239,20 @@ Returns batch metadata including anchor status.
 
 **Stale anchors.** Anchors prove existence at a point in time. A revoked credential's anchor remains valid — it proves the credential existed before revocation. Revocation status is orthogonal to anchoring (check revocation separately per credential-v1.md §7).
 
-## 9. Relationship to Settlement Anchoring
+## 9. Relationship to Other Anchoring
 
-Settlement anchoring (relay-federation-v1.md §7.6) and credential anchoring share the Merkle tree infrastructure but are separate batch streams:
+Three anchoring streams share the Merkle tree infrastructure but serve distinct audiences:
 
-| Property           | Settlement Anchoring                         | Credential Anchoring               |
-| ------------------ | -------------------------------------------- | ---------------------------------- |
-| Source table       | `relay_federation_settlements`               | `relay_credentials`                |
-| Leaf hash          | Settlement fields → canonical JSON → SHA-256 | Full VC → canonical JSON → SHA-256 |
-| Default batch size | 100                                          | 50                                 |
-| Reference chain    | EVM (Base)                                   | Solana                             |
-| Batch table        | `relay_anchor_batches`                       | `relay_credential_anchor_batches`  |
+| Property           | Federation Settlement (relay-federation-v1.md §7.6) | Per-Agent Settlement (agent-settlement-anchor-v1.md)       | Credential Anchoring                              |
+| ------------------ | --------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------- |
+| Audience           | Inter-relay peer audit                              | Worker audit of relay-as-counterparty                      | External verifier of agent reputation portability |
+| Source table       | `relay_federation_settlements`                      | `relay_settlements` (signed rows only)                     | `relay_credentials`                               |
+| Leaf hash          | Settlement fields → canonical JSON → SHA-256        | Whole signed `SettlementRecord` → canonical JSON → SHA-256 | Full VC → canonical JSON → SHA-256                |
+| Default batch size | 100                                                 | 100                                                        | 50                                                |
+| Reference chain    | EVM (Base)                                          | EVM (Base) — shared submitter                              | Solana                                            |
+| Batch table        | `relay_anchor_batches`                              | `relay_agent_anchor_batches`                               | `relay_credential_anchor_batches`                 |
 
-Both use the same `buildMerkleTree`, `getMerkleProof`, `verifyMerkleProof` functions from the shared Merkle library.
+All three use the same `buildMerkleTree`, `getMerkleProof`, `verifyMerkleProof` functions from the shared Merkle library and the same `ChainAnchorSubmitter` interface (`@motebit/protocol`).
 
 ## 10. Revocation Anchoring
 
