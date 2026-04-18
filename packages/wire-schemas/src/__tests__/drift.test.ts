@@ -29,6 +29,7 @@ import {
   buildAgentServiceListingJsonSchema,
 } from "../agent-service-listing.js";
 import { AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "../agent-task.js";
+import { ROUTE_SCORE_SCHEMA_ID, buildRouteScoreJsonSchema } from "../route-score.js";
 import {
   SETTLEMENT_RECORD_SCHEMA_ID,
   buildSettlementRecordJsonSchema,
@@ -82,6 +83,12 @@ const CASES: SchemaCase[] = [
     filename: "settlement-record-v1.json",
     expectedId: SETTLEMENT_RECORD_SCHEMA_ID,
     build: buildSettlementRecordJsonSchema,
+  },
+  {
+    name: "route-score-v1",
+    filename: "route-score-v1.json",
+    expectedId: ROUTE_SCORE_SCHEMA_ID,
+    build: buildRouteScoreJsonSchema,
   },
 ];
 

@@ -86,7 +86,6 @@ const WAIVERS: Record<string, string> = {
   MigrationToken: "TODO: schema (migration-v1) — signed migration authorization",
   ReputationCredentialSubject:
     "TODO: schema (credential-v1) — VC subject body for reputation credentials",
-  RouteScore: "TODO: schema (market-v1) — discovery composite score envelope",
   TrustCredentialSubject: "TODO: schema (credential-v1) — VC subject body for trust credentials",
 };
 

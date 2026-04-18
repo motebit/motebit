@@ -54,3 +54,8 @@ export {
   SETTLEMENT_RECORD_SCHEMA_ID,
   buildSettlementRecordJsonSchema,
 } from "./settlement-record.js";
+export {
+  RouteScoreSchema,
+  ROUTE_SCORE_SCHEMA_ID,
+  buildRouteScoreJsonSchema,
+} from "./route-score.js";
