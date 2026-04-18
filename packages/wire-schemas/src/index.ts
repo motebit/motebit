@@ -59,3 +59,8 @@ export {
   ROUTE_SCORE_SCHEMA_ID,
   buildRouteScoreJsonSchema,
 } from "./route-score.js";
+export {
+  CredentialBundleSchema,
+  CREDENTIAL_BUNDLE_SCHEMA_ID,
+  buildCredentialBundleJsonSchema,
+} from "./credential-bundle.js";

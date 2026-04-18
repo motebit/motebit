@@ -73,7 +73,6 @@ const WAIVERS: Record<string, string> = {
   BalanceWaiver: "TODO: schema (settlement-v1) — operator-signed balance reconciliation",
   CredentialAnchorBatch: "TODO: schema (credential-anchor-v1) — chain-anchored batch metadata",
   CredentialAnchorProof: "TODO: schema (credential-anchor-v1) — Merkle inclusion proof",
-  CredentialBundle: "TODO: schema (credential-v1) — VC + presentation envelope",
   DepartureAttestation: "TODO: schema (relay-federation-v1) — peer departure signal",
   DisputeAppeal: "TODO: schema (dispute-v1) — appeal of a dispute resolution",
   DisputeEvidence: "TODO: schema (dispute-v1) — evidence attached to a dispute",

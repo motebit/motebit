@@ -18,6 +18,7 @@ import { buildAgentServiceListingJsonSchema } from "../src/agent-service-listing
 import { buildAgentTaskJsonSchema } from "../src/agent-task.js";
 import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
+import { buildCredentialBundleJsonSchema } from "../src/credential-bundle.js";
 import { buildRouteScoreJsonSchema } from "../src/route-score.js";
 import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
 
@@ -32,6 +33,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "agent-task-v1.json", build: buildAgentTaskJsonSchema },
   { filename: "settlement-record-v1.json", build: buildSettlementRecordJsonSchema },
   { filename: "route-score-v1.json", build: buildRouteScoreJsonSchema },
+  { filename: "credential-bundle-v1.json", build: buildCredentialBundleJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {
