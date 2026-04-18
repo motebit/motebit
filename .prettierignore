@@ -8,6 +8,11 @@ pnpm-lock.yaml
 **/motebit.md
 services/proxy/tsconfig.json
 
+# VS Code extension build artifacts. Compiled from apps/vscode/src/ by
+# `tsc -p apps/vscode/tsconfig.json`; gitignored at apps/vscode/.gitignore
+# but Prettier doesn't respect nested .gitignore reliably.
+apps/vscode/out
+
 # api-extractor baselines are machine-generated; Prettier reformatting them
 # causes permanent divergence from the raw extractor output that the
 # check-api-surface gate compares against.
