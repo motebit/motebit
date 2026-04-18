@@ -482,3 +482,155 @@ describe("getCredentialAnchoringStats", () => {
     expect(stats.pending_credentials).toBe(0);
   });
 });
+
+// ===========================================================================
+// HTTP endpoint integration tests for the credential anchor proof routes.
+//
+// The endpoints are spec'd in spec/credential-anchor-v1.md §7 as public
+// verifier surfaces. They're also governed by services/api CLAUDE.md rule 6
+// (every relay-asserted truth independently verifiable without relay
+// contact). These tests pin the contract: no bearer token required,
+// spec'd status codes (404/202/200) at the exact paths.
+// ===========================================================================
+
+import { createTestRelay } from "./test-helpers.js";
+import type { SyncRelay } from "../index.js";
+
+let credRelay: SyncRelay;
+let credDb: DatabaseDriver;
+let credRelayIdentity: RelayIdentity;
+
+/** Insert a credential into the running test relay's DB. */
+async function insertCredentialIntoRelay(opts: { issuedAt?: number } = {}): Promise<string> {
+  const id = crypto.randomUUID();
+  const keypair = await generateKeypair();
+  const vc = await issueReputationCredential(
+    {
+      success_rate: 0.95,
+      avg_latency_ms: 120,
+      task_count: 42,
+      trust_score: 0.8,
+      availability: 0.99,
+      measured_at: Date.now(),
+    },
+    keypair.privateKey,
+    keypair.publicKey,
+    `did:key:zSubject${crypto.randomUUID().slice(0, 8)}`,
+  );
+  credDb
+    .prepare(
+      `INSERT INTO relay_credentials
+         (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      "agent-1",
+      vc.issuer,
+      "AgentReputationCredential",
+      JSON.stringify(vc),
+      opts.issuedAt ?? Date.now(),
+    );
+  return id;
+}
+
+describe("GET /api/v1/credentials/:credentialId/anchor-proof", () => {
+  beforeEach(async () => {
+    credRelay = await createTestRelay();
+    credDb = credRelay.moteDb.db;
+    // Reuse the relay's own identity so cutCredentialBatch signs against
+    // a key the getCredentialAnchorProof path can verify.
+    const row = credDb.prepare("SELECT * FROM relay_identity").get() as {
+      relay_motebit_id: string;
+      public_key: string;
+      private_key_hex: string;
+      did: string;
+    };
+    credRelayIdentity = {
+      relayMotebitId: row.relay_motebit_id,
+      publicKey: Uint8Array.from(Buffer.from(row.public_key, "hex")),
+      privateKey: Uint8Array.from(Buffer.from(row.private_key_hex, "hex")),
+      publicKeyHex: row.public_key,
+      did: row.did,
+    };
+  });
+
+  it("does NOT require bearer auth (public verifier endpoint — rule 6)", async () => {
+    const res = await credRelay.app.request("/api/v1/credentials/unknown/anchor-proof");
+    expect(res.status).not.toBe(401);
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 202 with Retry-After when credential exists but is not yet batched", async () => {
+    const id = await insertCredentialIntoRelay();
+    const res = await credRelay.app.request(`/api/v1/credentials/${id}/anchor-proof`);
+    expect(res.status).toBe(202);
+    expect(res.headers.get("Retry-After")).toBe("60");
+    const body = (await res.json()) as { status: string };
+    expect(body.status).toBe("pending");
+  });
+
+  it("returns 200 with the inclusion proof after batching (spec §7.1)", async () => {
+    const id = await insertCredentialIntoRelay();
+    await cutCredentialBatch(credDb, credRelayIdentity);
+
+    const res = await credRelay.app.request(`/api/v1/credentials/${id}/anchor-proof`);
+    expect(res.status).toBe(200);
+    const proof = (await res.json()) as {
+      credential_id: string;
+      credential_hash: string;
+      merkle_root: string;
+      batch_id: string;
+      leaf_index: number;
+      siblings: string[];
+      suite: string;
+    };
+    expect(proof.credential_id).toBe(id);
+    expect(proof.credential_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(proof.merkle_root).toMatch(/^[0-9a-f]{64}$/);
+    expect(proof.suite).toBe("motebit-jcs-ed25519-hex-v1");
+  });
+});
+
+describe("GET /api/v1/credential-anchors/:batchId", () => {
+  beforeEach(async () => {
+    credRelay = await createTestRelay();
+    credDb = credRelay.moteDb.db;
+    const row = credDb.prepare("SELECT * FROM relay_identity").get() as {
+      relay_motebit_id: string;
+      public_key: string;
+      private_key_hex: string;
+      did: string;
+    };
+    credRelayIdentity = {
+      relayMotebitId: row.relay_motebit_id,
+      publicKey: Uint8Array.from(Buffer.from(row.public_key, "hex")),
+      privateKey: Uint8Array.from(Buffer.from(row.private_key_hex, "hex")),
+      publicKeyHex: row.public_key,
+      did: row.did,
+    };
+  });
+
+  it("does NOT require bearer auth (public verifier endpoint — rule 6)", async () => {
+    const res = await credRelay.app.request("/api/v1/credential-anchors/unknown-batch");
+    expect(res.status).not.toBe(401);
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 200 with batch metadata after a cut (spec §7.2)", async () => {
+    await insertCredentialIntoRelay();
+    const cut = await cutCredentialBatch(credDb, credRelayIdentity);
+    expect(cut).not.toBeNull();
+
+    const res = await credRelay.app.request(`/api/v1/credential-anchors/${cut!.batch_id}`);
+    expect(res.status).toBe(200);
+    const batch = (await res.json()) as {
+      batch_id: string;
+      merkle_root: string;
+      leaf_count: number;
+    };
+    expect(batch.batch_id).toBe(cut!.batch_id);
+    expect(batch.merkle_root).toBe(cut!.merkle_root);
+    expect(batch.leaf_count).toBe(1);
+  });
+});

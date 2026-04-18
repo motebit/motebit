@@ -666,4 +666,34 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 15,
+    name: "credentials_anchor_batch_id",
+    up: (db) => {
+      // credential-anchor-v1.md §7 — relay_credentials.anchor_batch_id is the
+      // per-credential pointer into relay_credential_anchor_batches. The
+      // column was originally added via an idempotent ALTER TABLE inside
+      // createCredentialAnchoringTables(), but that helper runs BEFORE the
+      // migration that creates relay_credentials (createFederationTables
+      // precedes createRelaySchema in createSyncRelay so pairing/federation
+      // tables exist for later migrations). Result: the ALTER TABLE silently
+      // failed on fresh DBs, and the credential anchor-proof endpoint was
+      // non-functional end-to-end. Surfaced by the HTTP integration test
+      // added alongside the doctrinal auth-allowlist fix (services/api
+      // CLAUDE.md rule 6).
+      //
+      // Guarded with PRAGMA because DBs that somehow DID pick up the column
+      // via the old path (unlikely but possible) would trip a duplicate-
+      // column error.
+      const cols = db.prepare("PRAGMA table_info(relay_credentials)").all() as {
+        name: string;
+      }[];
+      if (!cols.some((c) => c.name === "anchor_batch_id")) {
+        db.exec("ALTER TABLE relay_credentials ADD COLUMN anchor_batch_id TEXT;");
+      }
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_credentials_unanchored ON relay_credentials(issued_at, credential_id) WHERE anchor_batch_id IS NULL;",
+      );
+    },
+  },
 ];
