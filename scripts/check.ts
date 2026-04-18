@@ -97,6 +97,12 @@ const GATES: ReadonlyArray<Gate> = [
     args: ["--strict"],
   },
   {
+    name: "check-spec-wire-schemas",
+    defends:
+      "every wire-format type declared in spec/*.md has a matching <TypeName>Schema export from @motebit/wire-schemas (invariant #23, added 2026-04-18 alongside the wire-schemas publication — completes the spec → TS-type → zod-schema → JSON-Schema chain so third-party implementers can validate without bundling motebit)",
+    script: "check-spec-wire-schemas",
+  },
+  {
     name: "check-suite-declared",
     defends:
       "every signed wire-format artifact declares a `suite` field naming a @motebit/protocol-registered SuiteId (invariant #10)",
