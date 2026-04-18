@@ -66,7 +66,7 @@
     }
   },
   "required": ["motebit_id", "found", "resolved_via", "cached", "ttl"],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "definitions": {
     "AgentResolutionResult": {
       "type": "object",
@@ -132,7 +132,7 @@
         }
       },
       "required": ["motebit_id", "found", "resolved_via", "cached", "ttl"],
-      "additionalProperties": false
+      "additionalProperties": true
     }
   }
 }

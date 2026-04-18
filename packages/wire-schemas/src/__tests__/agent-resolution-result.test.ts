@@ -58,8 +58,9 @@ describe("AgentResolutionResultSchema", () => {
     expect(() => AgentResolutionResultSchema.parse({ ...FOUND, relay_url: "not a url" })).toThrow();
   });
 
-  it("rejects extra top-level keys (strict mode)", () => {
-    expect(() => AgentResolutionResultSchema.parse({ ...FOUND, sneak: "not allowed" })).toThrow();
+  it("preserves unknown top-level keys (forward-compat — unsigned envelope)", () => {
+    const r = AgentResolutionResultSchema.parse({ ...FOUND, future_v2_field: "preserved" });
+    expect((r as Record<string, unknown>).future_v2_field).toBe("preserved");
   });
 
   it("rejects empty strings inside resolved_via", () => {

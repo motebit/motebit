@@ -99,7 +99,11 @@ export const AgentResolutionResultSchema = z
         "Seconds until this result should be re-resolved. Caller-side cache hint; the resolving relay does not enforce it.",
       ),
   })
-  .strict();
+  // Unsigned envelope — forward-compat per "unknown fields MUST be ignored"
+  // (delegation-v1 §3.1, applied across unsigned envelopes). A v2 relay
+  // returning a richer discovery response (e.g. with `route_score`) does
+  // not break v1 clients.
+  .passthrough();
 
 // ---------------------------------------------------------------------------
 // Type parity — drift defense #22 compile-time half

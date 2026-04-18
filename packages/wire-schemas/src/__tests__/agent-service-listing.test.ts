@@ -73,8 +73,9 @@ describe("AgentServiceListingSchema", () => {
     ).toThrow();
   });
 
-  it("rejects extra top-level keys (strict mode)", () => {
-    expect(() => AgentServiceListingSchema.parse({ ...SAMPLE, sneak: "not allowed" })).toThrow();
+  it("preserves unknown top-level keys (forward-compat — unsigned envelope)", () => {
+    const l = AgentServiceListingSchema.parse({ ...SAMPLE, future_v2_field: "preserved" });
+    expect((l as Record<string, unknown>).future_v2_field).toBe("preserved");
   });
 
   it("rejects empty capability strings", () => {

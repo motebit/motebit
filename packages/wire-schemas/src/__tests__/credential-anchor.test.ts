@@ -141,8 +141,9 @@ describe("CredentialAnchorProofSchema", () => {
     ).toThrow();
   });
 
-  it("rejects extra top-level keys (strict mode)", () => {
-    expect(() => CredentialAnchorProofSchema.parse({ ...SAMPLE, sneak: "no" })).toThrow();
+  it("preserves unknown top-level keys (forward-compat — proof envelope is unsigned)", () => {
+    const p = CredentialAnchorProofSchema.parse({ ...SAMPLE, future_v2_field: "preserved" });
+    expect((p as Record<string, unknown>).future_v2_field).toBe("preserved");
   });
 
   it("rejects the wrong cryptosuite", () => {

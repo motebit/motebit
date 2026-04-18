@@ -65,7 +65,7 @@
     "status",
     "settled_at"
   ],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "definitions": {
     "SettlementRecord": {
       "type": "object",
@@ -130,7 +130,7 @@
         "status",
         "settled_at"
       ],
-      "additionalProperties": false
+      "additionalProperties": true
     }
   }
 }

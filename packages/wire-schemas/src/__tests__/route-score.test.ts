@@ -62,8 +62,9 @@ describe("RouteScoreSchema", () => {
     ).toThrow();
   });
 
-  it("rejects extra top-level keys (strict mode)", () => {
-    expect(() => RouteScoreSchema.parse({ ...SAMPLE, sneak: "extra" })).toThrow();
+  it("preserves unknown top-level keys (forward-compat — unsigned envelope)", () => {
+    const r = RouteScoreSchema.parse({ ...SAMPLE, future_v2_field: "preserved" });
+    expect((r as Record<string, unknown>).future_v2_field).toBe("preserved");
   });
 
   it("accepts negative or zero composite (relay policy may produce these)", () => {

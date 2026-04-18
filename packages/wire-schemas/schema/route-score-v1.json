@@ -59,7 +59,7 @@
     }
   },
   "required": ["motebit_id", "composite", "sub_scores", "selected"],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "definitions": {
     "RouteScore": {
       "type": "object",
@@ -118,7 +118,7 @@
         }
       },
       "required": ["motebit_id", "composite", "sub_scores", "selected"],
-      "additionalProperties": false
+      "additionalProperties": true
     }
   }
 }

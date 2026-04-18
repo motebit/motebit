@@ -121,7 +121,13 @@ export const AgentTaskSchema = z
       ),
     invocation_origin: IntentOriginSchema.optional(),
   })
-  .strict();
+  // Unsigned envelope — spec/delegation-v1.md §3.1 mandates "unknown fields
+  // MUST be ignored (forward compatibility)". `.passthrough()` accepts and
+  // preserves unknown fields so v1 verifiers don't reject v2 payloads.
+  // Inner enums (`status`, `required_capabilities[]`, `invocation_origin`)
+  // remain closed via their own zod schemas — only the top-level envelope
+  // is forward-compatible.
+  .passthrough();
 
 // ---------------------------------------------------------------------------
 // Type parity — drift defense #22 compile-time half

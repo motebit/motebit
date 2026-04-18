@@ -93,7 +93,15 @@ export const RouteScoreSchema = z
         "True if this candidate was the routing decision. Exactly one RouteScore in a routing batch should have `selected: true`; the rest are runners-up included for transparency.",
       ),
   })
-  .strict();
+  // Unsigned envelope — forward-compat per "unknown fields MUST be ignored"
+  // (delegation-v1 §3.1, applied across unsigned envelopes). The inner
+  // `sub_scores` keeps `.strict()` because the six dimensions are a
+  // protocol-defined closed surface — adding a "creativity" axis there
+  // would be a protocol versioning event, not silent forward-compat.
+  // NOTE (audit follow-up): RouteScore is unsigned today, so a relay can
+  // claim any composite without proof. Routing transparency is a UX hint,
+  // not a binding claim. Tracked as a protocol-level gap.
+  .passthrough();
 
 // ---------------------------------------------------------------------------
 // Type parity — drift defense #22 compile-time half

@@ -124,7 +124,12 @@ export const AgentServiceListingSchema = z
         "Unix timestamp in milliseconds of the last listing update. The relay stamps this on PUT; consumers treat it as a freshness signal (stale listings may indicate offline agents).",
       ),
   })
-  .strict();
+  // Unsigned envelope — forward-compat per the protocol's "unknown fields
+  // MUST be ignored" convention (delegation-v1 §3.1, applied across
+  // unsigned envelopes). Inner objects (`sla`, `pricing[]` elements) keep
+  // strict — those are protocol-defined closed surfaces; the listing
+  // envelope is open for v2 fields.
+  .passthrough();
 
 // ---------------------------------------------------------------------------
 // Type parity — drift defense #22 compile-time half

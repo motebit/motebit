@@ -57,8 +57,9 @@ describe("SettlementRecordSchema", () => {
     expect(() => SettlementRecordSchema.parse(bad)).toThrow();
   });
 
-  it("rejects extra top-level keys (strict mode)", () => {
-    expect(() => SettlementRecordSchema.parse({ ...SAMPLE, sneak: "extra" })).toThrow();
+  it("preserves unknown top-level keys (forward-compat — unsigned envelope; see audit follow-up to sign upstream)", () => {
+    const s = SettlementRecordSchema.parse({ ...SAMPLE, future_v2_field: "preserved" });
+    expect((s as Record<string, unknown>).future_v2_field).toBe("preserved");
   });
 
   it("rejects empty receipt_hash and allocation_id", () => {

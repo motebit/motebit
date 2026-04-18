@@ -83,8 +83,9 @@ describe("AgentTaskSchema", () => {
     expect(() => AgentTaskSchema.parse({ ...SAMPLE, invocation_origin: "telepathy" })).toThrow();
   });
 
-  it("rejects extra top-level keys (strict mode — drift defense)", () => {
-    expect(() => AgentTaskSchema.parse({ ...SAMPLE, sneak: "not allowed" })).toThrow();
+  it("preserves unknown top-level keys (forward-compat per delegation-v1 §3.1: `unknown fields MUST be ignored`)", () => {
+    const t = AgentTaskSchema.parse({ ...SAMPLE, future_v2_field: "preserved" });
+    expect((t as Record<string, unknown>).future_v2_field).toBe("preserved");
   });
 
   it("rejects empty task_id and motebit_id", () => {

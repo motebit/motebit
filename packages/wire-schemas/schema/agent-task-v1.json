@@ -76,7 +76,7 @@
     }
   },
   "required": ["task_id", "motebit_id", "prompt", "submitted_at", "status"],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "definitions": {
     "AgentTask": {
       "type": "object",
@@ -152,7 +152,7 @@
         }
       },
       "required": ["task_id", "motebit_id", "prompt", "submitted_at", "status"],
-      "additionalProperties": false
+      "additionalProperties": true
     }
   }
 }

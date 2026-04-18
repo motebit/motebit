@@ -100,7 +100,14 @@ export const SettlementRecordSchema = z
       .number()
       .describe("Unix timestamp in milliseconds when the settlement was committed."),
   })
-  .strict();
+  // Unsigned envelope today — forward-compat per "unknown fields MUST be
+  // ignored" (delegation-v1 §3.1, applied across unsigned envelopes).
+  // NOTE (audit follow-up): the upstream TypeScript type lacks a
+  // signature/suite, so a relay can retroactively rewrite settlement
+  // history undetectably. That's a protocol-level gap (not a wire-schema
+  // gap) and tracked separately — when @motebit/protocol adds signing
+  // to SettlementRecord, this schema flips back to .strict().
+  .passthrough();
 
 // ---------------------------------------------------------------------------
 // Type parity — drift defense #22 compile-time half

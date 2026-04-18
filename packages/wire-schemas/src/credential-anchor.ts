@@ -253,7 +253,12 @@ export const CredentialAnchorProofSchema = z
     ),
     anchor: chainAnchorField("proof's underlying batch"),
   })
-  .strict();
+  // Unsigned envelope — the proof itself isn't signed; it carries the
+  // batch's signature for verification. Forward-compat per "unknown fields
+  // MUST be ignored" — a v2 proof with extra debug fields (e.g. anchor
+  // confirmations count) shouldn't break v1 verifiers. The nested `anchor`
+  // and the inner Merkle-path fields stay strict — those are tight.
+  .passthrough();
 
 type _ProofForward =
   CredentialAnchorProof extends z.infer<typeof CredentialAnchorProofSchema> ? true : never;
