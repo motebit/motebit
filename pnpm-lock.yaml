@@ -1760,9 +1760,9 @@ importers:
 
   services/proxy:
     dependencies:
-      '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@vercel/kv':
         specifier: ^2.0.0
         version: 2.0.0

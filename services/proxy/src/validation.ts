@@ -3,6 +3,8 @@
  * No I/O, no edge runtime dependencies — testable in any environment.
  */
 
+import { verifyBySuite } from "@motebit/crypto/suite-dispatch";
+
 // --- Constants ---
 
 export const DAILY_LIMIT = 5;
@@ -271,17 +273,19 @@ export async function parseProxyToken(
       relayPublicKeyHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)),
     );
 
-    // Dynamic import — works in Edge Runtime.
-    //
-    // ProxyToken is a service-local artifact (not a protocol-shaped wire
-    // format), verified here on Vercel Edge where the full
-    // @motebit/crypto suite-dispatch module exceeds the edge bundle
-    // budget. If @motebit/crypto gains an edge-friendly build later,
-    // this routes through `verifyBySuite` and the waiver goes away.
-    // See docs/drift-defenses.md §11 "Active waivers".
-    const ed = await import("@noble/ed25519");
-    // crypto-suite: intentional-primitive-call — Vercel Edge bundle budget; ProxyToken is service-local, not a protocol wire artifact.
-    const valid = await ed.verifyAsync(sigBytes, payloadBytes, pubKeyBytes);
+    // The relay signs ProxyToken payloads by applying JCS to the
+    // payload JSON and Ed25519-signing those bytes; the envelope
+    // encodes both sides as base64url. That matches
+    // `motebit-jcs-ed25519-b64-v1`. ProxyToken is service-local (no
+    // on-wire `suite` field — it is not a protocol artifact), so the
+    // suite is named here at the verify call. If the relay ever
+    // switches signing suites, this constant moves with it.
+    const valid = await verifyBySuite(
+      "motebit-jcs-ed25519-b64-v1",
+      payloadBytes,
+      sigBytes,
+      pubKeyBytes,
+    );
     if (!valid) return null;
 
     const payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as ProxyTokenPayload;

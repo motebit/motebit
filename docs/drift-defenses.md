@@ -58,9 +58,7 @@ Every signature primitive call lives in `packages/crypto/src/suite-dispatch.ts`,
 
 **Active waivers.** Each one must pass the protocol test ("is this a motebit wire artifact?") and name a revisit trigger.
 
-| File                               | Pattern          | Reason                                                                               | Revisit trigger                                                                                     |
-| ---------------------------------- | ---------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `services/proxy/src/validation.ts` | `ed.verifyAsync` | Vercel Edge bundle budget; ProxyToken is service-local, not a protocol wire artifact | `@motebit/crypto` ships an edge-friendly subpath build → route through `verifyBySuite`, drop waiver |
+_None today._ The `services/proxy/src/validation.ts` `ed.verifyAsync` waiver (Vercel Edge bundle budget) closed 2026-04-18 when `@motebit/crypto` shipped a `./suite-dispatch` subpath export — edge-neutral tsup entry, `verifyBySuite` and friends only, no identity / credential / anchor machinery. The proxy now calls `verifyBySuite("motebit-jcs-ed25519-b64-v1", ...)` directly. The subpath is the repo's first answer to "how do we route through the dispatcher from an environment that can't afford the full package surface?" — future edge or worker-bound consumers should reuse it before proposing a new waiver.
 
 ### 12. Published binaries ↔ dist-boot smoke
 

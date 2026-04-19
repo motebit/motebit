@@ -15,7 +15,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@noble/ed25519": "~3.0.1",
+    "@motebit/crypto": "workspace:*",
     "@vercel/kv": "^2.0.0",
     "next": "^16.1.7",
     "react": "^19.0.0",

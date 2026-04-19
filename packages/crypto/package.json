@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./suite-dispatch": {
+      "types": "./dist/suite-dispatch.d.ts",
+      "default": "./dist/suite-dispatch.js"
     }
   },
   "files": [
