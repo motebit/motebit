@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryMemoryStorage, MemoryGraph } from "../index.js";
-import { InMemoryEventStore } from "@motebit/event-log";
+import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { RelationType, SensitivityLevel } from "@motebit/sdk";
 import type { MemoryCandidate } from "@motebit/sdk";
 
@@ -62,7 +62,7 @@ interface FixtureNodes {
 
 async function buildFixture(): Promise<{ graph: MemoryGraph; nodes: FixtureNodes }> {
   const storage = new InMemoryMemoryStorage();
-  const eventStore = new InMemoryEventStore();
+  const eventStore = new EventStore(new InMemoryEventStore());
   const graph = new MemoryGraph(storage, eventStore, "test-motebit");
 
   const emb = (label: string): number[] => {
@@ -223,14 +223,14 @@ describe("semiring-driven recall — five lenses, five answers", () => {
 describe("recall lens edge cases", () => {
   it("recallConfidentChain returns null for unknown seed", async () => {
     const storage = new InMemoryMemoryStorage();
-    const eventStore = new InMemoryEventStore();
+    const eventStore = new EventStore(new InMemoryEventStore());
     const graph = new MemoryGraph(storage, eventStore, "test-motebit");
     expect(await graph.recallConfidentChain("nope", null)).toBeNull();
   });
 
   it("recallShortestProvenance returns null when target is disconnected", async () => {
     const storage = new InMemoryMemoryStorage();
-    const eventStore = new InMemoryEventStore();
+    const eventStore = new EventStore(new InMemoryEventStore());
     const graph = new MemoryGraph(storage, eventStore, "test-motebit");
     const a = (await graph.formMemory(
       { content: "a", sensitivity: SensitivityLevel.None, confidence: 0.9 },
@@ -246,14 +246,14 @@ describe("recall lens edge cases", () => {
 
   it("recallReachable returns empty set for empty graph", async () => {
     const storage = new InMemoryMemoryStorage();
-    const eventStore = new InMemoryEventStore();
+    const eventStore = new EventStore(new InMemoryEventStore());
     const graph = new MemoryGraph(storage, eventStore, "test-motebit");
     expect((await graph.recallReachable("nope")).size).toBe(0);
   });
 
   it("recallFuzzyCluster returns empty array for isolated seed", async () => {
     const storage = new InMemoryMemoryStorage();
-    const eventStore = new InMemoryEventStore();
+    const eventStore = new EventStore(new InMemoryEventStore());
     const graph = new MemoryGraph(storage, eventStore, "test-motebit");
     const a = (await graph.formMemory(
       { content: "a", sensitivity: SensitivityLevel.None, confidence: 0.9 },
