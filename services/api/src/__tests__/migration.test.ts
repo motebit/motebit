@@ -10,7 +10,9 @@ import {
   canonicalJson,
   hexToBytes,
 } from "@motebit/encryption";
-import type { MigrationToken, DepartureAttestation } from "@motebit/protocol";
+import { signBalanceWaiver } from "@motebit/crypto";
+import type { MigrationToken, DepartureAttestation, BalanceWaiver } from "@motebit/protocol";
+import { creditAccount } from "../accounts.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
@@ -253,6 +255,124 @@ describe("Migration: cancel + depart", () => {
     const discoverRes = await relay.app.request(`/api/v1/discover/lifecycle-agent`);
     const discoverBody = (await discoverRes.json()) as { found: boolean };
     expect(discoverBody.found).toBe(false);
+  });
+});
+
+// ── Migration §7.2 — BalanceWaiver ─────────────────────────────────────
+// Foundation law (§7.3): "Migration advances to `departed` only after
+// withdrawal is confirmed OR the agent signs a BalanceWaiver." These
+// tests cover the second branch: an agent with positive balance presents
+// a signed waiver and the relay verifies it before flipping state.
+
+describe("Migration: depart with BalanceWaiver (§7.2 + §7.3)", () => {
+  let relay: SyncRelay;
+  let agentPrivateKey: Uint8Array;
+  let agentPublicKeyHex: string;
+  const motebitId = "waiver-agent";
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+    const kp = await generateKeypair();
+    agentPrivateKey = kp.privateKey;
+    agentPublicKeyHex = bytesToHex(kp.publicKey);
+    await registerAgent(relay, motebitId, agentPublicKeyHex);
+  });
+
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  async function fundAndSign(balance: number, overrides?: Partial<BalanceWaiver>) {
+    creditAccount(relay.moteDb.db, motebitId, balance, "deposit", null, "test");
+    await initiateMigration(relay, motebitId);
+    const body = {
+      motebit_id: overrides?.motebit_id ?? motebitId,
+      waived_amount: overrides?.waived_amount ?? balance,
+      waived_at: overrides?.waived_at ?? Date.now(),
+    };
+    return signBalanceWaiver(body, agentPrivateKey);
+  }
+
+  async function depart(waiver?: BalanceWaiver): Promise<Response> {
+    return relay.app.request(`/api/v1/agents/${motebitId}/migrate/depart`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: waiver ? JSON.stringify({ balance_waiver: waiver }) : JSON.stringify({}),
+    });
+  }
+
+  it("positive balance with no waiver — 409 naming both paths", async () => {
+    creditAccount(relay.moteDb.db, motebitId, 1_000_000, "deposit", null, "test");
+    await initiateMigration(relay, motebitId);
+    const res = await depart();
+    expect(res.status).toBe(409);
+    expect(await res.text()).toMatch(/withdrawn or waived/i);
+  });
+
+  it("valid waiver — succeeds, balance debited to zero, waiver persisted", async () => {
+    const waiver = await fundAndSign(1_234_567);
+    const res = await depart(waiver);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; state: string };
+    expect(body.state).toBe("departed");
+
+    // Balance debited under the waiver transaction type.
+    const row = relay.moteDb.db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get(motebitId) as { balance: number } | undefined;
+    expect(row?.balance).toBe(0);
+
+    // Waiver persisted verbatim on the migration row — auditors re-verify.
+    const mig = relay.moteDb.db
+      .prepare("SELECT balance_waiver_json FROM relay_migrations WHERE motebit_id = ?")
+      .get(motebitId) as { balance_waiver_json: string | null } | undefined;
+    expect(mig?.balance_waiver_json).toBeTruthy();
+    const persisted = JSON.parse(mig!.balance_waiver_json!) as BalanceWaiver;
+    expect(persisted.signature).toBe(waiver.signature);
+  });
+
+  it("tampered signature — 400", async () => {
+    const waiver = await fundAndSign(1_000_000);
+    const tampered: BalanceWaiver = { ...waiver, waived_amount: 999_999_999 };
+    const res = await depart(tampered);
+    expect(res.status).toBe(400);
+  });
+
+  it("motebit_id mismatch — 400", async () => {
+    // Sign a waiver claiming a different motebit_id than the path
+    const waiver = await fundAndSign(1_000_000, { motebit_id: "impostor" });
+    const res = await depart(waiver);
+    expect(res.status).toBe(400);
+  });
+
+  it("waived_amount < current balance — 409 with re-sign guidance", async () => {
+    const waiver = await fundAndSign(1_000_000, { waived_amount: 500_000 });
+    const res = await depart(waiver);
+    expect(res.status).toBe(409);
+    expect(await res.text()).toMatch(/re-sign/i);
+  });
+
+  it("waiver signed by wrong key — 400", async () => {
+    creditAccount(relay.moteDb.db, motebitId, 1_000_000, "deposit", null, "test");
+    await initiateMigration(relay, motebitId);
+    const impostorKp = await generateKeypair();
+    const waiver = await signBalanceWaiver(
+      { motebit_id: motebitId, waived_amount: 1_000_000, waived_at: Date.now() },
+      impostorKp.privateKey,
+    );
+    const res = await depart(waiver);
+    expect(res.status).toBe(400);
+  });
+
+  it("waived_amount ≥ balance — succeeds and debits only the current balance", async () => {
+    // Agent over-commits: balance 500k, waives 2M. Relay accepts, debits 500k.
+    const waiver = await fundAndSign(500_000, { waived_amount: 2_000_000 });
+    const res = await depart(waiver);
+    expect(res.status).toBe(200);
+    const row = relay.moteDb.db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get(motebitId) as { balance: number } | undefined;
+    expect(row?.balance).toBe(0);
   });
 });
 

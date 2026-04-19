@@ -555,6 +555,58 @@ export async function verifyDelegationChain(
   return { valid: true };
 }
 
+// === Balance Waivers (migration §7.2) ===
+
+import type { BalanceWaiver } from "@motebit/protocol";
+export type { BalanceWaiver };
+
+/** The one suite BalanceWaivers sign under today — matches spec/migration-v1.md §7.2. */
+export const BALANCE_WAIVER_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Sign a balance waiver. The agent forfeits a named micro-unit amount to
+ * expedite departure from a relay (spec/migration-v1.md §7.2 + §7.3 — a
+ * waiver is one of the two terminal authorizations the depart route will
+ * accept, the other being a confirmed withdrawal).
+ *
+ * Callers pass the body without `signature` or `suite`; the signer owns
+ * both. The agent's identity key signs canonical JSON of the unsigned
+ * body (with `suite` stamped in), base64url-encoded.
+ */
+export async function signBalanceWaiver(
+  waiver: Omit<BalanceWaiver, "signature" | "suite">,
+  agentPrivateKey: Uint8Array,
+): Promise<BalanceWaiver> {
+  const body = { ...waiver, suite: BALANCE_WAIVER_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(BALANCE_WAIVER_SUITE, message, agentPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a balance waiver against the agent's public key. Rejects
+ * fail-closed on unknown `suite`, base64url decode error, and primitive
+ * verification failure. Matching of `motebit_id` to the authorizing
+ * agent, and `waived_amount` to the actual virtual-account balance, is
+ * the caller's responsibility (neither is a cryptographic property).
+ */
+export async function verifyBalanceWaiver(
+  waiver: BalanceWaiver,
+  agentPublicKey: Uint8Array,
+): Promise<boolean> {
+  if (waiver.suite !== BALANCE_WAIVER_SUITE) return false;
+  const { signature, ...body } = waiver;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(waiver.suite, message, sig, agentPublicKey);
+  } catch {
+    return false;
+  }
+}
+
 // === Settlement Records ===
 
 import type { SettlementRecord } from "@motebit/protocol";

@@ -1613,6 +1613,9 @@ importers:
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@motebit/deposit-detector':
         specifier: workspace:*
         version: link:../../packages/deposit-detector
@@ -1665,9 +1668,6 @@ importers:
       '@motebit/ai-core':
         specifier: workspace:*
         version: link:../../packages/ai-core
-      '@motebit/crypto':
-        specifier: workspace:*
-        version: link:../../packages/crypto
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner

@@ -10,7 +10,8 @@ export type TransactionType =
   | "allocation_release"
   | "settlement_debit"
   | "settlement_credit"
-  | "fee";
+  | "fee"
+  | "waiver";
 
 export interface VirtualAccount {
   motebit_id: string;

@@ -10,16 +10,19 @@
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { sign, verify, canonicalJson, bytesToHex, hexToBytes } from "@motebit/encryption";
+import { verifyBalanceWaiver } from "@motebit/crypto";
 import type {
   MigrationToken,
   DepartureAttestation,
   CredentialBundle,
   MigrationState,
+  BalanceWaiver,
 } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { getCredentialAnchorProof } from "./credential-anchoring.js";
+import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
 
@@ -48,6 +51,16 @@ export function createMigrationTables(db: DatabaseDriver): void {
     CREATE INDEX IF NOT EXISTS idx_migrations_motebit
       ON relay_migrations(motebit_id) WHERE state NOT IN ('departed', 'cancelled');
   `);
+  // Add balance_waiver_json on existing deployments. Auditor-verifiable
+  // record of the §7.2 departure authorization: stores the canonical JSON
+  // of the BalanceWaiver as received. An auditor re-canonicalizes, looks
+  // up the agent's public key, and re-runs `verifyBalanceWaiver` to
+  // confirm the departure was properly authorized — no relay trust.
+  try {
+    db.exec("ALTER TABLE relay_migrations ADD COLUMN balance_waiver_json TEXT");
+  } catch {
+    // Column already exists — expected on subsequent boots
+  }
 
   // Track accepted migration presentations at destination (replay prevention §10)
   db.exec(`
@@ -480,8 +493,12 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   });
 
   // ── POST /api/v1/agents/:motebitId/migrate/depart ──
-  // Confirm departure — terminal state (§3.2).
-  app.post("/api/v1/agents/:motebitId/migrate/depart", (c) => {
+  // Confirm departure — terminal state (§3.2). Accepts an optional
+  // `balance_waiver` body per §7.2 + §7.3: the depart route will only
+  // advance to `departed` when the virtual-account balance is zero OR
+  // the agent presents a signed BalanceWaiver for at least the current
+  // balance.
+  app.post("/api/v1/agents/:motebitId/migrate/depart", async (c) => {
     const motebitId = c.req.param("motebitId");
     const migration = getActiveMigration(db, motebitId);
     if (!migration) {
@@ -506,28 +523,122 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       if (err instanceof HTTPException) throw err;
     }
 
-    // Check balance settled (§7.3) — zero balance or explicit waiver
+    // Optional balance waiver in the request body. Empty / no-JSON body
+    // is the zero-balance path; a present-but-malformed body is a 400.
+    let balanceWaiver: BalanceWaiver | undefined;
     try {
-      const balance = db
-        .prepare("SELECT balance FROM virtual_accounts WHERE motebit_id = ?")
-        .get(motebitId) as { balance: number } | undefined;
-
-      if (balance && balance.balance > 0) {
-        throw new HTTPException(409, {
-          message: "Cannot depart: balance must be withdrawn or waived first",
-        });
-      }
-    } catch (err) {
-      if (err instanceof HTTPException) throw err;
-      // virtual_accounts table may not exist — no balance
+      const body = (await c.req.json().catch(() => null)) as {
+        balance_waiver?: BalanceWaiver;
+      } | null;
+      balanceWaiver = body?.balance_waiver;
+    } catch {
+      balanceWaiver = undefined;
     }
 
+    // Check balance settled (§7.3) — zero balance or valid BalanceWaiver.
+    let currentBalance = 0;
+    try {
+      const row = db
+        .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+        .get(motebitId) as { balance: number } | undefined;
+      currentBalance = row?.balance ?? 0;
+    } catch {
+      // relay_accounts not yet created — treat as zero balance
+      currentBalance = 0;
+    }
+
+    let persistedWaiverJson: string | null = null;
+    if (currentBalance > 0) {
+      if (!balanceWaiver) {
+        throw new HTTPException(409, {
+          message:
+            "Cannot depart: balance must be withdrawn or waived first (POST { balance_waiver } per spec/migration-v1.md §7.2)",
+        });
+      }
+      if (balanceWaiver.motebit_id !== motebitId) {
+        throw new HTTPException(400, {
+          message: "Balance waiver motebit_id does not match path parameter",
+        });
+      }
+      if (balanceWaiver.waived_amount < currentBalance) {
+        throw new HTTPException(409, {
+          message: `Balance waiver covers ${balanceWaiver.waived_amount} but current balance is ${currentBalance} — re-sign and retry`,
+        });
+      }
+
+      // Resolve agent public key: agent_registry first (service agents),
+      // then the device records (personal agents). Mirrors the pattern in
+      // agents.ts verify-receipt.
+      let pubKeyHex: string | undefined;
+      const regRow = db
+        .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+        .get(motebitId) as { public_key: string } | undefined;
+      if (regRow?.public_key) {
+        pubKeyHex = regRow.public_key;
+      } else {
+        const device = db
+          .prepare(
+            "SELECT public_key FROM relay_devices WHERE motebit_id = ? AND public_key IS NOT NULL LIMIT 1",
+          )
+          .get(motebitId) as { public_key: string } | undefined;
+        pubKeyHex = device?.public_key;
+      }
+      if (!pubKeyHex) {
+        throw new HTTPException(400, {
+          message: "No public key on file for this agent — cannot verify balance waiver",
+        });
+      }
+
+      const waiverValid = await verifyBalanceWaiver(balanceWaiver, hexToBytes(pubKeyHex));
+      if (!waiverValid) {
+        throw new HTTPException(400, { message: "Balance waiver signature invalid" });
+      }
+
+      // Debit the account to zero under the "waiver" transaction type.
+      // The waiver amount may exceed the current balance (the agent
+      // committed to forfeiting "at least" `waived_amount`) — we debit
+      // only what's on the books. Audit trail cites the migration token.
+      const store = sqliteAccountStoreFor(db);
+      const debitResult = store.debit(
+        motebitId,
+        currentBalance,
+        "waiver",
+        migration.token_id,
+        `migration waiver: ${migration.token_id}`,
+      );
+      if (debitResult === null) {
+        // Insufficient funds between our read and debit — concurrent
+        // debit raced us. Surface a 409 and let the CLI re-check.
+        throw new HTTPException(409, {
+          message: "Balance changed during depart; re-check balance and retry",
+        });
+      }
+
+      persistedWaiverJson = canonicalJson(balanceWaiver);
+    }
+
+    // State transition, waiver persistence, and agent-revoke in one
+    // place. If any of these fail the request 5xxs and the caller can
+    // safely retry — the active-migration query will still find the
+    // token and the waiver replay is handled by the `motebit_id + state`
+    // guard (only 'initiated' / 'exporting' / 'settling' states match
+    // getActiveMigration; 'departed' is terminal).
+    if (persistedWaiverJson !== null) {
+      db.prepare("UPDATE relay_migrations SET balance_waiver_json = ? WHERE token_id = ?").run(
+        persistedWaiverJson,
+        migration.token_id,
+      );
+    }
     updateMigrationState(db, migration.token_id, "departed");
 
     // Mark agent as inactive on this relay
     db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(motebitId);
 
-    logger.info("migration.departed", { motebitId, tokenId: migration.token_id });
+    logger.info("migration.departed", {
+      motebitId,
+      tokenId: migration.token_id,
+      waived: persistedWaiverJson !== null,
+    });
     return c.json({ ok: true, motebit_id: motebitId, state: "departed" });
   });
 }

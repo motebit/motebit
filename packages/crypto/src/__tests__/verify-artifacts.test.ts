@@ -13,6 +13,8 @@ import {
   verifyExecutionReceipt,
   signSettlement,
   verifySettlement,
+  signBalanceWaiver,
+  verifyBalanceWaiver,
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   signKeySuccession,
@@ -384,6 +386,71 @@ describe("signSettlement / verifySettlement", () => {
     const r = makeSettlement();
     const a = await signSettlement(r, kp.privateKey);
     const b = await signSettlement(r, kp.privateKey);
+    expect(a.signature).toBe(b.signature);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signBalanceWaiver / verifyBalanceWaiver
+// ---------------------------------------------------------------------------
+
+describe("signBalanceWaiver / verifyBalanceWaiver", () => {
+  function makeWaiver() {
+    return {
+      motebit_id: "mote-departing",
+      waived_amount: 1_234_567,
+      waived_at: 1_700_000_000_000,
+    };
+  }
+
+  it("round-trips (sign -> verify = true) and stamps suite", async () => {
+    const kp = await generateKeypair();
+    const signed = await signBalanceWaiver(makeWaiver(), kp.privateKey);
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(signed.signature).toBeTruthy();
+    expect(await verifyBalanceWaiver(signed, kp.publicKey)).toBe(true);
+  });
+
+  it("detects waived_amount tampering — a verifier cannot silently inflate the forfeit", async () => {
+    const kp = await generateKeypair();
+    const signed = await signBalanceWaiver(makeWaiver(), kp.privateKey);
+    const tampered = { ...signed, waived_amount: 9_999_999 };
+    expect(await verifyBalanceWaiver(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects motebit_id tampering — a waiver cannot be reattributed to another agent", async () => {
+    const kp = await generateKeypair();
+    const signed = await signBalanceWaiver(makeWaiver(), kp.privateKey);
+    const tampered = { ...signed, motebit_id: "mote-impostor" };
+    expect(await verifyBalanceWaiver(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signBalanceWaiver(makeWaiver(), kpA.privateKey);
+    expect(await verifyBalanceWaiver(signed, kpB.publicKey)).toBe(false);
+  });
+
+  it("rejects unknown suite (no legacy-no-suite path)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signBalanceWaiver(makeWaiver(), kp.privateKey);
+    const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
+    expect(await verifyBalanceWaiver(wrongSuite, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects malformed base64url signature", async () => {
+    const kp = await generateKeypair();
+    const signed = await signBalanceWaiver(makeWaiver(), kp.privateKey);
+    const garbage = { ...signed, signature: "!!!not-base64url!!!" };
+    expect(await verifyBalanceWaiver(garbage, kp.publicKey)).toBe(false);
+  });
+
+  it("is deterministic (same body -> same signature)", async () => {
+    const kp = await generateKeypair();
+    const w = makeWaiver();
+    const a = await signBalanceWaiver(w, kp.privateKey);
+    const b = await signBalanceWaiver(w, kp.privateKey);
     expect(a.signature).toBe(b.signature);
   });
 });

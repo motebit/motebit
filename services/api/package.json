@@ -21,6 +21,7 @@
     "@hono/node-ws": "^1.3.0",
     "@motebit/circuit-breaker": "workspace:*",
     "@motebit/core-identity": "workspace:*",
+    "@motebit/crypto": "workspace:*",
     "@motebit/deposit-detector": "workspace:*",
     "@motebit/encryption": "workspace:*",
     "@motebit/event-log": "workspace:*",
@@ -40,7 +41,6 @@
   },
   "devDependencies": {
     "@motebit/ai-core": "workspace:*",
-    "@motebit/crypto": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@types/node": "^22.0.0",

@@ -13,9 +13,36 @@
  *   `motebit migrate status` — check migration state
  */
 
+import { signBalanceWaiver, secureErase, type BalanceWaiver } from "@motebit/encryption";
+import { createInterface } from "node:readline";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
+import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
 import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
+
+async function loadIdentityPrivateKey(): Promise<Uint8Array | null> {
+  const config = loadFullConfig();
+  if (config.cli_private_key != null && config.cli_private_key !== "") {
+    return fromHex(config.cli_private_key);
+  }
+  if (config.cli_encrypted_key) {
+    const passphrase = await promptPassphrase("Passphrase (to sign balance waiver): ");
+    const privateKeyHex = await decryptPrivateKey(config.cli_encrypted_key, passphrase);
+    return fromHex(privateKeyHex);
+  }
+  return null;
+}
+
+async function confirmWaiver(motebitId: string, balanceMicro: number): Promise<boolean> {
+  const usd = (balanceMicro / 1_000_000).toFixed(6);
+  process.stdout.write(
+    `\n  This will forfeit $${usd} USD (${balanceMicro} micro-units) of ${motebitId}'s balance.\n  Signing a BalanceWaiver is irreversible — the relay retains the funds.\n  Continue? [y/N] `,
+  );
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer: string = await new Promise((resolve) => rl.question("", resolve));
+  rl.close();
+  return answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes";
+}
 
 export async function handleMigrate(config: CliConfig): Promise<void> {
   const subCmd = config.positionals[1];
@@ -180,9 +207,58 @@ export async function handleMigrate(config: CliConfig): Promise<void> {
 
   // === Step 5: Confirm departure on source relay ===
   console.log("\n[5/5] Confirming departure...");
+
+  // Per spec/migration-v1.md §7.3, depart requires zero balance OR a
+  // signed BalanceWaiver. Check the balance; if positive and --waive
+  // was passed, sign a waiver with the identity key and attach it.
+  let departBody: Record<string, unknown> = {};
+  const balanceRes = await fetch(`${sourceRelayUrl}/api/v1/agents/${motebitId}/balance`, {
+    headers: sourceHeaders,
+  });
+  if (balanceRes.ok) {
+    const balancePayload = (await balanceRes.json()) as { balance?: number };
+    const balanceMicro = balancePayload.balance ?? 0;
+    if (balanceMicro > 0) {
+      if (!config.waive) {
+        console.error(
+          `\nCannot depart: ${motebitId} has a positive balance of ${balanceMicro} micro-units.`,
+        );
+        console.error(
+          "  Withdraw first (motebit withdraw <amount>) — or re-run with --waive to forfeit.",
+        );
+        console.error("\nMigration token is still valid. You can retry or cancel.");
+        process.exit(1);
+      }
+
+      const ok = await confirmWaiver(motebitId, balanceMicro);
+      if (!ok) {
+        console.error("Waiver cancelled. Migration token is still valid.");
+        process.exit(1);
+      }
+
+      const privateKey = await loadIdentityPrivateKey();
+      if (privateKey === null) {
+        console.error("No private key on this machine — cannot sign balance waiver.");
+        process.exit(1);
+      }
+      let waiver: BalanceWaiver;
+      try {
+        waiver = await signBalanceWaiver(
+          { motebit_id: motebitId, waived_amount: balanceMicro, waived_at: Date.now() },
+          privateKey,
+        );
+      } finally {
+        secureErase(privateKey);
+      }
+      departBody = { balance_waiver: waiver };
+      console.log(`  Signed BalanceWaiver for ${balanceMicro} micro-units.`);
+    }
+  }
+
   const departRes = await fetch(`${sourceRelayUrl}/api/v1/agents/${motebitId}/migrate/depart`, {
     method: "POST",
-    headers: sourceHeaders,
+    headers: { ...sourceHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify(departBody),
   });
 
   if (!departRes.ok) {

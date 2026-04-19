@@ -69,6 +69,8 @@ export interface CliConfig {
   tail?: boolean;
   /** `motebit logs` — max number of outcomes to show. */
   limit?: number;
+  /** `motebit migrate` — forfeit remaining relay balance instead of withdrawing. */
+  waive?: boolean;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -122,6 +124,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       force: { type: "boolean", default: false },
       tail: { type: "boolean", default: false },
       limit: { type: "string" },
+      waive: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -218,6 +221,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     force: values.force,
     tail: values.tail,
     limit: values.limit != null ? parseInt(values.limit, 10) : undefined,
+    waive: values.waive,
     version: values.version,
     help: values.help,
     positionals,
