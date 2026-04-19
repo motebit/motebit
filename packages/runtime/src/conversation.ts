@@ -44,6 +44,7 @@ export class ConversationManager {
   private history: ConversationMessage[] = [];
   private currentId: string | null = null;
   private sessionInfo: { continued: boolean; lastActiveAt: number } | null = null;
+  private autoTitlePending = false;
 
   constructor(private readonly deps: ConversationDeps) {}
 
@@ -185,6 +186,12 @@ export class ConversationManager {
       });
     }
 
+    // Auto-title the conversation once enough context exists. Fires from
+    // pushExchange — not from the UI — so currentId and history are both
+    // guaranteed present. Idempotent: autoTitle checks for an existing
+    // title and returns early if one is set.
+    void this.autoTitle();
+
     // Trigger background summarization at message-count intervals
     if (
       this.deps.getProvider() &&
@@ -224,6 +231,7 @@ export class ConversationManager {
   async autoTitle(): Promise<string | null> {
     const { store } = this.deps;
     if (store == null || this.currentId == null || this.currentId === "") return null;
+    if (this.autoTitlePending) return null;
 
     const convos = store.listConversations(this.deps.motebitId, 100);
     const current = convos.find((c) => c.conversationId === this.currentId);
@@ -232,40 +240,45 @@ export class ConversationManager {
     const history = this.getHistory();
     if (history.length < 2) return null;
 
-    const provider = this.deps.getProvider();
-    if (provider) {
-      try {
-        const snippet = history
-          .slice(0, 6)
-          .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
-          .join("\n");
-        const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${snippet}`;
-        const raw = await this.deps.generateCompletion(prompt, "title_generation");
-        const title = raw
-          .trim()
-          .replace(/^["']|["']$/g, "")
-          .slice(0, 100);
-        if (title.length > 0 && title.length < 100) {
+    this.autoTitlePending = true;
+    try {
+      const provider = this.deps.getProvider();
+      if (provider) {
+        try {
+          const snippet = history
+            .slice(0, 6)
+            .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
+            .join("\n");
+          const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${snippet}`;
+          const raw = await this.deps.generateCompletion(prompt, "title_generation");
+          const title = raw
+            .trim()
+            .replace(/^["']|["']$/g, "")
+            .slice(0, 100);
+          if (title.length > 0 && title.length < 100) {
+            store.updateTitle(this.currentId, title);
+            return title;
+          }
+        } catch {
+          // Fall through to heuristic
+        }
+      }
+
+      // Heuristic fallback: first 7 words of first user message
+      const first = history.find((m) => m.role === "user");
+      if (first) {
+        const words = first.content.split(/\s+/);
+        let title = words.slice(0, 7).join(" ");
+        if (words.length > 7) title += "...";
+        if (title.length > 0) {
           store.updateTitle(this.currentId, title);
           return title;
         }
-      } catch {
-        // Fall through to heuristic
       }
+      return null;
+    } finally {
+      this.autoTitlePending = false;
     }
-
-    // Heuristic fallback: first 7 words of first user message
-    const first = history.find((m) => m.role === "user");
-    if (first) {
-      const words = first.content.split(/\s+/);
-      let title = words.slice(0, 7).join(" ");
-      if (words.length > 7) title += "...";
-      if (title.length > 0) {
-        store.updateTitle(this.currentId, title);
-        return title;
-      }
-    }
-    return null;
   }
 
   // --- Task isolation ---

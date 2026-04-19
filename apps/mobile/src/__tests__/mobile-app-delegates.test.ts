@@ -420,8 +420,4 @@ describe("MobileApp pre-init memory delegates", () => {
     const r = await app.summarizeConversation();
     expect(r).toBeNull();
   });
-
-  it("autoTitle is a no-op", () => {
-    app.autoTitle();
-  });
 });

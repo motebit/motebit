@@ -1457,16 +1457,6 @@ export class MobileApp {
     return this._governanceStatus;
   }
 
-  // === Auto-Titling ===
-
-  /**
-   * Auto-generate a conversation title via AI (runtime.autoTitle),
-   * with heuristic fallback. Fire-and-forget — matches web/spatial pattern.
-   */
-  autoTitle(): void {
-    void this.runtime?.autoTitle();
-  }
-
   /** Manually trigger conversation summarization. */
   async summarizeConversation(): Promise<string | null> {
     if (!this.runtime) return null;

@@ -1364,14 +1364,6 @@ export class DesktopApp {
     return this.conversations.summarizeConversation();
   }
 
-  maybeAutoTitle(): Promise<string | null> {
-    return this.conversations.maybeAutoTitle();
-  }
-
-  generateTitleInBackground(): Promise<string | null> {
-    return this.conversations.generateTitleInBackground();
-  }
-
   // === Sync / Serving (delegates to SyncController) ===
 
   /** Sync conversations + plans with the remote relay server. */

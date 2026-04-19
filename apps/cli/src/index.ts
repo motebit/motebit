@@ -703,7 +703,6 @@ async function main(): Promise<void> {
         ),
         runtime,
       );
-      void runtime.autoTitle();
     } catch (err: unknown) {
       // Activation is best-effort — if it fails, user still gets the prompt
       const msg = err instanceof Error ? err.message : String(err);
@@ -776,8 +775,6 @@ async function main(): Promise<void> {
           voice: voiceController,
         });
       }
-      // Best-effort auto-title after enough messages
-      void runtime.autoTitle();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`\n  ${errorColor("[error: " + message + "]")}\n`);

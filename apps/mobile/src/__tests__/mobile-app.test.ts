@@ -668,16 +668,3 @@ describe("MobileApp.governanceStatus", () => {
     app.stop();
   });
 });
-
-// ---------------------------------------------------------------------------
-// MobileApp.autoTitle
-// ---------------------------------------------------------------------------
-
-describe("MobileApp.autoTitle", () => {
-  it("does nothing before initAI", () => {
-    const app = new MobileApp();
-    // Should not throw
-    app.autoTitle();
-    app.stop();
-  });
-});

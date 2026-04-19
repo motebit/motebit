@@ -110,10 +110,21 @@ export function initConversations(
       item.appendChild(metaDiv);
 
       item.addEventListener("click", () => {
-        void ctx.app.loadConversationById(entry.conversationId).then(() => {
-          close();
-          callbacks.onLoad();
-        });
+        void ctx.app
+          .loadConversationById(entry.conversationId)
+          .then(() => {
+            close();
+            callbacks.onLoad();
+          })
+          .catch((err: unknown) => {
+            // A failed load leaves the panel open with no feedback — the exact
+            // "click does nothing" symptom. Close and surface the failure so
+            // it degrades honestly, not silently.
+            close();
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error("[conversations] load failed:", msg);
+            callbacks.onLoad();
+          });
       });
 
       convList.appendChild(item);

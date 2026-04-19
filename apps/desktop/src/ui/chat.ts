@@ -1128,8 +1128,6 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         finalBubble.appendChild(footer);
       }
 
-      void ctx.app.generateTitleInBackground();
-
       callbacks.flushTTS();
     } catch (err: unknown) {
       removeThinkingIndicator(thinkingEl);

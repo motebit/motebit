@@ -163,7 +163,17 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         e.stopPropagation();
         if (deleteBtn.classList.contains("confirming")) {
           if (confirmTimer != null) clearTimeout(confirmTimer);
-          void runtime.memory.deleteMemory(node.node_id).then(() => populateMemories());
+          void runtime.memory
+            .deleteMemory(node.node_id)
+            .catch((err: unknown) => {
+              // A rejected delete leaves the row in "confirming" state with no
+              // feedback. Surface it and repopulate so the UI reflects truth.
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error("[memory] delete failed:", msg);
+            })
+            .finally(() => {
+              void populateMemories();
+            });
         } else {
           deleteBtn.classList.add("confirming");
           deleteBtn.textContent = "Forget?";

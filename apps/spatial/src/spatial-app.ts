@@ -808,10 +808,6 @@ export class SpatialApp {
     this.runtime?.deleteConversation(id);
   }
 
-  async autoTitle(): Promise<string | null> {
-    return this.runtime?.autoTitle() ?? null;
-  }
-
   async summarize(): Promise<string | null> {
     return this.runtime?.summarizeCurrentConversation() ?? null;
   }
@@ -1055,7 +1051,6 @@ export class SpatialApp {
 
     // Background housekeeping (memory decay, gradient computation)
     void this.runtime.housekeeping();
-    void this.runtime.autoTitle();
 
     return accumulated;
   }

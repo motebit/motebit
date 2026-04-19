@@ -657,10 +657,6 @@ export class WebApp {
 
   // === Sovereign Features ===
 
-  async autoTitle(): Promise<string | null> {
-    return this.runtime?.autoTitle() ?? null;
-  }
-
   async summarize(): Promise<string | null> {
     return this.runtime?.summarizeCurrentConversation() ?? null;
   }

@@ -743,7 +743,6 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
                 else if (resumeChunk.status === "done") completeToolStatus(resumeChunk.name);
               } else if (resumeChunk.type === "result") {
                 streamingTTS.flush();
-                void ctx.app.autoTitle();
               }
             }
             break;
@@ -804,8 +803,6 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
               costEl.textContent = `${chunk.result.totalTokens.toLocaleString()} tokens`;
               bubble.appendChild(costEl);
             }
-            // Trigger auto-titling in background (best-effort, don't surface errors)
-            void ctx.app.autoTitle().catch(() => {});
             break;
           }
         }
