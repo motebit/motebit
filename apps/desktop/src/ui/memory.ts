@@ -2,6 +2,7 @@ import { RelationType, SensitivityLevel } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge, DeletionCertificate } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
+import { createMemoryController, type MemoryFetchAdapter, type MemoryState } from "@motebit/panels";
 
 // === DOM Refs ===
 
@@ -26,6 +27,10 @@ export interface MemoryAPI {
 
 type ViewMode = "list" | "graph" | "deletions";
 
+// Graph view still uses raw node/edge arrays — the force simulation cares
+// about every node regardless of the list-view filter. The controller owns
+// the list-view slice (search, audit sort, pin ordering); the graph reads
+// the full set.
 let allMemories: MemoryNode[] = [];
 let allEdges: MemoryEdge[] = [];
 let currentView: ViewMode = "list";
@@ -302,12 +307,48 @@ function findNodeAt(nodes: GraphNode[], gx: number, gy: number): GraphNode | nul
 
 export function initMemory(ctx: DesktopContext): MemoryAPI {
   let focusNodeId: string | null = null;
-  /** Map of node_id → audit category, set by /audit and cleared on next open. */
-  let currentAuditFlags: Map<string, string> | undefined;
+
+  // Controller owns list-view state (memories, search, audit flags, filter).
+  // Graph view still consumes raw `allMemories` + `allEdges` (the force
+  // simulation can't filter — it operates on the whole graph).
+  const memoryAdapter: MemoryFetchAdapter = {
+    listMemories: () => ctx.app.listMemories(),
+    deleteMemory: async (nodeId) => {
+      const cert = await ctx.app.deleteMemory(nodeId);
+      // Encryption's cert has a concrete shape; widen to the controller's
+      // Record<string, unknown> and let the surface cast back for display.
+      return cert as unknown as Record<string, unknown> | null;
+    },
+    pinMemory: (nodeId, pinned) => ctx.app.pinMemory(nodeId, pinned),
+    getDecayedConfidence: (node) => ctx.app.getDecayedConfidence(node as never),
+  };
+  // Desktop shows all sensitivities — the user is on their own device with
+  // their own memories, and hiding them here would make the UI lie about
+  // what the runtime has stored. Web's panel opts into the ["none",
+  // "personal"] floor to match CLI export; desktop doesn't.
+  const memoryCtrl = createMemoryController(memoryAdapter);
+
+  memoryCtrl.subscribe((state) => {
+    // Panels' MemoryNode is a narrow structural subset of the runtime's;
+    // cast back here so the graph-view code keeps its richer field access.
+    allMemories = state.memories as unknown as MemoryNode[];
+    memoryCount.textContent = String(state.memories.length);
+    // Invalidate graph cache if memory count changed
+    if (state.memories.length !== cachedMemoryCount) {
+      cachedGraphNodes = null;
+      cachedGraphEdges = null;
+      cachedMemoryCount = state.memories.length;
+    }
+    if (currentView === "list") {
+      renderMemoryItems(state);
+    } else if (currentView === "graph") {
+      renderGraphView();
+    }
+  });
 
   function open(nodeId?: string, auditFlags?: Map<string, string>): void {
     focusNodeId = nodeId ?? null;
-    currentAuditFlags = auditFlags;
+    memoryCtrl.setAuditFlags(auditFlags ?? new Map());
     // If focusing a specific node or showing audit, ensure list view
     if ((focusNodeId != null && focusNodeId !== "" && currentView !== "list") || auditFlags) {
       setView("list");
@@ -328,26 +369,12 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   }
 
   function refreshMemoryData(): void {
-    void Promise.all([ctx.app.listMemories(), ctx.app.listMemoryEdges()]).then(
-      ([memories, edges]) => {
-        allMemories = memories;
-        allEdges = edges;
-        memoryCount.textContent = String(memories.length);
-
-        // Invalidate graph cache if memory count changed
-        if (memories.length !== cachedMemoryCount) {
-          cachedGraphNodes = null;
-          cachedGraphEdges = null;
-          cachedMemoryCount = memories.length;
-        }
-
-        if (currentView === "list") {
-          renderMemoryItems(memories, memorySearch.value.trim());
-        } else {
-          renderGraphView();
-        }
-      },
-    );
+    // Fire the controller refresh (list + state) and the edges fetch
+    // (graph-only) in parallel. The controller's subscription re-renders
+    // the list view; the edges promise updates the graph-view cache.
+    void Promise.all([memoryCtrl.refresh(), ctx.app.listMemoryEdges()]).then(([, edges]) => {
+      allEdges = edges;
+    });
   }
 
   function setView(mode: ViewMode): void {
@@ -366,7 +393,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     if (mode === "list") {
       memoryList.style.display = "";
       memoryGraphWrap.style.display = "none";
-      renderMemoryItems(allMemories, memorySearch.value.trim());
+      renderMemoryItems(memoryCtrl.getState());
     } else if (mode === "graph") {
       memoryList.style.display = "none";
       memoryGraphWrap.style.display = "";
@@ -380,33 +407,23 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
 
   // === List View ===
 
-  function renderMemoryItems(memories: MemoryNode[], query: string): void {
+  function renderMemoryItems(state: MemoryState): void {
     memoryList.innerHTML = "";
-    const filtered = query
-      ? memories.filter((m) => m.content.toLowerCase().includes(query.toLowerCase()))
-      : memories;
+    const filtered = memoryCtrl.filteredView() as MemoryNode[];
 
     if (filtered.length === 0) {
       const empty = document.createElement("div");
       empty.className = "mem-empty";
-      empty.textContent = query ? "No matches" : "No memories yet";
+      empty.textContent = state.search.trim() ? "No matches" : "No memories yet";
       memoryList.appendChild(empty);
       return;
     }
 
-    const pinned = filtered.filter((m) => m.pinned);
-    const unpinned = filtered.filter((m) => !m.pinned);
-
-    // When audit is active, sort flagged memories first within each section
-    if (currentAuditFlags && currentAuditFlags.size > 0) {
-      const auditSort = (a: MemoryNode, b: MemoryNode): number => {
-        const aFlag = currentAuditFlags!.has(a.node_id) ? 0 : 1;
-        const bFlag = currentAuditFlags!.has(b.node_id) ? 0 : 1;
-        return aFlag - bFlag;
-      };
-      pinned.sort(auditSort);
-      unpinned.sort(auditSort);
-    }
+    // Controller sort already put pinned first. Desktop still wants two
+    // labelled sections — split on pinned flag to preserve the headers.
+    const pinnedEnd = filtered.findIndex((m) => !m.pinned);
+    const pinned = pinnedEnd === -1 ? filtered : filtered.slice(0, pinnedEnd);
+    const unpinned = pinnedEnd === -1 ? [] : filtered.slice(pinnedEnd);
 
     if (pinned.length > 0) {
       const header = document.createElement("div");
@@ -414,7 +431,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       header.textContent = `Pinned (${pinned.length})`;
       memoryList.appendChild(header);
       for (const mem of pinned) {
-        renderMemoryItem(mem);
+        renderMemoryItem(mem, state);
       }
     }
 
@@ -426,7 +443,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
         memoryList.appendChild(header);
       }
       for (const mem of unpinned) {
-        renderMemoryItem(mem);
+        renderMemoryItem(mem, state);
       }
     }
 
@@ -436,15 +453,14 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       if (target) {
         target.classList.add("mem-item-focused");
         target.scrollIntoView({ block: "center", behavior: "smooth" });
-        // Remove highlight after animation
         setTimeout(() => target.classList.remove("mem-item-focused"), 2000);
       }
       focusNodeId = null;
     }
   }
 
-  function renderMemoryItem(mem: MemoryNode): void {
-    const auditCategory = currentAuditFlags?.get(mem.node_id);
+  function renderMemoryItem(mem: MemoryNode, state: MemoryState): void {
+    const auditCategory = state.auditFlags.get(mem.node_id);
     const item = document.createElement("div");
     item.className = "mem-item" + (auditCategory ? ` memory-item ${auditCategory}` : "");
     item.dataset.nodeId = mem.node_id;
@@ -478,7 +494,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     }
 
     const conf = document.createElement("span");
-    const decayed = ctx.app.getDecayedConfidence(mem);
+    const decayed = memoryCtrl.getDecayedConfidence(mem);
     conf.textContent = `${Math.round(decayed * 100)}%`;
     metaDiv.appendChild(conf);
 
@@ -501,9 +517,9 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     pinBtn.title = mem.pinned ? "Unpin memory" : "Pin memory";
     pinBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      void ctx.app.pinMemory(mem.node_id, !mem.pinned).then(() => {
-        refreshMemoryData();
-      });
+      // Controller does the optimistic pin flip + emits; edges don't
+      // change on pin so no need to re-fetch.
+      void memoryCtrl.pinMemory(mem.node_id, !mem.pinned);
     });
     item.appendChild(pinBtn);
 
@@ -524,9 +540,11 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       // Already in confirm state — execute delete
       if (deleteBtnWrap.classList.contains("mem-delete-confirming")) {
         if (confirmTimeout) clearTimeout(confirmTimeout);
-        void ctx.app.deleteMemory(mem.node_id).then((cert) => {
+        void memoryCtrl.deleteMemory(mem.node_id).then((cert) => {
           if (cert) {
-            showDeletionCertificate(item, cert);
+            // Controller returns an opaque Record<string, unknown>; cast
+            // back to the runtime's concrete encryption cert for render.
+            showDeletionCertificate(item, cert as unknown as DeletionCertificate);
           } else {
             refreshMemoryData();
           }
@@ -835,14 +853,13 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   viewGraphBtn.addEventListener("click", () => setView("graph"));
   viewDeletionsBtn.addEventListener("click", () => setView("deletions"));
 
-  // Debounced search (list view only)
+  // Debounced search — pushes into the controller, which re-emits so the
+  // subscription's renderer re-runs with the new filteredView.
   let memorySearchTimeout: ReturnType<typeof setTimeout> | null = null;
   memorySearch.addEventListener("input", () => {
     if (memorySearchTimeout) clearTimeout(memorySearchTimeout);
     memorySearchTimeout = setTimeout(() => {
-      if (currentView === "list") {
-        renderMemoryItems(allMemories, memorySearch.value.trim());
-      }
+      memoryCtrl.setSearch(memorySearch.value.trim());
     }, 200);
   });
 

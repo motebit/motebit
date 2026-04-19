@@ -16,12 +16,16 @@ import type { PlanChunk } from "@motebit/runtime";
 import { renderMarkdown } from "./chat";
 import {
   createAgentsController,
+  createMemoryController,
   type AgentRecord,
   type AgentsFetchAdapter,
   type AgentsState,
   type DiscoveredAgent,
+  type MemoryFetchAdapter,
+  type MemoryState,
   type PricingEntry,
 } from "@motebit/panels";
+import { computeDecayedConfidence } from "@motebit/memory-graph";
 
 export interface GatedPanelsAPI {
   openMemory(auditNodeIds?: Map<string, string>): void;
@@ -77,15 +81,44 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   let goals = loadGoals();
 
   // === Memory Panel (functional) ===
+  // Fetch + filter + delete live in @motebit/panels MemoryController.
+  // This block owns DOM rendering + markdown + the inline delete-confirm UX.
+  // Sensitivity floor ["none", "personal"] is passed explicitly — matches
+  // CLI export behavior and is now a declared config, not a silent
+  // per-surface divergence.
   const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
   const memoryBackdrop = document.getElementById("memory-backdrop") as HTMLDivElement;
   const memoryList = document.getElementById("memory-list") as HTMLDivElement;
   const memoryEmpty = document.getElementById("memory-empty") as HTMLDivElement;
 
-  /** Map of node_id → audit category, set by /audit and cleared on next open. */
-  let currentAuditFlags: Map<string, string> | undefined;
+  const memoryAdapter: MemoryFetchAdapter = {
+    listMemories: async () => {
+      const runtime = ctx.app.getRuntime();
+      if (!runtime) return [];
+      const { nodes } = await runtime.memory.exportAll();
+      return nodes;
+    },
+    deleteMemory: async (nodeId) => {
+      const runtime = ctx.app.getRuntime();
+      if (!runtime) return null;
+      await runtime.memory.deleteMemory(nodeId);
+      // Web's runtime.memory doesn't surface the certificate today — the
+      // tombstone hash lives in the event log. Returning null is correct
+      // until the runtime plumbs it up.
+      return null;
+    },
+    pinMemory: async () => {
+      // Web doesn't expose pin today. No-op keeps the interface satisfied.
+    },
+    getDecayedConfidence: (node) =>
+      computeDecayedConfidence(node.confidence, node.half_life, Date.now() - node.created_at),
+  };
 
-  async function populateMemories(): Promise<void> {
+  const memoryCtrl = createMemoryController(memoryAdapter, {
+    sensitivityFilter: ["none", "personal"],
+  });
+
+  function renderMemories(state: MemoryState): void {
     const runtime = ctx.app.getRuntime();
     if (!runtime) {
       memoryList.innerHTML = "";
@@ -94,43 +127,23 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       return;
     }
 
-    const { nodes } = await runtime.memory.exportAll();
-    // Filter: exclude tombstoned and sensitive memories (medical/financial/secret)
-    // matching CLI export behavior — only none/personal displayed in UI
-    const displayAllowed = new Set(["none", "personal"]);
-    const now = Date.now();
-    const active = nodes.filter(
-      (n) =>
-        !n.tombstoned &&
-        displayAllowed.has(n.sensitivity) &&
-        (n.valid_until == null || n.valid_until > now),
-    );
-
+    const view = memoryCtrl.filteredView();
     memoryList.innerHTML = "";
 
-    if (active.length === 0) {
+    if (view.length === 0) {
       memoryEmpty.style.display = "block";
-      memoryEmpty.textContent = "No memories yet. Start a conversation to build memory.";
+      memoryEmpty.textContent =
+        state.memories.length === 0
+          ? "No memories yet. Start a conversation to build memory."
+          : "No matching memories.";
       return;
     }
 
     memoryEmpty.style.display = "none";
 
-    const auditFlags = currentAuditFlags;
-
-    // Sort: flagged memories first when audit is active, then by recency
-    active.sort((a, b) => {
-      if (auditFlags) {
-        const aFlag = auditFlags.has(a.node_id) ? 0 : 1;
-        const bFlag = auditFlags.has(b.node_id) ? 0 : 1;
-        if (aFlag !== bFlag) return aFlag - bFlag;
-      }
-      return b.created_at - a.created_at;
-    });
-
-    for (const node of active) {
+    for (const node of view) {
       const item = document.createElement("div");
-      const auditCategory = auditFlags?.get(node.node_id);
+      const auditCategory = state.auditFlags.get(node.node_id);
       item.className = "memory-item" + (auditCategory ? ` ${auditCategory}` : "");
 
       const content = document.createElement("div");
@@ -141,7 +154,6 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       const meta = document.createElement("div");
       meta.className = "memory-item-meta";
 
-      // Audit tag (if flagged)
       if (auditCategory) {
         const tag = document.createElement("span");
         tag.className = `memory-audit-tag ${auditCategory}`;
@@ -154,8 +166,11 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         meta.appendChild(tag);
       }
 
+      // Decayed confidence — previously web rendered raw node.confidence,
+      // diverging from desktop/mobile. Controller-canonical now.
       const confidence = document.createElement("span");
-      confidence.textContent = `${Math.round(node.confidence * 100)}%`;
+      const decayed = memoryCtrl.getDecayedConfidence(node);
+      confidence.textContent = `${Math.round(decayed * 100)}%`;
       meta.appendChild(confidence);
 
       const time = document.createElement("span");
@@ -171,17 +186,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         e.stopPropagation();
         if (deleteBtn.classList.contains("confirming")) {
           if (confirmTimer != null) clearTimeout(confirmTimer);
-          void runtime.memory
-            .deleteMemory(node.node_id)
-            .catch((err: unknown) => {
-              // A rejected delete leaves the row in "confirming" state with no
-              // feedback. Surface it and repopulate so the UI reflects truth.
-              const msg = err instanceof Error ? err.message : String(err);
-              console.error("[memory] delete failed:", msg);
-            })
-            .finally(() => {
-              void populateMemories();
-            });
+          void memoryCtrl.deleteMemory(node.node_id).finally(() => {
+            void memoryCtrl.refresh();
+          });
         } else {
           deleteBtn.classList.add("confirming");
           deleteBtn.textContent = "Forget?";
@@ -198,12 +205,14 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
   }
 
+  memoryCtrl.subscribe(renderMemories);
+
   function openMemory(auditNodeIds?: Map<string, string>): void {
     closeAll();
-    currentAuditFlags = auditNodeIds;
+    memoryCtrl.setAuditFlags(auditNodeIds ?? new Map());
     memoryPanel.classList.add("open");
     memoryBackdrop.classList.add("open");
-    void populateMemories();
+    void memoryCtrl.refresh();
   }
 
   function closeMemory(): void {

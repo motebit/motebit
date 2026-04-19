@@ -32,3 +32,14 @@ export {
   type AgentFreshness,
   type SortKey,
 } from "./agents/controller";
+
+export {
+  createMemoryController,
+  filterMemoriesView,
+  type MemoryController,
+  type MemoryControllerOptions,
+  type MemoryFetchAdapter,
+  type MemoryState,
+  type MemoryNode,
+  type DeletionCertificate,
+} from "./memory/controller";

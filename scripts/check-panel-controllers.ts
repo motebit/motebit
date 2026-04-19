@@ -35,15 +35,16 @@ const ROOT = resolve(__dirname, "..");
 const APPS = ["admin", "cli", "desktop", "docs", "identity", "mobile", "spatial", "web"];
 
 /**
- * A registered panel family. Each entry maps a file-name pattern to the
- * relay endpoint substrings that family canonicalizes. A file that matches
- * the name pattern AND contains any of the endpoint signatures must import
- * from `@motebit/panels` — or the gate fails.
+ * A registered panel family. Each entry maps a file-name pattern to
+ * substrings whose presence indicates the file is doing the panel's
+ * canonical I/O — relay endpoints for sovereign/agents, runtime API calls
+ * for memory. A file that matches the name pattern AND contains any of the
+ * signatures must import from `@motebit/panels` — or the gate fails.
  *
- * The separation lets `gated-panels.ts` (web) legitimately hit credentials
- * endpoints for a non-agents reason without tripping the agents check: only
- * files whose name matches `/agents/i` are scanned for the agents endpoint
- * list.
+ * Each family's name pattern also matches `gated-panels` (the web surface's
+ * multi-panel host file, which legitimately hosts sovereign/agents/memory
+ * side-by-side). Without that alias, a drift that inlined panel state back
+ * into gated-panels.ts would slip through.
  *
  * ⚠ Don't collapse these into one flat list. A sovereign file hitting
  * `/api/v1/agents/{id}/discover` is impossible (wrong shape, wrong intent);
@@ -53,24 +54,36 @@ const APPS = ["admin", "cli", "desktop", "docs", "identity", "mobile", "spatial"
 interface PanelFamily {
   name: string;
   namePattern: RegExp;
-  endpointSignatures: ReadonlyArray<string>;
+  signatures: ReadonlyArray<string>;
 }
 
 const PANEL_FAMILIES: ReadonlyArray<PanelFamily> = [
   {
     name: "sovereign",
-    namePattern: /sovereign/i,
-    endpointSignatures: [
+    namePattern: /sovereign|gated-panels/i,
+    signatures: [
       "/api/v1/agents/", // credentials, balance, succession, sweep-config
-      "/agent/", // budget, ledger/{goal_id}
       "/api/v1/credentials/", // verify, batch-status, presentation
+      // note: "/agent/" alone is too broad (matches /api/v1/agents/); the
+      // sovereign-only paths are enough to trip the check on a rogue file.
     ],
   },
   {
     name: "agents",
-    namePattern: /agents/i,
-    endpointSignatures: [
+    namePattern: /agents|gated-panels/i,
+    signatures: [
       "/api/v1/agents/discover", // discover endpoint — only canonical hit for the agents panel
+    ],
+  },
+  {
+    name: "memory",
+    namePattern: /memory|gated-panels/i,
+    signatures: [
+      // Memory panel canonicalizes around the runtime's memory API calls;
+      // the gate scans for these substrings rather than relay endpoints.
+      "runtime.memory.exportAll",
+      "runtime.memory.deleteMemory",
+      "app.listMemories(",
     ],
   },
 ];
@@ -115,16 +128,8 @@ function walkTypeScript(dir: string): string[] {
   return out;
 }
 
-function matchFamily(filePath: string): PanelFamily | null {
-  const base = filePath.split("/").pop() ?? "";
-  for (const family of PANEL_FAMILIES) {
-    if (family.namePattern.test(base)) return family;
-  }
-  return null;
-}
-
-function hitsEndpoint(src: string, family: PanelFamily): boolean {
-  return family.endpointSignatures.some((sig) => src.includes(sig));
+function hitsSignature(src: string, family: PanelFamily): boolean {
+  return family.signatures.some((sig) => src.includes(sig));
 }
 
 function consumesPanelsPackage(src: string): boolean {
@@ -151,26 +156,37 @@ function scanApp(app: string): Violation[] {
     files.push(...walkTypeScript(dir));
   }
 
+  // A file may match multiple families (gated-panels.ts hosts sovereign +
+  // agents + memory). Each family is checked independently; one missing
+  // import trips every unsatisfied family.
   for (const file of files) {
-    const family = matchFamily(file);
-    if (!family) continue;
     const src = readFileSync(file, "utf-8");
-    if (!hitsEndpoint(src, family)) continue;
-    if (consumesPanelsPackage(src)) continue;
+    const hasPanelsImport = consumesPanelsPackage(src);
+    for (const family of PANEL_FAMILIES) {
+      if (!family.namePattern.test(file.split("/").pop() ?? "")) continue;
+      if (!hitsSignature(src, family)) continue;
+      if (hasPanelsImport) continue;
 
-    violations.push({
-      app,
-      family: family.name,
-      file: relative(ROOT, file),
-      reason:
-        `file name matches /${family.namePattern.source}/i and hits relay ${family.name}-panel endpoints directly, ` +
-        'but does not import from "@motebit/panels". Route fetching/state through ' +
-        `the ${family.name} controller (create${family.name[0]!.toUpperCase()}${family.name.slice(1)}Controller) instead of re-implementing the fetch + state machine.`,
-    });
+      violations.push({
+        app,
+        family: family.name,
+        file: relative(ROOT, file),
+        reason:
+          `file matches /${family.namePattern.source}/i and hits ${family.name}-panel I/O, ` +
+          'but does not import from "@motebit/panels". Route fetching/state through ' +
+          `the ${family.name} controller (create${family.name[0]!.toUpperCase()}${family.name.slice(1)}Controller) instead of re-implementing the fetch + state machine.`,
+      });
+    }
   }
 
   return violations;
 }
+
+/**
+ * Remove the old single-family matcher now that the family loop above
+ * handles every family per file. Kept as a no-op to avoid a dead export
+ * surface while this refactor settles.
+ */
 
 function main(): void {
   const violations: Violation[] = [];
