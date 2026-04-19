@@ -302,6 +302,9 @@ importers:
       '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../../packages/memory-graph
+      '@motebit/panels':
+        specifier: workspace:*
+        version: link:../../packages/panels
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
@@ -1132,6 +1135,18 @@ importers:
       '@xenova/transformers':
         specifier: ^2.17.2
         version: 2.17.2
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
+  packages/panels:
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

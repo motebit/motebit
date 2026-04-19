@@ -76,6 +76,7 @@ const LAYER: Record<string, number> = {
   // Layer 5 — Orchestrator
   "@motebit/runtime": 5,
   "@motebit/browser-persistence": 5,
+  "@motebit/panels": 5,
 
   // Layer 6 — Applications (apps/*, services/*, create-motebit)
   "create-motebit": 6,

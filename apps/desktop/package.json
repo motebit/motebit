@@ -29,6 +29,7 @@
     "@motebit/mcp-client": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
+    "@motebit/panels": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/render-engine": "workspace:*",
     "@motebit/gradient": "workspace:*",
