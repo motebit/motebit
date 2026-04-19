@@ -963,64 +963,63 @@ describe("list_events", () => {
 
 // ---------- registerBuiltinTools ----------
 
+// Single source of truth for registerBuiltinTools' contract. Adding a new
+// always-on tool = one entry in CORE_TOOLS. Adding a callback-gated tool
+// = one entry in OPTIONAL_TOOLS. The four tests below derive their
+// assertions from these sets, so per-tool maintenance is one line instead
+// of four scattered count updates.
+const CORE_TOOLS = new Set([
+  "current_time",
+  "web_search",
+  "read_url",
+  "read_file",
+  "write_file",
+  "shell_exec",
+  "undo_write",
+]);
+
+const OPTIONAL_TOOLS = {
+  memorySearchFn: "recall_memories",
+  eventQueryFn: "list_events",
+} as const;
+
+function registeredNames(registry: InMemoryToolRegistry): Set<string> {
+  return new Set(registry.list().map((t) => t.name));
+}
+
 describe("registerBuiltinTools", () => {
-  it("registers core tools (7 without optional callbacks)", () => {
+  it("registers exactly the core tools when no optional callbacks are provided", () => {
     const registry = new InMemoryToolRegistry();
     registerBuiltinTools(registry);
-
-    expect(registry.size).toBe(7);
-    expect(registry.has("current_time")).toBe(true);
-    expect(registry.has("web_search")).toBe(true);
-    expect(registry.has("read_url")).toBe(true);
-    expect(registry.has("read_file")).toBe(true);
-    expect(registry.has("write_file")).toBe(true);
-    expect(registry.has("shell_exec")).toBe(true);
-    expect(registry.has("undo_write")).toBe(true);
+    expect(registeredNames(registry)).toEqual(CORE_TOOLS);
   });
 
-  it("registers memory tool when memorySearchFn provided", () => {
+  it("adds recall_memories exactly when memorySearchFn is provided", () => {
     const registry = new InMemoryToolRegistry();
-    registerBuiltinTools(registry, {
-      memorySearchFn: async () => [],
-    });
-
-    expect(registry.size).toBe(8);
-    expect(registry.has("recall_memories")).toBe(true);
+    registerBuiltinTools(registry, { memorySearchFn: async () => [] });
+    const names = registeredNames(registry);
+    expect(names.has(OPTIONAL_TOOLS.memorySearchFn)).toBe(true);
+    expect(names.has(OPTIONAL_TOOLS.eventQueryFn)).toBe(false);
+    expect(names).toEqual(new Set([...CORE_TOOLS, OPTIONAL_TOOLS.memorySearchFn]));
   });
 
-  it("registers event tool when eventQueryFn provided", () => {
+  it("adds list_events exactly when eventQueryFn is provided", () => {
     const registry = new InMemoryToolRegistry();
-    registerBuiltinTools(registry, {
-      eventQueryFn: async () => [],
-    });
-
-    expect(registry.size).toBe(8);
-    expect(registry.has("list_events")).toBe(true);
+    registerBuiltinTools(registry, { eventQueryFn: async () => [] });
+    const names = registeredNames(registry);
+    expect(names.has(OPTIONAL_TOOLS.eventQueryFn)).toBe(true);
+    expect(names.has(OPTIONAL_TOOLS.memorySearchFn)).toBe(false);
+    expect(names).toEqual(new Set([...CORE_TOOLS, OPTIONAL_TOOLS.eventQueryFn]));
   });
 
-  it("registers all 9 tools when all options provided", () => {
+  it("registers core + every optional tool when all callbacks are provided", () => {
     const registry = new InMemoryToolRegistry();
     registerBuiltinTools(registry, {
       memorySearchFn: async () => [],
       eventQueryFn: async () => [],
     });
-
-    expect(registry.size).toBe(9);
-    const names = registry
-      .list()
-      .map((t) => t.name)
-      .sort();
-    expect(names).toEqual([
-      "current_time",
-      "list_events",
-      "read_file",
-      "read_url",
-      "recall_memories",
-      "shell_exec",
-      "undo_write",
-      "web_search",
-      "write_file",
-    ]);
+    const expected = new Set<string>([...CORE_TOOLS, ...Object.values(OPTIONAL_TOOLS)]);
+    expect(registeredNames(registry)).toEqual(expected);
   });
 
   it("passes allowedPaths to file tools", async () => {
