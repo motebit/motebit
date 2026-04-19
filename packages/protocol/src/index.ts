@@ -585,6 +585,16 @@ export enum DeviceCapability {
   LocalLlm = "local_llm",
   /** Device supports push-triggered wake for background task execution. */
   PushWake = "push_wake",
+  /**
+   * Device holds its identity key inside hardware (Secure Enclave / TPM /
+   * hardware keystore) and can produce signatures the private material
+   * never leaves. Consumed by `HardwareAttestationSemiring` to rank
+   * hardware-attested agents above software-only agents when the routing
+   * caller asks for the attestation dimension. Pairs with the
+   * `hardware_attestation` subject-field extension on `AgentTrustCredential`
+   * (spec/credential-v1.md §3.4).
+   */
+  SecureEnclave = "secure_enclave",
 }
 
 /** Push notification platform for wake-on-demand mobile execution. */
@@ -1459,6 +1469,74 @@ export interface TrustCredentialSubject {
   failed_tasks: number;
   first_seen_at: number;
   last_seen_at: number;
+  /**
+   * Optional hardware-attestation claim. Present when the subject agent
+   * demonstrated that its identity key lives inside a hardware keystore
+   * (Secure Enclave, TPM, Android Keystore / Play Integrity, Apple
+   * DeviceCheck). Consumed by `HardwareAttestationSemiring` in the
+   * routing layer to rank hardware-attested agents above software-only
+   * agents for sensitivity-aware delegation. See spec/credential-v1.md
+   * §3.4 and `HardwareAttestationClaim`. Absence means "no claim"
+   * (equivalent to `platform: "software"` for ranking purposes).
+   */
+  hardware_attestation?: HardwareAttestationClaim;
+}
+
+/**
+ * Hardware attestation claim embedded in `TrustCredentialSubject`. One claim
+ * describes the subject agent's key-custody posture on the device that issued
+ * the credential.
+ *
+ * Wire format (foundation law) — see spec/credential-v1.md §3.4 for the
+ * binding subsection. Every conformant implementation MUST emit these
+ * field names and types; the claim is carried inside the existing
+ * `AgentTrustCredential` VC envelope so the outer `suite` field already
+ * covers the signature.
+ *
+ * `platform` enumerates the attestation surface; `"software"` is the
+ * sentinel for "no hardware-backed key" and is explicitly part of the
+ * enum so credentials can truthfully claim "we tried, there was no
+ * hardware" rather than omit the field (which is ambiguous between
+ * "unknown" and "software").
+ *
+ * `key_exported` matters because even a hardware-generated key can be
+ * exported to software storage (e.g. backup, pairing, migration). When
+ * `true`, the claim is weaker — the private material left the hardware,
+ * so the binding between "this key is signing" and "this hardware held
+ * it" is broken for the lifetime of the export.
+ *
+ * `attestation_receipt` is an opaque platform-specific blob (Apple
+ * DeviceCheck assertion, Google Play Integrity token, TPM quote) that
+ * a verifier with the matching platform adapter can independently
+ * verify. Motebit does not parse these — adapters are glucose per the
+ * metabolic principle; this field just reserves wire-format space for
+ * them. Absence does not invalidate the claim; it just means the
+ * verifier has no side-channel proof beyond the credential signature.
+ */
+export interface HardwareAttestationClaim {
+  /**
+   * Attestation surface identifier. `"software"` is the explicit
+   * no-hardware sentinel — a credential that carries a claim with
+   * `platform: "software"` is truthfully claiming "this key is not
+   * hardware-backed", distinct from an absent claim ("unknown").
+   */
+  platform: "secure_enclave" | "tpm" | "play_integrity" | "device_check" | "software";
+  /**
+   * True when the private key was exported from hardware to software
+   * storage (backup, pairing). Weakens the claim — the hardware no
+   * longer uniquely holds the material. Default false; absent ≡ false
+   * for backward compatibility when a minting tool forgets to set it
+   * on a software-only platform.
+   */
+  key_exported?: boolean;
+  /**
+   * Opaque platform-specific attestation blob. Apple DeviceCheck
+   * assertion, Google Play Integrity token, or TPM quote bytes encoded
+   * as the platform expects (base64url by convention). Motebit does not
+   * parse this — platform adapters at the verification boundary do.
+   * Absent when no platform receipt is available.
+   */
+  attestation_receipt?: string;
 }
 
 export interface GradientCredentialSubject {

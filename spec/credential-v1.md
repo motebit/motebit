@@ -159,7 +159,35 @@ Peer-issued. One agent attests to its trust assessment of another agent, issued 
 
 The `TrustCredentialSubject` type in `@motebit/protocol` is the binding machine-readable form.
 
-### 3.3 — GradientCredentialSubject
+#### Subject-field extension: `hardware_attestation`
+
+`TrustCredentialSubject` carries an optional `hardware_attestation` field of type `HardwareAttestationClaim` (§3.4). Credentials that omit the field assert nothing about the subject's key custody; consumers that ignore the field observe the same wire format they did before the extension landed. The extension is strictly additive — no break to existing trust credentials in flight.
+
+### 3.4 — HardwareAttestationClaim
+
+Peer-issued or self-issued. Captures whether the subject agent's identity key lives inside a hardware keystore (Secure Enclave, TPM, Android Keystore, Apple DeviceCheck) or in software storage. Carried as the optional `hardware_attestation` field on `TrustCredentialSubject` (§3.2); does not carry its own signature — the outer `AgentTrustCredential` VC envelope's `eddsa-jcs-2022` proof covers the full subject body including this claim.
+
+**Issuer:** Any agent issuing an `AgentTrustCredential` about the subject — typically a peer that observed the subject produce hardware-attested signatures over a delegation chain. Self-attestation is permitted (the subject signs a credential about itself) but, per §4.2, self-issued credentials are excluded from routing aggregation regardless.
+
+**Trigger:** Same as `TrustCredentialSubject` (§3.2) — trust-level transition — with an added claim field.
+
+**Credential type token (in VC `type` array):** `AgentTrustCredential` (unchanged — the extension is inside the existing credential's subject body).
+
+#### Wire format (foundation law)
+
+| Field                 | Type    | Required | Description                                                                                                                                                                                                                                                              |
+| --------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `platform`            | string  | Yes      | One of: `"secure_enclave"`, `"tpm"`, `"play_integrity"`, `"device_check"`, `"software"`. `"software"` is the explicit no-hardware sentinel (distinct from an absent claim).                                                                                              |
+| `key_exported`        | boolean | No       | `true` when the private key was exported from hardware to software storage (backup, pairing, migration). Weakens the claim. Default `false`; absent is equivalent to `false`.                                                                                            |
+| `attestation_receipt` | string  | No       | Opaque platform-specific attestation blob (Apple DeviceCheck assertion, Google Play Integrity token, TPM quote) encoded as the platform expects. Verifiers with the matching platform adapter MAY verify it as a side channel; motebit itself does not parse this field. |
+
+The `HardwareAttestationClaim` type in `@motebit/protocol` is the binding machine-readable form; the `HardwareAttestationClaimSchema` in `@motebit/wire-schemas` is the runtime-validatable zod + JSON Schema artifact third-party implementers consume.
+
+**Signature coverage.** The claim does not declare its own `suite` field. The outer `AgentTrustCredential` VC envelope carries the proof (§5.1 `eddsa-jcs-2022`), and JCS canonicalization of the credential body includes the full `credentialSubject` object — so tampering with any claim field breaks the outer signature. Adding new attestation platforms (ARM TrustZone, Intel SGX, future post-quantum hardware) is a registry-like update to the `platform` enum; the wire shape does not change.
+
+**Ranking.** `HardwareAttestationSemiring` in `@motebit/semiring` consumes the claim to rank candidate agents in the routing graph. Agents with a `secure_enclave` / `tpm` / `device_check` / `play_integrity` claim and `key_exported: false` rank strictly above agents with an absent claim or a `"software"` claim; agents with `key_exported: true` sit between hardware-attested and software. This is algebraic ranking (one graph, one algorithm, a different semiring) per the motebit semiring doctrine — no new routing algorithm is introduced.
+
+### 3.5 — GradientCredentialSubject
 
 Self-issued. The agent measures its own internal state — knowledge density, retrieval quality, curiosity pressure — and publishes a signed snapshot. Self-issued credentials are excluded from trust routing (§4.1) but are useful for introspection, monitoring, and compliance audits.
 

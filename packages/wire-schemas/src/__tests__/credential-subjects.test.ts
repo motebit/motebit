@@ -122,6 +122,32 @@ describe("TrustCredentialSubjectSchema", () => {
       TrustCredentialSubjectSchema.parse({ ...SAMPLE, interaction_count: 1.5 }),
     ).toThrow();
   });
+
+  it("parses with optional hardware_attestation present", () => {
+    const t = TrustCredentialSubjectSchema.parse({
+      ...SAMPLE,
+      hardware_attestation: {
+        platform: "secure_enclave",
+        key_exported: false,
+      },
+    });
+    expect(t.hardware_attestation?.platform).toBe("secure_enclave");
+    expect(t.hardware_attestation?.key_exported).toBe(false);
+  });
+
+  it("accepts absent hardware_attestation (backward-compatible)", () => {
+    const t = TrustCredentialSubjectSchema.parse(SAMPLE);
+    expect(t.hardware_attestation).toBeUndefined();
+  });
+
+  it("rejects malformed hardware_attestation (propagates inner schema)", () => {
+    expect(() =>
+      TrustCredentialSubjectSchema.parse({
+        ...SAMPLE,
+        hardware_attestation: { platform: "not-a-platform" },
+      }),
+    ).toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------

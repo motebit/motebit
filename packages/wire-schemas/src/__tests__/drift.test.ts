@@ -54,6 +54,10 @@ import {
   buildTrustCredentialSubjectJsonSchema,
 } from "../credential-subjects.js";
 import {
+  HARDWARE_ATTESTATION_CLAIM_SCHEMA_ID,
+  buildHardwareAttestationClaimJsonSchema,
+} from "../hardware-attestation-claim.js";
+import {
   ADJUDICATOR_VOTE_SCHEMA_ID,
   DISPUTE_APPEAL_SCHEMA_ID,
   DISPUTE_EVIDENCE_SCHEMA_ID,
@@ -221,6 +225,12 @@ const CASES: SchemaCase[] = [
     filename: "gradient-credential-subject-v1.json",
     expectedId: GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID,
     build: buildGradientCredentialSubjectJsonSchema,
+  },
+  {
+    name: "hardware-attestation-claim-v1",
+    filename: "hardware-attestation-claim-v1.json",
+    expectedId: HARDWARE_ATTESTATION_CLAIM_SCHEMA_ID,
+    build: buildHardwareAttestationClaimJsonSchema,
   },
   {
     name: "credential-anchor-batch-v1",

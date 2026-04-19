@@ -63,3 +63,20 @@ export type {
   MatchDecision,
 } from "./disambiguation.js";
 export { disambiguate, stringSimilaritySignal, matchOrAsk } from "./disambiguation.js";
+
+// ── Hardware Attestation (BSL) ────────────────────────────────────
+// Fifth semiring consumer — ranks agents by hardware-custody strength
+// of their identity key (Secure Enclave / TPM / DeviceCheck / Play
+// Integrity / software / absent). Structurally identical to
+// BottleneckSemiring under a different interpretation. See
+// spec/credential-v1.md §3.4.
+export type { HardwareAttestationScore } from "./hardware-attestation.js";
+export {
+  HardwareAttestationSemiring,
+  HW_ATTESTATION_HARDWARE,
+  HW_ATTESTATION_HARDWARE_EXPORTED,
+  HW_ATTESTATION_SOFTWARE,
+  HW_ATTESTATION_NONE,
+  scoreAttestation,
+  attestationRanksAbove,
+} from "./hardware-attestation.js";

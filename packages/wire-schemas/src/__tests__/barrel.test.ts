@@ -70,6 +70,15 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(typeof barrel.GradientCredentialSubjectSchema.parse).toBe("function");
   });
 
+  it("re-exports HardwareAttestationClaimSchema", () => {
+    expect(typeof barrel.HardwareAttestationClaimSchema.parse).toBe("function");
+    expect(typeof barrel.HARDWARE_ATTESTATION_CLAIM_SCHEMA_ID).toBe("string");
+    expect(typeof barrel.buildHardwareAttestationClaimJsonSchema).toBe("function");
+    expect(barrel.buildHardwareAttestationClaimJsonSchema().title).toBe(
+      "HardwareAttestationClaim (v1)",
+    );
+  });
+
   it("re-exports the credential-anchor pair (Batch/Proof)", () => {
     expect(typeof barrel.CredentialAnchorBatchSchema.parse).toBe("function");
     expect(typeof barrel.CredentialAnchorProofSchema.parse).toBe("function");

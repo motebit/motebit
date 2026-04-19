@@ -32,6 +32,7 @@ import {
   buildReputationCredentialSubjectJsonSchema,
   buildTrustCredentialSubjectJsonSchema,
 } from "../src/credential-subjects.js";
+import { buildHardwareAttestationClaimJsonSchema } from "../src/hardware-attestation-claim.js";
 import {
   buildAdjudicatorVoteJsonSchema,
   buildDisputeAppealJsonSchema,
@@ -91,6 +92,10 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   {
     filename: "gradient-credential-subject-v1.json",
     build: buildGradientCredentialSubjectJsonSchema,
+  },
+  {
+    filename: "hardware-attestation-claim-v1.json",
+    build: buildHardwareAttestationClaimJsonSchema,
   },
   { filename: "credential-anchor-batch-v1.json", build: buildCredentialAnchorBatchJsonSchema },
   { filename: "credential-anchor-proof-v1.json", build: buildCredentialAnchorProofJsonSchema },

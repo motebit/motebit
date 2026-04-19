@@ -45,6 +45,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import { HardwareAttestationClaimSchema } from "./hardware-attestation-claim.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URLs
@@ -200,6 +201,9 @@ export const TrustCredentialSubjectSchema = z
       .describe(
         "Unix timestamp in milliseconds of the most recent interaction. Lets verifiers detect dormant relationships (`last_seen_at` far in the past = weaker present-tense trust signal).",
       ),
+    hardware_attestation: HardwareAttestationClaimSchema.optional().describe(
+      "Optional hardware-custody claim about the subject agent's identity key. Declares whether the key lives in a hardware keystore (Secure Enclave, TPM, Android StrongBox, Apple DeviceCheck) or software. Absence asserts nothing (equivalent to 'unknown' for ranking). See spec/credential-v1.md §3.4 and HardwareAttestationClaim.",
+    ),
   })
   .strict();
 

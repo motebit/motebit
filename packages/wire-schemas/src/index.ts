@@ -110,6 +110,11 @@ export {
   buildGradientCredentialSubjectJsonSchema,
 } from "./credential-subjects.js";
 export {
+  HardwareAttestationClaimSchema,
+  HARDWARE_ATTESTATION_CLAIM_SCHEMA_ID,
+  buildHardwareAttestationClaimJsonSchema,
+} from "./hardware-attestation-claim.js";
+export {
   CredentialAnchorBatchSchema,
   CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
   buildCredentialAnchorBatchJsonSchema,
