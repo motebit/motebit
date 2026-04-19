@@ -90,7 +90,7 @@ motebit/
 │   ├── embed/                 [atom]        ONNX embedding service.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 13 open specifications, each motebit/<name>@1.0
+├── spec/                      # 15 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -104,7 +104,8 @@ motebit/
 │   ├── discovery-v1.md                      .well-known, DNS SRV, agent resolution, relay metadata.
 │   ├── migration-v1.md                      Departure attestation, credential export, trust bootstrap.
 │   ├── device-self-registration-v1.md       Self-attesting device → relay handshake, no master token required.
-│   └── dispute-v1.md                        Evidence, adjudication, fund handling, appeal, sybil defense.
+│   ├── dispute-v1.md                        Evidence, adjudication, fund handling, appeal, sybil defense.
+│   └── memory-delta-v1.md                   Event-shaped memory mutations, wire-format payloads, sensitivity redaction.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.

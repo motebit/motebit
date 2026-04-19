@@ -1818,3 +1818,14 @@ export type {
   SuitePublicKeyEncoding,
 } from "./crypto-suite.js";
 export { SUITE_REGISTRY, ALL_SUITE_IDS, isSuiteId, getSuiteEntry } from "./crypto-suite.js";
+
+// ── Memory event payloads (spec/memory-delta-v1.md) ───────────────
+export type {
+  MemoryDecayedPayload,
+  MemoryFormedPayload,
+  MemoryAccessedPayload,
+  MemoryPinnedPayload,
+  MemoryDeletedPayload,
+  MemoryConsolidatedPayload,
+  MemoryAuditPayload,
+} from "./memory-events.js";

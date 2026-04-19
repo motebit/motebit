@@ -46,6 +46,15 @@ import {
   buildMigrationRequestJsonSchema,
   buildMigrationTokenJsonSchema,
 } from "../src/migration.js";
+import {
+  buildMemoryAccessedPayloadJsonSchema,
+  buildMemoryAuditPayloadJsonSchema,
+  buildMemoryConsolidatedPayloadJsonSchema,
+  buildMemoryDecayedPayloadJsonSchema,
+  buildMemoryDeletedPayloadJsonSchema,
+  buildMemoryFormedPayloadJsonSchema,
+  buildMemoryPinnedPayloadJsonSchema,
+} from "../src/memory-events.js";
 import { buildRouteScoreJsonSchema } from "../src/route-score.js";
 import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
 
@@ -93,6 +102,16 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
     filename: "agent-settlement-anchor-proof-v1.json",
     build: buildAgentSettlementAnchorProofJsonSchema,
   },
+  { filename: "memory-formed-payload-v1.json", build: buildMemoryFormedPayloadJsonSchema },
+  { filename: "memory-accessed-payload-v1.json", build: buildMemoryAccessedPayloadJsonSchema },
+  { filename: "memory-pinned-payload-v1.json", build: buildMemoryPinnedPayloadJsonSchema },
+  { filename: "memory-deleted-payload-v1.json", build: buildMemoryDeletedPayloadJsonSchema },
+  {
+    filename: "memory-consolidated-payload-v1.json",
+    build: buildMemoryConsolidatedPayloadJsonSchema,
+  },
+  { filename: "memory-audit-payload-v1.json", build: buildMemoryAuditPayloadJsonSchema },
+  { filename: "memory-decayed-payload-v1.json", build: buildMemoryDecayedPayloadJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {
