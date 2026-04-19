@@ -352,17 +352,25 @@ export class IdbConversationStore implements ConversationStoreAdapter {
     }
   }
 
-  /** Preload conversation data from IDB into sync caches. Call before runtime construction. */
+  /** Preload conversation data from IDB into sync caches. Call before runtime construction.
+   *
+   *  Uses two separate readonly transactions — one for conversations, one
+   *  for the active conversation's messages — instead of a single
+   *  multi-store transaction held across two awaits. IDB auto-commits a
+   *  transaction when the current task has no pending requests, and
+   *  `await idbRequest()` yields control to the microtask queue.
+   *  Modern browsers preserve the transaction across that boundary in
+   *  practice, but the spec doesn't guarantee it under stress (slow CPU,
+   *  GC pause, very large query) and the failure mode is a hard
+   *  `TransactionInactiveError` on the second op. Two cheap readonly
+   *  transactions are deterministic across browsers and load conditions. */
   async preload(motebitId: string): Promise<void> {
-    const tx = this.db.transaction(["conversations", "conversation_messages"], "readonly");
-    const convStore = tx.objectStore("conversations");
-    const msgStore = tx.objectStore("conversation_messages");
-
-    // Load all conversations for this motebit
-    const convIndex = convStore.index("motebit_id");
+    // Transaction 1 — read every conversation for this motebit.
+    const convTx = this.db.transaction("conversations", "readonly");
+    const convIndex = convTx.objectStore("conversations").index("motebit_id");
     const allConvs = (await idbRequest(convIndex.getAll(motebitId))) as ConversationRecord[];
 
-    // Sort by lastActiveAt descending
+    // Sort by lastActiveAt descending so the most recent appears first.
     allConvs.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
 
     // Cache conversation list
@@ -377,23 +385,23 @@ export class IdbConversationStore implements ConversationStoreAdapter {
       })),
     );
 
-    // Find active conversation (within 4h window)
+    // Find active conversation (within the 4h activity window)
     const cutoff = Date.now() - ACTIVE_CONVERSATION_WINDOW_MS;
     const active = allConvs.find((c) => c.lastActiveAt > cutoff);
+    if (!active) return;
 
-    if (active) {
-      this._activeConversationCache.set(motebitId, {
-        conversationId: active.conversationId,
-        startedAt: active.startedAt,
-        lastActiveAt: active.lastActiveAt,
-        summary: active.summary,
-      });
+    this._activeConversationCache.set(motebitId, {
+      conversationId: active.conversationId,
+      startedAt: active.startedAt,
+      lastActiveAt: active.lastActiveAt,
+      summary: active.summary,
+    });
 
-      // Load messages for the active conversation
-      const msgIndex = msgStore.index("conversation_id");
-      const msgs = (await idbRequest(msgIndex.getAll(active.conversationId))) as MessageRecord[];
-      msgs.sort((a, b) => a.createdAt - b.createdAt);
-      this._messageCache.set(active.conversationId, msgs);
-    }
+    // Transaction 2 — load messages for the active conversation only.
+    const msgTx = this.db.transaction("conversation_messages", "readonly");
+    const msgIndex = msgTx.objectStore("conversation_messages").index("conversation_id");
+    const msgs = (await idbRequest(msgIndex.getAll(active.conversationId))) as MessageRecord[];
+    msgs.sort((a, b) => a.createdAt - b.createdAt);
+    this._messageCache.set(active.conversationId, msgs);
   }
 }
