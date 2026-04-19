@@ -27,6 +27,7 @@
 
 import { executeCommand, PlanExecutionVM } from "@motebit/runtime";
 import type { MotebitRuntime, RelayConfig, PlanChunk } from "@motebit/runtime";
+import { matchOrAsk, stringSimilaritySignal } from "@motebit/semiring";
 import type { SpatialVoicePipeline } from "./voice-pipeline";
 
 export interface VoiceCommandDeps {
@@ -194,19 +195,48 @@ function handleLoadConversation(lower: string, deps: VoiceCommandDeps): string {
   const convs = deps.listConversations();
   if (convs.length === 0) return "No conversations to load.";
   const keyword = lower.replace(/^(load|open|resume) (conversation|chat) ?/i, "").trim();
-  const match = keyword ? convs.find((c) => c.title?.toLowerCase().includes(keyword)) : convs[0];
-  if (!match) return `No conversation matching "${keyword}".`;
-  deps.loadConversationById(match.conversationId);
-  return `Loaded: ${match.title ?? "untitled conversation"}.`;
+  if (!keyword) {
+    // No disambiguation needed — the first listed conversation is the target.
+    const first = convs[0]!;
+    deps.loadConversationById(first.conversationId);
+    return `Loaded: ${first.title ?? "untitled conversation"}.`;
+  }
+  const decision = matchOrAsk(
+    convs,
+    stringSimilaritySignal(keyword, (c) => c.title ?? ""),
+    { threshold: 0.3, separation: 0.15, maxAlternatives: 3 },
+  );
+  if (decision.kind === "none") return `No conversation matching "${keyword}".`;
+  if (decision.kind === "ambiguous") {
+    const titles = decision
+      .alternatives!.map((c) => c.title ?? "untitled")
+      .slice(0, 3)
+      .join(", ");
+    return `Multiple conversations match "${keyword}": ${titles}. Say the full title.`;
+  }
+  deps.loadConversationById(decision.winner!.conversationId);
+  return `Loaded: ${decision.winner!.title ?? "untitled conversation"}.`;
 }
 
 function handleDeleteConversation(lower: string, deps: VoiceCommandDeps): string {
   const convs = deps.listConversations();
   const keyword = lower.replace(/^delete (conversation|chat) ?/i, "").trim();
-  const match = keyword ? convs.find((c) => c.title?.toLowerCase().includes(keyword)) : null;
-  if (!match) return `No conversation matching "${keyword}".`;
-  deps.deleteConversation(match.conversationId);
-  return `Deleted: ${match.title ?? "untitled conversation"}.`;
+  if (!keyword) return "Which conversation? Say the title.";
+  const decision = matchOrAsk(
+    convs,
+    stringSimilaritySignal(keyword, (c) => c.title ?? ""),
+    { threshold: 0.3, separation: 0.15, maxAlternatives: 3 },
+  );
+  if (decision.kind === "none") return `No conversation matching "${keyword}".`;
+  if (decision.kind === "ambiguous") {
+    const titles = decision
+      .alternatives!.map((c) => c.title ?? "untitled")
+      .slice(0, 3)
+      .join(", ");
+    return `Multiple conversations match "${keyword}": ${titles}. Say the full title.`;
+  }
+  deps.deleteConversation(decision.winner!.conversationId);
+  return `Deleted: ${decision.winner!.title ?? "untitled conversation"}.`;
 }
 
 async function handleGoalExecution(text: string, deps: VoiceCommandDeps): Promise<string> {

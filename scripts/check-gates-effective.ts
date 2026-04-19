@@ -519,6 +519,20 @@ export async function probeLeak(): Promise<boolean> {
         `# motebit/probe-uncovered@1.0\n\n**Status:** Stable  \n**Version:** 1.0\n\nProbe fixture for check-spec-impl-coverage — intentionally uncovered.\n`,
       ),
   },
+  {
+    script: "check-disambiguation-primitives",
+    proves:
+      "flags an inline `.find(c => c.title.toLowerCase().includes(keyword))` referent pick without importing matchOrAsk",
+    perturb: () =>
+      // Fixture matches the ADHOC_PICK signature: a find-based lookup
+      // using .toLowerCase() + .includes() against a title field. This
+      // is the exact shape voice-commands.ts carried before the
+      // disambiguation primitive landed.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}inline_disambiguation.ts`,
+        `interface Conv { id: string; title: string }\nexport function pick(convs: Conv[], keyword: string): Conv | undefined {\n  return convs.find((c) => c.title.toLowerCase().includes(keyword.toLowerCase()));\n}\n`,
+      ),
+  },
 ];
 
 /**

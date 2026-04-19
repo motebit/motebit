@@ -20,6 +20,7 @@
     "@motebit/sdk": "workspace:*",
     "@motebit/render-engine": "workspace:*",
     "@motebit/runtime": "workspace:*",
+    "@motebit/semiring": "workspace:*",
     "@motebit/ai-core": "workspace:*",
     "@motebit/encryption": "workspace:*",
     "@motebit/event-log": "workspace:*",

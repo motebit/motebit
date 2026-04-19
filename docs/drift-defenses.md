@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Thirty-one invariants are enforced today. Twenty-four run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
+Thirty-two invariants are enforced today. Twenty-five run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
 
 ## Inventory
 
@@ -45,6 +45,7 @@ Thirty-one invariants are enforced today. Twenty-four run as hard CI gates via `
 | 29  | Notability scoring ↔ `@motebit/memory-graph` notability module | `check-notability-primitives.ts`                               | 2026-04-19 |
 | 30  | Trust propagation ↔ `@motebit/market` trust-propagation module | `check-trust-propagation-primitives.ts`                        | 2026-04-19 |
 | 31  | Stable spec ↔ `motebit.implements` package declaration         | `check-spec-impl-coverage.ts`                                  | 2026-04-19 |
+| 32  | Referent disambiguation ↔ `@motebit/semiring` disambiguation   | `check-disambiguation-primitives.ts`                           | 2026-04-19 |
 
 ## Incident histories
 
@@ -125,6 +126,10 @@ Root CLAUDE.md is the index of doctrine. Per-package and per-service CLAUDE.md f
 ### 29. Notability scoring ↔ `@motebit/memory-graph` notability module
 
 The second semiring consumer in the codebase. Memory retrieval was the first (invariant #27); agent routing had proved the pattern earlier in `@motebit/semiring`. Reflection — "which memories should the creature notice this tick?" — was still imperative: `packages/reflection/src/engine.ts` ran three hand-sorted categorizations (`phantomCertainties`, `conflicts`, `nearDeath`) with `.slice(5)` / `.slice(3)` limits per category and per-category prompt formatting. Adding a dimension or changing what notable means was three edits across parallel arms. 2026-04-19 refactor extracted the judgment into `packages/memory-graph/src/notability.ts`: three scalar dimensions composed via `recordSemiring` over `TrustSemiring` (max-times), one `rankNotableMemories(nodes, edges, options)` primitive producing a ranked `NotableMemory[]` with a `dominantReason` tag. Changing the creature's reflection focus is now a weight (`phantomWeight` / `conflictWeight` / `decayWeight`), not a new category. Defense: `check-notability-primitives.ts` with a three-condition heuristic — file calls `computeDecayedConfidence(`, references two or more of `{edgeCount, isolated, orphan, ConflictsWith}`, and does not import `rankNotableMemories` or `NotabilitySemiring`. Allowlist empty at landing. Proves the second semiring consumer pattern and closes the door on inline reinvention the moment a third surface/service wants "which memories matter right now."
+
+### 32. Referent disambiguation ↔ `@motebit/semiring` disambiguation module
+
+The fourth non-trivial semiring consumer — the one that completes the endgame map's "semiring wherever algebra is natural" line item. Before 2026-04-19 every surface that had to route a voice / chat / REPL referent to one of a typed set of candidates (conversations by title, agents by name, tools by invocation word, memories by subject) wrote the same one-liner: `candidates.find(c => c.title.toLowerCase().includes(keyword))`. Four structural problems in that shape: first-match on substring (list-order decides when two candidates match the same word), no exactness weight ("python" ties "python" and "python advanced"), no ambiguity surface (caller can't distinguish "confident match" from "two plausible candidates" to prompt the user), and diverging implementations across sites. `packages/semiring/src/disambiguation.ts` extracted the judgment: `disambiguate(candidates, signals, semiring)` ranks under any scalar semiring, `stringSimilaritySignal(query, extract)` is the single canonical string-similarity signal (internal max over exact 1.0 / substring 0.8 / fuzzy-jaccard × 0.6), `matchOrAsk` wraps it with a threshold + separation gate so the caller distinguishes `match | ambiguous | none`. First consumer migrated in the same commit: `apps/spatial/src/voice-commands.ts` `handleLoadConversation` + `handleDeleteConversation`. Defense: `check-disambiguation-primitives.ts` with the ADHOC_PICK regex — a `.find(` whose callback calls both `.toLowerCase(` and `.includes(` — plus the canonical-import check. Hard gate, empty allowlist. Semiring-consumer tally: agent routing, memory retrieval, notability, trust propagation, disambiguation — five sites across four packages. "Swap the semiring, change the judgment" is now the codebase's expression of judgment, not one of several.
 
 ### 31. Stable spec ↔ `motebit.implements` package declaration
 

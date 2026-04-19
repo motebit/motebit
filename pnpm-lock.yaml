@@ -623,6 +623,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@motebit/semiring':
+        specifier: workspace:*
+        version: link:../../packages/semiring
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../../packages/sync-engine

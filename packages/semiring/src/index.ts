@@ -54,3 +54,12 @@ export {
   rankReachableAgents,
   projectGraph,
 } from "./agent-network.js";
+
+// ── Intent Disambiguation (BSL) ───────────────────────────────────
+export type {
+  DisambiguationSignal,
+  DisambiguationResult,
+  DisambiguateOptions,
+  MatchDecision,
+} from "./disambiguation.js";
+export { disambiguate, stringSimilaritySignal, matchOrAsk } from "./disambiguation.js";

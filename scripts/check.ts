@@ -218,6 +218,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every Stable protocol spec has ≥1 implementing package declared via `motebit.implements` in package.json (invariant #31, added 2026-04-19 to extend the type-surface guarantees of #9/#14/#23 to runtime-behavior ownership — a Stable spec without a declared implementer is a silent gap between what we ship and what we claim third parties can implement; drafts exempt)",
     script: "check-spec-impl-coverage",
   },
+  {
+    name: "check-disambiguation-primitives",
+    defends:
+      "referent disambiguation (picking one candidate from a list by matching a fuzzy user input against a title/name/label field) lives in @motebit/semiring (matchOrAsk + stringSimilaritySignal + disambiguate), not inline in apps/services/sibling-packages (invariant #32, added 2026-04-19 as the fourth non-trivial semiring consumer — completes the endgame map's 'semiring wherever algebra is natural' line item; same drift family as #27/#28/#29/#30)",
+    script: "check-disambiguation-primitives",
+  },
 ];
 
 interface Result {
