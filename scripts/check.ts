@@ -206,6 +206,12 @@ const GATES: ReadonlyArray<Gate> = [
       "notability scoring (weighted combination of decay + graph-isolation + conflict-involvement, used to rank memories for reflection) lives in @motebit/memory-graph (rankNotableMemories + NotabilitySemiring), not inline in apps/services/sibling-packages (invariant #29, added 2026-04-19 when the reflection engine moved from three hand-sorted categories to one algebraic ranking — extends the protocol-primitive doctrine to reflection judgment, second semiring consumer after retrieval proves the pattern beyond routing)",
     script: "check-notability-primitives",
   },
+  {
+    name: "check-trust-propagation-primitives",
+    defends:
+      "multi-hop trust propagation across the credential graph (walk issuer→subject edges, product-along-chain × max-across-parallel under TrustSemiring) lives in @motebit/market (propagateTrust + buildTrustGraph), not inline in apps/services/sibling-packages (invariant #30, added 2026-04-19 as the third non-trivial semiring consumer beyond routing + retrieval/notability — locks in the pattern of one primitive, many callers, swappable algebra; prevents divergence between admin UI, AI-core, and market router on the propagated trust of the same agent)",
+    script: "check-trust-propagation-primitives",
+  },
 ];
 
 interface Result {

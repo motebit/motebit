@@ -55,6 +55,7 @@
     "check-retrieval-primitives": "npx tsx scripts/check-retrieval-primitives.ts",
     "check-reputation-primitives": "npx tsx scripts/check-reputation-primitives.ts",
     "check-notability-primitives": "npx tsx scripts/check-notability-primitives.ts",
+    "check-trust-propagation-primitives": "npx tsx scripts/check-trust-propagation-primitives.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",

@@ -23,6 +23,17 @@ export type {
   CredentialWeightConfig,
   ReputationVC,
 } from "./credential-weight.js";
+export {
+  propagateTrust,
+  buildTrustGraph,
+  makeIssuerTrustResolver,
+  TRUST_SUPER_SOURCE,
+} from "./trust-propagation.js";
+export type {
+  CredentialEdge,
+  PropagatedTrust,
+  TrustPropagationOptions,
+} from "./trust-propagation.js";
 export { allocateBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";
 export { computeServiceReputation } from "./reputation.js";

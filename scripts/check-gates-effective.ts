@@ -490,6 +490,22 @@ export async function probeLeak(): Promise<boolean> {
         `import { computeDecayedConfidence } from "@motebit/memory-graph";\nimport type { MemoryNode, MemoryEdge } from "@motebit/sdk";\nimport { RelationType } from "@motebit/sdk";\nexport function notabilityProbe(node: MemoryNode, edges: MemoryEdge[]): number {\n  const edgeCount = edges.filter((e) => e.source_id === node.node_id).length;\n  const isolated = edgeCount === 0;\n  const hasConflict = edges.some((e) => e.relation_type === RelationType.ConflictsWith);\n  const decayed = computeDecayedConfidence(node.confidence, node.half_life, Date.now() - node.created_at);\n  return (isolated ? decayed : 0) + (hasConflict ? decayed : 0);\n}\n`,
       ),
   },
+  {
+    script: "check-trust-propagation-primitives",
+    proves:
+      "flags inline trust propagation — credential-vocabulary + issuerTrust × weight aggregation over a loop of credentials without importing the canonical propagateTrust",
+    perturb: () =>
+      // Fixture matches the three-condition heuristic: credential-graph
+      // vocabulary (≥2 of credentialSubject/issuer/VC_TYPE_REPUTATION/did:key),
+      // getIssuerTrust × weight in an aggregation loop, and no canonical
+      // import. This is the shape a caller would write if they tried to
+      // implement multi-hop trust lookup themselves instead of asking
+      // the market package for it.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}inline_trust_propagation.ts`,
+        `interface Cred { issuer: string; credentialSubject: { id: string; success_rate: number } }\nexport function aggregate(credentials: Cred[], getIssuerTrust: (did: string) => number): Map<string, number> {\n  const out = new Map<string, number>();\n  for (const vc of credentials) {\n    const issuerTrust = getIssuerTrust(vc.issuer);\n    const weight = vc.credentialSubject.success_rate;\n    const score = issuerTrust * weight;\n    const prev = out.get(vc.credentialSubject.id) ?? 0;\n    if (score > prev) out.set(vc.credentialSubject.id, score);\n  }\n  return out;\n}\n`,
+      ),
+  },
 ];
 
 /**
