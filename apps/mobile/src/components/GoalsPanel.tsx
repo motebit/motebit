@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
   View,
@@ -12,8 +12,14 @@ import {
   Alert,
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
-import type { Goal, GoalMode } from "../adapters/expo-sqlite";
 import { useTheme, type ThemeColors } from "../theme";
+import {
+  createGoalsController,
+  type GoalsFetchAdapter,
+  type GoalsState,
+  type GoalMode,
+  type ScheduledGoal,
+} from "@motebit/panels";
 
 const INTERVAL_OPTIONS: { label: string; ms: number }[] = [
   { label: "Hourly", ms: 3_600_000 },
@@ -42,134 +48,153 @@ interface GoalsPanelProps {
   onClose: () => void;
 }
 
+function createMobileGoalsAdapter(app: MobileApp): GoalsFetchAdapter {
+  const identity = app.getIdentityInfo();
+  return {
+    listGoals: async () => {
+      const store = app.getGoalStore();
+      if (!store) return [];
+      return store.listGoals(identity.motebitId) as ScheduledGoal[];
+    },
+    addGoal: async (input) => {
+      const store = app.getGoalStore();
+      if (!store) return;
+      store.addGoal(identity.motebitId, input.prompt, input.interval_ms, input.mode);
+    },
+    setEnabled: async (goalId, enabled) => {
+      const store = app.getGoalStore();
+      if (!store) return;
+      store.toggleGoal(goalId, enabled);
+    },
+    removeGoal: async (goalId) => {
+      const store = app.getGoalStore();
+      if (!store) return;
+      store.removeGoal(goalId);
+    },
+  };
+}
+
 export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const [goals, setGoals] = useState<Goal[]>([]);
   const [newPrompt, setNewPrompt] = useState("");
   const [newIntervalIdx, setNewIntervalIdx] = useState(0);
   const [newMode, setNewMode] = useState<GoalMode>("recurring");
 
-  const goalStore = app.getGoalStore();
-  const identity = app.getIdentityInfo();
-
-  const refresh = useCallback(() => {
-    if (!goalStore) return;
-    setGoals(goalStore.listGoals(identity.motebitId));
-  }, [goalStore, identity.motebitId]);
+  const ctrlRef = useRef<ReturnType<typeof createGoalsController> | null>(null);
+  const [state, setState] = useState<GoalsState>(() => ({
+    goals: [],
+    loading: false,
+    error: null,
+  }));
 
   useEffect(() => {
-    if (visible) refresh();
-  }, [visible, refresh]);
+    const ctrl = createGoalsController(createMobileGoalsAdapter(app));
+    ctrlRef.current = ctrl;
+    const unsubscribe = ctrl.subscribe(setState);
+    return () => {
+      unsubscribe();
+      ctrl.dispose();
+      ctrlRef.current = null;
+    };
+  }, [app]);
 
-  const handleAdd = useCallback(() => {
+  useEffect(() => {
+    if (!visible) return;
+    void ctrlRef.current?.refresh();
+  }, [visible]);
+
+  const goalStore = app.getGoalStore();
+
+  const handleAdd = (): void => {
     const prompt = newPrompt.trim();
-    if (!prompt || !goalStore) return;
+    if (!prompt) return;
     const interval = INTERVAL_OPTIONS[newIntervalIdx];
     if (!interval) return;
-    goalStore.addGoal(identity.motebitId, prompt, interval.ms, newMode);
-    setNewPrompt("");
-    refresh();
-  }, [newPrompt, newIntervalIdx, newMode, goalStore, identity.motebitId, refresh]);
+    void ctrlRef.current
+      ?.addGoal({ prompt, interval_ms: interval.ms, mode: newMode })
+      .then(() => setNewPrompt(""));
+  };
 
-  const handleToggle = useCallback(
-    (goalId: string, enabled: boolean) => {
-      if (!goalStore) return;
-      goalStore.toggleGoal(goalId, enabled);
-      refresh();
-    },
-    [goalStore, refresh],
-  );
+  const handleRemove = (goalId: string): void => {
+    Alert.alert("Remove Goal", "Are you sure you want to delete this goal?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => void ctrlRef.current?.removeGoal(goalId),
+      },
+    ]);
+  };
 
-  const handleRemove = useCallback(
-    (goalId: string) => {
-      Alert.alert("Remove Goal", "Are you sure you want to delete this goal?", [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            if (!goalStore) return;
-            goalStore.removeGoal(goalId);
-            refresh();
-          },
-        },
-      ]);
-    },
-    [goalStore, refresh],
-  );
-
-  const renderGoal = useCallback(
-    ({ item: goal }: { item: Goal }) => (
-      <View style={styles.goalRow}>
-        <View style={styles.goalInfo}>
-          <Text style={styles.goalPrompt} numberOfLines={2}>
-            {goal.prompt}
-          </Text>
-          <View style={styles.goalMeta}>
-            <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
-            <Text style={styles.goalMetaText}>{goal.mode}</Text>
-            <Text
-              style={[
-                styles.goalMetaText,
-                (goal.status === "paused" || goal.status === "failed") && styles.goalMetaWarning,
-              ]}
-            >
-              {goal.status}
-            </Text>
-            {goal.last_run_at != null ? (
-              <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
-            ) : null}
-            {goal.consecutive_failures > 0 ? (
-              <Text style={styles.goalMetaWarning}>
-                {goal.consecutive_failures}/{goal.max_retries} failures
-              </Text>
-            ) : null}
-          </View>
-        </View>
-        <View style={styles.goalActions}>
-          <Switch
-            value={goal.enabled}
-            onValueChange={(v) => handleToggle(goal.goal_id, v)}
-            trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
-            thumbColor={goal.enabled ? colors.textPrimary : colors.textMuted}
-          />
-          <TouchableOpacity
-            onPress={() => handleRemove(goal.goal_id)}
-            activeOpacity={0.7}
-            style={styles.goalDeleteBtn}
+  const renderGoal = ({ item: goal }: { item: ScheduledGoal }): React.ReactElement => (
+    <View style={styles.goalRow}>
+      <View style={styles.goalInfo}>
+        <Text style={styles.goalPrompt} numberOfLines={2}>
+          {goal.prompt}
+        </Text>
+        <View style={styles.goalMeta}>
+          <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
+          <Text style={styles.goalMetaText}>{goal.mode}</Text>
+          <Text
+            style={[
+              styles.goalMetaText,
+              (goal.status === "paused" || goal.status === "failed") && styles.goalMetaWarning,
+            ]}
           >
-            <Text style={styles.goalDeleteText}>X</Text>
-          </TouchableOpacity>
+            {goal.status}
+          </Text>
+          {goal.last_run_at != null ? (
+            <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
+          ) : null}
+          {goal.consecutive_failures != null && goal.consecutive_failures > 0 ? (
+            <Text style={styles.goalMetaWarning}>
+              {goal.consecutive_failures}/{goal.max_retries ?? "?"} failures
+            </Text>
+          ) : null}
         </View>
       </View>
-    ),
-    [colors, styles, handleToggle, handleRemove],
+      <View style={styles.goalActions}>
+        <Switch
+          value={goal.enabled ?? goal.status === "active"}
+          onValueChange={(v) => void ctrlRef.current?.setEnabled(goal.goal_id, v)}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={
+            (goal.enabled ?? goal.status === "active") ? colors.textPrimary : colors.textMuted
+          }
+        />
+        <TouchableOpacity
+          onPress={() => handleRemove(goal.goal_id)}
+          activeOpacity={0.7}
+          style={styles.goalDeleteBtn}
+        >
+          <Text style={styles.goalDeleteText}>X</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 
   return (
     <Modal visible={visible} animationType="slide" transparent statusBarTranslucent>
       <View style={styles.backdrop}>
         <View style={styles.panel}>
-          {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>Goals</Text>
             <View style={styles.headerRight}>
-              <Text style={styles.countBadge}>{goals.length}</Text>
+              <Text style={styles.countBadge}>{state.goals.length}</Text>
               <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
                 <Text style={styles.closeButton}>Done</Text>
               </TouchableOpacity>
             </View>
           </View>
 
-          {/* Goal list */}
-          {goals.length === 0 ? (
+          {state.goals.length === 0 ? (
             <Text style={styles.emptyText}>
               {goalStore ? "No goals yet. Add one below." : "Goal store not available."}
             </Text>
           ) : (
             <FlatList
-              data={goals}
+              data={state.goals}
               keyExtractor={(g) => g.goal_id}
               renderItem={renderGoal}
               style={styles.list}
@@ -177,7 +202,6 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
             />
           )}
 
-          {/* Add form */}
           {goalStore && (
             <View style={styles.addForm}>
               <TextInput
@@ -232,11 +256,7 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
 
 function createStyles(c: ThemeColors) {
   return StyleSheet.create({
-    backdrop: {
-      flex: 1,
-      backgroundColor: c.overlayBg,
-      justifyContent: "flex-end",
-    },
+    backdrop: { flex: 1, backgroundColor: c.overlayBg, justifyContent: "flex-end" },
     panel: {
       backgroundColor: c.bgPrimary,
       borderTopLeftRadius: 20,
@@ -254,26 +274,14 @@ function createStyles(c: ThemeColors) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.borderPrimary,
     },
-    title: {
-      color: c.textPrimary,
-      fontSize: 18,
-      fontWeight: "600",
-    },
-    headerRight: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 12,
-    },
+    title: { color: c.textPrimary, fontSize: 18, fontWeight: "600" },
+    headerRight: { flexDirection: "row", alignItems: "center", gap: 12 },
     countBadge: {
       color: c.textMuted,
       fontSize: 13,
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
-    closeButton: {
-      color: c.accent,
-      fontSize: 16,
-      fontWeight: "600",
-    },
+    closeButton: { color: c.accent, fontSize: 16, fontWeight: "600" },
     emptyText: {
       color: c.textMuted,
       fontSize: 13,
@@ -281,13 +289,8 @@ function createStyles(c: ThemeColors) {
       textAlign: "center",
       marginVertical: 24,
     },
-    list: {
-      flexGrow: 0,
-    },
-    listContent: {
-      paddingHorizontal: 16,
-      paddingVertical: 8,
-    },
+    list: { flexGrow: 0 },
+    listContent: { paddingHorizontal: 16, paddingVertical: 8 },
     goalRow: {
       flexDirection: "row",
       alignItems: "center",
@@ -298,34 +301,12 @@ function createStyles(c: ThemeColors) {
       borderWidth: 1,
       borderColor: c.borderPrimary,
     },
-    goalInfo: {
-      flex: 1,
-      marginRight: 10,
-    },
-    goalPrompt: {
-      color: c.textPrimary,
-      fontSize: 14,
-      marginBottom: 4,
-    },
-    goalMeta: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 6,
-    },
-    goalMetaText: {
-      color: c.textMuted,
-      fontSize: 11,
-    },
-    goalMetaWarning: {
-      color: c.statusWarning,
-      fontSize: 11,
-      fontWeight: "600",
-    },
-    goalActions: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-    },
+    goalInfo: { flex: 1, marginRight: 10 },
+    goalPrompt: { color: c.textPrimary, fontSize: 14, marginBottom: 4 },
+    goalMeta: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+    goalMetaText: { color: c.textMuted, fontSize: 11 },
+    goalMetaWarning: { color: c.statusWarning, fontSize: 11, fontWeight: "600" },
+    goalActions: { flexDirection: "row", alignItems: "center", gap: 8 },
     goalDeleteBtn: {
       width: 28,
       height: 28,
@@ -334,11 +315,7 @@ function createStyles(c: ThemeColors) {
       justifyContent: "center",
       alignItems: "center",
     },
-    goalDeleteText: {
-      color: c.statusError,
-      fontSize: 12,
-      fontWeight: "700",
-    },
+    goalDeleteText: { color: c.statusError, fontSize: 12, fontWeight: "700" },
     addForm: {
       paddingHorizontal: 16,
       paddingTop: 12,
@@ -356,12 +333,7 @@ function createStyles(c: ThemeColors) {
       borderColor: c.borderInput,
       minHeight: 48,
     },
-    optionsRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 8,
-      marginTop: 10,
-    },
+    optionsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
     chip: {
       paddingHorizontal: 12,
       paddingVertical: 6,
@@ -370,18 +342,9 @@ function createStyles(c: ThemeColors) {
       borderWidth: 1,
       borderColor: c.borderPrimary,
     },
-    chipActive: {
-      borderColor: c.accent,
-      backgroundColor: c.accentSoft,
-    },
-    chipText: {
-      color: c.textSecondary,
-      fontSize: 13,
-      fontWeight: "600",
-    },
-    chipTextActive: {
-      color: c.textPrimary,
-    },
+    chipActive: { borderColor: c.accent, backgroundColor: c.accentSoft },
+    chipText: { color: c.textSecondary, fontSize: 13, fontWeight: "600" },
+    chipTextActive: { color: c.textPrimary },
     addButton: {
       backgroundColor: c.buttonPrimaryBg,
       borderRadius: 10,
@@ -389,13 +352,7 @@ function createStyles(c: ThemeColors) {
       marginTop: 12,
       alignItems: "center",
     },
-    addButtonDisabled: {
-      opacity: 0.4,
-    },
-    addButtonText: {
-      color: c.buttonPrimaryText,
-      fontSize: 15,
-      fontWeight: "600",
-    },
+    addButtonDisabled: { opacity: 0.4 },
+    addButtonText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
   });
 }

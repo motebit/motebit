@@ -43,3 +43,14 @@ export {
   type MemoryNode,
   type DeletionCertificate,
 } from "./memory/controller";
+
+export {
+  createGoalsController,
+  type GoalsController,
+  type GoalsFetchAdapter,
+  type GoalsState,
+  type ScheduledGoal,
+  type GoalMode,
+  type GoalStatus,
+  type NewGoalInput,
+} from "./goals/controller";

@@ -12,41 +12,41 @@ Thirty-three invariants are enforced today. Twenty-six run as hard CI gates via 
 
 ## Inventory
 
-| #   | Invariant                                                               | Defense                                                        | Landed     |
-| --- | ----------------------------------------------------------------------- | -------------------------------------------------------------- | ---------- |
-| 1   | Protocol primitives ↔ service implementations                           | `check-service-primitives.ts`                                  | —          |
-| 2   | Architectural layers ↔ dependencies                                     | `check-deps.ts`                                                | —          |
-| 3   | Spec filenames ↔ implementation references                              | `check-spec-references.ts` (`--strict`)                        | —          |
-| 4   | Sibling boundaries ↔ each other                                         | `check-sibling-boundaries.ts` (advisory, PR-diff)              | —          |
-| 5   | Coverage thresholds ↔ measurements                                      | `turbo run test:coverage`                                      | —          |
-| 6   | Capability rings ↔ surfaces                                             | `check-app-primitives.ts`                                      | —          |
-| 7   | Deps declarations ↔ actual use                                          | `knip` (soft signal)                                           | —          |
-| 8   | Published API ↔ consumer contract                                       | `check-api-surface.ts`                                         | —          |
-| 9   | Spec Wire format types ↔ `@motebit/protocol` exports                    | `check-spec-coverage.ts` (`--strict`)                          | 2026-04-13 |
-| 10  | Spec Wire format signatures ↔ cryptosuite declarations                  | `check-suite-declared.ts`                                      | 2026-04-13 |
-| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher                       | `check-suite-dispatch.ts`                                      | 2026-04-13 |
-| 12  | Published binaries ↔ dist-boot smoke                                    | `check-dist-smoke.ts`                                          | 2026-04-13 |
-| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`                   | `check-docs-tree.ts`                                           | 2026-04-14 |
-| 14  | Spec callables ↔ MIT package exports                                    | `check-spec-mit-boundary.ts`                                   | 2026-04-14 |
-| 15  | Surface affordances ↔ deterministic invocation path                     | `check-affordance-routing.ts`                                  | 2026-04-14 |
-| 16  | Ring 2 privacy substrate ↔ surface package declarations                 | `check-privacy-ring.ts`                                        | 2026-04-16 |
-| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface                  | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)                   | 2026-04-17 |
-| 18  | Routine `every` grammar ↔ `parseInterval`                               | zod `.transform()` calls `parseInterval` once                  | 2026-04-17 |
-| 19  | Goal columns ↔ `routineToGoal` mapper                                   | `satisfies Goal` assertion in `yaml-config.ts`                 | 2026-04-17 |
-| 20  | motebit.yaml schema fields ↔ zod `.describe()` hover                    | `yaml-config.test.ts` (schema walk assertion)                  | 2026-04-17 |
-| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema                      | `yaml-json-schema.test.ts` (roundtrip assertion)               | 2026-04-17 |
-| 22  | Wire-format types ↔ zod schemas ↔ committed JSON Schema                 | `@motebit/wire-schemas` 3-way pin (satisfies + roundtrip test) | 2026-04-17 |
-| 23  | spec/\*.md wire-format types ↔ `@motebit/wire-schemas` exports          | `check-spec-wire-schemas.ts` + waiver list                     | 2026-04-18 |
-| 24  | README.md "What you see:" block ↔ scaffold + runtime defaults           | `check-readme.ts`                                              | 2026-04-18 |
-| 25  | Per-directory CLAUDE.md files ↔ root CLAUDE.md doctrine index           | `check-claude-md.ts`                                           | 2026-04-18 |
-| 26  | SpatialExpression renderers ↔ `@motebit/render-engine` package          | `check-scene-primitives.ts`                                    | 2026-04-19 |
-| 27  | Memory-retrieval ordering ↔ `@motebit/memory-graph` recall\*            | `check-retrieval-primitives.ts`                                | 2026-04-19 |
-| 28  | Reputation scoring ↔ `@motebit/policy` + `@motebit/market`              | `check-reputation-primitives.ts`                               | 2026-04-19 |
-| 29  | Notability scoring ↔ `@motebit/memory-graph` notability module          | `check-notability-primitives.ts`                               | 2026-04-19 |
-| 30  | Trust propagation ↔ `@motebit/market` trust-propagation module          | `check-trust-propagation-primitives.ts`                        | 2026-04-19 |
-| 31  | Stable spec ↔ `motebit.implements` package declaration                  | `check-spec-impl-coverage.ts`                                  | 2026-04-19 |
-| 32  | Referent disambiguation ↔ `@motebit/semiring` disambiguation            | `check-disambiguation-primitives.ts`                           | 2026-04-19 |
-| 33  | Panel state ↔ `@motebit/panels` controllers (sovereign, agents, memory) | `check-panel-controllers.ts`                                   | 2026-04-19 |
+| #   | Invariant                                                                      | Defense                                                        | Landed     |
+| --- | ------------------------------------------------------------------------------ | -------------------------------------------------------------- | ---------- |
+| 1   | Protocol primitives ↔ service implementations                                  | `check-service-primitives.ts`                                  | —          |
+| 2   | Architectural layers ↔ dependencies                                            | `check-deps.ts`                                                | —          |
+| 3   | Spec filenames ↔ implementation references                                     | `check-spec-references.ts` (`--strict`)                        | —          |
+| 4   | Sibling boundaries ↔ each other                                                | `check-sibling-boundaries.ts` (advisory, PR-diff)              | —          |
+| 5   | Coverage thresholds ↔ measurements                                             | `turbo run test:coverage`                                      | —          |
+| 6   | Capability rings ↔ surfaces                                                    | `check-app-primitives.ts`                                      | —          |
+| 7   | Deps declarations ↔ actual use                                                 | `knip` (soft signal)                                           | —          |
+| 8   | Published API ↔ consumer contract                                              | `check-api-surface.ts`                                         | —          |
+| 9   | Spec Wire format types ↔ `@motebit/protocol` exports                           | `check-spec-coverage.ts` (`--strict`)                          | 2026-04-13 |
+| 10  | Spec Wire format signatures ↔ cryptosuite declarations                         | `check-suite-declared.ts`                                      | 2026-04-13 |
+| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher                              | `check-suite-dispatch.ts`                                      | 2026-04-13 |
+| 12  | Published binaries ↔ dist-boot smoke                                           | `check-dist-smoke.ts`                                          | 2026-04-13 |
+| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`                          | `check-docs-tree.ts`                                           | 2026-04-14 |
+| 14  | Spec callables ↔ MIT package exports                                           | `check-spec-mit-boundary.ts`                                   | 2026-04-14 |
+| 15  | Surface affordances ↔ deterministic invocation path                            | `check-affordance-routing.ts`                                  | 2026-04-14 |
+| 16  | Ring 2 privacy substrate ↔ surface package declarations                        | `check-privacy-ring.ts`                                        | 2026-04-16 |
+| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface                         | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)                   | 2026-04-17 |
+| 18  | Routine `every` grammar ↔ `parseInterval`                                      | zod `.transform()` calls `parseInterval` once                  | 2026-04-17 |
+| 19  | Goal columns ↔ `routineToGoal` mapper                                          | `satisfies Goal` assertion in `yaml-config.ts`                 | 2026-04-17 |
+| 20  | motebit.yaml schema fields ↔ zod `.describe()` hover                           | `yaml-config.test.ts` (schema walk assertion)                  | 2026-04-17 |
+| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema                             | `yaml-json-schema.test.ts` (roundtrip assertion)               | 2026-04-17 |
+| 22  | Wire-format types ↔ zod schemas ↔ committed JSON Schema                        | `@motebit/wire-schemas` 3-way pin (satisfies + roundtrip test) | 2026-04-17 |
+| 23  | spec/\*.md wire-format types ↔ `@motebit/wire-schemas` exports                 | `check-spec-wire-schemas.ts` + waiver list                     | 2026-04-18 |
+| 24  | README.md "What you see:" block ↔ scaffold + runtime defaults                  | `check-readme.ts`                                              | 2026-04-18 |
+| 25  | Per-directory CLAUDE.md files ↔ root CLAUDE.md doctrine index                  | `check-claude-md.ts`                                           | 2026-04-18 |
+| 26  | SpatialExpression renderers ↔ `@motebit/render-engine` package                 | `check-scene-primitives.ts`                                    | 2026-04-19 |
+| 27  | Memory-retrieval ordering ↔ `@motebit/memory-graph` recall\*                   | `check-retrieval-primitives.ts`                                | 2026-04-19 |
+| 28  | Reputation scoring ↔ `@motebit/policy` + `@motebit/market`                     | `check-reputation-primitives.ts`                               | 2026-04-19 |
+| 29  | Notability scoring ↔ `@motebit/memory-graph` notability module                 | `check-notability-primitives.ts`                               | 2026-04-19 |
+| 30  | Trust propagation ↔ `@motebit/market` trust-propagation module                 | `check-trust-propagation-primitives.ts`                        | 2026-04-19 |
+| 31  | Stable spec ↔ `motebit.implements` package declaration                         | `check-spec-impl-coverage.ts`                                  | 2026-04-19 |
+| 32  | Referent disambiguation ↔ `@motebit/semiring` disambiguation                   | `check-disambiguation-primitives.ts`                           | 2026-04-19 |
+| 33  | Panel state ↔ `@motebit/panels` controllers (sovereign, agents, memory, goals) | `check-panel-controllers.ts`                                   | 2026-04-19 |
 
 ## Incident histories
 

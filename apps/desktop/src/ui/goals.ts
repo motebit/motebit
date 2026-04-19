@@ -3,6 +3,12 @@ import { formatTimeAgo } from "../types";
 import type { GoalPlanProgressEvent, GoalCompleteEvent } from "../index";
 import { parseJsonSafe, classifyDecision, ipcString } from "./audit-utils";
 import { addMessage } from "./chat";
+import {
+  createGoalsController,
+  type GoalsFetchAdapter,
+  type GoalsState,
+  type ScheduledGoal,
+} from "@motebit/panels";
 
 // === DOM Refs ===
 
@@ -40,10 +46,66 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   let progressStepEl: HTMLDivElement | null = null;
   let fadeTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Scheduled-goal state (list + CRUD) lives in @motebit/panels so desktop
+  // and mobile share the state shape. The adapter wraps Tauri IPC; Rust's
+  // goals_toggle ignores the explicit target state (it flips based on
+  // current). A future Rust-side change can honor the argument — the
+  // controller's contract is already in the right shape.
+  const goalsAdapter: GoalsFetchAdapter = {
+    listGoals: async () => {
+      const config = ctx.getConfig();
+      if (config?.isTauri !== true || config.invoke == null) return [];
+      const motebitId = ctx.app.motebitId;
+      if (!motebitId) return [];
+      const rows = await config.invoke<Array<Record<string, unknown>>>("goals_list", { motebitId });
+      return rows.map(
+        (g): ScheduledGoal => ({
+          goal_id: String(g.goal_id),
+          prompt: ipcString(g.prompt),
+          interval_ms: Number(g.interval_ms) || 0,
+          mode: (ipcString(g.mode, "recurring") as "recurring" | "once") ?? "recurring",
+          status: ipcString(g.status, "active"),
+        }),
+      );
+    },
+    addGoal: async (input) => {
+      const config = ctx.getConfig();
+      if (config?.isTauri !== true || config.invoke == null) return;
+      const motebitId = ctx.app.motebitId;
+      if (!motebitId) return;
+      const goalId = crypto.randomUUID();
+      await config.invoke("goals_create", {
+        motebitId,
+        goalId,
+        prompt: input.prompt,
+        intervalMs: input.interval_ms,
+        mode: input.mode,
+      });
+    },
+    setEnabled: async (goalId, _enabled) => {
+      const config = ctx.getConfig();
+      if (config?.isTauri !== true || config.invoke == null) return;
+      // Rust's goals_toggle is stateless (flips current). A future change
+      // can accept the explicit target; until then the controller's
+      // `enabled` argument is informational and refresh reconciles.
+      await config.invoke("goals_toggle", { goalId });
+    },
+    removeGoal: async (goalId) => {
+      const config = ctx.getConfig();
+      if (config?.isTauri !== true || config.invoke == null) return;
+      await config.invoke("goals_delete", { goalId });
+    },
+  };
+
+  const goalsCtrl = createGoalsController(goalsAdapter);
+  goalsCtrl.subscribe((state) => {
+    renderGoalList(state);
+  });
+
   function open(): void {
     goalsPanel.classList.add("open");
     goalsBackdrop.classList.add("open");
-    refreshGoalList();
+    void goalsCtrl.refresh();
     loadRecentOutcomes();
     loadPlanHistory();
   }
@@ -97,7 +159,8 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       fadeTimer = null;
     }, 3000);
 
-    // Refresh recent outcomes and plan history
+    // Refresh goal list (status may have changed) plus desktop-specific views
+    void goalsCtrl.refresh();
     loadRecentOutcomes();
     loadPlanHistory();
   }
@@ -276,107 +339,105 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   // === Goal List ===
 
-  function refreshGoalList(): void {
-    const config = ctx.getConfig();
-    if (config?.isTauri !== true || config.invoke == null) return;
-    const motebitId = ctx.app.motebitId;
-    if (!motebitId) return;
-    const invoke = config.invoke;
-
+  function renderGoalList(state: GoalsState): void {
     goalList.innerHTML = "";
-    void invoke<Array<Record<string, unknown>>>("goals_list", { motebitId })
-      .then((goals) => {
-        if (goals.length === 0) {
-          const empty = document.createElement("div");
-          empty.className = "goal-empty";
-          empty.textContent = "No goals yet";
-          goalList.appendChild(empty);
-          return;
-        }
 
-        for (const goal of goals) {
-          const item = document.createElement("div");
-          item.className = "goal-item";
+    if (state.error != null && state.goals.length === 0) {
+      goalList.innerHTML = '<div class="goal-empty">Failed to load goals</div>';
+      return;
+    }
 
-          const promptDiv = document.createElement("div");
-          promptDiv.className = "goal-item-prompt";
-          const promptText = ipcString(goal.prompt);
-          promptDiv.textContent =
-            promptText.length > 60 ? promptText.slice(0, 60) + "..." : promptText;
-          promptDiv.title = promptText;
-          item.appendChild(promptDiv);
+    if (state.goals.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "goal-empty";
+      empty.textContent = "No goals yet";
+      goalList.appendChild(empty);
+      return;
+    }
 
-          const metaDiv = document.createElement("div");
-          metaDiv.className = "goal-item-meta";
+    const config = ctx.getConfig();
+    const invoke = config?.invoke;
 
-          const statusDot = document.createElement("span");
-          const status = ipcString(goal.status, "active");
-          statusDot.className = `goal-status-dot ${status}`;
-          metaDiv.appendChild(statusDot);
+    for (const goal of state.goals) {
+      const item = document.createElement("div");
+      item.className = "goal-item";
 
-          const statusText = document.createElement("span");
-          statusText.textContent = status;
-          metaDiv.appendChild(statusText);
+      const promptDiv = document.createElement("div");
+      promptDiv.className = "goal-item-prompt";
+      const promptText = goal.prompt;
+      promptDiv.textContent = promptText.length > 60 ? promptText.slice(0, 60) + "..." : promptText;
+      promptDiv.title = promptText;
+      item.appendChild(promptDiv);
 
-          const intervalSpan = document.createElement("span");
-          intervalSpan.textContent = formatInterval(Number(goal.interval_ms) || 0);
-          metaDiv.appendChild(intervalSpan);
+      const metaDiv = document.createElement("div");
+      metaDiv.className = "goal-item-meta";
 
-          const modeSpan = document.createElement("span");
-          modeSpan.textContent = ipcString(goal.mode, "recurring");
-          metaDiv.appendChild(modeSpan);
+      const statusDot = document.createElement("span");
+      const status = String(goal.status);
+      statusDot.className = `goal-status-dot ${status}`;
+      metaDiv.appendChild(statusDot);
 
-          item.appendChild(metaDiv);
+      const statusText = document.createElement("span");
+      statusText.textContent = status;
+      metaDiv.appendChild(statusText);
 
-          const actions = document.createElement("div");
-          actions.className = "goal-item-actions";
+      const intervalSpan = document.createElement("span");
+      intervalSpan.textContent = formatInterval(goal.interval_ms);
+      metaDiv.appendChild(intervalSpan);
 
-          const goalId = String(goal.goal_id);
+      const modeSpan = document.createElement("span");
+      modeSpan.textContent = goal.mode;
+      metaDiv.appendChild(modeSpan);
 
-          if (status === "active" || status === "paused") {
-            const toggleBtn = document.createElement("button");
-            toggleBtn.textContent = status === "active" ? "Pause" : "Resume";
-            toggleBtn.addEventListener("click", () => {
-              void toggleGoal(goalId);
-            });
-            actions.appendChild(toggleBtn);
-          }
+      item.appendChild(metaDiv);
 
-          const historyBtn = document.createElement("button");
-          historyBtn.className = "goal-toggle-outcomes";
-          historyBtn.textContent = "History";
-          actions.appendChild(historyBtn);
+      const actions = document.createElement("div");
+      actions.className = "goal-item-actions";
 
-          const deleteBtn = document.createElement("button");
-          deleteBtn.className = "goal-delete-btn";
-          deleteBtn.textContent = "Delete";
-          deleteBtn.addEventListener("click", () => {
-            void deleteGoal(goalId);
-          });
-          actions.appendChild(deleteBtn);
+      const goalId = goal.goal_id;
 
-          item.appendChild(actions);
+      if (status === "active" || status === "paused") {
+        const toggleBtn = document.createElement("button");
+        toggleBtn.textContent = status === "active" ? "Pause" : "Resume";
+        toggleBtn.addEventListener("click", () => {
+          void goalsCtrl.setEnabled(goalId, status !== "active").then(() => goalsCtrl.refresh());
+        });
+        actions.appendChild(toggleBtn);
+      }
 
-          const outcomesDiv = document.createElement("div");
-          outcomesDiv.className = "goal-outcomes";
-          item.appendChild(outcomesDiv);
+      const historyBtn = document.createElement("button");
+      historyBtn.className = "goal-toggle-outcomes";
+      historyBtn.textContent = "History";
+      actions.appendChild(historyBtn);
 
-          historyBtn.addEventListener("click", () => {
-            const isOpen = outcomesDiv.classList.contains("open");
-            if (isOpen) {
-              outcomesDiv.classList.remove("open");
-            } else {
-              outcomesDiv.classList.add("open");
-              loadGoalOutcomes(goalId, outcomesDiv);
-            }
-          });
-
-          goalList.appendChild(item);
-        }
-      })
-      .catch(() => {
-        goalList.innerHTML = '<div class="goal-empty">Failed to load goals</div>';
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "goal-delete-btn";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", () => {
+        void goalsCtrl.removeGoal(goalId);
       });
+      actions.appendChild(deleteBtn);
+
+      item.appendChild(actions);
+
+      const outcomesDiv = document.createElement("div");
+      outcomesDiv.className = "goal-outcomes";
+      item.appendChild(outcomesDiv);
+
+      if (invoke != null) {
+        historyBtn.addEventListener("click", () => {
+          const isOpen = outcomesDiv.classList.contains("open");
+          if (isOpen) {
+            outcomesDiv.classList.remove("open");
+          } else {
+            outcomesDiv.classList.add("open");
+            loadGoalOutcomes(goalId, outcomesDiv);
+          }
+        });
+      }
+
+      goalList.appendChild(item);
+    }
   }
 
   function loadGoalOutcomes(goalId: string, container: HTMLDivElement): void {
@@ -770,13 +831,9 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   });
 
   // === Goal CRUD ===
+  // Add-form wiring only — CRUD state lives in goalsCtrl.
 
   async function createGoal(): Promise<void> {
-    const config = ctx.getConfig();
-    if (config?.isTauri !== true || config.invoke == null) return;
-    const motebitId = ctx.app.motebitId;
-    if (!motebitId) return;
-
     const promptEl = document.getElementById("goal-prompt") as HTMLTextAreaElement;
     const intervalEl = document.getElementById("goal-interval") as HTMLSelectElement;
     const modeEl = document.getElementById("goal-mode") as HTMLSelectElement;
@@ -785,47 +842,16 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     if (!prompt) return;
 
     const intervalMs = parseInt(intervalEl.value, 10);
-    const mode = modeEl.value;
-    const goalId = crypto.randomUUID();
+    const mode = (modeEl.value as "recurring" | "once") ?? "recurring";
 
-    try {
-      await config.invoke("goals_create", {
-        motebitId,
-        goalId,
-        prompt,
-        intervalMs,
-        mode,
-      });
-      promptEl.value = "";
-      refreshGoalList();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addMessage("system", `Failed to create goal: ${msg}`);
+    const before = goalsCtrl.getState().error;
+    await goalsCtrl.addGoal({ prompt, interval_ms: intervalMs, mode });
+    const s = goalsCtrl.getState();
+    if (s.error && s.error !== before) {
+      addMessage("system", `Failed to create goal: ${s.error}`);
+      return;
     }
-  }
-
-  async function toggleGoal(goalId: string): Promise<void> {
-    const config = ctx.getConfig();
-    if (config?.isTauri !== true || config.invoke == null) return;
-    try {
-      await config.invoke("goals_toggle", { goalId });
-      refreshGoalList();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addMessage("system", `Failed to toggle goal: ${msg}`);
-    }
-  }
-
-  async function deleteGoal(goalId: string): Promise<void> {
-    const config = ctx.getConfig();
-    if (config?.isTauri !== true || config.invoke == null) return;
-    try {
-      await config.invoke("goals_delete", { goalId });
-      refreshGoalList();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addMessage("system", `Failed to delete goal: ${msg}`);
-    }
+    promptEl.value = "";
   }
 
   // Event listeners

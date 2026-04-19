@@ -86,6 +86,22 @@ const PANEL_FAMILIES: ReadonlyArray<PanelFamily> = [
       "app.listMemories(",
     ],
   },
+  {
+    name: "goals",
+    namePattern: /goals|gated-panels/i,
+    signatures: [
+      // Desktop: Tauri IPC commands from the Rust daemon.
+      'invoke("goals_list"',
+      'invoke("goals_create"',
+      'invoke("goals_toggle"',
+      'invoke("goals_delete"',
+      // Mobile: the expo-sqlite GoalStore handle.
+      "app.getGoalStore(",
+      "goalStore.listGoals",
+      "goalStore.addGoal",
+      "goalStore.removeGoal",
+    ],
+  },
 ];
 
 /**
