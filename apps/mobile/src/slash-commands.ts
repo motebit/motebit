@@ -26,13 +26,14 @@ import type { MobileApp } from "./mobile-app";
 
 interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "system" | "approval";
+  role: "user" | "assistant" | "system" | "approval" | "receipt";
   content: string;
   timestamp: number;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   riskLevel?: number;
   approvalResolved?: boolean;
+  receipt?: import("@motebit/sdk").ExecutionReceipt;
 }
 
 function formatTimeAgo(ts: number): string {

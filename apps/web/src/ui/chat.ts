@@ -3,7 +3,7 @@ import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 import { StreamingTTSQueue, WebSpeechTTSProvider } from "@motebit/voice";
 import type { TTSProvider } from "@motebit/voice";
 import type { ExecutionReceipt } from "@motebit/sdk";
-import { buildReceiptArtifact } from "./receipt-artifact";
+import { buildReceiptArtifact } from "@motebit/render-engine";
 import { installPrUrlChip } from "./pr-url-chip";
 
 // === Lightweight Markdown Renderer ===

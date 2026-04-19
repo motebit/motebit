@@ -1,6 +1,8 @@
 import { stripPartialActionTag } from "@motebit/ai-core";
 import { executeCommand } from "@motebit/runtime";
 import type { RelayConfig } from "@motebit/runtime";
+import { buildReceiptArtifact } from "@motebit/render-engine";
+import type { ExecutionReceipt } from "@motebit/sdk";
 import {
   isSlashCommand,
   parseSlashCommand,
@@ -404,6 +406,7 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
   bubble.classList.add("visible");
 
   let accumulated = "";
+  let capturedReceipt: ExecutionReceipt | null = null;
   try {
     for await (const chunk of ctx.app.resolveApprovalVote(approved, ctx.app.motebitId)) {
       if (chunk.type === "text") {
@@ -420,11 +423,20 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
         showDelegationIndicator(chunk.server, chunk.tool);
       } else if (chunk.type === "delegation_complete") {
         completeDelegationIndicator(chunk.server, chunk.tool, chunk.receipt);
+        if (chunk.full_receipt) capturedReceipt = chunk.full_receipt;
       } else if (chunk.type === "approval_request") {
         showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level, chunk.quorum);
       } else if (chunk.type === "injection_warning") {
         addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
+    }
+    if (capturedReceipt) {
+      const receipt = capturedReceipt;
+      const id = `receipt-${receipt.task_id}`;
+      window.setTimeout(() => {
+        const el = buildReceiptArtifact(receipt, () => ctx.app.removeArtifact(id));
+        ctx.app.addArtifact({ id, kind: "receipt", element: el });
+      }, 200);
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1049,6 +1061,11 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       sensitivity: string;
     }> = [];
     let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
+    // Captured from the most recent delegation_complete that carried a full
+    // signed receipt. Emerged as a scene artifact after the result chunk
+    // (mirrors the web receipt-artifact pattern). The receipt is the witness,
+    // not the work — review text stays primary.
+    let capturedReceipt: ExecutionReceipt | null = null;
 
     function ensureBubble(): { bubble: HTMLDivElement; textEl: HTMLSpanElement } {
       if (bubble) return { bubble, textEl: textEl! };
@@ -1085,6 +1102,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           showDelegationIndicator(chunk.server, chunk.tool);
         } else if (chunk.type === "delegation_complete") {
           completeDelegationIndicator(chunk.server, chunk.tool, chunk.receipt);
+          if (chunk.full_receipt) capturedReceipt = chunk.full_receipt;
         } else if (chunk.type === "approval_request") {
           removeThinkingIndicator(thinkingEl);
           showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level, chunk.quorum);
@@ -1126,6 +1144,19 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           callbacks.openMemoryPanel(nodeId),
         );
         finalBubble.appendChild(footer);
+      }
+
+      // Emerge the receipt bubble after the review text settles. 200ms beat
+      // preserves the review-as-primary, receipt-as-witness order (same
+      // pattern as apps/web chat.ts). The user reads the answer first, then
+      // sees proof-of-work arrive as a tappable, locally-verified artifact.
+      if (capturedReceipt) {
+        const receipt = capturedReceipt;
+        const id = `receipt-${receipt.task_id}`;
+        window.setTimeout(() => {
+          const el = buildReceiptArtifact(receipt, () => ctx.app.removeArtifact(id));
+          ctx.app.addArtifact({ id, kind: "receipt", element: el });
+        }, 200);
       }
 
       callbacks.flushTTS();

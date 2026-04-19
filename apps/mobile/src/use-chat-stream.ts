@@ -43,17 +43,20 @@
 import { useCallback } from "react";
 import type { StreamChunk } from "@motebit/runtime";
 import { stripTags, stripPartialActionTag } from "@motebit/ai-core";
+import type { ExecutionReceipt } from "@motebit/sdk";
 import type { MobileApp } from "./mobile-app";
 
 export interface ChatStreamMessage {
   id: string;
-  role: "user" | "assistant" | "system" | "approval";
+  role: "user" | "assistant" | "system" | "approval" | "receipt";
   content: string;
   timestamp: number;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   riskLevel?: number;
   approvalResolved?: boolean;
+  /** Full signed receipt for role === "receipt" messages. */
+  receipt?: ExecutionReceipt;
 }
 
 export interface UseChatStreamDeps {
@@ -142,13 +145,32 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
             break;
 
           case "delegation_complete": {
-            const status =
-              chunk.receipt != null && chunk.receipt.status === "failed" ? "\u2717" : "\u2713";
-            const toolInfo =
-              chunk.receipt != null
-                ? ` (${chunk.receipt.tools_used.length} tool${chunk.receipt.tools_used.length !== 1 ? "s" : ""})`
-                : "";
-            addSystemMessage(`Delegated to ${chunk.server} ${status}${toolInfo}`);
+            // If a full signed receipt arrived, emerge it as a receipt
+            // artifact message — renders via <ReceiptArtifact>, verifies
+            // locally with Ed25519. Falls back to the short system line
+            // when only a receipt summary is present (motebit-tool
+            // delegations without signed chain).
+            if (chunk.full_receipt) {
+              const full = chunk.full_receipt;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  role: "receipt",
+                  content: "",
+                  timestamp: Date.now(),
+                  receipt: full,
+                },
+              ]);
+            } else {
+              const status =
+                chunk.receipt != null && chunk.receipt.status === "failed" ? "\u2717" : "\u2713";
+              const toolInfo =
+                chunk.receipt != null
+                  ? ` (${chunk.receipt.tools_used.length} tool${chunk.receipt.tools_used.length !== 1 ? "s" : ""})`
+                  : "";
+              addSystemMessage(`Delegated to ${chunk.server} ${status}${toolInfo}`);
+            }
             break;
           }
 

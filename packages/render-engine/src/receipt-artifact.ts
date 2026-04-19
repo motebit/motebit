@@ -1,90 +1,27 @@
 /**
- * Receipt artifact — the signed delegation chain rendered as a satellite
- * around the creature. The "oh" beat of the motebit protocol: agents paid
- * agents, with local cryptographic proof.
+ * `buildReceiptArtifact` — the DOM form of the receipt emergence.
  *
- * The DOM is built once per receipt; `verifyReceiptChain` runs in-browser
- * via `@motebit/crypto` (pure-JS Ed25519, zero monorepo deps). No server
- * roundtrip, no trust in this page — the user can open devtools and see
+ * A delegation completes, a signed chain arrives, and the receipt card
+ * fades into the scene: signer, task id, chain, tools, verify state.
+ * Every check runs locally — `verifyReceiptChain` is pure-JS Ed25519
+ * over JCS canonical JSON from `@motebit/encryption`. No server round
+ * trip, no trust in the page; the user can open devtools and confirm
  * zero verify-side network traffic.
+ *
+ * Shape invariant: the returned element is `.spatial-artifact.artifact-receipt`
+ * so surface CSS (web, desktop) can style it uniformly. The caller owns
+ * lifecycle — pass the element to `ArtifactManager.addArtifact(...)` and
+ * call the `onDismiss` callback from your close handler.
+ *
+ * Extracted from apps/web/src/ui/receipt-artifact.ts on 2026-04-19 so
+ * desktop can consume the same renderer (web + desktop are both DOM
+ * surfaces; mobile gets its own RN component; spatial renders as a 3D
+ * satellite). One-pass-delivery.
  */
 
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { verifyReceiptChain } from "@motebit/encryption";
-
-// Known per-capability unit costs, USD. Mirrors the pricing in the relay's
-// Discover endpoint. A follow-up can swap this for a live lookup from the
-// same cache the Discover panel uses — for now, the numbers are fixed by
-// each atom/molecule's published `getServiceListing()` pricing.
-const CAPABILITY_PRICES_USD: Record<string, number> = {
-  review_pr: 0.01,
-  research: 0.25,
-  read_url: 0.003,
-  web_search: 0.005,
-  summarize: 0.002,
-  connection_search: 0.03,
-};
-
-function formatUsd(amount: number): string {
-  // Three-decimal precision for sub-cent atom pricing; drops trailing zeros
-  // past the cent place for readability (0.010 → "$0.01", 0.003 → "$0.003").
-  if (amount >= 0.01) return `$${amount.toFixed(2)}`;
-  return `$${amount.toFixed(3)}`;
-}
-
-function priceFor(receipt: ExecutionReceipt): string {
-  for (const cap of receipt.tools_used) {
-    const p = CAPABILITY_PRICES_USD[cap];
-    if (p != null) return formatUsd(p);
-  }
-  return "—";
-}
-
-function displayName(receipt: ExecutionReceipt): string {
-  // Prefer the capability name (tools_used[0]); falls back to a motebit_id
-  // prefix if the capability is unknown to the price table.
-  const cap = receipt.tools_used[0];
-  if (cap) return cap.replace(/_/g, "-");
-  return receipt.motebit_id.slice(0, 10);
-}
-
-/**
- * Build the `knownKeys` map from public_key fields embedded in the receipt
- * tree. Each motebit's public key is included in its own receipt — no
- * external registry lookup needed for local verification.
- */
-function collectKnownKeys(receipt: ExecutionReceipt): Map<string, Uint8Array> {
-  const keys = new Map<string, Uint8Array>();
-  const visit = (r: ExecutionReceipt): void => {
-    if (typeof r.public_key === "string" && r.public_key.length > 0) {
-      try {
-        const bytes = hexToBytes(r.public_key);
-        keys.set(r.motebit_id, bytes);
-      } catch {
-        // Ignore malformed keys — verify will fail-closed on this receipt.
-      }
-    }
-    const nested = r.delegation_receipts ?? [];
-    for (const child of nested) visit(child);
-  };
-  visit(receipt);
-  return keys;
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const clean = hex.replace(/^0x/, "").trim();
-  if (clean.length % 2 !== 0) throw new Error("invalid hex");
-  const out = new Uint8Array(clean.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
-
-function shortHash(hex: string, n = 8): string {
-  const clean = hex.replace(/^0x/, "");
-  return clean.length > n ? clean.slice(0, n) + "…" : clean;
-}
+import { collectKnownKeys, displayName, priceFor, shortHash } from "./receipt-summary.js";
 
 /**
  * Build the receipt artifact DOM. The caller owns the element lifecycle
@@ -143,13 +80,11 @@ export function buildReceiptArtifact(
   verify.appendChild(label);
   body.appendChild(verify);
 
-  // Body tap toggles expanded details (doesn't conflict with the close
-  // button, which lives outside .spatial-artifact-body).
   body.addEventListener("click", () => {
     root.classList.toggle("is-expanded");
   });
 
-  // Close — dismiss via the artifact manager.
+  // Close — dismiss via the caller-provided handler.
   const close = document.createElement("button");
   close.className = "spatial-artifact-close";
   close.textContent = "×";
@@ -160,13 +95,10 @@ export function buildReceiptArtifact(
   });
   root.appendChild(close);
 
-  // Initial state — replaced below by one of is-verified / is-unverified /
-  // is-failed once the chain verify completes. The pending pulse is the
-  // calm-software signal that local verification is in flight.
+  // Initial state — replaced below once verification settles. Pending
+  // pulse is the calm-software signal that a check is in flight.
   root.classList.add("is-pending");
 
-  // Verify the full chain locally. Ed25519 over JCS canonical JSON via
-  // @noble/ed25519 — zero network traffic, fail-closed on any error.
   const knownKeys = collectKnownKeys(receipt);
   void verifyReceiptChain(receipt, knownKeys)
     .then((tree) => {
@@ -176,10 +108,6 @@ export function buildReceiptArtifact(
         label.textContent = "verification failed";
         return;
       }
-      // Verified, but the task itself may have failed. The receipt's
-      // status is meaningful evidence — emerge it in is-failed state so
-      // the user sees "the delegation happened, the agent reported
-      // failure," not a silent-hide.
       if (receipt.status === "failed") {
         root.classList.add("is-failed");
         label.textContent = "verified · completed: failed";
@@ -203,7 +131,6 @@ function renderRow(receipt: ExecutionReceipt, depth: number, _last: boolean): HT
 
   const glyph = document.createElement("span");
   glyph.className = "receipt-tree";
-  // Simple indented glyph — tree drawing at depth 1 uses a corner mark.
   glyph.textContent = depth === 0 ? "" : "└";
   row.appendChild(glyph);
 

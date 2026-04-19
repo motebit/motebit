@@ -1302,6 +1302,9 @@ importers:
 
   packages/render-engine:
     dependencies:
+      '@motebit/encryption':
+        specifier: workspace:*
+        version: link:../encryption
       '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../policy-invariants

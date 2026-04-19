@@ -46,6 +46,7 @@ import type {
   GoalApprovalEvent,
 } from "./mobile-app";
 import { ApprovalCard } from "./components/ApprovalCard";
+import { ReceiptArtifact } from "./components/ReceiptArtifact";
 import { PinDialog } from "./components/PinDialog";
 import type { PinMode } from "./components/PinDialog";
 import { SettingsModal, deriveInteriorColor } from "./components/SettingsModal";
@@ -69,7 +70,7 @@ import { useVoice } from "./use-voice";
 
 interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "system" | "approval";
+  role: "user" | "assistant" | "system" | "approval" | "receipt";
   content: string;
   timestamp: number;
   // Approval-specific fields
@@ -77,6 +78,8 @@ interface ChatMessage {
   toolArgs?: Record<string, unknown>;
   riskLevel?: number;
   approvalResolved?: boolean;
+  // Receipt-specific field — present when role === "receipt"
+  receipt?: import("@motebit/sdk").ExecutionReceipt;
 }
 
 // === App singleton ===
@@ -997,6 +1000,13 @@ export default function App(): React.ReactElement {
               return (
                 <AnimatedBubble style={ds.systemBubble}>
                   <Text style={ds.systemText}>{item.content}</Text>
+                </AnimatedBubble>
+              );
+            }
+            if (item.role === "receipt" && item.receipt) {
+              return (
+                <AnimatedBubble>
+                  <ReceiptArtifact receipt={item.receipt} />
                 </AnimatedBubble>
               );
             }

@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@motebit/sdk": "workspace:*",
+    "@motebit/encryption": "workspace:*",
     "@motebit/policy-invariants": "workspace:*",
     "three": "^0.170.0"
   },

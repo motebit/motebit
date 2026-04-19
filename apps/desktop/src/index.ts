@@ -461,6 +461,26 @@ export class DesktopApp {
     this.credentialSatellites?.tick(time * 1000);
   }
 
+  // === Spatial Canvas ===
+  // Artifacts (receipts, interactive cards) emerge in the scene around
+  // the creature, positioned by the @motebit/render-engine
+  // ArtifactManager. Same API and semantics as the web surface — see
+  // apps/web/src/web-app.ts addArtifact for the pattern.
+
+  addArtifact(
+    spec: import("@motebit/render-engine").ArtifactSpec,
+  ): import("@motebit/render-engine").ArtifactHandle | undefined {
+    return this.renderer.addArtifact?.(spec);
+  }
+
+  removeArtifact(id: string): void {
+    void this.renderer.removeArtifact?.(id);
+  }
+
+  clearArtifacts(): void {
+    this.renderer.clearArtifacts?.();
+  }
+
   // === AI Integration ===
 
   get isAIReady(): boolean {
