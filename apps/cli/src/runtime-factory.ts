@@ -617,7 +617,13 @@ export async function createRuntime(
     process.env["MOTEBIT_SYNC_URL"] ??
     loadFullConfig().sync_url ??
     DEFAULT_SYNC_URL;
-  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  // Accept both env var names — they have been aliases for the life of the
+  // CLI; see subcommands/_helpers.ts:getRelayAuthHeaders for the canonical
+  // fallback order. create-motebit's scaffold writes MOTEBIT_API_TOKEN, so
+  // reading only MOTEBIT_SYNC_TOKEN here would silently drop the token on
+  // `npm run dev` from a fresh scaffold.
+  const syncToken =
+    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
   const httpAdapter = new HttpEventStoreAdapter({
     baseUrl: syncUrl,

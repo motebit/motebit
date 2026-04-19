@@ -323,8 +323,12 @@ function makeAgentTsconfig(): string {
 }
 
 function makeAgentEnvExample(): string {
-  return `# Relay connection (required for network participation)
+  return `# Relay URL — defaults to the public relay if unset.
+# Override to point at your own relay or a federation peer.
 MOTEBIT_SYNC_URL=https://relay.motebit.com
+
+# API token — only required to accept paid tasks.
+# Anonymous agents can register and serve for free.
 MOTEBIT_API_TOKEN=
 
 # Identity passphrase (set during creation)

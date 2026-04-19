@@ -170,6 +170,18 @@ const GATES: ReadonlyArray<Gate> = [
       "every surface app (web/cli/desktop/mobile/spatial) declares and imports @motebit/event-log + @motebit/privacy-layer — the Ring 2 fail-closed privacy substrate the root CLAUDE.md claims as doctrine (invariant #16, added 2026-04-16 after the birds-eye audit caught web/spatial/cli missing one or both declarations)",
     script: "check-privacy-ring",
   },
+  {
+    name: "check-readme",
+    defends:
+      "README.md 'What you see:' block advertises the scaffold's first-run output — tool names, MCP port, --direct flag, relay URL — which must match create-motebit's agent template and runtime-factory's DEFAULT_SYNC_URL (invariant #24, added 2026-04-18 after a principal-engineer review found the README making aspirational promises with no gate; extends the self-attesting-system doctrine to the repo's front door)",
+    script: "check-readme",
+  },
+  {
+    name: "check-claude-md",
+    defends:
+      "every per-directory CLAUDE.md is indexed in root CLAUDE.md under 'Per-directory doctrine loads lazily' — sub-doctrine is only discoverable through the root index, so an unindexed CLAUDE.md is invisible to top-down readers (invariant #25, added 2026-04-18 after a birds-eye review found 6 package CLAUDE.md files added Apr 16 silently absent from the root index; extends the self-attesting-system doctrine to the doctrine-index itself)",
+    script: "check-claude-md",
+  },
 ];
 
 interface Result {
