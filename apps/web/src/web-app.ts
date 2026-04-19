@@ -66,21 +66,10 @@ import {
   type SyncStatus,
 } from "@motebit/sync-engine";
 import {
-  webSearchDefinition,
-  createWebSearchHandler,
-  readUrlDefinition,
-  createReadUrlHandler,
-  recallMemoriesDefinition,
-  createRecallMemoriesHandler,
-  listEventsDefinition,
-  createListEventsHandler,
-  selfReflectDefinition,
-  createSelfReflectHandler,
+  registerBrowserSafeBuiltins,
   ProxySearchProvider,
   recallSelfDefinition,
   createRecallSelfHandler,
-  currentTimeDefinition,
-  createCurrentTimeHandler,
 } from "@motebit/tools/web-safe";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
 import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
@@ -404,33 +393,38 @@ export class WebApp {
 
   private registerWebTools(): void {
     if (!this.runtime) return;
-    const registry = this.runtime.getToolRegistry();
+    const runtime = this.runtime;
+    const registry = runtime.getToolRegistry();
 
-    registry.register(currentTimeDefinition, createCurrentTimeHandler());
-    registry.register(
-      webSearchDefinition,
-      createWebSearchHandler(
-        new ProxySearchProvider(
-          ((import.meta as unknown as Record<string, Record<string, string> | undefined>).env
-            ?.VITE_SEARCH_URL ?? "https://motebit-web-search.fly.dev") + "/search",
-        ),
-      ),
-    );
-    registry.register(
-      readUrlDefinition,
-      createReadUrlHandler({ proxyUrl: `${PROXY_BASE_URL}/v1/fetch` }),
-    );
-    registry.register(
-      recallMemoriesDefinition,
-      createRecallMemoriesHandler(async (query, limit) => {
-        if (!this.runtime) return [];
+    const searchUrl =
+      ((import.meta as unknown as Record<string, Record<string, string> | undefined>).env
+        ?.VITE_SEARCH_URL ?? "https://motebit-web-search.fly.dev") + "/search";
+
+    registerBrowserSafeBuiltins(registry, {
+      searchProvider: new ProxySearchProvider(searchUrl),
+      readUrlProxy: `${PROXY_BASE_URL}/v1/fetch`,
+      memorySearchFn: async (query, limit) => {
         const embedding = await embedText(query);
-        const nodes = await this.runtime.memory.recallRelevant(embedding, { limit });
+        const nodes = await runtime.memory.recallRelevant(embedding, { limit });
         return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
-      }),
-    );
+      },
+      eventQueryFn: async (limit, eventType) => {
+        const events = await runtime.events.query({
+          motebit_id: runtime.motebitId,
+          limit,
+          event_types: eventType ? [eventType as EventType] : undefined,
+        });
+        return events.map((e) => ({
+          event_type: e.event_type,
+          timestamp: e.timestamp,
+          payload: e.payload,
+        }));
+      },
+      reflectFn: () => runtime.reflect(),
+    });
+
     // Interior tier of the answer engine — BM25 over committed motebit docs.
-    // Preferred before web_search for questions about Motebit itself.
+    // Web-only: the self-knowledge corpus is surface-specific.
     registry.register(
       recallSelfDefinition,
       createRecallSelfHandler((query, limit) =>
@@ -443,29 +437,6 @@ export class WebApp {
           })),
         ),
       ),
-    );
-    registry.register(
-      listEventsDefinition,
-      createListEventsHandler(async (limit, eventType) => {
-        if (!this.runtime) return [];
-        const events = await this.runtime.events.query({
-          motebit_id: this.runtime.motebitId,
-          limit,
-          event_types: eventType ? [eventType as EventType] : undefined,
-        });
-        return events.map((e) => ({
-          event_type: e.event_type,
-          timestamp: e.timestamp,
-          payload: e.payload,
-        }));
-      }),
-    );
-    registry.register(
-      selfReflectDefinition,
-      createSelfReflectHandler(async () => {
-        if (!this.runtime) throw new Error("Runtime not initialized");
-        return this.runtime.reflect();
-      }),
     );
   }
 

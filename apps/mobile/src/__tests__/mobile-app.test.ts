@@ -146,81 +146,18 @@ vi.mock("@motebit/core-identity", () => ({
   })),
 }));
 
-// @motebit/tools/web-safe
-vi.mock("@motebit/tools/web-safe", () => ({
-  webSearchDefinition: {
-    name: "web_search",
-    description: "Search the web",
-    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
-  },
-  createWebSearchHandler: vi.fn(() =>
-    vi.fn(() => Promise.resolve({ ok: true, data: "mock results" })),
-  ),
-  readUrlDefinition: {
-    name: "read_url",
-    description: "Read a URL",
-    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
-  },
-  createReadUrlHandler: vi.fn(() =>
-    vi.fn(() => Promise.resolve({ ok: true, data: "mock content" })),
-  ),
-  recallMemoriesDefinition: {
-    name: "recall_memories",
-    description: "Recall memories",
-    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
-  },
-  createRecallMemoriesHandler: vi.fn((_fn: unknown) =>
-    vi.fn(() => Promise.resolve({ ok: true, data: "mock memories" })),
-  ),
-  listEventsDefinition: {
-    name: "list_events",
-    description: "List events",
-    inputSchema: { type: "object", properties: {} },
-  },
-  createListEventsHandler: vi.fn((_fn: unknown) =>
-    vi.fn(() => Promise.resolve({ ok: true, data: "mock events" })),
-  ),
-  createSubGoalDefinition: {
-    name: "create_sub_goal",
-    description: "Create sub-goal",
-    inputSchema: {
-      type: "object",
-      properties: { prompt: { type: "string" } },
-      required: ["prompt"],
-    },
-  },
-  completeGoalDefinition: {
-    name: "complete_goal",
-    description: "Complete goal",
-    inputSchema: {
-      type: "object",
-      properties: { reason: { type: "string" } },
-      required: ["reason"],
-    },
-  },
-  reportProgressDefinition: {
-    name: "report_progress",
-    description: "Report progress",
-    inputSchema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] },
-  },
-  selfReflectDefinition: {
-    name: "self_reflect",
-    description: "Reflect on recent interactions",
-    inputSchema: { type: "object", properties: {} },
-  },
-  createSelfReflectHandler: vi.fn((_fn: unknown) =>
-    vi.fn(() => Promise.resolve({ ok: true, data: "mock reflection" })),
-  ),
-  currentTimeDefinition: {
-    name: "current_time",
-    description: "Get the current date and time",
-    inputSchema: { type: "object", properties: { timezone: { type: "string" } } },
-  },
-  createCurrentTimeHandler: vi.fn(() =>
-    vi.fn(() => Promise.resolve({ ok: true, data: "2026-04-19T00:00:00Z (UTC)" })),
-  ),
-  DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({})),
-}));
+// @motebit/tools/web-safe — importActual inherits every real export, so adding
+// a new Ring-1 tool doesn't require editing this mock. Only the network-bound
+// search provider is stubbed to keep tests offline.
+vi.mock("@motebit/tools/web-safe", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({
+      search: vi.fn(() => Promise.resolve([])),
+    })),
+  };
+});
 
 // @motebit/memory-graph — mock embedText while preserving MemoryGraph class
 vi.mock("@motebit/memory-graph", async (importOriginal) => {

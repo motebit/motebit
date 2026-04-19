@@ -2,14 +2,18 @@
  * Desktop tool registration — browser-safe builtins + Tauri-privileged tools.
  *
  * The desktop can't eagerly import @motebit/tools because it pulls in
- * node:child_process (via shell_exec). Instead, we import from
- * @motebit/tools/web-safe which only re-exports the browser-safe tools.
+ * node:child_process (via shell_exec). Instead, we use
+ * @motebit/tools/web-safe which ships only browser-safe tools plus the
+ * `registerBrowserSafeBuiltins` helper that collapses Ring-1 wiring
+ * into a single call.
  *
- * Browser-safe tools (always registered):
+ * Browser-safe tools (registered via helper):
+ *   current_time    (R0) — always available
  *   web_search      (R0) — fetch-based, always available
  *   read_url        (R0) — fetch-based, always available
  *   recall_memories (R0) — uses runtime memory.recallRelevant()
  *   list_events     (R0) — uses runtime events.query()
+ *   self_reflect    (R0) — uses runtime.reflect()
  *
  * Tauri-privileged tools (registered only when invoke is available):
  *   read_file   (R0)  — Tauri IPC → Rust fs::read_to_string
@@ -20,21 +24,9 @@
 import { SimpleToolRegistry } from "@motebit/runtime";
 import type { MotebitRuntime } from "@motebit/runtime";
 import type { EventType } from "@motebit/sdk";
-import type { EventFilter } from "@motebit/event-log";
 import { embedText } from "@motebit/memory-graph";
 import {
-  webSearchDefinition,
-  createWebSearchHandler,
-  readUrlDefinition,
-  createReadUrlHandler,
-  recallMemoriesDefinition,
-  createRecallMemoriesHandler,
-  listEventsDefinition,
-  createListEventsHandler,
-  selfReflectDefinition,
-  createSelfReflectHandler,
-  currentTimeDefinition,
-  createCurrentTimeHandler,
+  registerBrowserSafeBuiltins,
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
@@ -55,7 +47,6 @@ export function registerDesktopTools(
   runtime: MotebitRuntime,
   invoke?: InvokeFn,
 ): void {
-  // Fetch-based tools — work in any environment
   // Search provider chain: Brave (if API key configured) → DuckDuckGo fallback
   const braveKey = import.meta.env.VITE_BRAVE_SEARCH_API_KEY as string | undefined;
   let searchProvider: SearchProvider | undefined;
@@ -65,48 +56,28 @@ export function registerDesktopTools(
       new DuckDuckGoSearchProvider(),
     ]);
   }
-  registry.register(currentTimeDefinition, createCurrentTimeHandler());
-  registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
-  registry.register(readUrlDefinition, createReadUrlHandler());
 
-  // Memory recall — bridges to runtime's semantic memory graph
-  registry.register(
-    recallMemoriesDefinition,
-    createRecallMemoriesHandler(async (query, limit) => {
+  registerBrowserSafeBuiltins(registry, {
+    searchProvider,
+    memorySearchFn: async (query, limit) => {
       const queryEmbedding = await embedText(query);
       const nodes = await runtime.memory.recallRelevant(queryEmbedding, { limit });
       return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
-    }),
-  );
-
-  // Event log query — bridges to runtime's event store
-  registry.register(
-    listEventsDefinition,
-    createListEventsHandler(async (limit, eventType) => {
-      const filter: EventFilter = {
+    },
+    eventQueryFn: async (limit, eventType) => {
+      const events = await runtime.events.query({
         motebit_id: runtime.motebitId,
         limit,
-      };
-      if (eventType != null && eventType !== "") {
-        filter.event_types = [eventType as EventType];
-      }
-      const events = await runtime.events.query(filter);
+        event_types: eventType != null && eventType !== "" ? [eventType as EventType] : undefined,
+      });
       return events.map((e) => ({
         event_type: e.event_type,
         timestamp: e.timestamp,
         payload: e.payload,
       }));
-    }),
-  );
-
-  // Self-reflection — creature can introspect on its own behavior
-  registry.register(
-    selfReflectDefinition,
-    createSelfReflectHandler(async () => {
-      const result = await runtime.reflect();
-      return result;
-    }),
-  );
+    },
+    reflectFn: () => runtime.reflect(),
+  });
 
   // Tauri-privileged tools — only available when running inside Tauri
   if (invoke) {

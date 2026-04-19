@@ -133,48 +133,15 @@ vi.mock("@motebit/core-identity", () => ({
   })),
 }));
 
-vi.mock("@motebit/tools/web-safe", () => ({
-  webSearchDefinition: { name: "web_search", description: "", inputSchema: { type: "object" } },
-  createWebSearchHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true }))),
-  readUrlDefinition: { name: "read_url", description: "", inputSchema: { type: "object" } },
-  createReadUrlHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true }))),
-  recallMemoriesDefinition: {
-    name: "recall_memories",
-    description: "",
-    inputSchema: { type: "object" },
-  },
-  createRecallMemoriesHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true }))),
-  listEventsDefinition: { name: "list_events", description: "", inputSchema: { type: "object" } },
-  createListEventsHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true }))),
-  createSubGoalDefinition: {
-    name: "create_sub_goal",
-    description: "",
-    inputSchema: { type: "object" },
-  },
-  completeGoalDefinition: {
-    name: "complete_goal",
-    description: "",
-    inputSchema: { type: "object" },
-  },
-  reportProgressDefinition: {
-    name: "report_progress",
-    description: "",
-    inputSchema: { type: "object" },
-  },
-  selfReflectDefinition: {
-    name: "self_reflect",
-    description: "",
-    inputSchema: { type: "object" },
-  },
-  createSelfReflectHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true }))),
-  currentTimeDefinition: {
-    name: "current_time",
-    description: "",
-    inputSchema: { type: "object", properties: { timezone: { type: "string" } } },
-  },
-  createCurrentTimeHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true }))),
-  DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock("@motebit/tools/web-safe", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({
+      search: vi.fn(() => Promise.resolve([])),
+    })),
+  };
+});
 
 vi.mock("@motebit/memory-graph", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;

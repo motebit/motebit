@@ -57,18 +57,7 @@ import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues, MemoryNode } from "@motebit/sdk";
 import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import {
-  webSearchDefinition,
-  createWebSearchHandler,
-  readUrlDefinition,
-  createReadUrlHandler,
-  recallMemoriesDefinition,
-  createRecallMemoriesHandler,
-  listEventsDefinition,
-  createListEventsHandler,
-  selfReflectDefinition,
-  createSelfReflectHandler,
-  currentTimeDefinition,
-  createCurrentTimeHandler,
+  registerBrowserSafeBuiltins,
   DuckDuckGoSearchProvider,
   createSubGoalDefinition,
   completeGoalDefinition,
@@ -937,33 +926,15 @@ export class MobileApp {
     const registry = this.runtime.getToolRegistry();
     const runtime = this.runtime;
 
-    // current_time — IANA timezone-aware date/time
-    registry.register(currentTimeDefinition, createCurrentTimeHandler());
-
-    // web_search — DuckDuckGo (no API key needed)
-    registry.register(webSearchDefinition, createWebSearchHandler(new DuckDuckGoSearchProvider()));
-
-    // read_url — fetch + clean HTML
-    registry.register(readUrlDefinition, createReadUrlHandler());
-
-    // recall_memories — semantic search via embeddings
-    registry.register(
-      recallMemoriesDefinition,
-      createRecallMemoriesHandler(async (query, limit) => {
+    registerBrowserSafeBuiltins(registry, {
+      searchProvider: new DuckDuckGoSearchProvider(),
+      memorySearchFn: async (query, limit) => {
         const queryEmbedding = await embedText(query);
         const nodes = await runtime.memory.recallRelevant(queryEmbedding, { limit });
         return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
-      }),
-    );
-
-    // list_events — query event log
-    registry.register(
-      listEventsDefinition,
-      createListEventsHandler(async (limit, eventType) => {
-        const filter: EventFilter = {
-          motebit_id: runtime.motebitId,
-          limit,
-        };
+      },
+      eventQueryFn: async (limit, eventType) => {
+        const filter: EventFilter = { motebit_id: runtime.motebitId, limit };
         if (eventType != null && eventType !== "") {
           filter.event_types = [eventType as EventType];
         }
@@ -973,14 +944,9 @@ export class MobileApp {
           timestamp: e.timestamp,
           payload: e.payload,
         }));
-      }),
-    );
-
-    // Self-reflection — creature can introspect on its own behavior
-    registry.register(
-      selfReflectDefinition,
-      createSelfReflectHandler(async () => runtime.reflect()),
-    );
+      },
+      reflectFn: () => runtime.reflect(),
+    });
 
     // Goal management tools (available during goal execution).
     // Read currentGoalId through the scheduler so the tool handlers stay
