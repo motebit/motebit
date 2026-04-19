@@ -30,7 +30,7 @@ export const currentTimeDefinition: ToolDefinition = {
 };
 
 export function createCurrentTimeHandler(): ToolHandler {
-  return async (args) => {
+  return (args) => {
     const timezone = (args.timezone as string | undefined) ?? "UTC";
     const now = new Date();
     try {
@@ -40,16 +40,16 @@ export function createCurrentTimeHandler(): ToolHandler {
         timeStyle: "long",
       });
       const local = formatter.format(now);
-      return {
+      return Promise.resolve({
         ok: true,
         data: `${local} (${timezone}) · ISO ${now.toISOString()}`,
-      };
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      return {
+      return Promise.resolve({
         ok: false,
         error: `Invalid timezone "${timezone}": ${msg}`,
-      };
+      });
     }
   };
 }
