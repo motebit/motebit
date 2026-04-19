@@ -21,6 +21,13 @@ export {
   type ReflectionDeps,
   performReflection,
   runReflectionSafe,
-  formatAuditSummary,
   isConcreteInsight,
 } from "./engine.js";
+export {
+  rankNotableMemories,
+  formatNotabilitySummary,
+  NotabilitySemiring,
+  type NotableMemory,
+  type NotabilityScore,
+  type NotabilityOptions,
+} from "@motebit/memory-graph";

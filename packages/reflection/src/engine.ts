@@ -16,13 +16,14 @@ import type {
 } from "@motebit/ai-core";
 import { reflect } from "@motebit/ai-core";
 import {
-  auditMemoryGraph,
   embedText,
   textSimilarity,
   cosineSimilarity,
   detectReflectionPatterns,
+  rankNotableMemories,
+  formatNotabilitySummary,
 } from "@motebit/memory-graph";
-import type { MemoryGraph, MemoryAuditResult } from "@motebit/memory-graph";
+import type { MemoryGraph } from "@motebit/memory-graph";
 import type { EventStore } from "@motebit/event-log";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import { MemoryClass } from "@motebit/policy";
@@ -164,59 +165,26 @@ async function loadPastReflections(deps: ReflectionDeps, limit: number): Promise
 }
 
 /**
- * Run auditMemoryGraph and format the result as a concise text summary.
- * Best-effort: returns undefined if the audit fails or finds nothing notable.
+ * Build the reflection audit summary using the single-ranking notability
+ * primitive from `@motebit/memory-graph`.
+ *
+ * The old shape (three separate hand-sorted categories) is gone. Notability
+ * is one algebraic query over the memory graph under `NotabilitySemiring`;
+ * swap weights (phantomWeight/conflictWeight/decayWeight) to change what
+ * the creature reflects on. Drift gate #29 keeps this pattern honest.
+ *
+ * Best-effort: returns undefined if scoring throws or nothing ranks.
  */
 function buildAuditSummary(
-  nodes: Parameters<typeof auditMemoryGraph>[0],
-  edges: Parameters<typeof auditMemoryGraph>[1],
+  nodes: Parameters<typeof rankNotableMemories>[0],
+  edges: Parameters<typeof rankNotableMemories>[1],
 ): string | undefined {
   try {
-    const audit = auditMemoryGraph(nodes, edges);
-    return formatAuditSummary(audit);
+    const ranked = rankNotableMemories(nodes, edges, { limit: 10 });
+    return formatNotabilitySummary(ranked);
   } catch {
     return undefined;
   }
-}
-
-/**
- * Format a MemoryAuditResult into a concise text summary for the LLM prompt.
- * Returns undefined if nothing notable was found.
- */
-export function formatAuditSummary(audit: MemoryAuditResult): string | undefined {
-  const lines: string[] = [];
-
-  if (audit.phantomCertainties.length > 0) {
-    lines.push(
-      `Phantom certainties (${audit.phantomCertainties.length} beliefs held with high confidence but little corroboration):`,
-    );
-    for (const p of audit.phantomCertainties.slice(0, 5)) {
-      lines.push(
-        `- "${p.node.content.slice(0, 120)}" (confidence: ${p.decayedConfidence.toFixed(2)}, edges: ${p.edgeCount})`,
-      );
-    }
-  }
-
-  if (audit.conflicts.length > 0) {
-    lines.push(`Contradictions (${audit.conflicts.length} pairs of conflicting memories):`);
-    for (const c of audit.conflicts.slice(0, 5)) {
-      lines.push(`- "${c.a.content.slice(0, 80)}" vs "${c.b.content.slice(0, 80)}"`);
-    }
-  }
-
-  if (audit.nearDeath.length > 0) {
-    lines.push(`Fading memories (${audit.nearDeath.length} memories near expiry):`);
-    for (const nd of audit.nearDeath.slice(0, 3)) {
-      lines.push(
-        `- "${nd.node.content.slice(0, 120)}" (confidence: ${nd.decayedConfidence.toFixed(2)})`,
-      );
-    }
-  }
-
-  if (lines.length === 0) return undefined;
-
-  lines.unshift(`Memory audit of ${audit.nodesAudited} nodes found issues:`);
-  return lines.join("\n");
 }
 
 // === Selective Persistence ===

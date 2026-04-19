@@ -477,6 +477,19 @@ export async function probeLeak(): Promise<boolean> {
         `export function reputationProbe(r: { interaction_count: number; last_seen_at: number }): number {\n  const volumeScore = Math.min(r.interaction_count / 50, 1.0);\n  const recency = Math.exp(-(Date.now() - r.last_seen_at) / 1000);\n  return (volumeScore + recency) / 2;\n}\n`,
       ),
   },
+  {
+    script: "check-notability-primitives",
+    proves:
+      "flags inline notability scoring — computeDecayedConfidence + two-of-{edgeCount, isolated, orphan, ConflictsWith} without importing the canonical rankNotableMemories",
+    perturb: () =>
+      // Fixture matches the heuristic: decay-math + two isolation signals
+      // + no canonical import. Exactly the shape the reflection engine's
+      // buildAuditSummary carried before the notability primitive landed.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}inline_notability.ts`,
+        `import { computeDecayedConfidence } from "@motebit/memory-graph";\nimport type { MemoryNode, MemoryEdge } from "@motebit/sdk";\nimport { RelationType } from "@motebit/sdk";\nexport function notabilityProbe(node: MemoryNode, edges: MemoryEdge[]): number {\n  const edgeCount = edges.filter((e) => e.source_id === node.node_id).length;\n  const isolated = edgeCount === 0;\n  const hasConflict = edges.some((e) => e.relation_type === RelationType.ConflictsWith);\n  const decayed = computeDecayedConfidence(node.confidence, node.half_life, Date.now() - node.created_at);\n  return (isolated ? decayed : 0) + (hasConflict ? decayed : 0);\n}\n`,
+      ),
+  },
 ];
 
 /**

@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Twenty-eight invariants are enforced today. Twenty-one run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
+Twenty-nine invariants are enforced today. Twenty-two run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
 
 ## Inventory
 
@@ -42,6 +42,7 @@ Twenty-eight invariants are enforced today. Twenty-one run as hard CI gates via 
 | 26  | SpatialExpression renderers ↔ `@motebit/render-engine` package | `check-scene-primitives.ts`                                    | 2026-04-19 |
 | 27  | Memory-retrieval ordering ↔ `@motebit/memory-graph` recall\*   | `check-retrieval-primitives.ts`                                | 2026-04-19 |
 | 28  | Reputation scoring ↔ `@motebit/policy` + `@motebit/market`     | `check-reputation-primitives.ts`                               | 2026-04-19 |
+| 29  | Notability scoring ↔ `@motebit/memory-graph` notability module | `check-notability-primitives.ts`                               | 2026-04-19 |
 
 ## Incident histories
 
@@ -118,6 +119,10 @@ Every drift defense preceding this one guards a pair of canonical sources deep i
 ### 25. Per-directory CLAUDE.md files ↔ root CLAUDE.md doctrine index
 
 Root CLAUDE.md is the index of doctrine. Per-package and per-service CLAUDE.md files load lazily — they exist so directory-specific rules don't bloat the root, but they are only discoverable through the root index. A contributor or coding agent doing top-down reading sees the index and follows the links; a CLAUDE.md file on disk that is not in the index is silently invisible. Same drift shape every gate before it has guarded: canonical truth (per-directory doctrine) lives in one place, the sibling copy (the root index) drifts. The first birds-eye review on 2026-04-18 found six package CLAUDE.md files added two days earlier (`circuit-breaker`, `deposit-detector`, `evm-rpc`, `settlement-rails`, `virtual-accounts`, `self-knowledge`) silently absent from the root index — the project's own front door doing the exact thing the project's own meta-principle predicts. Defense: `check-claude-md.ts` walks the repo, collects every `CLAUDE.md` file other than root, and asserts each appears as a Markdown link target in root CLAUDE.md (and inversely, that every referenced path resolves to a file on disk so a stale link surfaces immediately after a package rename). Editorial concerns — the one-line description after each link, the grouping order — stay with the human; the gate only guards the existence link. Doctrine: extends [`self-attesting-system.md`](doctrine/self-attesting-system.md) one level inward — the doctrine-index is itself a claim that must resolve to something verifiable.
+
+### 29. Notability scoring ↔ `@motebit/memory-graph` notability module
+
+The second semiring consumer in the codebase. Memory retrieval was the first (invariant #27); agent routing had proved the pattern earlier in `@motebit/semiring`. Reflection — "which memories should the creature notice this tick?" — was still imperative: `packages/reflection/src/engine.ts` ran three hand-sorted categorizations (`phantomCertainties`, `conflicts`, `nearDeath`) with `.slice(5)` / `.slice(3)` limits per category and per-category prompt formatting. Adding a dimension or changing what notable means was three edits across parallel arms. 2026-04-19 refactor extracted the judgment into `packages/memory-graph/src/notability.ts`: three scalar dimensions composed via `recordSemiring` over `TrustSemiring` (max-times), one `rankNotableMemories(nodes, edges, options)` primitive producing a ranked `NotableMemory[]` with a `dominantReason` tag. Changing the creature's reflection focus is now a weight (`phantomWeight` / `conflictWeight` / `decayWeight`), not a new category. Defense: `check-notability-primitives.ts` with a three-condition heuristic — file calls `computeDecayedConfidence(`, references two or more of `{edgeCount, isolated, orphan, ConflictsWith}`, and does not import `rankNotableMemories` or `NotabilitySemiring`. Allowlist empty at landing. Proves the second semiring consumer pattern and closes the door on inline reinvention the moment a third surface/service wants "which memories matter right now."
 
 ## How to add a new defense
 

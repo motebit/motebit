@@ -200,6 +200,12 @@ const GATES: ReadonlyArray<Gate> = [
       "reputation scoring (continuous 0-1 score from trust-record + recency decay) lives in @motebit/policy (basic) or @motebit/market (receipt-history composite), not inline in apps or services (invariant #28, added 2026-04-19 after apps/admin/TrustPanel was caught with a reinvented formula that diverged from its claimed @motebit/policy source on the Beta-binomial prior — admin panel showed different scores than AI-core computed for the same agent record; extends the protocol-primitive doctrine to reputation judgment)",
     script: "check-reputation-primitives",
   },
+  {
+    name: "check-notability-primitives",
+    defends:
+      "notability scoring (weighted combination of decay + graph-isolation + conflict-involvement, used to rank memories for reflection) lives in @motebit/memory-graph (rankNotableMemories + NotabilitySemiring), not inline in apps/services/sibling-packages (invariant #29, added 2026-04-19 when the reflection engine moved from three hand-sorted categories to one algebraic ranking — extends the protocol-primitive doctrine to reflection judgment, second semiring consumer after retrieval proves the pattern beyond routing)",
+    script: "check-notability-primitives",
+  },
 ];
 
 interface Result {

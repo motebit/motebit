@@ -16,12 +16,13 @@ vi.mock("@motebit/memory-graph", async () => {
       if (text.includes(EMBED_POISON)) return Promise.reject(new Error("embedding unavailable"));
       return Promise.resolve(actual.embedTextHash(text));
     },
-    auditMemoryGraph: (
-      nodes: Parameters<typeof actual.auditMemoryGraph>[0],
-      edges: Parameters<typeof actual.auditMemoryGraph>[1],
+    rankNotableMemories: (
+      nodes: Parameters<typeof actual.rankNotableMemories>[0],
+      edges: Parameters<typeof actual.rankNotableMemories>[1],
+      options?: Parameters<typeof actual.rankNotableMemories>[2],
     ) => {
       if (testFlags.auditThrows) throw new Error("audit imploded");
-      return actual.auditMemoryGraph(nodes, edges);
+      return actual.rankNotableMemories(nodes, edges, options);
     },
     detectReflectionPatterns: (past: Parameters<typeof actual.detectReflectionPatterns>[0]) => {
       if (testFlags.patternsThrows) throw new Error("patterns imploded");
@@ -281,8 +282,8 @@ Fine.`;
 
     const call = (deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
       .calls[0]![0] as ContextPack;
-    expect(call.user_message).toContain("Memory audit");
-    expect(call.user_message).toContain("Phantom certainties");
+    expect(call.user_message).toContain("Notable memories this period");
+    expect(call.user_message).toMatch(/\[phantom /);
     expect(call.user_message).toContain("Ansible");
   });
 
@@ -343,7 +344,7 @@ Test.`;
       const call = (deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
         .calls[0]![0] as ContextPack;
       // Audit section should NOT be in the prompt since the audit failed
-      expect(call.user_message).not.toContain("Memory audit");
+      expect(call.user_message).not.toContain("Notable memories this period");
     } finally {
       testFlags.auditThrows = false;
     }

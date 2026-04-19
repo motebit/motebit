@@ -34,6 +34,18 @@ export type {
   ChainResult,
   ResolvedScoringConfig,
 } from "./retrieval.js";
+export {
+  NotabilitySemiring,
+  rankNotableMemories,
+  formatNotabilitySummary,
+  scoreNode,
+} from "./notability.js";
+export type {
+  NotabilityScore,
+  NotabilityReason,
+  NotabilityOptions,
+  NotableMemory,
+} from "./notability.js";
 
 // === Scoring Configuration ===
 
