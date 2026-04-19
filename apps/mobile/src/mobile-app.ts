@@ -452,9 +452,7 @@ async function mobileSpecToProvider(
   spec: ProviderSpec,
   maxTokensFromConfig?: number,
 ): Promise<
-  | AnthropicProvider
-  | OpenAIProvider
-  | import("./adapters/local-inference.js").LocalInferenceProvider
+  AnthropicProvider | OpenAIProvider | import("./adapters/local-inference").LocalInferenceProvider
 > {
   switch (spec.kind) {
     case "cloud":
@@ -481,7 +479,7 @@ async function mobileSpecToProvider(
       });
     case "apple-fm":
     case "mlx": {
-      const { LocalInferenceProvider } = await import("./adapters/local-inference.js");
+      const { LocalInferenceProvider } = await import("./adapters/local-inference");
       const localProvider = new LocalInferenceProvider({
         backend: spec.kind,
         maxTokens: spec.maxTokens ?? maxTokensFromConfig,
@@ -961,7 +959,7 @@ export class MobileApp {
       recallMemoriesDefinition,
       createRecallMemoriesHandler(async (query, limit) => {
         const queryEmbedding = await embedText(query);
-        const nodes = await runtime.memory.retrieve(queryEmbedding, { limit });
+        const nodes = await runtime.memory.recallRelevant(queryEmbedding, { limit });
         return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
       }),
     );

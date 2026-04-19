@@ -8,7 +8,7 @@
  * Browser-safe tools (always registered):
  *   web_search      (R0) — fetch-based, always available
  *   read_url        (R0) — fetch-based, always available
- *   recall_memories (R0) — uses runtime memory.retrieve()
+ *   recall_memories (R0) — uses runtime memory.recallRelevant()
  *   list_events     (R0) — uses runtime events.query()
  *
  * Tauri-privileged tools (registered only when invoke is available):
@@ -71,7 +71,7 @@ export function registerDesktopTools(
     recallMemoriesDefinition,
     createRecallMemoriesHandler(async (query, limit) => {
       const queryEmbedding = await embedText(query);
-      const nodes = await runtime.memory.retrieve(queryEmbedding, { limit });
+      const nodes = await runtime.memory.recallRelevant(queryEmbedding, { limit });
       return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
     }),
   );

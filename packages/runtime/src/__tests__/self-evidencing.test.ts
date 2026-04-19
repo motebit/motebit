@@ -344,14 +344,14 @@ describe("Self-Evidencing Loop", () => {
 
     // Retrieve with HIGH precision (similarity-focused)
     graph.setPrecisionWeights(0.9);
-    const highPrecisionResults = await graph.retrieve(queryEmb, {
+    const highPrecisionResults = await graph.recallRelevant(queryEmb, {
       limit: 2,
       expandEdges: false,
     });
 
     // Retrieve with LOW precision (diversified)
     graph.setPrecisionWeights(0.1);
-    const lowPrecisionResults = await graph.retrieve(queryEmb, {
+    const lowPrecisionResults = await graph.recallRelevant(queryEmb, {
       limit: 2,
       expandEdges: false,
     });
@@ -389,7 +389,7 @@ describe("Self-Evidencing Loop", () => {
 
     // Verify clearing precision restores defaults
     graph.setPrecisionWeights(null);
-    const defaultResults = await graph.retrieve(queryEmb, {
+    const defaultResults = await graph.recallRelevant(queryEmb, {
       limit: 2,
       expandEdges: false,
     });

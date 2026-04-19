@@ -36,7 +36,7 @@ function makeRuntime(overrides: Partial<ServiceRuntime> = {}): ServiceRuntime {
           },
         ],
       }),
-      retrieve: vi.fn().mockResolvedValue([{ content: "retrieved", confidence: 0.8 }]),
+      recallRelevant: vi.fn().mockResolvedValue([{ content: "retrieved", confidence: 0.8 }]),
       formMemory: vi.fn().mockResolvedValue({ node_id: "mem-123" }),
     },
     events: {

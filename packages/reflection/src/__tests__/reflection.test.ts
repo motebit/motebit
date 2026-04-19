@@ -197,8 +197,8 @@ describe("isConcreteInsight", () => {
   });
 
   it("accepts insights with dot notation", () => {
-    expect(isConcreteInsight("The agent uses memory.retrieve for semantic search operations")).toBe(
-      true,
-    );
+    expect(
+      isConcreteInsight("The agent uses memory.recallRelevant for semantic search operations"),
+    ).toBe(true);
   });
 });

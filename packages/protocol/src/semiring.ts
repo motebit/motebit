@@ -108,6 +108,28 @@ export const BooleanSemiring: Semiring<boolean> = {
   mul: (a, b) => a && b,
 };
 
+/**
+ * (max, +, -∞, 0) — numerically stable max-product via log-space.
+ *
+ * Multiplying many small probabilities or confidences (each < 1) in
+ * linear space underflows fast: twenty 0.1-confidence edges collapse
+ * to 10⁻²⁰, which starts losing precision before then and hits
+ * denormals by 50. In log space the product becomes a sum; max stays
+ * max. Isomorphic to `ReliabilitySemiring` via x ↦ log(x), but callers
+ * skip the intermediate floats and stay stable over deep chains.
+ *
+ * Used by memory-graph's `recallConfidentChain` lens — most-confident
+ * reasoning chain through the memory graph. Also valid as the Viterbi
+ * recurrence semiring on DAG-structured trellises (when HMM-shape
+ * inference joins the codebase as a separate primitive).
+ */
+export const MaxProductLogSemiring: Semiring<number> = {
+  zero: -Infinity,
+  one: 0,
+  add: (a, b) => Math.max(a, b),
+  mul: (a, b) => a + b,
+};
+
 // ── Semiring Combinators ────────────────────────────────────────────
 
 /**

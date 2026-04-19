@@ -52,6 +52,7 @@
     "check-readme": "npx tsx scripts/check-readme.ts",
     "check-claude-md": "npx tsx scripts/check-claude-md.ts",
     "check-scene-primitives": "npx tsx scripts/check-scene-primitives.ts",
+    "check-retrieval-primitives": "npx tsx scripts/check-retrieval-primitives.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",

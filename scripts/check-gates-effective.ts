@@ -450,6 +450,19 @@ export async function probeLeak(): Promise<boolean> {
         `import * as THREE from "three";\nimport { registerSpatialDataModule } from "@motebit/render-engine";\nconst _probe = new THREE.Group();\nvoid _probe;\nregisterSpatialDataModule({ kind: "satellite", name: "__probe__" });\n`,
       ),
   },
+  {
+    script: "check-retrieval-primitives",
+    proves:
+      "flags inline retrieval scoring — similarity + confidence + sort in one file outside @motebit/memory-graph",
+    perturb: () =>
+      // Three-predicate heuristic: similarity, confidence, sort/rerank
+      // all present. This fixture reinvents memory ranking inline — the
+      // exact drift the gate exists to catch.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}inline_retrieval_scoring.ts`,
+        `interface Node { similarity: number; confidence: number }\nexport function rankInline(nodes: Node[]): Node[] {\n  return nodes\n    .map((n) => ({ ...n, score: n.similarity * 0.6 + n.confidence * 0.4 }))\n    .sort((a, b) => b.score - a.score);\n}\n`,
+      ),
+  },
 ];
 
 /**

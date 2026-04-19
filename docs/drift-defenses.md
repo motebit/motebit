@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Twenty-six invariants are enforced today. Nineteen run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
+Twenty-seven invariants are enforced today. Twenty run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
 
 ## Inventory
 
@@ -40,6 +40,7 @@ Twenty-six invariants are enforced today. Nineteen run as hard CI gates via `pnp
 | 24  | README.md "What you see:" block ↔ scaffold + runtime defaults  | `check-readme.ts`                                              | 2026-04-18 |
 | 25  | Per-directory CLAUDE.md files ↔ root CLAUDE.md doctrine index  | `check-claude-md.ts`                                           | 2026-04-18 |
 | 26  | SpatialExpression renderers ↔ `@motebit/render-engine` package | `check-scene-primitives.ts`                                    | 2026-04-19 |
+| 27  | Memory-retrieval ordering ↔ `@motebit/memory-graph` recall\*   | `check-retrieval-primitives.ts`                                | 2026-04-19 |
 
 ## Incident histories
 

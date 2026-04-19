@@ -359,7 +359,7 @@ describe("MemoryGraph", () => {
       );
 
       // Query with embedding close to the first memory
-      const results = await graph.retrieve([1, 0, 0]);
+      const results = await graph.recallRelevant([1, 0, 0]);
       expect(results.length).toBeGreaterThanOrEqual(1);
       // The first result should be the one with matching embedding
       expect(results[0]!.content).toBe("relevant memory");
@@ -376,7 +376,7 @@ describe("MemoryGraph", () => {
           [1, 0],
         );
       }
-      const results = await graph.retrieve([1, 0], { limit: 2 });
+      const results = await graph.recallRelevant([1, 0], { limit: 2 });
       expect(results).toHaveLength(2);
     });
   });
@@ -394,7 +394,7 @@ describe("MemoryGraph", () => {
         [1, 0, 0],
       );
 
-      await graph.retrieve([1, 0, 0]);
+      await graph.recallRelevant([1, 0, 0]);
       const stats = graph.getAndResetRetrievalStats();
 
       expect(stats.count).toBeGreaterThan(0);
@@ -407,7 +407,7 @@ describe("MemoryGraph", () => {
         [1, 0, 0],
       );
 
-      await graph.retrieve([1, 0, 0]);
+      await graph.recallRelevant([1, 0, 0]);
       graph.getAndResetRetrievalStats(); // first read clears
 
       const stats2 = graph.getAndResetRetrievalStats();
@@ -607,7 +607,7 @@ describe("MemoryGraph", () => {
 
       // With default weights (0.5 sim, 0.3 conf, 0.2 recency), the high-confidence
       // memory might rank higher. With similarity-only, it must rank lower.
-      const results = await graph.retrieve([1, 0, 0], {
+      const results = await graph.recallRelevant([1, 0, 0], {
         scoringConfig: { similarityWeight: 1, confidenceWeight: 0, recencyWeight: 0 },
       });
       expect(results[0]!.content).toBe("semantically close");
@@ -631,7 +631,7 @@ describe("MemoryGraph", () => {
         [0, 0, 1],
       );
 
-      const results = await graph.retrieve([1, 0, 0], {
+      const results = await graph.recallRelevant([1, 0, 0], {
         scoringConfig: { similarityWeight: 0, confidenceWeight: 1, recencyWeight: 0 },
       });
       expect(results[0]!.content).toBe("high confidence orthogonal");
@@ -657,7 +657,7 @@ describe("MemoryGraph", () => {
         [0, 0, 1],
       );
 
-      const results = await graph.retrieve([1, 0, 0], {
+      const results = await graph.recallRelevant([1, 0, 0], {
         scoringConfig: { similarityWeight: 10, confidenceWeight: 0, recencyWeight: 0 },
       });
       expect(results[0]!.content).toBe("exact match");
@@ -691,7 +691,7 @@ describe("MemoryGraph", () => {
       // No per-call config — should use constructor config
       // minConfidence: 0 prevents flake — the "exact match" node has confidence 0.1
       // which can decay below the default minConfidence (0.1) in slow CI environments
-      const results = await customGraph.retrieve([1, 0, 0], {
+      const results = await customGraph.recallRelevant([1, 0, 0], {
         minConfidence: 0,
       });
       expect(results[0]!.content).toBe("exact match");
@@ -723,7 +723,7 @@ describe("MemoryGraph", () => {
       );
 
       // Per-call override says confidence-only
-      const results = await customGraph.retrieve([1, 0, 0], {
+      const results = await customGraph.recallRelevant([1, 0, 0], {
         scoringConfig: { similarityWeight: 0, confidenceWeight: 1, recencyWeight: 0 },
       });
       expect(results[0]!.content).toBe("distant high confidence");
@@ -749,7 +749,7 @@ describe("MemoryGraph", () => {
       }
 
       // With overFetchRatio=1 and limit=1, only 1 candidate fetched, 1 returned
-      const results = await customGraph.retrieve([1, 0], { limit: 1 });
+      const results = await customGraph.recallRelevant([1, 0], { limit: 1 });
       expect(results).toHaveLength(1);
     });
 
@@ -793,7 +793,7 @@ describe("MemoryGraph", () => {
         pinned: false,
       });
 
-      const results = await customGraph.retrieve([1, 0]);
+      const results = await customGraph.recallRelevant([1, 0]);
       // Recent memory should rank first with recency-only scoring
       expect(results[0]!.content).toBe("recent memory");
       expect(results[1]!.content).toBe("old memory");
@@ -906,7 +906,7 @@ describe("MemoryGraph", () => {
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
 
       // Query is very similar to A
-      const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: true });
+      const results = await graph.recallRelevant([0.99, 0.01, 0], { limit: 10, expandEdges: true });
       const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
@@ -925,7 +925,10 @@ describe("MemoryGraph", () => {
 
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
 
-      const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: false });
+      const results = await graph.recallRelevant([0.99, 0.01, 0], {
+        limit: 10,
+        expandEdges: false,
+      });
       const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
@@ -946,7 +949,7 @@ describe("MemoryGraph", () => {
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
       await graph.deleteMemory(nodeB.node_id);
 
-      const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: true });
+      const results = await graph.recallRelevant([0.99, 0.01, 0], { limit: 10, expandEdges: true });
       const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
@@ -967,7 +970,7 @@ describe("MemoryGraph", () => {
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 0.5, 0.8);
 
       // With custom discount factor of 0.5
-      const results = await graph.retrieve([0.99, 0.01, 0], {
+      const results = await graph.recallRelevant([0.99, 0.01, 0], {
         limit: 10,
         expandEdges: true,
         edgeDiscountFactor: 0.5,
@@ -998,7 +1001,7 @@ describe("MemoryGraph", () => {
       expired.valid_until = Date.now() - 1000;
       await storage.saveNode(expired);
 
-      const results = await graph.retrieve([1, 0, 0], { limit: 10 });
+      const results = await graph.recallRelevant([1, 0, 0], { limit: 10 });
       const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(current.node_id);
@@ -1013,7 +1016,7 @@ describe("MemoryGraph", () => {
       expired.valid_until = Date.now() - 1000;
       await storage.saveNode(expired);
 
-      const results = await graph.retrieve([1, 0, 0], { limit: 10, includeExpired: true });
+      const results = await graph.recallRelevant([1, 0, 0], { limit: 10, includeExpired: true });
       const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(expired.node_id);
@@ -1033,7 +1036,7 @@ describe("MemoryGraph", () => {
 
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
 
-      const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: true });
+      const results = await graph.recallRelevant([0.99, 0.01, 0], { limit: 10, expandEdges: true });
       const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
@@ -1096,7 +1099,7 @@ describe("MemoryGraph", () => {
       // Small delay so timestamps differ
       await new Promise((r) => setTimeout(r, 10));
 
-      await graph.retrieve([1, 0, 0]);
+      await graph.recallRelevant([1, 0, 0]);
 
       const updated = await storage.getNode(node.node_id);
       expect(updated!.last_accessed).toBeGreaterThan(originalAccessed);
@@ -1113,12 +1116,12 @@ describe("MemoryGraph", () => {
       );
 
       // Without strengthenCoRetrieved, no edges created
-      await graph.retrieve([0.95, 0.05, 0]);
+      await graph.recallRelevant([0.95, 0.05, 0]);
       const edgesBefore = await storage.getEdges(nodeA.node_id);
       expect(edgesBefore).toHaveLength(0);
 
       // With strengthenCoRetrieved, Related edges appear
-      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+      await graph.recallRelevant([0.95, 0.05, 0], { strengthenCoRetrieved: true });
       const edgesAfter = await storage.getEdges(nodeA.node_id);
       const coRetrievalEdge = edgesAfter.find((e) => e.relation_type === RelationType.Related);
       expect(coRetrievalEdge).toBeDefined();
@@ -1137,10 +1140,10 @@ describe("MemoryGraph", () => {
       );
 
       // First co-retrieval: creates edge with weight 0.2
-      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+      await graph.recallRelevant([0.95, 0.05, 0], { strengthenCoRetrieved: true });
 
       // Second co-retrieval: strengthens to 0.25
-      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+      await graph.recallRelevant([0.95, 0.05, 0], { strengthenCoRetrieved: true });
 
       const edges = await storage.getEdges(nodeA.node_id);
       const coEdge = edges.find((e) => e.relation_type === RelationType.Related);
@@ -1153,7 +1156,7 @@ describe("MemoryGraph", () => {
         [1, 0, 0],
       );
 
-      await graph.retrieve([1, 0, 0], { strengthenCoRetrieved: true });
+      await graph.recallRelevant([1, 0, 0], { strengthenCoRetrieved: true });
 
       const { edges } = await graph.exportAll();
       expect(edges).toHaveLength(0);
@@ -1186,7 +1189,7 @@ describe("MemoryGraph", () => {
 
       // High precision: similarity-weighted → semantic match should rank higher
       graph.setPrecisionWeights(0.9);
-      const highPrecision = await graph.retrieve([1, 0, 0], { limit: 2 });
+      const highPrecision = await graph.recallRelevant([1, 0, 0], { limit: 2 });
       expect(highPrecision[0]!.content).toBe("semantic match");
     });
 
@@ -1204,7 +1207,7 @@ describe("MemoryGraph", () => {
 
       // Low precision: confidence weight rises relative to similarity
       graph.setPrecisionWeights(0.1);
-      const lowPrecision = await graph.retrieve([1, 0, 0], { limit: 2 });
+      const lowPrecision = await graph.recallRelevant([1, 0, 0], { limit: 2 });
       // With flattened weights, the confident memory gets a boost relative
       // to similarity — it may rank first or second depending on exact weights
       expect(lowPrecision).toHaveLength(2);
@@ -1219,7 +1222,7 @@ describe("MemoryGraph", () => {
         { content: "test", confidence: 0.8, sensitivity: SensitivityLevel.None },
         [1, 0],
       );
-      const results = await graph.retrieve([1, 0]);
+      const results = await graph.recallRelevant([1, 0]);
       expect(results).toHaveLength(1);
     });
 
@@ -1231,7 +1234,7 @@ describe("MemoryGraph", () => {
 
       graph.setPrecisionWeights(0.9);
       // Per-call override should take precedence over precision
-      const results = await graph.retrieve([1, 0], {
+      const results = await graph.recallRelevant([1, 0], {
         scoringConfig: { similarityWeight: 0.1, confidenceWeight: 0.8, recencyWeight: 0.1 },
       });
       expect(results).toHaveLength(1);
@@ -1306,7 +1309,7 @@ describe("MemoryGraph", () => {
 
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 1.0, 1.0);
 
-      const results = await graph.retrieve([0.99, 0.01, 0], { limit: 10, expandEdges: true });
+      const results = await graph.recallRelevant([0.99, 0.01, 0], { limit: 10, expandEdges: true });
       const ids = results.map((r) => r.node_id);
 
       expect(ids).toContain(nodeA.node_id);
@@ -1333,7 +1336,7 @@ describe("MemoryGraph", () => {
       await graph.link(nodeA.node_id, nodeC.node_id, RelationType.Related, 1.0, 1.0);
 
       // limit=2: A is top result, expansion adds B and C, total=3, should trim to 2
-      const results = await graph.retrieve([0.99, 0.01, 0], {
+      const results = await graph.recallRelevant([0.99, 0.01, 0], {
         limit: 2,
         expandEdges: true,
       });
@@ -1361,7 +1364,7 @@ describe("MemoryGraph", () => {
       await graph.link(nodeA.node_id, nodeB.node_id, RelationType.Related, 0.97, 0.5);
 
       // Co-retrieve — should strengthen by 0.05, capping at 1.0
-      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+      await graph.recallRelevant([0.95, 0.05, 0], { strengthenCoRetrieved: true });
 
       const edges = await storage.getEdges(nodeA.node_id);
       const coEdge = edges.find((e) => e.relation_type === RelationType.Related);
@@ -1384,7 +1387,7 @@ describe("MemoryGraph", () => {
       await graph.link(nodeB.node_id, nodeA.node_id, RelationType.Related, 0.3, 0.5);
 
       // Co-retrieve — should find the existing edge and strengthen it
-      await graph.retrieve([0.95, 0.05, 0], { strengthenCoRetrieved: true });
+      await graph.recallRelevant([0.95, 0.05, 0], { strengthenCoRetrieved: true });
 
       const edges = await storage.getEdges(nodeA.node_id);
       const coEdge = edges.find((e) => e.relation_type === RelationType.Related);

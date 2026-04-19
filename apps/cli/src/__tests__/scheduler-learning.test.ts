@@ -50,7 +50,7 @@ vi.mock("@motebit/memory-graph", async (importOriginal) => {
 
 interface MockMemoryGraph {
   formMemory: ReturnType<typeof vi.fn>;
-  retrieve: ReturnType<typeof vi.fn>;
+  recallRelevant: ReturnType<typeof vi.fn>;
 }
 
 interface MockRuntimeResult {
@@ -86,7 +86,7 @@ function createMockRuntime(
       tombstoned: false,
       pinned: false,
     }),
-    retrieve: vi.fn().mockResolvedValue(opts.relevantMemories ?? []),
+    recallRelevant: vi.fn().mockResolvedValue(opts.relevantMemories ?? []),
   };
 
   const runtime = {
@@ -457,8 +457,8 @@ describe("GoalScheduler — learning loop", () => {
       scheduler.setPlanEngine(mockPlanEngine, planStore as unknown as PlanStoreAdapter);
       await scheduler.tickOnce();
 
-      // memory.retrieve should have been called with the goal prompt
-      expect(memoryGraph.retrieve).toHaveBeenCalledTimes(1);
+      // memory.recallRelevant should have been called with the goal prompt
+      expect(memoryGraph.recallRelevant).toHaveBeenCalledTimes(1);
 
       // createPlan should have been called with relevantMemories
       expect(createPlanSpy).toHaveBeenCalledTimes(1);
@@ -516,7 +516,7 @@ describe("GoalScheduler — learning loop", () => {
 
     it("gracefully handles memory retrieval failure", async () => {
       const { runtime, memoryGraph } = createMockRuntime();
-      memoryGraph.retrieve.mockRejectedValue(new Error("Embedding pipeline failed"));
+      memoryGraph.recallRelevant.mockRejectedValue(new Error("Embedding pipeline failed"));
       moteDb.goalStore.add(makeGoal());
 
       const planStore = new InMemoryPlanStore();

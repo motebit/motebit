@@ -1,10 +1,4 @@
-import type {
-  MemoryNode,
-  MemoryEdge,
-  MemoryCandidate,
-  SensitivityLevel,
-  RelationType,
-} from "@motebit/sdk";
+import type { MemoryNode, MemoryEdge, MemoryCandidate, RelationType } from "@motebit/sdk";
 import { EventType, MemoryType, RelationType as RT } from "@motebit/sdk";
 import { ConsolidationAction } from "./consolidation.js";
 import type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
@@ -24,6 +18,22 @@ export {
   clusterBySimilarity,
 } from "./consolidation.js";
 export type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
+export {
+  recallConfidentChain,
+  recallShortestProvenance,
+  recallReachable,
+  recallFuzzyCluster,
+  buildMemoryDigraph,
+  relationTypeMultiplier,
+  recallRelevantCore,
+} from "./retrieval.js";
+export type {
+  RecallRelevantOptions,
+  ConfidentChainOptions,
+  ReachableOptions,
+  ChainResult,
+  ResolvedScoringConfig,
+} from "./retrieval.js";
 
 // === Scoring Configuration ===
 
@@ -48,23 +58,8 @@ const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   overFetchRatio: 5,
 };
 
-/**
- * Normalize scoring weights so they sum to 1.
- * Accepts the three weight fields and returns normalized values.
- */
-function normalizeWeights(
-  similarity: number,
-  confidence: number,
-  recency: number,
-): { similarity: number; confidence: number; recency: number } {
-  const sum = similarity + confidence + recency;
-  if (sum === 0) return { similarity: 1 / 3, confidence: 1 / 3, recency: 1 / 3 };
-  return {
-    similarity: similarity / sum,
-    confidence: confidence / sum,
-    recency: recency / sum,
-  };
-}
+// Scoring-weight normalization lives in ./retrieval.ts
+// (normalizeScoringWeights) — used by recallRelevantCore.
 
 // === Interfaces ===
 
@@ -465,20 +460,6 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / denom;
 }
 
-/**
- * Dot product for L2-normalized unit vectors.
- * Equivalent to cosine similarity when both vectors have unit norm,
- * but skips 2 norm accumulations and 2 sqrt calls.
- */
-function dotProduct(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return 0;
-  let sum = 0;
-  for (let i = 0; i < a.length; i++) {
-    sum += a[i]! * b[i]!;
-  }
-  return sum;
-}
-
 // === In-Memory Adapter ===
 
 export class InMemoryMemoryStorage implements MemoryStorageAdapter {
@@ -732,7 +713,7 @@ export class MemoryGraph {
     halfLife?: number,
   ): Promise<{ node: MemoryNode | null; decision: ConsolidationDecision }> {
     // Retrieve top-5 similar existing memories
-    const similar = await this.retrieve(embedding, { limit: 5 });
+    const similar = await this.recallRelevant(embedding, { limit: 5 });
 
     // No similar memories — skip LLM call, fall through to ADD
     if (similar.length === 0) {
@@ -845,142 +826,114 @@ export class MemoryGraph {
     }
   }
 
+  // === Semiring-driven memory retrieval ===
+  //
+  // Five lenses over the same memory graph, each projected through a
+  // different semiring in `@motebit/protocol`. Same algorithm, different
+  // judgment. Mirrors the agent-network pattern. Pure traversal logic
+  // lives in `./retrieval.ts`; these methods own instance-state
+  // concerns (precision override, gradient accumulator, Hebbian
+  // linking) and wrap the pure calls.
+
   /**
-   * Two-pass retrieval:
-   * 1. Weighted filter by confidence, recency, sensitivity
-   * 2. Semantic rerank by cosine similarity on embeddings
-   *
-   * Scoring weights are normalized to sum to 1 at scoring time,
-   * so callers can pass any ratio (e.g., {similarityWeight: 10, confidenceWeight: 0, recencyWeight: 0}).
+   * Recall memories relevant to a query embedding. Drop-in replacement
+   * for the retired `retrieve()`: weighted filter + semantic rerank +
+   * 1-hop edge expansion under `ReliabilitySemiring` (max-×).
    */
-  async retrieve(
+  async recallRelevant(
     queryEmbedding: number[],
-    options: {
-      minConfidence?: number;
-      sensitivityFilter?: SensitivityLevel[];
-      limit?: number;
-      scoringConfig?: Partial<ScoringConfig>;
-      /** Expand results via graph edges (1-hop neighbors). Default true. */
-      expandEdges?: boolean;
-      /** Score discount factor for edge-expanded neighbors. Default 0.7. */
-      edgeDiscountFactor?: number;
-      /** Include temporally expired memories (valid_until in the past). Default false. */
-      includeExpired?: boolean;
-      /** Hebbian co-retrieval: create/strengthen Related edges between top results. Default false. */
+    options: import("./retrieval.js").RecallRelevantOptions & {
+      /** Hebbian co-retrieval: strengthen Related edges between top results. */
       strengthenCoRetrieved?: boolean;
     } = {},
   ): Promise<MemoryNode[]> {
-    const {
-      minConfidence = 0.1,
-      sensitivityFilter,
-      limit = 10,
-      scoringConfig: perCallConfig,
-      expandEdges = true,
-      edgeDiscountFactor = 0.7,
-      includeExpired = false,
-      strengthenCoRetrieved = false,
-    } = options;
+    const { recallRelevantCore } = await import("./retrieval.js");
 
-    // Merge: precision override (gradient feedback) → per-call overrides → instance config
-    const baseConfig = this._precisionOverride
+    // Merge base scoring config with precision override (gradient feedback).
+    const baseScoring = this._precisionOverride
       ? { ...this.scoringConfig, ...this._precisionOverride }
       : this.scoringConfig;
-    const config = perCallConfig ? { ...baseConfig, ...perCallConfig } : baseConfig;
-    const weights = normalizeWeights(
-      config.similarityWeight,
-      config.confidenceWeight,
-      config.recencyWeight,
-    );
 
-    // Pass 1: weighted filter
-    const candidates = await this.storage.queryNodes({
-      motebit_id: this.motebitId,
-      min_confidence: minConfidence,
-      sensitivity_filter: sensitivityFilter,
-      limit: limit * config.overFetchRatio,
+    const { nodes, similarityScores } = await recallRelevantCore({
+      storage: this.storage,
+      motebitId: this.motebitId,
+      queryEmbedding,
+      baseScoring,
+      options,
     });
 
-    // Pass 2: semantic rerank
-    const now = Date.now();
+    // Intelligence gradient feedback — preserved from `retrieve()`.
+    for (const sim of similarityScores) this._retrievalScores.push(sim);
 
-    // Temporal filter: exclude expired memories unless requested
-    const filtered = includeExpired
-      ? candidates
-      : candidates.filter((node) => node.valid_until == null || node.valid_until > now);
-
-    const scored = filtered.map((node) => {
-      const similarity = dotProduct(queryEmbedding, node.embedding);
-      const decayedConfidence = computeDecayedConfidence(
-        node.confidence,
-        node.half_life,
-        now - node.created_at,
-      );
-      // Exponential decay: recencyBoost = 0.5^(elapsed / halfLife)
-      const elapsed = now - node.last_accessed;
-      const recencyBoost = Math.pow(0.5, elapsed / config.recencyHalfLife);
-      const score =
-        similarity * weights.similarity +
-        decayedConfidence * weights.confidence +
-        recencyBoost * weights.recency;
-      return { node, score };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-    let topResults = scored.slice(0, limit);
-
-    // Accumulate similarity scores for intelligence gradient
-    for (const { node } of topResults) {
-      const sim = dotProduct(queryEmbedding, node.embedding);
-      this._retrievalScores.push(sim);
-    }
-
-    // Pass 3: Graph expansion — 1-hop neighbors via edges
-    if (expandEdges && topResults.length > 0) {
-      const resultIds = new Set(topResults.map((r) => r.node.node_id));
-
-      for (const { node: parent, score: parentScore } of [...topResults]) {
-        const edges = await this.storage.getEdges(parent.node_id);
-        for (const edge of edges) {
-          const neighborId = edge.source_id === parent.node_id ? edge.target_id : edge.source_id;
-          if (resultIds.has(neighborId)) continue;
-
-          const neighbor = await this.storage.getNode(neighborId);
-          if (!neighbor || neighbor.tombstoned) continue;
-
-          // Sensitivity filter for neighbor — prevent edge expansion from leaking
-          // high-sensitivity memories when a sensitivity filter is active
-          if (sensitivityFilter && !sensitivityFilter.includes(neighbor.sensitivity)) continue;
-
-          // Temporal filter for neighbor
-          if (!includeExpired && neighbor.valid_until != null && neighbor.valid_until <= now)
-            continue;
-
-          const neighborScore = parentScore * edgeDiscountFactor * edge.weight * edge.confidence;
-          topResults.push({ node: neighbor, score: neighborScore });
-          resultIds.add(neighborId);
-        }
-      }
-
-      // Re-sort and trim after expansion
-      topResults.sort((a, b) => b.score - a.score);
-      topResults = topResults.slice(0, limit);
-    }
-
-    const resultNodes = topResults.map((s) => s.node);
-
-    // Update last_accessed on all retrieved nodes — recently retrieved memories stay fresh
+    // last_accessed update — recently retrieved memories stay fresh.
     const retrievalTime = Date.now();
-    for (const node of resultNodes) {
+    for (const node of nodes) {
       node.last_accessed = retrievalTime;
       await this.storage.saveNode(node);
     }
 
-    // Hebbian co-retrieval: link top co-retrieved memories
-    if (strengthenCoRetrieved && resultNodes.length >= 2) {
-      await this.linkCoRetrieved(resultNodes.slice(0, 3));
+    // Hebbian co-retrieval — only triggered when caller asks.
+    if (options.strengthenCoRetrieved && nodes.length >= 2) {
+      await this.linkCoRetrieved(nodes.slice(0, 3));
     }
 
-    return resultNodes;
+    return nodes;
+  }
+
+  /**
+   * Most-confident reasoning chain from a seed memory. Uses
+   * `MaxProductLogSemiring` for numerical stability when multiplying
+   * many edge confidences. If `targetId` is null, returns the single
+   * best outgoing chain. Otherwise returns the chain from seed to
+   * target, or null when disconnected.
+   */
+  async recallConfidentChain(
+    seedId: string,
+    targetId: string | null,
+    options?: import("./retrieval.js").ConfidentChainOptions,
+  ): Promise<import("./retrieval.js").ChainResult<number> | null> {
+    const { recallConfidentChain } = await import("./retrieval.js");
+    return recallConfidentChain(this.storage, this.motebitId, seedId, targetId, options);
+  }
+
+  /**
+   * Shortest chain (fewest hops) connecting two memories. Min-plus
+   * semiring on uniform hop weight — classic Dijkstra. Returns null
+   * if disconnected.
+   */
+  async recallShortestProvenance(
+    seedId: string,
+    targetId: string,
+    options?: { includeInvalid?: boolean },
+  ): Promise<import("./retrieval.js").ChainResult<number> | null> {
+    const { recallShortestProvenance } = await import("./retrieval.js");
+    return recallShortestProvenance(this.storage, this.motebitId, seedId, targetId, options);
+  }
+
+  /**
+   * Nodes reachable from the seed within `maxDepth` hops. Boolean
+   * semiring (∨, ∧) — depth-bounded transitive closure.
+   */
+  async recallReachable(
+    seedId: string,
+    options?: import("./retrieval.js").ReachableOptions,
+  ): Promise<Set<string>> {
+    const { recallReachable } = await import("./retrieval.js");
+    return recallReachable(this.storage, this.motebitId, seedId, options);
+  }
+
+  /**
+   * Memory cluster connected to the seed via the "strongest weakest
+   * link." Bottleneck semiring (⊕=max, ⊗=min): every reachable node
+   * comes back with its bottleneck edge weight along the best path.
+   * Useful for surfacing robust clusters where every relation holds.
+   */
+  async recallFuzzyCluster(
+    seedId: string,
+    options?: { minBottleneck?: number },
+  ): Promise<Array<{ nodeId: string; bottleneck: number; node: MemoryNode }>> {
+    const { recallFuzzyCluster } = await import("./retrieval.js");
+    return recallFuzzyCluster(this.storage, this.motebitId, seedId, options);
   }
 
   /**

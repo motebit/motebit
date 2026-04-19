@@ -432,7 +432,7 @@ export class WebApp {
       createRecallMemoriesHandler(async (query, limit) => {
         if (!this.runtime) return [];
         const embedding = await embedText(query);
-        const nodes = await this.runtime.memory.retrieve(embedding, { limit });
+        const nodes = await this.runtime.memory.recallRelevant(embedding, { limit });
         return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
       }),
     );

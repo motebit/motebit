@@ -293,7 +293,7 @@ export function buildToolRegistry(
   const memorySearchFn = async (query: string, limit: number) => {
     if (!runtimeRef.current) return [];
     const queryEmbedding = await embedText(query);
-    const nodes = await runtimeRef.current.memory.retrieve(queryEmbedding, { limit });
+    const nodes = await runtimeRef.current.memory.recallRelevant(queryEmbedding, { limit });
     return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
   };
   const eventQueryFn = async (limit: number, eventType?: string) => {

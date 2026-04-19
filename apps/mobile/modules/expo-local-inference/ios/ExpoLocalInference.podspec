@@ -20,4 +20,11 @@ Pod::Spec.new do |s|
   }
 
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
+  # Package.swift is the SPM manifest for the MLX-swift integration —
+  # it imports PackageDescription, which is only resolvable during SPM's
+  # manifest parse, not during CocoaPods' iOS target compile. The glob
+  # above catches it alongside the real sources; exclude it so the pod
+  # builds cleanly. MLX stays loaded via SPM at the Xcode-project level
+  # and is runtime-guarded via #canImport in ExpoLocalInferenceModule.swift.
+  s.exclude_files = "Package.swift"
 end

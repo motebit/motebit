@@ -313,7 +313,7 @@ async function persistHighSignalInsights(
         continue; // Embedding unavailable — skip rather than crash
       }
 
-      const similar = await deps.memory.retrieve(embedding, { limit: 3 });
+      const similar = await deps.memory.recallRelevant(embedding, { limit: 3 });
       const tooSimilar = similar.some(
         (n) => cosineSimilarity(embedding, n.embedding) >= NOVELTY_THRESHOLD,
       );

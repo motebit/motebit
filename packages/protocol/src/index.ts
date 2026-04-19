@@ -1705,6 +1705,7 @@ export {
   ReliabilitySemiring,
   BooleanSemiring,
   RegulatoryRiskSemiring,
+  MaxProductLogSemiring,
   productSemiring,
   recordSemiring,
   mappedSemiring,

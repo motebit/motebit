@@ -950,13 +950,13 @@ describe("runTurnStreaming pipeline stage timeouts", () => {
     expect((err as InstanceType<typeof StageTimeoutError>).stage).toBe("event_query");
   });
 
-  it("surfaces a StageTimeoutError when memoryGraph.retrieve hangs past its deadline", async () => {
+  it("surfaces a StageTimeoutError when memoryGraph.recallRelevant hangs past its deadline", async () => {
     const { StageTimeoutError, STAGE_TIMEOUTS_MS } = await import("../core");
     const deps = makeDeps();
     // Let the Promise.all batch resolve (event/embed/pinned all fast against
     // in-memory stores), then hang the similarity retrieve. Models a
     // corrupted vector index that accepts the call but never returns.
-    vi.spyOn(deps.memoryGraph, "retrieve").mockReturnValue(new Promise(() => {}));
+    vi.spyOn(deps.memoryGraph, "recallRelevant").mockReturnValue(new Promise(() => {}));
 
     const nextPromise = iter(deps, "hello");
     await vi.advanceTimersByTimeAsync(STAGE_TIMEOUTS_MS.memory_retrieve + 50);

@@ -312,7 +312,7 @@ export async function* runTurnStreaming(
   const similarityMemories = await withStageTimeout(
     "memory_retrieve",
     STAGE_TIMEOUTS_MS.memory_retrieve,
-    memoryGraph.retrieve(queryEmbedding, {
+    memoryGraph.recallRelevant(queryEmbedding, {
       limit: 5,
       strengthenCoRetrieved: true,
       sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,

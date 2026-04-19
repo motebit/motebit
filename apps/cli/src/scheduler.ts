@@ -962,7 +962,7 @@ export class GoalScheduler {
   private async retrieveRelevantMemories(goalPrompt: string): Promise<string[]> {
     try {
       const goalEmbedding = await embedText(goalPrompt);
-      const nodes = await this.runtime.memory.retrieve(goalEmbedding, { limit: 5 });
+      const nodes = await this.runtime.memory.recallRelevant(goalEmbedding, { limit: 5 });
       return nodes.map((n) => n.content);
     } catch {
       return [];

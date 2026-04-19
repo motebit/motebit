@@ -17,7 +17,7 @@ function makeRuntime(overrides: Record<string, unknown> = {}): any {
   return {
     motebitId: "motebit-1",
     memory: {
-      retrieve: vi.fn(async () => [
+      recallRelevant: vi.fn(async () => [
         { content: "memory 1", confidence: 0.8 },
         { content: "memory 2", confidence: 0.6 },
       ]),
@@ -63,12 +63,12 @@ describe("registerDesktopTools", () => {
     expect(names).toContain("shell_exec");
   });
 
-  it("recall_memories handler calls runtime.memory.retrieve", async () => {
+  it("recall_memories handler calls runtime.memory.recallRelevant", async () => {
     const registry = new SimpleToolRegistry();
     const runtime = makeRuntime();
     registerDesktopTools(registry, runtime);
     const result = await registry.execute("recall_memories", { query: "q", limit: 5 });
-    expect(runtime.memory.retrieve).toHaveBeenCalled();
+    expect(runtime.memory.recallRelevant).toHaveBeenCalled();
     expect(result.ok).toBe(true);
   });
 

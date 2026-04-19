@@ -926,7 +926,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
     queryMemories: async (query: string, limit?: number) => {
       const embedding = await embedText(query);
-      const nodes = await runtime.memory.retrieve(embedding, {
+      const nodes = await runtime.memory.recallRelevant(embedding, {
         limit: limit ?? 10,
         sensitivityFilter: [SensitivityLevel.None, SensitivityLevel.Personal],
       });

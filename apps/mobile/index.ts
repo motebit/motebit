@@ -1,12 +1,7 @@
-// Polyfill Web Crypto API for Hermes runtime.
-// react-native-quick-crypto provides crypto.subtle + crypto.getRandomValues
-// via native JSI bindings — must install on global before any code touches crypto.
-import crypto from "react-native-quick-crypto";
-
-if (typeof globalThis.crypto === "undefined") {
-  // @ts-expect-error -- quick-crypto's type doesn't perfectly match Web Crypto but is compatible
-  globalThis.crypto = crypto;
-}
+// Install Node-shaped globals Hermes doesn't ship (Buffer, crypto) BEFORE
+// anything else imports. Must be the first import — see shims/install-globals.ts
+// for why separating this into its own file matters (ESM hoisting).
+import "./shims/install-globals";
 
 import { registerRootComponent } from "expo";
 import App from "./src/App";

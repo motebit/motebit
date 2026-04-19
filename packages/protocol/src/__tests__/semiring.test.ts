@@ -7,6 +7,7 @@ import {
   ReliabilitySemiring,
   BooleanSemiring,
   RegulatoryRiskSemiring,
+  MaxProductLogSemiring,
   productSemiring,
   recordSemiring,
   mappedSemiring,
@@ -129,6 +130,39 @@ verifySemiringAxioms("BottleneckSemiring", BottleneckSemiring, bottleneckValues,
 verifySemiringAxioms("ReliabilitySemiring", ReliabilitySemiring, trustValues, numEq);
 
 verifySemiringAxioms("BooleanSemiring", BooleanSemiring, [true, false]);
+
+// MaxProductLog: (max, +, -∞, 0). Finite log-probabilities land in
+// (-∞, 0]; include 0 (log 1), negative finites, and -Infinity (log 0)
+// so annihilation (a + -Infinity = -Infinity) and identity (a + 0 = a)
+// both exercise their tape.
+const logProbValues = [-Infinity, -10, -3.2, -1, -0.5, 0];
+verifySemiringAxioms("MaxProductLogSemiring", MaxProductLogSemiring, logProbValues, numEq);
+
+// Isomorphism check: MaxProductLog is ReliabilitySemiring under log-space.
+// Pushing values through Math.log and back should preserve semiring ops
+// (modulo floating-point — tolerance is the 1e-10 numEq already uses).
+describe("MaxProductLogSemiring ↔ ReliabilitySemiring isomorphism", () => {
+  const pairs: [number, number][] = [
+    [0.1, 0.5],
+    [0.3, 0.7],
+    [0.9, 0.2],
+    [1, 0.1],
+  ];
+  it("log(a × b) = log(a) + log(b) — multiplication corresponds", () => {
+    for (const [a, b] of pairs) {
+      const linear = ReliabilitySemiring.mul(a, b);
+      const logspace = MaxProductLogSemiring.mul(Math.log(a), Math.log(b));
+      expect(Math.abs(Math.log(linear) - logspace)).toBeLessThan(1e-10);
+    }
+  });
+  it("log(max(a, b)) = max(log(a), log(b)) — addition corresponds (monotonic)", () => {
+    for (const [a, b] of pairs) {
+      const linear = ReliabilitySemiring.add(a, b);
+      const logspace = MaxProductLogSemiring.add(Math.log(a), Math.log(b));
+      expect(Math.abs(Math.log(linear) - logspace)).toBeLessThan(1e-10);
+    }
+  });
+});
 
 // ── Product Semiring ────────────────────────────────────────────────
 
