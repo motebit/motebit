@@ -533,6 +533,26 @@ export async function probeLeak(): Promise<boolean> {
         `interface Conv { id: string; title: string }\nexport function pick(convs: Conv[], keyword: string): Conv | undefined {\n  return convs.find((c) => c.title.toLowerCase().includes(keyword.toLowerCase()));\n}\n`,
       ),
   },
+  {
+    script: "check-panel-controllers",
+    proves:
+      "flags a sovereign-panel surface file that fetches relay endpoints directly without importing @motebit/panels",
+    perturb: () =>
+      // Fixture: a file under apps/web/src/ui/ with `sovereign` in its name
+      // that touches a relay sovereign endpoint but has zero @motebit/panels
+      // import. This is precisely the drift the gate exists to prevent —
+      // someone re-implementing the credential-fetch path inline after the
+      // controller extraction.
+      writeFixture(
+        `apps/web/src/ui/${PROBE_PREFIX}sovereign-rogue.ts`,
+        `// Probe-only file — reimplements the sovereign fetch path inline.
+export async function fetchCredsInline(id: string): Promise<unknown> {
+  const res = await fetch(\`https://relay.test/api/v1/agents/\${id}/credentials\`);
+  return res.json();
+}
+`,
+      ),
+  },
 ];
 
 /**

@@ -224,6 +224,12 @@ const GATES: ReadonlyArray<Gate> = [
       "referent disambiguation (picking one candidate from a list by matching a fuzzy user input against a title/name/label field) lives in @motebit/semiring (matchOrAsk + stringSimilaritySignal + disambiguate), not inline in apps/services/sibling-packages (invariant #32, added 2026-04-19 as the fourth non-trivial semiring consumer — completes the endgame map's 'semiring wherever algebra is natural' line item; same drift family as #27/#28/#29/#30)",
     script: "check-disambiguation-primitives",
   },
+  {
+    name: "check-panel-controllers",
+    defends:
+      "Sovereign-panel state/fetch layer (credential dedup + revocation batch-check + sovereign balance + sweep-config state machine + credentials/ledger/budget/succession fetching) lives in @motebit/panels, not inline in apps/* / src/ui or src/components (invariant #33, added 2026-04-19 after desktop/web/mobile all migrated to createSovereignController — three surfaces had carried identical state logic expressed in three render substrates; extends the protocol-primitive doctrine to multi-surface panel state)",
+    script: "check-panel-controllers",
+  },
 ];
 
 interface Result {

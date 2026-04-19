@@ -35,6 +35,7 @@
     "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
+    "@motebit/panels": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/render-engine": "workspace:*",

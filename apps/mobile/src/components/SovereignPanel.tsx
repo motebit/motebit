@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
   View,
@@ -13,75 +13,14 @@ import {
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
-
-interface CredentialEntry {
-  credential_id: string;
-  credential_type: string;
-  credential: {
-    issuer?: string | { id: string };
-    credentialSubject?: Record<string, unknown>;
-    issuanceDate?: string;
-  };
-  issued_at: number;
-}
-
-interface BudgetSummary {
-  total_locked: number;
-  total_settled: number;
-}
-
-interface BudgetAllocation {
-  allocation_id: string;
-  amount_locked: number;
-  status: string;
-  created_at: number;
-  amount_settled?: number;
-  settlement_status?: string;
-}
-
-interface AccountBalance {
-  balance: number;
-  currency: string;
-  transactions: Array<{
-    transaction_id: string;
-    type: string;
-    amount: number;
-    balance_after: number;
-    description?: string;
-    created_at: number;
-  }>;
-  dispute_window_hold?: number;
-  available_for_withdrawal?: number;
-  // Sovereign-wallet sweep config surfaced by the relay so the UI can render
-  // the "operating → sovereign" relationship alongside the balance. Null
-  // when the motebit has not declared a settlement_address + threshold.
-  sweep_threshold?: number | null;
-  settlement_address?: string | null;
-}
-
-interface LedgerEntry {
-  goal_id: string;
-  goal_prompt: string;
-  status: string;
-  steps: Array<{
-    step_id: string;
-    summary: string;
-    status: string;
-    started_at?: number;
-    completed_at?: number;
-  }>;
-  manifest_hash?: string;
-  signed_at?: number;
-}
-
-interface SuccessionRecord {
-  old_public_key: string;
-  new_public_key: string;
-  reason?: string;
-  rotated_at: number;
-  old_signature: string;
-  new_signature: string;
-}
+import {
+  createSovereignController,
+  type CredentialEntry,
+  type SovereignFetchAdapter,
+  type SovereignFetchInit,
+  type SovereignState,
+  type SovereignTab,
+} from "@motebit/panels";
 
 const TYPE_COLORS: Record<string, string> = {
   reputation: "#4caf50",
@@ -99,15 +38,17 @@ function formatTimeAgo(ts: number): string {
 }
 
 function resolveIssuer(cred: CredentialEntry["credential"]): string {
-  if (cred.issuer == null) return "unknown";
-  if (typeof cred.issuer === "string") {
-    return cred.issuer.length > 28 ? cred.issuer.slice(0, 28) + "..." : cred.issuer;
+  const issuerRaw = cred["issuer"];
+  if (issuerRaw == null) return "unknown";
+  if (typeof issuerRaw === "string") {
+    return issuerRaw.length > 28 ? issuerRaw.slice(0, 28) + "..." : issuerRaw;
   }
-  const id = cred.issuer.id ?? "unknown";
+  const id =
+    typeof issuerRaw === "object" && "id" in issuerRaw
+      ? String((issuerRaw as Record<string, unknown>).id ?? "unknown")
+      : "unknown";
   return id.length > 28 ? id.slice(0, 28) + "..." : id;
 }
-
-type SovereignTab = "credentials" | "ledger" | "budget" | "succession";
 
 interface SovereignPanelProps {
   visible: boolean;
@@ -115,217 +56,125 @@ interface SovereignPanelProps {
   onClose: () => void;
 }
 
+// Mobile's sync URL comes from AsyncStorage (async). The adapter's `syncUrl`
+// getter is synchronous, so we cache the URL in a ref and prime it in the
+// effect before calling refresh().
+function createMobileAdapter(
+  app: MobileApp,
+  syncUrlRef: React.MutableRefObject<string | null>,
+): SovereignFetchAdapter {
+  return {
+    get syncUrl() {
+      return syncUrlRef.current;
+    },
+    get motebitId() {
+      return app.motebitId !== "mobile-local" ? app.motebitId : null;
+    },
+    async fetch(path: string, init?: SovereignFetchInit) {
+      const syncUrl = syncUrlRef.current;
+      if (!syncUrl) throw new Error("No relay URL configured");
+      const token = await app.createSyncToken();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      return fetch(`${syncUrl}${path}`, {
+        method: init?.method ?? "GET",
+        headers,
+        body: init?.body != null ? JSON.stringify(init.body) : undefined,
+      });
+    },
+    getSolanaAddress: () => app.getRuntime()?.getSolanaAddress?.() ?? null,
+    getSolanaBalanceMicro: async () => {
+      const runtime = app.getRuntime();
+      const micro = await runtime?.getSolanaBalance?.();
+      return micro != null ? Number(micro) : null;
+    },
+    getLocalCredentials: () => app.getLocalCredentials() as CredentialEntry[],
+  };
+}
+
 export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): React.ReactElement {
   const colors = useTheme();
-  const [activeTab, setActiveTab] = useState<SovereignTab>("credentials");
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
-  const [revokedIds, setRevokedIds] = useState<Set<string>>(new Set());
-  const [budgetSummary, setBudgetSummary] = useState<BudgetSummary | null>(null);
-  const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocation[]>([]);
-  const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null);
-  // Sovereign wallet: address is sync (derived from identity key), balance is
-  // async (RPC call). Null address = no wallet configured — render as em dash.
-  const [sovereignAddress, setSovereignAddress] = useState<string | null>(null);
-  const [sovereignBalanceUsdc, setSovereignBalanceUsdc] = useState<number | null>(null);
-  // Sweep-config editor: when editing, holds the in-flight dollar string.
-  // Null = not editing (show readout or CTA). The commit handler writes back
-  // to accountBalance so the readout re-renders without a full refresh.
-  const [sweepEditValue, setSweepEditValue] = useState<string | null>(null);
-  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [activeTab, setActiveTab] = useState<SovereignTab>("credentials");
   const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
-  const [successionChain, setSuccessionChain] = useState<SuccessionRecord[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [sweepEditValue, setSweepEditValue] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const syncUrl = await app.getSyncUrl();
-      if (!syncUrl) return;
-      const motebitId = app.motebitId;
-      if (!motebitId) return;
+  const syncUrlRef = useRef<string | null>(null);
+  const ctrlRef = useRef<ReturnType<typeof createSovereignController> | null>(null);
 
-      // Merge local peer-issued credentials with relay credentials
-      const localCreds: CredentialEntry[] = app.getLocalCredentials();
-      let relayCreds: CredentialEntry[] = [];
-      if (syncUrl) {
-        try {
-          const credRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/credentials`);
-          if (credRes.ok) {
-            const data = (await credRes.json()) as { credentials: CredentialEntry[] };
-            relayCreds = data.credentials ?? [];
-          }
-        } catch {
-          // Relay fetch failed — local credentials still display
-        }
-      }
-      // Deduplicate by issuer + type + timestamp
-      const seen = new Set<string>();
-      const merged: CredentialEntry[] = [];
-      for (const c of [...localCreds, ...relayCreds].sort((a, b) => b.issued_at - a.issued_at)) {
-        const issuerVal = (c.credential as Record<string, unknown>).issuer;
-        const issuerKey = typeof issuerVal === "string" ? issuerVal : "";
-        const key = `${issuerKey}:${c.credential_type}:${c.issued_at}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          merged.push(c);
-        }
-      }
-      // Check revocation status via batch endpoint
-      if (merged.length > 0) {
-        try {
-          const batchRes = await fetch(`${syncUrl}/api/v1/credentials/batch-status`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ credential_ids: merged.map((c) => c.credential_id) }),
-          });
-          if (batchRes.ok) {
-            const batchData = (await batchRes.json()) as {
-              results: Array<{ credential_id: string; revoked: boolean }>;
-            };
-            const revIds = new Set(
-              batchData.results.filter((r) => r.revoked).map((r) => r.credential_id),
-            );
-            if (revIds.size > 0) {
-              setRevokedIds(revIds);
-            }
-          }
-        } catch {
-          /* batch check failed — display without revocation status */
-        }
-      }
+  // Initial state — the controller's emitted state replaces this as soon as
+  // subscribe fires.
+  const [state, setState] = useState<SovereignState>(() => ({
+    activeTab: "credentials",
+    credentials: [],
+    revokedIds: new Set<string>(),
+    balance: null,
+    budget: null,
+    sovereignAddress: null,
+    sovereignBalanceUsdc: null,
+    goals: [],
+    ledgerDetails: new Map(),
+    succession: null,
+    presentation: null,
+    verifyResult: null,
+    loading: false,
+    error: null,
+  }));
 
-      setCredentials(merged);
-
-      // Fetch budget
-      try {
-        const budgetRes = await fetch(`${syncUrl}/agent/${motebitId}/budget`);
-        if (budgetRes.ok) {
-          const data = (await budgetRes.json()) as {
-            summary: BudgetSummary;
-            allocations: BudgetAllocation[];
-          };
-          setBudgetSummary(data.summary);
-          setBudgetAllocations(data.allocations ?? []);
-        }
-      } catch {
-        // Budget fetch failed
-      }
-
-      // Fetch virtual account balance (operating balance + sweep config)
-      try {
-        const balanceRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/balance`);
-        if (balanceRes.ok) {
-          const data = (await balanceRes.json()) as AccountBalance;
-          setAccountBalance(data);
-        }
-      } catch {
-        // Balance fetch failed
-      }
-
-      // Fetch sovereign wallet balance (first time on mobile — the address is
-      // derived from the identity key at runtime construction, the balance is
-      // an onchain RPC call). Silent on failure; em dash is the spinner.
-      const runtime = app.getRuntime();
-      const address = runtime?.getSolanaAddress?.() ?? null;
-      setSovereignAddress(address);
-      if (runtime && address) {
-        try {
-          const micro = await runtime.getSolanaBalance?.();
-          setSovereignBalanceUsdc(micro != null ? Number(micro) / 1_000_000 : null);
-        } catch {
-          setSovereignBalanceUsdc(null);
-        }
-      } else {
-        setSovereignBalanceUsdc(null);
-      }
-
-      // Fetch execution ledger entries
-      try {
-        const ledgerRes = await fetch(`${syncUrl}/agent/${motebitId}/ledger`);
-        if (ledgerRes.ok) {
-          const data = (await ledgerRes.json()) as { entries: LedgerEntry[] };
-          setLedgerEntries(data.entries ?? []);
-        }
-      } catch {
-        // Ledger fetch failed
-      }
-
-      // Fetch key succession chain
-      try {
-        const succRes = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/succession`);
-        if (succRes.ok) {
-          const data = (await succRes.json()) as { chain: SuccessionRecord[] };
-          setSuccessionChain(data.chain ?? []);
-        }
-      } catch {
-        // Succession fetch failed
-      }
-    } finally {
-      setLoading(false);
-    }
+  // One controller per SovereignPanel instance. Created on first open; torn
+  // down on unmount.
+  useEffect(() => {
+    const adapter = createMobileAdapter(app, syncUrlRef);
+    const ctrl = createSovereignController(adapter);
+    ctrlRef.current = ctrl;
+    const unsubscribe = ctrl.subscribe(setState);
+    return () => {
+      unsubscribe();
+      ctrl.dispose();
+      ctrlRef.current = null;
+    };
   }, [app]);
 
+  // Prime sync URL + refresh when the modal opens.
   useEffect(() => {
-    if (visible) {
-      void refresh();
-    }
-  }, [visible, refresh]);
+    if (!visible) return;
+    void (async () => {
+      syncUrlRef.current = await app.getSyncUrl();
+      await ctrlRef.current?.refresh();
+    })();
+  }, [visible, app]);
 
-  // Sweep-config commit handler — PATCHes the new threshold (and optionally
-  // a default settlement_address for first-time enablement, matching the web
-  // pattern: the default destination is the motebit's sovereign wallet, per
-  // the sovereign-exit thesis). On success, mutates accountBalance so the
-  // readout re-renders without a full refresh().
-  const commitSweep = useCallback(
-    async (thresholdMicro: number | null, addressOverride: string | undefined): Promise<void> => {
-      const syncUrl = await app.getSyncUrl();
-      const motebitId = app.motebitId;
-      if (!syncUrl || !motebitId) {
-        Alert.alert("Sweep update failed", "No relay configured");
-        return;
+  const commitSweepFromUi = useCallback(
+    async (thresholdMicro: number | null, addressOverride: string | undefined) => {
+      const ctrl = ctrlRef.current;
+      if (!ctrl) return;
+      const before = ctrl.getState().error;
+      await ctrl.commitSweep(thresholdMicro, addressOverride);
+      const s = ctrl.getState();
+      if (s.error && s.error !== before) {
+        Alert.alert("Sweep update failed", s.error);
       }
-      try {
-        const body: Record<string, unknown> = { sweep_threshold: thresholdMicro };
-        if (addressOverride !== undefined) body.settlement_address = addressOverride;
-        const res = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/sweep-config`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(`${res.status}: ${text}`);
-        }
-        const updated = (await res.json()) as {
-          sweep_threshold: number | null;
-          settlement_address: string | null;
-        };
-        const dollars =
-          updated.sweep_threshold != null ? updated.sweep_threshold / 1_000_000 : null;
-        setAccountBalance((prev) =>
-          prev
-            ? { ...prev, sweep_threshold: dollars, settlement_address: updated.settlement_address }
-            : prev,
-        );
-        setSweepEditValue(null);
-      } catch (err) {
-        Alert.alert("Sweep update failed", err instanceof Error ? err.message : String(err));
-      }
+      setSweepEditValue(null);
     },
-    [app],
+    [],
   );
 
-  // Count by type
+  const loadGoalDetail = useCallback(async (goalId: string) => {
+    await ctrlRef.current?.loadLedgerDetail(goalId);
+  }, []);
+
+  // Count by type for the badge row
   const typeCounts: Record<string, number> = {};
-  for (const c of credentials) {
+  for (const c of state.credentials) {
     typeCounts[c.credential_type] = (typeCounts[c.credential_type] ?? 0) + 1;
   }
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <View style={styles.container}>
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.headerTitle}>Sovereign</Text>
@@ -334,7 +183,6 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
             <Text style={styles.closeBtn}>Done</Text>
           </TouchableOpacity>
         </View>
-        {/* Tab bar — matches desktop: Credentials, Ledger, Budget, Succession */}
         <View style={styles.tabBar}>
           {(["credentials", "ledger", "budget", "succession"] as SovereignTab[]).map((tab) => (
             <TouchableOpacity
@@ -350,13 +198,13 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
           ))}
         </View>
 
-        {loading ? (
+        {state.loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color={colors.accent} />
           </View>
         ) : activeTab === "credentials" ? (
           <FlatList
-            data={credentials}
+            data={state.credentials}
             keyExtractor={(item) => item.credential_id}
             style={styles.list}
             contentContainerStyle={styles.listContent}
@@ -379,12 +227,16 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
             renderItem={({ item }) => {
               const color = TYPE_COLORS[item.credential_type] ?? "#616161";
               const issuer = resolveIssuer(item.credential);
-              const rawSubjectId = item.credential.credentialSubject?.id;
+              const subjectField = item.credential["credentialSubject"];
+              const rawSubjectId =
+                typeof subjectField === "object" && subjectField != null
+                  ? (subjectField as Record<string, unknown>)["id"]
+                  : undefined;
               const subject =
                 typeof rawSubjectId === "string" && rawSubjectId.length > 0
                   ? rawSubjectId.slice(0, 28) + "..."
                   : undefined;
-              const isRevoked = revokedIds.has(item.credential_id);
+              const isRevoked = state.revokedIds.has(item.credential_id);
               return (
                 <View style={[styles.credentialItem, isRevoked ? { opacity: 0.5 } : undefined]}>
                   <View style={styles.credentialHeader}>
@@ -416,31 +268,35 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
           />
         ) : activeTab === "ledger" ? (
           <FlatList
-            data={ledgerEntries}
+            data={state.goals}
             keyExtractor={(item) => item.goal_id}
             style={styles.list}
             contentContainerStyle={styles.listContent}
-            renderItem={({ item: entry }) => {
-              const isExpanded = expandedGoalId === entry.goal_id;
+            renderItem={({ item: goal }) => {
+              const isExpanded = expandedGoalId === goal.goal_id;
+              const manifest = state.ledgerDetails.get(goal.goal_id);
               return (
                 <View>
                   <TouchableOpacity
                     style={styles.ledgerItem}
-                    onPress={() => setExpandedGoalId(isExpanded ? null : entry.goal_id)}
+                    onPress={() => {
+                      setExpandedGoalId(isExpanded ? null : goal.goal_id);
+                      if (!isExpanded && !manifest) void loadGoalDetail(goal.goal_id);
+                    }}
                     activeOpacity={0.7}
                   >
                     <View style={styles.ledgerHeader}>
                       <Text style={styles.ledgerPrompt} numberOfLines={1}>
-                        {entry.goal_prompt}
+                        {goal.prompt}
                       </Text>
                       <View
                         style={[
                           styles.ledgerStatusBadge,
                           {
                             borderColor:
-                              entry.status === "completed"
+                              goal.status === "completed"
                                 ? colors.statusSuccess
-                                : entry.status === "failed"
+                                : goal.status === "failed"
                                   ? colors.statusError
                                   : colors.statusWarning,
                           },
@@ -451,34 +307,34 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
                             styles.ledgerStatusText,
                             {
                               color:
-                                entry.status === "completed"
+                                goal.status === "completed"
                                   ? colors.statusSuccess
-                                  : entry.status === "failed"
+                                  : goal.status === "failed"
                                     ? colors.statusError
                                     : colors.statusWarning,
                             },
                           ]}
                         >
-                          {entry.status}
+                          {goal.status}
                         </Text>
                       </View>
                     </View>
-                    {entry.manifest_hash && (
+                    {manifest?.content_hash && (
                       <Text style={styles.credentialMeta}>
-                        hash: {entry.manifest_hash.slice(0, 16)}...
+                        hash: {manifest.content_hash.slice(0, 16)}...
                       </Text>
                     )}
                   </TouchableOpacity>
-                  {isExpanded && entry.steps.length > 0 && (
+                  {isExpanded && manifest?.timeline && manifest.timeline.length > 0 && (
                     <View style={styles.ledgerSteps}>
-                      {entry.steps.map((step) => (
-                        <View key={step.step_id} style={styles.ledgerStep}>
-                          <Text style={styles.ledgerStepText}>{step.summary}</Text>
+                      {manifest.timeline.map((event, idx) => (
+                        <View key={idx} style={styles.ledgerStep}>
+                          <Text style={styles.ledgerStepText}>
+                            {event.description ?? event.type}
+                          </Text>
                           <Text style={styles.credentialMeta}>
-                            {step.status}
-                            {step.completed_at != null && step.completed_at > 0
-                              ? ` — ${formatTimeAgo(step.completed_at)}`
-                              : ""}
+                            {event.type}
+                            {event.timestamp != null ? ` — ${formatTimeAgo(event.timestamp)}` : ""}
                           </Text>
                         </View>
                       ))}
@@ -495,177 +351,19 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
           />
         ) : activeTab === "budget" ? (
           <FlatList
-            data={budgetAllocations}
+            data={state.budget?.allocations ?? []}
             keyExtractor={(item) => item.allocation_id}
             style={styles.list}
             contentContainerStyle={styles.listContent}
             ListHeaderComponent={
-              <>
-                {/* Unified Balances block — two ownership regimes side by side:
-                    sovereign reserve (onchain USDC, yours outright) and
-                    operating balance (relay ledger claim). The sweep readout
-                    teaches that the relay is a utility, not a jail — the
-                    operating balance auto-drains into the sovereign reserve
-                    above the threshold. */}
-                <View style={styles.budgetSection}>
-                  <Text style={styles.balanceLabel}>Sovereign reserve</Text>
-                  <View style={styles.balanceRow}>
-                    <Text style={styles.balanceAmount}>
-                      {sovereignBalanceUsdc != null
-                        ? sovereignBalanceUsdc.toFixed(2)
-                        : sovereignAddress
-                          ? "…"
-                          : "—"}
-                    </Text>
-                    <Text style={styles.balanceCurrency}>{sovereignAddress ? "USDC" : ""}</Text>
-                  </View>
-                  <Text style={styles.balanceNote}>
-                    {sovereignAddress ? "onchain USDC, yours" : "no wallet configured"}
-                  </Text>
-                </View>
-                {accountBalance != null && (
-                  <View style={styles.budgetSection}>
-                    <Text style={styles.balanceLabel}>Operating balance</Text>
-                    <View style={styles.balanceRow}>
-                      <Text style={styles.balanceAmount}>{accountBalance.balance.toFixed(2)}</Text>
-                      <Text style={styles.balanceCurrency}>{accountBalance.currency ?? "USD"}</Text>
-                    </View>
-                    <Text style={styles.balanceNote}>
-                      relay ledger, instant settlement
-                      {accountBalance.dispute_window_hold != null &&
-                      accountBalance.dispute_window_hold > 0
-                        ? ` · on hold ${accountBalance.dispute_window_hold.toFixed(2)}`
-                        : ""}
-                    </Text>
-                    {/* Sweep-config inline editor. Three states mirror web:
-                        (a) configured → readout + edit/disable buttons
-                        (b) unset but address known → "Set auto-sweep threshold" CTA
-                        (c) no destination wallet at all → omit
-                        First-time enablement defaults the destination to the
-                        motebit's sovereign Solana address. */}
-                    {(() => {
-                      const effectiveAddress =
-                        accountBalance.settlement_address ?? sovereignAddress;
-                      if (!effectiveAddress) return null;
-                      const thresholdDollars = accountBalance.sweep_threshold;
-                      const editing = sweepEditValue !== null;
-
-                      if (editing) {
-                        return (
-                          <View style={styles.sweepEditorRow}>
-                            <Text style={styles.sweepEditorPrefix}>Auto-sweep above $</Text>
-                            <TextInput
-                              style={styles.sweepEditorInput}
-                              value={sweepEditValue ?? ""}
-                              onChangeText={setSweepEditValue}
-                              keyboardType="decimal-pad"
-                              placeholder="50"
-                              autoFocus
-                              onSubmitEditing={() => {
-                                const n = Number(sweepEditValue);
-                                if (!Number.isFinite(n) || n < 0) {
-                                  Alert.alert("Invalid threshold", "Must be non-negative number");
-                                  return;
-                                }
-                                const needsAddress =
-                                  accountBalance.settlement_address !== effectiveAddress;
-                                void commitSweep(
-                                  Math.round(n * 1_000_000),
-                                  needsAddress ? effectiveAddress : undefined,
-                                );
-                              }}
-                            />
-                            <TouchableOpacity
-                              onPress={() => setSweepEditValue(null)}
-                              style={styles.sweepEditorCancel}
-                            >
-                              <Text style={styles.sweepEditorCancelText}>cancel</Text>
-                            </TouchableOpacity>
-                          </View>
-                        );
-                      }
-
-                      if (thresholdDollars != null) {
-                        return (
-                          <View style={styles.sweepReadoutRow}>
-                            <Text style={styles.sweepReadout}>
-                              Auto-sweep above ${thresholdDollars.toFixed(2)} → your sovereign
-                              wallet
-                            </Text>
-                            <TouchableOpacity
-                              onPress={() => setSweepEditValue(String(thresholdDollars))}
-                              style={styles.sweepActionBtn}
-                            >
-                              <Text style={styles.sweepActionText}>edit</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              onPress={() => void commitSweep(null, undefined)}
-                              style={styles.sweepActionBtn}
-                            >
-                              <Text style={styles.sweepActionText}>disable</Text>
-                            </TouchableOpacity>
-                          </View>
-                        );
-                      }
-
-                      return (
-                        <TouchableOpacity
-                          onPress={() => setSweepEditValue("")}
-                          style={styles.sweepCta}
-                        >
-                          <Text style={styles.sweepCtaText}>+ Set auto-sweep threshold</Text>
-                        </TouchableOpacity>
-                      );
-                    })()}
-                    {accountBalance.transactions.length > 0 && (
-                      <>
-                        <Text style={[styles.sectionTitle, { marginTop: 8, marginBottom: 4 }]}>
-                          Recent Transactions
-                        </Text>
-                        {accountBalance.transactions.slice(0, 5).map((tx) => {
-                          const isCredit = tx.amount > 0;
-                          return (
-                            <View key={tx.transaction_id} style={styles.allocationItem}>
-                              <Text style={styles.allocationId}>
-                                {tx.type}
-                                {tx.description ? ` — ${tx.description}` : ""}
-                              </Text>
-                              <Text
-                                style={[
-                                  styles.allocationStatus,
-                                  {
-                                    color: isCredit ? colors.statusSuccess : colors.statusError,
-                                  },
-                                ]}
-                              >
-                                {isCredit ? "+" : ""}
-                                {tx.amount.toFixed(2)}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                      </>
-                    )}
-                  </View>
-                )}
-                {budgetSummary != null && (
-                  <View style={styles.budgetSection}>
-                    <View style={styles.budgetRow}>
-                      <View style={styles.budgetCard}>
-                        <Text style={styles.budgetLabel}>Locked</Text>
-                        <Text style={styles.budgetValue}>{budgetSummary.total_locked}</Text>
-                      </View>
-                      <View style={styles.budgetCard}>
-                        <Text style={styles.budgetLabel}>Settled</Text>
-                        <Text style={styles.budgetValue}>{budgetSummary.total_settled}</Text>
-                      </View>
-                    </View>
-                  </View>
-                )}
-                {budgetAllocations.length > 0 && (
-                  <Text style={styles.sectionTitle}>Allocations</Text>
-                )}
-              </>
+              <BudgetHeader
+                state={state}
+                styles={styles}
+                colors={colors}
+                sweepEditValue={sweepEditValue}
+                setSweepEditValue={setSweepEditValue}
+                commitSweepFromUi={commitSweepFromUi}
+              />
             }
             renderItem={({ item: a }) => (
               <View style={styles.allocationItem}>
@@ -686,7 +384,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
               </View>
             )}
             ListEmptyComponent={
-              accountBalance == null && budgetSummary == null ? (
+              state.balance == null && state.budget == null ? (
                 <View style={styles.emptyContainer}>
                   <Text style={styles.emptyText}>No budget data yet.</Text>
                 </View>
@@ -695,7 +393,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
           />
         ) : (
           <FlatList
-            data={successionChain}
+            data={state.succession?.chain ?? []}
             keyExtractor={(_, idx) => String(idx)}
             style={styles.list}
             contentContainerStyle={styles.listContent}
@@ -712,7 +410,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
                 {record.reason && (
                   <Text style={styles.credentialMeta}>reason: {record.reason}</Text>
                 )}
-                <Text style={styles.credentialMeta}>{formatTimeAgo(record.rotated_at)}</Text>
+                <Text style={styles.credentialMeta}>{formatTimeAgo(record.timestamp)}</Text>
               </View>
             )}
             ListEmptyComponent={
@@ -727,12 +425,165 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
   );
 }
 
+// Extracted to keep the FlatList ListHeaderComponent inline expression short.
+// Renders the two-balance block (sovereign reserve + operating) with the
+// sweep inline editor and the budget metric row.
+function BudgetHeader(props: {
+  state: SovereignState;
+  styles: ReturnType<typeof createStyles>;
+  colors: ThemeColors;
+  sweepEditValue: string | null;
+  setSweepEditValue: (v: string | null) => void;
+  commitSweepFromUi: (
+    thresholdMicro: number | null,
+    addressOverride: string | undefined,
+  ) => Promise<void>;
+}): React.ReactElement {
+  const { state, styles, colors, sweepEditValue, setSweepEditValue, commitSweepFromUi } = props;
+  const { balance, budget, sovereignAddress, sovereignBalanceUsdc } = state;
+
+  const effectiveAddress = balance?.settlement_address ?? sovereignAddress;
+  const thresholdDollars = balance?.sweep_threshold ?? null;
+  const editing = sweepEditValue !== null;
+
+  return (
+    <>
+      <View style={styles.budgetSection}>
+        <Text style={styles.balanceLabel}>Sovereign reserve</Text>
+        <View style={styles.balanceRow}>
+          <Text style={styles.balanceAmount}>
+            {sovereignBalanceUsdc != null
+              ? sovereignBalanceUsdc.toFixed(2)
+              : sovereignAddress
+                ? "…"
+                : "—"}
+          </Text>
+          <Text style={styles.balanceCurrency}>{sovereignAddress ? "USDC" : ""}</Text>
+        </View>
+        <Text style={styles.balanceNote}>
+          {sovereignAddress ? "onchain USDC, yours" : "no wallet configured"}
+        </Text>
+      </View>
+      {balance != null && (
+        <View style={styles.budgetSection}>
+          <Text style={styles.balanceLabel}>Operating balance</Text>
+          <View style={styles.balanceRow}>
+            <Text style={styles.balanceAmount}>{balance.balance.toFixed(2)}</Text>
+            <Text style={styles.balanceCurrency}>{balance.currency ?? "USD"}</Text>
+          </View>
+          <Text style={styles.balanceNote}>
+            relay ledger, instant settlement
+            {balance.dispute_window_hold != null && balance.dispute_window_hold > 0
+              ? ` · on hold ${balance.dispute_window_hold.toFixed(2)}`
+              : ""}
+          </Text>
+          {effectiveAddress != null &&
+            (editing ? (
+              <View style={styles.sweepEditorRow}>
+                <Text style={styles.sweepEditorPrefix}>Auto-sweep above $</Text>
+                <TextInput
+                  style={styles.sweepEditorInput}
+                  value={sweepEditValue ?? ""}
+                  onChangeText={setSweepEditValue}
+                  keyboardType="decimal-pad"
+                  placeholder="50"
+                  autoFocus
+                  onSubmitEditing={() => {
+                    const n = Number(sweepEditValue);
+                    if (!Number.isFinite(n) || n < 0) {
+                      Alert.alert("Invalid threshold", "Must be non-negative number");
+                      return;
+                    }
+                    const needsAddress = balance.settlement_address !== effectiveAddress;
+                    void commitSweepFromUi(
+                      Math.round(n * 1_000_000),
+                      needsAddress ? effectiveAddress : undefined,
+                    );
+                  }}
+                />
+                <TouchableOpacity
+                  onPress={() => setSweepEditValue(null)}
+                  style={styles.sweepEditorCancel}
+                >
+                  <Text style={styles.sweepEditorCancelText}>cancel</Text>
+                </TouchableOpacity>
+              </View>
+            ) : thresholdDollars != null ? (
+              <View style={styles.sweepReadoutRow}>
+                <Text style={styles.sweepReadout}>
+                  Auto-sweep above ${thresholdDollars.toFixed(2)} → your sovereign wallet
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setSweepEditValue(String(thresholdDollars))}
+                  style={styles.sweepActionBtn}
+                >
+                  <Text style={styles.sweepActionText}>edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => void commitSweepFromUi(null, undefined)}
+                  style={styles.sweepActionBtn}
+                >
+                  <Text style={styles.sweepActionText}>disable</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity onPress={() => setSweepEditValue("")} style={styles.sweepCta}>
+                <Text style={styles.sweepCtaText}>+ Set auto-sweep threshold</Text>
+              </TouchableOpacity>
+            ))}
+          {balance.transactions.length > 0 && (
+            <>
+              <Text style={[styles.sectionTitle, { marginTop: 8, marginBottom: 4 }]}>
+                Recent Transactions
+              </Text>
+              {balance.transactions.slice(0, 5).map((tx) => {
+                const isCredit = tx.amount > 0;
+                return (
+                  <View key={tx.transaction_id} style={styles.allocationItem}>
+                    <Text style={styles.allocationId}>
+                      {tx.type}
+                      {tx.description ? ` — ${tx.description}` : ""}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.allocationStatus,
+                        { color: isCredit ? colors.statusSuccess : colors.statusError },
+                      ]}
+                    >
+                      {isCredit ? "+" : ""}
+                      {tx.amount.toFixed(2)}
+                    </Text>
+                  </View>
+                );
+              })}
+            </>
+          )}
+        </View>
+      )}
+      {budget != null && (
+        <View style={styles.budgetSection}>
+          <View style={styles.budgetRow}>
+            <View style={styles.budgetCard}>
+              <Text style={styles.budgetLabel}>Locked</Text>
+              <Text style={styles.budgetValue}>{budget.total_locked}</Text>
+            </View>
+            <View style={styles.budgetCard}>
+              <Text style={styles.budgetLabel}>Settled</Text>
+              <Text style={styles.budgetValue}>{budget.total_settled}</Text>
+            </View>
+          </View>
+        </View>
+      )}
+      {(budget?.allocations.length ?? 0) > 0 && (
+        <Text style={styles.sectionTitle}>Allocations</Text>
+      )}
+    </>
+  );
+}
+
 function createStyles(c: ThemeColors) {
   return StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: c.bgPrimary,
-    },
+    container: { flex: 1, backgroundColor: c.bgPrimary },
     header: {
       flexDirection: "row",
       justifyContent: "space-between",
@@ -753,90 +604,22 @@ function createStyles(c: ThemeColors) {
       borderBottomWidth: 2,
       borderBottomColor: "transparent",
     },
-    tabActive: {
-      borderBottomColor: c.textSecondary,
-    },
-    tabText: {
-      fontSize: 12,
-      color: c.textGhost,
-    },
-    tabTextActive: {
-      color: c.textSecondary,
-    },
-    headerLeft: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-    },
-    headerTitle: {
-      color: c.textPrimary,
-      fontSize: 17,
-      fontWeight: "600",
-    },
-    countBadge: {
-      backgroundColor: c.borderLight,
-      borderRadius: 10,
-      paddingHorizontal: 8,
-      paddingVertical: 2,
-    },
-    countText: {
-      color: c.textMuted,
-      fontSize: 12,
-      fontWeight: "600",
-    },
-    closeBtn: {
-      color: c.accent,
-      fontSize: 16,
-      fontWeight: "600",
-    },
-    loadingContainer: {
-      flex: 1,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    list: {
-      flex: 1,
-    },
-    listContent: {
-      padding: 16,
-    },
-    badgeRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 8,
-      marginBottom: 16,
-    },
-    typeBadge: {
-      borderWidth: 1,
-      borderRadius: 4,
-      paddingHorizontal: 8,
-      paddingVertical: 2,
-    },
-    typeBadgeText: {
-      fontSize: 12,
-      fontWeight: "600",
-    },
-    sectionTitle: {
-      color: c.textSecondary,
-      fontSize: 13,
-      fontWeight: "600",
-      marginBottom: 8,
-    },
-    balanceRow: {
-      flexDirection: "row",
-      alignItems: "baseline",
-      gap: 4,
-      marginBottom: 2,
-    },
-    balanceAmount: {
-      color: c.textPrimary,
-      fontSize: 22,
-      fontWeight: "700",
-    },
-    balanceCurrency: {
-      color: c.textMuted,
-      fontSize: 12,
-    },
+    tabActive: { borderBottomColor: c.textSecondary },
+    tabText: { fontSize: 12, color: c.textGhost },
+    tabTextActive: { color: c.textSecondary },
+    headerLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
+    headerTitle: { color: c.textPrimary, fontSize: 17, fontWeight: "600" },
+    closeBtn: { color: c.accent, fontSize: 16, fontWeight: "600" },
+    loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+    list: { flex: 1 },
+    listContent: { padding: 16 },
+    badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 },
+    typeBadge: { borderWidth: 1, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2 },
+    typeBadgeText: { fontSize: 12, fontWeight: "600" },
+    sectionTitle: { color: c.textSecondary, fontSize: 13, fontWeight: "600", marginBottom: 8 },
+    balanceRow: { flexDirection: "row", alignItems: "baseline", gap: 4, marginBottom: 2 },
+    balanceAmount: { color: c.textPrimary, fontSize: 22, fontWeight: "700" },
+    balanceCurrency: { color: c.textMuted, fontSize: 12 },
     balanceLabel: {
       color: c.textMuted,
       fontSize: 10,
@@ -844,11 +627,7 @@ function createStyles(c: ThemeColors) {
       letterSpacing: 0.5,
       marginBottom: 2,
     },
-    balanceNote: {
-      color: c.textMuted,
-      fontSize: 10,
-      marginTop: 2,
-    },
+    balanceNote: { color: c.textMuted, fontSize: 10, marginTop: 2 },
     sweepReadout: {
       color: c.textMuted,
       fontSize: 10,
@@ -871,10 +650,7 @@ function createStyles(c: ThemeColors) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.textMuted,
     },
-    sweepActionText: {
-      color: c.textMuted,
-      fontSize: 10,
-    },
+    sweepActionText: { color: c.textMuted, fontSize: 10 },
     sweepCta: {
       alignSelf: "flex-start",
       paddingHorizontal: 8,
@@ -886,11 +662,7 @@ function createStyles(c: ThemeColors) {
       borderColor: c.textMuted,
       borderStyle: "dashed",
     },
-    sweepCtaText: {
-      color: c.textMuted,
-      fontSize: 10,
-      fontStyle: "italic",
-    },
+    sweepCtaText: { color: c.textMuted, fontSize: 10, fontStyle: "italic" },
     sweepEditorRow: {
       flexDirection: "row",
       alignItems: "center",
@@ -898,11 +670,7 @@ function createStyles(c: ThemeColors) {
       marginTop: 6,
       marginBottom: 4,
     },
-    sweepEditorPrefix: {
-      color: c.textMuted,
-      fontSize: 10,
-      fontStyle: "italic",
-    },
+    sweepEditorPrefix: { color: c.textMuted, fontSize: 10, fontStyle: "italic" },
     sweepEditorInput: {
       width: 64,
       paddingHorizontal: 6,
@@ -920,33 +688,12 @@ function createStyles(c: ThemeColors) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.textMuted,
     },
-    sweepEditorCancelText: {
-      color: c.textMuted,
-      fontSize: 10,
-    },
-    budgetSection: {
-      marginBottom: 8,
-    },
-    budgetRow: {
-      flexDirection: "row",
-      gap: 12,
-      marginBottom: 8,
-    },
-    budgetCard: {
-      backgroundColor: c.bgSecondary,
-      borderRadius: 8,
-      padding: 10,
-      flex: 1,
-    },
-    budgetLabel: {
-      color: c.textMuted,
-      fontSize: 10,
-    },
-    budgetValue: {
-      color: c.textPrimary,
-      fontSize: 16,
-      fontWeight: "700",
-    },
+    sweepEditorCancelText: { color: c.textMuted, fontSize: 10 },
+    budgetSection: { marginBottom: 8 },
+    budgetRow: { flexDirection: "row", gap: 12, marginBottom: 8 },
+    budgetCard: { backgroundColor: c.bgSecondary, borderRadius: 8, padding: 10, flex: 1 },
+    budgetLabel: { color: c.textMuted, fontSize: 10 },
+    budgetValue: { color: c.textPrimary, fontSize: 16, fontWeight: "700" },
     allocationItem: {
       flexDirection: "row",
       justifyContent: "space-between",
@@ -955,14 +702,8 @@ function createStyles(c: ThemeColors) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.borderLight,
     },
-    allocationId: {
-      color: c.textSecondary,
-      fontSize: 11,
-    },
-    allocationStatus: {
-      fontSize: 11,
-      fontWeight: "600",
-    },
+    allocationId: { color: c.textSecondary, fontSize: 11 },
+    allocationStatus: { fontSize: 11, fontWeight: "600" },
     credentialItem: {
       paddingVertical: 10,
       borderBottomWidth: StyleSheet.hairlineWidth,
@@ -974,25 +715,15 @@ function createStyles(c: ThemeColors) {
       alignItems: "center",
       marginBottom: 4,
     },
-    credentialId: {
-      color: c.textSecondary,
-      fontSize: 12,
-    },
+    credentialId: { color: c.textSecondary, fontSize: 12 },
     credentialTypeBadge: {
       borderWidth: 1,
       borderRadius: 3,
       paddingHorizontal: 6,
       paddingVertical: 1,
     },
-    credentialTypeText: {
-      fontSize: 11,
-      fontWeight: "700",
-    },
-    credentialMeta: {
-      color: c.textMuted,
-      fontSize: 11,
-      marginTop: 1,
-    },
+    credentialTypeText: { fontSize: 11, fontWeight: "700" },
+    credentialMeta: { color: c.textMuted, fontSize: 11, marginTop: 1 },
     ledgerItem: {
       paddingVertical: 8,
       borderBottomWidth: StyleSheet.hairlineWidth,
@@ -1004,26 +735,15 @@ function createStyles(c: ThemeColors) {
       alignItems: "center",
       gap: 8,
     },
-    ledgerPrompt: {
-      color: c.textPrimary,
-      fontSize: 13,
-      flex: 1,
-    },
+    ledgerPrompt: { color: c.textPrimary, fontSize: 13, flex: 1 },
     ledgerStatusBadge: {
       borderWidth: 1,
       borderRadius: 3,
       paddingHorizontal: 6,
       paddingVertical: 1,
     },
-    ledgerStatusText: {
-      fontSize: 10,
-      fontWeight: "700",
-    },
-    ledgerSteps: {
-      paddingLeft: 12,
-      paddingTop: 4,
-      paddingBottom: 4,
-    },
+    ledgerStatusText: { fontSize: 10, fontWeight: "700" },
+    ledgerSteps: { paddingLeft: 12, paddingTop: 4, paddingBottom: 4 },
     ledgerStep: {
       paddingVertical: 3,
       borderLeftWidth: 2,
@@ -1031,39 +751,20 @@ function createStyles(c: ThemeColors) {
       paddingLeft: 8,
       marginBottom: 2,
     },
-    ledgerStepText: {
-      color: c.textSecondary,
-      fontSize: 12,
-    },
+    ledgerStepText: { color: c.textSecondary, fontSize: 12 },
     successionItem: {
       paddingVertical: 8,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.borderLight,
     },
-    successionRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      marginBottom: 2,
-    },
-    successionLabel: {
-      color: c.textMuted,
-      fontSize: 10,
-      fontWeight: "600",
-      width: 30,
-    },
+    successionRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 },
+    successionLabel: { color: c.textMuted, fontSize: 10, fontWeight: "600", width: 30 },
     successionKey: {
       color: c.textSecondary,
       fontSize: 11,
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
-    emptyContainer: {
-      paddingVertical: 40,
-      alignItems: "center",
-    },
-    emptyText: {
-      color: c.textMuted,
-      fontSize: 14,
-    },
+    emptyContainer: { paddingVertical: 40, alignItems: "center" },
+    emptyText: { color: c.textMuted, fontSize: 14 },
   });
 }

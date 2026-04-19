@@ -484,6 +484,9 @@ importers:
       '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../../packages/memory-graph
+      '@motebit/panels':
+        specifier: workspace:*
+        version: link:../../packages/panels
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
@@ -703,6 +706,9 @@ importers:
       '@motebit/memory-graph':
         specifier: workspace:*
         version: link:../../packages/memory-graph
+      '@motebit/panels':
+        specifier: workspace:*
+        version: link:../../packages/panels
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
