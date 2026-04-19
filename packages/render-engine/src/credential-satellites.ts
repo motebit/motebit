@@ -272,10 +272,9 @@ export function mountCredentialSatellites(
   source: CredentialSource,
 ): CredentialSatelliteController | null {
   if (!target) return null;
-  const sink: SatelliteSink =
-    "setExpression" in target && typeof (target as SatelliteSink).setExpression === "function"
-      ? (target as SatelliteSink)
-      : sinkForGroup(target as THREE.Object3D);
+  // Discriminate by a field only present on SatelliteSink. `in`-narrowing
+  // on the union tells TS which branch is which — no manual assertion.
+  const sink: SatelliteSink = "setExpression" in target ? target : sinkForGroup(target);
 
   const refresh = (): void => {
     const summaries: CredentialSummary[] = source.getIssuedCredentials().map((vc) => ({
