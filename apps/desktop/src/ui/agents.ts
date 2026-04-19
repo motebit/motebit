@@ -1,5 +1,15 @@
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
+import {
+  createAgentsController,
+  collectCapabilities,
+  type AgentRecord,
+  type AgentsFetchAdapter,
+  type AgentsState,
+  type DiscoveredAgent,
+  type PricingEntry,
+  type SortKey,
+} from "@motebit/panels";
 
 // === DOM Refs ===
 
@@ -25,11 +35,11 @@ const delegateDialogError = document.getElementById("delegate-dialog-error") as 
 const delegateDialogSubmit = document.getElementById("delegate-dialog-submit") as HTMLButtonElement;
 const delegateDialogCancel = document.getElementById("delegate-dialog-cancel") as HTMLButtonElement;
 
-// Sort / filter controls (Discover tab only)
+// Sort / filter controls (Discover tab only — desktop-specific affordance)
 const discoverSort = document.getElementById("discover-sort") as HTMLSelectElement;
 const discoverFilter = document.getElementById("discover-filter") as HTMLSelectElement;
 
-// === Agents Panel ===
+// === Public API ===
 
 export interface AgentsAPI {
   open(): void;
@@ -44,84 +54,36 @@ const TRUST_BADGE_CLASS: Record<string, string> = {
   blocked: "blocked",
 };
 
-type DiscoveredAgent = Awaited<ReturnType<DesktopContext["app"]["discoverAgents"]>>[number];
-type PricingEntry = { capability: string; unit_cost: number; currency: string; per: string };
-
 interface BalanceSnapshot {
   balance: number;
   currency: string;
 }
 
-type SortKey = "recent" | "price-asc" | "price-desc" | "trust" | "interactions";
+// === Adapter ===
 
-const TRUST_RANK: Record<string, number> = {
-  blocked: -1,
-  unknown: 0,
-  first_contact: 1,
-  verified: 2,
-  trusted: 3,
-};
-
-function minPrice(agent: DiscoveredAgent): number {
-  if (!Array.isArray(agent.pricing) || agent.pricing.length === 0) return Number.POSITIVE_INFINITY;
-  let best = Number.POSITIVE_INFINITY;
-  for (const p of agent.pricing) {
-    if (typeof p.unit_cost === "number" && p.unit_cost < best) best = p.unit_cost;
-  }
-  return best;
+function createDesktopAgentsAdapter(ctx: DesktopContext): AgentsFetchAdapter {
+  return {
+    get syncUrl() {
+      return ctx.getConfig()?.syncUrl ?? null;
+    },
+    get motebitId() {
+      return ctx.app.motebitId || null;
+    },
+    listTrustedAgents: () => ctx.app.listTrustedAgents(),
+    discoverAgents: () => ctx.app.discoverAgents(),
+  };
 }
 
-function collectCapabilities(agents: DiscoveredAgent[]): string[] {
-  const set = new Set<string>();
-  for (const a of agents) {
-    for (const c of a.capabilities) set.add(c);
-  }
-  return [...set].sort();
-}
-
-function applySortFilter(
-  agents: DiscoveredAgent[],
-  sort: SortKey,
-  capFilter: string,
-): DiscoveredAgent[] {
-  const filtered =
-    capFilter === "" ? agents.slice() : agents.filter((a) => a.capabilities.includes(capFilter));
-
-  switch (sort) {
-    case "price-asc":
-      filtered.sort((a, b) => minPrice(a) - minPrice(b));
-      break;
-    case "price-desc":
-      filtered.sort((a, b) => {
-        const pa = minPrice(a);
-        const pb = minPrice(b);
-        // Unpriced agents sort last in both directions
-        if (pa === Number.POSITIVE_INFINITY && pb === Number.POSITIVE_INFINITY) return 0;
-        if (pa === Number.POSITIVE_INFINITY) return 1;
-        if (pb === Number.POSITIVE_INFINITY) return -1;
-        return pb - pa;
-      });
-      break;
-    case "trust":
-      filtered.sort(
-        (a, b) =>
-          (TRUST_RANK[b.trust_level ?? "unknown"] ?? 0) -
-          (TRUST_RANK[a.trust_level ?? "unknown"] ?? 0),
-      );
-      break;
-    case "interactions":
-      filtered.sort((a, b) => (b.interaction_count ?? 0) - (a.interaction_count ?? 0));
-      break;
-    case "recent":
-    default:
-      filtered.sort((a, b) => (b.last_seen_at ?? 0) - (a.last_seen_at ?? 0));
-      break;
-  }
-  return filtered;
-}
+// === Init ===
 
 export function initAgents(ctx: DesktopContext): AgentsAPI {
-  // --- Balance bar ---
+  const adapter = createDesktopAgentsAdapter(ctx);
+  const ctrl = createAgentsController(adapter);
+
+  // --- Balance bar (desktop-only; kept out of the panel controller since the
+  // sovereign controller already owns the balance fetch and mobile/web don't
+  // show this bar) ---
+
   let latestBalance: BalanceSnapshot | null = null;
 
   async function fetchBalance(): Promise<BalanceSnapshot | null> {
@@ -154,29 +116,22 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
     } else {
       agentsBalanceBar.style.display = "none";
     }
-    // If the delegate modal is open, update its balance line too
     if (delegateBackdrop.classList.contains("open")) {
       delegateDialogBalance.textContent = b ? `$${b.balance.toFixed(2)}` : "unavailable";
     }
   }
 
-  // --- Known tab ---
-  async function populateAgents(): Promise<void> {
-    const agents = await ctx.app.listTrustedAgents();
+  // --- Renderers ---
 
+  function renderKnown(state: AgentsState): void {
     agentsList.innerHTML = "";
-
-    if (agents.length === 0) {
+    if (state.known.length === 0) {
       agentsEmpty.style.display = "block";
       return;
     }
-
     agentsEmpty.style.display = "none";
 
-    // Sort by most recently seen
-    agents.sort((a, b) => b.last_seen_at - a.last_seen_at);
-
-    for (const agent of agents) {
+    for (const agent of state.known) {
       const item = document.createElement("div");
       item.className = "agent-item";
 
@@ -210,7 +165,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
 
       item.appendChild(meta);
 
-      // Delegate button — known agents support delegation too
+      // Known agents support delegation too
       const actions = document.createElement("div");
       actions.className = "agent-item-actions";
       const btn = document.createElement("button");
@@ -230,7 +185,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
     }
   }
 
-  // --- Discover tab ---
+  // --- Discover tab DOM refs ---
   const discoverList = document.getElementById("agents-discover-list") as HTMLDivElement;
   const discoverEmpty = document.getElementById("agents-discover-empty") as HTMLDivElement;
   const discoverControls = document.getElementById("agents-discover-controls") as HTMLDivElement;
@@ -238,25 +193,26 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
   const discoverPane = document.getElementById("agents-discover-pane") as HTMLDivElement;
   const tabBtns = Array.from(agentsPanel.querySelectorAll<HTMLButtonElement>(".agents-tab"));
 
-  let discoveredAgents: DiscoveredAgent[] = [];
-
   function switchTab(tab: string): void {
     for (const btn of tabBtns) {
       btn.classList.toggle("active", btn.dataset.tab === tab);
     }
     knownPane.style.display = tab === "known" ? "" : "none";
     discoverPane.style.display = tab === "discover" ? "" : "none";
-    if (tab === "discover") void populateDiscover();
+    if (tab === "known") ctrl.setActiveTab("known");
+    else if (tab === "discover") {
+      ctrl.setActiveTab("discover");
+      void ctrl.refreshDiscover();
+    }
   }
 
   for (const btn of tabBtns) {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab ?? "known"));
   }
 
-  function rebuildCapabilityFilter(): void {
-    const caps = collectCapabilities(discoveredAgents);
+  function rebuildCapabilityFilter(state: AgentsState): void {
+    const caps = collectCapabilities(state.discovered);
     const current = discoverFilter.value;
-    // Rebuild options
     discoverFilter.innerHTML = "";
     const all = document.createElement("option");
     all.value = "";
@@ -268,25 +224,33 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       opt.textContent = c;
       discoverFilter.appendChild(opt);
     }
-    // Restore prior selection if still valid
+    // Restore prior selection if still valid; otherwise reset to "all".
     if (current && caps.includes(current)) {
       discoverFilter.value = current;
     } else {
       discoverFilter.value = "";
+      if (state.capabilityFilter !== "") ctrl.setCapabilityFilter("");
     }
   }
 
-  function renderDiscoverList(): void {
-    discoverList.innerHTML = "";
-    const sort = (discoverSort.value || "recent") as SortKey;
-    const capFilter = discoverFilter.value || "";
-    const view = applySortFilter(discoveredAgents, sort, capFilter);
-
-    if (view.length === 0) {
+  function renderDiscover(state: AgentsState): void {
+    if (state.discovered.length === 0) {
+      discoverList.innerHTML = "";
       discoverEmpty.textContent =
-        discoveredAgents.length === 0
-          ? "No agents on the network yet. Connect to a relay to discover."
-          : "No agents match the current filter.";
+        state.error != null
+          ? "Could not reach relay."
+          : "No agents on the network yet. Connect to a relay to discover.";
+      discoverEmpty.style.display = "block";
+      discoverControls.style.display = "none";
+      return;
+    }
+
+    discoverControls.style.display = "";
+    const view = ctrl.discoveredView();
+
+    discoverList.innerHTML = "";
+    if (view.length === 0) {
+      discoverEmpty.textContent = "No agents match the current filter.";
       discoverEmpty.style.display = "block";
       return;
     }
@@ -305,14 +269,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       if (agent.capabilities.length > 0) {
         const priceByCapability = new Map<string, PricingEntry>();
         if (Array.isArray(agent.pricing)) {
-          for (const p of agent.pricing) {
-            priceByCapability.set(p.capability, {
-              capability: p.capability,
-              unit_cost: p.unit_cost,
-              currency: p.currency,
-              per: p.per,
-            });
-          }
+          for (const p of agent.pricing) priceByCapability.set(p.capability, p);
         }
 
         const capsRow = document.createElement("div");
@@ -366,7 +323,6 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       }
       item.appendChild(meta);
 
-      // Delegate action
       const actions = document.createElement("div");
       actions.className = "agent-item-actions";
       const btn = document.createElement("button");
@@ -380,29 +336,23 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
     }
   }
 
-  async function populateDiscover(): Promise<void> {
-    discoverList.innerHTML = "";
-    discoverEmpty.textContent = "Discovering agents…";
-    discoverEmpty.style.display = "block";
-    discoverControls.style.display = "none";
-
-    discoveredAgents = await ctx.app.discoverAgents();
-
-    if (discoveredAgents.length === 0) {
-      discoverEmpty.textContent = "No agents on the network yet. Connect to a relay to discover.";
-      discoverEmpty.style.display = "block";
-      return;
-    }
-
-    rebuildCapabilityFilter();
-    discoverControls.style.display = "";
-    renderDiscoverList();
+  function renderAll(state: AgentsState): void {
+    renderKnown(state);
+    rebuildCapabilityFilter(state);
+    renderDiscover(state);
   }
 
-  discoverSort.addEventListener("change", renderDiscoverList);
-  discoverFilter.addEventListener("change", renderDiscoverList);
+  ctrl.subscribe(renderAll);
 
-  // --- Delegate modal ---
+  discoverSort.addEventListener("change", () => {
+    ctrl.setSort((discoverSort.value || "recent") as SortKey);
+  });
+  discoverFilter.addEventListener("change", () => {
+    ctrl.setCapabilityFilter(discoverFilter.value || "");
+  });
+
+  // --- Delegate modal (desktop-only today) ---
+
   type DelegateTarget = {
     motebit_id: string;
     capabilities: string[];
@@ -432,24 +382,37 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
     delegateDialogCost.textContent = `≈ $${price.unit_cost.toFixed(2)}/${price.per}`;
   }
 
-  function openDelegateModal(agent: DelegateTarget): void {
-    currentTarget = agent;
+  function openDelegateModal(agent: DelegateTarget | DiscoveredAgent | AgentRecord): void {
+    // Normalize the three shapes the Delegate button can pass — discovered
+    // agents carry capabilities + pricing, known agents carry neither.
+    const target: DelegateTarget =
+      "motebit_id" in agent
+        ? {
+            motebit_id: agent.motebit_id,
+            capabilities: agent.capabilities ?? [],
+            pricing: agent.pricing ?? null,
+          }
+        : {
+            motebit_id: (agent as AgentRecord).remote_motebit_id,
+            capabilities: [],
+            pricing: null,
+          };
+    currentTarget = target;
     delegateDialogError.style.display = "none";
     delegateDialogError.textContent = "";
     delegateDialogPrompt.value = "";
     delegateDialogSubmit.disabled = false;
     delegateDialogSubmit.textContent = "Delegate";
 
-    delegateDialogTargetId.textContent = agent.motebit_id;
-    delegateDialogTargetId.title = agent.motebit_id;
+    delegateDialogTargetId.textContent = target.motebit_id;
+    delegateDialogTargetId.title = target.motebit_id;
 
-    // Build capability picker (radio)
     delegateDialogCaps.innerHTML = "";
     const priceByCapability = new Map<string, PricingEntry>();
-    if (Array.isArray(agent.pricing)) {
-      for (const p of agent.pricing) priceByCapability.set(p.capability, p);
+    if (Array.isArray(target.pricing)) {
+      for (const p of target.pricing) priceByCapability.set(p.capability, p);
     }
-    const caps = agent.capabilities.length > 0 ? agent.capabilities : ["general"];
+    const caps = target.capabilities.length > 0 ? target.capabilities : ["general"];
     caps.forEach((cap, idx) => {
       const label = document.createElement("label");
       label.className = "delegate-cap-option";
@@ -474,7 +437,6 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
 
     updateEstimatedCost();
 
-    // Balance line
     delegateDialogBalance.textContent = latestBalance
       ? `$${latestBalance.balance.toFixed(2)}`
       : "—";
@@ -538,14 +500,12 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       const targetShort = currentTarget.motebit_id.slice(0, 12);
       const taskShort = data.task_id.slice(0, 12);
 
-      // Close modal silently (calm software); surface the receipt via chat
       closeDelegateModal();
       ctx.addMessage(
         "system",
         `Delegation submitted to ${targetShort}… (task ${taskShort}…). Result will arrive via the agent network.`,
       );
 
-      // Refresh balance (allocation will have locked some funds)
       void refreshBalance();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -569,7 +529,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
   function open(): void {
     agentsPanel.classList.add("open");
     agentsBackdrop.classList.add("open");
-    void populateAgents();
+    void ctrl.refreshKnown();
     void refreshBalance();
   }
 
@@ -577,8 +537,6 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
     agentsPanel.classList.remove("open");
     agentsBackdrop.classList.remove("open");
   }
-
-  // === Event Wiring ===
 
   document.getElementById("agents-btn")!.addEventListener("click", open);
   document.getElementById("agents-close-btn")!.addEventListener("click", close);

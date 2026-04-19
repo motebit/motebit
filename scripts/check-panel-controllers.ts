@@ -1,25 +1,24 @@
 /**
  * Panel-controller boundary check.
  *
- * The Sovereign panel ships on desktop (DOM), web (DOM), and mobile (React
- * Native). The state-derivation and relay-I/O layer — credential dedup,
- * revocation batch-check, sovereign balance resolution, sweep-config state
- * machine, credentials/ledger/budget/succession fetching — was triplicated
- * across three surfaces. In Apr 2026 it was lifted into @motebit/panels as a
- * single controller; each surface now renders DOM or RN from controller state.
+ * Multi-surface UI panels (Sovereign, Agents, …) have their state-derivation
+ * and relay-I/O layer lifted into @motebit/panels controllers; each surface
+ * renders DOM or RN from controller state. The Sovereign controller landed
+ * 2026-04-19 after three files had carried ~3054 LOC of identical state
+ * logic. The Agents controller followed the same day.
  *
- * This gate defends the extraction. Any surface file under apps/* / src/ui/
- * or apps/ * /src/components/ whose name matches /sovereign/i and contains
- * direct fetches to the relay's sovereign endpoints must also import from
- * @motebit/panels. Re-implementing the fetch path inline reopens the same
+ * This gate defends those extractions and future ones. Any surface file
+ * under apps/ * /src/ui/ or apps/ * /src/components/ whose name matches a
+ * registered panel pattern — /sovereign/i, /agents/i — and contains direct
+ * fetches to the relay endpoints that panel canonicalizes must also import
+ * from @motebit/panels. Re-implementing the fetch path inline reopens the
  * drift window the extraction closed: desktop/web/mobile could diverge on
- * endpoint shape, response type, or sweep-commit micro-conversion without any
+ * endpoint shape, response type, or state-transition semantics without any
  * single source of truth to correct against.
  *
- * Exempt: test files (which are allowed to reach in for assertion),
- * packages/panels itself (the canonical source), and the one Stripe-onramp
- * helper apps/web/src/ui/wallet-balance.ts (not part of the sovereign
- * controller; explicitly named).
+ * Exempt: test files (allowed to reach in for assertion), packages/panels
+ * itself (the canonical source), and apps/web/src/ui/wallet-balance.ts
+ * (Stripe-onramp helper, not part of any panel controller).
  *
  * This is the 33rd synchronization invariant defense.
  */
@@ -36,21 +35,44 @@ const ROOT = resolve(__dirname, "..");
 const APPS = ["admin", "cli", "desktop", "docs", "identity", "mobile", "spatial", "web"];
 
 /**
- * File-name patterns that declare themselves as panel-surface consumers.
- * Matches case-insensitively; a file named `Sovereign.tsx` or
- * `sovereign-panels.ts` or `SovereignPanel.tsx` all qualify.
+ * A registered panel family. Each entry maps a file-name pattern to the
+ * relay endpoint substrings that family canonicalizes. A file that matches
+ * the name pattern AND contains any of the endpoint signatures must import
+ * from `@motebit/panels` — or the gate fails.
+ *
+ * The separation lets `gated-panels.ts` (web) legitimately hit credentials
+ * endpoints for a non-agents reason without tripping the agents check: only
+ * files whose name matches `/agents/i` are scanned for the agents endpoint
+ * list.
+ *
+ * ⚠ Don't collapse these into one flat list. A sovereign file hitting
+ * `/api/v1/agents/{id}/discover` is impossible (wrong shape, wrong intent);
+ * collapsing would allow `sovereign-panels.ts` to pass the gate by hitting
+ * only the discover endpoint, defeating the point.
  */
-const PANEL_NAME_PATTERNS: ReadonlyArray<RegExp> = [/sovereign/i];
+interface PanelFamily {
+  name: string;
+  namePattern: RegExp;
+  endpointSignatures: ReadonlyArray<string>;
+}
 
-/**
- * Relay endpoint substrings whose presence in a panel file indicates the
- * file is doing its own sovereign-panel fetching — exactly the work the
- * controller owns. One hit is enough; we don't need to enumerate every path.
- */
-const SOVEREIGN_ENDPOINT_SIGNATURES: ReadonlyArray<string> = [
-  "/api/v1/agents/", // credentials, balance, succession, sweep-config
-  "/agent/", // budget, ledger/{goal_id}
-  "/api/v1/credentials/", // verify, batch-status, presentation
+const PANEL_FAMILIES: ReadonlyArray<PanelFamily> = [
+  {
+    name: "sovereign",
+    namePattern: /sovereign/i,
+    endpointSignatures: [
+      "/api/v1/agents/", // credentials, balance, succession, sweep-config
+      "/agent/", // budget, ledger/{goal_id}
+      "/api/v1/credentials/", // verify, batch-status, presentation
+    ],
+  },
+  {
+    name: "agents",
+    namePattern: /agents/i,
+    endpointSignatures: [
+      "/api/v1/agents/discover", // discover endpoint — only canonical hit for the agents panel
+    ],
+  },
 ];
 
 /**
@@ -62,6 +84,7 @@ const PANELS_IMPORT_SIGNATURE = '"@motebit/panels"';
 
 interface Violation {
   app: string;
+  family: string;
   file: string;
   reason: string;
 }
@@ -92,13 +115,16 @@ function walkTypeScript(dir: string): string[] {
   return out;
 }
 
-function looksLikePanel(filePath: string): boolean {
+function matchFamily(filePath: string): PanelFamily | null {
   const base = filePath.split("/").pop() ?? "";
-  return PANEL_NAME_PATTERNS.some((re) => re.test(base));
+  for (const family of PANEL_FAMILIES) {
+    if (family.namePattern.test(base)) return family;
+  }
+  return null;
 }
 
-function hitsSovereignEndpoint(src: string): boolean {
-  return SOVEREIGN_ENDPOINT_SIGNATURES.some((sig) => src.includes(sig));
+function hitsEndpoint(src: string, family: PanelFamily): boolean {
+  return family.endpointSignatures.some((sig) => src.includes(sig));
 }
 
 function consumesPanelsPackage(src: string): boolean {
@@ -126,19 +152,20 @@ function scanApp(app: string): Violation[] {
   }
 
   for (const file of files) {
-    if (!looksLikePanel(file)) continue;
+    const family = matchFamily(file);
+    if (!family) continue;
     const src = readFileSync(file, "utf-8");
-    if (!hitsSovereignEndpoint(src)) continue;
+    if (!hitsEndpoint(src, family)) continue;
     if (consumesPanelsPackage(src)) continue;
 
     violations.push({
       app,
+      family: family.name,
       file: relative(ROOT, file),
       reason:
-        "file name matches /sovereign/i and hits relay sovereign endpoints directly, " +
+        `file name matches /${family.namePattern.source}/i and hits relay ${family.name}-panel endpoints directly, ` +
         'but does not import from "@motebit/panels". Route fetching/state through ' +
-        "createSovereignController instead of re-implementing the fetch + dedup + sweep " +
-        "state machine.",
+        `the ${family.name} controller (create${family.name[0]!.toUpperCase()}${family.name.slice(1)}Controller) instead of re-implementing the fetch + state machine.`,
     });
   }
 
@@ -153,21 +180,21 @@ function main(): void {
 
   if (violations.length === 0) {
     process.stderr.write(
-      `✓ check-panel-controllers: every sovereign-panel surface routes state through @motebit/panels.\n`,
+      `✓ check-panel-controllers: every panel surface (${PANEL_FAMILIES.map((f) => f.name).join(", ")}) routes state through @motebit/panels.\n`,
     );
     return;
   }
 
   process.stderr.write(
-    `\n✗ check-panel-controllers: ${violations.length} surface(s) re-implement sovereign-panel state instead of consuming @motebit/panels.\n\n`,
+    `\n✗ check-panel-controllers: ${violations.length} surface(s) re-implement panel state instead of consuming @motebit/panels.\n\n`,
   );
   for (const v of violations) {
-    process.stderr.write(`  ${v.file}  (app: ${v.app})\n    ${v.reason}\n\n`);
+    process.stderr.write(`  ${v.file}  (app: ${v.app}, family: ${v.family})\n    ${v.reason}\n\n`);
   }
   process.stderr.write(
-    `The sovereign-panel state layer was extracted into packages/panels so the three surfaces\n` +
-      `could not drift. Add \`import { createSovereignController } from "@motebit/panels";\` and route\n` +
-      `fetching through the controller. See packages/panels/CLAUDE.md.\n`,
+    `Panel state/fetch was extracted into packages/panels so surfaces cannot drift.\n` +
+      `Add the @motebit/panels import and route fetching through the appropriate controller.\n` +
+      `See packages/panels/CLAUDE.md.\n`,
   );
   process.exit(1);
 }

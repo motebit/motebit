@@ -12,41 +12,41 @@ Thirty-three invariants are enforced today. Twenty-six run as hard CI gates via 
 
 ## Inventory
 
-| #   | Invariant                                                      | Defense                                                        | Landed     |
-| --- | -------------------------------------------------------------- | -------------------------------------------------------------- | ---------- |
-| 1   | Protocol primitives ↔ service implementations                  | `check-service-primitives.ts`                                  | —          |
-| 2   | Architectural layers ↔ dependencies                            | `check-deps.ts`                                                | —          |
-| 3   | Spec filenames ↔ implementation references                     | `check-spec-references.ts` (`--strict`)                        | —          |
-| 4   | Sibling boundaries ↔ each other                                | `check-sibling-boundaries.ts` (advisory, PR-diff)              | —          |
-| 5   | Coverage thresholds ↔ measurements                             | `turbo run test:coverage`                                      | —          |
-| 6   | Capability rings ↔ surfaces                                    | `check-app-primitives.ts`                                      | —          |
-| 7   | Deps declarations ↔ actual use                                 | `knip` (soft signal)                                           | —          |
-| 8   | Published API ↔ consumer contract                              | `check-api-surface.ts`                                         | —          |
-| 9   | Spec Wire format types ↔ `@motebit/protocol` exports           | `check-spec-coverage.ts` (`--strict`)                          | 2026-04-13 |
-| 10  | Spec Wire format signatures ↔ cryptosuite declarations         | `check-suite-declared.ts`                                      | 2026-04-13 |
-| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher              | `check-suite-dispatch.ts`                                      | 2026-04-13 |
-| 12  | Published binaries ↔ dist-boot smoke                           | `check-dist-smoke.ts`                                          | 2026-04-13 |
-| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`          | `check-docs-tree.ts`                                           | 2026-04-14 |
-| 14  | Spec callables ↔ MIT package exports                           | `check-spec-mit-boundary.ts`                                   | 2026-04-14 |
-| 15  | Surface affordances ↔ deterministic invocation path            | `check-affordance-routing.ts`                                  | 2026-04-14 |
-| 16  | Ring 2 privacy substrate ↔ surface package declarations        | `check-privacy-ring.ts`                                        | 2026-04-16 |
-| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface         | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)                   | 2026-04-17 |
-| 18  | Routine `every` grammar ↔ `parseInterval`                      | zod `.transform()` calls `parseInterval` once                  | 2026-04-17 |
-| 19  | Goal columns ↔ `routineToGoal` mapper                          | `satisfies Goal` assertion in `yaml-config.ts`                 | 2026-04-17 |
-| 20  | motebit.yaml schema fields ↔ zod `.describe()` hover           | `yaml-config.test.ts` (schema walk assertion)                  | 2026-04-17 |
-| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema             | `yaml-json-schema.test.ts` (roundtrip assertion)               | 2026-04-17 |
-| 22  | Wire-format types ↔ zod schemas ↔ committed JSON Schema        | `@motebit/wire-schemas` 3-way pin (satisfies + roundtrip test) | 2026-04-17 |
-| 23  | spec/\*.md wire-format types ↔ `@motebit/wire-schemas` exports | `check-spec-wire-schemas.ts` + waiver list                     | 2026-04-18 |
-| 24  | README.md "What you see:" block ↔ scaffold + runtime defaults  | `check-readme.ts`                                              | 2026-04-18 |
-| 25  | Per-directory CLAUDE.md files ↔ root CLAUDE.md doctrine index  | `check-claude-md.ts`                                           | 2026-04-18 |
-| 26  | SpatialExpression renderers ↔ `@motebit/render-engine` package | `check-scene-primitives.ts`                                    | 2026-04-19 |
-| 27  | Memory-retrieval ordering ↔ `@motebit/memory-graph` recall\*   | `check-retrieval-primitives.ts`                                | 2026-04-19 |
-| 28  | Reputation scoring ↔ `@motebit/policy` + `@motebit/market`     | `check-reputation-primitives.ts`                               | 2026-04-19 |
-| 29  | Notability scoring ↔ `@motebit/memory-graph` notability module | `check-notability-primitives.ts`                               | 2026-04-19 |
-| 30  | Trust propagation ↔ `@motebit/market` trust-propagation module | `check-trust-propagation-primitives.ts`                        | 2026-04-19 |
-| 31  | Stable spec ↔ `motebit.implements` package declaration         | `check-spec-impl-coverage.ts`                                  | 2026-04-19 |
-| 32  | Referent disambiguation ↔ `@motebit/semiring` disambiguation   | `check-disambiguation-primitives.ts`                           | 2026-04-19 |
-| 33  | Sovereign-panel state ↔ `@motebit/panels` controller           | `check-panel-controllers.ts`                                   | 2026-04-19 |
+| #   | Invariant                                                       | Defense                                                        | Landed     |
+| --- | --------------------------------------------------------------- | -------------------------------------------------------------- | ---------- |
+| 1   | Protocol primitives ↔ service implementations                   | `check-service-primitives.ts`                                  | —          |
+| 2   | Architectural layers ↔ dependencies                             | `check-deps.ts`                                                | —          |
+| 3   | Spec filenames ↔ implementation references                      | `check-spec-references.ts` (`--strict`)                        | —          |
+| 4   | Sibling boundaries ↔ each other                                 | `check-sibling-boundaries.ts` (advisory, PR-diff)              | —          |
+| 5   | Coverage thresholds ↔ measurements                              | `turbo run test:coverage`                                      | —          |
+| 6   | Capability rings ↔ surfaces                                     | `check-app-primitives.ts`                                      | —          |
+| 7   | Deps declarations ↔ actual use                                  | `knip` (soft signal)                                           | —          |
+| 8   | Published API ↔ consumer contract                               | `check-api-surface.ts`                                         | —          |
+| 9   | Spec Wire format types ↔ `@motebit/protocol` exports            | `check-spec-coverage.ts` (`--strict`)                          | 2026-04-13 |
+| 10  | Spec Wire format signatures ↔ cryptosuite declarations          | `check-suite-declared.ts`                                      | 2026-04-13 |
+| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher               | `check-suite-dispatch.ts`                                      | 2026-04-13 |
+| 12  | Published binaries ↔ dist-boot smoke                            | `check-dist-smoke.ts`                                          | 2026-04-13 |
+| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`           | `check-docs-tree.ts`                                           | 2026-04-14 |
+| 14  | Spec callables ↔ MIT package exports                            | `check-spec-mit-boundary.ts`                                   | 2026-04-14 |
+| 15  | Surface affordances ↔ deterministic invocation path             | `check-affordance-routing.ts`                                  | 2026-04-14 |
+| 16  | Ring 2 privacy substrate ↔ surface package declarations         | `check-privacy-ring.ts`                                        | 2026-04-16 |
+| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface          | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)                   | 2026-04-17 |
+| 18  | Routine `every` grammar ↔ `parseInterval`                       | zod `.transform()` calls `parseInterval` once                  | 2026-04-17 |
+| 19  | Goal columns ↔ `routineToGoal` mapper                           | `satisfies Goal` assertion in `yaml-config.ts`                 | 2026-04-17 |
+| 20  | motebit.yaml schema fields ↔ zod `.describe()` hover            | `yaml-config.test.ts` (schema walk assertion)                  | 2026-04-17 |
+| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema              | `yaml-json-schema.test.ts` (roundtrip assertion)               | 2026-04-17 |
+| 22  | Wire-format types ↔ zod schemas ↔ committed JSON Schema         | `@motebit/wire-schemas` 3-way pin (satisfies + roundtrip test) | 2026-04-17 |
+| 23  | spec/\*.md wire-format types ↔ `@motebit/wire-schemas` exports  | `check-spec-wire-schemas.ts` + waiver list                     | 2026-04-18 |
+| 24  | README.md "What you see:" block ↔ scaffold + runtime defaults   | `check-readme.ts`                                              | 2026-04-18 |
+| 25  | Per-directory CLAUDE.md files ↔ root CLAUDE.md doctrine index   | `check-claude-md.ts`                                           | 2026-04-18 |
+| 26  | SpatialExpression renderers ↔ `@motebit/render-engine` package  | `check-scene-primitives.ts`                                    | 2026-04-19 |
+| 27  | Memory-retrieval ordering ↔ `@motebit/memory-graph` recall\*    | `check-retrieval-primitives.ts`                                | 2026-04-19 |
+| 28  | Reputation scoring ↔ `@motebit/policy` + `@motebit/market`      | `check-reputation-primitives.ts`                               | 2026-04-19 |
+| 29  | Notability scoring ↔ `@motebit/memory-graph` notability module  | `check-notability-primitives.ts`                               | 2026-04-19 |
+| 30  | Trust propagation ↔ `@motebit/market` trust-propagation module  | `check-trust-propagation-primitives.ts`                        | 2026-04-19 |
+| 31  | Stable spec ↔ `motebit.implements` package declaration          | `check-spec-impl-coverage.ts`                                  | 2026-04-19 |
+| 32  | Referent disambiguation ↔ `@motebit/semiring` disambiguation    | `check-disambiguation-primitives.ts`                           | 2026-04-19 |
+| 33  | Panel state ↔ `@motebit/panels` controllers (sovereign, agents) | `check-panel-controllers.ts`                                   | 2026-04-19 |
 
 ## Incident histories
 
@@ -136,9 +136,9 @@ The fourth non-trivial semiring consumer — the one that completes the endgame 
 
 Three existing gates guard the _type surface_ of every spec: `check-spec-coverage` (#9, Wire format types ↔ `@motebit/protocol` exports), `check-spec-mit-boundary` (#14, spec callables ↔ MIT exports), `check-spec-wire-schemas` (#23, spec types ↔ zod schemas). All three verify that declared shapes exist. None verified that _runtime behavior_ for a spec was actually implemented anywhere in this repo. A new spec could land — complete with Wire format types and zod schemas — and never be implemented, silently. Consumers looking at the repo had no machine-readable way to map `settlement-v1.md` to `packages/settlement-rails` beyond grep. That's the drift this gate closes. Each implementing `package.json` carries `"motebit": { "implements": ["spec/..."] }`; the gate asserts bidirectionally that every declaration resolves to a real spec file and every Stable spec is claimed by at least one package. Drafts are exempt — declaration is allowed but not required. Landed 2026-04-19 alongside the initial declarations for the 8 Stable specs (auth-token, credential, device-self-registration, execution-ledger, identity, market, relay-federation, settlement). Extends the "implementable by another runtime" claim from "the types exist" to "a package here claims ownership of the behavior." Allowlist empty at landing.
 
-### 33. Sovereign-panel state ↔ `@motebit/panels` controller
+### 33. Panel state ↔ `@motebit/panels` controllers
 
-The first extraction of a multi-surface _UI panel_ state layer into a shared BSL package. Before 2026-04-19 the Sovereign panel shipped in three surfaces (`apps/desktop/src/ui/sovereign.ts` 970 LOC, `apps/web/src/ui/sovereign-panels.ts` 1015 LOC, `apps/mobile/src/components/SovereignPanel.tsx` 1069 LOC — ~3054 LOC total). Each surface carried an independent copy of: five relay fetchers (credentials, balance, budget, goals, succession), credential dedup by (issuer, type, subject, issued*at), revocation batch-check merging, sovereign balance resolution (identity key → Solana address → RPC USDC query), and the sweep-config three-state machine (readout / editing / disabled with micro/dollar conversion on commit). Three real divergences were already detectable: mobile had \_no* auth headers on any sovereign fetch, mobile's ledger used an aggregated `/agent/{id}/ledger` endpoint instead of the lazy per-goal pattern desktop/web used, and mobile had revocation-batch logic neither of the others had (with no canonical source to agree with). Classic shape: three siblings, no canonical source, silently diverging. Fix: `packages/panels/src/sovereign/controller.ts` — adapter-injected fetch (desktop: static master token; web: rotating `createSyncToken`; mobile: rotating `createSyncToken` primed at panel-open time), state subscription, action methods (`refresh`, `present`, `verify`, `commitSweep`, `loadLedgerDetail`, `setActiveTab`, `dispose`). Adapter inverts the `@motebit/runtime` dependency via three function properties (`getSolanaAddress`, `getSolanaBalanceMicro`, `getLocalCredentials`) so the package stays at Layer 5 without promotion. Each surface renders DOM or RN from the controller's state. Combined LOC reduction across the three surfaces: 3054 → 2317 (−737, ~24%). Defense: `check-panel-controllers.ts` — any file under `apps/*/src/ui/` or `apps/*/src/components/` whose name matches `/sovereign/i` and touches a relay sovereign endpoint (`/api/v1/agents/`, `/agent/`, `/api/v1/credentials/`) must also import from `@motebit/panels`, or the gate fails. Empty allowlist at landing. The pattern is the answer to "what happens when a state layer needs to ship on three render substrates that will never agree?" — controller in package, adapter at boundary, render per surface.
+The first extraction of multi-surface _UI panel_ state layers into a shared BSL package. Before 2026-04-19 the Sovereign panel shipped in three surfaces (`apps/desktop/src/ui/sovereign.ts` 970 LOC, `apps/web/src/ui/sovereign-panels.ts` 1015 LOC, `apps/mobile/src/components/SovereignPanel.tsx` 1069 LOC — ~3054 LOC total). Each surface carried an independent copy of: five relay fetchers (credentials, balance, budget, goals, succession), credential dedup by (issuer, type, subject, issued*at), revocation batch-check merging, sovereign balance resolution (identity key → Solana address → RPC USDC query), and the sweep-config three-state machine. Three real divergences were already detectable: mobile had \_no* auth headers on any sovereign fetch, mobile's ledger used an aggregated `/agent/{id}/ledger` endpoint instead of the lazy per-goal pattern desktop/web used, and mobile had revocation-batch logic the others lacked (with no canonical source to agree with). Classic shape: three siblings, no canonical source, silently diverging. Fix: `packages/panels/src/sovereign/controller.ts` with adapter-injected fetch (desktop: static master token; web: rotating `createSyncToken`; mobile: rotating `createSyncToken` primed at panel-open time), state subscription, action methods, and a dependency-inverted adapter so the package stays at Layer 5. Sovereign LOC reduction across the three surfaces: 3054 → 2317 (−737, ~24%). The Agents panel followed the same day as the second consumer: `packages/panels/src/agents/controller.ts` lifts `listTrustedAgents` + `discoverAgents` + sort/filter/tab state and canonicalizes the `AgentFreshness` / `TrustLevel` / `PricingEntry` / `SortKey` vocabulary that had been declared three times with no shared source. Agents reconciliations: web inlined `/api/v1/agents/discover` directly while desktop/mobile went through `app.discoverAgents()`; `AgentFreshness` was three independent literal unions; sort+capability filter existed only on desktop. Agents LOC reduction: desktop 588 → 547, mobile 438 → 374, web's agents chunk in gated-panels.ts 731 → 719 (−117 combined; smaller ratio than Sovereign because desktop's delegate modal is ~200 LOC of surface-specific code and the Agents state surface is narrower). Defense: `check-panel-controllers.ts` is keyed on panel families — each family declares a file-name pattern (`/sovereign/i`, `/agents/i`) and a list of canonical relay endpoint signatures; any file matching a family's name pattern that hits its endpoints must import from `@motebit/panels`, or the gate fails. Effectiveness probe lives in `check-gates-effective.ts`. Adding a third panel family (Settings, Goals, Memory …) is a two-entry PR: append to `PANEL_FAMILIES` and the gate covers it. The pattern is the answer to "what happens when a state layer needs to ship on three render substrates that will never agree?" — controller in package, adapter at boundary, render per surface.
 
 ### 30. Trust propagation ↔ `@motebit/market` trust-propagation module
 

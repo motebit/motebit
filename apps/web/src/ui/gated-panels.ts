@@ -14,6 +14,14 @@ import {
 } from "../storage";
 import type { PlanChunk } from "@motebit/runtime";
 import { renderMarkdown } from "./chat";
+import {
+  createAgentsController,
+  type AgentRecord,
+  type AgentsFetchAdapter,
+  type AgentsState,
+  type DiscoveredAgent,
+  type PricingEntry,
+} from "@motebit/panels";
 
 export interface GatedPanelsAPI {
   openMemory(auditNodeIds?: Map<string, string>): void;
@@ -392,6 +400,11 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   goalsBackdrop.addEventListener("click", closeGoals);
 
   // === Agents Panel (functional) ===
+  // Fetching + state live in @motebit/panels AgentsController. This block
+  // owns the DOM rendering + the "route discoverAgents through signed sync
+  // token" adapter. When web adopts sort/filter, wire discoverSort/
+  // discoverFilter to ctrl.setSort / ctrl.setCapabilityFilter — the state
+  // is already there.
   const agentsPanel = document.getElementById("agents-panel") as HTMLDivElement;
   const agentsBackdrop = document.getElementById("agents-backdrop") as HTMLDivElement;
   const agentsList = document.getElementById("agents-list") as HTMLDivElement;
@@ -405,29 +418,42 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     blocked: "blocked",
   };
 
-  async function populateAgents(): Promise<void> {
-    const runtime = ctx.app.getRuntime();
-    if (!runtime) {
-      agentsList.innerHTML = "";
-      agentsEmpty.style.display = "block";
-      return;
-    }
+  const agentsAdapter: AgentsFetchAdapter = {
+    get syncUrl() {
+      return loadSyncUrl();
+    },
+    get motebitId() {
+      return ctx.app.motebitId || null;
+    },
+    listTrustedAgents: async (): Promise<AgentRecord[]> => {
+      const runtime = ctx.app.getRuntime();
+      if (!runtime) return [];
+      return (await runtime.listTrustedAgents()) as AgentRecord[];
+    },
+    discoverAgents: async (): Promise<DiscoveredAgent[]> => {
+      const syncUrl = loadSyncUrl();
+      if (!syncUrl) return [];
+      const token = await ctx.app.createSyncToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`${syncUrl}/api/v1/agents/discover`, { headers });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = (await res.json()) as { agents?: DiscoveredAgent[] };
+      return data.agents ?? [];
+    },
+  };
 
-    const agents = await runtime.listTrustedAgents();
+  const agentsCtrl = createAgentsController(agentsAdapter);
 
+  function renderKnown(state: AgentsState): void {
     agentsList.innerHTML = "";
-
-    if (agents.length === 0) {
+    if (state.known.length === 0) {
       agentsEmpty.style.display = "block";
       return;
     }
-
     agentsEmpty.style.display = "none";
 
-    // Sort by most recently seen
-    agents.sort((a, b) => b.last_seen_at - a.last_seen_at);
-
-    for (const agent of agents) {
+    for (const agent of state.known) {
       const item = document.createElement("div");
       item.className = "agent-item";
 
@@ -477,14 +503,18 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
     knownPane.style.display = tab === "known" ? "" : "none";
     discoverPane.style.display = tab === "discover" ? "" : "none";
-    if (tab === "discover") void populateDiscover();
+    if (tab === "known") agentsCtrl.setActiveTab("known");
+    else if (tab === "discover") {
+      agentsCtrl.setActiveTab("discover");
+      void agentsCtrl.refreshDiscover();
+    }
   }
 
   for (const btn of tabBtns) {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab ?? "known"));
   }
 
-  async function populateDiscover(): Promise<void> {
+  function renderDiscover(state: AgentsState): void {
     const syncUrl = loadSyncUrl();
     if (!syncUrl) {
       discoverList.innerHTML = "";
@@ -493,140 +523,98 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       return;
     }
 
-    discoverList.innerHTML = "";
-    discoverEmpty.textContent = "";
-    discoverEmpty.style.display = "block";
-
-    try {
-      const token = await ctx.app.createSyncToken();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-
-      const res = await fetch(`${syncUrl}/api/v1/agents/discover`, { headers });
-      if (!res.ok) throw new Error(`${res.status}`);
-      const data = (await res.json()) as {
-        agents: Array<{
-          motebit_id: string;
-          capabilities: string[];
-          trust_level?: string;
-          interaction_count?: number;
-          pricing?: Array<{
-            capability: string;
-            unit_cost: number;
-            currency: string;
-            per: string;
-          }> | null;
-          last_seen_at?: number;
-          endpoint_url?: string;
-          /** Render hint for agent liveness — never filter on this. */
-          freshness?: "awake" | "recently_seen" | "dormant" | "cold";
-        }>;
-      };
-
-      const agents = data.agents ?? [];
-      if (agents.length === 0) {
-        discoverEmpty.textContent = "No agents on the network yet.";
-        discoverEmpty.style.display = "block";
-        return;
-      }
-
-      discoverEmpty.style.display = "none";
-
-      for (const agent of agents) {
-        const item = document.createElement("div");
-        item.className = "agent-item";
-
-        const idDiv = document.createElement("div");
-        idDiv.className = "agent-item-id";
-        idDiv.textContent = agent.motebit_id;
-        idDiv.title = agent.motebit_id;
-        item.appendChild(idDiv);
-
-        if (agent.capabilities.length > 0) {
-          // Index pricing by capability for O(1) lookup per tag
-          const priceByCapability = new Map<
-            string,
-            { unit_cost: number; currency: string; per: string }
-          >();
-          if (Array.isArray(agent.pricing)) {
-            for (const p of agent.pricing) {
-              priceByCapability.set(p.capability, {
-                unit_cost: p.unit_cost,
-                currency: p.currency,
-                per: p.per,
-              });
-            }
-          }
-
-          const capsRow = document.createElement("div");
-          capsRow.className = "agent-caps-row";
-          for (const cap of agent.capabilities) {
-            const tag = document.createElement("span");
-            tag.className = "agent-cap-tag";
-            const price = priceByCapability.get(cap);
-            if (price && price.unit_cost > 0) {
-              // "web_search · $0.05/search" — capability name + price + unit
-              tag.textContent = `${cap} · $${price.unit_cost.toFixed(2)}/${price.per}`;
-              tag.classList.add("priced");
-              tag.title = `${price.unit_cost} ${price.currency} per ${price.per}`;
-            } else {
-              tag.textContent = cap;
-            }
-            capsRow.appendChild(tag);
-          }
-          item.appendChild(capsRow);
-        }
-
-        const meta = document.createElement("div");
-        meta.className = "agent-item-meta";
-        if (agent.trust_level) {
-          const badge = document.createElement("span");
-          badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
-          const interactionSuffix =
-            typeof agent.interaction_count === "number" && agent.interaction_count > 0
-              ? ` · ${agent.interaction_count} interaction${agent.interaction_count === 1 ? "" : "s"}`
-              : "";
-          badge.textContent = agent.trust_level.replace(/_/g, " ") + interactionSuffix;
-          meta.appendChild(badge);
-        }
-        if (typeof agent.last_seen_at === "number" && agent.last_seen_at > 0) {
-          // Freshness dot + "seen X ago" — calm palette, no animation,
-          // muted colors per goal-status-dot precedent. Dormant/cold are
-          // informational, not warnings: these services remain rankable
-          // and get woken on delegation.
-          if (agent.freshness) {
-            const dot = document.createElement("span");
-            dot.className = `agent-freshness-dot agent-freshness-${agent.freshness}`;
-            dot.title =
-              agent.freshness === "awake"
-                ? "Heartbeating now"
-                : agent.freshness === "recently_seen"
-                  ? "Missed a heartbeat; still likely reachable"
-                  : agent.freshness === "dormant"
-                    ? "Asleep — woken on delegation"
-                    : "Long asleep — wake latency uncertain";
-            meta.appendChild(dot);
-          }
-          const seen = document.createElement("span");
-          seen.className = "agent-last-seen";
-          seen.textContent = `seen ${formatTimeAgo(agent.last_seen_at)}`;
-          meta.appendChild(seen);
-        }
-        item.appendChild(meta);
-
-        discoverList.appendChild(item);
-      }
-    } catch {
-      discoverEmpty.textContent = "Could not reach relay.";
+    if (state.discovered.length === 0) {
+      discoverList.innerHTML = "";
+      discoverEmpty.textContent =
+        state.error != null ? "Could not reach relay." : "No agents on the network yet.";
       discoverEmpty.style.display = "block";
+      return;
+    }
+
+    discoverEmpty.style.display = "none";
+    discoverList.innerHTML = "";
+
+    for (const agent of state.discovered) {
+      const item = document.createElement("div");
+      item.className = "agent-item";
+
+      const idDiv = document.createElement("div");
+      idDiv.className = "agent-item-id";
+      idDiv.textContent = agent.motebit_id;
+      idDiv.title = agent.motebit_id;
+      item.appendChild(idDiv);
+
+      if (agent.capabilities.length > 0) {
+        const priceByCapability = new Map<string, PricingEntry>();
+        if (Array.isArray(agent.pricing)) {
+          for (const p of agent.pricing) priceByCapability.set(p.capability, p);
+        }
+
+        const capsRow = document.createElement("div");
+        capsRow.className = "agent-caps-row";
+        for (const cap of agent.capabilities) {
+          const tag = document.createElement("span");
+          tag.className = "agent-cap-tag";
+          const price = priceByCapability.get(cap);
+          if (price && price.unit_cost > 0) {
+            tag.textContent = `${cap} · $${price.unit_cost.toFixed(2)}/${price.per}`;
+            tag.classList.add("priced");
+            tag.title = `${price.unit_cost} ${price.currency} per ${price.per}`;
+          } else {
+            tag.textContent = cap;
+          }
+          capsRow.appendChild(tag);
+        }
+        item.appendChild(capsRow);
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "agent-item-meta";
+      if (agent.trust_level) {
+        const badge = document.createElement("span");
+        badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
+        const interactionSuffix =
+          typeof agent.interaction_count === "number" && agent.interaction_count > 0
+            ? ` · ${agent.interaction_count} interaction${agent.interaction_count === 1 ? "" : "s"}`
+            : "";
+        badge.textContent = agent.trust_level.replace(/_/g, " ") + interactionSuffix;
+        meta.appendChild(badge);
+      }
+      if (typeof agent.last_seen_at === "number" && agent.last_seen_at > 0) {
+        if (agent.freshness) {
+          const dot = document.createElement("span");
+          dot.className = `agent-freshness-dot agent-freshness-${agent.freshness}`;
+          dot.title =
+            agent.freshness === "awake"
+              ? "Heartbeating now"
+              : agent.freshness === "recently_seen"
+                ? "Missed a heartbeat; still likely reachable"
+                : agent.freshness === "dormant"
+                  ? "Asleep — woken on delegation"
+                  : "Long asleep — wake latency uncertain";
+          meta.appendChild(dot);
+        }
+        const seen = document.createElement("span");
+        seen.className = "agent-last-seen";
+        seen.textContent = `seen ${formatTimeAgo(agent.last_seen_at)}`;
+        meta.appendChild(seen);
+      }
+      item.appendChild(meta);
+
+      discoverList.appendChild(item);
     }
   }
+
+  agentsCtrl.subscribe((state) => {
+    renderKnown(state);
+    renderDiscover(state);
+  });
 
   function openAgents(): void {
     closeAll();
     agentsPanel.classList.add("open");
     agentsBackdrop.classList.add("open");
-    void populateAgents();
+    void agentsCtrl.refreshKnown();
   }
 
   function closeAgents(): void {

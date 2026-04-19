@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
   View,
@@ -11,35 +11,17 @@ import {
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
+import {
+  createAgentsController,
+  type AgentFreshness,
+  type AgentRecord,
+  type AgentsFetchAdapter,
+  type AgentsState,
+  type AgentsTab,
+  type DiscoveredAgent,
+} from "@motebit/panels";
 
-interface AgentRecord {
-  remote_motebit_id: string;
-  trust_level: string;
-  first_seen_at: number;
-  last_seen_at: number;
-  interaction_count: number;
-  successful_tasks?: number;
-  failed_tasks?: number;
-  notes?: string;
-}
-
-interface DiscoveredAgent {
-  motebit_id: string;
-  capabilities: string[];
-  trust_level?: string;
-  interaction_count?: number;
-  pricing?: Array<{
-    capability: string;
-    unit_cost: number;
-    currency: string;
-    per: string;
-  }> | null;
-  last_seen_at?: number;
-  /** Render hint for agent liveness — never filter on this. */
-  freshness?: "awake" | "recently_seen" | "dormant" | "cold";
-}
-
-const FRESHNESS_COLORS: Record<NonNullable<DiscoveredAgent["freshness"]>, string> = {
+const FRESHNESS_COLORS: Record<AgentFreshness, string> = {
   awake: "#4ade80",
   recently_seen: "#facc15",
   dormant: "#94a3b8",
@@ -73,49 +55,70 @@ interface AgentsPanelProps {
   onClose: () => void;
 }
 
+function createMobileAgentsAdapter(app: MobileApp): AgentsFetchAdapter {
+  return {
+    get syncUrl() {
+      // Mobile's syncUrl is async (AsyncStorage), but the Agents panel only
+      // uses the adapter's fetch indirectly via listTrustedAgents/discoverAgents
+      // which themselves route through the sync controller. The getter exists
+      // for interface parity with other panels; return null to signal "use the
+      // app's own fetchers".
+      return null;
+    },
+    get motebitId() {
+      return app.motebitId !== "mobile-local" ? app.motebitId : null;
+    },
+    listTrustedAgents: async () => {
+      return (await app.listTrustedAgents()) as AgentRecord[];
+    },
+    discoverAgents: async () => {
+      return (await app.discoverAgents()) as DiscoveredAgent[];
+    },
+  };
+}
+
 export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const [tab, setTab] = useState<"known" | "discover">("known");
-  const [agents, setAgents] = useState<AgentRecord[]>([]);
-  const [discovered, setDiscovered] = useState<DiscoveredAgent[]>([]);
-  const [loading, setLoading] = useState(false);
 
-  const refreshKnown = useCallback(async () => {
-    setLoading(true);
-    try {
-      const records = await app.listTrustedAgents();
-      setAgents((records as AgentRecord[]).sort((a, b) => b.last_seen_at - a.last_seen_at));
-    } catch {
-      // Failed to load agents
-    } finally {
-      setLoading(false);
-    }
-  }, [app]);
+  const ctrlRef = useRef<ReturnType<typeof createAgentsController> | null>(null);
 
-  const refreshDiscover = useCallback(async () => {
-    setLoading(true);
-    try {
-      const results = await app.discoverAgents();
-      setDiscovered(results);
-    } catch {
-      setDiscovered([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [app]);
+  const [state, setState] = useState<AgentsState>(() => ({
+    activeTab: "known",
+    known: [],
+    discovered: [],
+    sort: "recent",
+    capabilityFilter: "",
+    loading: false,
+    error: null,
+  }));
 
   useEffect(() => {
-    if (visible) {
-      if (tab === "known") void refreshKnown();
-      else void refreshDiscover();
-    }
-  }, [visible, tab, refreshKnown, refreshDiscover]);
+    const adapter = createMobileAgentsAdapter(app);
+    const ctrl = createAgentsController(adapter);
+    ctrlRef.current = ctrl;
+    const unsubscribe = ctrl.subscribe(setState);
+    return () => {
+      unsubscribe();
+      ctrl.dispose();
+      ctrlRef.current = null;
+    };
+  }, [app]);
+
+  // Refresh the active tab when the modal opens or when the user switches tabs.
+  useEffect(() => {
+    if (!visible) return;
+    const ctrl = ctrlRef.current;
+    if (!ctrl) return;
+    if (state.activeTab === "known") void ctrl.refreshKnown();
+    else void ctrl.refreshDiscover();
+  }, [visible, state.activeTab]);
+
+  const onSetTab = (tab: AgentsTab): void => ctrlRef.current?.setActiveTab(tab);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <View style={styles.container}>
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.headerTitle}>Agents</Text>
@@ -125,33 +128,34 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
           </TouchableOpacity>
         </View>
 
-        {/* Tabs */}
         <View style={styles.tabBar}>
           <TouchableOpacity
-            style={[styles.tab, tab === "known" && styles.tabActive]}
-            onPress={() => setTab("known")}
+            style={[styles.tab, state.activeTab === "known" && styles.tabActive]}
+            onPress={() => onSetTab("known")}
             activeOpacity={0.7}
           >
-            <Text style={[styles.tabText, tab === "known" && styles.tabTextActive]}>Known</Text>
+            <Text style={[styles.tabText, state.activeTab === "known" && styles.tabTextActive]}>
+              Known
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.tab, tab === "discover" && styles.tabActive]}
-            onPress={() => setTab("discover")}
+            style={[styles.tab, state.activeTab === "discover" && styles.tabActive]}
+            onPress={() => onSetTab("discover")}
             activeOpacity={0.7}
           >
-            <Text style={[styles.tabText, tab === "discover" && styles.tabTextActive]}>
+            <Text style={[styles.tabText, state.activeTab === "discover" && styles.tabTextActive]}>
               Discover
             </Text>
           </TouchableOpacity>
         </View>
 
-        {loading ? (
+        {state.loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color={colors.accent} />
           </View>
-        ) : tab === "known" ? (
+        ) : state.activeTab === "known" ? (
           <FlatList
-            data={agents}
+            data={state.known}
             keyExtractor={(item) => item.remote_motebit_id}
             style={styles.list}
             contentContainerStyle={styles.listContent}
@@ -193,13 +197,12 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
           />
         ) : (
           <FlatList
-            data={discovered}
+            data={ctrlRef.current?.discoveredView() ?? state.discovered}
             keyExtractor={(item) => item.motebit_id}
             style={styles.list}
             contentContainerStyle={styles.listContent}
             renderItem={({ item }) => {
               const trustColor = TRUST_COLORS[item.trust_level ?? "unknown"] ?? "#616161";
-              // Index pricing by capability — "web_search · $0.05/search" per desktop pattern
               const priceByCapability = new Map<
                 string,
                 { unit_cost: number; currency: string; per: string }
@@ -278,10 +281,7 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
 
 function createStyles(c: ThemeColors) {
   return StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: c.bgPrimary,
-    },
+    container: { flex: 1, backgroundColor: c.bgPrimary },
     header: {
       flexDirection: "row",
       justifyContent: "space-between",
@@ -292,21 +292,9 @@ function createStyles(c: ThemeColors) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.borderPrimary,
     },
-    headerLeft: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-    },
-    headerTitle: {
-      color: c.textPrimary,
-      fontSize: 17,
-      fontWeight: "600",
-    },
-    closeBtn: {
-      color: c.accent,
-      fontSize: 16,
-      fontWeight: "600",
-    },
+    headerLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
+    headerTitle: { color: c.textPrimary, fontSize: 17, fontWeight: "600" },
+    closeBtn: { color: c.accent, fontSize: 16, fontWeight: "600" },
     tabBar: {
       flexDirection: "row",
       borderBottomWidth: StyleSheet.hairlineWidth,
@@ -319,28 +307,12 @@ function createStyles(c: ThemeColors) {
       borderBottomWidth: 2,
       borderBottomColor: "transparent",
     },
-    tabActive: {
-      borderBottomColor: c.textPrimary,
-    },
-    tabText: {
-      fontSize: 13,
-      color: c.textMuted,
-    },
-    tabTextActive: {
-      color: c.textPrimary,
-      fontWeight: "600",
-    },
-    loadingContainer: {
-      flex: 1,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    list: {
-      flex: 1,
-    },
-    listContent: {
-      padding: 16,
-    },
+    tabActive: { borderBottomColor: c.textPrimary },
+    tabText: { fontSize: 13, color: c.textMuted },
+    tabTextActive: { color: c.textPrimary, fontWeight: "600" },
+    loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+    list: { flex: 1 },
+    listContent: { padding: 16 },
     agentItem: {
       backgroundColor: c.bgSecondary,
       borderRadius: 10,
@@ -367,16 +339,8 @@ function createStyles(c: ThemeColors) {
       paddingHorizontal: 6,
       paddingVertical: 1,
     },
-    trustText: {
-      fontSize: 11,
-      fontWeight: "700",
-    },
-    capsRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 4,
-      marginTop: 4,
-    },
+    trustText: { fontSize: 11, fontWeight: "700" },
+    capsRow: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 4 },
     capTag: {
       backgroundColor: "rgba(126,184,218,0.1)",
       borderRadius: 3,
@@ -393,46 +357,14 @@ function createStyles(c: ThemeColors) {
       color: c.textMuted,
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
-    capTextPriced: {
-      color: c.textPrimary,
-    },
-    statsRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 12,
-      marginBottom: 4,
-    },
-    statText: {
-      color: c.textMuted,
-      fontSize: 11,
-    },
-    seenText: {
-      color: c.textMuted,
-      fontSize: 10,
-    },
-    seenRow: {
-      flexDirection: "row",
-      alignItems: "center",
-    },
-    freshnessDot: {
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-      marginRight: 4,
-    },
-    emptyContainer: {
-      paddingVertical: 40,
-      alignItems: "center",
-    },
-    emptyText: {
-      color: c.textMuted,
-      fontSize: 14,
-    },
-    emptySubtext: {
-      color: c.textMuted,
-      fontSize: 12,
-      marginTop: 4,
-      opacity: 0.7,
-    },
+    capTextPriced: { color: c.textPrimary },
+    statsRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: 4 },
+    statText: { color: c.textMuted, fontSize: 11 },
+    seenText: { color: c.textMuted, fontSize: 10 },
+    seenRow: { flexDirection: "row", alignItems: "center" },
+    freshnessDot: { width: 6, height: 6, borderRadius: 3, marginRight: 4 },
+    emptyContainer: { paddingVertical: 40, alignItems: "center" },
+    emptyText: { color: c.textMuted, fontSize: 14 },
+    emptySubtext: { color: c.textMuted, fontSize: 12, marginTop: 4, opacity: 0.7 },
   });
 }

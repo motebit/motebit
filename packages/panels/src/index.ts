@@ -16,3 +16,19 @@ export {
   type SuccessionResponse,
   type KeySuccessionEntry,
 } from "./sovereign/controller";
+
+export {
+  createAgentsController,
+  applySortFilter,
+  collectCapabilities,
+  type AgentsController,
+  type AgentsFetchAdapter,
+  type AgentsState,
+  type AgentsTab,
+  type AgentRecord,
+  type DiscoveredAgent,
+  type PricingEntry,
+  type TrustLevel,
+  type AgentFreshness,
+  type SortKey,
+} from "./agents/controller";
