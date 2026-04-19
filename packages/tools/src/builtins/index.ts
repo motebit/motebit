@@ -11,6 +11,7 @@ export type { ShellExecConfig } from "./shell-exec.js";
 export { undoWriteDefinition, createUndoWriteHandler } from "./undo-write.js";
 export { isPathAllowed, isDirectoryAllowed } from "./path-sandbox.js";
 export { recallMemoriesDefinition, createRecallMemoriesHandler } from "./recall-memories.js";
+export { currentTimeDefinition, createCurrentTimeHandler } from "./current-time.js";
 export {
   recallSelfDefinition,
   createRecallSelfHandler,
@@ -32,6 +33,7 @@ import { writeFileDefinition, createWriteFileHandler } from "./write-file.js";
 import { shellExecDefinition, createShellExecHandler } from "./shell-exec.js";
 import { undoWriteDefinition, createUndoWriteHandler } from "./undo-write.js";
 import { recallMemoriesDefinition, createRecallMemoriesHandler } from "./recall-memories.js";
+import { currentTimeDefinition, createCurrentTimeHandler } from "./current-time.js";
 import { listEventsDefinition, createListEventsHandler } from "./list-events.js";
 
 export interface BuiltinToolOptions {
@@ -57,6 +59,7 @@ export function registerBuiltinTools(
   registry: InMemoryToolRegistry,
   options: BuiltinToolOptions = {},
 ): void {
+  registry.register(currentTimeDefinition, createCurrentTimeHandler());
   registry.register(webSearchDefinition, createWebSearchHandler(options.searchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());
   registry.register(readFileDefinition, createReadFileHandler(options.allowedPaths));

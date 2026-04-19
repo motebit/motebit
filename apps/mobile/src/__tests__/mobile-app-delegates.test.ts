@@ -167,6 +167,12 @@ vi.mock("@motebit/tools/web-safe", () => ({
     inputSchema: { type: "object" },
   },
   createSelfReflectHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true }))),
+  currentTimeDefinition: {
+    name: "current_time",
+    description: "",
+    inputSchema: { type: "object", properties: { timezone: { type: "string" } } },
+  },
+  createCurrentTimeHandler: vi.fn(() => vi.fn(() => Promise.resolve({ ok: true }))),
   DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({})),
 }));
 

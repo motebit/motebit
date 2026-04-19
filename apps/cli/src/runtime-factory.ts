@@ -59,6 +59,8 @@ import {
   createListEventsHandler,
   selfReflectDefinition,
   createSelfReflectHandler,
+  currentTimeDefinition,
+  createCurrentTimeHandler,
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
@@ -286,6 +288,7 @@ export function buildToolRegistry(
       new DuckDuckGoSearchProvider(),
     ]);
   }
+  registry.register(currentTimeDefinition, createCurrentTimeHandler());
   registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());
 

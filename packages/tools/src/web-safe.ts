@@ -11,6 +11,7 @@ export {
   recallMemoriesDefinition,
   createRecallMemoriesHandler,
 } from "./builtins/recall-memories.js";
+export { currentTimeDefinition, createCurrentTimeHandler } from "./builtins/current-time.js";
 export {
   recallSelfDefinition,
   createRecallSelfHandler,

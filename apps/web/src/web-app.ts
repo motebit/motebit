@@ -79,6 +79,8 @@ import {
   ProxySearchProvider,
   recallSelfDefinition,
   createRecallSelfHandler,
+  currentTimeDefinition,
+  createCurrentTimeHandler,
 } from "@motebit/tools/web-safe";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
 import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
@@ -404,6 +406,7 @@ export class WebApp {
     if (!this.runtime) return;
     const registry = this.runtime.getToolRegistry();
 
+    registry.register(currentTimeDefinition, createCurrentTimeHandler());
     registry.register(
       webSearchDefinition,
       createWebSearchHandler(

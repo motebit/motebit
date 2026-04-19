@@ -964,11 +964,12 @@ describe("list_events", () => {
 // ---------- registerBuiltinTools ----------
 
 describe("registerBuiltinTools", () => {
-  it("registers core tools (6 without optional callbacks)", () => {
+  it("registers core tools (7 without optional callbacks)", () => {
     const registry = new InMemoryToolRegistry();
     registerBuiltinTools(registry);
 
-    expect(registry.size).toBe(6);
+    expect(registry.size).toBe(7);
+    expect(registry.has("current_time")).toBe(true);
     expect(registry.has("web_search")).toBe(true);
     expect(registry.has("read_url")).toBe(true);
     expect(registry.has("read_file")).toBe(true);
@@ -983,7 +984,7 @@ describe("registerBuiltinTools", () => {
       memorySearchFn: async () => [],
     });
 
-    expect(registry.size).toBe(7);
+    expect(registry.size).toBe(8);
     expect(registry.has("recall_memories")).toBe(true);
   });
 
@@ -993,23 +994,24 @@ describe("registerBuiltinTools", () => {
       eventQueryFn: async () => [],
     });
 
-    expect(registry.size).toBe(7);
+    expect(registry.size).toBe(8);
     expect(registry.has("list_events")).toBe(true);
   });
 
-  it("registers all 8 tools when all options provided", () => {
+  it("registers all 9 tools when all options provided", () => {
     const registry = new InMemoryToolRegistry();
     registerBuiltinTools(registry, {
       memorySearchFn: async () => [],
       eventQueryFn: async () => [],
     });
 
-    expect(registry.size).toBe(8);
+    expect(registry.size).toBe(9);
     const names = registry
       .list()
       .map((t) => t.name)
       .sort();
     expect(names).toEqual([
+      "current_time",
       "list_events",
       "read_file",
       "read_url",

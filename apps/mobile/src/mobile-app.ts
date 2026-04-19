@@ -67,6 +67,8 @@ import {
   createListEventsHandler,
   selfReflectDefinition,
   createSelfReflectHandler,
+  currentTimeDefinition,
+  createCurrentTimeHandler,
   DuckDuckGoSearchProvider,
   createSubGoalDefinition,
   completeGoalDefinition,
@@ -934,6 +936,9 @@ export class MobileApp {
     if (!this.runtime) return;
     const registry = this.runtime.getToolRegistry();
     const runtime = this.runtime;
+
+    // current_time — IANA timezone-aware date/time
+    registry.register(currentTimeDefinition, createCurrentTimeHandler());
 
     // web_search — DuckDuckGo (no API key needed)
     registry.register(webSearchDefinition, createWebSearchHandler(new DuckDuckGoSearchProvider()));
