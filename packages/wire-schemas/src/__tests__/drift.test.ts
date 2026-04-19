@@ -66,10 +66,12 @@ import {
   buildDisputeResolutionJsonSchema,
 } from "../dispute.js";
 import {
+  BALANCE_WAIVER_SCHEMA_ID,
   DEPARTURE_ATTESTATION_SCHEMA_ID,
   MIGRATION_PRESENTATION_SCHEMA_ID,
   MIGRATION_REQUEST_SCHEMA_ID,
   MIGRATION_TOKEN_SCHEMA_ID,
+  buildBalanceWaiverJsonSchema,
   buildDepartureAttestationJsonSchema,
   buildMigrationPresentationJsonSchema,
   buildMigrationRequestJsonSchema,
@@ -165,6 +167,12 @@ const CASES: SchemaCase[] = [
     filename: "migration-presentation-v1.json",
     expectedId: MIGRATION_PRESENTATION_SCHEMA_ID,
     build: buildMigrationPresentationJsonSchema,
+  },
+  {
+    name: "balance-waiver-v1",
+    filename: "balance-waiver-v1.json",
+    expectedId: BALANCE_WAIVER_SCHEMA_ID,
+    build: buildBalanceWaiverJsonSchema,
   },
   {
     name: "dispute-request-v1",

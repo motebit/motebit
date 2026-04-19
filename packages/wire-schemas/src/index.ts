@@ -77,6 +77,9 @@ export {
   MigrationPresentationSchema,
   MIGRATION_PRESENTATION_SCHEMA_ID,
   buildMigrationPresentationJsonSchema,
+  BalanceWaiverSchema,
+  BALANCE_WAIVER_SCHEMA_ID,
+  buildBalanceWaiverJsonSchema,
 } from "./migration.js";
 export {
   DisputeRequestSchema,

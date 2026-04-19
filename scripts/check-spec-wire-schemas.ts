@@ -67,9 +67,6 @@ const WAIVERS: Record<string, string> = {
   // Nested in existing top-level schemas (covered structurally):
   CapabilityPrice:
     "nested inside AgentServiceListingSchema as the pricing[] element — covered structurally",
-
-  // TODO: ship as standalone schemas. Each is an open item; remove when shipped.
-  BalanceWaiver: "TODO: schema (settlement-v1) — operator-signed balance reconciliation",
 };
 
 // ---------------------------------------------------------------------------

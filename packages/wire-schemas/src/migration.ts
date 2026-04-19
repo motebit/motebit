@@ -33,6 +33,7 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
+  BalanceWaiver,
   DepartureAttestation,
   MigrationPresentation,
   MigrationRequest,
@@ -57,6 +58,9 @@ export const DEPARTURE_ATTESTATION_SCHEMA_ID =
 
 export const MIGRATION_PRESENTATION_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/migration-presentation-v1.json";
+
+export const BALANCE_WAIVER_SCHEMA_ID =
+  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/balance-waiver-v1.json";
 
 // ---------------------------------------------------------------------------
 // Shared leaf factories
@@ -278,6 +282,61 @@ export function buildDepartureAttestationJsonSchema(): Record<string, unknown> {
     title: "DepartureAttestation (v1)",
     description:
       "Source-relay-signed snapshot of an agent's history at the relay being departed. Lets destination relays understand the agent's trust level, task counts, and economic state without trusting the agent's self-report. See spec/migration-v1.md §5.1.",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// BalanceWaiver — agent-signed waiver of remaining virtual-account balance
+//
+// Sibling to the standard withdrawal flow, not nested in MigrationPresentation.
+// Per spec §7.3 the relay advances migration to `departed` only after
+// withdrawal is confirmed OR the agent signs a BalanceWaiver — the two
+// paths are alternatives, not a sequence.
+// ---------------------------------------------------------------------------
+
+export const BalanceWaiverSchema = z
+  .object({
+    motebit_id: z
+      .string()
+      .min(1)
+      .describe("Agent's motebit identity (UUIDv7). The signer of this waiver."),
+    waived_amount: z
+      .number()
+      .describe(
+        "Amount waived in micro-units (1 USD = 1,000,000). Per spec §7.3 the relay MUST process the waiver — migration is not grounds for withholding funds, and the waiver is the agent's explicit decision to forgo recovery.",
+      ),
+    waived_at: z
+      .number()
+      .describe("Unix timestamp in milliseconds when the agent signed the waiver."),
+    suite: suiteField(),
+    signature: signatureField("Signed by the agent."),
+  })
+  .strict();
+
+type _BalanceWaiverForward =
+  BalanceWaiver extends z.infer<typeof BalanceWaiverSchema> ? true : never;
+type _BalanceWaiverReverse =
+  z.infer<typeof BalanceWaiverSchema> extends BalanceWaiver ? true : never;
+
+export const _BALANCE_WAIVER_TYPE_PARITY: {
+  forward: _BalanceWaiverForward;
+  reverse: _BalanceWaiverReverse;
+} = {
+  forward: true as _BalanceWaiverForward,
+  reverse: true as _BalanceWaiverReverse,
+};
+
+export function buildBalanceWaiverJsonSchema(): Record<string, unknown> {
+  const raw = zodToJsonSchema(BalanceWaiverSchema, {
+    name: "BalanceWaiver",
+    $refStrategy: "root",
+    target: "jsonSchema7",
+  }) as Record<string, unknown>;
+  return assembleJsonSchemaFor("BalanceWaiver", raw, {
+    $id: BALANCE_WAIVER_SCHEMA_ID,
+    title: "BalanceWaiver (v1)",
+    description:
+      "Agent-signed waiver of remaining virtual-account balance — an alternative to the standard withdrawal flow for advancing migration to `departed`. Per spec §7.3 the relay MUST process the waiver and MUST NOT withhold funds on migration grounds; the waiver is the agent's explicit decision to forgo recovery, not the relay's right to keep them. Shipped alongside the migration cluster (request/token/attestation/presentation) so the migration loop is end-to-end verifiable from published JSON Schemas alone. See spec/migration-v1.md §7.2.",
   });
 }
 

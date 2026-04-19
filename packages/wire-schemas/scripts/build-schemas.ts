@@ -40,6 +40,7 @@ import {
   buildDisputeResolutionJsonSchema,
 } from "../src/dispute.js";
 import {
+  buildBalanceWaiverJsonSchema,
   buildDepartureAttestationJsonSchema,
   buildMigrationPresentationJsonSchema,
   buildMigrationRequestJsonSchema,
@@ -64,6 +65,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "migration-token-v1.json", build: buildMigrationTokenJsonSchema },
   { filename: "departure-attestation-v1.json", build: buildDepartureAttestationJsonSchema },
   { filename: "migration-presentation-v1.json", build: buildMigrationPresentationJsonSchema },
+  { filename: "balance-waiver-v1.json", build: buildBalanceWaiverJsonSchema },
   { filename: "dispute-request-v1.json", build: buildDisputeRequestJsonSchema },
   { filename: "dispute-evidence-v1.json", build: buildDisputeEvidenceJsonSchema },
   { filename: "adjudicator-vote-v1.json", build: buildAdjudicatorVoteJsonSchema },

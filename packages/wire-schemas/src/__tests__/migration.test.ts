@@ -1,12 +1,15 @@
 /**
  * Runtime-parse tests for the migration cluster — Request, Token,
- * DepartureAttestation, Presentation. The four artifacts that
+ * DepartureAttestation, Presentation, plus the BalanceWaiver sibling
+ * artifact (an alternative to the standard withdrawal flow for advancing
+ * migration to `departed`, per spec §7.2). The five artifacts that
  * collectively let an agent move from one relay to another while
  * preserving identity + accumulated trust.
  */
 import { describe, expect, it } from "vitest";
 
 import {
+  BalanceWaiverSchema,
   DepartureAttestationSchema,
   MigrationPresentationSchema,
   MigrationRequestSchema,
@@ -135,6 +138,49 @@ describe("DepartureAttestationSchema", () => {
 
   it("rejects empty trust_level", () => {
     expect(() => DepartureAttestationSchema.parse({ ...SAMPLE, trust_level: "" })).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BalanceWaiver — agent-signed alternative to withdrawal for departure
+// ---------------------------------------------------------------------------
+
+describe("BalanceWaiverSchema", () => {
+  const SAMPLE: Record<string, unknown> = {
+    motebit_id: MOTEBIT_ID,
+    waived_amount: 1_500_000, // $1.50 in micro-units
+    waived_at: 1_713_456_000_000,
+    suite: SUITE,
+    signature: SIG,
+  };
+
+  it("parses a valid waiver", () => {
+    const w = BalanceWaiverSchema.parse(SAMPLE);
+    expect(w.motebit_id).toBe(MOTEBIT_ID);
+    expect(w.waived_amount).toBe(1_500_000);
+  });
+
+  it("accepts zero waived_amount (legitimate when balance has already settled to zero)", () => {
+    const w = BalanceWaiverSchema.parse({ ...SAMPLE, waived_amount: 0 });
+    expect(w.waived_amount).toBe(0);
+  });
+
+  it("rejects unknown cryptosuite", () => {
+    expect(() => BalanceWaiverSchema.parse({ ...SAMPLE, suite: "future-pqc" })).toThrow();
+  });
+
+  it("rejects extra top-level keys (strict mode)", () => {
+    expect(() => BalanceWaiverSchema.parse({ ...SAMPLE, sneak: "no" })).toThrow();
+  });
+
+  it("rejects missing signature (agent-signed is the contract)", () => {
+    const bad = { ...SAMPLE };
+    delete bad.signature;
+    expect(() => BalanceWaiverSchema.parse(bad)).toThrow();
+  });
+
+  it("rejects empty motebit_id", () => {
+    expect(() => BalanceWaiverSchema.parse({ ...SAMPLE, motebit_id: "" })).toThrow();
   });
 });
 
