@@ -6,8 +6,20 @@
  * from packages/render-engine/src/creature.ts. Communicates with React Native
  * via postMessage.
  *
- * This produces the EXACT same visual output as motebit.com in Safari.
+ * Stage 1 (2026-04-19): the `@motebit/render-engine` browser bundle is
+ * inlined via `MOTEBIT_RE_BUNDLE` (codegen'd from the package). It runs
+ * inside the WebView and exposes `window.MotebitRE`, providing
+ * `CredentialSatelliteRenderer` + friends so credential satellites mount
+ * on mobile through the same package that ships them on web/desktop.
+ *
+ * Stage 2 (deferred): replace the inline `BODY_R`, `createBody`,
+ * `animate`, etc. below with `window.MotebitRE.createCreature(scene)` +
+ * `window.MotebitRE.animateCreature(refs, state, frame)` so the creature
+ * code stops duplicating packages/render-engine/src/creature.ts. Needs
+ * visual verification in the iOS simulator.
  */
+
+import { MOTEBIT_RE_BUNDLE } from "./creature-webview-bundle.generated";
 
 export const CREATURE_HTML = /* html */ `<!DOCTYPE html>
 <html>
@@ -32,6 +44,17 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+// Stash THREE on window so the MotebitRE bundle (inlined below) can
+// resolve its \`import "three"\` references — see
+// packages/render-engine/scripts/build-browser.mjs three-as-global plugin.
+window.THREE = THREE;
+
+// === Inlined @motebit/render-engine browser bundle ===
+// The bundle declares \`var MotebitRE = (() => { ... })()\` at module
+// scope. Exposes CredentialSatelliteRenderer, createCreature, etc. for
+// scene primitives shared with web/desktop/spatial. Regenerated from the
+// package by apps/mobile/scripts/build-creature-html.mjs.
+${MOTEBIT_RE_BUNDLE}
 
 // === Constants (from creature.ts) ===
 const BODY_R = 0.14;
@@ -403,6 +426,17 @@ group.add(smileMesh);
 
 const refs = { group, bodyMesh: body.mesh, bodyMaterial: body.material, leftEye, rightEye, smileMesh };
 
+// Credential satellites — mounted lazily on first setSatelliteExpression
+// message. The renderer parents under the creature's group so satellites
+// inherit the creature's world transform (they orbit with it).
+let credentialSatellites = null;
+function ensureCredentialSatellites() {
+  if (credentialSatellites) return credentialSatellites;
+  if (!MotebitRE || !MotebitRE.CredentialSatelliteRenderer) return null;
+  credentialSatellites = new MotebitRE.CredentialSatelliteRenderer(group);
+  return credentialSatellites;
+}
+
 const state = {
   blinkState: createBlinkState(),
   smoothedCues: {
@@ -455,6 +489,16 @@ window.__onMessage = function(msg) {
     case 'setListeningIndicator':
       state.listeningActive = msg.active;
       break;
+    case 'setSatelliteExpression': {
+      // Credentials-as-satellites rendered through the same
+      // CredentialSatelliteRenderer web/desktop/spatial use. The
+      // React-Native side sends a pure data expression; we apply it.
+      const sat = ensureCredentialSatellites();
+      if (sat && msg.expression) {
+        sat.setExpression(msg.expression);
+      }
+      break;
+    }
   }
 };
 
@@ -477,6 +521,7 @@ function animate(timestamp) {
   frame.time = time;
 
   animateCreature(refs, state, frame);
+  if (credentialSatellites) credentialSatellites.tick(timestamp);
   controls.update();
   renderer.render(scene, camera);
 }

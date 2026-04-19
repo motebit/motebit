@@ -22,6 +22,8 @@ import type {
   RenderFrame,
   InteriorColor,
   AudioReactivity,
+  SatelliteSink,
+  SpatialExpression,
 } from "@motebit/render-engine";
 import type { RenderSpec } from "@motebit/sdk";
 import { TrustMode } from "@motebit/sdk";
@@ -128,14 +130,38 @@ export class WebViewGLAdapter implements RenderAdapter {
   }
 
   /**
-   * The creature lives inside the WebView — its THREE.Group is not
-   * reachable from the React-Native side. Scene-object modules that
-   * want to mount on mobile must do so inside the WebView's HTML, via
-   * a future message-passing protocol. For now the interface is
-   * satisfied with null, matching NullRenderer's contract.
+   * The creature's THREE.Group lives inside the WebView and is not
+   * reachable from the React-Native side. Returns null so callers that
+   * expect a same-process group (web/desktop mount path) degrade cleanly
+   * into a no-op; the mobile satellite path goes through
+   * `createSatelliteSink()` instead, which forwards expressions as
+   * postMessage payloads.
    */
   getCreatureGroup(): unknown {
     return null;
+  }
+
+  /**
+   * Send a SatelliteExpression to the WebView's in-scene renderer. The
+   * bundle loaded via `@motebit/render-engine`'s browser IIFE owns the
+   * actual CredentialSatelliteRenderer inside the WebView; this side
+   * just pipes data over the existing postMessage channel (same shape
+   * as render / setInteriorColor / setTrustMode above).
+   */
+  setSatelliteExpression(expression: SpatialExpression): void {
+    this.send({ type: "setSatelliteExpression", expression });
+  }
+
+  /**
+   * A SatelliteSink backed by postMessage — the mobile path into
+   * `mountCredentialSatellites`. Dispose clears the in-WebView set; tick
+   * is omitted because the WebView's own rAF loop drives the animation.
+   */
+  createSatelliteSink(): SatelliteSink {
+    return {
+      setExpression: (expr) => this.setSatelliteExpression(expr),
+      dispose: () => this.setSatelliteExpression({ kind: "satellite", items: [] }),
+    };
   }
 
   dispose(): void {

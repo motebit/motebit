@@ -5,15 +5,21 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
+    "prestart": "pnpm run build:creature-html",
+    "preios": "pnpm run build:creature-html",
+    "preandroid": "pnpm run build:creature-html",
+    "pretest": "pnpm run build:creature-html",
+    "pretypecheck": "pnpm run build:creature-html",
     "start": "expo start",
     "ios": "expo run:ios",
     "android": "expo run:android",
     "build": "echo 'Mobile build via EAS'",
+    "build:creature-html": "node scripts/build-creature-html.mjs",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "clean": "rm -rf dist .turbo .expo"
+    "clean": "rm -rf dist .turbo .expo src/creature-webview-bundle.generated.ts"
   },
   "dependencies": {
     "@babel/runtime": "^7.29.2",

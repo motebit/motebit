@@ -83,6 +83,10 @@ import {
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import { WebViewGLAdapter } from "./adapters/webview-gl";
+import {
+  mountCredentialSatellites,
+  type CredentialSatelliteController,
+} from "@motebit/render-engine";
 import { ASYNC_STORAGE_KEYS, KEYRING_KEYS } from "./storage-keys";
 import { SecureStoreAdapter } from "./adapters/secure-store";
 import {
@@ -529,6 +533,7 @@ export class MobileApp {
   private storage: ExpoStorageResult | null = null;
   private renderer: WebViewGLAdapter;
   private keyring: SecureStoreAdapter;
+  private credentialSatellites: CredentialSatelliteController | null = null;
 
   // Governance status
   private _governanceStatus: { governed: boolean; reason?: string } = {
@@ -917,6 +922,14 @@ export class MobileApp {
     // Mobile capabilities: HTTP MCP + secure keyring
     this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp, DeviceCapability.Keyring]);
 
+    // Mount credential satellites over the WebView postMessage bridge —
+    // the same @motebit/render-engine renderer web/desktop/spatial use,
+    // running inside the WebView, fed by expressions from this side.
+    this.credentialSatellites = mountCredentialSatellites(
+      this.renderer.createSatelliteSink(),
+      this.runtime,
+    );
+
     // Create PlanEngine for multi-step goal execution
     if (storage.planStore != null) {
       this.planEngine = new PlanEngine(storage.planStore);
@@ -1036,6 +1049,8 @@ export class MobileApp {
   }
 
   stop(): void {
+    this.credentialSatellites?.dispose();
+    this.credentialSatellites = null;
     this.runtime?.stop();
     this.renderer.dispose();
     this.stopSync();

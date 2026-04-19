@@ -212,28 +212,71 @@ export interface CredentialSource {
 }
 
 export interface CredentialSatelliteController {
-  /** Call every animation frame with the current timestamp in ms. */
+  /**
+   * Call every animation frame with the current timestamp in ms. No-op on
+   * sinks that animate internally (e.g. the mobile WebView, where the
+   * renderer runs its own rAF loop inside the WebView's JS context).
+   */
   tick(nowMs: number): void;
   /** Dispose the renderer and unsubscribe from credential changes. */
   dispose(): void;
 }
 
 /**
- * Mount the credential satellite renderer under a parent group and wire
- * it to credential-source changes. Returns a controller whose `tick` is
- * called each frame and `dispose` releases every mesh + unsubscribes.
+ * The render side of a satellite mount. `CredentialSatelliteRenderer`
+ * satisfies it directly for web/desktop/spatial (same process, same
+ * scene graph). Mobile provides a postMessage-based sink that forwards
+ * expressions into the WebView where the real renderer lives — there
+ * is no same-process creature group on mobile, so a structural sink is
+ * the only clean boundary.
  *
- * Returns null when `parent` is null — callers pass `adapter.getCreatureGroup()`
- * directly and get a safe no-op when the adapter has no scene graph
- * (headless tests, mobile WebView boundary, pre-init).
+ * `tick` is optional: sinks whose renderer owns an internal animation
+ * loop (mobile WebView) leave it undefined and the controller becomes
+ * a no-op tick. Sinks that run in the caller's rAF loop (web/desktop/
+ * spatial) implement it.
+ */
+export interface SatelliteSink {
+  setExpression(expression: SpatialExpression): void;
+  tick?(nowMs: number): void;
+  dispose(): void;
+}
+
+/** Wrap a THREE group as a SatelliteSink. Used by web/desktop/spatial. */
+function sinkForGroup(parent: THREE.Object3D): SatelliteSink {
+  const renderer = new CredentialSatelliteRenderer(parent);
+  return {
+    setExpression: (expr) => renderer.setExpression(expr),
+    tick: (nowMs) => renderer.tick(nowMs),
+    dispose: () => renderer.dispose(),
+  };
+}
+
+/**
+ * Mount credential satellites and wire them to credential-source changes.
+ * Returns a controller whose `tick` is called each frame and `dispose`
+ * releases every mesh + unsubscribes.
+ *
+ * `target` accepts either:
+ *   - `THREE.Object3D` — the creature group. Wrapped in a
+ *     CredentialSatelliteRenderer internally. Used by web, desktop,
+ *     spatial (same-process scene graphs).
+ *   - `SatelliteSink` — a structural sink (setExpression + dispose).
+ *     Used by mobile, which forwards expressions through postMessage
+ *     into the WebView where the actual renderer lives.
+ *   - `null` — no-op, returns null. Covers headless tests and adapters
+ *     whose scene graph is not reachable from the caller (NullRenderer,
+ *     mobile pre-WebView-ready).
  */
 export function mountCredentialSatellites(
-  parent: THREE.Object3D | null,
+  target: THREE.Object3D | SatelliteSink | null,
   source: CredentialSource,
 ): CredentialSatelliteController | null {
-  if (!parent) return null;
+  if (!target) return null;
+  const sink: SatelliteSink =
+    "setExpression" in target && typeof (target as SatelliteSink).setExpression === "function"
+      ? (target as SatelliteSink)
+      : sinkForGroup(target as THREE.Object3D);
 
-  const renderer = new CredentialSatelliteRenderer(parent);
   const refresh = (): void => {
     const summaries: CredentialSummary[] = source.getIssuedCredentials().map((vc) => ({
       credential_type: vc.type.find((t) => t !== "VerifiableCredential") ?? "Credential",
@@ -243,17 +286,17 @@ export function mountCredentialSatellites(
         issuer: typeof vc.issuer === "string" ? vc.issuer : vc.issuer,
       },
     }));
-    renderer.setExpression(credentialsToExpression(summaries));
+    sink.setExpression(credentialsToExpression(summaries));
   };
 
   refresh();
   const unsubscribe = source.onCredentialsChanged(refresh);
 
   return {
-    tick: (nowMs) => renderer.tick(nowMs),
+    tick: (nowMs) => sink.tick?.(nowMs),
     dispose: () => {
       unsubscribe();
-      renderer.dispose();
+      sink.dispose();
     },
   };
 }
