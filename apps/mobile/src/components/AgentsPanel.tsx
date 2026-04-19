@@ -35,7 +35,16 @@ interface DiscoveredAgent {
     per: string;
   }> | null;
   last_seen_at?: number;
+  /** Render hint for agent liveness — never filter on this. */
+  freshness?: "awake" | "recently_seen" | "dormant" | "cold";
 }
+
+const FRESHNESS_COLORS: Record<NonNullable<DiscoveredAgent["freshness"]>, string> = {
+  awake: "#4ade80",
+  recently_seen: "#facc15",
+  dormant: "#94a3b8",
+  cold: "#64748b",
+};
 
 const TRUST_COLORS: Record<string, string> = {
   unknown: "#616161",
@@ -239,7 +248,17 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                     </View>
                   )}
                   {typeof item.last_seen_at === "number" && item.last_seen_at > 0 && (
-                    <Text style={styles.seenText}>seen {formatTimeAgo(item.last_seen_at)}</Text>
+                    <View style={styles.seenRow}>
+                      {item.freshness && (
+                        <View
+                          style={[
+                            styles.freshnessDot,
+                            { backgroundColor: FRESHNESS_COLORS[item.freshness] },
+                          ]}
+                        />
+                      )}
+                      <Text style={styles.seenText}>seen {formatTimeAgo(item.last_seen_at)}</Text>
+                    </View>
                   )}
                 </View>
               );
@@ -390,6 +409,16 @@ function createStyles(c: ThemeColors) {
     seenText: {
       color: c.textMuted,
       fontSize: 10,
+    },
+    seenRow: {
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    freshnessDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      marginRight: 4,
     },
     emptyContainer: {
       paddingVertical: 40,

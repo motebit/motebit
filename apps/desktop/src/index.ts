@@ -1423,6 +1423,7 @@ export class DesktopApp {
         per: string;
       }> | null;
       last_seen_at?: number;
+      freshness?: "awake" | "recently_seen" | "dormant" | "cold";
     }>
   > {
     return this.sync.discoverAgents();

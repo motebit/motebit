@@ -22,6 +22,7 @@ interface DiscoveredAgent {
   capabilities: string[];
   pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }> | null;
   last_seen_at: number;
+  freshness: "awake" | "recently_seen" | "dormant" | "cold";
   trust_level?: string;
   interaction_count?: number;
 }
@@ -275,5 +276,72 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
     const target = agents.find((a) => a.motebit_id === "deleted-listing");
     expect(target).toBeDefined();
     expect(target!.pricing).toBeNull();
+  });
+
+  // Endgame-marketplace invariant: a service agent that went to sleep
+  // (Fly.io auto_stop, missed heartbeat) MUST remain discoverable. The
+  // old behavior filtered on `expires_at > now`, creating a visibility
+  // deadlock: sleeping agents disappeared from Discover, so nobody
+  // delegated to them, so they stayed asleep. Under the new semantics,
+  // discoverability is persistent and liveness is a render hint.
+  it("sleeping agent (heartbeat > 30 min old) remains discoverable with freshness='dormant'", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "sleeping-agent", bytesToHex(kp.publicKey));
+
+    // Simulate a 45-minute-old heartbeat by rewriting last_heartbeat directly.
+    // This is the exact shape of a Fly.io machine that slept past the old 15
+    // minute TTL — today (post-fix) it should still appear with freshness
+    // "dormant". Before the fix, the `WHERE expires_at > now` filter would
+    // hide it entirely.
+    const staleHeartbeat = Date.now() - 45 * 60 * 1000;
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET last_heartbeat = ? WHERE motebit_id = ?")
+      .run(staleHeartbeat, "sleeping-agent");
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "sleeping-agent");
+    expect(target).toBeDefined();
+    expect(target!.freshness).toBe("dormant");
+  });
+
+  it("long-asleep agent (heartbeat > 24 h old) remains discoverable with freshness='cold'", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "cold-agent", bytesToHex(kp.publicKey));
+
+    const coldHeartbeat = Date.now() - 48 * 60 * 60 * 1000;
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET last_heartbeat = ? WHERE motebit_id = ?")
+      .run(coldHeartbeat, "cold-agent");
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "cold-agent");
+    expect(target).toBeDefined();
+    expect(target!.freshness).toBe("cold");
+  });
+
+  it("fresh agent (just registered) has freshness='awake'", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "fresh-agent-freshness", bytesToHex(kp.publicKey));
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "fresh-agent-freshness");
+    expect(target).toBeDefined();
+    expect(target!.freshness).toBe("awake");
+  });
+
+  it("revoked agent is filtered out even if freshness would be awake", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "revoked-agent", bytesToHex(kp.publicKey));
+
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?")
+      .run("revoked-agent");
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    expect(agents.find((a) => a.motebit_id === "revoked-agent")).toBeUndefined();
   });
 });

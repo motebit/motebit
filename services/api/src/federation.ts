@@ -1427,10 +1427,14 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       body.timestamp,
     );
 
-    // Check target agent exists locally
+    // Check target agent exists locally. No `expires_at > now` filter —
+    // liveness is checked by the wake-on-delegation hook in
+    // `forwardTaskViaMcp` downstream, not by this existence gate. Gating
+    // peer-forwards on a 15-min heartbeat window was punishing peers for
+    // agent sleep, which they can't control.
     const agent = db
-      .prepare("SELECT 1 FROM agent_registry WHERE motebit_id = ? AND expires_at > ?")
-      .get(body.target_agent, Date.now());
+      .prepare("SELECT 1 FROM agent_registry WHERE motebit_id = ?")
+      .get(body.target_agent);
     if (agent == null)
       throw new HTTPException(404, { message: "Target agent not found on this relay" });
 

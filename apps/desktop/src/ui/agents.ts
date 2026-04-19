@@ -346,6 +346,19 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
         meta.appendChild(badge);
       }
       if (typeof agent.last_seen_at === "number" && agent.last_seen_at > 0) {
+        if (agent.freshness) {
+          const dot = document.createElement("span");
+          dot.className = `agent-freshness-dot agent-freshness-${agent.freshness}`;
+          dot.title =
+            agent.freshness === "awake"
+              ? "Heartbeating now"
+              : agent.freshness === "recently_seen"
+                ? "Missed a heartbeat; still likely reachable"
+                : agent.freshness === "dormant"
+                  ? "Asleep — woken on delegation"
+                  : "Long asleep — wake latency uncertain";
+          meta.appendChild(dot);
+        }
         const seen = document.createElement("span");
         seen.className = "agent-last-seen";
         seen.textContent = `seen ${formatTimeAgo(agent.last_seen_at)}`;

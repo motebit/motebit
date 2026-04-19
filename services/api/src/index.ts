@@ -566,7 +566,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (evicted > 0) {
       logger.warn("task_queue.eviction", { evicted, remaining: taskQueue.size });
     }
-    // Clean expired agent registrations
+    // Janitor: reap long-abandoned agent registrations. `expires_at` is a
+    // 90-day lease set on register/heartbeat — not a visibility window.
+    // Discoverability is driven by the `freshness` discriminant in
+    // task-routing.ts; an agent stays findable while asleep and is only
+    // removed here if no heartbeat arrived for 90 days (presumed dead).
     const stmtClean = moteDb.db.prepare("DELETE FROM agent_registry WHERE expires_at < ?");
     stmtClean.run(now);
     // Clean expired rate limit entries

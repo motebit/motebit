@@ -23,6 +23,27 @@ import { createLogger } from "./logger.js";
 const logger = createLogger({ service: "relay", module: "task-routing" });
 const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
 
+/**
+ * Freshness bands for agent liveness. Computed from `last_heartbeat` age
+ * at query time, exposed on every discovery response. Render hint only —
+ * routing still considers dormant/cold candidates; wake-on-delegation
+ * takes care of reachability. Keep the thresholds as named constants so
+ * drift between server, tests, and UI copy stays easy to audit.
+ */
+export const FRESHNESS_AWAKE_MS = 6 * 60 * 1000; // one heartbeat cycle (5m) + slack
+export const FRESHNESS_RECENT_MS = 30 * 60 * 1000; // missed a cycle, still likely reachable
+export const FRESHNESS_DORMANT_MS = 24 * 60 * 60 * 1000; // asleep but wakeable
+
+export type AgentFreshness = "awake" | "recently_seen" | "dormant" | "cold";
+
+export function computeFreshness(lastSeenAt: number, now: number): AgentFreshness {
+  const ageMs = now - lastSeenAt;
+  if (ageMs < FRESHNESS_AWAKE_MS) return "awake";
+  if (ageMs < FRESHNESS_RECENT_MS) return "recently_seen";
+  if (ageMs < FRESHNESS_DORMANT_MS) return "dormant";
+  return "cold";
+}
+
 export interface TaskRouterDeps {
   db: DatabaseDriver;
   relayIdentity: RelayIdentity;
@@ -169,12 +190,15 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   ): { profiles: CandidateProfile[]; requirements: TaskRequirements } {
     const now = Date.now();
 
-    // Query service listings, optionally filtered by capability
+    // Query service listings, optionally filtered by capability.
+    // `last_heartbeat` is pulled so the candidate's freshness can drive
+    // `is_online` instead of the old `expires_at > now` gate (which
+    // created a visibility deadlock with Fly.io auto_stop).
     let listingRows: Array<Record<string, unknown>>;
     if (capabilityFilter) {
       listingRows = db
         .prepare(
-          `SELECT l.*, r.public_key, r.expires_at, r.guardian_public_key, r.endpoint_url AS agent_endpoint_url
+          `SELECT l.*, r.public_key, r.last_heartbeat, r.guardian_public_key, r.endpoint_url AS agent_endpoint_url
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
            WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
@@ -184,7 +208,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     } else {
       listingRows = db
         .prepare(
-          `SELECT l.*, r.public_key, r.expires_at, r.guardian_public_key, r.endpoint_url AS agent_endpoint_url
+          `SELECT l.*, r.public_key, r.last_heartbeat, r.guardian_public_key, r.endpoint_url AS agent_endpoint_url
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
            LIMIT ?`,
@@ -239,8 +263,16 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
 
     const profiles: CandidateProfile[] = listingRows.map((row) => {
       const mid = row.motebit_id as string;
+      // `is_online` now means "is this candidate's freshness good enough
+      // to route without a wake delay?" — awake/recently_seen pass as
+      // online; dormant/cold fall through but remain rankable. Wake-on-
+      // delegation (see `forwardTaskViaMcp`) will wake them before MCP
+      // init if selected.
+      const lastHeartbeat = row.last_heartbeat as number | null;
       const isOnline =
-        (row.expires_at as number | null) != null && (row.expires_at as number) > now;
+        lastHeartbeat != null &&
+        (computeFreshness(lastHeartbeat, now) === "awake" ||
+          computeFreshness(lastHeartbeat, now) === "recently_seen");
 
       const latencyRows = latencyStmt.all(mid) as Array<{ latency_ms: number }>;
       let latencyStats: { avg_ms: number; p95_ms: number; sample_count: number } | null = null;
@@ -536,8 +568,22 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }> | null;
     /** Last heartbeat timestamp from agent_registry. */
     last_seen_at: number;
+    /**
+     * Liveness discriminant derived from `last_heartbeat` age at query time.
+     * - `awake` — within one heartbeat cycle + slack (< 6 min)
+     * - `recently_seen` — missed a cycle, still likely reachable (< 30 min)
+     * - `dormant` — asleep but wake-on-delegation should reach it (< 24 h)
+     * - `cold` — long asleep, wake latency uncertain (≥ 24 h)
+     * Render hint only; routing still considers dormant/cold candidates.
+     */
+    freshness: "awake" | "recently_seen" | "dormant" | "cold";
   }> {
     const now = Date.now();
+    // Filter out revoked entries and federation opt-outs when appropriate.
+    // No `expires_at > now` filter: discoverability is a protocol property,
+    // not a heartbeat property. `last_heartbeat` drives the freshness
+    // discriminant below, which is a render hint for the caller.
+    const revokedFilter = " AND (revoked IS NULL OR revoked = 0)";
     const fedFilter = federatedOnly
       ? " AND (federation_visible IS NULL OR federation_visible != 0)"
       : "";
@@ -549,39 +595,38 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         .prepare(
           `
         SELECT * FROM agent_registry
-        WHERE expires_at > ? AND motebit_id = ?
-          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)${fedFilter}
+        WHERE motebit_id = ?
+          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)${revokedFilter}${fedFilter}
         LIMIT ?
       `,
         )
-        .all(now, motebitId, capability, limit) as Array<Record<string, unknown>>;
+        .all(motebitId, capability, limit) as Array<Record<string, unknown>>;
     } else if (capability) {
       rows = db
         .prepare(
           `
         SELECT * FROM agent_registry
-        WHERE expires_at > ?
-          AND EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)${fedFilter}
+        WHERE EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)${revokedFilter}${fedFilter}
         LIMIT ?
       `,
         )
-        .all(now, capability, limit) as Array<Record<string, unknown>>;
+        .all(capability, limit) as Array<Record<string, unknown>>;
     } else if (motebitId) {
       rows = db
         .prepare(
           `
-        SELECT * FROM agent_registry WHERE expires_at > ? AND motebit_id = ?${fedFilter} LIMIT ?
+        SELECT * FROM agent_registry WHERE motebit_id = ?${revokedFilter}${fedFilter} LIMIT ?
       `,
         )
-        .all(now, motebitId, limit) as Array<Record<string, unknown>>;
+        .all(motebitId, limit) as Array<Record<string, unknown>>;
     } else {
       rows = db
         .prepare(
           `
-        SELECT * FROM agent_registry WHERE expires_at > ?${fedFilter} LIMIT ?
+        SELECT * FROM agent_registry WHERE 1=1${revokedFilter}${fedFilter} LIMIT ?
       `,
         )
-        .all(now, limit) as Array<Record<string, unknown>>;
+        .all(limit) as Array<Record<string, unknown>>;
     }
 
     // Batch-fetch service listings for these agents in one query — avoids N+1
@@ -621,6 +666,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         // Non-fatal
       }
       const id = r.motebit_id as string;
+      const lastSeen = (r.last_heartbeat as number | null) ?? (r.registered_at as number);
       return {
         motebit_id: id,
         public_key: pk,
@@ -630,7 +676,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped
         metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
         pricing: listingByAgent.get(id) ?? null,
-        last_seen_at: (r.last_heartbeat as number | null) ?? (r.registered_at as number),
+        last_seen_at: lastSeen,
+        freshness: computeFreshness(lastSeen, now),
       };
     });
   }
@@ -761,6 +808,28 @@ export async function forwardTaskViaMcp(
     Accept: "application/json, text/event-stream",
   };
   if (apiToken) mcpHeaders["Authorization"] = `Bearer ${apiToken}`;
+
+  // Wake-on-delegation: Fly.io `auto_stop_machines = "stop"` services
+  // require an HTTP GET to trigger auto-start. MCP POSTs don't wake
+  // them — a cold machine returns 503 and the task fails. Hit `/health`
+  // first (5s budget — Fly cold-start is ~3-5s). Fail-open: if the
+  // wake call errors we still try MCP init, whose 30s timeout absorbs
+  // residual cold-start latency. The service's /health handler also
+  // calls `ensureRegistered()` (packages/mcp-server/src/index.ts:1110),
+  // so a successful wake also refreshes the registry entry.
+  try {
+    await fetch(`${endpointUrl}/health`, {
+      method: "GET",
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (wakeErr) {
+    logger.warn("task.agent_wake_attempted", {
+      correlationId: taskId,
+      agent: agentId,
+      endpoint: endpointUrl,
+      error: wakeErr instanceof Error ? wakeErr.message : String(wakeErr),
+    });
+  }
 
   try {
     // Step 1: Initialize MCP session

@@ -3575,6 +3575,21 @@
       color: var(--text-faint);
       opacity: 0.7;
     }
+    /* Freshness dot — calm palette matching goal-status-dot precedent.
+     * No animation, no flicker: sleeping services are a normal state,
+     * not a warning. Wake-on-delegation makes them reachable. */
+    .agent-freshness-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .agent-freshness-awake { background: #4ade80; }
+    .agent-freshness-recently_seen { background: #facc15; }
+    .agent-freshness-dormant { background: #94a3b8; }
+    .agent-freshness-cold { background: #64748b; }
     .agent-caps-row {
       display: flex;
       flex-wrap: wrap;

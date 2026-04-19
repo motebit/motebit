@@ -688,7 +688,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     }
 
     const now = Date.now();
-    const expiresAt = now + 15 * 60 * 1000; // 15 minutes
+    // `expires_at` is now the janitor lease, not a visibility gate. An agent
+    // stays discoverable in `/api/v1/agents/discover` based on its liveness
+    // (`last_heartbeat` + a computed freshness band), not a hard TTL drop-out.
+    // We only remove rows the relay believes are abandoned — 90 days of no
+    // heartbeat. Explicit deregistration or key-succession-with-stale-key
+    // still remove immediately. See docs/doctrine/… (endgame-marketplace).
+    const expiresAt = now + 90 * 24 * 60 * 60 * 1000; // 90 days
 
     // Guardian registration requires cryptographic proof: the guardian must sign
     // an attestation proving they govern this agent. Without the guardian's private
@@ -869,7 +875,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     }
 
     const now = Date.now();
-    const expiresAt = now + 15 * 60 * 1000;
+    // Janitor lease, not visibility gate — see the register route for the
+    // full rationale. 90d = "presumed abandoned if no heartbeat."
+    const expiresAt = now + 90 * 24 * 60 * 60 * 1000;
 
     const result = moteDb.db
       .prepare(
@@ -1096,15 +1104,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   // GET /api/v1/agents/:motebitId — get specific agent
   app.get("/api/v1/agents/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
-    const now = Date.now();
 
+    // No `expires_at > now` filter: public-key lookups for receipt
+    // verification must survive a sleeping agent. The janitor TTL (90d
+    // no-heartbeat) removes truly abandoned rows; `revoked = 0` is the
+    // correct "don't show this agent" filter.
     const row = moteDb.db
       .prepare(
         `
-      SELECT * FROM agent_registry WHERE motebit_id = ? AND expires_at > ?
+      SELECT * FROM agent_registry WHERE motebit_id = ?
     `,
       )
-      .get(motebitId, now) as Record<string, unknown> | undefined;
+      .get(motebitId) as Record<string, unknown> | undefined;
 
     if (!row) {
       throw new HTTPException(404, { message: "Agent not found" });

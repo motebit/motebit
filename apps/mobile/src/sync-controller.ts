@@ -176,6 +176,7 @@ export class MobileSyncController {
         per: string;
       }> | null;
       last_seen_at?: number;
+      freshness?: "awake" | "recently_seen" | "dormant" | "cold";
     }>
   > {
     if (!this._servingSyncUrl || !this._servingAuthToken) return [];
@@ -200,6 +201,7 @@ export class MobileSyncController {
             per: string;
           }> | null;
           last_seen_at?: number;
+          freshness?: "awake" | "recently_seen" | "dormant" | "cold";
         }>;
       };
       return data.agents ?? [];
