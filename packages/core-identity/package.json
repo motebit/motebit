@@ -16,6 +16,11 @@
       "default": "./dist/node.js"
     }
   },
+  "motebit": {
+    "implements": [
+      "spec/device-self-registration-v1.md"
+    ]
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",

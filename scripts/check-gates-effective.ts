@@ -506,6 +506,19 @@ export async function probeLeak(): Promise<boolean> {
         `interface Cred { issuer: string; credentialSubject: { id: string; success_rate: number } }\nexport function aggregate(credentials: Cred[], getIssuerTrust: (did: string) => number): Map<string, number> {\n  const out = new Map<string, number>();\n  for (const vc of credentials) {\n    const issuerTrust = getIssuerTrust(vc.issuer);\n    const weight = vc.credentialSubject.success_rate;\n    const score = issuerTrust * weight;\n    const prev = out.get(vc.credentialSubject.id) ?? 0;\n    if (score > prev) out.set(vc.credentialSubject.id, score);\n  }\n  return out;\n}\n`,
       ),
   },
+  {
+    script: "check-spec-impl-coverage",
+    proves:
+      "flags a new Stable spec that no package declares via motebit.implements (uncovered-spec violation)",
+    perturb: () =>
+      // Fixture: a minimally-valid Stable spec that no package has
+      // declared in its motebit.implements array. The gate's second
+      // invariant (every Stable spec has ≥1 declarer) should fire.
+      writeFixture(
+        `spec/${PROBE_PREFIX}uncovered-v1.md`,
+        `# motebit/probe-uncovered@1.0\n\n**Status:** Stable  \n**Version:** 1.0\n\nProbe fixture for check-spec-impl-coverage — intentionally uncovered.\n`,
+      ),
+  },
 ];
 
 /**

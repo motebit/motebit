@@ -6,6 +6,11 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "motebit": {
+    "implements": [
+      "spec/relay-federation-v1.md"
+    ]
+  },
   "scripts": {
     "build": "tsc -b",
     "dev": "sh -c 'set -a; [ -f .env ] && . ./.env; set +a; exec tsx watch src/index.ts'",

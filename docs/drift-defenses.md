@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Thirty invariants are enforced today. Twenty-three run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
+Thirty-one invariants are enforced today. Twenty-four run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); six are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions).
 
 ## Inventory
 
@@ -44,6 +44,7 @@ Thirty invariants are enforced today. Twenty-three run as hard CI gates via `pnp
 | 28  | Reputation scoring ↔ `@motebit/policy` + `@motebit/market`     | `check-reputation-primitives.ts`                               | 2026-04-19 |
 | 29  | Notability scoring ↔ `@motebit/memory-graph` notability module | `check-notability-primitives.ts`                               | 2026-04-19 |
 | 30  | Trust propagation ↔ `@motebit/market` trust-propagation module | `check-trust-propagation-primitives.ts`                        | 2026-04-19 |
+| 31  | Stable spec ↔ `motebit.implements` package declaration         | `check-spec-impl-coverage.ts`                                  | 2026-04-19 |
 
 ## Incident histories
 
@@ -124,6 +125,10 @@ Root CLAUDE.md is the index of doctrine. Per-package and per-service CLAUDE.md f
 ### 29. Notability scoring ↔ `@motebit/memory-graph` notability module
 
 The second semiring consumer in the codebase. Memory retrieval was the first (invariant #27); agent routing had proved the pattern earlier in `@motebit/semiring`. Reflection — "which memories should the creature notice this tick?" — was still imperative: `packages/reflection/src/engine.ts` ran three hand-sorted categorizations (`phantomCertainties`, `conflicts`, `nearDeath`) with `.slice(5)` / `.slice(3)` limits per category and per-category prompt formatting. Adding a dimension or changing what notable means was three edits across parallel arms. 2026-04-19 refactor extracted the judgment into `packages/memory-graph/src/notability.ts`: three scalar dimensions composed via `recordSemiring` over `TrustSemiring` (max-times), one `rankNotableMemories(nodes, edges, options)` primitive producing a ranked `NotableMemory[]` with a `dominantReason` tag. Changing the creature's reflection focus is now a weight (`phantomWeight` / `conflictWeight` / `decayWeight`), not a new category. Defense: `check-notability-primitives.ts` with a three-condition heuristic — file calls `computeDecayedConfidence(`, references two or more of `{edgeCount, isolated, orphan, ConflictsWith}`, and does not import `rankNotableMemories` or `NotabilitySemiring`. Allowlist empty at landing. Proves the second semiring consumer pattern and closes the door on inline reinvention the moment a third surface/service wants "which memories matter right now."
+
+### 31. Stable spec ↔ `motebit.implements` package declaration
+
+Three existing gates guard the _type surface_ of every spec: `check-spec-coverage` (#9, Wire format types ↔ `@motebit/protocol` exports), `check-spec-mit-boundary` (#14, spec callables ↔ MIT exports), `check-spec-wire-schemas` (#23, spec types ↔ zod schemas). All three verify that declared shapes exist. None verified that _runtime behavior_ for a spec was actually implemented anywhere in this repo. A new spec could land — complete with Wire format types and zod schemas — and never be implemented, silently. Consumers looking at the repo had no machine-readable way to map `settlement-v1.md` to `packages/settlement-rails` beyond grep. That's the drift this gate closes. Each implementing `package.json` carries `"motebit": { "implements": ["spec/..."] }`; the gate asserts bidirectionally that every declaration resolves to a real spec file and every Stable spec is claimed by at least one package. Drafts are exempt — declaration is allowed but not required. Landed 2026-04-19 alongside the initial declarations for the 8 Stable specs (auth-token, credential, device-self-registration, execution-ledger, identity, market, relay-federation, settlement). Extends the "implementable by another runtime" claim from "the types exist" to "a package here claims ownership of the behavior." Allowlist empty at landing.
 
 ### 30. Trust propagation ↔ `@motebit/market` trust-propagation module
 

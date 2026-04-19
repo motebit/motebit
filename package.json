@@ -56,6 +56,7 @@
     "check-reputation-primitives": "npx tsx scripts/check-reputation-primitives.ts",
     "check-notability-primitives": "npx tsx scripts/check-notability-primitives.ts",
     "check-trust-propagation-primitives": "npx tsx scripts/check-trust-propagation-primitives.ts",
+    "check-spec-impl-coverage": "npx tsx scripts/check-spec-impl-coverage.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",

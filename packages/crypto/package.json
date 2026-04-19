@@ -49,6 +49,12 @@
   "publishConfig": {
     "access": "public"
   },
+  "motebit": {
+    "implements": [
+      "spec/identity-v1.md",
+      "spec/credential-v1.md"
+    ]
+  },
   "scripts": {
     "build": "tsup && tsc -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap --outDir dist",
     "test": "vitest run",
