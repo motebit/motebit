@@ -1,8 +1,14 @@
 import type { ChatAPI } from "./chat";
 import { setStreamingTTSEnabled } from "./chat";
 import type { WebContext } from "../types";
-import type { STTProvider } from "@motebit/voice";
-import { WebSpeechSTTProvider, DeepgramSTTProvider } from "@motebit/voice";
+import type { STTProvider, WaveformState } from "@motebit/voice";
+import {
+  WebSpeechSTTProvider,
+  DeepgramSTTProvider,
+  createWaveformState,
+  renderVoiceWaveform,
+  waveformColorFromSoul,
+} from "@motebit/voice";
 import { getSTTKey } from "../storage";
 
 // === STT Provider Selection ===
@@ -50,8 +56,7 @@ let audioContext: AudioContext | null = null;
 let analyserNode: AnalyserNode | null = null;
 let micStream: MediaStream | null = null;
 let waveformAnimationId = 0;
-let noiseFloor = 0;
-const waveformSmoothed = new Float32Array(64);
+const waveformState: WaveformState = createWaveformState();
 let waveformColor = { r: 203, g: 225, b: 255 };
 
 // === Session State ===
@@ -170,13 +175,7 @@ export function initVoice(
     const b = Math.round(glow[2] * 255);
     inputBarWrapper!.style.setProperty("--voice-glow-color", `rgba(${r},${g},${b},0.55)`);
 
-    const maxG = Math.max(glow[0], glow[1], glow[2], 0.01);
-    const satPow = 1.3;
-    waveformColor = {
-      r: Math.min(255, Math.round((glow[0] / maxG) ** (1 / satPow) * glow[0] * 300)),
-      g: Math.min(255, Math.round((glow[1] / maxG) ** (1 / satPow) * glow[1] * 300)),
-      b: Math.min(255, Math.round((glow[2] / maxG) ** (1 / satPow) * glow[2] * 300)),
-    };
+    waveformColor = waveformColorFromSoul(glow);
   }
 
   // === Waveform Canvas ===
@@ -196,162 +195,18 @@ export function initVoice(
     const ctx2d = voiceWaveform.getContext("2d");
     if (!ctx2d) return;
 
-    const timeDomain = new Uint8Array(analyserNode.frequencyBinCount);
-    const freqDomain = new Uint8Array(analyserNode.frequencyBinCount);
-    let smoothedRms = 0;
-    let smoothedLow = 0;
-    let smoothedMid = 0;
-    let smoothedHigh = 0;
-    let smoothedFlatness = 0;
-
-    // Attenuation envelope — fades edges to zero
-    const att = (x: number): number => {
-      const d = 2 * x - 1;
-      const d2 = d * d;
-      return 1 - d2 * d2 * d2;
-    };
-
-    // 4 overlapping wave layers per desktop
-    const waves = [
-      { tf: 0.7, sf: 6.5, amp: 0.4, alpha: 0.1, lw: 16, band: 0 },
-      { tf: 1.1, sf: 9.3, amp: 0.32, alpha: 0.28, lw: 4.5, band: 1 },
-      { tf: 1.5, sf: 13.1, amp: 0.25, alpha: 0.5, lw: 2.5, band: 1 },
-      { tf: 2.1, sf: 17.4, amp: 0.15, alpha: 0.88, lw: 1.5, band: 2 },
-    ];
-
-    const N = 64;
-    const waveY = new Float32Array(N);
-
     const draw = (timestamp: number): void => {
       // The loop lives for the entire session — not per recognition cycle.
       if (!inSession || !analyserNode) return;
 
       const t = timestamp / 1000;
-      const w = voiceWaveform.width;
-      const h = voiceWaveform.height;
-      const dpr = window.devicePixelRatio || 1;
-
-      ctx2d.clearRect(0, 0, w, h);
-
-      analyserNode.getByteTimeDomainData(timeDomain);
-      analyserNode.getByteFrequencyData(freqDomain);
-
-      // RMS
-      let sumSq = 0;
-      for (let j = 0; j < timeDomain.length; j++) {
-        const v = timeDomain[j]! / 128.0 - 1.0;
-        sumSq += v * v;
-      }
-      const rms = Math.sqrt(sumSq / timeDomain.length);
-      smoothedRms += (rms > smoothedRms ? 0.4 : 0.06) * (rms - smoothedRms);
-
-      noiseFloor += (rms > noiseFloor ? 0.003 : 0.05) * (rms - noiseFloor);
-
-      // Frequency bands
-      const binCount = freqDomain.length;
-      const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
-      const midEnd = Math.max(2, Math.floor(binCount * 0.25));
-      let lowE = 0,
-        midE = 0,
-        highE = 0;
-      for (let j = 0; j < binCount; j++) {
-        const v = freqDomain[j]! / 255;
-        if (j < lowEnd) lowE += v;
-        else if (j < midEnd) midE += v;
-        else highE += v;
-      }
-      lowE /= lowEnd;
-      midE /= midEnd - lowEnd;
-      highE /= binCount - midEnd;
-
-      smoothedLow += (lowE > smoothedLow ? 0.35 : 0.05) * (lowE - smoothedLow);
-      smoothedMid += (midE > smoothedMid ? 0.35 : 0.05) * (midE - smoothedMid);
-      smoothedHigh += (highE > smoothedHigh ? 0.3 : 0.04) * (highE - smoothedHigh);
-      const bands = [smoothedLow, smoothedMid, smoothedHigh];
-
-      // Spectral flatness
-      let logSum = 0;
-      let linSum = 0;
-      for (let j = lowEnd; j < midEnd; j++) {
-        const v = freqDomain[j]! / 255 + 1e-10;
-        logSum += Math.log(v);
-        linSum += v;
-      }
-      const flatBins = midEnd - lowEnd;
-      const rawFlatness = linSum > 1e-8 ? Math.exp(logSum / flatBins) / (linSum / flatBins) : 0;
-      smoothedFlatness += 0.08 * (rawFlatness - smoothedFlatness);
-
-      const gatedRms = Math.max(0, smoothedRms - noiseFloor);
-      const gate = smoothedRms > 0.001 ? gatedRms / smoothedRms : 0;
-
-      const flat2 = smoothedFlatness * smoothedFlatness;
-      const damping = Math.max(0.15, 1 - flat2 * 0.9);
-      const shimmer = 1 + (1 - smoothedFlatness) * 0.6;
+      const frame = renderVoiceWaveform(ctx2d, analyserNode, waveformState, waveformColor, t);
 
       // Drive creature reactivity from mic only while we own the floor. During
       // TTS (suspended), main.ts's syncTTS drives reactivity from synthesized
       // speech energy — don't fight it.
       if (!suspended) {
-        ctx.app.setAudioReactivity({
-          rms: gatedRms * damping,
-          low: smoothedLow * gate * damping,
-          mid: smoothedMid * gate * damping,
-          high: smoothedHigh * gate * damping * shimmer,
-        });
-      }
-
-      // Draw waveform
-      const pad = 24 * dpr;
-      const drawW = w - pad * 2;
-      const midY = h / 2;
-
-      const voiceGain = Math.min(smoothedRms * 10, 1.8);
-      const amplitude = h * (0.22 + voiceGain * 0.18);
-      const sampleDecay = 0.08 + voiceGain * 0.15;
-
-      for (let i = 0; i < N; i++) {
-        const bufIdx = Math.floor((i / N) * timeDomain.length);
-        const raw = timeDomain[bufIdx]! / 128.0 - 1.0;
-        const target = raw * (1 + voiceGain * 5);
-        waveformSmoothed[i] = waveformSmoothed[i]! + (target - waveformSmoothed[i]!) * sampleDecay;
-      }
-
-      const { r: cr, g: cg, b: cb } = waveformColor;
-
-      ctx2d.lineCap = "round";
-      ctx2d.lineJoin = "round";
-      const stepX = drawW / (N - 1);
-
-      const spread = voiceGain * 0.7;
-
-      for (const wave of waves) {
-        const bandVal = bands[wave.band] ?? 0;
-        const bandBoost = 1 + bandVal * 3.5;
-
-        for (let i = 0; i < N; i++) {
-          const pos = i / (N - 1);
-          const a = att(pos);
-
-          const organic =
-            Math.sin(t * wave.tf + pos * wave.sf) * wave.amp +
-            Math.sin(t * wave.tf * 1.73 + pos * wave.sf * 1.61) * wave.amp * 0.5;
-
-          const val = (waveformSmoothed[i]! + organic * (0.5 + spread)) * bandBoost * a;
-          waveY[i] = midY + val * amplitude;
-        }
-
-        ctx2d.beginPath();
-        ctx2d.moveTo(pad, waveY[0]!);
-        for (let i = 1; i < N - 1; i++) {
-          const x = pad + i * stepX;
-          const nx = pad + (i + 1) * stepX;
-          ctx2d.quadraticCurveTo(x, waveY[i]!, (x + nx) / 2, (waveY[i]! + waveY[i + 1]!) / 2);
-        }
-        ctx2d.lineTo(pad + drawW, waveY[N - 1]!);
-
-        ctx2d.strokeStyle = `rgba(${cr},${cg},${cb},${wave.alpha})`;
-        ctx2d.lineWidth = wave.lw * dpr;
-        ctx2d.stroke();
+        ctx.app.setAudioReactivity(frame.bands);
       }
 
       waveformAnimationId = requestAnimationFrame(draw);
