@@ -404,6 +404,38 @@ export async function probeLeak(): Promise<boolean> {
         src.replace(/\s+"@motebit\/event-log":\s*"workspace:\*",/, ""),
       ),
   },
+  {
+    script: "check-readme",
+    proves:
+      "flags a README 'What you see:' block claim that disagrees with create-motebit / runtime-factory source-of-truth (here: the relay URL ↔ DEFAULT_SYNC_URL pin)",
+    perturb: () =>
+      // Replace the README's `Registered with relay:` value with an obviously
+      // invalid URL. The gate's claim-4 assertion compares this line against
+      // `DEFAULT_SYNC_URL` in apps/cli/src/runtime-factory.ts — under the
+      // perturbation, the two disagree and the gate fires. Distinctive
+      // `.invalid` TLD makes the perturbation trivially safe to grep-and-
+      // revert if cleanup ever fails.
+      mutateFile("README.md", (src) =>
+        src.replace(
+          /^Registered with relay:\s+\S+/m,
+          "Registered with relay: https://probe-only-wrong-relay.invalid",
+        ),
+      ),
+  },
+  {
+    script: "check-claude-md",
+    proves:
+      "flags a sub-CLAUDE.md file that exists on disk but is not referenced from root CLAUDE.md's per-directory doctrine index",
+    perturb: () =>
+      // Strip the `packages/protocol/CLAUDE.md` line out of root CLAUDE.md's
+      // "Per-directory doctrine loads lazily" index. The file still exists on
+      // disk; the index entry is gone. Direction 1 of the gate (every disk
+      // CLAUDE.md must be referenced from root) should fire on the now-orphan
+      // sub-doctrine. mutateFile restores byte-identical on cleanup.
+      mutateFile("CLAUDE.md", (src) =>
+        src.replace(/^- \[`packages\/protocol\/CLAUDE\.md`\][^\n]*\n/m, ""),
+      ),
+  },
 ];
 
 /**
