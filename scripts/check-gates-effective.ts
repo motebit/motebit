@@ -436,6 +436,20 @@ export async function probeLeak(): Promise<boolean> {
         src.replace(/^- \[`packages\/protocol\/CLAUDE\.md`\][^\n]*\n/m, ""),
       ),
   },
+  {
+    script: "check-scene-primitives",
+    proves:
+      "flags an inline scene primitive in an app — imports `three` AND registers a SpatialExpression kind outside @motebit/render-engine",
+    perturb: () =>
+      // The gate's two-condition heuristic: a file under apps/*/src/ that
+      // both imports `three` AND calls registerSpatialDataModule is an
+      // inline scene primitive and should have moved to render-engine.
+      // This fixture satisfies both conditions.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}inline_scene_primitive.ts`,
+        `import * as THREE from "three";\nimport { registerSpatialDataModule } from "@motebit/render-engine";\nconst _probe = new THREE.Group();\nvoid _probe;\nregisterSpatialDataModule({ kind: "satellite", name: "__probe__" });\n`,
+      ),
+  },
 ];
 
 /**
