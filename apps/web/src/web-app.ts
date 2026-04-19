@@ -15,11 +15,8 @@ import type {
 } from "@motebit/sdk";
 import { DeviceCapability } from "@motebit/sdk";
 import { ThreeJSAdapter } from "@motebit/render-engine";
-import type { AudioReactivity } from "@motebit/render-engine";
-import {
-  mountCredentialSatellites,
-  type CredentialSatelliteController,
-} from "./scene/credential-satellites";
+import type { AudioReactivity, CredentialSatelliteController } from "@motebit/render-engine";
+import { mountCredentialSatellites } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
 import {
   createBrowserStorage,
@@ -318,7 +315,10 @@ export class WebApp {
     // Mount credential satellites under the creature group — the 3D shadow
     // of the sovereign panel's credential list. Satellites are nouns
     // ("I have credentials"); artifacts are verbs ("a receipt arrived").
-    this.credentialSatellites = mountCredentialSatellites(this.renderer, this.runtime);
+    this.credentialSatellites = mountCredentialSatellites(
+      this.renderer.getCreatureGroup(),
+      this.runtime,
+    );
 
     // 30fps cursor tick: merge cursor presence into runtime state
     this.cuesTickInterval = setInterval(() => {

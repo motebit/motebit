@@ -45,6 +45,10 @@ vi.mock("@motebit/render-engine", () => {
     NullRenderAdapter: MockThreeJSAdapter,
     CredentialSatelliteRenderer: MockCredentialSatelliteRenderer,
     credentialsToExpression: () => ({ kind: "satellite", items: [] }),
+    // Headless tests have no scene graph — the helper returns null and
+    // the web-app renders without satellites (same contract as when
+    // getCreatureGroup() returns null).
+    mountCredentialSatellites: () => null,
   };
 });
 

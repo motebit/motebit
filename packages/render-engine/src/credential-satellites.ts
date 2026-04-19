@@ -185,3 +185,75 @@ export class CredentialSatelliteRenderer {
     sat.material.dispose();
   }
 }
+
+// ── Cross-surface mount helper ────────────────────────────────────────
+//
+// The mount/tick/subscribe/dispose dance is identical across web, desktop,
+// and any future surface with a 3D creature. Promoting it into the package
+// lets every surface consume one function instead of copy-pasting the
+// lifecycle. Structural typing on the source argument means render-engine
+// does not have to import from runtime — MotebitRuntime satisfies the
+// interface naturally (verified at the call site via tsc).
+
+/**
+ * Minimal shape render-engine needs to render credential satellites.
+ * `MotebitRuntime` satisfies this interface — surfaces pass the runtime
+ * directly. Kept structural (not a class) so render-engine stays layer-2
+ * and does not take on `@motebit/runtime` as a dependency.
+ */
+export interface CredentialSource {
+  getIssuedCredentials(): ReadonlyArray<{
+    readonly type: readonly string[];
+    readonly validFrom?: string;
+    readonly issuer: string | { readonly id?: string };
+  }>;
+  /** Subscribe to credential-set changes. Returns unsubscribe. */
+  onCredentialsChanged(fn: () => void): () => void;
+}
+
+export interface CredentialSatelliteController {
+  /** Call every animation frame with the current timestamp in ms. */
+  tick(nowMs: number): void;
+  /** Dispose the renderer and unsubscribe from credential changes. */
+  dispose(): void;
+}
+
+/**
+ * Mount the credential satellite renderer under a parent group and wire
+ * it to credential-source changes. Returns a controller whose `tick` is
+ * called each frame and `dispose` releases every mesh + unsubscribes.
+ *
+ * Returns null when `parent` is null — callers pass `adapter.getCreatureGroup()`
+ * directly and get a safe no-op when the adapter has no scene graph
+ * (headless tests, mobile WebView boundary, pre-init).
+ */
+export function mountCredentialSatellites(
+  parent: THREE.Object3D | null,
+  source: CredentialSource,
+): CredentialSatelliteController | null {
+  if (!parent) return null;
+
+  const renderer = new CredentialSatelliteRenderer(parent);
+  const refresh = (): void => {
+    const summaries: CredentialSummary[] = source.getIssuedCredentials().map((vc) => ({
+      credential_type: vc.type.find((t) => t !== "VerifiableCredential") ?? "Credential",
+      issued_at: typeof vc.validFrom === "string" ? new Date(vc.validFrom).getTime() : Date.now(),
+      credential: {
+        issuanceDate: typeof vc.validFrom === "string" ? vc.validFrom : undefined,
+        issuer: typeof vc.issuer === "string" ? vc.issuer : vc.issuer,
+      },
+    }));
+    renderer.setExpression(credentialsToExpression(summaries));
+  };
+
+  refresh();
+  const unsubscribe = source.onCredentialsChanged(refresh);
+
+  return {
+    tick: (nowMs) => renderer.tick(nowMs),
+    dispose: () => {
+      unsubscribe();
+      renderer.dispose();
+    },
+  };
+}
