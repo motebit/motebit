@@ -72,8 +72,13 @@ async function handleDelegatePlan(
       process.exit(1);
     }
 
-    const ed = await import("@noble/ed25519");
-    const publicKey = await ed.getPublicKeyAsync(privateKey);
+    // Sovereign delegation derives the public key through the suite
+    // dispatcher rather than calling @noble directly — keeps the
+    // @noble import surface confined to packages/crypto/suite-dispatch.ts
+    // (the one place check-suite-dispatch permits) and PQ-ready: when
+    // ML-DSA suites land, only the dispatcher arm changes.
+    const { getPublicKeyBySuite } = await import("@motebit/crypto");
+    const publicKey = await getPublicKeyBySuite(privateKey, "motebit-jcs-ed25519-hex-v1");
     signingKeys = { privateKey, publicKey };
     solanaConfig = { rpcUrl: config.solanaRpcUrl ?? "https://api.mainnet-beta.solana.com" };
   }

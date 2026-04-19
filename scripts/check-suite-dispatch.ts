@@ -63,7 +63,8 @@ const FORBIDDEN_PATTERNS: { regex: RegExp; name: string }[] = [
   { regex: /\bed\.signAsync\b/, name: "ed.signAsync" },
   { regex: /\bed\.verify\b(?!Async)/, name: "ed.verify" },
   { regex: /\bed\.sign\b(?!Async)/, name: "ed.sign" },
-  { regex: /\bed\.getPublicKey\b/, name: "ed.getPublicKey" },
+  { regex: /\bed\.getPublicKey\b(?!Async)/, name: "ed.getPublicKey" },
+  { regex: /\bed\.getPublicKeyAsync\b/, name: "ed.getPublicKeyAsync" },
   { regex: /\bed\.keygenAsync\b/, name: "ed.keygenAsync" },
 ];
 

@@ -157,6 +157,7 @@ const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "generateKeypair",
     "ed25519Sign",
     "ed25519Verify",
+    "getPublicKeyBySuite",
     "createSignedToken",
     "verifySignedToken",
     "parseScopeSet",

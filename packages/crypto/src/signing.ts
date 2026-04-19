@@ -249,6 +249,7 @@ export {
   ed25519Sign,
   ed25519Verify,
   generateEd25519Keypair,
+  getPublicKeyBySuite,
   signBySuite,
   verifyBySuite,
 } from "./suite-dispatch.js";

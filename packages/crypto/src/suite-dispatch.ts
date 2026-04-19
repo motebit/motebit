@@ -145,3 +145,29 @@ export async function generateEd25519Keypair(): Promise<{
   const { secretKey, publicKey } = await ed.keygenAsync();
   return { publicKey, privateKey: secretKey };
 }
+
+/**
+ * Derive the matching public key from a private key, dispatched by suite.
+ *
+ * For Ed25519 suites this is deterministic seed expansion (hash the seed,
+ * derive the curve point). Callers that have a private key in hand and
+ * need the public key — sovereign delegation paths, identity bootstrap
+ * after a seed import, recovery flows — go through here so the noble
+ * call doesn't escape the dispatcher.
+ *
+ * Throws on unknown or unsupported suite (fail-closed). PQ arms will
+ * land alongside their `verifyBySuite` / `signBySuite` counterparts.
+ */
+export async function getPublicKeyBySuite(
+  privateKey: Uint8Array,
+  suite: SuiteId,
+): Promise<Uint8Array> {
+  switch (suite) {
+    case "motebit-jcs-ed25519-b64-v1":
+    case "motebit-jcs-ed25519-hex-v1":
+    case "motebit-jwt-ed25519-v1":
+    case "motebit-concat-ed25519-hex-v1":
+    case "eddsa-jcs-2022":
+      return ed.getPublicKeyAsync(privateKey);
+  }
+}

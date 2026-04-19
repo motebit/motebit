@@ -204,6 +204,9 @@ export function generateEd25519Keypair(): Promise<{
 // @public (undocumented)
 export function generateKeypair(): Promise<KeyPair>;
 
+// @public
+export function getPublicKeyBySuite(privateKey: Uint8Array, suite: SuiteId): Promise<Uint8Array>;
+
 // @public (undocumented)
 export interface GradientCredentialSubject {
     // (undocumented)
