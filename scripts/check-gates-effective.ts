@@ -463,6 +463,20 @@ export async function probeLeak(): Promise<boolean> {
         `interface Node { similarity: number; confidence: number }\nexport function rankInline(nodes: Node[]): Node[] {\n  return nodes\n    .map((n) => ({ ...n, score: n.similarity * 0.6 + n.confidence * 0.4 }))\n    .sort((a, b) => b.score - a.score);\n}\n`,
       ),
   },
+  {
+    script: "check-reputation-primitives",
+    proves:
+      "flags inline reputation scoring — Math.exp(-…) decay + interaction_count/volumeScore without importing the canonical computeReputationScore",
+    perturb: () =>
+      // Fixture matches the three-condition heuristic: decay signature +
+      // volume sub-score + no canonical import. Exactly the shape
+      // apps/admin/TrustPanel had before the fix that precipitated this
+      // gate.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}inline_reputation.ts`,
+        `export function reputationProbe(r: { interaction_count: number; last_seen_at: number }): number {\n  const volumeScore = Math.min(r.interaction_count / 50, 1.0);\n  const recency = Math.exp(-(Date.now() - r.last_seen_at) / 1000);\n  return (volumeScore + recency) / 2;\n}\n`,
+      ),
+  },
 ];
 
 /**

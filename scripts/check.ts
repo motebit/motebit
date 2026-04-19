@@ -194,6 +194,12 @@ const GATES: ReadonlyArray<Gate> = [
       "memory-retrieval ordering (similarity + confidence + recency scoring) lives in @motebit/memory-graph's five recall* lenses, not inline in apps/services/packages (invariant #27, added 2026-04-19 after the semiring-driven retrieval landed deprecating the hand-rolled retrieve() method; extends the protocol-primitive doctrine to retrieval judgment — one graph, five lenses, one algorithm)",
     script: "check-retrieval-primitives",
   },
+  {
+    name: "check-reputation-primitives",
+    defends:
+      "reputation scoring (continuous 0-1 score from trust-record + recency decay) lives in @motebit/policy (basic) or @motebit/market (receipt-history composite), not inline in apps or services (invariant #28, added 2026-04-19 after apps/admin/TrustPanel was caught with a reinvented formula that diverged from its claimed @motebit/policy source on the Beta-binomial prior — admin panel showed different scores than AI-core computed for the same agent record; extends the protocol-primitive doctrine to reputation judgment)",
+    script: "check-reputation-primitives",
+  },
 ];
 
 interface Result {

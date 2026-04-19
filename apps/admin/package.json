@@ -17,6 +17,7 @@
   "dependencies": {
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/gradient": "workspace:*",
+    "@motebit/policy": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "d3-force": "^3.0.0",
     "react": "^18.3.0",

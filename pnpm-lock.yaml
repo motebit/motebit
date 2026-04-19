@@ -93,6 +93,9 @@ importers:
       '@motebit/gradient':
         specifier: workspace:*
         version: link:../../packages/gradient
+      '@motebit/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
