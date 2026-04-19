@@ -15,8 +15,7 @@ import type {
 } from "@motebit/sdk";
 import { DeviceCapability } from "@motebit/sdk";
 import { ThreeJSAdapter } from "@motebit/render-engine";
-import type { AudioReactivity, CredentialSatelliteController } from "@motebit/render-engine";
-import { mountCredentialSatellites } from "@motebit/render-engine";
+import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
 import {
   createBrowserStorage,
@@ -120,7 +119,6 @@ export class WebApp {
   private renderer = new ThreeJSAdapter();
   private cursorPresence = new CursorPresence();
   private runtime: MotebitRuntime | null = null;
-  private credentialSatellites: CredentialSatelliteController | null = null;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -312,14 +310,6 @@ export class WebApp {
     this.runtime.start();
     this.cursorPresence.start();
 
-    // Mount credential satellites under the creature group — the 3D shadow
-    // of the sovereign panel's credential list. Satellites are nouns
-    // ("I have credentials"); artifacts are verbs ("a receipt arrived").
-    this.credentialSatellites = mountCredentialSatellites(
-      this.renderer.getCreatureGroup(),
-      this.runtime,
-    );
-
     // 30fps cursor tick: merge cursor presence into runtime state
     this.cuesTickInterval = setInterval(() => {
       const cursorUpdates = this.cursorPresence.getUpdates();
@@ -486,8 +476,6 @@ export class WebApp {
       clearInterval(this.housekeepingInterval);
       this.housekeepingInterval = null;
     }
-    this.credentialSatellites?.dispose();
-    this.credentialSatellites = null;
     this.runtime?.stop();
     this.renderer.dispose();
   }
@@ -507,9 +495,6 @@ export class WebApp {
         time,
       });
     }
-    // Credential satellites animate even when the runtime is paused —
-    // they represent state, not activity.
-    this.credentialSatellites?.tick(time * 1000);
   }
 
   // === Provider Management ===

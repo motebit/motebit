@@ -19,10 +19,6 @@ import type {
 } from "@motebit/runtime";
 import { ThreeJSAdapter } from "@motebit/render-engine";
 import {
-  mountCredentialSatellites,
-  type CredentialSatelliteController,
-} from "@motebit/render-engine";
-import {
   AnthropicProvider,
   OpenAIProvider,
   detectLocalInference,
@@ -347,7 +343,6 @@ export type GovernanceStatus = { governed: true } | { governed: false; reason: s
 export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
   private renderer: ThreeJSAdapter;
-  private credentialSatellites: CredentialSatelliteController | null = null;
   /**
    * The MCP manager owns the mcpAdapters / mcpConfigs / mcpToolCounts
    * maps + the connect / disconnect / tool-dispatch lifecycle. It reads
@@ -444,8 +439,6 @@ export class DesktopApp {
   }
 
   stop(): void {
-    this.credentialSatellites?.dispose();
-    this.credentialSatellites = null;
     this.runtime?.stop();
     this.renderer.dispose();
   }
@@ -456,9 +449,6 @@ export class DesktopApp {
 
   renderFrame(deltaTime: number, time: number): void {
     rendererCommands.renderFrame(this.renderer, this.runtime, deltaTime, time);
-    // Credential satellites animate independently of runtime state — they
-    // represent what the motebit HAS, not what it's doing right now.
-    this.credentialSatellites?.tick(time * 1000);
   }
 
   // === Spatial Canvas ===
@@ -795,14 +785,6 @@ export class DesktopApp {
         solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
       },
       { storage, renderer: this.renderer, ai: provider, keyring },
-    );
-
-    // Mount credential satellites under the creature group — same renderer
-    // as web/spatial (@motebit/render-engine), different surface wiring.
-    // Safe no-op if the adapter has not initialized a scene graph yet.
-    this.credentialSatellites = mountCredentialSatellites(
-      this.renderer.getCreatureGroup(),
-      this.runtime,
     );
 
     // Advertise full desktop capabilities
