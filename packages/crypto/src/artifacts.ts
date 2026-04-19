@@ -555,6 +555,134 @@ export async function verifyDelegationChain(
   return { valid: true };
 }
 
+// === Dispute Resolution + Adjudicator Votes (dispute §6.4 + §6.5) ===
+
+import type { AdjudicatorVote, DisputeResolution } from "@motebit/protocol";
+export type { AdjudicatorVote, DisputeResolution };
+
+/** The one suite AdjudicatorVotes sign under today — matches spec/dispute-v1.md §6.4. */
+export const ADJUDICATOR_VOTE_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/** The one suite DisputeResolutions sign under today — matches spec/dispute-v1.md §6.4. */
+export const DISPUTE_RESOLUTION_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Sign a federation peer's adjudication vote. The `dispute_id` IS part
+ * of the signed body — spec §6.5 Foundation Law: "Each AdjudicatorVote
+ * signature MUST cover its `dispute_id`. Votes are not portable across
+ * disputes — a malicious adjudicator collecting old votes from other
+ * disputes cannot stuff them into a new resolution because the
+ * dispute_id binding breaks the signature."
+ *
+ * Callers pass the body without `signature` or `suite`; the signer owns
+ * both.
+ */
+export async function signAdjudicatorVote(
+  vote: Omit<AdjudicatorVote, "signature" | "suite">,
+  peerPrivateKey: Uint8Array,
+): Promise<AdjudicatorVote> {
+  const body = { ...vote, suite: ADJUDICATOR_VOTE_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(ADJUDICATOR_VOTE_SUITE, message, peerPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify an adjudicator vote against the voting peer's public key.
+ * Fail-closed on unknown suite, base64url decode error, and primitive
+ * verification failure. Matching of `peer_id` to a legitimate federation
+ * peer is the caller's responsibility (this function verifies the
+ * signature; peer-membership is a trust decision).
+ */
+export async function verifyAdjudicatorVote(
+  vote: AdjudicatorVote,
+  peerPublicKey: Uint8Array,
+): Promise<boolean> {
+  if (vote.suite !== ADJUDICATOR_VOTE_SUITE) return false;
+  const { signature, ...body } = vote;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(vote.suite, message, sig, peerPublicKey);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sign a dispute resolution. For single-relay adjudication
+ * (`adjudicator_votes: []`) the relay signs with its own identity key.
+ * For federation resolutions, the leader collects signed
+ * `AdjudicatorVote` entries, then signs the aggregate.
+ *
+ * Callers pass the body without `signature` or `suite`; the signer
+ * owns both.
+ *
+ * Per spec §6.5 Foundation Law, a federation resolution MUST include
+ * individual `AdjudicatorVote` entries — aggregated-only verdicts are
+ * rejected. This signer does not enforce that at sign time (the
+ * orchestrator decides whether federation is required); the verifier
+ * re-checks every embedded vote signature when the array is non-empty.
+ */
+export async function signDisputeResolution(
+  resolution: Omit<DisputeResolution, "signature" | "suite">,
+  adjudicatorPrivateKey: Uint8Array,
+): Promise<DisputeResolution> {
+  const body = { ...resolution, suite: DISPUTE_RESOLUTION_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(DISPUTE_RESOLUTION_SUITE, message, adjudicatorPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a dispute resolution. Two layers:
+ *   1. Outer signature verifies against `adjudicatorPublicKey`.
+ *   2. When `adjudicator_votes.length > 0`, every embedded
+ *      AdjudicatorVote's signature is re-checked against the
+ *      corresponding `peerKeys` entry (lookup by `peer_id`). Per §6.5,
+ *      aggregated-only verdicts without individual peer signatures are
+ *      rejected — a missing peer key in the lookup is treated as a
+ *      verification failure.
+ *
+ * Fail-closed on unknown suite, decode errors, primitive verification
+ * failures, any missing peer key, and any invalid embedded vote.
+ */
+export async function verifyDisputeResolution(
+  resolution: DisputeResolution,
+  adjudicatorPublicKey: Uint8Array,
+  peerKeys?: Map<string, Uint8Array>,
+): Promise<boolean> {
+  if (resolution.suite !== DISPUTE_RESOLUTION_SUITE) return false;
+  const { signature, ...body } = resolution;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    const outerValid = await verifyBySuite(resolution.suite, message, sig, adjudicatorPublicKey);
+    if (!outerValid) return false;
+  } catch {
+    return false;
+  }
+
+  // Federation resolutions must carry signed peer votes. Verify every
+  // one against the caller-supplied peer-key map. Missing map or
+  // missing peer entry is a verification failure, not a pass-through.
+  if (resolution.adjudicator_votes.length > 0) {
+    if (!peerKeys) return false;
+    for (const vote of resolution.adjudicator_votes) {
+      if (vote.dispute_id !== resolution.dispute_id) return false;
+      const peerKey = peerKeys.get(vote.peer_id);
+      if (!peerKey) return false;
+      const voteValid = await verifyAdjudicatorVote(vote, peerKey);
+      if (!voteValid) return false;
+    }
+  }
+  return true;
+}
+
 // === Balance Waivers (migration §7.2) ===
 
 import type { BalanceWaiver } from "@motebit/protocol";

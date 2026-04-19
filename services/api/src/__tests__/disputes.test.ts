@@ -210,6 +210,113 @@ describe("Dispute: evidence + resolve", () => {
     });
     expect(resolveRes.status).toBe(400);
   });
+
+  // Spec/dispute-v1.md §6.3 + §6.5 Foundation Law: "A relay must not
+  // self-adjudicate when it is the defendant. Violation is a
+  // federation-level trust event." Also §6.2(1): "no single relay has
+  // complete jurisdiction" when the relay is a party. The relay
+  // refuses to sign a single-relay resolution in either direction
+  // (as defendant or as filer). Federation orchestration is deferred;
+  // until then these disputes remain unresolved and the agent's
+  // onchain evidence stands independently (§6.3, §10).
+  it("refuses to self-adjudicate when relay is the respondent (§6.5)", async () => {
+    const relayMotebitId = relay.relayIdentity.relayMotebitId;
+    createAllocation(relay, "alloc-defendant", "task-defendant", "del-ev");
+    const openRes = await openDispute(
+      relay,
+      "alloc-defendant",
+      "del-ev",
+      relayMotebitId,
+      "task-defendant",
+    );
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "overturned",
+        rationale: "Relay tries to exonerate itself",
+        fund_action: "refund_to_delegator",
+      }),
+    });
+    expect(resolveRes.status).toBe(409);
+    expect(await resolveRes.text()).toMatch(/federation adjudication required/i);
+  });
+
+  it("refuses to self-adjudicate when relay is the filer (§6.2)", async () => {
+    const relayMotebitId = relay.relayIdentity.relayMotebitId;
+    createAllocation(relay, "alloc-filer", "task-filer", relayMotebitId);
+    const openRes = await openDispute(relay, "alloc-filer", relayMotebitId, "wrk-ev", "task-filer");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "Relay rules in its own favor",
+        fund_action: "refund_to_delegator",
+      }),
+    });
+    expect(resolveRes.status).toBe(409);
+    expect(await resolveRes.text()).toMatch(/federation adjudication required/i);
+  });
+
+  it("resolution signature is verifiable with the relay's public key (single-relay path)", async () => {
+    const { verifyDisputeResolution } = await import("@motebit/encryption");
+    const { hexToBytes } = await import("@motebit/encryption");
+    const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "split",
+        rationale: "Evidence supports both positions",
+        fund_action: "split",
+      }),
+    });
+
+    // Reconstruct the signed resolution from the stored row and verify
+    // under the relay's public key — proves the new `signDisputeResolution`
+    // call site produces what `verifyDisputeResolution` accepts.
+    const row = relay.moteDb.db
+      .prepare(
+        "SELECT dispute_id, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature FROM relay_dispute_resolutions WHERE dispute_id = ?",
+      )
+      .get(dispute_id) as {
+      dispute_id: string;
+      resolution: "upheld" | "overturned" | "split";
+      rationale: string;
+      fund_action: "release_to_worker" | "refund_to_delegator" | "split";
+      split_ratio: number;
+      adjudicator: string;
+      adjudicator_votes: string;
+      resolved_at: number;
+      signature: string;
+    };
+
+    const resolutionToVerify = {
+      dispute_id: row.dispute_id,
+      resolution: row.resolution,
+      rationale: row.rationale,
+      fund_action: row.fund_action,
+      split_ratio: row.split_ratio,
+      adjudicator: row.adjudicator,
+      adjudicator_votes: JSON.parse(row.adjudicator_votes) as never[],
+      resolved_at: row.resolved_at,
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+      signature: row.signature,
+    };
+
+    const valid = await verifyDisputeResolution(
+      resolutionToVerify,
+      hexToBytes(relay.relayIdentity.publicKeyHex),
+    );
+    expect(valid).toBe(true);
+  });
 });
 
 describe("Dispute: appeal", () => {

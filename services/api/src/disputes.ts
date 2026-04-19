@@ -11,7 +11,7 @@
  */
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { sign, canonicalJson, bytesToHex } from "@motebit/encryption";
+import { signDisputeResolution } from "@motebit/encryption";
 import type {
   DisputeState,
   DisputeOutcome,
@@ -344,6 +344,26 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
+    // Foundation law §6.5: "A relay must not self-adjudicate when it
+    // is the defendant." The same logic applies when the relay is the
+    // filing party — no entity may judge its own case (§6.2). Refuse
+    // to sign a single-relay resolution in either direction; the
+    // dispute must go to federation adjudication per §6.3. Federation
+    // orchestration is not yet implemented — without federation peers,
+    // the agent's onchain credential anchors and settlement proofs
+    // stand as independent evidence (§6.3, §10).
+    if (
+      dispute.filed_by === relayIdentity.relayMotebitId ||
+      dispute.respondent === relayIdentity.relayMotebitId
+    ) {
+      throw new HTTPException(409, {
+        message:
+          "Relay is a party to this dispute; federation adjudication required (spec/dispute-v1.md §6.3, §6.5). " +
+          "This relay has no federation peers configured — the dispute remains unresolved here; " +
+          "the agent's onchain credential anchors and settlement proofs stand as independent evidence.",
+      });
+    }
+
     // Rationale required (§6.5)
     if (!body.rationale) {
       throw new HTTPException(400, { message: "Rationale is required" });
@@ -354,20 +374,25 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       (body.resolution === "upheld" ? 0 : body.resolution === "overturned" ? 1 : 0.5);
     const resolvedAt = Date.now();
 
-    // Sign the resolution
-    const resolutionPayload = {
-      dispute_id: disputeId,
-      resolution: body.resolution,
-      rationale: body.rationale,
-      fund_action: body.fund_action,
-      split_ratio: splitRatio,
-      adjudicator: relayIdentity.relayMotebitId,
-      adjudicator_votes: [],
-      resolved_at: resolvedAt,
-    };
-    const canonical = canonicalJson(resolutionPayload);
-    const sig = await sign(new TextEncoder().encode(canonical), relayIdentity.privateKey);
-    const signatureHex = bytesToHex(sig);
+    // Sign the resolution through `@motebit/encryption`'s signer — the
+    // protocol-primitive-placement rule says the sign recipe lives in
+    // the package layer, not inline here. `adjudicator_votes: []` is
+    // correct for single-relay (§6.4); federation orchestration fills
+    // this array when it lands.
+    const signedResolution = await signDisputeResolution(
+      {
+        dispute_id: disputeId,
+        resolution: body.resolution,
+        rationale: body.rationale,
+        fund_action: body.fund_action,
+        split_ratio: splitRatio,
+        adjudicator: relayIdentity.relayMotebitId,
+        adjudicator_votes: [],
+        resolved_at: resolvedAt,
+      },
+      relayIdentity.privateKey,
+    );
+    const signatureHex = signedResolution.signature;
 
     const resolutionId = `res-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 

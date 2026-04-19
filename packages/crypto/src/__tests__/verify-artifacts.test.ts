@@ -15,6 +15,10 @@ import {
   verifySettlement,
   signBalanceWaiver,
   verifyBalanceWaiver,
+  signAdjudicatorVote,
+  verifyAdjudicatorVote,
+  signDisputeResolution,
+  verifyDisputeResolution,
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   signKeySuccession,
@@ -452,6 +456,191 @@ describe("signBalanceWaiver / verifyBalanceWaiver", () => {
     const a = await signBalanceWaiver(w, kp.privateKey);
     const b = await signBalanceWaiver(w, kp.privateKey);
     expect(a.signature).toBe(b.signature);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signAdjudicatorVote / verifyAdjudicatorVote  (dispute-v1 §6.4 + §6.5)
+// ---------------------------------------------------------------------------
+
+describe("signAdjudicatorVote / verifyAdjudicatorVote", () => {
+  function makeVote(overrides?: { dispute_id?: string; peer_id?: string }) {
+    return {
+      dispute_id: overrides?.dispute_id ?? "dispute-alpha",
+      peer_id: overrides?.peer_id ?? "peer-one",
+      vote: "upheld" as const,
+      rationale: "Evidence favors the filing party.",
+    };
+  }
+
+  it("round-trips and stamps suite", async () => {
+    const kp = await generateKeypair();
+    const signed = await signAdjudicatorVote(makeVote(), kp.privateKey);
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(signed.signature).toBeTruthy();
+    expect(await verifyAdjudicatorVote(signed, kp.publicKey)).toBe(true);
+  });
+
+  // The foundation-law invariant: §6.5 says "Each AdjudicatorVote
+  // signature MUST cover its dispute_id. Votes are not portable across
+  // disputes." If a vote signed for dispute A verifies when attached to
+  // dispute B, the binding is broken.
+  it("signature binds to dispute_id — vote for dispute A fails against dispute B's bytes (§6.5)", async () => {
+    const kp = await generateKeypair();
+    const voteForA = await signAdjudicatorVote(
+      makeVote({ dispute_id: "dispute-A" }),
+      kp.privateKey,
+    );
+    const reattributedToB = { ...voteForA, dispute_id: "dispute-B" };
+    expect(await verifyAdjudicatorVote(reattributedToB, kp.publicKey)).toBe(false);
+  });
+
+  it("detects vote-outcome tampering", async () => {
+    const kp = await generateKeypair();
+    const signed = await signAdjudicatorVote(makeVote(), kp.privateKey);
+    const flipped = { ...signed, vote: "overturned" as const };
+    expect(await verifyAdjudicatorVote(flipped, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signAdjudicatorVote(makeVote(), kpA.privateKey);
+    expect(await verifyAdjudicatorVote(signed, kpB.publicKey)).toBe(false);
+  });
+
+  it("rejects unknown suite (no legacy-no-suite path)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signAdjudicatorVote(makeVote(), kp.privateKey);
+    const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
+    expect(await verifyAdjudicatorVote(wrongSuite, kp.publicKey)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signDisputeResolution / verifyDisputeResolution  (dispute-v1 §6.4 + §6.5)
+// ---------------------------------------------------------------------------
+
+describe("signDisputeResolution / verifyDisputeResolution", () => {
+  function makeResolution(overrides?: {
+    dispute_id?: string;
+    adjudicator?: string;
+    adjudicator_votes?: Parameters<typeof signAdjudicatorVote>[0][];
+  }) {
+    return {
+      dispute_id: overrides?.dispute_id ?? "dispute-alpha",
+      resolution: "upheld" as const,
+      rationale: "Both parties presented evidence; the filing party's claim is substantiated.",
+      fund_action: "release_to_worker" as const,
+      split_ratio: 1,
+      adjudicator: overrides?.adjudicator ?? "relay-1",
+      adjudicator_votes: [],
+      resolved_at: 1_700_000_000_000,
+    };
+  }
+
+  it("single-relay resolution: no votes, outer signature verifies", async () => {
+    const relayKp = await generateKeypair();
+    const signed = await signDisputeResolution(makeResolution(), relayKp.privateKey);
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(await verifyDisputeResolution(signed, relayKp.publicKey)).toBe(true);
+  });
+
+  it("federation resolution: every embedded vote signature re-checked (§6.5)", async () => {
+    const leaderKp = await generateKeypair();
+    const peer1 = await generateKeypair();
+    const peer2 = await generateKeypair();
+    const peer3 = await generateKeypair();
+
+    const votes = await Promise.all([
+      signAdjudicatorVote(
+        { dispute_id: "d-1", peer_id: "p1", vote: "upheld", rationale: "ok" },
+        peer1.privateKey,
+      ),
+      signAdjudicatorVote(
+        { dispute_id: "d-1", peer_id: "p2", vote: "upheld", rationale: "ok" },
+        peer2.privateKey,
+      ),
+      signAdjudicatorVote(
+        { dispute_id: "d-1", peer_id: "p3", vote: "split", rationale: "partial" },
+        peer3.privateKey,
+      ),
+    ]);
+
+    const body = {
+      ...makeResolution({ dispute_id: "d-1", adjudicator: "leader" }),
+      adjudicator_votes: votes,
+    };
+    const signed = await signDisputeResolution(body, leaderKp.privateKey);
+
+    const peerKeys = new Map<string, Uint8Array>([
+      ["p1", peer1.publicKey],
+      ["p2", peer2.publicKey],
+      ["p3", peer3.publicKey],
+    ]);
+    expect(await verifyDisputeResolution(signed, leaderKp.publicKey, peerKeys)).toBe(true);
+  });
+
+  it("federation resolution with missing peer key — rejected (aggregated-only verdicts forbidden)", async () => {
+    const leaderKp = await generateKeypair();
+    const peer1 = await generateKeypair();
+    const vote = await signAdjudicatorVote(
+      { dispute_id: "d-2", peer_id: "p1", vote: "upheld", rationale: "ok" },
+      peer1.privateKey,
+    );
+    const signed = await signDisputeResolution(
+      { ...makeResolution({ dispute_id: "d-2" }), adjudicator_votes: [vote] },
+      leaderKp.privateKey,
+    );
+    expect(await verifyDisputeResolution(signed, leaderKp.publicKey, new Map())).toBe(false);
+  });
+
+  it("federation resolution with one tampered vote — whole resolution fails", async () => {
+    const leaderKp = await generateKeypair();
+    const peer1 = await generateKeypair();
+    const vote = await signAdjudicatorVote(
+      { dispute_id: "d-3", peer_id: "p1", vote: "upheld", rationale: "ok" },
+      peer1.privateKey,
+    );
+    const tamperedVote = { ...vote, vote: "overturned" as const };
+    const signed = await signDisputeResolution(
+      { ...makeResolution({ dispute_id: "d-3" }), adjudicator_votes: [tamperedVote] },
+      leaderKp.privateKey,
+    );
+    const peerKeys = new Map([["p1", peer1.publicKey]]);
+    expect(await verifyDisputeResolution(signed, leaderKp.publicKey, peerKeys)).toBe(false);
+  });
+
+  it("vote whose dispute_id does not match the outer resolution — rejected", async () => {
+    const leaderKp = await generateKeypair();
+    const peer1 = await generateKeypair();
+    const voteForOtherDispute = await signAdjudicatorVote(
+      { dispute_id: "d-OTHER", peer_id: "p1", vote: "upheld", rationale: "ok" },
+      peer1.privateKey,
+    );
+    const signed = await signDisputeResolution(
+      {
+        ...makeResolution({ dispute_id: "d-TARGET" }),
+        adjudicator_votes: [voteForOtherDispute],
+      },
+      leaderKp.privateKey,
+    );
+    const peerKeys = new Map([["p1", peer1.publicKey]]);
+    expect(await verifyDisputeResolution(signed, leaderKp.publicKey, peerKeys)).toBe(false);
+  });
+
+  it("detects outer-signature tampering (split_ratio)", async () => {
+    const relayKp = await generateKeypair();
+    const signed = await signDisputeResolution(makeResolution(), relayKp.privateKey);
+    const tampered = { ...signed, split_ratio: 0 };
+    expect(await verifyDisputeResolution(tampered, relayKp.publicKey)).toBe(false);
+  });
+
+  it("rejects unknown suite", async () => {
+    const relayKp = await generateKeypair();
+    const signed = await signDisputeResolution(makeResolution(), relayKp.privateKey);
+    const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
+    expect(await verifyDisputeResolution(wrongSuite, relayKp.publicKey)).toBe(false);
   });
 });
 
