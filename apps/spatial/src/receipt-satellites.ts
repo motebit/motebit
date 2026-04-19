@@ -29,8 +29,8 @@
 import * as THREE from "three";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { verifyReceiptChain } from "@motebit/encryption";
-import type { SatelliteExpression, SatelliteItem, SpatialExpression } from "./spatial-expression";
-import { registerSpatialDataModule } from "./spatial-expression";
+import type { SatelliteExpression, SatelliteItem, SpatialExpression } from "@motebit/render-engine";
+import { registerSpatialDataModule } from "@motebit/render-engine";
 
 export const RECEIPT_SATELLITES_MODULE = registerSpatialDataModule({
   kind: "satellite",

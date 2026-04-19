@@ -1802,6 +1802,16 @@ export class MotebitRuntime {
     this.credentialManager.clearIssuedCredentials();
   }
 
+  /**
+   * Subscribe to credential-set changes. Fires after each credential is
+   * persisted (locally issued + forwarded through persistCredential).
+   * Returns an unsubscribe function. Used by surfaces rendering credentials
+   * as scene objects (satellites) so they don't poll.
+   */
+  onCredentialsChanged(fn: () => void): () => void {
+    return this.credentialManager.onChange(fn);
+  }
+
   private wireLoopDeps(): void {
     if (this.provider) {
       const provider = this.provider;

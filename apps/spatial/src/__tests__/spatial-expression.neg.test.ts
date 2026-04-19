@@ -21,9 +21,13 @@
  * accidentally deletes the enforcement.
  */
 import { describe, it, expect } from "vitest";
-import type { SpatialDataModule, SpatialExpression, SpatialKind } from "../spatial-expression";
-import { registerSpatialDataModule, listSpatialDataModules } from "../spatial-expression";
-import { CREDENTIAL_SATELLITES_MODULE, credentialsToExpression } from "../credential-satellites";
+import type { SpatialDataModule, SpatialExpression, SpatialKind } from "@motebit/render-engine";
+import {
+  registerSpatialDataModule,
+  listSpatialDataModules,
+  CREDENTIAL_SATELLITES_MODULE,
+  credentialsToExpression,
+} from "@motebit/render-engine";
 
 describe("SpatialKind is the closed vocabulary", () => {
   it("accepts the four canonical kinds at the type level", () => {

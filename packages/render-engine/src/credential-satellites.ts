@@ -1,35 +1,35 @@
 /**
- * Credential satellites — the first scene-object class in spatial.
+ * Credential satellites — the first scene-object class, shared across every
+ * surface that renders a creature in a 3D scene.
  *
- * Credentials are the cleanest first target for the spatial-object
- * doctrine because they are small, stable, and structurally list-shaped.
- * The 2D list in the settings overlay still exists for configuration;
- * this module renders the canonical expression: each credential is a
- * small glass orb orbiting the creature.
+ * Credentials are the cleanest first target because they are small, stable,
+ * and structurally list-shaped. The 2D list in each surface's settings /
+ * sovereign panel still exists for configuration; this module renders the
+ * canonical expression: each credential is a small glass orb orbiting the
+ * creature.
  *
- * The module declares itself a SATELLITE expression (see
- * `./spatial-expression.ts`). Attempting to declare this module as a
- * "panel" fails to compile — that is the category-3 enforcement the
- * doctrine requires, mirrored on the GuestRail / SovereignRail custody
- * boundary.
+ * Split:
+ *   - `credentialsToExpression` is a pure data transform — no THREE.
+ *   - `CredentialSatelliteRenderer` mounts sphere meshes under a parent
+ *     THREE.Group (typically the creature's group via
+ *     `RenderAdapter.getCreatureGroup()`). Positions are recomputed each
+ *     frame via the orbital parameters on each SatelliteItem.
  *
- * The renderer is intentionally minimal: a single THREE.Group of sphere
- * meshes parented to the creature's group (so they inherit the creature's
- * world position). Positions are recomputed each frame via the orbital
- * parameters on each SatelliteItem. Dispose releases every mesh, material,
- * and geometry.
+ * The module was extracted from apps/spatial to this package so web
+ * (and any future surface with a 3D scene) consumes one implementation
+ * instead of duplicating the geometry, palette, and orbit math.
  */
 
 import * as THREE from "three";
-import type { SatelliteExpression, SatelliteItem, SpatialExpression } from "./spatial-expression";
-import { registerSpatialDataModule } from "./spatial-expression";
+import type { SatelliteExpression, SatelliteItem, SpatialExpression } from "./expression.js";
+import { registerSpatialDataModule } from "./expression.js";
 
 export const CREDENTIAL_SATELLITES_MODULE = registerSpatialDataModule({
   kind: "satellite",
   name: "credentials",
 });
 
-/** Minimal shape of a relay-issued credential as the spatial app reads it. */
+/** Minimal shape of a relay-issued credential. */
 export interface CredentialSummary {
   readonly credential_id?: string;
   readonly credential_type: string;
@@ -108,7 +108,7 @@ interface SatelliteMesh {
 
 /**
  * Mounts satellite meshes under a parent THREE.Group (typically the
- * creature's group, via WebXRThreeJSAdapter.getCreatureGroup()). Call
+ * creature's group, via `RenderAdapter.getCreatureGroup()`). Call
  * `setExpression()` whenever the credential set changes; call `tick()`
  * every frame with the current timestamp in ms to animate the orbits;
  * call `dispose()` on teardown.

@@ -1,20 +1,9 @@
 /**
  * SpatialExpression — the discriminated type every structured-data module
- * in spatial MUST declare itself as.
- *
- * Doctrine (CLAUDE.md, "Spatial rejects the panel metaphor"):
- * spatial data is expressed as scene objects, not rectangular panels.
- * The doctrine used to be prose; this module makes it a compile-time
- * boundary. A structured-data module that claims to be a "panel" produces
- * a tsc error, not a lint warning.
- *
- * The pattern mirrors the GuestRail / SovereignRail custody split
- * (services/api/src/__tests__/custody-boundary.test.ts): express the
- * invariant as a type, back it with a @ts-expect-error negative proof,
- * and the build refuses to silence the constraint.
+ * with a scene representation declares itself as.
  *
  * The four shapes — satellite, creature, environment, attractor — come
- * directly from the vision documents (`vision_spatial_canvas.md`,
+ * from the vision documents (`vision_spatial_canvas.md`,
  * `vision_interactive_artifacts.md`, `vision_endgame_interface.md`):
  *
  *   - satellite:   orbits the creature (credentials, tools, active tasks)
@@ -24,9 +13,11 @@
  *   - attractor:   a spatial focus the creature moves toward (goals,
  *                  pending approvals, calls for attention)
  *
- * If a new structural concept arises that doesn't fit these four, the
- * answer is to widen the union deliberately — not to fall back to a
- * rectangular panel.
+ * These types live in @motebit/render-engine so any surface with a 3D
+ * scene — web, spatial, a future mobile-AR — can consume them.
+ * The doctrine enforcement ("spatial rejects panels") lives in
+ * apps/spatial/__tests__/spatial-expression.neg.test.ts; the types
+ * themselves are neutral.
  */
 
 export interface SatelliteItem {
@@ -76,10 +67,11 @@ export interface AttractorExpression {
 }
 
 /**
- * The canonical union. Every structured-data module in spatial MUST
- * produce one of these shapes. Adding "panel" or "list" here is the
- * spatial anti-pattern and will cause the negative-proof test
- * (`src/__tests__/spatial-expression.neg.test.ts`) to fail compilation.
+ * The canonical union. Every structured-data module with a scene
+ * representation MUST produce one of these shapes. apps/spatial enforces
+ * "no panels" at compile time via `spatial-expression.neg.test.ts` —
+ * widening this union to include `"panel"` or any other non-member
+ * fails that negative proof.
  */
 export type SpatialExpression =
   | SatelliteExpression

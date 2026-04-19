@@ -182,6 +182,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every per-directory CLAUDE.md is indexed in root CLAUDE.md under 'Per-directory doctrine loads lazily' — sub-doctrine is only discoverable through the root index, so an unindexed CLAUDE.md is invisible to top-down readers (invariant #25, added 2026-04-18 after a birds-eye review found 6 package CLAUDE.md files added Apr 16 silently absent from the root index; extends the self-attesting-system doctrine to the doctrine-index itself)",
     script: "check-claude-md",
   },
+  {
+    name: "check-scene-primitives",
+    defends:
+      "SpatialExpression renderers live in @motebit/render-engine, not inline in apps (invariant #26, added 2026-04-19 after CredentialSatelliteRenderer moved from apps/spatial to packages/render-engine so apps/web could consume the same renderer; extends the protocol-primitive doctrine to scene primitives — every surface with a 3D creature consumes one implementation)",
+    script: "check-scene-primitives",
+  },
 ];
 
 interface Result {

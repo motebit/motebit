@@ -117,6 +117,18 @@ const BOUNDARY_GROUPS: BoundaryGroup[] = [
       "packages/core-identity/src/index.ts",
     ],
   },
+  {
+    name: "scene_primitives",
+    description:
+      "Scene renderers + SpatialExpression kinds — credentials, receipts, and future agents/goals/memory. When one extracts to @motebit/render-engine or adds a kind, the siblings should move through the same pass (check-scene-primitives gate, invariant #26).",
+    files: [
+      "packages/render-engine/src/expression.ts",
+      "packages/render-engine/src/credential-satellites.ts",
+      "apps/spatial/src/receipt-satellites.ts",
+      "apps/spatial/src/__tests__/spatial-expression.neg.test.ts",
+      "apps/web/src/scene/credential-satellites.ts",
+    ],
+  },
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────

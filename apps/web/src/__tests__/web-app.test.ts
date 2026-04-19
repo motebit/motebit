@@ -28,9 +28,24 @@ vi.mock("@motebit/render-engine", () => {
     setTrustMode() {}
     setListeningIndicator() {}
     enableOrbitControls() {}
+    getCreatureGroup() {
+      // Headless tests have no scene graph — mountCredentialSatellites
+      // returns null and the web-app renders without satellites.
+      return null;
+    }
     dispose() {}
   }
-  return { ThreeJSAdapter: MockThreeJSAdapter, NullRenderAdapter: MockThreeJSAdapter };
+  class MockCredentialSatelliteRenderer {
+    setExpression() {}
+    tick() {}
+    dispose() {}
+  }
+  return {
+    ThreeJSAdapter: MockThreeJSAdapter,
+    NullRenderAdapter: MockThreeJSAdapter,
+    CredentialSatelliteRenderer: MockCredentialSatelliteRenderer,
+    credentialsToExpression: () => ({ kind: "satellite", items: [] }),
+  };
 });
 
 // Stub CursorPresence — needs window/document

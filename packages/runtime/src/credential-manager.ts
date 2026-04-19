@@ -26,6 +26,7 @@ export interface CredentialManagerDeps {
 export class CredentialManager {
   private _issuedCredentials: import("@motebit/encryption").VerifiableCredential<AnyCredentialSubject>[] =
     [];
+  private changeListeners = new Set<() => void>();
   /** Callback to submit credentials to relay for indexing. Set externally (e.g. by enableInteractiveDelegation). */
   credentialSubmitter:
     | ((
@@ -35,6 +36,18 @@ export class CredentialManager {
     | null = null;
 
   constructor(private readonly deps: CredentialManagerDeps) {}
+
+  /**
+   * Subscribe to credential-set changes (fires after each `persistCredential`).
+   * Returns an unsubscribe function. Used by surfaces that render credentials
+   * as scene objects (satellites) so they don't have to poll.
+   */
+  onChange(fn: () => void): () => void {
+    this.changeListeners.add(fn);
+    return () => {
+      this.changeListeners.delete(fn);
+    };
+  }
 
   /**
    * Issue a W3C Verifiable Credential containing this agent's current gradient.
@@ -97,6 +110,16 @@ export class CredentialManager {
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    }
+    // Notify subscribers (satellite renderers, panels) that the set changed.
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch (err: unknown) {
+        this.deps.logger.warn("credential change listener threw", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 }

@@ -151,7 +151,7 @@ The remaining 31 packages are BSL-1.1 — the reference implementation that answ
 
 Spatial rejects the panel metaphor. Porting 2D panels to a headset is cargo-cult parity and surrenders the medium's only advantage. The surface ships a **functional HUD** for read-only essentials (connection state, balance, active task) and expresses structured data as **spatial objects**.
 
-The taxonomy is compile-time, not prose. `apps/spatial/src/spatial-expression.ts` declares:
+The taxonomy is compile-time, not prose. `@motebit/render-engine` declares the shared union — consumed by every surface that renders a creature (spatial, web, future mobile-AR):
 
 ```ts
 export type SpatialExpression =
@@ -161,7 +161,7 @@ export type SpatialExpression =
   | AttractorExpression;  // goals, tasks
 ```
 
-Every structured-data module registers its kind via `registerSpatialDataModule<K extends SpatialKind>(...)`. Passing `"panel"` or `"list"` is a `tsc` error, locked by negative-type assertions in `__tests__/spatial-expression.neg.test.ts`. Credential satellites are the first shipping expression — each credential orbits the creature as a small glass orb.
+Every structured-data module registers its kind via `registerSpatialDataModule<K extends SpatialKind>(...)`. Passing `"panel"` or `"list"` is a `tsc` error, locked by negative-type assertions in `apps/spatial/src/__tests__/spatial-expression.neg.test.ts`. Spatial keeps the doctrinal "no panels" enforcement; the primitives themselves are shared. Credential satellites are the first shipping expression — each credential orbits the creature as a small glass orb. The invariant that scene renderers live in the package, not inline in apps, is enforced by `check-scene-primitives` (drift defense #26).
 
 ## Services
 

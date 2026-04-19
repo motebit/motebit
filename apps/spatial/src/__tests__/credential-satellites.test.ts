@@ -11,7 +11,7 @@ import {
   CredentialSatelliteRenderer,
   credentialsToExpression,
   hueForType,
-} from "../credential-satellites";
+} from "@motebit/render-engine";
 
 function parent(): THREE.Group {
   const g = new THREE.Group();

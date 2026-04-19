@@ -24,7 +24,7 @@ import {
   CredentialSatelliteRenderer,
   credentialsToExpression,
   type CredentialSummary,
-} from "./credential-satellites";
+} from "@motebit/render-engine";
 import { ReceiptSatelliteCoordinator } from "./receipt-satellites";
 
 // === DOM elements ===
