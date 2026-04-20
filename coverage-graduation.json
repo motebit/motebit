@@ -6,10 +6,10 @@
     {
       "package": "@motebit/wallet-solana",
       "vitest_config": "packages/wallet-solana/vitest.config.ts",
-      "current": { "statements": 42, "branches": 86, "functions": 58, "lines": 42 },
+      "current": { "statements": 61, "branches": 86, "functions": 71, "lines": 61 },
       "target": { "statements": 80, "branches": 86, "functions": 80, "lines": 80 },
       "target_date": "2026-06-01",
-      "rationale": "Sovereign rail. Money path. Untested surface concentrated in @solana/web3.js boundary (sendUsdc, sendUsdcBatch, getTransaction inside Web3JsRpcAdapter) and SolanaMemoSubmitter batch/revocation paths. Close by adding integration tests against the SolanaRpcAdapter interface with a fake RPC, then raise the thresholds in vitest.config.ts."
+      "rationale": "Sovereign rail + moat anchor path. Raised 2026-04-20 from 42/86/58/42 → 61/86/71/61 by bringing memo-submitter.ts to 100% (Connection-mocked submission + isAvailable + revocation tests). Remaining gap is web3js-adapter.ts (USDC transfer RPC: sendUsdc / sendUsdcBatch / getTransaction) and rail.ts — both pending Connection-mock tests in a follow-up pass. Close by mirroring the memo-submitter mock pattern on the adapter's SPL-token paths, then raise both threshold and this manifest together per the doctrine's drift rule."
     }
   ]
 }

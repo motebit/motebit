@@ -1,18 +1,22 @@
 import { defineMotebitTest } from "../../vitest.shared.js";
 
-// Sovereign rail coverage floor — locked at measured baseline (2026-04-16).
-// Policy: never lower thresholds; write tests to meet them. This package had
-// no vitest.config.ts before today, so this is the first locked floor.
+// Sovereign rail coverage floor. Policy: never lower thresholds; write
+// tests to meet them. Raised 2026-04-20 from the original
+// 2026-04-16 baseline (42/86/58/42 → 61/86/71/61) as part of the
+// coverage-graduation commitment — the moat path through
+// `memo-submitter.ts` is now 100% covered (consolidation receipts
+// anchor through it; it had to be robust). Remaining gap is
+// concentrated in `web3js-adapter.ts` (USDC transfer path) and
+// `rail.ts` — both pending Connection-mock tests in a follow-up pass.
 //
 // adapter.ts is excluded (types-only; no runtime emit), matching the
 // identity-file/schema.ts and protocol/*.ts exclusion precedent.
 //
-// Follow-up (tracked outside this file): the runtime coverage gap is
-// concentrated in the @solana/web3.js boundary — sendUsdc, sendUsdcBatch,
-// getTransaction inside Web3JsRpcAdapter, and the memo-submitter's
-// batch/revocation paths. Close by adding integration tests against the
-// SolanaRpcAdapter interface with a fake RPC, then raise these thresholds.
+// Graduation target: 80/80/80/80 by 2026-06-01 (see
+// `coverage-graduation.json`). Each raise MUST update both this file
+// and the manifest in the same PR per the graduation doctrine's
+// drift rule.
 export default defineMotebitTest({
   coverageExclude: ["src/adapter.ts"],
-  thresholds: { statements: 42, branches: 86, functions: 58, lines: 42 },
+  thresholds: { statements: 61, branches: 86, functions: 71, lines: 61 },
 });
