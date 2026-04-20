@@ -287,6 +287,13 @@ export class WebApp {
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
         solana: { rpcUrl: solanaRpcUrl },
+        // Deferred memory formation — desktop flipped first
+        // (c931fefa); web joins to complete one-pass delivery of the
+        // autoDream-shape path. Turns return as soon as the response
+        // streams; embedding + consolidation run in the background
+        // queue; the next turn's pre-idle barrier preserves graph
+        // consistency. See packages/runtime/src/memory-formation-queue.ts.
+        deferMemoryFormation: true,
       },
       { storage, renderer: this.renderer, ai: undefined, keyring },
     );

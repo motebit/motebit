@@ -899,6 +899,14 @@ export class MobileApp {
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
         solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
+        // Deferred memory formation — mobile benefits most from the
+        // autoDream-shape path because on-device embedding is slower
+        // than on desktop/web. Turns return as soon as the response
+        // streams; formation runs in the background queue. The
+        // pre-turn idle barrier preserves graph consistency before
+        // the next turn's retrieval. See
+        // packages/runtime/src/memory-formation-queue.ts.
+        deferMemoryFormation: true,
       },
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );
