@@ -1998,6 +1998,14 @@
     .mem-sensitivity-badge.medical { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
     .mem-sensitivity-badge.financial { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
     .mem-sensitivity-badge.secret { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+    /* Certainty badge — Memory Trinity §5.8 tentative → confident → absolute */
+    .mem-certainty {
+      font-variant: small-caps;
+      letter-spacing: 0.02em;
+    }
+    .mem-certainty-absolute { color: var(--accent); font-weight: 500; }
+    .mem-certainty-confident { color: var(--text-faint); }
+    .mem-certainty-tentative { color: var(--text-faint); font-style: italic; opacity: 0.75; }
     .mem-pin-btn {
       position: absolute;
       top: 8px;

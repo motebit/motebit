@@ -4437,6 +4437,26 @@
       color: var(--text-ghost);
     }
 
+    /* Certainty badge — tentative / confident / absolute from the
+       Memory Trinity's §5.8 promotion threshold. Ground-truth memories
+       render with a slightly emphasized weight; tentative dims toward
+       the ghost color. Calm — no flashing, no heavy borders. */
+    .memory-item-certainty {
+      font-variant: small-caps;
+      letter-spacing: 0.02em;
+    }
+    .memory-certainty-absolute {
+      color: var(--accent);
+      font-weight: 500;
+    }
+    .memory-certainty-confident {
+      color: var(--text-muted);
+    }
+    .memory-certainty-tentative {
+      color: var(--text-ghost);
+      font-style: italic;
+    }
+
     /* Focus-visible — outline only on keyboard navigation, not mouse click */
     :focus { outline: none; }
     :focus-visible {

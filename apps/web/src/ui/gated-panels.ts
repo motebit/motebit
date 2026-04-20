@@ -17,6 +17,7 @@ import { renderMarkdown } from "./chat";
 import {
   createAgentsController,
   createMemoryController,
+  classifyCertainty,
   type AgentRecord,
   type AgentsFetchAdapter,
   type AgentsState,
@@ -168,9 +169,16 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
       // Decayed confidence — previously web rendered raw node.confidence,
       // diverging from desktop/mobile. Controller-canonical now.
-      const confidence = document.createElement("span");
       const decayed = memoryCtrl.getDecayedConfidence(node);
-      confidence.textContent = `${Math.round(decayed * 100)}%`;
+      const certainty = classifyCertainty(decayed);
+      const confidence = document.createElement("span");
+      confidence.className = `memory-item-certainty memory-certainty-${certainty}`;
+      // Three-state label surfaces the `memory_promoted` state (§5.8) —
+      // when the agent's Layer-1 index sees `(absolute)` for a node,
+      // the panel renders the same badge here. Percentage stays for
+      // the fine-grained numeric reader; the label is the at-a-glance
+      // certainty cue.
+      confidence.textContent = `${certainty} · ${Math.round(decayed * 100)}%`;
       meta.appendChild(confidence);
 
       const time = document.createElement("span");

@@ -2,7 +2,12 @@ import { RelationType, SensitivityLevel } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge, DeletionCertificate } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
-import { createMemoryController, type MemoryFetchAdapter, type MemoryState } from "@motebit/panels";
+import {
+  createMemoryController,
+  classifyCertainty,
+  type MemoryFetchAdapter,
+  type MemoryState,
+} from "@motebit/panels";
 
 // === DOM Refs ===
 
@@ -493,9 +498,15 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       metaDiv.appendChild(badge);
     }
 
-    const conf = document.createElement("span");
     const decayed = memoryCtrl.getDecayedConfidence(mem);
-    conf.textContent = `${Math.round(decayed * 100)}%`;
+    const certainty = classifyCertainty(decayed);
+    const conf = document.createElement("span");
+    // Three-state certainty badge mirrors the Layer-1 memory index
+    // the agent sees in its own system prompt (spec/memory-delta-v1.md
+    // §5.8). When the motebit promotes a memory to "absolute", the
+    // user sees the same label here.
+    conf.className = `mem-certainty mem-certainty-${certainty}`;
+    conf.textContent = `${certainty} · ${Math.round(decayed * 100)}%`;
     metaDiv.appendChild(conf);
 
     const halfDays = Math.round(mem.half_life / 86_400_000);

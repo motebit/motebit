@@ -13,7 +13,12 @@ import {
 import { SensitivityLevel } from "@motebit/sdk";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
-import { createMemoryController, type MemoryFetchAdapter, type MemoryState } from "@motebit/panels";
+import {
+  createMemoryController,
+  classifyCertainty,
+  type MemoryFetchAdapter,
+  type MemoryState,
+} from "@motebit/panels";
 
 function formatTimeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -129,6 +134,17 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
             contentContainerStyle={styles.listContent}
             renderItem={({ item }) => {
               const decayed = ctrlRef.current?.getDecayedConfidence(item) ?? item.confidence;
+              const certainty = classifyCertainty(decayed);
+              // Certainty label mirrors the Layer-1 memory index the
+              // agent sees (spec/memory-delta-v1.md §5.8). When motebit
+              // promotes a memory to "absolute", the user sees the
+              // same label here.
+              const certaintyStyle =
+                certainty === "absolute"
+                  ? styles.certaintyAbsolute
+                  : certainty === "confident"
+                    ? styles.certaintyConfident
+                    : styles.certaintyTentative;
               return (
                 <View style={styles.memoryItem}>
                   <View style={styles.memoryContent}>
@@ -141,7 +157,9 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
                           <Text style={styles.sensitivityText}>{item.sensitivity}</Text>
                         </View>
                       )}
-                      <Text style={styles.metaText}>{Math.round(decayed * 100)}%</Text>
+                      <Text style={[styles.metaText, certaintyStyle]}>
+                        {certainty} · {Math.round(decayed * 100)}%
+                      </Text>
                       <Text style={styles.metaText}>
                         {Math.round(item.half_life / 86_400_000)}d half
                         {item.half_life > 30 * 86_400_000 ? " \u2191" : ""}
@@ -228,6 +246,15 @@ function createStyles(c: ThemeColors) {
       textTransform: "uppercase",
     },
     metaText: { color: c.textMuted, fontSize: 11 },
+    // Certainty badge — Memory Trinity §5.8 tentative → confident → absolute
+    certaintyAbsolute: { color: c.accent, fontWeight: "500", textTransform: "lowercase" },
+    certaintyConfident: { color: c.textMuted, textTransform: "lowercase" },
+    certaintyTentative: {
+      color: c.textMuted,
+      fontStyle: "italic",
+      opacity: 0.75,
+      textTransform: "lowercase",
+    },
     deleteBtn: {
       width: 28,
       height: 28,
