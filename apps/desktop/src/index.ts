@@ -378,6 +378,43 @@ export interface BootstrapResult {
   deviceId: string;
 }
 
+/**
+ * Resolve the runtime's `proactiveAnchor` config from the desktop's
+ * settings + identity state. Extracted out of `initAI` so the four
+ * branches (no-keys, no-toggle, local-only, onchain) are unit-testable
+ * without booting the whole DesktopApp.
+ *
+ * Branches:
+ *   - proactive disabled OR no signing keys → undefined (no auto-anchor)
+ *   - proactive enabled + keys + anchorOnchain=false → local-only policy
+ *   - proactive enabled + keys + anchorOnchain=true → policy with
+ *     SolanaMemoSubmitter constructed from the identity seed
+ *   - submitter construction throws (shouldn't, with valid inputs) →
+ *     falls through to local-only — no surprise crash
+ */
+export async function resolveProactiveAnchor(args: {
+  proactiveEnabled: boolean;
+  anchorOnchain: boolean;
+  signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
+  solanaRpcUrl: string;
+}): Promise<RuntimeConfig["proactiveAnchor"] | undefined> {
+  if (!args.proactiveEnabled || !args.signingKeys) return undefined;
+  let submitter: ChainAnchorSubmitter | undefined;
+  if (args.anchorOnchain) {
+    try {
+      const { createSolanaMemoSubmitter } = await import("@motebit/wallet-solana");
+      submitter = createSolanaMemoSubmitter({
+        rpcUrl: args.solanaRpcUrl,
+        identitySeed: args.signingKeys.privateKey,
+      });
+    } catch {
+      // Submitter construction failure (shouldn't happen with valid
+      // inputs) falls through to local-only anchoring.
+    }
+  }
+  return { submitter, batchThreshold: 8 };
+}
+
 export type GovernanceStatus = { governed: true } | { governed: false; reason: string };
 
 export class DesktopApp {
@@ -813,31 +850,12 @@ export class DesktopApp {
     const proactive = config.proactive ?? {};
     const proactiveEnabled = proactive.enabled ?? false;
     const solanaRpcUrl = "https://api.mainnet-beta.solana.com";
-    // Proactive anchor policy — on when consolidation is enabled AND the
-    // motebit has signing keys. Without `anchorOnchain`, the policy runs
-    // with a local-only submitter (Merkle root commits are offline-
-    // verifiable; no Solana tx). With `anchorOnchain: true`, a
-    // SolanaMemoSubmitter constructed from the identity seed handles the
-    // publish. A failure inside the submitter (RPC down, no SOL) is
-    // non-fatal — runtime emits a local-only anchor for the same
-    // receipts, so no backlog accumulates.
-    let proactiveAnchor: RuntimeConfig["proactiveAnchor"] | undefined;
-    if (proactiveEnabled && signingKeys) {
-      let submitter: ChainAnchorSubmitter | undefined;
-      if (proactive.anchorOnchain === true) {
-        try {
-          const { createSolanaMemoSubmitter } = await import("@motebit/wallet-solana");
-          submitter = createSolanaMemoSubmitter({
-            rpcUrl: solanaRpcUrl,
-            identitySeed: signingKeys.privateKey,
-          });
-        } catch {
-          // Submitter construction failure (shouldn't happen with valid
-          // inputs) falls through to local-only anchoring.
-        }
-      }
-      proactiveAnchor = { submitter, batchThreshold: 8 };
-    }
+    const proactiveAnchor = await resolveProactiveAnchor({
+      proactiveEnabled,
+      anchorOnchain: proactive.anchorOnchain === true,
+      signingKeys,
+      solanaRpcUrl,
+    });
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,

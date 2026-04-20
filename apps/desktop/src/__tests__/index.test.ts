@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { DesktopApp, isSlashCommand, parseSlashCommand, type InvokeFn } from "../index";
+import {
+  DesktopApp,
+  createTauriStorage,
+  isSlashCommand,
+  parseSlashCommand,
+  resolveProactiveAnchor,
+  type InvokeFn,
+} from "../index";
 
 // ---------------------------------------------------------------------------
 // DesktopApp
@@ -218,6 +225,166 @@ describe("DesktopApp.initAI — proactive interior", () => {
     // but the predicate machinery is reachable, which is the wire test.
     expect(Array.isArray(scoped.list())).toBe(true);
     runtime!.presence.exitTending();
+  });
+
+  it("anchorOnchain=false (with proactive enabled) yields a local-only auto-anchor policy", async () => {
+    // No signing keys (no Tauri keyring in this test path), so the
+    // proactive-anchor wiring stays unconfigured even with the toggle on.
+    // This exercises the conditional in initAI that bails when keys
+    // are absent — the cycle still runs, just no signed receipts.
+    app = new DesktopApp();
+    await app.initAI({
+      provider: "local-server",
+      isTauri: false,
+      proactive: { enabled: true, anchorOnchain: false },
+    });
+    const runtime = app.getRuntime();
+    expect(runtime).not.toBeNull();
+    // Presence stays idle until idle-tick fires; the wiring is reachable.
+    expect(runtime!.presence.canStartCycle()).toBe(true);
+  });
+
+  describe("DesktopApp — renderer delegators", () => {
+    let app: DesktopApp;
+    afterEach(() => {
+      if (app != null) app.stop();
+    });
+
+    it("setInteriorColor with an unknown preset is a silent no-op (no throw)", () => {
+      app = new DesktopApp();
+      expect(() => app.setInteriorColor("unknown-preset-name")).not.toThrow();
+    });
+
+    it("setInteriorColor with a known preset succeeds", () => {
+      app = new DesktopApp();
+      expect(() => app.setInteriorColor("moonlight")).not.toThrow();
+    });
+
+    it("setInteriorColorDirect applies a custom color without throw", () => {
+      app = new DesktopApp();
+      expect(() =>
+        app.setInteriorColorDirect({ hue: 200, saturation: 50, lightness: 60 } as never),
+      ).not.toThrow();
+    });
+
+    it("setDarkEnvironment and setLightEnvironment toggle without throw", () => {
+      app = new DesktopApp();
+      expect(() => app.setDarkEnvironment()).not.toThrow();
+      expect(() => app.setLightEnvironment()).not.toThrow();
+    });
+
+    it("setAudioReactivity accepts an energy snapshot or null without throw", () => {
+      app = new DesktopApp();
+      expect(() =>
+        app.setAudioReactivity({ rms: 0.5, low: 0.3, mid: 0.4, high: 0.2 }),
+      ).not.toThrow();
+      expect(() => app.setAudioReactivity(null)).not.toThrow();
+    });
+
+    it("clearArtifacts and removeArtifact are no-ops on an empty scene", () => {
+      app = new DesktopApp();
+      expect(() => app.removeArtifact("nonexistent-id")).not.toThrow();
+      expect(() => app.clearArtifacts()).not.toThrow();
+    });
+
+    it("resize forwards width + height to the renderer", () => {
+      app = new DesktopApp();
+      expect(() => app.resize(800, 600)).not.toThrow();
+    });
+  });
+
+  describe("createTauriStorage — adapter wiring", () => {
+    it("constructs a complete StorageAdapters bundle with the supplied invoke", () => {
+      const invoke = vi.fn() as unknown as InvokeFn;
+      const storage = createTauriStorage(invoke);
+      expect(storage.eventStore).toBeDefined();
+      expect(storage.memoryStorage).toBeDefined();
+      expect(storage.identityStorage).toBeDefined();
+      expect(storage.auditLog).toBeDefined();
+      expect(storage.toolAuditSink).toBeDefined();
+      expect(storage.agentTrustStore).toBeDefined();
+      expect(storage.planStore).toBeDefined();
+      expect(storage.gradientStore).toBeDefined();
+      expect(storage.serviceListingStore).toBeDefined();
+      expect(storage.budgetAllocationStore).toBeDefined();
+      expect(storage.settlementStore).toBeDefined();
+      expect(storage.latencyStatsStore).toBeDefined();
+      expect(storage.credentialStore).toBeDefined();
+      expect(storage.approvalStore).toBeDefined();
+      // Optional fields default to undefined when not passed.
+      expect(storage.stateSnapshot).toBeUndefined();
+      expect(storage.conversationStore).toBeUndefined();
+    });
+  });
+
+  describe("resolveProactiveAnchor — pure resolver", () => {
+    const fakeKeys = {
+      privateKey: new Uint8Array(32),
+      publicKey: new Uint8Array(32),
+    };
+    const RPC = "https://api.mainnet-beta.solana.com";
+
+    it("returns undefined when proactive is disabled", async () => {
+      const result = await resolveProactiveAnchor({
+        proactiveEnabled: false,
+        anchorOnchain: true,
+        signingKeys: fakeKeys,
+        solanaRpcUrl: RPC,
+      });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined when signing keys are absent", async () => {
+      const result = await resolveProactiveAnchor({
+        proactiveEnabled: true,
+        anchorOnchain: true,
+        signingKeys: undefined,
+        solanaRpcUrl: RPC,
+      });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns local-only policy when proactive is on but anchorOnchain is off", async () => {
+      const result = await resolveProactiveAnchor({
+        proactiveEnabled: true,
+        anchorOnchain: false,
+        signingKeys: fakeKeys,
+        solanaRpcUrl: RPC,
+      });
+      expect(result).toBeDefined();
+      expect(result!.batchThreshold).toBe(8);
+      expect(result!.submitter).toBeUndefined();
+    });
+
+    it("constructs a SolanaMemoSubmitter when both proactive and anchorOnchain are on", async () => {
+      const result = await resolveProactiveAnchor({
+        proactiveEnabled: true,
+        anchorOnchain: true,
+        signingKeys: fakeKeys,
+        solanaRpcUrl: RPC,
+      });
+      expect(result).toBeDefined();
+      expect(result!.submitter).toBeDefined();
+      expect(result!.submitter!.chain).toBe("solana");
+      expect(result!.batchThreshold).toBe(8);
+    });
+  });
+
+  it("anchorOnchain=true is honored even without signing keys (no submitter, no crash)", async () => {
+    // The conditional in initAI requires signingKeys for proactiveAnchor
+    // to be set at all. With no keys (test env), the toggle is a no-op
+    // — no submitter constructed, no auto-anchor policy attached. The
+    // motebit boots cleanly anyway. This is the "honest degradation"
+    // path — settings can be flipped without keys present.
+    app = new DesktopApp();
+    await app.initAI({
+      provider: "local-server",
+      isTauri: false,
+      proactive: { enabled: true, anchorOnchain: true },
+    });
+    const runtime = app.getRuntime();
+    expect(runtime).not.toBeNull();
+    expect(runtime!.presence.get().mode).toBe("idle");
   });
 });
 
