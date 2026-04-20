@@ -93,6 +93,7 @@ import { CredentialManager } from "./credential-manager.js";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsController, type GoalsController, type GoalLifecycleStatus } from "./goals.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
+import { createIdleTickController, type IdleTickController } from "./idle-tick.js";
 import { formMemoriesFromCandidates } from "@motebit/memory-graph";
 import { setOperatorMode, setupOperatorPin, resetOperatorPin } from "./operator.js";
 import {
@@ -473,6 +474,24 @@ export interface RuntimeConfig {
    * validated. See `memory-formation-queue.ts`.
    */
   deferMemoryFormation?: boolean;
+  /**
+   * Interval for the proactive idle-tick heartbeat (KAIROS-shape
+   * scheduler). Undefined / 0 = disabled. When set, the runtime
+   * starts an interval that fires when:
+   *   - No turn is currently in flight, AND
+   *   - The last user message was at least
+   *     `proactiveQuietWindowMs` ago.
+   *
+   * Each qualifying tick emits an `idle_tick_fired` event to the
+   * log. Downstream wiring (generating a proactive action from the
+   * tick) is surface-specific and ships separately; this config
+   * only turns on the scheduler. See `idle-tick.ts`.
+   */
+  proactiveTickMs?: number;
+  /** How long after the last user message before a tick is allowed
+   *  to fire. Default 60_000 (one minute). Ignored when
+   *  `proactiveTickMs` is not set. */
+  proactiveQuietWindowMs?: number;
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
   /**
@@ -626,6 +645,15 @@ export class MotebitRuntime {
    */
   readonly memoryFormation: MemoryFormationQueue;
   private _deferMemoryFormation: boolean;
+  /**
+   * Proactive idle-tick scheduler. Non-null only when
+   * `RuntimeConfig.proactiveTickMs` was set at construction time.
+   * Starts on `runtime.start()`, stops on `runtime.stop()`. See
+   * `idle-tick.ts`.
+   */
+  private _idleTick: IdleTickController | null = null;
+  /** Unix ms timestamp of the last user-sent message, or null. */
+  private _lastUserMessageAt: number | null = null;
   policy: PolicyGate;
   memoryGovernor: MemoryGovernor;
 
@@ -770,6 +798,35 @@ export class MotebitRuntime {
     });
     this._deferMemoryFormation = config.deferMemoryFormation ?? false;
     this.memoryFormation = createMemoryFormationQueue({ logger: this._logger });
+    if (config.proactiveTickMs != null && config.proactiveTickMs > 0) {
+      const tickMs = config.proactiveTickMs;
+      const quietMs = config.proactiveQuietWindowMs ?? 60_000;
+      this._idleTick = createIdleTickController({
+        intervalMs: tickMs,
+        quietWindowMs: quietMs,
+        isProcessing: () => this._isProcessing,
+        lastUserMessageAt: () => this._lastUserMessageAt,
+        onTick: async (timestamp) => {
+          try {
+            await this.events.appendWithClock({
+              event_id: crypto.randomUUID(),
+              motebit_id: this.motebitId,
+              timestamp,
+              event_type: EventType.IdleTickFired,
+              payload: {
+                interval_ms: tickMs,
+                quiet_window_ms: quietMs,
+              },
+              tombstoned: false,
+            });
+          } catch {
+            // Event-log append is best-effort — a missed tick record
+            // does not corrupt state.
+          }
+        },
+        logger: this._logger,
+      });
+    }
     this.memory = new MemoryGraph(adapters.storage.memoryStorage, this.events, this.motebitId);
     this.identity = new IdentityManager(adapters.storage.identityStorage, this.events);
     this.auditLog = adapters.storage.auditLog;
@@ -1016,10 +1073,14 @@ export class MotebitRuntime {
     if (this.running) return;
     this.running = true;
     this.state.start();
+    // Proactive idle-tick starts alongside the state engine when
+    // configured. See `RuntimeConfig.proactiveTickMs`.
+    this._idleTick?.start();
   }
 
   stop(): void {
     if (!this.running) return;
+    this._idleTick?.stop();
     this.sync.stop();
     this.state.stop();
     // Snapshot synchronously, compact in background
@@ -1382,6 +1443,11 @@ export class MotebitRuntime {
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
+    // Record the user-message timestamp for the proactive idle-tick
+    // scheduler's quiet-window check (idle-tick.ts). Only set on
+    // user-initiated turns — not on `generateActivation`, which is
+    // system-triggered and should not reset the quiet window.
+    this._lastUserMessageAt = Date.now();
     this.streaming.clearPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);

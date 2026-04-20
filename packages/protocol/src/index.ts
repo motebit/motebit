@@ -232,6 +232,7 @@ export enum EventType {
   PlanFailed = "plan_failed",
   HousekeepingRun = "housekeeping_run",
   ReflectionCompleted = "reflection_completed",
+  IdleTickFired = "idle_tick_fired",
   MemoryConsolidated = "memory_consolidated",
   MemoryPromoted = "memory_promoted",
   AgentTaskCompleted = "agent_task_completed",
