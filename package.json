@@ -60,6 +60,7 @@
     "check-spec-impl-coverage": "npx tsx scripts/check-spec-impl-coverage.ts",
     "check-disambiguation-primitives": "npx tsx scripts/check-disambiguation-primitives.ts",
     "check-panel-controllers": "npx tsx scripts/check-panel-controllers.ts",
+    "check-consolidation-primitives": "npx tsx scripts/check-consolidation-primitives.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",

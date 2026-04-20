@@ -170,6 +170,24 @@ export interface DesktopAIConfig {
    * `custom_soul_color` keys via `parseAppearanceFromConfig`.
    */
   appearance?: AppearanceConfig;
+  /**
+   * Proactive interior — enables the idle-tick → consolidation cycle
+   * loop. Default `enabled=false` (sovereign fail-closed default; the
+   * motebit acts only when prompted unless the user explicitly opts in).
+   *
+   * `tickIntervalMs` is how often the runtime asks "am I idle?".
+   * `quietWindowMs` is how long after the last user message before a
+   * tick is allowed to fire. `capabilities` is the proactive-tool
+   * allowlist (intersected at runtime with the memory-mutation
+   * allowlist — surface side-effecting tools are blocked even if
+   * named here). See `docs/doctrine/proactive-interior.md`.
+   */
+  proactive?: {
+    enabled?: boolean;
+    tickIntervalMs?: number;
+    quietWindowMs?: number;
+    capabilities?: string[];
+  };
 }
 
 // === Provider unification + spec mapping ===
@@ -770,6 +788,8 @@ export class DesktopApp {
       }
     }
 
+    const proactive = config.proactive ?? {};
+    const proactiveEnabled = proactive.enabled ?? false;
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
@@ -790,6 +810,14 @@ export class DesktopApp {
         // retrieval stays consistent. See
         // `packages/runtime/src/memory-formation-queue.ts`.
         deferMemoryFormation: true,
+        // Proactive interior — opt-in. When enabled, the runtime runs
+        // a 4-phase consolidation cycle during idle windows. Presence
+        // transitions tending→idle, memory delta lands in the graph,
+        // audit event emitted. See `docs/doctrine/proactive-interior.md`.
+        proactiveTickMs: proactiveEnabled ? (proactive.tickIntervalMs ?? 5 * 60_000) : undefined,
+        proactiveQuietWindowMs: proactive.quietWindowMs ?? 90_000,
+        proactiveAction: proactiveEnabled ? "consolidate" : "none",
+        proactiveCapabilities: proactive.capabilities ?? [],
       },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );

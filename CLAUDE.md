@@ -47,8 +47,9 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/panels-pattern.md`](docs/doctrine/panels-pattern.md) — four shapes for multi-surface panel state; what's shipped, what's evaluated, what's open
 - [`docs/doctrine/records-vs-acts.md`](docs/doctrine/records-vs-acts.md) — body shows acts; panels hold records; the category test before any new mount
 - [`docs/doctrine/coverage-graduation.md`](docs/doctrine/coverage-graduation.md) — money/identity packages below 80 carry a raise-by date; soft signal via `pnpm coverage-graduation`
+- [`docs/doctrine/proactive-interior.md`](docs/doctrine/proactive-interior.md) — presence mode + 4-phase consolidation cycle + fail-closed proactive tool scope; `runtime.consolidationCycle()` is the only loop
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out
-- [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory (33 today)
+- [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory (34 today)
 
 ## Principles
 
@@ -67,6 +68,7 @@ Architectural invariants. Violating them breaks CI, the product, or the thesis.
 - **Synchronization invariants are the meta-principle.** Every drift has the same shape: canonical truth invisible or unenforced, siblings drifted. On a new drift pattern: name it, identify canonical source, name sync owner and trigger, add a defense (CI/lint/doctrine), cross-reference. Never let spec and code diverge. Inventory: [`docs/drift-defenses.md`](docs/drift-defenses.md).
 - **Protocol primitives belong in packages, never inline in services.** Before writing protocol-shaped plumbing (signing, token minting, MCP transport, receipt construction, relay submission, verification, delegation) in a service, audit the package layer in order: `@motebit/protocol` → `crypto` → `encryption` → `mcp-client` → `mcp-server` → `runtime` → `core-identity` → `identity-file`. No match means a primitive is missing — pause, add it to the right package with tests, consume from the service. `check-service-primitives` enforces.
 - **Surface affordances are deterministic.** Explicit UI affordances (chip tap, button, slash command, scene-object click, voice opt-in) MUST invoke the runtime's typed `invokeCapability(capability, args)`, never route through the AI loop via a constructed prompt. Enforced at protocol (`invocation_origin`), runtime (`invokeCapability` vs `sendMessageStreaming`), and statically (`check-affordance-routing`). Failures degrade honestly, not gracefully. See [`docs/doctrine/surface-determinism.md`](docs/doctrine/surface-determinism.md).
+- **Proactive interior is one cycle, fail-closed by default.** Idle-time work flows through `runtime.consolidationCycle()` (orient → gather → consolidate → prune) — no parallel "background tasks" loops. Presence (`responsive | tending | idle`) is a typed state machine surfaces subscribe to. Proactive tool scope is fail-closed: empty by default, intersected with a runtime allowlist of memory-mutation tools so a misclick on the user's allowlist still cannot fire a side-effecting tool proactively. Enforced by `check-consolidation-primitives` (#34). See [`docs/doctrine/proactive-interior.md`](docs/doctrine/proactive-interior.md).
 - **Capability rings, not feature parity.** Ring 1 (identical everywhere): runtime, sdk, crypto, policy. Ring 2 (platform adapters): persistence, keyring, voice. Ring 3 (platform capabilities): MCP stdio, 3D creature, daemon. Ring 1 is about capability, not form — a surface may express the same capability through a different medium-native form.
 
 ## Money model

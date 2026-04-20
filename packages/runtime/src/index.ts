@@ -111,10 +111,30 @@ import {
 import { StreamingManager } from "./streaming.js";
 import type { InteractiveDelegationConfig } from "./interactive-delegation.js";
 
-import { performReflection } from "./reflection.js";
+import { performReflection, runReflectionSafe } from "./reflection.js";
 import type { ReflectionDeps } from "./reflection.js";
 import { runHousekeeping } from "./housekeeping.js";
 import type { HousekeepingDeps } from "./housekeeping.js";
+import { PresenceController } from "./presence.js";
+import { ScopedToolRegistry } from "./scoped-tool-registry.js";
+import {
+  runConsolidationCycle,
+  type ConsolidationCycleConfig,
+  type ConsolidationCycleResult,
+} from "./consolidation-cycle.js";
+
+/** Tools the runtime allows during a tending cycle, regardless of user
+ *  config. The proactive scope intersects user opt-in WITH this set, so a
+ *  user who allowlists a side-effecting tool by mistake still cannot have
+ *  it fire proactively. Memory mutations are always safe (atomic writes,
+ *  reversible via tombstone). Surface-output tools are deliberately
+ *  excluded. The list is small and known. */
+const TENDING_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
+  "form_memory",
+  "rewrite_memory",
+  "prune_memory",
+  "search_conversations",
+]);
 import type { AgentTrustDeps } from "./agent-trust.js";
 import { handleAgentTask as handleAgentTaskFn } from "./agent-task-handler.js";
 import type { AgentTaskHandlerDeps } from "./agent-task-handler.js";
@@ -512,7 +532,19 @@ export interface RuntimeConfig {
    * next browse the memory panel or trigger a turn that recalls
    * them.
    */
-  proactiveAction?: "none" | "reflect";
+  proactiveAction?: "none" | "reflect" | "consolidate";
+  /**
+   * Tool names allowed to fire when presence is `tending` (i.e. during
+   * a consolidation cycle). Empty by default — sovereign fail-closed
+   * default. The list is intersected with a runtime-internal allowlist
+   * of memory-mutation tools to prevent any side-effecting tool from
+   * running proactively even if explicitly named here.
+   *
+   * Surface settings should default this to `[]` and require the user
+   * to opt in to specific capabilities. See
+   * `docs/doctrine/proactive-interior.md`.
+   */
+  proactiveCapabilities?: string[];
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
   /**
@@ -697,6 +729,15 @@ export class MotebitRuntime {
   private lastKnownClock = 0;
   private running = false;
   private toolRegistry: SimpleToolRegistry;
+  /** Presence-scoped view onto `toolRegistry`. Filters tool visibility +
+   *  execution when presence ≠ responsive. The AI loop reads this; the
+   *  underlying registry is mutated through `toolRegistry` directly. */
+  private scopedToolRegistry: ScopedToolRegistry;
+  /** Operational mode state machine. Public so surfaces can subscribe. */
+  readonly presence: PresenceController;
+  /** Allowed proactive capability names. Empty by default — fail-closed
+   *  sovereign default. User opts in explicitly via runtime config. */
+  private _proactiveCapabilities: ReadonlySet<string>;
   private mcpAdapters: McpClientAdapter[] = [];
   private mcpConfigs: McpServerConfig[];
   /** Maps tool names to motebit server names (only for motebit MCP adapters). */
@@ -805,6 +846,34 @@ export class MotebitRuntime {
       this.toolRegistry.merge(adapters.tools);
     }
 
+    // Presence: operational state machine. Constructed early so the scoped
+    // tool registry can reference it.
+    this.presence = new PresenceController({
+      onWatchdogFired: (cycleId, phase) => {
+        this._logger.warn("presence watchdog fired — forced back to idle", {
+          cycle_id: cycleId,
+          phase,
+        });
+      },
+    });
+
+    // Proactive scope: intersect user config with runtime-internal allowlist.
+    // Memory-mutation tools only — no surface side effects during tending.
+    this._proactiveCapabilities = new Set(config.proactiveCapabilities ?? []);
+    this.scopedToolRegistry = new ScopedToolRegistry(this.toolRegistry, {
+      allows: (toolName) => {
+        const presence = this.presence.get();
+        if (presence.mode === "responsive" || presence.mode === "idle") return true;
+        // tending: only the user-allowed proactive tools, intersected with
+        // the runtime-internal memory-mutation allowlist.
+        if (presence.mode === "tending") {
+          if (!this._proactiveCapabilities.has(toolName)) return false;
+          return TENDING_ALLOWED_TOOLS.has(toolName);
+        }
+        return false;
+      },
+    });
+
     // Core engines
     this.state = new StateVectorEngine({ tick_rate_hz: config.tickRateHz ?? 2 });
     this.behavior = new BehaviorEngine();
@@ -858,6 +927,11 @@ export class MotebitRuntime {
             // updates gradient state on success; the controller's
             // catch wrapper handles failure as best-effort.
             await this.reflect();
+          } else if (action === "consolidate") {
+            // Full proactive interior: 4-phase consolidation cycle. The
+            // cycle owns presence transitions and tool scoping; idle-tick
+            // just kicks it off. Errors caught by the idle-tick controller.
+            await this.consolidationCycle();
           }
         },
         logger: this._logger,
@@ -1437,6 +1511,10 @@ export class MotebitRuntime {
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
+    // Preempt any in-flight consolidation cycle; transition presence to
+    // responsive so surfaces stop showing the tending indicator. The cycle
+    // sees the abort on its next phase checkpoint and yields.
+    this.preemptCycleForUserMessage();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
 
     try {
@@ -1467,6 +1545,10 @@ export class MotebitRuntime {
     } finally {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
+      // Return presence to idle so the next idle-tick can fire. enterIdle
+      // is unconditional here — if a cycle is still unwinding, its
+      // finally's exitTending will see mode!=tending and no-op.
+      this.presence.enterIdle();
     }
   }
 
@@ -1479,6 +1561,10 @@ export class MotebitRuntime {
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
+    // Preempt any in-flight consolidation cycle; transition presence to
+    // responsive so surfaces stop showing the tending indicator. The cycle
+    // sees the abort on its next phase checkpoint and yields.
+    this.preemptCycleForUserMessage();
     // Record the user-message timestamp for the proactive idle-tick
     // scheduler's quiet-window check (idle-tick.ts). Only set on
     // user-initiated turns — not on `generateActivation`, which is
@@ -1554,6 +1640,10 @@ export class MotebitRuntime {
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
+      // Return presence to idle so the next idle-tick can fire. enterIdle
+      // is unconditional here — if a cycle is still unwinding, its
+      // finally's exitTending will see mode!=tending and no-op.
+      this.presence.enterIdle();
     }
   }
 
@@ -1928,6 +2018,102 @@ export class MotebitRuntime {
     this.gradientManager.setCuriosityTargets(result.curiosityTargets);
   }
 
+  /**
+   * Run the four-phase consolidation cycle (orient → gather → consolidate
+   * → prune). Wraps the cycle in `PresenceController.enterTending` /
+   * `exitTending` so surfaces can render the in-flight state and the
+   * watchdog catches any phase that ignores its abort signal. Re-entry
+   * guarded: returns an empty result when presence is not idle.
+   *
+   * The runtime owns the cycle's `AbortController`. When a user message
+   * arrives mid-cycle, `sendMessage` / `sendMessageStreaming` aborts it
+   * so the in-flight phase yields on its next checkpoint and the user's
+   * response streams without waiting on consolidation. A caller-provided
+   * `config.signal` is honored alongside (cycle aborts on either).
+   */
+  async consolidationCycle(
+    config: ConsolidationCycleConfig = {},
+  ): Promise<ConsolidationCycleResult> {
+    if (!this.presence.canStartCycle()) {
+      const now = Date.now();
+      return {
+        cycleId: "",
+        phasesRun: [],
+        phasesYielded: [],
+        phasesErrored: [],
+        startedAt: now,
+        finishedAt: now,
+        summary: {},
+      };
+    }
+    const cycleId = config.cycleId ?? crypto.randomUUID();
+    let entered = false;
+    const internalCtrl = new AbortController();
+    this._currentCycleAbortController = internalCtrl;
+    // Combine caller signal with our internal one — abort on either.
+    let combinedSignal: AbortSignal = internalCtrl.signal;
+    let callerOnAbort: (() => void) | null = null;
+    if (config.signal) {
+      if (config.signal.aborted) {
+        internalCtrl.abort(config.signal.reason);
+      } else {
+        callerOnAbort = () => internalCtrl.abort(config.signal!.reason);
+        config.signal.addEventListener("abort", callerOnAbort);
+      }
+      combinedSignal = internalCtrl.signal;
+    }
+    try {
+      return await runConsolidationCycle(
+        {
+          motebitId: this.motebitId,
+          memory: this.memory,
+          events: this.events,
+          state: this.state,
+          memoryGovernor: this.memoryGovernor,
+          privacy: this.privacy,
+          getProvider: () => this.provider,
+          performReflection: () => runReflectionSafe(this.reflectionDeps),
+          logger: this._logger,
+        },
+        {
+          ...config,
+          cycleId,
+          signal: combinedSignal,
+          onPhaseStart: (phase, id) => {
+            if (!entered) {
+              entered = true;
+              this.presence.enterTending(id, phase);
+            } else {
+              this.presence.advancePhase(phase);
+            }
+            config.onPhaseStart?.(phase, id);
+          },
+        },
+      );
+    } finally {
+      if (config.signal && callerOnAbort) {
+        config.signal.removeEventListener("abort", callerOnAbort);
+      }
+      this._currentCycleAbortController = null;
+      if (entered) this.presence.exitTending();
+    }
+  }
+
+  /** AbortController for the in-flight cycle, or null when idle. The
+   *  runtime aborts this from `sendMessage` / `sendMessageStreaming` so
+   *  user messages preempt proactive work. */
+  private _currentCycleAbortController: AbortController | null = null;
+
+  /** Called from user-message entry points to preempt an in-flight cycle.
+   *  Idempotent — no-op when no cycle is running. */
+  private preemptCycleForUserMessage(): void {
+    const ctrl = this._currentCycleAbortController;
+    if (ctrl != null && !ctrl.signal.aborted) {
+      ctrl.abort(new Error("user message arrived"));
+    }
+    this.presence.enterResponsive();
+  }
+
   private get housekeepingDeps(): HousekeepingDeps {
     return {
       motebitId: this.motebitId,
@@ -2075,7 +2261,10 @@ export class MotebitRuntime {
         stateEngine: this.state,
         behaviorEngine: this.behavior,
         provider: this.provider,
-        tools: this.toolRegistry.size > 0 ? this.toolRegistry : undefined,
+        // Always pass the scoped registry — its predicate is presence-aware
+        // and returns full passthrough during responsive/idle turns. Tending
+        // turns see only the proactive-allowlisted memory tools.
+        tools: this.scopedToolRegistry.size > 0 ? this.scopedToolRegistry : undefined,
         policyGate: this.policy,
         memoryGovernor: this.memoryGovernor,
         consolidationProvider,

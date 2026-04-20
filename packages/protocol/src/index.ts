@@ -235,6 +235,7 @@ export enum EventType {
   IdleTickFired = "idle_tick_fired",
   MemoryConsolidated = "memory_consolidated",
   MemoryPromoted = "memory_promoted",
+  ConsolidationCycleRun = "consolidation_cycle_run",
   AgentTaskCompleted = "agent_task_completed",
   AgentTaskFailed = "agent_task_failed",
   AgentTaskDenied = "agent_task_denied",
