@@ -378,6 +378,169 @@ describe("Runtime — proactive interior wire-in", () => {
     expect(anchor!.merkle_root).toBeTruthy();
   });
 
+  it("auto-anchor does not fire when no proactiveAnchor policy is configured", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "auto-off-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    await rt.consolidationCycle();
+    const events = await rt.events.query({
+      motebit_id: "auto-off-test",
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    expect(events).toHaveLength(0);
+  });
+
+  it("auto-anchor fires when the batch threshold is reached", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      {
+        motebitId: "auto-thresh-test",
+        tickRateHz: 0,
+        signingKeys: kp,
+        proactiveAnchor: { batchThreshold: 2 },
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    // Cycle 1: receipt 1 signed, threshold not yet reached.
+    await rt.consolidationCycle();
+    let anchors = await rt.events.query({
+      motebit_id: "auto-thresh-test",
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    expect(anchors).toHaveLength(0);
+    // Cycle 2: receipt 2 signed, threshold hit → auto-anchor fires.
+    await rt.consolidationCycle();
+    anchors = await rt.events.query({
+      motebit_id: "auto-thresh-test",
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    expect(anchors).toHaveLength(1);
+    const anchor = (anchors[0]!.payload as { anchor: import("@motebit/sdk").ConsolidationAnchor })
+      .anchor;
+    expect(anchor.leaf_count).toBe(2);
+  });
+
+  it("auto-anchor uses the submitter when one is provided (tx_hash populated)", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const submit = vi
+      .fn<(root: string, motebitId: string, leafCount: number) => Promise<{ txHash: string }>>()
+      .mockResolvedValue({ txHash: "auto-anchored-tx" });
+    const rt = new MotebitRuntime(
+      {
+        motebitId: "auto-submit-test",
+        tickRateHz: 0,
+        signingKeys: kp,
+        proactiveAnchor: {
+          batchThreshold: 1,
+          submitter: {
+            chain: "solana" as const,
+            network: "solana:devnet",
+            submitMerkleRoot: submit,
+            isAvailable: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
+          },
+        },
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    expect(submit).toHaveBeenCalledTimes(1);
+    const anchors = await rt.events.query({
+      motebit_id: "auto-submit-test",
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    expect(anchors).toHaveLength(1);
+    const anchor = (anchors[0]!.payload as { anchor: import("@motebit/sdk").ConsolidationAnchor })
+      .anchor;
+    expect(anchor.tx_hash).toBe("auto-anchored-tx");
+    expect(anchor.network).toBe("solana:devnet");
+  });
+
+  it("auto-anchor is idempotent — once pending receipts are anchored, subsequent cycles don't re-anchor them", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      {
+        motebitId: "auto-idem-test",
+        tickRateHz: 0,
+        signingKeys: kp,
+        proactiveAnchor: { batchThreshold: 1 },
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle(); // receipt 1 → anchor 1 (count 1)
+    await rt.consolidationCycle(); // receipt 2 → anchor 2 (count 1)
+    const anchors = await rt.events.query({
+      motebit_id: "auto-idem-test",
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    // Two cycles, two receipts, two anchors (each with leaf_count=1
+    // because threshold=1 fires immediately after each receipt).
+    expect(anchors).toHaveLength(2);
+    const a1 = (anchors[0]!.payload as { anchor: import("@motebit/sdk").ConsolidationAnchor })
+      .anchor;
+    const a2 = (anchors[1]!.payload as { anchor: import("@motebit/sdk").ConsolidationAnchor })
+      .anchor;
+    expect(a1.leaf_count).toBe(1);
+    expect(a2.leaf_count).toBe(1);
+    // Receipt IDs don't overlap between anchors.
+    const ids1 = new Set(a1.receipt_ids);
+    for (const id of a2.receipt_ids) expect(ids1.has(id)).toBe(false);
+  });
+
+  it("auto-anchor survives a submitter failure — emits local-only anchor, doesn't loop forever", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      {
+        motebitId: "auto-fail-test",
+        tickRateHz: 0,
+        signingKeys: kp,
+        proactiveAnchor: {
+          batchThreshold: 1,
+          submitter: {
+            chain: "solana" as const,
+            network: "solana:devnet",
+            submitMerkleRoot: vi
+              .fn<
+                (root: string, motebitId: string, leafCount: number) => Promise<{ txHash: string }>
+              >()
+              .mockRejectedValue(new Error("RPC down")),
+            isAvailable: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
+          },
+        },
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    const anchors = await rt.events.query({
+      motebit_id: "auto-fail-test",
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    expect(anchors).toHaveLength(1);
+    const anchor = (anchors[0]!.payload as { anchor: import("@motebit/sdk").ConsolidationAnchor })
+      .anchor;
+    // Local-only anchor — tx_hash absent, but Merkle root populated.
+    expect(anchor.tx_hash).toBeUndefined();
+    expect(anchor.merkle_root).toBeTruthy();
+    // Receipt is now considered anchored, so a second cycle anchors only
+    // the new receipt (not the old one too).
+    await rt.consolidationCycle();
+    const anchorsAfter = await rt.events.query({
+      motebit_id: "auto-fail-test",
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    expect(anchorsAfter).toHaveLength(2);
+    const a2 = (anchorsAfter[1]!.payload as { anchor: import("@motebit/sdk").ConsolidationAnchor })
+      .anchor;
+    expect(a2.leaf_count).toBe(1);
+  });
+
   it("scoped tool registry honors proactiveCapabilities config but only for memory-mutation tools", async () => {
     const { SimpleToolRegistry } = await import("../index");
     const r = new SimpleToolRegistry();

@@ -548,6 +548,28 @@ export interface RuntimeConfig {
    * `docs/doctrine/proactive-interior.md`.
    */
   proactiveCapabilities?: string[];
+  /**
+   * Auto-anchor policy for consolidation receipts. When configured, the
+   * runtime invokes `anchorPendingConsolidationReceipts` after signing a
+   * receipt if either trigger fires:
+   *
+   *   - `batchThreshold` unanchored receipts have accumulated (default 8), OR
+   *   - `minAnchorIntervalMs` has elapsed since the last anchor
+   *     (default 0 — disabled; only the threshold fires).
+   *
+   * Omit the field to disable auto-anchor; receipts then accumulate
+   * signed-only until a manual `anchorPendingConsolidationReceipts()`
+   * call. Pass `{}` for default-thresholds with a local-only (offline)
+   * anchor; pass `{ submitter }` to additionally publish the Merkle
+   * root onchain. Failures are best-effort — logged, never thrown.
+   *
+   * Doctrine: [`docs/doctrine/proactive-interior.md`](../../docs/doctrine/proactive-interior.md).
+   */
+  proactiveAnchor?: {
+    submitter?: import("@motebit/sdk").ChainAnchorSubmitter;
+    batchThreshold?: number;
+    minAnchorIntervalMs?: number;
+  };
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
   /**
@@ -741,6 +763,10 @@ export class MotebitRuntime {
   /** Allowed proactive capability names. Empty by default — fail-closed
    *  sovereign default. User opts in explicitly via runtime config. */
   private _proactiveCapabilities: ReadonlySet<string>;
+  /** Auto-anchor policy; null when disabled. Stored by reference so the
+   *  submitter can be rotated by the surface without re-constructing the
+   *  runtime. */
+  private _proactiveAnchor: RuntimeConfig["proactiveAnchor"] | null = null;
   private mcpAdapters: McpClientAdapter[] = [];
   private mcpConfigs: McpServerConfig[];
   /** Maps tool names to motebit server names (only for motebit MCP adapters). */
@@ -863,6 +889,7 @@ export class MotebitRuntime {
     // Proactive scope: intersect user config with runtime-internal allowlist.
     // Memory-mutation tools only — no surface side effects during tending.
     this._proactiveCapabilities = new Set(config.proactiveCapabilities ?? []);
+    this._proactiveAnchor = config.proactiveAnchor ?? null;
     this.scopedToolRegistry = new ScopedToolRegistry(this.toolRegistry, {
       allows: (toolName) => {
         const presence = this.presence.get();
@@ -2279,6 +2306,57 @@ export class MotebitRuntime {
     } catch (err: unknown) {
       this._logger.warn("consolidation receipt sign/emit failed", {
         cycle_id: cycleResult.cycleId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    // Auto-anchor hook — runs independently of the sign-emit success
+    // path. A sign failure above should NOT block a policy that would
+    // otherwise fire on a prior cycle's receipts.
+    await this.maybeAutoAnchor();
+  }
+
+  /**
+   * If `proactiveAnchor` policy is configured and a trigger is reached,
+   * invoke `anchorPendingConsolidationReceipts`. Best-effort — a failure
+   * is logged and never thrown. Triggers (OR):
+   *   - pending-receipt count ≥ `batchThreshold` (default 8)
+   *   - time since last anchor ≥ `minAnchorIntervalMs` (default 0 = off)
+   */
+  private async maybeAutoAnchor(): Promise<void> {
+    const policy = this._proactiveAnchor;
+    if (policy == null) return;
+    const threshold = policy.batchThreshold ?? 8;
+    const intervalMs = policy.minAnchorIntervalMs ?? 0;
+    try {
+      const [signedEvents, anchoredEvents] = await Promise.all([
+        this.events.query({
+          motebit_id: this.motebitId,
+          event_types: [EventType.ConsolidationReceiptSigned],
+        }),
+        this.events.query({
+          motebit_id: this.motebitId,
+          event_types: [EventType.ConsolidationReceiptsAnchored],
+        }),
+      ]);
+      const alreadyAnchored = new Set<string>();
+      let lastAnchorAt = 0;
+      for (const ev of anchoredEvents) {
+        if (ev.timestamp > lastAnchorAt) lastAnchorAt = ev.timestamp;
+        const anchor = (ev.payload as { anchor?: ConsolidationAnchor }).anchor;
+        if (anchor) for (const id of anchor.receipt_ids) alreadyAnchored.add(id);
+      }
+      let pendingCount = 0;
+      for (const ev of signedEvents) {
+        const receipt = (ev.payload as { receipt?: ConsolidationReceipt }).receipt;
+        if (receipt && !alreadyAnchored.has(receipt.receipt_id)) pendingCount++;
+      }
+      if (pendingCount === 0) return;
+      const thresholdReached = threshold > 0 && pendingCount >= threshold;
+      const timeReached = intervalMs > 0 && Date.now() - lastAnchorAt >= intervalMs;
+      if (!thresholdReached && !timeReached) return;
+      await this.anchorPendingConsolidationReceipts(policy.submitter);
+    } catch (err: unknown) {
+      this._logger.warn("auto-anchor failed", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
