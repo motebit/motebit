@@ -1,12 +1,13 @@
 /**
- * Credential satellites — the first scene-object class, shared across every
- * surface that renders a creature in a 3D scene.
+ * Credential satellite renderer — preserved primitive, ephemeral use only.
  *
- * Credentials are the cleanest first target because they are small, stable,
- * and structurally list-shaped. The 2D list in each surface's settings /
- * sovereign panel still exists for configuration; this module renders the
- * canonical expression: each credential is a small glass orb orbiting the
- * creature.
+ * Credentials are records, not acts: they live in the sovereign / settings
+ * panel as the canonical view, never as permanent satellites on the body.
+ * The 2026-04-19 pure-droplet correction removed boot-time mounting from
+ * every surface (web, desktop, mobile, spatial) for that reason. This
+ * module stays for the correct trigger: a credential briefly orbits
+ * during the delegation that uses it, then fades. Doctrine:
+ * `docs/doctrine/records-vs-acts.md`.
  *
  * Split:
  *   - `credentialsToExpression` is a pure data transform — no THREE.
@@ -15,9 +16,8 @@
  *     `RenderAdapter.getCreatureGroup()`). Positions are recomputed each
  *     frame via the orbital parameters on each SatelliteItem.
  *
- * The module was extracted from apps/spatial to this package so web
- * (and any future surface with a 3D scene) consumes one implementation
- * instead of duplicating the geometry, palette, and orbit math.
+ * Receipts (`ReceiptSatelliteCoordinator`) are the act-shaped sibling and
+ * orbit by default — receipts are signed events the motebit just performed.
  */
 
 import * as THREE from "three";
