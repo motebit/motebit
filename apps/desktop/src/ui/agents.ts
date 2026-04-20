@@ -393,7 +393,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
             pricing: agent.pricing ?? null,
           }
         : {
-            motebit_id: (agent as AgentRecord).remote_motebit_id,
+            motebit_id: agent.remote_motebit_id,
             capabilities: [],
             pricing: null,
           };

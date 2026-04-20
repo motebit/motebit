@@ -348,7 +348,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
 
   function open(nodeId?: string, auditFlags?: Map<string, string>): void {
     focusNodeId = nodeId ?? null;
-    memoryCtrl.setAuditFlags(auditFlags ?? new Map());
+    memoryCtrl.setAuditFlags(auditFlags ?? new Map<string, string>());
     // If focusing a specific node or showing audit, ensure list view
     if ((focusNodeId != null && focusNodeId !== "" && currentView !== "list") || auditFlags) {
       setView("list");

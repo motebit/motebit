@@ -38,7 +38,9 @@ export interface ScheduledGoal {
   prompt: string;
   interval_ms: number;
   mode: GoalMode;
-  status: GoalStatus | string;
+  // `(string & {})` opens the literal union to forward-compat values
+  // without collapsing autocomplete — idiomatic TS pattern.
+  status: GoalStatus | (string & {});
   /** Mobile-only today. Desktop infers enabled from status !== "paused". */
   enabled?: boolean;
   last_run_at?: number | null;

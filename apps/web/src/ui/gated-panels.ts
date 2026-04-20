@@ -209,7 +209,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
   function openMemory(auditNodeIds?: Map<string, string>): void {
     closeAll();
-    memoryCtrl.setAuditFlags(auditNodeIds ?? new Map());
+    memoryCtrl.setAuditFlags(auditNodeIds ?? new Map<string, string>());
     memoryPanel.classList.add("open");
     memoryBackdrop.classList.add("open");
     void memoryCtrl.refresh();

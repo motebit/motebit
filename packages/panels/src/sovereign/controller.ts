@@ -138,7 +138,7 @@ export interface SovereignState {
   goals: GoalRow[];
   ledgerDetails: ReadonlyMap<string, LedgerManifest>;
   succession: SuccessionResponse | null;
-  presentation: unknown | null;
+  presentation: unknown;
   verifyResult: { valid: boolean; reason?: string } | null;
   loading: boolean;
   error: string | null;
@@ -171,7 +171,7 @@ export interface SovereignController {
   setActiveTab(tab: SovereignTab): void;
   refresh(): Promise<void>;
   loadLedgerDetail(goalId: string): Promise<LedgerManifest | null>;
-  present(): Promise<unknown | null>;
+  present(): Promise<unknown>;
   verify(vp: unknown): Promise<{ valid: boolean; reason?: string }>;
   commitSweep(
     thresholdMicro: number | null,
@@ -212,12 +212,13 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
     const seen = new Map<string, CredentialEntry>();
     for (const entry of entries) {
       const issuerRaw = entry.credential["issuer"];
-      const issuer =
-        typeof issuerRaw === "string"
-          ? issuerRaw
-          : typeof issuerRaw === "object" && issuerRaw != null
-            ? String((issuerRaw as Record<string, unknown>)["id"] ?? "")
-            : "";
+      let issuer = "";
+      if (typeof issuerRaw === "string") {
+        issuer = issuerRaw;
+      } else if (typeof issuerRaw === "object" && issuerRaw != null) {
+        const id = (issuerRaw as Record<string, unknown>)["id"];
+        issuer = typeof id === "string" ? id : "";
+      }
       const subjectField = entry.credential["credentialSubject"];
       const subjectRaw =
         typeof subjectField === "object" && subjectField != null
@@ -395,7 +396,7 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
     }
   }
 
-  async function present(): Promise<unknown | null> {
+  async function present(): Promise<unknown> {
     if (!adapter.syncUrl || !adapter.motebitId) return null;
     try {
       const res = await adapter.fetch(`/api/v1/agents/${adapter.motebitId}/presentation`, {

@@ -46,7 +46,9 @@ export interface PricingEntry {
  */
 export interface AgentRecord {
   remote_motebit_id: string;
-  trust_level: TrustLevel | string;
+  // `(string & {})` opens the literal union to forward-compat values
+  // without collapsing autocomplete — idiomatic TS pattern.
+  trust_level: TrustLevel | (string & {});
   first_seen_at: number;
   last_seen_at: number;
   interaction_count: number;
@@ -63,7 +65,7 @@ export interface AgentRecord {
 export interface DiscoveredAgent {
   motebit_id: string;
   capabilities: string[];
-  trust_level?: TrustLevel | string;
+  trust_level?: TrustLevel | (string & {});
   interaction_count?: number;
   pricing?: PricingEntry[] | null;
   last_seen_at?: number;

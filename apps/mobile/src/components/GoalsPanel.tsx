@@ -50,26 +50,28 @@ interface GoalsPanelProps {
 
 function createMobileGoalsAdapter(app: MobileApp): GoalsFetchAdapter {
   const identity = app.getIdentityInfo();
+  // Mobile's GoalStore is synchronous; the adapter wraps each method in a
+  // resolved promise to match the async controller contract without adding
+  // `async` ceremony that would trip @typescript-eslint/require-await.
   return {
-    listGoals: async () => {
+    listGoals: () => {
       const store = app.getGoalStore();
-      if (!store) return [];
-      return store.listGoals(identity.motebitId) as ScheduledGoal[];
+      return Promise.resolve(store ? (store.listGoals(identity.motebitId) as ScheduledGoal[]) : []);
     },
-    addGoal: async (input) => {
+    addGoal: (input) => {
       const store = app.getGoalStore();
-      if (!store) return;
-      store.addGoal(identity.motebitId, input.prompt, input.interval_ms, input.mode);
+      if (store) store.addGoal(identity.motebitId, input.prompt, input.interval_ms, input.mode);
+      return Promise.resolve();
     },
-    setEnabled: async (goalId, enabled) => {
+    setEnabled: (goalId, enabled) => {
       const store = app.getGoalStore();
-      if (!store) return;
-      store.toggleGoal(goalId, enabled);
+      if (store) store.toggleGoal(goalId, enabled);
+      return Promise.resolve();
     },
-    removeGoal: async (goalId) => {
+    removeGoal: (goalId) => {
       const store = app.getGoalStore();
-      if (!store) return;
-      store.removeGoal(goalId);
+      if (store) store.removeGoal(goalId);
+      return Promise.resolve();
     },
   };
 }

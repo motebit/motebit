@@ -43,10 +43,11 @@ function resolveIssuer(cred: CredentialEntry["credential"]): string {
   if (typeof issuerRaw === "string") {
     return issuerRaw.length > 28 ? issuerRaw.slice(0, 28) + "..." : issuerRaw;
   }
-  const id =
-    typeof issuerRaw === "object" && "id" in issuerRaw
-      ? String((issuerRaw as Record<string, unknown>).id ?? "unknown")
-      : "unknown";
+  let id = "unknown";
+  if (typeof issuerRaw === "object" && "id" in issuerRaw) {
+    const rawId = (issuerRaw as Record<string, unknown>).id;
+    id = typeof rawId === "string" ? rawId : "unknown";
+  }
   return id.length > 28 ? id.slice(0, 28) + "..." : id;
 }
 

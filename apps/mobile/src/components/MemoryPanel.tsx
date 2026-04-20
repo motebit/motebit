@@ -136,7 +136,7 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
                       {item.content}
                     </Text>
                     <View style={styles.metaRow}>
-                      {item.sensitivity !== SensitivityLevel.None && (
+                      {item.sensitivity !== String(SensitivityLevel.None) && (
                         <View style={styles.sensitivityBadge}>
                           <Text style={styles.sensitivityText}>{item.sensitivity}</Text>
                         </View>
