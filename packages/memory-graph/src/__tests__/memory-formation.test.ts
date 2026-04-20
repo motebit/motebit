@@ -25,6 +25,7 @@ import {
   formMemoriesFromCandidates,
   MEMORY_EDGE_SIMILARITY_THRESHOLD,
 } from "../index.js";
+import { ConsolidationAction } from "../consolidation.js";
 
 const MOTEBIT_ID = "mb-formation";
 
@@ -119,6 +120,53 @@ describe("formMemoriesFromCandidates", () => {
 
     expect(memoriesFormed).toHaveLength(2);
     expect(memoriesFormed.map((m) => m.content)).toEqual(["Alpha memory", "Beta memory"]);
+  });
+
+  it("routes through consolidateAndForm when a consolidation provider is supplied", async () => {
+    // Stub provider that always returns ADD so the consolidation
+    // path's formMemory still fires — lets us observe the branch
+    // under coverage while keeping the outcome deterministic.
+    const consolidationProvider = {
+      classify: vi.fn(async () => ({
+        action: ConsolidationAction.ADD,
+        reason: "test-only provider — always add",
+      })),
+    };
+
+    const candidates: MemoryCandidate[] = [
+      {
+        content: "Gamma memory requiring consolidation",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+      },
+    ];
+
+    const { memoriesFormed } = await formMemoriesFromCandidates(
+      { memoryGraph: graph, consolidationProvider },
+      candidates,
+      [],
+    );
+
+    // First memory in an empty graph triggers the "no similar
+    // existing memories" short-circuit inside consolidateAndForm,
+    // which falls through to formMemory without invoking the
+    // classifier. Seed a prior node + call again to exercise the
+    // provider branch end-to-end.
+    expect(memoriesFormed).toHaveLength(1);
+
+    const { memoriesFormed: second } = await formMemoriesFromCandidates(
+      { memoryGraph: graph, consolidationProvider },
+      [
+        {
+          content: "Delta memory also requiring consolidation",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.None,
+        },
+      ],
+      [],
+    );
+    expect(second).toHaveLength(1);
+    expect(consolidationProvider.classify).toHaveBeenCalled();
   });
 
   it("links new memories to retrieved memories above the cosine-similarity threshold", async () => {

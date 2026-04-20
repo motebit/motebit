@@ -169,6 +169,27 @@ describe("Memory Trinity — end-to-end composition", () => {
     expect(indexV2).toContain("User lives in SF");
   });
 
+  it("MemoryGraph.getMemoryIndex wraps buildMemoryIndex over live storage", async () => {
+    // Empty graph produces the empty-state string.
+    const emptyIndex = await graph.getMemoryIndex();
+    expect(emptyIndex).toBe("");
+
+    await graph.formMemory(
+      { content: "Pinned anchor fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      [0.1, 0.2, 0.3],
+    );
+
+    const index = await graph.getMemoryIndex();
+    expect(index).toContain("Memory Index");
+    expect(index).toContain("Pinned anchor fact");
+
+    // Caller-supplied options pass through to the underlying builder
+    // — tight maxSummaryChars truncates the rendered content summary.
+    const tight = await graph.getMemoryIndex({ maxSummaryChars: 5 });
+    expect(tight).toContain("Pinne"); // first 5 chars of "Pinned anchor fact"
+    expect(tight).not.toContain("Pinned anchor fact");
+  });
+
   it("short node-id prefix resolves to the exact live node", async () => {
     const node = await graph.formMemory(
       {
