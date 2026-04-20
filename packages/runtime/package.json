@@ -8,7 +8,9 @@
   "types": "./dist/index.d.ts",
   "motebit": {
     "implements": [
-      "spec/execution-ledger-v1.md"
+      "spec/execution-ledger-v1.md",
+      "spec/goal-lifecycle-v1.md",
+      "spec/plan-lifecycle-v1.md"
     ]
   },
   "scripts": {

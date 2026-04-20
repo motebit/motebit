@@ -84,6 +84,31 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(typeof barrel.CredentialAnchorProofSchema.parse).toBe("function");
   });
 
+  it("re-exports the goal-lifecycle cluster (Created/Executed/Progress/Completed/Removed)", () => {
+    expect(typeof barrel.GoalCreatedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.GoalExecutedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.GoalProgressPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.GoalCompletedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.GoalRemovedPayloadSchema.parse).toBe("function");
+    expect(barrel.buildGoalCreatedPayloadJsonSchema().title).toBe("GoalCreatedPayload (v1)");
+    expect(barrel.buildGoalExecutedPayloadJsonSchema().title).toBe("GoalExecutedPayload (v1)");
+    expect(barrel.buildGoalProgressPayloadJsonSchema().title).toBe("GoalProgressPayload (v1)");
+    expect(barrel.buildGoalCompletedPayloadJsonSchema().title).toBe("GoalCompletedPayload (v1)");
+    expect(barrel.buildGoalRemovedPayloadJsonSchema().title).toBe("GoalRemovedPayload (v1)");
+  });
+
+  it("re-exports the plan-lifecycle cluster (7 events)", () => {
+    expect(typeof barrel.PlanCreatedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.PlanStepStartedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.PlanStepCompletedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.PlanStepFailedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.PlanStepDelegatedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.PlanCompletedPayloadSchema.parse).toBe("function");
+    expect(typeof barrel.PlanFailedPayloadSchema.parse).toBe("function");
+    expect(barrel.buildPlanCreatedPayloadJsonSchema().title).toBe("PlanCreatedPayload (v1)");
+    expect(barrel.buildPlanFailedPayloadJsonSchema().title).toBe("PlanFailedPayload (v1)");
+  });
+
   it("re-exports all wire-format $id URLs as stable raw-GitHub URLs", () => {
     const urls = [
       barrel.EXECUTION_RECEIPT_SCHEMA_ID,
