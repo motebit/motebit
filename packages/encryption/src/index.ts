@@ -298,6 +298,11 @@ export {
 } from "./merkle.js";
 export type { MerkleTree, MerkleProof } from "./merkle.js";
 
+// ── Consolidation anchor verification (proactive interior) ──────────
+
+export { verifyConsolidationAnchor } from "./consolidation-anchor.js";
+export type { ConsolidationAnchorVerifyResult } from "./consolidation-anchor.js";
+
 // ── X25519 Key Transfer (multi-device pairing) ─────────────────────
 
 export {
