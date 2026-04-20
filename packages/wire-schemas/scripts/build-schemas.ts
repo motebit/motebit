@@ -56,6 +56,22 @@ import {
   buildMemoryFormedPayloadJsonSchema,
   buildMemoryPinnedPayloadJsonSchema,
 } from "../src/memory-events.js";
+import {
+  buildGoalCreatedPayloadJsonSchema,
+  buildGoalExecutedPayloadJsonSchema,
+  buildGoalProgressPayloadJsonSchema,
+  buildGoalCompletedPayloadJsonSchema,
+  buildGoalRemovedPayloadJsonSchema,
+} from "../src/goal-lifecycle.js";
+import {
+  buildPlanCreatedPayloadJsonSchema,
+  buildPlanStepStartedPayloadJsonSchema,
+  buildPlanStepCompletedPayloadJsonSchema,
+  buildPlanStepFailedPayloadJsonSchema,
+  buildPlanStepDelegatedPayloadJsonSchema,
+  buildPlanCompletedPayloadJsonSchema,
+  buildPlanFailedPayloadJsonSchema,
+} from "../src/plan-lifecycle.js";
 import { buildRouteScoreJsonSchema } from "../src/route-score.js";
 import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
 
@@ -117,6 +133,24 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "memory-audit-payload-v1.json", build: buildMemoryAuditPayloadJsonSchema },
   { filename: "memory-decayed-payload-v1.json", build: buildMemoryDecayedPayloadJsonSchema },
+  { filename: "goal-created-payload-v1.json", build: buildGoalCreatedPayloadJsonSchema },
+  { filename: "goal-executed-payload-v1.json", build: buildGoalExecutedPayloadJsonSchema },
+  { filename: "goal-progress-payload-v1.json", build: buildGoalProgressPayloadJsonSchema },
+  { filename: "goal-completed-payload-v1.json", build: buildGoalCompletedPayloadJsonSchema },
+  { filename: "goal-removed-payload-v1.json", build: buildGoalRemovedPayloadJsonSchema },
+  { filename: "plan-created-payload-v1.json", build: buildPlanCreatedPayloadJsonSchema },
+  { filename: "plan-step-started-payload-v1.json", build: buildPlanStepStartedPayloadJsonSchema },
+  {
+    filename: "plan-step-completed-payload-v1.json",
+    build: buildPlanStepCompletedPayloadJsonSchema,
+  },
+  { filename: "plan-step-failed-payload-v1.json", build: buildPlanStepFailedPayloadJsonSchema },
+  {
+    filename: "plan-step-delegated-payload-v1.json",
+    build: buildPlanStepDelegatedPayloadJsonSchema,
+  },
+  { filename: "plan-completed-payload-v1.json", build: buildPlanCompletedPayloadJsonSchema },
+  { filename: "plan-failed-payload-v1.json", build: buildPlanFailedPayloadJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

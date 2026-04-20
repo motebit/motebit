@@ -1907,3 +1907,23 @@ export type {
   MemoryConsolidatedPayload,
   MemoryAuditPayload,
 } from "./memory-events.js";
+
+// ── Goal-lifecycle event payloads (spec/goal-lifecycle-v1.md) ────
+export type {
+  GoalCreatedPayload,
+  GoalExecutedPayload,
+  GoalProgressPayload,
+  GoalCompletedPayload,
+  GoalRemovedPayload,
+} from "./goal-lifecycle.js";
+
+// ── Plan-lifecycle event payloads (spec/plan-lifecycle-v1.md) ────
+export type {
+  PlanCreatedPayload,
+  PlanStepStartedPayload,
+  PlanStepCompletedPayload,
+  PlanStepFailedPayload,
+  PlanStepDelegatedPayload,
+  PlanCompletedPayload,
+  PlanFailedPayload,
+} from "./plan-lifecycle.js";

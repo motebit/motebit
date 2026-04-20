@@ -107,6 +107,34 @@ import {
   buildMemoryFormedPayloadJsonSchema,
   buildMemoryPinnedPayloadJsonSchema,
 } from "../memory-events.js";
+import {
+  GOAL_CREATED_PAYLOAD_SCHEMA_ID,
+  GOAL_EXECUTED_PAYLOAD_SCHEMA_ID,
+  GOAL_PROGRESS_PAYLOAD_SCHEMA_ID,
+  GOAL_COMPLETED_PAYLOAD_SCHEMA_ID,
+  GOAL_REMOVED_PAYLOAD_SCHEMA_ID,
+  buildGoalCreatedPayloadJsonSchema,
+  buildGoalExecutedPayloadJsonSchema,
+  buildGoalProgressPayloadJsonSchema,
+  buildGoalCompletedPayloadJsonSchema,
+  buildGoalRemovedPayloadJsonSchema,
+} from "../goal-lifecycle.js";
+import {
+  PLAN_CREATED_PAYLOAD_SCHEMA_ID,
+  PLAN_STEP_STARTED_PAYLOAD_SCHEMA_ID,
+  PLAN_STEP_COMPLETED_PAYLOAD_SCHEMA_ID,
+  PLAN_STEP_FAILED_PAYLOAD_SCHEMA_ID,
+  PLAN_STEP_DELEGATED_PAYLOAD_SCHEMA_ID,
+  PLAN_COMPLETED_PAYLOAD_SCHEMA_ID,
+  PLAN_FAILED_PAYLOAD_SCHEMA_ID,
+  buildPlanCreatedPayloadJsonSchema,
+  buildPlanStepStartedPayloadJsonSchema,
+  buildPlanStepCompletedPayloadJsonSchema,
+  buildPlanStepFailedPayloadJsonSchema,
+  buildPlanStepDelegatedPayloadJsonSchema,
+  buildPlanCompletedPayloadJsonSchema,
+  buildPlanFailedPayloadJsonSchema,
+} from "../plan-lifecycle.js";
 
 interface SchemaCase {
   name: string;
@@ -314,6 +342,80 @@ const CASES: SchemaCase[] = [
     filename: "memory-decayed-payload-v1.json",
     expectedId: MEMORY_DECAYED_PAYLOAD_SCHEMA_ID,
     build: buildMemoryDecayedPayloadJsonSchema,
+  },
+  // Goal-lifecycle-v1 payloads — one case per event type under §5 of the spec.
+  {
+    name: "goal-created-payload-v1",
+    filename: "goal-created-payload-v1.json",
+    expectedId: GOAL_CREATED_PAYLOAD_SCHEMA_ID,
+    build: buildGoalCreatedPayloadJsonSchema,
+  },
+  {
+    name: "goal-executed-payload-v1",
+    filename: "goal-executed-payload-v1.json",
+    expectedId: GOAL_EXECUTED_PAYLOAD_SCHEMA_ID,
+    build: buildGoalExecutedPayloadJsonSchema,
+  },
+  {
+    name: "goal-progress-payload-v1",
+    filename: "goal-progress-payload-v1.json",
+    expectedId: GOAL_PROGRESS_PAYLOAD_SCHEMA_ID,
+    build: buildGoalProgressPayloadJsonSchema,
+  },
+  {
+    name: "goal-completed-payload-v1",
+    filename: "goal-completed-payload-v1.json",
+    expectedId: GOAL_COMPLETED_PAYLOAD_SCHEMA_ID,
+    build: buildGoalCompletedPayloadJsonSchema,
+  },
+  {
+    name: "goal-removed-payload-v1",
+    filename: "goal-removed-payload-v1.json",
+    expectedId: GOAL_REMOVED_PAYLOAD_SCHEMA_ID,
+    build: buildGoalRemovedPayloadJsonSchema,
+  },
+  // Plan-lifecycle-v1 payloads — one case per event type under §5 of the spec.
+  {
+    name: "plan-created-payload-v1",
+    filename: "plan-created-payload-v1.json",
+    expectedId: PLAN_CREATED_PAYLOAD_SCHEMA_ID,
+    build: buildPlanCreatedPayloadJsonSchema,
+  },
+  {
+    name: "plan-step-started-payload-v1",
+    filename: "plan-step-started-payload-v1.json",
+    expectedId: PLAN_STEP_STARTED_PAYLOAD_SCHEMA_ID,
+    build: buildPlanStepStartedPayloadJsonSchema,
+  },
+  {
+    name: "plan-step-completed-payload-v1",
+    filename: "plan-step-completed-payload-v1.json",
+    expectedId: PLAN_STEP_COMPLETED_PAYLOAD_SCHEMA_ID,
+    build: buildPlanStepCompletedPayloadJsonSchema,
+  },
+  {
+    name: "plan-step-failed-payload-v1",
+    filename: "plan-step-failed-payload-v1.json",
+    expectedId: PLAN_STEP_FAILED_PAYLOAD_SCHEMA_ID,
+    build: buildPlanStepFailedPayloadJsonSchema,
+  },
+  {
+    name: "plan-step-delegated-payload-v1",
+    filename: "plan-step-delegated-payload-v1.json",
+    expectedId: PLAN_STEP_DELEGATED_PAYLOAD_SCHEMA_ID,
+    build: buildPlanStepDelegatedPayloadJsonSchema,
+  },
+  {
+    name: "plan-completed-payload-v1",
+    filename: "plan-completed-payload-v1.json",
+    expectedId: PLAN_COMPLETED_PAYLOAD_SCHEMA_ID,
+    build: buildPlanCompletedPayloadJsonSchema,
+  },
+  {
+    name: "plan-failed-payload-v1",
+    filename: "plan-failed-payload-v1.json",
+    expectedId: PLAN_FAILED_PAYLOAD_SCHEMA_ID,
+    build: buildPlanFailedPayloadJsonSchema,
   },
 ];
 
