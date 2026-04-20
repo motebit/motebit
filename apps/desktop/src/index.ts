@@ -783,6 +783,13 @@ export class DesktopApp {
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
         solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
+        // Deferred memory formation — desktop is the first opt-in
+        // surface. The user's turn returns as soon as the response
+        // streams; embedding + consolidation run in the background
+        // queue. Next turn blocks on `memoryFormation.idle()` so
+        // retrieval stays consistent. See
+        // `packages/runtime/src/memory-formation-queue.ts`.
+        deferMemoryFormation: true,
       },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
