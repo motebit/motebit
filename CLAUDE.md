@@ -44,6 +44,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — declared posture vs proven posture
 - [`docs/doctrine/self-attesting-system.md`](docs/doctrine/self-attesting-system.md) — every claim is user-verifiable
 - [`docs/doctrine/surface-determinism.md`](docs/doctrine/surface-determinism.md) — affordances invoke capabilities, not prompts
+- [`docs/doctrine/panels-pattern.md`](docs/doctrine/panels-pattern.md) — four shapes for multi-surface panel state; what's shipped, what's evaluated, what's open
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out
 - [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory (33 today)
 
