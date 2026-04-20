@@ -131,6 +131,14 @@ export {
   buildAgentSettlementAnchorProofJsonSchema,
 } from "./agent-settlement-anchor.js";
 export {
+  ConsolidationReceiptSchema,
+  CONSOLIDATION_RECEIPT_SCHEMA_ID,
+  buildConsolidationReceiptJsonSchema,
+  ConsolidationAnchorSchema,
+  CONSOLIDATION_ANCHOR_SCHEMA_ID,
+  buildConsolidationAnchorJsonSchema,
+} from "./consolidation-receipt.js";
+export {
   MemoryFormedPayloadSchema,
   MEMORY_FORMED_PAYLOAD_SCHEMA_ID,
   buildMemoryFormedPayloadJsonSchema,

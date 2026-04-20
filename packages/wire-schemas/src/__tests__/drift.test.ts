@@ -42,6 +42,12 @@ import {
   buildAgentSettlementAnchorProofJsonSchema,
 } from "../agent-settlement-anchor.js";
 import {
+  CONSOLIDATION_ANCHOR_SCHEMA_ID,
+  CONSOLIDATION_RECEIPT_SCHEMA_ID,
+  buildConsolidationAnchorJsonSchema,
+  buildConsolidationReceiptJsonSchema,
+} from "../consolidation-receipt.js";
+import {
   CREDENTIAL_BUNDLE_SCHEMA_ID,
   buildCredentialBundleJsonSchema,
 } from "../credential-bundle.js";
@@ -301,6 +307,20 @@ const CASES: SchemaCase[] = [
     filename: "agent-settlement-anchor-proof-v1.json",
     expectedId: AGENT_SETTLEMENT_ANCHOR_PROOF_SCHEMA_ID,
     build: buildAgentSettlementAnchorProofJsonSchema,
+  },
+  // Consolidation-receipt-v1 cluster — proactive-interior work as
+  // self-attesting + chain-anchorable evidence.
+  {
+    name: "consolidation-receipt-v1",
+    filename: "consolidation-receipt-v1.json",
+    expectedId: CONSOLIDATION_RECEIPT_SCHEMA_ID,
+    build: buildConsolidationReceiptJsonSchema,
+  },
+  {
+    name: "consolidation-anchor-v1",
+    filename: "consolidation-anchor-v1.json",
+    expectedId: CONSOLIDATION_ANCHOR_SCHEMA_ID,
+    build: buildConsolidationAnchorJsonSchema,
   },
   // Memory-delta-v1 payloads — one case per event type under §5 of the spec.
   {
