@@ -192,6 +192,19 @@ export interface TurnOptions {
   firstConversation?: boolean;
   /** System-triggered generation — goes into system prompt, not user message. */
   activationPrompt?: string;
+  /**
+   * When true, skip the inline memory-formation pass and yield a
+   * `memory_formation_deferred` chunk before the final `result` chunk.
+   * The runtime catches that chunk and queues formation to run after
+   * the turn generator returns — the user sees their response and
+   * the next turn can start without waiting on embedding +
+   * consolidation.
+   *
+   * Default `false` — preserves the turn-contains-formation invariant
+   * that a lot of existing tests and callers expect. Runtime sets
+   * this to `true` when `RuntimeConfig.deferMemoryFormation === true`.
+   */
+  deferMemoryFormation?: boolean;
 }
 
 export type AgenticChunk =
@@ -212,6 +225,19 @@ export type AgenticChunk =
       quorum?: { required: number; approvers: string[]; collected: string[] };
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
+  | {
+      /**
+       * Emitted when `options.deferMemoryFormation === true`. Carries the
+       * candidates + relevantMemories snapshot the formation pass would
+       * have consumed. The runtime catches this chunk and queues formation
+       * to run after the turn generator returns, so the user sees the
+       * `result` chunk (and the conversation flow completes) without
+       * waiting on embedding + consolidation.
+       */
+      type: "memory_formation_deferred";
+      candidates: MemoryCandidate[];
+      relevantMemories: MemoryNode[];
+    }
   | { type: "result"; result: TurnResult };
 
 // === Orchestrator ===
@@ -793,12 +819,26 @@ export async function* runTurnStreaming(
   // link (cosine-threshold). Extracted into @motebit/memory-graph's
   // `formMemoriesFromCandidates` so a future runtime Worker can call
   // the same function off-thread without duplicating the machinery.
-  const { memoriesFormed: newlyFormed } = await formMemoriesFromCandidates(
-    { memoryGraph, consolidationProvider: deps.consolidationProvider },
-    candidates,
-    relevantMemories,
-  );
-  for (const n of newlyFormed) memoriesFormed.push(n);
+  //
+  // When `options.deferMemoryFormation === true`, skip the inline pass
+  // and yield a deferred chunk carrying the candidates + retrieval
+  // snapshot. The runtime catches it, queues formation in the
+  // background, and the user sees their response without waiting on
+  // embedding + consolidation. See `MotebitRuntime._memoryFormationQueue`.
+  if (options?.deferMemoryFormation === true) {
+    yield {
+      type: "memory_formation_deferred",
+      candidates: [...candidates],
+      relevantMemories: [...relevantMemories],
+    };
+  } else {
+    const { memoriesFormed: newlyFormed } = await formMemoriesFromCandidates(
+      { memoryGraph, consolidationProvider: deps.consolidationProvider },
+      candidates,
+      relevantMemories,
+    );
+    for (const n of newlyFormed) memoriesFormed.push(n);
+  }
 
   // 4b. Audit: detect memory-worthy patterns the model missed
   const untaggedPatterns = detectUntaggedMemoryPatterns(

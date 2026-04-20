@@ -92,6 +92,8 @@ import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsController, type GoalsController, type GoalLifecycleStatus } from "./goals.js";
+import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
+import { formMemoriesFromCandidates } from "@motebit/memory-graph";
 import { setOperatorMode, setupOperatorPin, resetOperatorPin } from "./operator.js";
 import {
   bumpTrustFromReceipt as _bumpTrustFromReceipt,
@@ -456,6 +458,21 @@ export interface RuntimeConfig {
   taskRouter?: TaskRouterConfig;
   /** Enable episodic memory consolidation during housekeeping. Default false. */
   episodicConsolidation?: boolean;
+  /**
+   * When true, the AI loop yields a `memory_formation_deferred` chunk
+   * at the end of each turn and skips the inline embedding +
+   * consolidation pass. The runtime queues formation onto a
+   * single-lane Promise chain that runs in the background after the
+   * user's response has been delivered. The next turn blocks on
+   * `awaitPendingMemoryFormation()` so the graph state is
+   * consistent before the next `recallRelevant`.
+   *
+   * Default `false` — preserves the turn-contains-formation
+   * invariant that existing tests + callers assume. Mobile + web may
+   * opt-in for perceived-latency wins once surface behavior has been
+   * validated. See `memory-formation-queue.ts`.
+   */
+  deferMemoryFormation?: boolean;
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
   /**
@@ -601,6 +618,14 @@ export class MotebitRuntime {
    */
   readonly goals: GoalsController;
   private _goalStatusResolver: ((goalId: string) => GoalLifecycleStatus) | null = null;
+  /**
+   * Background memory-formation queue. Populated only when
+   * `RuntimeConfig.deferMemoryFormation === true`; otherwise inert.
+   * Single-lane (graph-state ordering required). See
+   * `memory-formation-queue.ts` for the design rationale.
+   */
+  readonly memoryFormation: MemoryFormationQueue;
+  private _deferMemoryFormation: boolean;
   policy: PolicyGate;
   memoryGovernor: MemoryGovernor;
 
@@ -743,6 +768,8 @@ export class MotebitRuntime {
       getGoalStatus: (goalId) => this._goalStatusResolver?.(goalId) ?? null,
       logger: this._logger,
     });
+    this._deferMemoryFormation = config.deferMemoryFormation ?? false;
+    this.memoryFormation = createMemoryFormationQueue({ logger: this._logger });
     this.memory = new MemoryGraph(adapters.storage.memoryStorage, this.events, this.motebitId);
     this.identity = new IdentityManager(adapters.storage.identityStorage, this.events);
     this.auditLog = adapters.storage.auditLog;
@@ -1376,6 +1403,16 @@ export class MotebitRuntime {
       );
       const selfAwareness = this.buildSelfAwareness();
 
+      // When background formation is enabled, ensure any prior turn's
+      // queued formation has drained before we rebuild the retrieval
+      // context — otherwise `recallRelevant` (inside runTurnStreaming)
+      // could miss memories that are mid-formation. Cheap: typical
+      // human-conversation cadence leaves the queue drained by the
+      // time the next message arrives.
+      if (this._deferMemoryFormation) {
+        await this.memoryFormation.idle();
+      }
+
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -1387,10 +1424,11 @@ export class MotebitRuntime {
         precisionContext: selfAwareness || undefined,
         delegationScope: options?.delegationScope,
         firstConversation: this._isFirstConversation || undefined,
+        deferMemoryFormation: this._deferMemoryFormation,
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
-      yield* this.streaming.processStream(stream, text, runId);
+      yield* this.streaming.processStream(this._catchDeferredFormationChunks(stream), text, runId);
       // First-conversation guidance fades after a few exchanges
       if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
         this._isFirstConversation = false;
@@ -1622,6 +1660,51 @@ export class MotebitRuntime {
    */
   searchConversations(query: string, limit = 5) {
     return this.conversation.searchHistory(query, limit);
+  }
+
+  /**
+   * Resolve when no background memory-formation jobs are pending.
+   * Callers outside the runtime (tests, admin tools, shutdown paths)
+   * use this to wait for the autoDream-shape queue to drain. The
+   * runtime itself awaits this at the top of each new turn when
+   * `deferMemoryFormation` is set.
+   */
+  awaitPendingMemoryFormation(): Promise<void> {
+    return this.memoryFormation.idle();
+  }
+
+  /**
+   * Stream filter: catches `memory_formation_deferred` chunks
+   * emitted by `runTurnStreaming` when `deferMemoryFormation` is
+   * set, enqueues the formation job onto the single-lane queue, and
+   * passes every other chunk through to the downstream consumer. The
+   * user sees the final `result` chunk and the turn completes on the
+   * UI side; formation runs after the generator returns.
+   */
+  private async *_catchDeferredFormationChunks(
+    source: AsyncIterable<import("@motebit/ai-core").AgenticChunk>,
+  ): AsyncGenerator<
+    Exclude<import("@motebit/ai-core").AgenticChunk, { type: "memory_formation_deferred" }>
+  > {
+    for await (const chunk of source) {
+      if (chunk.type === "memory_formation_deferred") {
+        const candidates = chunk.candidates;
+        const relevantMemories = chunk.relevantMemories;
+        const memoryGraph = this.memory;
+        const consolidationProvider = this.loopDeps?.consolidationProvider;
+        this.memoryFormation.enqueue(async () => {
+          await formMemoriesFromCandidates(
+            { memoryGraph, consolidationProvider },
+            candidates,
+            relevantMemories,
+          );
+        });
+        // Deferred chunks are internal protocol — never forwarded
+        // to the UI / streaming wrapper. Continue consuming.
+        continue;
+      }
+      yield chunk;
+    }
   }
 
   /** List recent conversations (for UI/CLI). */

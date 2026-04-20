@@ -165,6 +165,12 @@ export class StreamingManager {
     const motebitToolServers = this.deps.getMotebitToolServers();
 
     for await (let chunk of stream) {
+      // Deferred memory-formation chunks are an internal runtime
+      // protocol handled by `MotebitRuntime._catchDeferredFormationChunks`
+      // before reaching this streaming wrapper. Guard here as a
+      // belt-and-suspenders: if the wrapper path ever shifts, we drop
+      // the internal chunk cleanly instead of leaking it to the UI.
+      if (chunk.type === "memory_formation_deferred") continue;
       if (chunk.type === "text") {
         accumulated += chunk.text;
 
