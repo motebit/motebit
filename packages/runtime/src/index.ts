@@ -492,6 +492,27 @@ export interface RuntimeConfig {
    *  to fire. Default 60_000 (one minute). Ignored when
    *  `proactiveTickMs` is not set. */
   proactiveQuietWindowMs?: number;
+  /**
+   * What the motebit does on each qualifying idle tick. Ignored when
+   * `proactiveTickMs` is not set.
+   *
+   *   - `"none"` (default) — heartbeat-only. Emits an
+   *     `idle_tick_fired` event to the log; no LLM call, no user-
+   *     visible action. Foundation for future surface-specific
+   *     wiring.
+   *   - `"reflect"` — calls `runtime.reflect()` in the background.
+   *     The reflection engine reviews recent memories + audit
+   *     flags, forms high-signal insight memories, records the
+   *     trajectory. No new UI surface — reflections land in the
+   *     existing memory graph + event log.
+   *
+   * Calm-software choice: `"reflect"` acts entirely within the
+   * interior (memory graph, event log); no chat bubble, toast, or
+   * notification surfaces. User discovers new reflections when they
+   * next browse the memory panel or trigger a turn that recalls
+   * them.
+   */
+  proactiveAction?: "none" | "reflect";
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
   /**
@@ -801,6 +822,7 @@ export class MotebitRuntime {
     if (config.proactiveTickMs != null && config.proactiveTickMs > 0) {
       const tickMs = config.proactiveTickMs;
       const quietMs = config.proactiveQuietWindowMs ?? 60_000;
+      const action = config.proactiveAction ?? "none";
       this._idleTick = createIdleTickController({
         intervalMs: tickMs,
         quietWindowMs: quietMs,
@@ -816,12 +838,26 @@ export class MotebitRuntime {
               payload: {
                 interval_ms: tickMs,
                 quiet_window_ms: quietMs,
+                action,
               },
               tombstoned: false,
             });
           } catch {
             // Event-log append is best-effort — a missed tick record
             // does not corrupt state.
+          }
+          // Perform the configured action AFTER the heartbeat event
+          // is logged — so a reflection failure cannot prevent the
+          // cadence signal from being recorded. Each action path is
+          // best-effort; a throw here is caught by the idle-tick
+          // controller's logger.
+          if (action === "reflect") {
+            // Calls the public `reflect()` directly (not the private
+            // reflectAndStore) so a thrown error reaches the
+            // idle-tick controller's logger. The `reflect()` method
+            // updates gradient state on success; the controller's
+            // catch wrapper handles failure as best-effort.
+            await this.reflect();
           }
         },
         logger: this._logger,
