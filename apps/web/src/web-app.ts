@@ -447,6 +447,7 @@ export class WebApp {
         supersedeMemory: (nodeId, newContent, reason) =>
           runtime.memory.supersedeMemoryByNodeId(nodeId, newContent, reason),
       },
+      conversationSearchFn: (query, limit) => runtime.searchConversations(query, limit),
     });
 
     // Interior tier of the answer engine — BM25 over committed motebit docs.

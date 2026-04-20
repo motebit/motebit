@@ -10,6 +10,10 @@ import type { ConversationMessage, ConversationStoreAdapter } from "@motebit/sdk
 import type { StreamingProvider, ContextBudget, TaskType } from "@motebit/ai-core";
 import { trimConversation, summarizeConversation, shouldSummarize } from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";
+import {
+  searchConversationMessages,
+  type ConversationMessageRecord,
+} from "./conversation-search.js";
 
 /** Strip internal tags (state, thinking, memory) before persisting — display-only, not content. */
 function stripInternalTags(text: string): string {
@@ -331,6 +335,42 @@ export class ConversationManager {
     } catch {
       return null;
     }
+  }
+
+  // --- Layer-3 conversation search ---
+
+  /**
+   * BM25 search over every persisted message for this motebit. Used by
+   * the `search_conversations` tool — the Layer-3 transcript retrieval
+   * that complements Layer-1 (memory index) and Layer-2
+   * (`recall_memories` embedding search). Returns ranked hits with
+   * conversation id, timestamp, and a short snippet around the first
+   * matching token.
+   *
+   * Uses only the sync ConversationStoreAdapter surface, so callers
+   * with IDB-backed stores MUST preload message caches (e.g.
+   * `preloadAllMessages` on web) before invoking. The default for
+   * CLI/desktop/mobile with SQLite is sync all the way down and needs
+   * no preload.
+   */
+  searchHistory(query: string, limit = 5): ReturnType<typeof searchConversationMessages> {
+    const { store } = this.deps;
+    if (store == null) return [];
+    const convos = store.listConversations(this.deps.motebitId);
+    const messages: ConversationMessageRecord[] = [];
+    for (const c of convos) {
+      const msgs = store.loadMessages(c.conversationId);
+      for (const m of msgs) {
+        if (m.role !== "user" && m.role !== "assistant") continue;
+        messages.push({
+          conversationId: c.conversationId,
+          role: m.role,
+          content: m.content,
+          createdAt: m.createdAt,
+        });
+      }
+    }
+    return searchConversationMessages(messages, query, { limit });
   }
 
   /**

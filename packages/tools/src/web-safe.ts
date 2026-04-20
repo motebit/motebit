@@ -20,6 +20,11 @@ import {
   type RewriteMemoryDeps,
 } from "./builtins/rewrite-memory.js";
 import {
+  searchConversationsDefinition,
+  createSearchConversationsHandler,
+  type ConversationSearchHit,
+} from "./builtins/search-conversations.js";
+import {
   selfReflectDefinition,
   createSelfReflectHandler,
   type ReflectionToolResult,
@@ -83,6 +88,14 @@ export interface BrowserSafeBuiltinOptions {
    * resolvers yet — the tool is useless without them.
    */
   rewriteMemoryDeps?: RewriteMemoryDeps;
+  /**
+   * When provided, registers `search_conversations` — Layer-3
+   * lexical BM25 retrieval over conversation transcripts.
+   */
+  conversationSearchFn?: (
+    query: string,
+    limit: number,
+  ) => Promise<ConversationSearchHit[]> | ConversationSearchHit[];
 }
 
 /**
@@ -123,6 +136,12 @@ export function registerBrowserSafeBuiltins(
     registry.register(
       rewriteMemoryDefinition,
       createRewriteMemoryHandler(options.rewriteMemoryDeps),
+    );
+  }
+  if (options.conversationSearchFn) {
+    registry.register(
+      searchConversationsDefinition,
+      createSearchConversationsHandler(options.conversationSearchFn),
     );
   }
 }

@@ -951,6 +951,7 @@ export class MobileApp {
         supersedeMemory: (nodeId, newContent, reason) =>
           runtime.memory.supersedeMemoryByNodeId(nodeId, newContent, reason),
       },
+      conversationSearchFn: (query, limit) => runtime.searchConversations(query, limit),
     });
 
     // Goal management tools (available during goal execution).

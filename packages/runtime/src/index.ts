@@ -1613,6 +1613,17 @@ export class MotebitRuntime {
     return this.conversation.backfillMissingTitles();
   }
 
+  /**
+   * Layer-3 conversation search — lexical BM25 over every persisted
+   * user+assistant message for this motebit. Surfaces the raw
+   * transcript alongside the Layer-1 memory index and Layer-2
+   * embedding recall. See `conversation-search.ts` for the ranking
+   * logic.
+   */
+  searchConversations(query: string, limit = 5) {
+    return this.conversation.searchHistory(query, limit);
+  }
+
   /** List recent conversations (for UI/CLI). */
   listConversations(limit?: number): Array<{
     conversationId: string;

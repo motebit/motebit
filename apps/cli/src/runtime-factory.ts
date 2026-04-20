@@ -54,6 +54,8 @@ import {
   recallMemoriesDefinition,
   rewriteMemoryDefinition,
   createRewriteMemoryHandler,
+  searchConversationsDefinition,
+  createSearchConversationsHandler,
   createRecallMemoriesHandler,
   recallSelfDefinition,
   createRecallSelfHandler,
@@ -323,6 +325,17 @@ export function buildToolRegistry(
   };
 
   registry.register(recallMemoriesDefinition, createRecallMemoriesHandler(memorySearchFn));
+
+  // Layer-3 transcript retrieval — BM25 over conversation history.
+  // Complements `recall_memories` (Layer 2, embeddings over memory
+  // nodes) and the always-loaded memory index (Layer 1).
+  registry.register(
+    searchConversationsDefinition,
+    createSearchConversationsHandler((query, limit) => {
+      if (!runtimeRef.current) return [];
+      return runtimeRef.current.searchConversations(query, limit);
+    }),
+  );
 
   // Register `rewrite_memory` so the agent can correct a stale entry
   // by the short node id from the Layer-1 memory index. Deps close

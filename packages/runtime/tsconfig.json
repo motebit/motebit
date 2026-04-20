@@ -49,6 +49,9 @@
       "path": "../sdk"
     },
     {
+      "path": "../self-knowledge"
+    },
+    {
       "path": "../semiring"
     },
     {

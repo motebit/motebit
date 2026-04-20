@@ -257,6 +257,15 @@ export class GoalScheduler {
 
     const lines: string[] = [];
     lines.push("You are executing a scheduled goal.");
+    // Local time-of-day context — lets the agent reason about whether
+    // a deferred action ("email the team lead tomorrow morning") is
+    // ripe, or whether cadence-sensitive behavior ("daily digest") is
+    // on its expected window. Absent, the agent has to guess from run
+    // timestamps alone, which is lossy.
+    const now = new Date();
+    lines.push(
+      `Current local time: ${now.toLocaleString(undefined, { weekday: "long", year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}`,
+    );
     lines.push("");
     lines.push(`Goal: ${goal.prompt}`);
 

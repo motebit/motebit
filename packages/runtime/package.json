@@ -39,6 +39,7 @@
     "@motebit/planner": "workspace:*",
     "@motebit/policy": "workspace:*",
     "@motebit/semiring": "workspace:*",
+    "@motebit/self-knowledge": "workspace:*",
     "@motebit/wallet-solana": "workspace:*"
   },
   "devDependencies": {

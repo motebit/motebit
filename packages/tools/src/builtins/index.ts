@@ -16,6 +16,11 @@ export {
   createRewriteMemoryHandler,
   type RewriteMemoryDeps,
 } from "./rewrite-memory.js";
+export {
+  searchConversationsDefinition,
+  createSearchConversationsHandler,
+  type ConversationSearchHit,
+} from "./search-conversations.js";
 export { currentTimeDefinition, createCurrentTimeHandler } from "./current-time.js";
 export {
   recallSelfDefinition,
@@ -43,6 +48,11 @@ import {
   createRewriteMemoryHandler,
   type RewriteMemoryDeps,
 } from "./rewrite-memory.js";
+import {
+  searchConversationsDefinition,
+  createSearchConversationsHandler,
+  type ConversationSearchHit,
+} from "./search-conversations.js";
 import { currentTimeDefinition, createCurrentTimeHandler } from "./current-time.js";
 import { listEventsDefinition, createListEventsHandler } from "./list-events.js";
 
@@ -71,6 +81,16 @@ export interface BuiltinToolOptions {
    * primary input — the short id — isn't visible to the agent).
    */
   rewriteMemoryDeps?: RewriteMemoryDeps;
+  /**
+   * When provided, registers `search_conversations` — Layer-3
+   * transcript retrieval. Returns the agent's verbatim exchange
+   * history ranked by BM25. Complements `memorySearchFn` (Layer-2
+   * embedding recall over distilled memory nodes).
+   */
+  conversationSearchFn?: (
+    query: string,
+    limit: number,
+  ) => Promise<ConversationSearchHit[]> | ConversationSearchHit[];
 }
 
 export function registerBuiltinTools(
@@ -117,6 +137,12 @@ export function registerBuiltinTools(
     registry.register(
       rewriteMemoryDefinition,
       createRewriteMemoryHandler(options.rewriteMemoryDeps),
+    );
+  }
+  if (options.conversationSearchFn) {
+    registry.register(
+      searchConversationsDefinition,
+      createSearchConversationsHandler(options.conversationSearchFn),
     );
   }
 }

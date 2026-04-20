@@ -82,6 +82,7 @@ export function registerDesktopTools(
       supersedeMemory: (nodeId, newContent, reason) =>
         runtime.memory.supersedeMemoryByNodeId(nodeId, newContent, reason),
     },
+    conversationSearchFn: (query, limit) => runtime.searchConversations(query, limit),
   });
 
   // Tauri-privileged tools — only available when running inside Tauri
