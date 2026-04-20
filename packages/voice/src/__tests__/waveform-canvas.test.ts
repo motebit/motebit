@@ -13,6 +13,8 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import {
+  AMBIENT_EMA_TUNING,
+  VOICE_EMA_TUNING,
   analyzeWaveformFrame,
   createWaveformState,
   emaAsymmetric,
@@ -189,6 +191,28 @@ describe("renderVoiceWaveform", () => {
     expect(frame.bands).toBeDefined();
     expect(typeof frame.gatedRms).toBe("number");
     expect(typeof frame.smoothedFlatness).toBe("number");
+  });
+});
+
+describe("EMA tuning parameter", () => {
+  it("AMBIENT tuning smooths slower than VOICE tuning under identical input", () => {
+    const voiceState = createWaveformState();
+    const ambientState = createWaveformState();
+    const loud = makeMockAnalyser(255, 200);
+    const voiceFrame = analyzeWaveformFrame(loud, voiceState, VOICE_EMA_TUNING);
+    const ambientFrame = analyzeWaveformFrame(loud, ambientState, AMBIENT_EMA_TUNING);
+    // Under the same loud step, VOICE should climb higher (α_up=0.4 vs 0.3).
+    expect(voiceFrame.smoothedRms).toBeGreaterThan(ambientFrame.smoothedRms);
+  });
+
+  it("defaults to VOICE_EMA_TUNING when tuning is omitted", () => {
+    const explicit = createWaveformState();
+    const implicit = createWaveformState();
+    const loud = makeMockAnalyser(255, 200);
+    analyzeWaveformFrame(loud, explicit, VOICE_EMA_TUNING);
+    analyzeWaveformFrame(loud, implicit);
+    expect(implicit.smoothedRms).toBe(explicit.smoothedRms);
+    expect(implicit.smoothedMid).toBe(explicit.smoothedMid);
   });
 });
 

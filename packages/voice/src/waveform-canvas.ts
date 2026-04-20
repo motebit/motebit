@@ -121,15 +121,59 @@ export function emaAsymmetric(
 }
 
 /**
+ * EMA tuning for the band-smoothing filters. Different callers want
+ * different responsiveness:
+ *
+ *   - Active-voice waveform (default) uses faster rise constants so the
+ *     rendered bars track speech onsets quickly.
+ *   - Ambient/wake loops prefer slower constants so the creature doesn't
+ *     twitch at every transient.
+ *
+ * The values are exposed so call sites declare their intent rather than
+ * hard-coding constants inline.
+ */
+export interface EmaTuning {
+  rmsUp: number;
+  rmsDown: number;
+  bandUp: number;
+  bandDown: number;
+  highUp: number;
+  highDown: number;
+}
+
+export const VOICE_EMA_TUNING: EmaTuning = {
+  rmsUp: 0.4,
+  rmsDown: 0.06,
+  bandUp: 0.35,
+  bandDown: 0.05,
+  highUp: 0.3,
+  highDown: 0.04,
+};
+
+export const AMBIENT_EMA_TUNING: EmaTuning = {
+  rmsUp: 0.3,
+  rmsDown: 0.04,
+  bandUp: 0.3,
+  bandDown: 0.04,
+  highUp: 0.25,
+  highDown: 0.03,
+};
+
+/**
  * Compute analysis bands from a raw analyser node into the state. Separated
  * from the draw so surfaces that need analysis without drawing (desktop's
- * ambient loop) can reuse the same math once it's consolidated.
+ * ambient loop) can reuse the same math.
+ *
+ * The `tuning` parameter controls smoothing responsiveness — defaults to
+ * `VOICE_EMA_TUNING` (fast rise for the active-voice waveform). Ambient
+ * callers should pass `AMBIENT_EMA_TUNING` for the calmer profile.
  *
  * Mutates `state`. Returns the derived frame so callers don't have to copy.
  */
 export function analyzeWaveformFrame(
   analyserNode: AnalyserNode,
   state: WaveformState,
+  tuning: EmaTuning = VOICE_EMA_TUNING,
 ): WaveformFrame {
   const binCount = analyserNode.frequencyBinCount;
   const timeDomain = new Uint8Array(binCount);
@@ -144,7 +188,10 @@ export function analyzeWaveformFrame(
     sumSq += v * v;
   }
   const rms = Math.sqrt(sumSq / timeDomain.length);
-  state.smoothedRms = emaAsymmetric(state.smoothedRms, rms, 0.4, 0.06);
+  state.smoothedRms = emaAsymmetric(state.smoothedRms, rms, tuning.rmsUp, tuning.rmsDown);
+  // Noise-floor EMA is tuning-independent — both loops use the same
+  // slow-rise/fast-decay constants so a calibrated floor carries across
+  // ambient → voice transitions.
   state.noiseFloor = emaAsymmetric(state.noiseFloor, rms, 0.003, 0.05);
 
   // Frequency band averages
@@ -163,9 +210,9 @@ export function analyzeWaveformFrame(
   midE /= midEnd - lowEnd;
   highE /= binCount - midEnd;
 
-  state.smoothedLow = emaAsymmetric(state.smoothedLow, lowE, 0.35, 0.05);
-  state.smoothedMid = emaAsymmetric(state.smoothedMid, midE, 0.35, 0.05);
-  state.smoothedHigh = emaAsymmetric(state.smoothedHigh, highE, 0.3, 0.04);
+  state.smoothedLow = emaAsymmetric(state.smoothedLow, lowE, tuning.bandUp, tuning.bandDown);
+  state.smoothedMid = emaAsymmetric(state.smoothedMid, midE, tuning.bandUp, tuning.bandDown);
+  state.smoothedHigh = emaAsymmetric(state.smoothedHigh, highE, tuning.highUp, tuning.highDown);
 
   // Spectral flatness (mid band)
   let logSum = 0;

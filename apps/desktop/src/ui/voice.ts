@@ -8,7 +8,9 @@ import {
   computeSpeechEnergy,
   createWaveformState,
   renderVoiceWaveform,
+  analyzeWaveformFrame,
   waveformColorFromSoul,
+  AMBIENT_EMA_TUNING,
 } from "@motebit/voice";
 import type { TTSProvider, WaveformState } from "@motebit/voice";
 import { stripTags } from "@motebit/ai-core";
@@ -84,8 +86,10 @@ let waveformAnimationId = 0;
 let ambientAnimationId = 0;
 let voiceFinalTranscript = "";
 let voiceInterimTranscript = "";
-// Shared waveform state — the renderer owns smoothing + noise-floor EMA.
+// Two separate states so active-voice smoothing doesn't bleed into ambient
+// and vice versa. Same shape, different EMA tuning at the call site.
 const waveformState: WaveformState = createWaveformState();
+const ambientState: WaveformState = createWaveformState();
 
 let sttAvailable = true;
 let sttErrorShown = false;
@@ -98,8 +102,6 @@ let voiceResponseEnabled = true;
 
 let ttsSpeaking = false;
 let ttsPulseAnimationId = 0;
-
-let noiseFloor = 0;
 
 let sileroVad: MicVAD | null = null;
 let sileroVadFailed = false;
@@ -529,77 +531,20 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
   function startAmbientLoop(): void {
     if (!analyserNode) return;
 
-    const timeDomain = new Uint8Array(analyserNode.frequencyBinCount);
-    const freqDomain = new Uint8Array(analyserNode.frequencyBinCount);
-    let smoothedRms = 0;
-    let smoothedLow = 0;
-    let smoothedMid = 0;
-    let smoothedHigh = 0;
-    let smoothedFlatness = 0;
-
     const analyze = (): void => {
       if (micState !== "ambient" || !analyserNode) return;
 
-      analyserNode.getByteTimeDomainData(timeDomain);
-      analyserNode.getByteFrequencyData(freqDomain);
-
-      let sumSq = 0;
-      for (let j = 0; j < timeDomain.length; j++) {
-        const v = timeDomain[j]! / 128.0 - 1.0;
-        sumSq += v * v;
-      }
-      const rms = Math.sqrt(sumSq / timeDomain.length);
-      smoothedRms += (rms > smoothedRms ? 0.3 : 0.04) * (rms - smoothedRms);
-
-      noiseFloor += (rms > noiseFloor ? 0.003 : 0.05) * (rms - noiseFloor);
-
-      const binCount = freqDomain.length;
-      const lowEnd = Math.max(1, Math.floor(binCount * 0.06));
-      const midEnd = Math.max(2, Math.floor(binCount * 0.25));
-      let lowE = 0,
-        midE = 0,
-        highE = 0;
-      for (let j = 0; j < binCount; j++) {
-        const v = freqDomain[j]! / 255;
-        if (j < lowEnd) lowE += v;
-        else if (j < midEnd) midE += v;
-        else highE += v;
-      }
-      lowE /= lowEnd;
-      midE /= midEnd - lowEnd;
-      highE /= binCount - midEnd;
-
-      smoothedLow += (lowE > smoothedLow ? 0.3 : 0.04) * (lowE - smoothedLow);
-      smoothedMid += (midE > smoothedMid ? 0.3 : 0.04) * (midE - smoothedMid);
-      smoothedHigh += (highE > smoothedHigh ? 0.25 : 0.03) * (highE - smoothedHigh);
-
-      let logSum = 0;
-      let linSum = 0;
-      for (let j = lowEnd; j < midEnd; j++) {
-        const v = freqDomain[j]! / 255 + 1e-10;
-        logSum += Math.log(v);
-        linSum += v;
-      }
-      const flatBins = midEnd - lowEnd;
-      const rawFlatness = linSum > 1e-8 ? Math.exp(logSum / flatBins) / (linSum / flatBins) : 0;
-      smoothedFlatness += 0.08 * (rawFlatness - smoothedFlatness);
-
-      const gatedRms = Math.max(0, smoothedRms - noiseFloor);
-      const gate = smoothedRms > 0.001 ? gatedRms / smoothedRms : 0;
-
-      const flat2 = smoothedFlatness * smoothedFlatness;
-      const damping = Math.max(0.15, 1 - flat2 * 0.9);
-      const shimmer = 1 + (1 - smoothedFlatness) * 0.6;
-
-      ctx.app.setAudioReactivity({
-        rms: gatedRms * damping,
-        low: smoothedLow * gate * damping,
-        mid: smoothedMid * gate * damping,
-        high: smoothedHigh * gate * damping * shimmer,
-      });
+      // Same FFT analysis as the active-voice waveform, but with the
+      // AMBIENT_EMA_TUNING so the creature's reactivity doesn't twitch on
+      // every transient. The Silero-VAD-failed fallback heuristic reads
+      // `smoothedFlatness`, `gatedRms`, and `smoothedMid` from the shared
+      // state to drive wake-on-speech without its own band analysis.
+      const frame = analyzeWaveformFrame(analyserNode, ambientState, AMBIENT_EMA_TUNING);
+      ctx.app.setAudioReactivity(frame.bands);
 
       if (sileroVadFailed && performance.now() > ttsCooldownUntil) {
-        const isSpeechLike = smoothedFlatness < 0.65 && gatedRms > 0.02 && smoothedMid > 0.08;
+        const isSpeechLike =
+          frame.smoothedFlatness < 0.65 && frame.gatedRms > 0.02 && ambientState.smoothedMid > 0.08;
 
         if (isSpeechLike) {
           fallbackSpeechConfidence += 0.08 * (1 - fallbackSpeechConfidence);

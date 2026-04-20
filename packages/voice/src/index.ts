@@ -8,3 +8,4 @@ export * from "./openai-tts.js";
 export * from "./elevenlabs-tts.js";
 export * from "./streaming-tts-queue.js";
 export * from "./speech-energy.js";
+export * from "./waveform-canvas.js";
