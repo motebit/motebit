@@ -208,12 +208,6 @@ export const GoalCompletedPayloadSchema = z
       .string()
       .optional()
       .describe("Free-text rationale for completion. Consumers MUST NOT parse it semantically."),
-    status: z
-      .string()
-      .optional()
-      .describe(
-        'Terminal status — `"completed" | "failed" | "suspended"`. Optional in v1 for back-compat with emitters that predate the field.',
-      ),
   })
   .passthrough();
 

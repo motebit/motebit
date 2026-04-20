@@ -294,6 +294,24 @@ Non-conformance modes and their consequences:
 
 ---
 
+## 8. Known Emitter Gaps (convergence debt)
+
+The spec above is the endgame. The shipping v1 emitter has the following gaps; closing them does not require a spec revision.
+
+### §8.1 Step-lifecycle ordering is structural, not guarded
+
+§3.4 specifies the allowed step emission orderings and "a step MAY be delegated at most once." Today this holds because `PlanChunk` is emitted by a single central method (`_logPlanChunkEvent` in `packages/runtime/src/plan-execution.ts`) that processes chunks sequentially from a well-formed `PlanEngine` — the shape is correct by construction, not by a runtime guard.
+
+A bug in a sibling implementation of the plan engine, or a refactor that introduces a second emitter site, could violate the ordering without any runtime signal. The convergence shape is an in-emitter state-machine check that rejects out-of-order transitions for a given `step_id` and rejects a second `plan_step_delegated` for the same step.
+
+### §8.2 `task_id` correlation is join-based, not payload-based
+
+§3.7 specifies `plan_step_delegated` carries `task_id` and the eventual `plan_step_completed` / `plan_step_failed` for that step "MUST correlate to the same `task_id`." Today, only `plan_step_delegated` carries `task_id`; the terminal events for a delegated step do not. Correlation is reconstructed by joining `plan_step_delegated.step_id` against the terminal event's `step_id`, then joining against the separate `agent_task_completed` event family for the result.
+
+This works for the reference implementation because `step_id` is unique within a plan, but it puts the correlation burden on the receiver rather than the emitter. A future minor spec revision MAY add `task_id` to the terminal events of delegated steps so the join is payload-direct; that change is additive and non-breaking.
+
+---
+
 ## Change Log
 
 | Version | Date       | Changes       |

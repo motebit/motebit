@@ -13,10 +13,6 @@
     "reason": {
       "type": "string",
       "description": "Free-text rationale for completion. Consumers MUST NOT parse it semantically."
-    },
-    "status": {
-      "type": "string",
-      "description": "Terminal status — `\"completed\" | \"failed\" | \"suspended\"`. Optional in v1 for back-compat with emitters that predate the field."
     }
   },
   "required": ["goal_id"],
@@ -33,10 +29,6 @@
         "reason": {
           "type": "string",
           "description": "Free-text rationale for completion. Consumers MUST NOT parse it semantically."
-        },
-        "status": {
-          "type": "string",
-          "description": "Terminal status — `\"completed\" | \"failed\" | \"suspended\"`. Optional in v1 for back-compat with emitters that predate the field."
         }
       },
       "required": ["goal_id"],

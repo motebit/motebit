@@ -106,12 +106,6 @@ export interface GoalCompletedPayload {
   readonly goal_id: string;
   /** Free-text rationale for completion. Consumers MUST NOT parse it semantically. */
   readonly reason?: string;
-  /**
-   * Terminal status — `"completed" | "failed" | "suspended"`. Optional in
-   * v1 for back-compat with emitters that shipped before the field was
-   * added. Future spec versions MAY tighten this to required.
-   */
-  readonly status?: string;
 }
 
 /**
