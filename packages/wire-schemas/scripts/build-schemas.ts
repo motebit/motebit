@@ -55,6 +55,7 @@ import {
   buildMemoryDeletedPayloadJsonSchema,
   buildMemoryFormedPayloadJsonSchema,
   buildMemoryPinnedPayloadJsonSchema,
+  buildMemoryPromotedPayloadJsonSchema,
 } from "../src/memory-events.js";
 import {
   buildGoalCreatedPayloadJsonSchema,
@@ -133,6 +134,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "memory-audit-payload-v1.json", build: buildMemoryAuditPayloadJsonSchema },
   { filename: "memory-decayed-payload-v1.json", build: buildMemoryDecayedPayloadJsonSchema },
+  { filename: "memory-promoted-payload-v1.json", build: buildMemoryPromotedPayloadJsonSchema },
   { filename: "goal-created-payload-v1.json", build: buildGoalCreatedPayloadJsonSchema },
   { filename: "goal-executed-payload-v1.json", build: buildGoalExecutedPayloadJsonSchema },
   { filename: "goal-progress-payload-v1.json", build: buildGoalProgressPayloadJsonSchema },

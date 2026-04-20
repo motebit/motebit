@@ -99,6 +99,7 @@ import {
   MEMORY_DELETED_PAYLOAD_SCHEMA_ID,
   MEMORY_FORMED_PAYLOAD_SCHEMA_ID,
   MEMORY_PINNED_PAYLOAD_SCHEMA_ID,
+  MEMORY_PROMOTED_PAYLOAD_SCHEMA_ID,
   buildMemoryAccessedPayloadJsonSchema,
   buildMemoryAuditPayloadJsonSchema,
   buildMemoryConsolidatedPayloadJsonSchema,
@@ -106,6 +107,7 @@ import {
   buildMemoryDeletedPayloadJsonSchema,
   buildMemoryFormedPayloadJsonSchema,
   buildMemoryPinnedPayloadJsonSchema,
+  buildMemoryPromotedPayloadJsonSchema,
 } from "../memory-events.js";
 import {
   GOAL_CREATED_PAYLOAD_SCHEMA_ID,
@@ -342,6 +344,12 @@ const CASES: SchemaCase[] = [
     filename: "memory-decayed-payload-v1.json",
     expectedId: MEMORY_DECAYED_PAYLOAD_SCHEMA_ID,
     build: buildMemoryDecayedPayloadJsonSchema,
+  },
+  {
+    name: "memory-promoted-payload-v1",
+    filename: "memory-promoted-payload-v1.json",
+    expectedId: MEMORY_PROMOTED_PAYLOAD_SCHEMA_ID,
+    build: buildMemoryPromotedPayloadJsonSchema,
   },
   // Goal-lifecycle-v1 payloads — one case per event type under §5 of the spec.
   {

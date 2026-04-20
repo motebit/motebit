@@ -2,6 +2,7 @@ import type { MemoryNode, MemoryEdge, MemoryCandidate, RelationType } from "@mot
 import { EventType, MemoryType, RelationType as RT } from "@motebit/sdk";
 import { ConsolidationAction } from "./consolidation.js";
 import type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
+import { shouldPromote, buildPromotionPayload } from "./promotion.js";
 import type { EventStore } from "@motebit/event-log";
 
 export {
@@ -46,6 +47,14 @@ export type {
   NotabilityOptions,
   NotableMemory,
 } from "./notability.js";
+export {
+  PROMOTION_CONFIDENCE_THRESHOLD,
+  shouldPromote,
+  estimateReinforcementCount,
+  buildPromotionPayload,
+} from "./promotion.js";
+export { buildMemoryIndex, rankIndexEntries, DEFAULT_INDEX_BYTE_BUDGET } from "./memory-index.js";
+export type { MemoryIndexOptions, MemoryIndexEntry, IndexCertainty } from "./memory-index.js";
 
 // === Scoring Configuration ===
 
@@ -774,6 +783,7 @@ export class MemoryGraph {
           ? await this.storage.getNode(decision.existingNodeId)
           : null;
         if (existingNode) {
+          const priorConfidence = existingNode.confidence;
           existingNode.confidence = Math.min(1.0, existingNode.confidence + 0.1);
           existingNode.half_life = Math.min(
             MemoryGraph.MAX_HALF_LIFE,
@@ -781,6 +791,7 @@ export class MemoryGraph {
           );
           existingNode.last_accessed = now;
           await this.storage.saveNode(existingNode);
+          await this.maybePromote(existingNode, priorConfidence, "reinforced");
         }
         await this.logConsolidation(decision);
         return { node: null, decision };
@@ -794,6 +805,7 @@ export class MemoryGraph {
           ? await this.storage.getNode(decision.existingNodeId)
           : null;
         if (existingNode) {
+          const priorConfidence = existingNode.confidence;
           existingNode.confidence = Math.min(1.0, existingNode.confidence + 0.1);
           existingNode.half_life = Math.min(
             MemoryGraph.MAX_HALF_LIFE,
@@ -801,6 +813,7 @@ export class MemoryGraph {
           );
           existingNode.last_accessed = now;
           await this.storage.saveNode(existingNode);
+          await this.maybePromote(existingNode, priorConfidence, "confirmed");
         }
         await this.logConsolidation(decision);
         return { node: null, decision };
@@ -835,6 +848,34 @@ export class MemoryGraph {
       });
     } catch {
       // Event logging is best-effort
+    }
+  }
+
+  /**
+   * Emit `memory_promoted` (spec/memory-delta-v1.md §5.8) when a
+   * confidence update crosses the tentative→absolute threshold. Called
+   * from the REINFORCE and NOOP paths with the pre-boost confidence;
+   * no-op when the threshold isn't crossed. Best-effort — promotion is
+   * advisory signal, not load-bearing state.
+   */
+  private async maybePromote(
+    node: MemoryNode,
+    priorConfidence: number,
+    reason: string,
+  ): Promise<void> {
+    if (!shouldPromote(priorConfidence, node.confidence)) return;
+    const payload = buildPromotionPayload(node, priorConfidence, node.confidence, reason);
+    try {
+      await this.eventStore.appendWithClock({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: Date.now(),
+        event_type: EventType.MemoryPromoted,
+        payload: { ...payload },
+        tombstoned: false,
+      });
+    } catch {
+      // Advisory — a missed promotion event does not corrupt the graph
     }
   }
 

@@ -233,6 +233,7 @@ export enum EventType {
   HousekeepingRun = "housekeeping_run",
   ReflectionCompleted = "reflection_completed",
   MemoryConsolidated = "memory_consolidated",
+  MemoryPromoted = "memory_promoted",
   AgentTaskCompleted = "agent_task_completed",
   AgentTaskFailed = "agent_task_failed",
   AgentTaskDenied = "agent_task_denied",
@@ -1906,6 +1907,7 @@ export type {
   MemoryDeletedPayload,
   MemoryConsolidatedPayload,
   MemoryAuditPayload,
+  MemoryPromotedPayload,
 } from "./memory-events.js";
 
 // ── Goal-lifecycle event payloads (spec/goal-lifecycle-v1.md) ────

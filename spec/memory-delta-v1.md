@@ -1,7 +1,7 @@
 # motebit/memory-delta@1.0
 
 **Status:** Stable
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-04-19
 
 ---
@@ -67,7 +67,7 @@ Every memory event carries `motebit_id`. The event log substrate (`@motebit/even
 
 ## 4. Event Taxonomy
 
-Seven memory-shaped event types exist in `EventType`, emitted by `@motebit/memory-graph` (with one exception — §4.7 is emitted by `@motebit/ai-core`). Each has a wire-format payload type in `@motebit/protocol`. Implementations MAY emit additional event types that are not memory-shaped; this spec governs only the seven below.
+Eight memory-shaped event types exist in `EventType`, emitted by `@motebit/memory-graph` (with one exception — §4.7 is emitted by `@motebit/ai-core`). Each has a wire-format payload type in `@motebit/protocol`. Implementations MAY emit additional event types that are not memory-shaped; this spec governs only the eight below.
 
 | EventType             | Payload type                | Emitter                 | Sync class            |
 | --------------------- | --------------------------- | ----------------------- | --------------------- |
@@ -78,6 +78,7 @@ Seven memory-shaped event types exist in `EventType`, emitted by `@motebit/memor
 | `memory_consolidated` | `MemoryConsolidatedPayload` | `@motebit/memory-graph` | wire                  |
 | `memory_audit`        | `MemoryAuditPayload`        | `@motebit/ai-core`      | local-only            |
 | `memory_decayed`      | `MemoryDecayedPayload`      | (reserved)              | (reserved)            |
+| `memory_promoted`     | `MemoryPromotedPayload`     | `@motebit/memory-graph` | wire                  |
 
 `memory_audit` is emitted during ai-core's turn loop to record missed-sensitivity-tagging heuristic signals. It is local-only — implementations MUST NOT forward it across device boundaries because `turn_message` may contain unredacted user content that predates sensitivity classification.
 
@@ -213,6 +214,36 @@ Reserved for future use. No emitter in this version.
 
 Fields: none. Conforming receivers MUST accept this event type without error, but MUST NOT assume a payload shape until a future spec revision pins one.
 
+### 5.8 — MemoryPromotedPayload
+
+Emitted when a memory node crosses from tentative to absolute — enough reinforcement has accumulated that downstream consumers MAY treat the claim as ground truth rather than hypothesis.
+
+Motebit's confidence is a continuous [0, 1] score updated by consolidation. The discrete question the UI and the AI loop actually want to answer is "am I sure?" This event records the state-change so the Layer-1 memory index can surface an "absolute" label and the agent can cite promoted memory as fact without hedging.
+
+Promotion is emitter-authored. The reference heuristic in `@motebit/memory-graph/promotion.ts` promotes when a confidence update crosses the `PROMOTION_CONFIDENCE_THRESHOLD` (0.95) from below. Implementations MAY use their own heuristic; this spec only pins the payload shape.
+
+#### Wire format (foundation law)
+
+```json
+{
+  "node_id": "550e8400-e29b-41d4-a716-446655440000",
+  "from_confidence": 0.85,
+  "to_confidence": 0.95,
+  "reinforcement_count": 3,
+  "reason": "reinforced"
+}
+```
+
+Fields:
+
+- `node_id` (string, required) — UUID of the promoted node.
+- `from_confidence` (number, required) — Confidence score before promotion, in [0, 1].
+- `to_confidence` (number, required) — Confidence score after promotion, in [0, 1]. Typically 1.0.
+- `reinforcement_count` (integer, required) — Count of consolidation reinforcement events observed against this node before the promotion fired. Informational; consumers MAY use it to calibrate their own promotion policy but MUST NOT rely on it as a precise audit count (use the event log for that).
+- `reason` (string, required) — Free-text rationale from the promoter. Consumers MUST NOT parse it semantically.
+
+Idempotency: once a node is promoted, subsequent reinforcement events MUST NOT re-emit `memory_promoted`. The emitter is responsible for the "cross from below" check; receivers MAY defensively deduplicate by `node_id` if they observe multiple promotions.
+
 ---
 
 ## 6. Sensitivity and Redaction
@@ -244,7 +275,7 @@ Each adapter projects `memory_formed` events into a `memories` row, applies `mem
 
 ## 8. Conformance
 
-An implementation is conformant with `motebit/memory-delta@1.0` if it:
+An implementation is conformant with `motebit/memory-delta@1.1` if it:
 
 1. Emits events of the types and shapes specified in §5.
 2. Tolerates the `memory_decayed` event type at receive time (§5.7).
@@ -252,6 +283,7 @@ An implementation is conformant with `motebit/memory-delta@1.0` if it:
 4. Applies sensitivity redaction at forwarding-time per §6 when acting as a sync forwarder.
 5. Projects a replay-safe live graph from the event log (§3.2).
 6. Signs the synced log tail via the primitives in `@motebit/event-log` + `@motebit/crypto`.
+7. When emitting `memory_promoted` (§5.8), respects the idempotency contract — a node already above the promotion threshold MUST NOT re-emit the event on subsequent reinforcement.
 
 Non-conformance modes and their consequences:
 
@@ -263,6 +295,7 @@ Non-conformance modes and their consequences:
 
 ## Change Log
 
-| Version | Date       | Changes       |
-| ------- | ---------- | ------------- |
-| 1.0     | 2026-04-19 | Initial spec. |
+| Version | Date       | Changes                                                                                                                                                                                                                                            |
+| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.0     | 2026-04-19 | Initial spec.                                                                                                                                                                                                                                      |
+| 1.1     | 2026-04-19 | Additive: `memory_promoted` event type + `MemoryPromotedPayload` (§5.8) for the tentative→absolute state transition. Reference heuristic in `@motebit/memory-graph/promotion.ts`. Paired with the Layer-1 memory index (always-loaded projection). |

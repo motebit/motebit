@@ -152,6 +152,9 @@ export {
   MemoryDecayedPayloadSchema,
   MEMORY_DECAYED_PAYLOAD_SCHEMA_ID,
   buildMemoryDecayedPayloadJsonSchema,
+  MemoryPromotedPayloadSchema,
+  MEMORY_PROMOTED_PAYLOAD_SCHEMA_ID,
+  buildMemoryPromotedPayloadJsonSchema,
 } from "./memory-events.js";
 export {
   GoalCreatedPayloadSchema,

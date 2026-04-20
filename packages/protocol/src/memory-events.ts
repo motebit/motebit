@@ -111,3 +111,38 @@ export interface MemoryAuditPayload {
    *  itself is long. */
   readonly turn_message: string;
 }
+
+/**
+ * Emitted when a memory node transitions from tentative to absolute —
+ * i.e. enough reinforcement has accumulated that downstream consumers
+ * MAY treat the claim as ground truth, not a hypothesis.
+ *
+ * Motebit's confidence is a continuous [0, 1] score updated by
+ * consolidation, but continuous scores don't answer the question the
+ * UI and the AI loop actually want: "am I sure?" This event records
+ * the discrete transition so the memory index can surface an
+ * "absolute" badge and the agent can cite promoted memory as fact
+ * rather than hedged belief.
+ *
+ * Promotion is emitter-authored. The reference heuristic lives in
+ * `@motebit/memory-graph/promotion.ts` — today: promote when
+ * `reinforcement_count >= 3 && confidence >= 0.85`. Implementations MAY
+ * use their own heuristic; the wire contract only pins the payload
+ * shape, not the policy.
+ */
+export interface MemoryPromotedPayload {
+  /** Node that was promoted. */
+  readonly node_id: string;
+  /** Confidence score before promotion (0, 1). */
+  readonly from_confidence: number;
+  /** Confidence score after promotion. Typically 1.0. */
+  readonly to_confidence: number;
+  /**
+   * Count of consolidation reinforcement events observed against this
+   * node before the promotion fired. Consumers MAY use this to
+   * calibrate their own promotion policy.
+   */
+  readonly reinforcement_count: number;
+  /** Free-text rationale from the promoter. Consumers MUST NOT parse it semantically. */
+  readonly reason: string;
+}

@@ -11,6 +11,11 @@ export type { ShellExecConfig } from "./shell-exec.js";
 export { undoWriteDefinition, createUndoWriteHandler } from "./undo-write.js";
 export { isPathAllowed, isDirectoryAllowed } from "./path-sandbox.js";
 export { recallMemoriesDefinition, createRecallMemoriesHandler } from "./recall-memories.js";
+export {
+  rewriteMemoryDefinition,
+  createRewriteMemoryHandler,
+  type RewriteMemoryDeps,
+} from "./rewrite-memory.js";
 export { currentTimeDefinition, createCurrentTimeHandler } from "./current-time.js";
 export {
   recallSelfDefinition,

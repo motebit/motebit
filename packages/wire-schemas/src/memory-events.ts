@@ -33,6 +33,7 @@ import type {
   MemoryConsolidatedPayload,
   MemoryAuditPayload,
   MemoryDecayedPayload,
+  MemoryPromotedPayload,
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
@@ -346,5 +347,56 @@ export function buildMemoryDecayedPayloadJsonSchema(): Record<string, unknown> {
     title: "MemoryDecayedPayload (v1)",
     description:
       "Payload of a `memory_decayed` event — reserved for future use. No emitter today; receivers MUST accept without assuming a shape. See spec/memory-delta-v1.md §5.7.",
+  });
+}
+
+// ── 5.8 MemoryPromotedPayload ────────────────────────────────────────
+
+export const MEMORY_PROMOTED_PAYLOAD_SCHEMA_ID = `${SCHEMA_BASE}/memory-promoted-payload-v1.json`;
+
+export const MemoryPromotedPayloadSchema = z
+  .object({
+    node_id: z.string().min(1).describe("UUID of the promoted node."),
+    from_confidence: z.number().min(0).max(1).describe("Confidence score before promotion."),
+    to_confidence: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe("Confidence score after promotion. Typically 1.0."),
+    reinforcement_count: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        "Count of consolidation reinforcement events against this node before the promotion fired.",
+      ),
+    reason: z
+      .string()
+      .describe("Free-text rationale from the promoter. Consumers MUST NOT parse it semantically."),
+  })
+  .passthrough();
+
+type InferredMemoryPromoted = z.infer<typeof MemoryPromotedPayloadSchema>;
+type _MemoryPromotedForward = MemoryPromotedPayload extends InferredMemoryPromoted ? true : never;
+type _MemoryPromotedReverse = InferredMemoryPromoted extends MemoryPromotedPayload ? true : never;
+export const _MEMORY_PROMOTED_PAYLOAD_TYPE_PARITY: {
+  forward: _MemoryPromotedForward;
+  reverse: _MemoryPromotedReverse;
+} = {
+  forward: true as _MemoryPromotedForward,
+  reverse: true as _MemoryPromotedReverse,
+};
+
+export function buildMemoryPromotedPayloadJsonSchema(): Record<string, unknown> {
+  const raw = zodToJsonSchema(MemoryPromotedPayloadSchema, {
+    name: "MemoryPromotedPayload",
+    $refStrategy: "root",
+    target: "jsonSchema7",
+  }) as Record<string, unknown>;
+  return assembleJsonSchemaFor("MemoryPromotedPayload", raw, {
+    $id: MEMORY_PROMOTED_PAYLOAD_SCHEMA_ID,
+    title: "MemoryPromotedPayload (v1)",
+    description:
+      "Payload of a `memory_promoted` event — discrete tentative→absolute transition after enough reinforcement. See spec/memory-delta-v1.md §5.8.",
   });
 }
