@@ -25,6 +25,7 @@
     "dev:down": "scripts/dev-up.sh --down",
     "test": "turbo run test",
     "test:coverage": "turbo run test:coverage",
+    "coverage-graduation": "npx tsx scripts/coverage-graduation.ts",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",

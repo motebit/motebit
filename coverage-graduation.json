@@ -1,0 +1,15 @@
+{
+  "policy": "soft-signal",
+  "scope": "money + identity path packages",
+  "doctrine": "docs/doctrine/coverage-graduation.md",
+  "packages": [
+    {
+      "package": "@motebit/wallet-solana",
+      "vitest_config": "packages/wallet-solana/vitest.config.ts",
+      "current": { "statements": 42, "branches": 86, "functions": 58, "lines": 42 },
+      "target": { "statements": 80, "branches": 86, "functions": 80, "lines": 80 },
+      "target_date": "2026-06-01",
+      "rationale": "Sovereign rail. Money path. Untested surface concentrated in @solana/web3.js boundary (sendUsdc, sendUsdcBatch, getTransaction inside Web3JsRpcAdapter) and SolanaMemoSubmitter batch/revocation paths. Close by adding integration tests against the SolanaRpcAdapter interface with a fake RPC, then raise the thresholds in vitest.config.ts."
+    }
+  ]
+}
