@@ -20,6 +20,25 @@ function stripInternalTags(text: string): string {
     .replace(/<(?:state|thinking|memory)[^>]*$/g, "");
 }
 
+/**
+ * Derive a short conversation title from the first user message. Used
+ * when an AI title isn't available (no provider, timeout, error). Also
+ * used by `backfillMissingTitles` to repair old conversations.
+ *
+ * Returns null when no user message exists or the message is empty —
+ * the caller then leaves the title null and the UI renders its
+ * "New conversation" fallback.
+ */
+function deriveHeuristicTitle(history: readonly ConversationMessage[]): string | null {
+  const first = history.find((m) => m.role === "user");
+  if (!first) return null;
+  const words = first.content.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  let title = words.slice(0, 7).join(" ");
+  if (words.length > 7) title += "...";
+  return title.length > 0 ? title : null;
+}
+
 /** Dependencies injected by the runtime. */
 export interface ConversationDeps {
   motebitId: string;
@@ -228,6 +247,17 @@ export class ConversationManager {
 
   // --- Auto-title ---
 
+  /**
+   * Timeout for the AI-generated title attempt. An unresponsive provider
+   * (network stall, misrouted task type, relay hiccup) must not poison
+   * the primitive: the heuristic fallback runs after this budget.
+   *
+   * 8s is long enough for a normal title-generation round-trip and short
+   * enough that the user never sees a stuck "New conversation" for more
+   * than a single turn on a slow network.
+   */
+  private static readonly AI_TITLE_TIMEOUT_MS = 8000;
+
   async autoTitle(): Promise<string | null> {
     const { store } = this.deps;
     if (store == null || this.currentId == null || this.currentId === "") return null;
@@ -242,43 +272,101 @@ export class ConversationManager {
 
     this.autoTitlePending = true;
     try {
+      // Prefer an AI-generated title when a provider is configured, but
+      // bound the wait. If the provider hangs, throws, or returns an
+      // unusable string, the heuristic below always runs and always
+      // writes — every conversation ends this call with a title.
       const provider = this.deps.getProvider();
       if (provider) {
-        try {
-          const snippet = history
-            .slice(0, 6)
-            .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
-            .join("\n");
-          const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${snippet}`;
-          const raw = await this.deps.generateCompletion(prompt, "title_generation");
-          const title = raw
-            .trim()
-            .replace(/^["']|["']$/g, "")
-            .slice(0, 100);
-          if (title.length > 0 && title.length < 100) {
-            store.updateTitle(this.currentId, title);
-            return title;
-          }
-        } catch {
-          // Fall through to heuristic
+        const aiTitle = await this.tryAiTitle(history);
+        if (aiTitle != null) {
+          store.updateTitle(this.currentId, aiTitle);
+          return aiTitle;
         }
       }
 
-      // Heuristic fallback: first 7 words of first user message
-      const first = history.find((m) => m.role === "user");
-      if (first) {
-        const words = first.content.split(/\s+/);
-        let title = words.slice(0, 7).join(" ");
-        if (words.length > 7) title += "...";
-        if (title.length > 0) {
-          store.updateTitle(this.currentId, title);
-          return title;
-        }
+      // Heuristic fallback: first 7 words of first user message.
+      // Synchronous, provider-independent, always completes.
+      const heuristic = deriveHeuristicTitle(history);
+      if (heuristic != null) {
+        store.updateTitle(this.currentId, heuristic);
+        return heuristic;
       }
       return null;
     } finally {
       this.autoTitlePending = false;
     }
+  }
+
+  /**
+   * Race the AI title generation against an 8s timeout. Returns the
+   * cleaned title string on success; null on timeout, error, empty
+   * result, or oversized output. Isolated from `autoTitle` so the
+   * fallback path is reached on every non-success — no duplicated
+   * catch blocks, no "the inner try-catch swallowed it" footguns.
+   */
+  private async tryAiTitle(history: readonly ConversationMessage[]): Promise<string | null> {
+    const snippet = history
+      .slice(0, 6)
+      .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
+      .join("\n");
+    const prompt = `Generate a very short title (5-7 words max) for this conversation. Return ONLY the title, no quotes, no explanation.\n\n${snippet}`;
+
+    try {
+      const raw = await Promise.race([
+        this.deps.generateCompletion(prompt, "title_generation"),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("title generation timeout")),
+            ConversationManager.AI_TITLE_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+      const title = raw
+        .trim()
+        .replace(/^["']|["']$/g, "")
+        .slice(0, 100);
+      if (title.length === 0 || title.length >= 100) return null;
+      return title;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Heuristic-title every stored conversation whose title is currently
+   * null or empty. Idempotent: conversations with existing titles are
+   * skipped. Uses only the synchronous store API, so the caller is
+   * responsible for preloading message caches if the adapter is
+   * IDB-backed (web/mobile). Returns the count of conversations
+   * titled.
+   *
+   * Shipped to close out the prior autoTitle regression: conversations
+   * created before the AI-path hang was fixed carry `title: null`
+   * forever. This pass gives them a legible heuristic title on next
+   * app start without round-tripping the AI.
+   */
+  backfillMissingTitles(): number {
+    const { store } = this.deps;
+    if (store == null) return 0;
+    const convos = store.listConversations(this.deps.motebitId);
+    let fixed = 0;
+    for (const c of convos) {
+      if (c.title != null && c.title !== "") continue;
+      const messages = store.loadMessages(c.conversationId);
+      const history: ConversationMessage[] = [];
+      for (const m of messages) {
+        if (m.role === "user" || m.role === "assistant") {
+          history.push({ role: m.role, content: m.content });
+        }
+      }
+      const title = deriveHeuristicTitle(history);
+      if (title != null) {
+        store.updateTitle(c.conversationId, title);
+        fixed += 1;
+      }
+    }
+    return fixed;
   }
 
   // --- Task isolation ---

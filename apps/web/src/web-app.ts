@@ -297,6 +297,27 @@ export class WebApp {
     // Register web-safe tools
     this.registerWebTools();
 
+    // Backfill heuristic titles for any preloaded conversations with
+    // null/empty titles — one-shot repair for conversations created
+    // before the autoTitle AI-hang fix. Loads messages for every
+    // conversation into the sync cache first (the adapter's sync API
+    // returns [] otherwise), then runs the heuristic pass. Fire and
+    // forget: failure here must not block app boot.
+    void (async () => {
+      try {
+        await this._convStore?.preloadAllMessages();
+        const fixed = this.runtime?.backfillMissingConversationTitles() ?? 0;
+        if (fixed > 0) {
+          console.log(`[conversations] backfilled ${fixed} missing title(s)`);
+        }
+      } catch (err: unknown) {
+        console.warn(
+          "[conversations] title backfill failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+
     // Start ticking
     this.runtime.start();
     this.cursorPresence.start();

@@ -1603,6 +1603,16 @@ export class MotebitRuntime {
     this.conversation.delete(conversationId);
   }
 
+  /**
+   * Heuristic-title every stored conversation whose title is null or
+   * empty. Idempotent. Surfaces call this once at startup after their
+   * storage preload completes. Returns the count of conversations
+   * updated.
+   */
+  backfillMissingConversationTitles(): number {
+    return this.conversation.backfillMissingTitles();
+  }
+
   /** List recent conversations (for UI/CLI). */
   listConversations(limit?: number): Array<{
     conversationId: string;

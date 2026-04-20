@@ -117,12 +117,15 @@ export function initConversations(
             callbacks.onLoad();
           })
           .catch((err: unknown) => {
-            // A failed load leaves the panel open with no feedback — the exact
-            // "click does nothing" symptom. Close and surface the failure so
-            // it degrades honestly, not silently.
+            // A silent failure here manifests as "click does nothing" —
+            // the exact symptom the user reported. Close the panel so
+            // the surface returns to a known state, surface a toast so
+            // the failure is visible (not buried in devtools), and log
+            // the full detail for diagnosis.
             close();
             const msg = err instanceof Error ? err.message : String(err);
             console.error("[conversations] load failed:", msg);
+            ctx.showToast("Couldn't open that conversation — try again");
             callbacks.onLoad();
           });
       });
