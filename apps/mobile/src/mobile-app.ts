@@ -55,7 +55,7 @@ import { DeviceCapability, DEFAULT_OLLAMA_MODEL, DEFAULT_MOTEBIT_CLOUD_URL } fro
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues, MemoryNode } from "@motebit/sdk";
-import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
+import { computeDecayedConfidence, embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
 import {
   registerBrowserSafeBuiltins,
   DuckDuckGoSearchProvider,
@@ -721,6 +721,13 @@ export class MobileApp {
       },
       onProviderReady: (config: ProxyProviderConfig) => {
         this._proxyConfig = config;
+        // Route semantic embedding through the proxy's /v1/embed
+        // endpoint — same pattern web uses. Removes on-device
+        // transformers.js CPU from the mobile JS thread; embedding
+        // becomes a network call. `embedText` in memory-graph falls
+        // back to the local model + hash if the proxy is
+        // unreachable, so offline use still works.
+        setRemoteEmbedUrl(`${config.baseUrl}/v1/embed`);
       },
     };
 
