@@ -11,10 +11,10 @@ import type {
   TurnContext,
   ConversationMessage,
 } from "@motebit/sdk";
-import { EventType, RelationType, SensitivityLevel } from "@motebit/sdk";
+import { EventType, SensitivityLevel } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
-import { embedText, cosineSimilarity } from "@motebit/memory-graph";
+import { embedText, formMemoriesFromCandidates } from "@motebit/memory-graph";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { StreamingProvider } from "./index.js";
@@ -789,51 +789,16 @@ export async function* runTurnStreaming(
         .filter((c): c is MemoryCandidate => c !== null)
     : rawCandidates;
 
-  for (const candidate of candidates) {
-    const embedding = await embedText(candidate.content);
-    if (deps.consolidationProvider) {
-      const { node } = await memoryGraph.consolidateAndForm(
-        candidate,
-        embedding,
-        deps.consolidationProvider,
-      );
-      if (node) memoriesFormed.push(node);
-    } else {
-      const node = await memoryGraph.formMemory(candidate, embedding);
-      memoriesFormed.push(node);
-    }
-  }
-
-  // 4a. Link related memories — connect new nodes to retrieved context and to each other
-  const EDGE_SIMILARITY_THRESHOLD = 0.7;
-  if (memoriesFormed.length > 0) {
-    // Link new memories to retrieved memories from this turn
-    for (const newNode of memoriesFormed) {
-      // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- defensive: embedding is required but guard against malformed nodes
-      if (!newNode.embedding) continue;
-      for (const retrieved of relevantMemories) {
-        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- defensive: embedding is required but guard against malformed nodes
-        if (!retrieved.embedding) continue;
-        const sim = cosineSimilarity(newNode.embedding, retrieved.embedding);
-        if (sim >= EDGE_SIMILARITY_THRESHOLD) {
-          await memoryGraph.link(newNode.node_id, retrieved.node_id, RelationType.Related, sim);
-        }
-      }
-    }
-    // Link new memories to each other when multiple form in one turn
-    for (let i = 0; i < memoriesFormed.length; i++) {
-      for (let j = i + 1; j < memoriesFormed.length; j++) {
-        const a = memoriesFormed[i]!;
-        const b = memoriesFormed[j]!;
-        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- defensive: embedding is required but guard against malformed nodes
-        if (!a.embedding || !b.embedding) continue;
-        const sim = cosineSimilarity(a.embedding, b.embedding);
-        if (sim >= EDGE_SIMILARITY_THRESHOLD) {
-          await memoryGraph.link(a.node_id, b.node_id, RelationType.Related, sim);
-        }
-      }
-    }
-  }
+  // Memory formation pass — embed (parallel), consolidate (sequential),
+  // link (cosine-threshold). Extracted into @motebit/memory-graph's
+  // `formMemoriesFromCandidates` so a future runtime Worker can call
+  // the same function off-thread without duplicating the machinery.
+  const { memoriesFormed: newlyFormed } = await formMemoriesFromCandidates(
+    { memoryGraph, consolidationProvider: deps.consolidationProvider },
+    candidates,
+    relevantMemories,
+  );
+  for (const n of newlyFormed) memoriesFormed.push(n);
 
   // 4b. Audit: detect memory-worthy patterns the model missed
   const untaggedPatterns = detectUntaggedMemoryPatterns(

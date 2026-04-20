@@ -56,6 +56,11 @@ export {
 } from "./promotion.js";
 export { buildMemoryIndex, rankIndexEntries, DEFAULT_INDEX_BYTE_BUDGET } from "./memory-index.js";
 export type { MemoryIndexOptions, MemoryIndexEntry, IndexCertainty } from "./memory-index.js";
+export {
+  formMemoriesFromCandidates,
+  MEMORY_EDGE_SIMILARITY_THRESHOLD,
+} from "./memory-formation.js";
+export type { MemoryFormationDeps, MemoryFormationResult } from "./memory-formation.js";
 
 // === Scoring Configuration ===
 
