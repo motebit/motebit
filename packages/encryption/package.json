@@ -8,7 +8,8 @@
   "types": "./dist/index.d.ts",
   "motebit": {
     "implements": [
-      "spec/auth-token-v1.md"
+      "spec/auth-token-v1.md",
+      "spec/consolidation-receipt-v1.md"
     ]
   },
   "scripts": {

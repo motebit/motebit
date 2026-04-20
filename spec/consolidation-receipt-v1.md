@@ -1,6 +1,6 @@
 # motebit/consolidation-receipt@1.0
 
-**Status:** Draft  
+**Status:** Stable  
 **Authors:** Daniel Hakim  
 **Created:** 2026-04-20
 

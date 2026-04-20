@@ -10,7 +10,8 @@
     "implements": [
       "spec/execution-ledger-v1.md",
       "spec/goal-lifecycle-v1.md",
-      "spec/plan-lifecycle-v1.md"
+      "spec/plan-lifecycle-v1.md",
+      "spec/consolidation-receipt-v1.md"
     ]
   },
   "scripts": {
