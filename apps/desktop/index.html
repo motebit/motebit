@@ -4755,6 +4755,24 @@
               </label>
             </div>
           </div>
+          <div class="settings-field" style="margin-top: 10px;">
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Publish consolidation proofs onchain</div>
+                <div class="toggle-desc">
+                  Anchors batches of signed receipts to Solana as Merkle memos
+                  (~$0.001 per batch, 8 receipts per batch). Requires
+                  consolidation above AND an identity with signing keys. The
+                  motebit's Solana address is its identity public key; it pays
+                  its own fees. Default off.
+                </div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settings-proactive-anchor" />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
         </div>
         <div class="settings-card">
           <div class="card-title">Recent Activity</div>

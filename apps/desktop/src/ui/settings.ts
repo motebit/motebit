@@ -83,6 +83,9 @@ const maxCalls = document.getElementById("settings-max-calls") as HTMLInputEleme
 const proactiveEnabled = document.getElementById(
   "settings-proactive-enabled",
 ) as HTMLInputElement | null;
+const proactiveAnchor = document.getElementById(
+  "settings-proactive-anchor",
+) as HTMLInputElement | null;
 
 const settingsWhisperApiKey = document.getElementById(
   "settings-whisper-apikey",
@@ -1680,6 +1683,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     if (proactiveEnabled != null) {
       proactiveEnabled.checked = config?.proactive?.enabled === true;
     }
+    if (proactiveAnchor != null) {
+      proactiveAnchor.checked = config?.proactive?.anchorOnchain === true;
+    }
     selectApprovalPreset(selectedApprovalPreset);
 
     switchTab("appearance");
@@ -1864,6 +1870,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const proactiveNext = {
       ...(currentConfig?.proactive ?? {}),
       enabled: proactiveEnabled?.checked === true,
+      anchorOnchain: proactiveAnchor?.checked === true,
     };
     const newConfig: DesktopAIConfig = {
       ...(currentConfig ?? { isTauri, provider }),

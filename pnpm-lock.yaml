@@ -335,6 +335,9 @@ importers:
       '@motebit/voice':
         specifier: workspace:*
         version: link:../../packages/voice
+      '@motebit/wallet-solana':
+        specifier: workspace:*
+        version: link:../../packages/wallet-solana
       '@ricky0123/vad-web':
         specifier: ^0.0.30
         version: 0.0.30

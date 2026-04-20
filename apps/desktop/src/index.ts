@@ -6,7 +6,8 @@
  */
 
 import { MotebitRuntime, ProxySession, PLANNING_TASK_ROUTER } from "@motebit/runtime";
-import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
+import type { ProxyProviderConfig, ProxySessionAdapter, RuntimeConfig } from "@motebit/runtime";
+import type { ChainAnchorSubmitter } from "@motebit/sdk";
 import type {
   TurnResult,
   StorageAdapters,
@@ -187,6 +188,27 @@ export interface DesktopAIConfig {
     tickIntervalMs?: number;
     quietWindowMs?: number;
     capabilities?: string[];
+    /**
+     * Publish consolidation-receipt Merkle roots to Solana as on-chain
+     * anchor memos. Requires `enabled: true` AND a configured signing
+     * identity (`signingKeys` in the runtime, which desktop loads from
+     * keyring when a motebit identity is provisioned). Default false.
+     *
+     * When true, the runtime constructs a `SolanaMemoSubmitter` from
+     * the identity seed + `solana.rpcUrl` and wires it into
+     * `proactiveAnchor.submitter`. When false (but `enabled: true`),
+     * local-only auto-anchor still runs — batches of receipts get a
+     * Merkle root for offline verification, just no on-chain tx.
+     *
+     * Cost: ~5000 lamports (~$0.001) per anchor transaction on Solana
+     * mainnet. With the default `batchThreshold: 8`, that's one tx
+     * per eight cycles — on a motebit that consolidates every hour,
+     * roughly 3 tx/day. The motebit's Solana address (= its identity
+     * public key) needs enough SOL to cover fees; a submitter failure
+     * (insufficient balance, RPC down) is non-fatal — the runtime
+     * emits a local-only anchor and the next cycle tries again.
+     */
+    anchorOnchain?: boolean;
   };
 }
 
@@ -790,6 +812,32 @@ export class DesktopApp {
 
     const proactive = config.proactive ?? {};
     const proactiveEnabled = proactive.enabled ?? false;
+    const solanaRpcUrl = "https://api.mainnet-beta.solana.com";
+    // Proactive anchor policy — on when consolidation is enabled AND the
+    // motebit has signing keys. Without `anchorOnchain`, the policy runs
+    // with a local-only submitter (Merkle root commits are offline-
+    // verifiable; no Solana tx). With `anchorOnchain: true`, a
+    // SolanaMemoSubmitter constructed from the identity seed handles the
+    // publish. A failure inside the submitter (RPC down, no SOL) is
+    // non-fatal — runtime emits a local-only anchor for the same
+    // receipts, so no backlog accumulates.
+    let proactiveAnchor: RuntimeConfig["proactiveAnchor"] | undefined;
+    if (proactiveEnabled && signingKeys) {
+      let submitter: ChainAnchorSubmitter | undefined;
+      if (proactive.anchorOnchain === true) {
+        try {
+          const { createSolanaMemoSubmitter } = await import("@motebit/wallet-solana");
+          submitter = createSolanaMemoSubmitter({
+            rpcUrl: solanaRpcUrl,
+            identitySeed: signingKeys.privateKey,
+          });
+        } catch {
+          // Submitter construction failure (shouldn't happen with valid
+          // inputs) falls through to local-only anchoring.
+        }
+      }
+      proactiveAnchor = { submitter, batchThreshold: 8 };
+    }
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
@@ -802,7 +850,7 @@ export class DesktopApp {
         },
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
-        solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
+        solana: signingKeys ? { rpcUrl: solanaRpcUrl } : undefined,
         // Deferred memory formation — desktop is the first opt-in
         // surface. The user's turn returns as soon as the response
         // streams; embedding + consolidation run in the background
@@ -818,6 +866,7 @@ export class DesktopApp {
         proactiveQuietWindowMs: proactive.quietWindowMs ?? 90_000,
         proactiveAction: proactiveEnabled ? "consolidate" : "none",
         proactiveCapabilities: proactive.capabilities ?? [],
+        proactiveAnchor,
       },
       { storage, renderer: this.renderer, ai: provider, keyring },
     );
