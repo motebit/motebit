@@ -168,6 +168,17 @@ describe("scoreAttestation", () => {
       HW_ATTESTATION_HARDWARE,
     );
   });
+
+  it("unknown future platform falls through to software-equivalent (not zero)", () => {
+    // The exhaustive-switch default path: a platform value outside the
+    // declared union (e.g. a TEE variant added in a later protocol
+    // revision) should score as software rather than silently drop to
+    // zero. Forward-compat guard — presence of an attestation claim is a
+    // stronger signal than silence, even when the platform isn't yet
+    // recognized by this semiring version.
+    const future = { platform: "future_tee_v2" } as unknown as HardwareAttestationClaim;
+    expect(scoreAttestation(future)).toBe(HW_ATTESTATION_SOFTWARE);
+  });
 });
 
 // ── Ranking semantics ───────────────────────────────────────────────

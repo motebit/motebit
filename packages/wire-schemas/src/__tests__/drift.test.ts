@@ -91,6 +91,22 @@ import {
   EXECUTION_RECEIPT_SCHEMA_ID,
   buildExecutionReceiptJsonSchema,
 } from "../execution-receipt.js";
+import {
+  MEMORY_ACCESSED_PAYLOAD_SCHEMA_ID,
+  MEMORY_AUDIT_PAYLOAD_SCHEMA_ID,
+  MEMORY_CONSOLIDATED_PAYLOAD_SCHEMA_ID,
+  MEMORY_DECAYED_PAYLOAD_SCHEMA_ID,
+  MEMORY_DELETED_PAYLOAD_SCHEMA_ID,
+  MEMORY_FORMED_PAYLOAD_SCHEMA_ID,
+  MEMORY_PINNED_PAYLOAD_SCHEMA_ID,
+  buildMemoryAccessedPayloadJsonSchema,
+  buildMemoryAuditPayloadJsonSchema,
+  buildMemoryConsolidatedPayloadJsonSchema,
+  buildMemoryDecayedPayloadJsonSchema,
+  buildMemoryDeletedPayloadJsonSchema,
+  buildMemoryFormedPayloadJsonSchema,
+  buildMemoryPinnedPayloadJsonSchema,
+} from "../memory-events.js";
 
 interface SchemaCase {
   name: string;
@@ -255,6 +271,49 @@ const CASES: SchemaCase[] = [
     filename: "agent-settlement-anchor-proof-v1.json",
     expectedId: AGENT_SETTLEMENT_ANCHOR_PROOF_SCHEMA_ID,
     build: buildAgentSettlementAnchorProofJsonSchema,
+  },
+  // Memory-delta-v1 payloads — one case per event type under §5 of the spec.
+  {
+    name: "memory-formed-payload-v1",
+    filename: "memory-formed-payload-v1.json",
+    expectedId: MEMORY_FORMED_PAYLOAD_SCHEMA_ID,
+    build: buildMemoryFormedPayloadJsonSchema,
+  },
+  {
+    name: "memory-accessed-payload-v1",
+    filename: "memory-accessed-payload-v1.json",
+    expectedId: MEMORY_ACCESSED_PAYLOAD_SCHEMA_ID,
+    build: buildMemoryAccessedPayloadJsonSchema,
+  },
+  {
+    name: "memory-pinned-payload-v1",
+    filename: "memory-pinned-payload-v1.json",
+    expectedId: MEMORY_PINNED_PAYLOAD_SCHEMA_ID,
+    build: buildMemoryPinnedPayloadJsonSchema,
+  },
+  {
+    name: "memory-deleted-payload-v1",
+    filename: "memory-deleted-payload-v1.json",
+    expectedId: MEMORY_DELETED_PAYLOAD_SCHEMA_ID,
+    build: buildMemoryDeletedPayloadJsonSchema,
+  },
+  {
+    name: "memory-consolidated-payload-v1",
+    filename: "memory-consolidated-payload-v1.json",
+    expectedId: MEMORY_CONSOLIDATED_PAYLOAD_SCHEMA_ID,
+    build: buildMemoryConsolidatedPayloadJsonSchema,
+  },
+  {
+    name: "memory-audit-payload-v1",
+    filename: "memory-audit-payload-v1.json",
+    expectedId: MEMORY_AUDIT_PAYLOAD_SCHEMA_ID,
+    build: buildMemoryAuditPayloadJsonSchema,
+  },
+  {
+    name: "memory-decayed-payload-v1",
+    filename: "memory-decayed-payload-v1.json",
+    expectedId: MEMORY_DECAYED_PAYLOAD_SCHEMA_ID,
+    build: buildMemoryDecayedPayloadJsonSchema,
   },
 ];
 
