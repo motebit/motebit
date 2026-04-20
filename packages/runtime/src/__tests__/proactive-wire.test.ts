@@ -252,6 +252,130 @@ describe("Runtime — proactive interior wire-in", () => {
     expect(events).toHaveLength(0);
   });
 
+  it("anchorPendingConsolidationReceipts returns null when no pending receipts", async () => {
+    const result = await runtime.anchorPendingConsolidationReceipts();
+    expect(result).toBeNull();
+  });
+
+  it("anchorPendingConsolidationReceipts batches signed receipts into a Merkle root (local-only, no submitter)", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const { canonicalSha256, buildMerkleTree } = await import("@motebit/encryption");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "anchor-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+
+    // Run two cycles → two signed receipts.
+    await rt.consolidationCycle();
+    await rt.consolidationCycle();
+
+    const anchor = await rt.anchorPendingConsolidationReceipts();
+    expect(anchor).not.toBeNull();
+    expect(anchor!.motebit_id).toBe("anchor-test");
+    expect(anchor!.leaf_count).toBe(2);
+    expect(anchor!.receipt_ids).toHaveLength(2);
+    expect(anchor!.tx_hash).toBeUndefined();
+    expect(anchor!.network).toBeUndefined();
+
+    // Independently recompute the Merkle root from the signed-receipt
+    // events — the anchor must match.
+    const sevs = await rt.events.query({
+      motebit_id: "anchor-test",
+      event_types: [EventType.ConsolidationReceiptSigned],
+    });
+    const receipts = sevs
+      .map((e) => (e.payload as { receipt: import("@motebit/sdk").ConsolidationReceipt }).receipt)
+      .sort((a, b) =>
+        a.finished_at !== b.finished_at
+          ? a.finished_at - b.finished_at
+          : a.receipt_id.localeCompare(b.receipt_id),
+      );
+    const leaves: string[] = [];
+    for (const r of receipts) leaves.push(await canonicalSha256(r));
+    const tree = await buildMerkleTree(leaves);
+    expect(anchor!.merkle_root).toBe(tree.root);
+  });
+
+  it("anchorPendingConsolidationReceipts emits ConsolidationReceiptsAnchored event with the anchor", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "emit-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    const anchor = await rt.anchorPendingConsolidationReceipts();
+    const events = await rt.events.query({
+      motebit_id: "emit-test",
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    expect(events).toHaveLength(1);
+    const payload = (events[0]!.payload as { anchor: import("@motebit/sdk").ConsolidationAnchor })
+      .anchor;
+    expect(payload.batch_id).toBe(anchor!.batch_id);
+    expect(payload.merkle_root).toBe(anchor!.merkle_root);
+  });
+
+  it("anchorPendingConsolidationReceipts is idempotent — second call with no new receipts returns null", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "idem-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    const first = await rt.anchorPendingConsolidationReceipts();
+    expect(first).not.toBeNull();
+    const second = await rt.anchorPendingConsolidationReceipts();
+    expect(second).toBeNull();
+  });
+
+  it("anchorPendingConsolidationReceipts uses submitter and records tx_hash + network when provided", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "submit-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    const submitter = {
+      chain: "solana" as const,
+      network: "solana:devnet",
+      submitMerkleRoot: vi
+        .fn<(root: string, motebitId: string, leafCount: number) => Promise<{ txHash: string }>>()
+        .mockResolvedValue({ txHash: "fake-tx-signature-base58" }),
+    };
+    const anchor = await rt.anchorPendingConsolidationReceipts(submitter);
+    expect(anchor!.tx_hash).toBe("fake-tx-signature-base58");
+    expect(anchor!.network).toBe("solana:devnet");
+    expect(submitter.submitMerkleRoot).toHaveBeenCalledTimes(1);
+    expect(submitter.submitMerkleRoot.mock.calls[0]![0]).toBe(anchor!.merkle_root);
+    expect(submitter.submitMerkleRoot.mock.calls[0]![2]).toBe(anchor!.leaf_count);
+  });
+
+  it("anchorPendingConsolidationReceipts emits a local-only anchor when submitter throws", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "fail-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    const submitter = {
+      chain: "solana" as const,
+      network: "solana:devnet",
+      submitMerkleRoot: vi
+        .fn<(root: string, motebitId: string, leafCount: number) => Promise<{ txHash: string }>>()
+        .mockRejectedValue(new Error("RPC down")),
+    };
+    const anchor = await rt.anchorPendingConsolidationReceipts(submitter);
+    expect(anchor).not.toBeNull();
+    expect(anchor!.tx_hash).toBeUndefined();
+    expect(anchor!.network).toBeUndefined();
+    expect(anchor!.merkle_root).toBeTruthy();
+  });
+
   it("scoped tool registry honors proactiveCapabilities config but only for memory-mutation tools", async () => {
     const { SimpleToolRegistry } = await import("../index");
     const r = new SimpleToolRegistry();

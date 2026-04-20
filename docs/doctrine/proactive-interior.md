@@ -63,7 +63,11 @@ Shape (in `@motebit/protocol`):
 
 Sign + verify primitives live in `@motebit/crypto` (`signConsolidationReceipt`, `verifyConsolidationReceipt`); the runtime calls the signer in `consolidationCycle`'s post-phase hook and emits a `ConsolidationReceiptSigned` event with the signed body in the payload. Best-effort emission — a signing or event-store failure never throws past the cycle boundary.
 
-**Anchoring** the receipt onchain is the next layer (deferred follow-up). The shape is anchor-ready: a stable hash over the canonical body can be Merkle-batched and submitted to Solana via the existing `SolanaMemoSubmitter` (the same pattern `spec/credential-anchor-v1` defines for credentials). Until then, the receipt is self-attesting — anchoring is the additive proof that the receipt existed at the time it claims, not a precondition for it being verifiable.
+**Anchoring** the receipt onchain is additive proof. `runtime.anchorPendingConsolidationReceipts(submitter?)` queries every signed receipt that hasn't appeared in a prior `ConsolidationReceiptsAnchored` event, hashes each one's canonical body to a Merkle leaf, builds a tree, and (if a `ChainAnchorSubmitter` is supplied) submits the root via `SolanaMemoSubmitter` — the same `motebit:anchor:v1:{root}:{leaf_count}` memo format the relay uses for credential anchors (`spec/credential-anchor-v1.md`). The motebit owns its own anchor cadence: there is no daemon. Call from a scheduled job, idle-tick hook, or surface affordance.
+
+The anchor itself is not separately signed. Cryptographic load is carried by (a) the Ed25519 signatures on the receipts the anchor groups, and (b) the Solana transaction signed by the motebit's identity key (the address IS the identity public key — Ed25519 curve coincidence). When no submitter is provided, the anchor still emits with the Merkle root populated and `tx_hash`/`network` absent — verifiable by recomputation, just not timestamp-attested onchain. A submitter failure is non-fatal: the runtime emits a local-only anchor and logs the submitter error.
+
+Receipt ordering inside a batch is stable: by `finished_at` ascending, with `receipt_id` lexicographic as tiebreaker. Verifiers reproduce the same root from the same set of receipts.
 
 ## What the user sees
 

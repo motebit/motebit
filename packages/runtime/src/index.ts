@@ -123,7 +123,8 @@ import {
   type ConsolidationCycleResult,
 } from "./consolidation-cycle.js";
 import { signConsolidationReceipt } from "@motebit/crypto";
-import type { ConsolidationReceipt } from "@motebit/sdk";
+import { buildMerkleTree, canonicalSha256 } from "@motebit/encryption";
+import type { ConsolidationAnchor, ConsolidationReceipt, ChainAnchorSubmitter } from "@motebit/sdk";
 
 /** Tools the runtime allows during a tending cycle, regardless of user
  *  config. The proactive scope intersects user opt-in WITH this set, so a
@@ -2115,6 +2116,112 @@ export class MotebitRuntime {
    *  runtime aborts this from `sendMessage` / `sendMessageStreaming` so
    *  user messages preempt proactive work. */
   private _currentCycleAbortController: AbortController | null = null;
+
+  /**
+   * Build a Merkle root over all `ConsolidationReceipt`s that have been
+   * signed since the last anchor (or all signed receipts on first call),
+   * optionally submit it to a chain via the supplied submitter, and emit
+   * a `ConsolidationReceiptsAnchored` event with the resulting
+   * `ConsolidationAnchor`.
+   *
+   * The motebit owns its own anchor cadence — there is no daemon. Call
+   * this directly (e.g., from a scheduled job, an idle-tick hook, or a
+   * surface affordance like a "publish my work" button). Pending receipt
+   * IDs are derived from the event log: every
+   * `ConsolidationReceiptSigned` event whose receipt_id has not appeared
+   * in a prior `ConsolidationReceiptsAnchored` event is pending.
+   *
+   * Local-only mode (no submitter): builds the Merkle tree, emits the
+   * event with `tx_hash`/`network` undefined. Useful for tests, offline
+   * use, and operators who want the commitment without paying for a
+   * Solana transaction. The Merkle root is still verifiable by
+   * recomputation; it just isn't timestamp-attested onchain.
+   *
+   * Returns `null` when there are no pending receipts.
+   */
+  async anchorPendingConsolidationReceipts(
+    submitter?: ChainAnchorSubmitter,
+  ): Promise<ConsolidationAnchor | null> {
+    const signedEvents = await this.events.query({
+      motebit_id: this.motebitId,
+      event_types: [EventType.ConsolidationReceiptSigned],
+    });
+    const anchoredEvents = await this.events.query({
+      motebit_id: this.motebitId,
+      event_types: [EventType.ConsolidationReceiptsAnchored],
+    });
+    const alreadyAnchored = new Set<string>();
+    for (const ev of anchoredEvents) {
+      const anchor = (ev.payload as { anchor?: ConsolidationAnchor }).anchor;
+      if (anchor) for (const id of anchor.receipt_ids) alreadyAnchored.add(id);
+    }
+    const pending: ConsolidationReceipt[] = [];
+    for (const ev of signedEvents) {
+      const receipt = (ev.payload as { receipt?: ConsolidationReceipt }).receipt;
+      if (receipt && !alreadyAnchored.has(receipt.receipt_id)) pending.push(receipt);
+    }
+    if (pending.length === 0) return null;
+
+    // Stable leaf order: the receipt's signed `finished_at` (cycle clock),
+    // then `receipt_id` lexicographic as tiebreaker. Lets a verifier
+    // reproduce the same Merkle root from the same set of receipts.
+    pending.sort((a, b) => {
+      if (a.finished_at !== b.finished_at) return a.finished_at - b.finished_at;
+      return a.receipt_id.localeCompare(b.receipt_id);
+    });
+
+    const leaves: string[] = [];
+    for (const r of pending) {
+      // Hash the canonical body of the SIGNED receipt — the signature is
+      // part of the leaf so the anchor commits to "this exact signed
+      // artifact existed," not just "a receipt with these fields could
+      // be reconstructed."
+      leaves.push(await canonicalSha256(r));
+    }
+    const tree = await buildMerkleTree(leaves);
+
+    let txHash: string | undefined;
+    let network: string | undefined;
+    if (submitter) {
+      try {
+        const result = await submitter.submitMerkleRoot(tree.root, this.motebitId, leaves.length);
+        txHash = result.txHash;
+        network = submitter.network;
+      } catch (err: unknown) {
+        // Submitter failure is non-fatal — emit the local anchor anyway.
+        // The Merkle root is still useful for offline verification.
+        this._logger.warn("consolidation anchor submitter failed — emitting local-only anchor", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const anchor: ConsolidationAnchor = {
+      batch_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      merkle_root: tree.root,
+      receipt_ids: pending.map((r) => r.receipt_id),
+      leaf_count: pending.length,
+      anchored_at: Date.now(),
+      ...(txHash !== undefined ? { tx_hash: txHash } : {}),
+      ...(network !== undefined ? { network } : {}),
+    };
+
+    try {
+      await this.events.appendWithClock({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: anchor.anchored_at,
+        event_type: EventType.ConsolidationReceiptsAnchored,
+        payload: { anchor },
+        tombstoned: false,
+      });
+    } catch {
+      // Audit emission is best-effort.
+    }
+
+    return anchor;
+  }
 
   /**
    * Sign a `ConsolidationReceipt` over the cycle result and emit it as

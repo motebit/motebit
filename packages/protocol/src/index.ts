@@ -237,6 +237,7 @@ export enum EventType {
   MemoryPromoted = "memory_promoted",
   ConsolidationCycleRun = "consolidation_cycle_run",
   ConsolidationReceiptSigned = "consolidation_receipt_signed",
+  ConsolidationReceiptsAnchored = "consolidation_receipts_anchored",
   AgentTaskCompleted = "agent_task_completed",
   AgentTaskFailed = "agent_task_failed",
   AgentTaskDenied = "agent_task_denied",
@@ -758,6 +759,57 @@ export interface ConsolidationReceipt {
    */
   suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
+}
+
+/**
+ * Merkle-batched anchor over signed `ConsolidationReceipt`s. The motebit
+ * batches its own receipts (no relay required), computes a Merkle root
+ * over canonical-JSON SHA-256 leaves, and optionally submits the root
+ * via a `ChainAnchorSubmitter` (the same primitive the relay uses for
+ * credential anchoring; `SolanaMemoSubmitter` is the reference impl).
+ *
+ * When `tx_hash` is populated the anchor is onchain — anyone can verify
+ * that the included receipts existed at `anchored_at` by recomputing
+ * their leaf hashes and checking inclusion against the root recorded in
+ * the Solana transaction memo (`motebit:anchor:v1:{root}:{leaf_count}`).
+ * When `tx_hash` is absent, the anchor is a local-only Merkle commitment
+ * — still verifiable by recomputation, just not timestamp-attested.
+ *
+ * The anchor itself is NOT separately signed. Its cryptographic load is
+ * carried by (a) the signatures on the receipts it groups, and (b) the
+ * onchain Solana transaction signed by the motebit's identity key (which
+ * IS the Solana address — Ed25519 curve coincidence, see
+ * `packages/wallet-solana/CLAUDE.md`). Adding a batch-level signature
+ * would be redundant.
+ *
+ * Doctrine: [`docs/doctrine/proactive-interior.md`](../../docs/doctrine/proactive-interior.md).
+ */
+export interface ConsolidationAnchor {
+  /** UUID identifying this anchor batch. */
+  batch_id: string;
+  /** Motebit that produced the receipts in this batch (and signed the
+   *  Solana transaction that carries the root, when onchain). */
+  motebit_id: MotebitId;
+  /** Hex-encoded SHA-256 Merkle root over the receipts' canonical-body
+   *  leaf hashes. Stable for a given ordered set of receipts. */
+  merkle_root: string;
+  /** Receipt IDs included in this batch, in the order their leaf hashes
+   *  were inserted into the Merkle tree. Consumers recomputing inclusion
+   *  proofs MUST preserve this order. */
+  receipt_ids: ReadonlyArray<string>;
+  /** leaf_count = receipt_ids.length (duplicated for parsers that don't
+   *  want to count the array). */
+  leaf_count: number;
+  /** Milliseconds since Unix epoch when the anchor was produced. */
+  anchored_at: number;
+  /** On-chain transaction hash (Solana signature base58 for
+   *  `SolanaMemoSubmitter`) if the anchor was submitted. Absent when the
+   *  anchor was constructed without a submitter. */
+  tx_hash?: string;
+  /** CAIP-2 network identifier the anchor was submitted to (e.g.,
+   *  `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"` for mainnet). Paired
+   *  with `tx_hash` — absent when `tx_hash` is absent. */
+  network?: string;
 }
 
 /**
