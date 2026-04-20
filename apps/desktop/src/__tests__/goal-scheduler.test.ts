@@ -50,6 +50,13 @@ function makeRuntime(overrides: Record<string, unknown> = {}): any {
       append: vi.fn(async () => {}),
       getLatestClock: vi.fn(async () => 0),
     },
+    goals: {
+      created: vi.fn(async () => {}),
+      executed: vi.fn(async () => {}),
+      progress: vi.fn(async () => {}),
+      completed: vi.fn(async () => {}),
+      removed: vi.fn(async () => {}),
+    },
     ...overrides,
   };
 }
@@ -415,7 +422,7 @@ describe("GoalScheduler goal-management tools (active context)", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("completeGoal happy path calls db_execute + events.append", async () => {
+  it("completeGoal happy path emits via runtime.goals.completed + db_execute", async () => {
     const runtime = makeRuntime();
     const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
     const invoke = makeInvoke();
@@ -428,7 +435,13 @@ describe("GoalScheduler goal-management tools (active context)", () => {
     const handler = (reg as any).tools[1].handler;
     const result = await handler({ reason: "done" });
     expect(result.ok).toBe(true);
-    expect(runtime.events.append).toHaveBeenCalled();
+    expect(runtime.goals.completed).toHaveBeenCalledWith({ goal_id: "g1", reason: "done" });
+    expect(invoke).toHaveBeenCalledWith(
+      "db_execute",
+      expect.objectContaining({
+        sql: expect.stringContaining("UPDATE goals SET status = 'completed'"),
+      }),
+    );
   });
 
   it("reportProgress returns error if runtime goes null after registration", async () => {

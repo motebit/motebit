@@ -12,17 +12,21 @@
     },
     "summary": {
       "type": "string",
-      "description": "Up to ~200 characters of the agent's response text for this run."
+      "description": "Up to ~200 characters of the agent's response text for a successful run."
     },
     "tool_calls": {
       "type": "integer",
       "minimum": 0,
-      "description": "Number of tool calls performed during the run."
+      "description": "Number of tool calls performed during a successful run."
     },
     "memories": {
       "type": "integer",
       "minimum": 0,
-      "description": "Number of memory nodes formed during the run."
+      "description": "Number of memory nodes formed during a successful run."
+    },
+    "error": {
+      "type": "string",
+      "description": "Error message; present iff the run terminated in failure. Consumers MUST NOT parse it semantically."
     }
   },
   "required": ["goal_id"],
@@ -38,17 +42,21 @@
         },
         "summary": {
           "type": "string",
-          "description": "Up to ~200 characters of the agent's response text for this run."
+          "description": "Up to ~200 characters of the agent's response text for a successful run."
         },
         "tool_calls": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of tool calls performed during the run."
+          "description": "Number of tool calls performed during a successful run."
         },
         "memories": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of memory nodes formed during the run."
+          "description": "Number of memory nodes formed during a successful run."
+        },
+        "error": {
+          "type": "string",
+          "description": "Error message; present iff the run terminated in failure. Consumers MUST NOT parse it semantically."
         }
       },
       "required": ["goal_id"],

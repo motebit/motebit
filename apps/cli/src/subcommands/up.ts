@@ -21,7 +21,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { EventStore } from "@motebit/event-log";
-import { EventType } from "@motebit/sdk";
+import { createGoalsController } from "@motebit/runtime";
 import type { Goal } from "@motebit/persistence";
 import { openMotebitDatabase } from "@motebit/persistence";
 
@@ -148,61 +148,41 @@ export async function applyMotebitYaml(opts: ApplyOptions): Promise<ApplyResult>
       saveFullConfig({ ...fullConfig, ...plan.configChanges });
     }
 
-    // Goal-level changes.
-    const eventStore = new EventStore(moteDb.eventStore);
-    const now = Date.now();
+    // Goal-level changes — route through the shared primitive so yaml-
+    // driven emission matches `motebit goal add` / `goal remove` in
+    // shape. Spec/goal-lifecycle-v1.md §5.1 §5.5.
+    const goals = createGoalsController({
+      motebitId: opts.motebitId,
+      events: new EventStore(moteDb.eventStore),
+    });
     for (const goal of plan.add) {
       moteDb.goalStore.add(goal);
-      await eventStore.append({
-        event_id: crypto.randomUUID(),
-        motebit_id: opts.motebitId,
-        timestamp: now,
-        event_type: EventType.GoalCreated,
-        payload: {
-          goal_id: goal.goal_id,
-          routine_id: goal.routine_id,
-          routine_source: goal.routine_source,
-          prompt: goal.prompt,
-          interval_ms: goal.interval_ms,
-        },
-        version_clock: (await moteDb.eventStore.getLatestClock(opts.motebitId)) + 1,
-        tombstoned: false,
+      await goals.created({
+        goal_id: goal.goal_id,
+        routine_id: goal.routine_id ?? undefined,
+        routine_source: goal.routine_source ?? undefined,
+        prompt: goal.prompt,
+        interval_ms: goal.interval_ms,
       });
     }
     for (const { after } of plan.update) {
       // INSERT OR REPLACE on the same deterministic goal_id updates in place.
       moteDb.goalStore.add(after);
-      await eventStore.append({
-        event_id: crypto.randomUUID(),
-        motebit_id: opts.motebitId,
-        timestamp: now,
-        event_type: EventType.GoalCreated, // updated goal is a new revision
-        payload: {
-          goal_id: after.goal_id,
-          routine_id: after.routine_id,
-          routine_source: after.routine_source,
-          routine_hash: after.routine_hash,
-          update: true,
-        },
-        version_clock: (await moteDb.eventStore.getLatestClock(opts.motebitId)) + 1,
-        tombstoned: false,
+      await goals.created({
+        goal_id: after.goal_id,
+        routine_id: after.routine_id ?? undefined,
+        routine_source: after.routine_source ?? undefined,
+        routine_hash: after.routine_hash ?? undefined,
+        update: true,
       });
     }
     if (opts.prune) {
       for (const goal of plan.prune) {
         moteDb.goalStore.remove(goal.goal_id);
-        await eventStore.append({
-          event_id: crypto.randomUUID(),
-          motebit_id: opts.motebitId,
-          timestamp: now,
-          event_type: EventType.GoalRemoved,
-          payload: {
-            goal_id: goal.goal_id,
-            routine_id: goal.routine_id,
-            reason: "yaml_pruned",
-          },
-          version_clock: (await moteDb.eventStore.getLatestClock(opts.motebitId)) + 1,
-          tombstoned: false,
+        await goals.removed({
+          goal_id: goal.goal_id,
+          routine_id: goal.routine_id ?? undefined,
+          reason: "yaml_pruned",
         });
       }
     }

@@ -114,6 +114,24 @@ function createMockRuntime(
           },
         ),
     },
+    goals: {
+      created: vi.fn().mockImplementation(async (payload: Record<string, unknown>) => {
+        eventsAppended.push({ event_type: "goal_created", payload });
+      }),
+      executed: vi.fn().mockImplementation(async (payload: Record<string, unknown>) => {
+        eventsAppended.push({ event_type: "goal_executed", payload });
+      }),
+      progress: vi.fn().mockImplementation(async (payload: Record<string, unknown>) => {
+        eventsAppended.push({ event_type: "goal_progress", payload });
+      }),
+      completed: vi.fn().mockImplementation(async (payload: Record<string, unknown>) => {
+        eventsAppended.push({ event_type: "goal_completed", payload });
+      }),
+      removed: vi.fn().mockImplementation(async (payload: Record<string, unknown>) => {
+        eventsAppended.push({ event_type: "goal_removed", payload });
+      }),
+    },
+    setGoalStatusResolver: vi.fn(),
     memory: memoryGraph,
     getToolRegistry: vi.fn().mockReturnValue({
       register: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {

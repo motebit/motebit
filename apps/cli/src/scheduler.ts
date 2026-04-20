@@ -66,6 +66,13 @@ export class GoalScheduler {
 
   start(tickMs = 60_000): void {
     if (this.timer) return;
+    // Wire the terminal-state guard on the shared goals primitive — spec
+    // goal-lifecycle-v1 §3.4 requires post-terminal emission to be
+    // suppressed. The resolver reads from our SQLite goal store.
+    this.runtime.setGoalStatusResolver((goalId) => {
+      const g = this.goalStore.get(goalId);
+      return g == null ? null : g.status;
+    });
     this.cleanupOrphanedApprovals();
     this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
@@ -199,25 +206,14 @@ export class GoalScheduler {
       const reason = args.reason as string;
       if (!reason) return { ok: false, error: "Missing required parameter: reason" };
 
-      this.goalStore.setStatus(this.currentGoalId, "completed");
+      const goalIdAtComplete = this.currentGoalId;
+      // Emit goal_completed BEFORE flipping status — the terminal-state
+      // guard in `runtime.goals` would suppress the event otherwise
+      // (spec §3.4 says no emission AFTER terminal).
+      await this.runtime.goals.completed({ goal_id: goalIdAtComplete, reason });
+      this.goalStore.setStatus(goalIdAtComplete, "completed");
 
-      // Log GoalCompleted event
-      try {
-        const clock = await this.runtime.events.getLatestClock(this.motebitId);
-        await this.runtime.events.append({
-          event_id: crypto.randomUUID(),
-          motebit_id: this.motebitId,
-          timestamp: Date.now(),
-          event_type: EventType.GoalCompleted,
-          payload: { goal_id: this.currentGoalId, reason },
-          version_clock: clock + 1,
-          tombstoned: false,
-        });
-      } catch {
-        // Best-effort
-      }
-
-      console.log(`[goal] completed by agent: ${this.currentGoalId.slice(0, 8)} — ${reason}`);
+      console.log(`[goal] completed by agent: ${goalIdAtComplete.slice(0, 8)} — ${reason}`);
       return { ok: true, data: `Goal marked as completed: ${reason}` };
     };
 
@@ -233,20 +229,7 @@ export class GoalScheduler {
 
       // Emit as event log entry, not an outcome row.
       // Outcomes are 1-per-run; progress notes are events within a run.
-      try {
-        const clock = await this.runtime.events.getLatestClock(this.motebitId);
-        await this.runtime.events.append({
-          event_id: crypto.randomUUID(),
-          motebit_id: this.motebitId,
-          timestamp: Date.now(),
-          event_type: EventType.GoalProgress,
-          payload: { goal_id: this.currentGoalId, note },
-          version_clock: clock + 1,
-          tombstoned: false,
-        });
-      } catch {
-        // Best-effort
-      }
+      await this.runtime.goals.progress({ goal_id: this.currentGoalId, note });
 
       console.log(`[goal] progress: ${note.slice(0, 60)}`);
       return { ok: true, data: `Progress recorded: ${note}` };
@@ -506,8 +489,9 @@ export class GoalScheduler {
           this.goalStore.updateLastRun(goal.goal_id, Date.now());
           this.goalStore.resetFailures(goal.goal_id);
 
-          // Log GoalExecuted event
-          void this.logGoalEvent(EventType.GoalExecuted, goal.goal_id, {
+          // Emit goal_executed (success variant) — spec §5.2.
+          void this.runtime.goals.executed({
+            goal_id: goal.goal_id,
             summary: result.responseText.slice(0, 200),
             tool_calls: result.toolCallsMade,
             memories: result.memoriesFormed,
@@ -517,13 +501,15 @@ export class GoalScheduler {
           await this.formGoalOutcomeMemory(goal, result);
 
           // One-shot goal: check if completed (agent may have called complete_goal,
-          // or if it's done and didn't call it, auto-complete)
+          // or if it's done and didn't call it, auto-complete). Emit BEFORE
+          // setStatus so the terminal-state guard doesn't suppress the event.
           const refreshed = this.goalStore.get(goal.goal_id);
           if (goal.mode === "once" && refreshed && refreshed.status === "active") {
-            this.goalStore.setStatus(goal.goal_id, "completed");
-            void this.logGoalEvent(EventType.GoalCompleted, goal.goal_id, {
+            void this.runtime.goals.completed({
+              goal_id: goal.goal_id,
               reason: "one-shot auto-complete",
             });
+            this.goalStore.setStatus(goal.goal_id, "completed");
           }
 
           console.log(`[goal] completed: ${goal.goal_id.slice(0, 8)}`);
@@ -543,6 +529,11 @@ export class GoalScheduler {
             memories_formed: 0,
             error_message: msg,
           });
+
+          // Emit goal_executed (failure variant) — spec §5.2. Every run
+          // leaves a wire record regardless of outcome; §1's "ledger is
+          // the semantic source of truth" demands it.
+          void this.runtime.goals.executed({ goal_id: goal.goal_id, error: msg });
 
           // Increment failures and auto-pause if threshold reached
           this.goalStore.incrementFailures(goal.goal_id);

@@ -1,7 +1,7 @@
 # motebit/goal-lifecycle@1.0
 
 **Status:** Stable
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-04-19
 
 ---
@@ -20,7 +20,7 @@ Like `memory-delta-v1.md`, this spec extends motebit's type-surface pinning guar
 - **Schema stability over payload completeness.** New fields are additive. Receivers MUST tolerate unknown fields. Renaming or repurposing a field is a wire break and requires a new spec version.
 - **Payloads are locally verifiable.** A receiver with just the event log + the emitting motebit's identity key can fully reconstruct the goal view. No relay contact required for replay semantics.
 - **The ledger is the semantic source of truth.** Storage projections (SQLite `goals` rows, IndexedDB objects) are rebuilt from the log on cold start. If a projected row and the event log disagree, the log wins.
-- **Progress notes are events, not state.** `goal_progress` records narrative progress within a run; `goal_executed` records a successful run's terminal outcome (§5.2, §9.1); `goal_completed` records the goal's terminal transition. The three have distinct sync semantics and MUST NOT be conflated.
+- **Progress notes are events, not state.** `goal_progress` records narrative progress within a run; `goal_executed` records a run's terminal outcome (success or failure — see §5.2); `goal_completed` records the goal's terminal transition. The three have distinct sync semantics and MUST NOT be conflated.
 
 ---
 
@@ -34,7 +34,7 @@ Like `memory-delta-v1.md`, this spec extends motebit's type-surface pinning guar
 - Sensitivity handling notes (§6).
 - Storage projection hints (§7, reference convention).
 - Conformance requirements (§8).
-- Known emitter gaps between v1 emitters and the spec (§9).
+- Known emitter gaps (§9 — empty as of v1.1).
 
 **Out of scope:**
 
@@ -71,15 +71,15 @@ A goal run MAY materialize a plan. When it does, the plan's `plan_created` event
 
 ## 4. Event Taxonomy
 
-Five goal-lifecycle event types exist in `EventType`. Each has a wire-format payload type in `@motebit/protocol`. Consumption (execution-ledger reconstruction, replay tests) lives in `@motebit/runtime`; emission in v1 is scattered across `apps/cli` and `apps/desktop` — see §9 for the convergence plan.
+Five goal-lifecycle event types exist in `EventType`. Each has a wire-format payload type in `@motebit/protocol` and is emitted through a single primitive — `runtime.goals` — exported by `@motebit/runtime` (`packages/runtime/src/goals.ts`). Surfaces (CLI, desktop, mobile, web) call `runtime.goals.{created, executed, progress, completed, removed}`; no surface constructs event payloads inline.
 
-| EventType        | Payload type           | Emitting site(s) today                                                                                              | Sync class |
-| ---------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------- |
-| `goal_created`   | `GoalCreatedPayload`   | `apps/cli/src/subcommands/goals.ts`, `apps/cli/src/subcommands/up.ts`                                               | wire       |
-| `goal_executed`  | `GoalExecutedPayload`  | `apps/cli/src/scheduler.ts` (success path only — see §9)                                                            | wire       |
-| `goal_progress`  | `GoalProgressPayload`  | `apps/cli/src/scheduler.ts` (`report_progress` tool), `apps/desktop/src/goal-scheduler.ts`                          | wire       |
-| `goal_completed` | `GoalCompletedPayload` | `apps/cli/src/scheduler.ts` (`complete_goal` tool and one-shot auto-complete), `apps/desktop/src/goal-scheduler.ts` | wire       |
-| `goal_removed`   | `GoalRemovedPayload`   | `apps/cli/src/subcommands/goals.ts`, `apps/cli/src/subcommands/up.ts` (yaml-pruned)                                 | wire       |
+| EventType        | Payload type           | Emitter method            | Sync class |
+| ---------------- | ---------------------- | ------------------------- | ---------- |
+| `goal_created`   | `GoalCreatedPayload`   | `runtime.goals.created`   | wire       |
+| `goal_executed`  | `GoalExecutedPayload`  | `runtime.goals.executed`  | wire       |
+| `goal_progress`  | `GoalProgressPayload`  | `runtime.goals.progress`  | wire       |
+| `goal_completed` | `GoalCompletedPayload` | `runtime.goals.completed` | wire       |
+| `goal_removed`   | `GoalRemovedPayload`   | `runtime.goals.removed`   | wire       |
 
 ---
 
@@ -123,11 +123,11 @@ Fields:
 
 ### 5.2 — GoalExecutedPayload
 
-Emitted when a goal run finishes successfully. Recurring goals emit this repeatedly on each successful run. Distinct from `goal_completed`: this records a single run's successful outcome; `goal_completed` records the goal's terminal transition.
+Emitted when a goal run finishes, successfully or in failure. Recurring goals emit this repeatedly. Distinct from `goal_completed`: `goal_executed` records one run's outcome; `goal_completed` records the goal's terminal transition.
 
-The v1 spec is explicit that this event fires only on success. Failed runs in v1 emitters leave no on-the-wire record — the failure is captured only in a local `goal_outcomes` projection table, not in the event log. This violates §1's "ledger is the semantic source of truth" principle and is tracked as convergence debt in §9.
+The presence of the optional `error` field distinguishes the two variants: a successful run carries `summary`, `tool_calls`, and `memories`; a failed run carries only `error` (plus any future additive fields). Receivers MUST NOT assume both shapes are mutually exclusive at the schema level — the wire envelope is `.passthrough()` — but emitters in the reference implementation keep them disjoint.
 
-#### Wire format (foundation law)
+#### Wire format (foundation law) — success variant
 
 ```json
 {
@@ -138,12 +138,22 @@ The v1 spec is explicit that this event fires only on success. Failed runs in v1
 }
 ```
 
+#### Wire format (foundation law) — failure variant
+
+```json
+{
+  "goal_id": "550e8400-e29b-41d4-a716-446655440000",
+  "error": "tool budget exhausted at step 4"
+}
+```
+
 Fields:
 
 - `goal_id` (string, required) — UUID of the executed goal.
-- `summary` (string, optional) — Up to ~200 characters of the agent's response text for this run. Implementations SHOULD truncate at emission.
-- `tool_calls` (integer, optional) — Number of tool calls performed during the run.
-- `memories` (integer, optional) — Number of memory nodes formed during the run.
+- `summary` (string, optional) — Up to ~200 characters of the agent's response text. Present on success.
+- `tool_calls` (integer, optional) — Number of tool calls performed during the run. Present on success.
+- `memories` (integer, optional) — Number of memory nodes formed during the run. Present on success.
+- `error` (string, optional) — Error message. Present iff the run terminated in failure. Consumers MUST NOT parse it semantically.
 
 ### 5.3 — GoalProgressPayload
 
@@ -255,32 +265,15 @@ Non-conformance modes and their consequences:
 
 ---
 
-## 9. Known Emitter Gaps (convergence debt)
+## 9. Known Emitter Gaps
 
-The spec above is the endgame. The in-tree emitters ship in v1 with the following gaps; both are convergence debt, not protocol decisions. Closing them does not require a spec revision.
-
-### §9.1 Failed runs emit no wire event
-
-§5.2 specifies `goal_executed` for successful runs only. Today, failed goal runs in `apps/cli/src/scheduler.ts` update a local `goal_outcomes` projection row with `status: "failed"` but emit **no** event to the log. A receiver replaying the log cannot count failed runs, cannot correlate a downstream `goal_completed` with a failure reason, and cannot audit goal reliability from events alone.
-
-The §1 foundation principle "the ledger is the semantic source of truth" requires every run outcome — success or failure — to be captured as an event. The emitter should either (a) emit `goal_executed` with an `error` field on the failure path (additive, non-breaking), or (b) introduce a `goal_failed` event. The additive (a) is preferred since `goal_executed` already has a `.passthrough()` envelope and a zod-optional shape that tolerates additional fields.
-
-### §9.2 Goal-lifecycle emission lives in apps, not in `@motebit/runtime`
-
-§4 lists emitter file paths scattered across `apps/cli` and `apps/desktop`. Payload construction for a Stable wire format living in app layers — rather than in a single runtime primitive — risks silent divergence the next time a new surface (mobile, web) adds its own goal management. Contrast plan-lifecycle (`plan-lifecycle-v1.md`): every emitter lives in a single `_logPlanChunkEvent` method in `@motebit/runtime`.
-
-The convergence shape is a `runtime.goals.*` primitive surface (create, execute, progress, complete, remove) that apps call. Apps author no goal-event payload JSON directly; the runtime owns the wire contract. This is the same doctrine as invariant #17 (`check-service-primitives`) and invariant #25 (`check-app-primitives`) applied to the goal domain.
-
-### §9.3 Terminal-state convention is not enforced in-runtime
-
-§3.4 says "MUST NOT emit further `goal_executed`, `goal_progress`, or `goal_completed` events" after a terminal event. Today this holds only indirectly: the scheduler filters active goals via `goalStore.setStatus(…, "completed")` so a completed goal stops being picked. No runtime check at emission time rejects a post-terminal event. A misbehaving app-layer emitter could drift.
-
-The convergence shape is a guard inside the `runtime.goals.*` primitive from §9.2 that rejects emission against a goal in a terminal state.
+None. The three convergence items tracked by v1.0 as §9.1 (failed-run emission), §9.2 (runtime.goals.\* primitive), and §9.3 (terminal-state guard) all landed in v1.1 alongside the additive `error` field on `GoalExecutedPayload`. The authoritative emitter now lives at `packages/runtime/src/goals.ts` (`createGoalsController` → `runtime.goals`); every in-tree surface calls it instead of constructing event payloads inline. The terminal-state guard fires via an optional `getGoalStatus` resolver that the CLI scheduler registers on start. See the 2026-04-19 line in the Change Log.
 
 ---
 
 ## Change Log
 
-| Version | Date       | Changes       |
-| ------- | ---------- | ------------- |
-| 1.0     | 2026-04-19 | Initial spec. |
+| Version | Date       | Changes                                                                                                                                                                                                                                       |
+| ------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.0     | 2026-04-19 | Initial spec.                                                                                                                                                                                                                                 |
+| 1.1     | 2026-04-19 | Additive: `error` field on `GoalExecutedPayload` distinguishes failed runs from successful ones. Convergence: `runtime.goals.*` primitive lands in `@motebit/runtime`; terminal-state guard enforced in-runtime. Closes 1.0's §9.1/§9.2/§9.3. |

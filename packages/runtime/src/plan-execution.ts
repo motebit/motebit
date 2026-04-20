@@ -37,8 +37,26 @@ export interface PlanExecutionDeps {
   getTaskRouter?(): TaskRouter | null;
 }
 
+/**
+ * Per-step state tracked by the §3.4 ordering guard. Each `step_id` in a
+ * plan transitions through these states in exactly the orderings §3.4
+ * permits; any out-of-order transition (double-delegation, post-terminal
+ * emission) is rejected in-emitter with a logger warning — no event is
+ * appended to the log. The map is keyed by `step_id` (globally unique)
+ * so we don't have to compose plan_id + step_id.
+ */
+type StepState = "pending" | "started" | "delegated" | "terminal";
+
 export class PlanExecutionManager {
   private _lastExecutionManifest: GoalExecutionManifest | null = null;
+  private _stepStates = new Map<string, StepState>();
+  /**
+   * Per-step delegation `task_id`, remembered on `step_delegated` so the
+   * subsequent terminal event can include it in its payload (spec §3.7).
+   * Receivers join the delegation chain payload-directly instead of
+   * reconstructing it by scanning sibling events.
+   */
+  private _stepDelegationTaskIds = new Map<string, string>();
 
   constructor(private readonly deps: PlanExecutionDeps) {}
 
@@ -289,8 +307,23 @@ export class PlanExecutionManager {
   }
 
   /**
-   * Log plan lifecycle events centrally so all consumers (CLI, desktop, mobile, web)
-   * get audit history without duplicating event-logging logic.
+   * Log plan lifecycle events centrally. Single authorship site for every
+   * `plan_*` event shape pinned by `spec/plan-lifecycle-v1.md`.
+   *
+   * Two invariants enforced here in addition to payload construction:
+   *
+   *  1. **§3.4 step-lifecycle ordering.** Each `step_id` transitions
+   *     pending → started → (delegated)? → terminal. Out-of-order chunks
+   *     (a second delegation for the same step, a completion before a
+   *     start, any event after a terminal) are rejected — the event is
+   *     not appended and a warning is logged. The map is reset on
+   *     `plan_created` so re-running a plan (or running a plan with
+   *     recycled step ids across test fixtures) starts clean.
+   *
+   *  2. **§3.7 delegation correlation.** When a step is delegated we
+   *     remember its `task_id`; when the step's terminal event fires we
+   *     include that `task_id` in the payload. Receivers join the
+   *     delegation chain payload-directly.
    */
   private _logPlanChunkEvent(chunk: PlanChunk, goalId?: string): void {
     let eventType: EventType | undefined;
@@ -298,6 +331,11 @@ export class PlanExecutionManager {
 
     switch (chunk.type) {
       case "plan_created":
+        // Reset per-step state on a new plan materialization.
+        for (const s of chunk.steps) {
+          this._stepStates.delete(s.step_id);
+          this._stepDelegationTaskIds.delete(s.step_id);
+        }
         eventType = EventType.PlanCreated;
         payload = {
           plan_id: chunk.plan.plan_id,
@@ -306,6 +344,7 @@ export class PlanExecutionManager {
         };
         break;
       case "step_started":
+        if (!this._advanceStep(chunk.step.step_id, "started", "plan_step_started")) return;
         eventType = EventType.PlanStepStarted;
         payload = {
           plan_id: chunk.step.plan_id,
@@ -314,25 +353,37 @@ export class PlanExecutionManager {
           description: chunk.step.description,
         };
         break;
-      case "step_completed":
+      case "step_completed": {
+        if (!this._advanceStep(chunk.step.step_id, "terminal", "plan_step_completed")) return;
         eventType = EventType.PlanStepCompleted;
-        payload = {
+        const base: Record<string, unknown> = {
           plan_id: chunk.step.plan_id,
           step_id: chunk.step.step_id,
           ordinal: chunk.step.ordinal,
           tool_calls_made: chunk.step.tool_calls_made,
         };
+        const taskId = this._stepDelegationTaskIds.get(chunk.step.step_id);
+        if (taskId != null) base.task_id = taskId;
+        payload = base;
         break;
-      case "step_failed":
+      }
+      case "step_failed": {
+        if (!this._advanceStep(chunk.step.step_id, "terminal", "plan_step_failed")) return;
         eventType = EventType.PlanStepFailed;
-        payload = {
+        const base: Record<string, unknown> = {
           plan_id: chunk.step.plan_id,
           step_id: chunk.step.step_id,
           ordinal: chunk.step.ordinal,
           error: chunk.error,
         };
+        const taskId = this._stepDelegationTaskIds.get(chunk.step.step_id);
+        if (taskId != null) base.task_id = taskId;
+        payload = base;
         break;
+      }
       case "step_delegated":
+        if (!this._advanceStep(chunk.step.step_id, "delegated", "plan_step_delegated")) return;
+        this._stepDelegationTaskIds.set(chunk.step.step_id, chunk.task_id);
         eventType = EventType.PlanStepDelegated;
         payload = {
           plan_id: chunk.step.plan_id,
@@ -372,6 +423,45 @@ export class PlanExecutionManager {
         // Fire-and-forget — consistent with existing event logging patterns
       }
     })();
+  }
+
+  /**
+   * State-machine transition for one `step_id`. Returns `true` if the
+   * transition is valid (and records the new state); returns `false`
+   * and logs a warning if the transition violates §3.4.
+   *
+   * Valid edges:
+   *   - `pending` → `started`
+   *   - `started` → `delegated`
+   *   - `started` → `terminal`
+   *   - `delegated` → `terminal`
+   *
+   * The `pending` state is implicit (absent from the map). No edge into
+   * `started` from `delegated` or `terminal`; no re-delegation; no
+   * post-terminal emission.
+   */
+  private _advanceStep(
+    stepId: string,
+    next: Exclude<StepState, "pending">,
+    chunkKind: string,
+  ): boolean {
+    const current: StepState = this._stepStates.get(stepId) ?? "pending";
+    const valid =
+      (current === "pending" && next === "started") ||
+      (current === "started" && next === "delegated") ||
+      (current === "started" && next === "terminal") ||
+      (current === "delegated" && next === "terminal");
+    if (!valid) {
+      this.deps.logger.warn("plan step event suppressed — invalid transition (spec §3.4)", {
+        step_id: stepId,
+        from: current,
+        attempted: next,
+        chunk: chunkKind,
+      });
+      return false;
+    }
+    this._stepStates.set(stepId, next);
+    return true;
   }
 
   /**

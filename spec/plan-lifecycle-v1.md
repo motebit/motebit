@@ -1,7 +1,7 @@
 # motebit/plan-lifecycle@1.0
 
 **Status:** Stable
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-04-19
 
 ---
@@ -78,7 +78,7 @@ When a plan is materialized for a goal run, every plan-lifecycle event MAY carry
 
 ### §3.7 Correlation with delegation
 
-`plan_step_delegated` carries `task_id`, the relay-issued identifier for the delegated work. The eventual `plan_step_completed` or `plan_step_failed` for that step MUST correlate to the same `task_id` (carried in the wrapping event envelope or by joining against the delegator's task tracking) so a receiver can reconstruct the delegation chain.
+`plan_step_delegated` carries `task_id`, the relay-issued identifier for the delegated work. The eventual `plan_step_completed` or `plan_step_failed` for that same step carries the same `task_id` in its payload (added in v1.1). A receiver reconstructs the delegation chain payload-directly: join `plan_step_delegated.task_id` to the terminal event's `task_id`. Terminal events for non-delegated steps omit `task_id`.
 
 ---
 
@@ -149,7 +149,7 @@ Fields:
 
 ### 5.3 — PlanStepCompletedPayload
 
-Emitted when a step reaches terminal success.
+Emitted when a step reaches terminal success. When this terminal event closes a delegated step, the payload carries `task_id` from the preceding `plan_step_delegated` so receivers join the delegation chain payload-directly (§3.7).
 
 #### Wire format (foundation law)
 
@@ -158,7 +158,8 @@ Emitted when a step reaches terminal success.
   "plan_id": "550e8400-e29b-41d4-a716-446655440000",
   "step_id": "7ba8c921-aebe-22e2-91c5-11d15fe541d9",
   "ordinal": 0,
-  "tool_calls_made": 3
+  "tool_calls_made": 3,
+  "task_id": "d290f1ee-6c54-4b01-90e6-d701748f0851"
 }
 ```
 
@@ -168,11 +169,12 @@ Fields:
 - `step_id` (string, required) — UUID of the completed step.
 - `ordinal` (integer, required) — Zero-based position of the step within its plan.
 - `tool_calls_made` (integer, required) — Number of tool calls the step performed. Consumers MAY reconstruct execution cost from this field without replaying every `tool_used` event.
+- `task_id` (string, optional) — Delegation task id. Present iff this step was delegated; joins back to the `plan_step_delegated.task_id` for the same `step_id` (§3.7). Added in v1.1.
 - `goal_id` (string, optional) — Owning goal. See §3.6.
 
 ### 5.4 — PlanStepFailedPayload
 
-Emitted when a step reaches terminal failure.
+Emitted when a step reaches terminal failure. When this terminal event closes a delegated step, the payload carries `task_id` from the preceding `plan_step_delegated` (§3.7).
 
 #### Wire format (foundation law)
 
@@ -181,7 +183,8 @@ Emitted when a step reaches terminal failure.
   "plan_id": "550e8400-e29b-41d4-a716-446655440000",
   "step_id": "7ba8c921-aebe-22e2-91c5-11d15fe541d9",
   "ordinal": 1,
-  "error": "Timeout waiting for remote worker response"
+  "error": "Timeout waiting for remote worker response",
+  "task_id": "d290f1ee-6c54-4b01-90e6-d701748f0851"
 }
 ```
 
@@ -191,6 +194,7 @@ Fields:
 - `step_id` (string, required) — UUID of the failed step.
 - `ordinal` (integer, required) — Zero-based position of the step within its plan.
 - `error` (string, required) — Error message. Consumers MUST NOT parse it semantically. Implementations MAY truncate over the wire.
+- `task_id` (string, optional) — Delegation task id. Present iff this step was delegated; joins back to the `plan_step_delegated.task_id` for the same `step_id` (§3.7). Added in v1.1.
 - `goal_id` (string, optional) — Owning goal. See §3.6.
 
 ### 5.5 — PlanStepDelegatedPayload
@@ -294,26 +298,15 @@ Non-conformance modes and their consequences:
 
 ---
 
-## 8. Known Emitter Gaps (convergence debt)
+## 8. Known Emitter Gaps
 
-The spec above is the endgame. The shipping v1 emitter has the following gaps; closing them does not require a spec revision.
-
-### §8.1 Step-lifecycle ordering is structural, not guarded
-
-§3.4 specifies the allowed step emission orderings and "a step MAY be delegated at most once." Today this holds because `PlanChunk` is emitted by a single central method (`_logPlanChunkEvent` in `packages/runtime/src/plan-execution.ts`) that processes chunks sequentially from a well-formed `PlanEngine` — the shape is correct by construction, not by a runtime guard.
-
-A bug in a sibling implementation of the plan engine, or a refactor that introduces a second emitter site, could violate the ordering without any runtime signal. The convergence shape is an in-emitter state-machine check that rejects out-of-order transitions for a given `step_id` and rejects a second `plan_step_delegated` for the same step.
-
-### §8.2 `task_id` correlation is join-based, not payload-based
-
-§3.7 specifies `plan_step_delegated` carries `task_id` and the eventual `plan_step_completed` / `plan_step_failed` for that step "MUST correlate to the same `task_id`." Today, only `plan_step_delegated` carries `task_id`; the terminal events for a delegated step do not. Correlation is reconstructed by joining `plan_step_delegated.step_id` against the terminal event's `step_id`, then joining against the separate `agent_task_completed` event family for the result.
-
-This works for the reference implementation because `step_id` is unique within a plan, but it puts the correlation burden on the receiver rather than the emitter. A future minor spec revision MAY add `task_id` to the terminal events of delegated steps so the join is payload-direct; that change is additive and non-breaking.
+None. The two convergence items tracked by v1.0 as §8.1 (structural step-lifecycle ordering) and §8.2 (join-based `task_id` correlation) both landed in v1.1. `_logPlanChunkEvent` now enforces a per-`step_id` state-machine guard that rejects invalid transitions inline, and terminal events for delegated steps carry `task_id` payload-directly.
 
 ---
 
 ## Change Log
 
-| Version | Date       | Changes       |
-| ------- | ---------- | ------------- |
-| 1.0     | 2026-04-19 | Initial spec. |
+| Version | Date       | Changes                                                                                                                                                                                                                         |
+| ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.0     | 2026-04-19 | Initial spec.                                                                                                                                                                                                                   |
+| 1.1     | 2026-04-19 | Additive: `task_id` on `PlanStepCompletedPayload` / `PlanStepFailedPayload` when the terminal event closes a delegated step (§3.7). Convergence: in-emitter step-lifecycle state machine enforces §3.4. Closes 1.0's §8.1/§8.2. |

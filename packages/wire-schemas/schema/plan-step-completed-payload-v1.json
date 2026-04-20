@@ -25,6 +25,10 @@
       "minimum": 0,
       "description": "Number of tool calls the step performed."
     },
+    "task_id": {
+      "type": "string",
+      "description": "Delegation task id; present iff this step was delegated (§3.7)."
+    },
     "goal_id": {
       "type": "string",
       "description": "Owning goal when the plan serves a goal."
@@ -55,6 +59,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "Number of tool calls the step performed."
+        },
+        "task_id": {
+          "type": "string",
+          "description": "Delegation task id; present iff this step was delegated (§3.7)."
         },
         "goal_id": {
           "type": "string",

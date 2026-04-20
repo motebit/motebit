@@ -9,7 +9,7 @@
 
 import { openMotebitDatabase } from "@motebit/persistence";
 import { EventStore } from "@motebit/event-log";
-import { EventType } from "@motebit/sdk";
+import { createGoalsController } from "@motebit/runtime";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -75,23 +75,19 @@ export async function handleGoalAdd(config: CliConfig): Promise<void> {
     project_id: projectId,
   });
 
-  // Log event
-  const eventStore = new EventStore(moteDb.eventStore);
-  await eventStore.append({
-    event_id: crypto.randomUUID(),
-    motebit_id: motebitId,
-    timestamp: Date.now(),
-    event_type: EventType.GoalCreated,
-    payload: {
-      goal_id: goalId,
-      prompt,
-      interval_ms: intervalMs,
-      mode,
-      wall_clock_ms: wallClockMs,
-      project_id: projectId,
-    },
-    version_clock: (await moteDb.eventStore.getLatestClock(motebitId)) + 1,
-    tombstoned: false,
+  // Emit goal_created via the shared primitive so every surface writes
+  // the same wire-format shape (spec/goal-lifecycle-v1.md §5.1).
+  const goals = createGoalsController({
+    motebitId,
+    events: new EventStore(moteDb.eventStore),
+  });
+  await goals.created({
+    goal_id: goalId,
+    prompt,
+    interval_ms: intervalMs,
+    mode,
+    wall_clock_ms: wallClockMs ?? undefined,
+    project_id: projectId ?? undefined,
   });
 
   moteDb.close();
@@ -205,8 +201,8 @@ export async function handleGoalRemove(config: CliConfig): Promise<void> {
   const moteDb = await openMotebitDatabase(dbPath);
 
   // Find goal by prefix match
-  const goals = moteDb.goalStore.list(motebitId);
-  const match = goals.find((g) => g.goal_id === goalId || g.goal_id.startsWith(goalId));
+  const allGoals = moteDb.goalStore.list(motebitId);
+  const match = allGoals.find((g) => g.goal_id === goalId || g.goal_id.startsWith(goalId));
   if (!match) {
     console.error(`Error: no goal found matching "${goalId}".`);
     moteDb.close();
@@ -215,17 +211,12 @@ export async function handleGoalRemove(config: CliConfig): Promise<void> {
 
   moteDb.goalStore.remove(match.goal_id);
 
-  // Log event
-  const eventStore = new EventStore(moteDb.eventStore);
-  await eventStore.append({
-    event_id: crypto.randomUUID(),
-    motebit_id: motebitId,
-    timestamp: Date.now(),
-    event_type: EventType.GoalRemoved,
-    payload: { goal_id: match.goal_id },
-    version_clock: (await moteDb.eventStore.getLatestClock(motebitId)) + 1,
-    tombstoned: false,
+  // Emit goal_removed via the shared primitive (spec/goal-lifecycle-v1.md §5.5).
+  const goalsController = createGoalsController({
+    motebitId,
+    events: new EventStore(moteDb.eventStore),
   });
+  await goalsController.removed({ goal_id: match.goal_id });
 
   moteDb.close();
   console.log(`Goal removed: ${match.goal_id.slice(0, 8)}`);

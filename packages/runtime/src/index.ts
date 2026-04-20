@@ -91,6 +91,7 @@ import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { PlanExecutionManager } from "./plan-execution.js";
+import { createGoalsController, type GoalsController, type GoalLifecycleStatus } from "./goals.js";
 import { setOperatorMode, setupOperatorPin, resetOperatorPin } from "./operator.js";
 import {
   bumpTrustFromReceipt as _bumpTrustFromReceipt,
@@ -232,6 +233,8 @@ export {
   buildPrecisionContext,
 } from "./gradient.js";
 export { AgentGraphManager } from "./agent-graph.js";
+export { createGoalsController } from "./goals.js";
+export type { GoalsController, GoalsControllerDeps, GoalLifecycleStatus } from "./goals.js";
 export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";
 
@@ -590,6 +593,14 @@ export class MotebitRuntime {
   readonly privacy: PrivacyLayer;
   readonly auditLog: AuditLogAdapter;
   readonly sync: SyncEngine;
+  /**
+   * Goal-lifecycle emitter — the single authorship site for every
+   * `goal_*` event shape pinned by `spec/goal-lifecycle-v1.md`. Surfaces
+   * (CLI, desktop, mobile, web) call `runtime.goals.*` instead of
+   * constructing payloads inline. See `packages/runtime/src/goals.ts`.
+   */
+  readonly goals: GoalsController;
+  private _goalStatusResolver: ((goalId: string) => GoalLifecycleStatus) | null = null;
   policy: PolicyGate;
   memoryGovernor: MemoryGovernor;
 
@@ -726,6 +737,12 @@ export class MotebitRuntime {
 
     // Data stores
     this.events = new EventStore(adapters.storage.eventStore);
+    this.goals = createGoalsController({
+      motebitId: this.motebitId,
+      events: this.events,
+      getGoalStatus: (goalId) => this._goalStatusResolver?.(goalId) ?? null,
+      logger: this._logger,
+    });
     this.memory = new MemoryGraph(adapters.storage.memoryStorage, this.events, this.motebitId);
     this.identity = new IdentityManager(adapters.storage.identityStorage, this.events);
     this.auditLog = adapters.storage.auditLog;
@@ -874,7 +891,8 @@ export class MotebitRuntime {
       graphCredentialStore,
     );
 
-    // Plan execution manager
+    // Plan execution manager — wires `_logPlanChunkEvent` with the
+    // step-state guard that enforces spec/plan-lifecycle-v1 §3.4.
     this.planExecution = new PlanExecutionManager({
       motebitId: this.motebitId,
       planEngine: this.planEngine,
@@ -1176,6 +1194,17 @@ export class MotebitRuntime {
   /** Reconstruct a complete execution manifest for a goal from the event log. */
   async replayGoal(goalId: string, privateKey?: Uint8Array): Promise<GoalExecutionManifest | null> {
     return this.planExecution.replayGoal(goalId, privateKey);
+  }
+
+  /**
+   * Register a goal-status resolver so the goals primitive can enforce
+   * the §3.4 terminal-state convention. Surface apps call this once
+   * after wiring their goal store — e.g. the CLI scheduler passes a
+   * closure over its `SqliteGoalStore`. Absent a resolver, the goals
+   * primitive trusts the caller and emits every event.
+   */
+  setGoalStatusResolver(resolver: (goalId: string) => GoalLifecycleStatus): void {
+    this._goalStatusResolver = resolver;
   }
 
   get isOperatorMode(): boolean {

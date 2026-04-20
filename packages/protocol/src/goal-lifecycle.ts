@@ -64,20 +64,30 @@ export interface GoalCreatedPayload {
 }
 
 /**
- * Emitted when a goal run finishes (successfully or otherwise). Distinct
+ * Emitted when a goal run finishes. Carries either the success metrics
+ * (summary / tool_calls / memories) or an `error` string — the presence
+ * of `error` distinguishes a failed run from a successful one. Distinct
  * from `goal_completed`: `goal_executed` records each run's outcome,
  * `goal_completed` records the terminal transition of a one-shot goal or
  * a user-initiated completion. A recurring goal can emit many
- * `goal_executed` events and at most one `goal_completed`.
+ * `goal_executed` events (successes + failures) and at most one
+ * `goal_completed`.
  */
 export interface GoalExecutedPayload {
   readonly goal_id: string;
-  /** Up to ~200 characters of the agent's response text for this run. */
+  /** Up to ~200 characters of the agent's response text for this run. Present on success. */
   readonly summary?: string;
-  /** Number of tool calls performed during the run. */
+  /** Number of tool calls performed during the run. Present on success. */
   readonly tool_calls?: number;
-  /** Number of memory nodes formed during the run. */
+  /** Number of memory nodes formed during the run. Present on success. */
   readonly memories?: number;
+  /**
+   * Error message for a failed run. Present iff the run terminated in
+   * failure. Consumers MUST NOT parse it semantically — treat as opaque
+   * free-text. A future spec version MAY add structured error codes;
+   * receivers MUST tolerate their absence.
+   */
+  readonly error?: string;
 }
 
 /**

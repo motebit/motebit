@@ -49,7 +49,6 @@
  */
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import { EventType } from "@motebit/sdk";
 import { PlanStatus } from "@motebit/sdk";
 import type { PlanChunk, PlanEngine, PlanStoreAdapter } from "@motebit/planner";
 import {
@@ -240,26 +239,17 @@ export class GoalScheduler {
       }
       const reason = args.reason as string;
       try {
+        const rt = this.deps.getRuntime();
+        if (rt) {
+          // Emit goal_completed BEFORE flipping status — the
+          // terminal-state guard on runtime.goals would suppress the
+          // event otherwise (spec/goal-lifecycle-v1.md §3.4).
+          await rt.goals.completed({ goal_id: this._currentGoalId, reason });
+        }
         await invoke<number>("db_execute", {
           sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
           params: [this._currentGoalId],
         });
-        const rt = this.deps.getRuntime();
-        if (rt) {
-          try {
-            await rt.events.append({
-              event_id: crypto.randomUUID(),
-              motebit_id: getMotebitId(),
-              event_type: EventType.GoalCompleted,
-              payload: { goal_id: this._currentGoalId, reason },
-              version_clock: (await rt.events.getLatestClock(getMotebitId())) + 1,
-              timestamp: Date.now(),
-              tombstoned: false,
-            });
-          } catch {
-            /* best-effort */
-          }
-        }
         return { ok: true, data: { goal_id: this._currentGoalId, status: "completed", reason } };
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -274,21 +264,8 @@ export class GoalScheduler {
       const note = args.note as string;
       const rt = this.deps.getRuntime();
       if (!rt) return { ok: false, error: "Runtime not initialized" };
-      try {
-        await rt.events.append({
-          event_id: crypto.randomUUID(),
-          motebit_id: getMotebitId(),
-          event_type: EventType.GoalProgress,
-          payload: { goal_id: this._currentGoalId, note },
-          version_clock: (await rt.events.getLatestClock(getMotebitId())) + 1,
-          timestamp: Date.now(),
-          tombstoned: false,
-        });
-        return { ok: true, data: { goal_id: this._currentGoalId, note } };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: msg };
-      }
+      await rt.goals.progress({ goal_id: this._currentGoalId, note });
+      return { ok: true, data: { goal_id: this._currentGoalId, note } };
     });
   }
 

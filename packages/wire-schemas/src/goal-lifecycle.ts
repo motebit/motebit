@@ -116,19 +116,25 @@ export const GoalExecutedPayloadSchema = z
     summary: z
       .string()
       .optional()
-      .describe("Up to ~200 characters of the agent's response text for this run."),
+      .describe("Up to ~200 characters of the agent's response text for a successful run."),
     tool_calls: z
       .number()
       .int()
       .nonnegative()
       .optional()
-      .describe("Number of tool calls performed during the run."),
+      .describe("Number of tool calls performed during a successful run."),
     memories: z
       .number()
       .int()
       .nonnegative()
       .optional()
-      .describe("Number of memory nodes formed during the run."),
+      .describe("Number of memory nodes formed during a successful run."),
+    error: z
+      .string()
+      .optional()
+      .describe(
+        "Error message; present iff the run terminated in failure. Consumers MUST NOT parse it semantically.",
+      ),
   })
   .passthrough();
 

@@ -140,6 +140,10 @@ export const PlanStepCompletedPayloadSchema = z
       .int()
       .nonnegative()
       .describe("Number of tool calls the step performed."),
+    task_id: z
+      .string()
+      .optional()
+      .describe("Delegation task id; present iff this step was delegated (§3.7)."),
     goal_id: z.string().optional().describe("Owning goal when the plan serves a goal."),
   })
   .passthrough();
@@ -189,6 +193,10 @@ export const PlanStepFailedPayloadSchema = z
     error: z
       .string()
       .describe("Error message from the failing step. Consumers MUST NOT parse it semantically."),
+    task_id: z
+      .string()
+      .optional()
+      .describe("Delegation task id; present iff this step was delegated (§3.7)."),
     goal_id: z.string().optional().describe("Owning goal when the plan serves a goal."),
   })
   .passthrough();

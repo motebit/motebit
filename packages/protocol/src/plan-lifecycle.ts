@@ -68,7 +68,10 @@ export interface PlanStepStartedPayload {
 /**
  * Emitted when a plan step completes successfully. Carries the tool-call
  * count so consumers can reconstruct execution cost without replaying
- * every `tool_used` event.
+ * every `tool_used` event. When the step was delegated, `task_id`
+ * carries the delegation identifier so the terminal event joins
+ * payload-directly to its `plan_step_delegated` predecessor — receivers
+ * do not have to maintain a separate task→step index.
  */
 export interface PlanStepCompletedPayload {
   readonly plan_id: string;
@@ -76,6 +79,8 @@ export interface PlanStepCompletedPayload {
   readonly ordinal: number;
   /** Number of tool calls the step performed. */
   readonly tool_calls_made: number;
+  /** Delegation task id. Present iff this step was delegated (§3.7). */
+  readonly task_id?: string;
   readonly goal_id?: string;
 }
 
@@ -92,6 +97,8 @@ export interface PlanStepFailedPayload {
   readonly ordinal: number;
   /** Error message from the failing step. */
   readonly error: string;
+  /** Delegation task id. Present iff this step was delegated (§3.7). */
+  readonly task_id?: string;
   readonly goal_id?: string;
 }
 
