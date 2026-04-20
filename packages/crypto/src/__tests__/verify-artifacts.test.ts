@@ -15,6 +15,8 @@ import {
   verifySettlement,
   signBalanceWaiver,
   verifyBalanceWaiver,
+  signConsolidationReceipt,
+  verifyConsolidationReceipt,
   signAdjudicatorVote,
   verifyAdjudicatorVote,
   signDisputeResolution,
@@ -456,6 +458,110 @@ describe("signBalanceWaiver / verifyBalanceWaiver", () => {
     const a = await signBalanceWaiver(w, kp.privateKey);
     const b = await signBalanceWaiver(w, kp.privateKey);
     expect(a.signature).toBe(b.signature);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signConsolidationReceipt / verifyConsolidationReceipt
+// ---------------------------------------------------------------------------
+
+describe("signConsolidationReceipt / verifyConsolidationReceipt", () => {
+  function makeReceipt() {
+    return {
+      receipt_id: "00000000-0000-4000-8000-000000000001",
+      motebit_id: "mote-tending",
+      cycle_id: "cycle-abc-123",
+      started_at: 1_700_000_000_000,
+      finished_at: 1_700_000_005_000,
+      phases_run: ["orient", "gather", "consolidate", "prune"] as const,
+      phases_yielded: [] as ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">,
+      summary: {
+        orient_nodes: 42,
+        gather_clusters: 3,
+        gather_notable: 5,
+        consolidate_merged: 2,
+        pruned_decay: 7,
+        pruned_notability: 1,
+        pruned_retention: 0,
+      },
+    };
+  }
+
+  it("round-trips (sign -> verify = true) and stamps suite", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kp.privateKey, kp.publicKey);
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(signed.signature).toBeTruthy();
+    expect(signed.public_key).toBeTruthy();
+    expect(await verifyConsolidationReceipt(signed, kp.publicKey)).toBe(true);
+  });
+
+  it("verifies without an embedded public key when caller provides it", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kp.privateKey);
+    expect(signed.public_key).toBeUndefined();
+    expect(await verifyConsolidationReceipt(signed, kp.publicKey)).toBe(true);
+  });
+
+  it("detects summary tampering — a verifier cannot silently inflate consolidation work", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kp.privateKey, kp.publicKey);
+    const tampered = {
+      ...signed,
+      summary: { ...signed.summary, consolidate_merged: 99 },
+    };
+    expect(await verifyConsolidationReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects motebit_id tampering — receipt cannot be reattributed", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kp.privateKey, kp.publicKey);
+    const tampered = { ...signed, motebit_id: "mote-impostor" };
+    expect(await verifyConsolidationReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects cycle_id tampering — receipt cannot be re-bound to a different cycle", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kp.privateKey, kp.publicKey);
+    const tampered = { ...signed, cycle_id: "cycle-someone-elses" };
+    expect(await verifyConsolidationReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kpA.privateKey, kpA.publicKey);
+    expect(await verifyConsolidationReceipt(signed, kpB.publicKey)).toBe(false);
+  });
+
+  it("rejects unknown suite (no legacy-no-suite path)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kp.privateKey, kp.publicKey);
+    const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
+    expect(await verifyConsolidationReceipt(wrongSuite, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects malformed base64url signature", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kp.privateKey, kp.publicKey);
+    const garbage = { ...signed, signature: "!!!not-base64url!!!" };
+    expect(await verifyConsolidationReceipt(garbage, kp.publicKey)).toBe(false);
+  });
+
+  it("is deterministic (same body -> same signature)", async () => {
+    const kp = await generateKeypair();
+    const r = makeReceipt();
+    const a = await signConsolidationReceipt(r, kp.privateKey, kp.publicKey);
+    const b = await signConsolidationReceipt(r, kp.privateKey, kp.publicKey);
+    expect(a.signature).toBe(b.signature);
+  });
+
+  it("frozen — post-sign mutation throws", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationReceipt(makeReceipt(), kp.privateKey, kp.publicKey);
+    expect(() => {
+      (signed as unknown as { motebit_id: string }).motebit_id = "mote-mutated";
+    }).toThrow(TypeError);
   });
 });
 

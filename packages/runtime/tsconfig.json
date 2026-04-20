@@ -16,6 +16,9 @@
       "path": "../core-identity"
     },
     {
+      "path": "../crypto"
+    },
+    {
       "path": "../encryption"
     },
     {

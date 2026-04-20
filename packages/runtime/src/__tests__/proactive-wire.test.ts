@@ -144,7 +144,7 @@ describe("Runtime — proactive interior wire-in", () => {
     // Start a long-running cycle by holding the provider.generate() in a
     // promise we control, then send a user message. The cycle should
     // abort and presence should transition responsive → idle by the end.
-    let releaseGenerate: (() => void) | null = null;
+    let releaseGenerate: () => void = () => {};
     const generateGate = new Promise<void>((resolve) => {
       releaseGenerate = resolve;
     });
@@ -194,7 +194,7 @@ describe("Runtime — proactive interior wire-in", () => {
     // Send a user message (mocked via direct sendMessage call). This
     // should abort the cycle, even though generateGate hasn't released.
     // Release the gate first so sendMessage can complete its own provider call.
-    releaseGenerate?.();
+    releaseGenerate();
     await rt.sendMessage("hello");
 
     // Cycle should now be done (preempted via abort).
@@ -202,6 +202,54 @@ describe("Runtime — proactive interior wire-in", () => {
 
     // Presence transitions back to idle after the user turn completes.
     expect(rt.presence.get().mode).toBe("idle");
+  });
+
+  it("signs + emits a ConsolidationReceipt when signing keys are configured", async () => {
+    const { generateKeypair, verifyConsolidationReceipt } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "receipt-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    const events = await rt.events.query({
+      motebit_id: "receipt-test",
+      event_types: [EventType.ConsolidationReceiptSigned],
+    });
+    expect(events).toHaveLength(1);
+    const payload = events[0]!.payload as {
+      receipt: import("@motebit/sdk").ConsolidationReceipt;
+    };
+    expect(payload.receipt.motebit_id).toBe("receipt-test");
+    expect(payload.receipt.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(payload.receipt.signature).toBeTruthy();
+    expect(await verifyConsolidationReceipt(payload.receipt, kp.publicKey)).toBe(true);
+  });
+
+  it("does NOT emit a ConsolidationReceiptSigned event when signing keys are absent", async () => {
+    // Default constructor — no signing keys configured.
+    await runtime.consolidationCycle();
+    const events = await runtime.events.query({
+      motebit_id: "wire-test",
+      event_types: [EventType.ConsolidationReceiptSigned],
+    });
+    expect(events).toHaveLength(0);
+  });
+
+  it("does NOT emit a receipt when the cycle ran zero phases (re-entry guard path)", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "noop-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    rt.presence.enterResponsive();
+    await rt.consolidationCycle();
+    const events = await rt.events.query({
+      motebit_id: "noop-test",
+      event_types: [EventType.ConsolidationReceiptSigned],
+    });
+    expect(events).toHaveLength(0);
   });
 
   it("scoped tool registry honors proactiveCapabilities config but only for memory-mutation tools", async () => {

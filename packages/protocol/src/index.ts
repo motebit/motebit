@@ -236,6 +236,7 @@ export enum EventType {
   MemoryConsolidated = "memory_consolidated",
   MemoryPromoted = "memory_promoted",
   ConsolidationCycleRun = "consolidation_cycle_run",
+  ConsolidationReceiptSigned = "consolidation_receipt_signed",
   AgentTaskCompleted = "agent_task_completed",
   AgentTaskFailed = "agent_task_failed",
   AgentTaskDenied = "agent_task_denied",
@@ -693,6 +694,67 @@ export interface ExecutionReceipt {
    * Narrowed to the single suite today so widening requires intentional
    * registry + type change (the plan for post-quantum migration). Verifiers
    * reject missing or unknown suite values fail-closed.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  signature: string;
+}
+
+/**
+ * Signed proof that the motebit performed a consolidation cycle. The
+ * receipt commits to structural facts only — counts of memories merged,
+ * promoted, pruned, and the cycle's identity / timestamps — never to
+ * memory content, embeddings, or any sensitive identifier. Anyone with
+ * the signer's public key can verify; no relay contact required.
+ *
+ * Why this exists: every other proactive AI agent today binds the
+ * agent's identity to the operator's billing relationship. Motebit
+ * binds it to a sovereign Ed25519 identity, so the consolidation work
+ * the motebit performs while idle becomes self-attesting evidence the
+ * motebit can show to anyone — including itself, across time. The
+ * receipt is the evidence; anchoring it on a public ledger (Solana
+ * memo via `SolanaMemoSubmitter`, batched per `spec/credential-anchor-v1`)
+ * is the additive proof that the receipt existed at the time it claims.
+ *
+ * Doctrine: [`docs/doctrine/proactive-interior.md`](../../docs/doctrine/proactive-interior.md).
+ */
+export interface ConsolidationReceipt {
+  /** UUID — the receipt's own identity (separate from cycle_id). */
+  receipt_id: string;
+  /** The motebit that performed the cycle. */
+  motebit_id: MotebitId;
+  /** Signer's Ed25519 public key (hex). Embedded for portable verification
+   *  — third parties verify without contacting any relay. */
+  public_key?: string;
+  /** Matches the `cycle_id` carried by the `consolidation_cycle_run` event
+   *  emitted at cycle completion. Verifiers cross-reference. */
+  cycle_id: string;
+  /** Cycle timing — milliseconds since Unix epoch. */
+  started_at: number;
+  finished_at: number;
+  /** Phases that ran to completion. Closed union — adding a phase is a
+   *  protocol-coordinated change. */
+  phases_run: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">;
+  /** Phases that yielded mid-execution because their AbortSignal fired
+   *  (budget exhausted or parent signal aborted). Subset of `phases_run`. */
+  phases_yielded: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">;
+  /** Structural counts only — never memory content. The privacy boundary
+   *  is the type: there is no field here that could leak a memory's text
+   *  or embedding. Adding such a field is a protocol break. */
+  summary: {
+    orient_nodes?: number;
+    gather_clusters?: number;
+    gather_notable?: number;
+    consolidate_merged?: number;
+    pruned_decay?: number;
+    pruned_notability?: number;
+    pruned_retention?: number;
+  };
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` for
+   * this artifact today — the verification recipe is JCS canonicalization
+   * of the unsigned body (this object without `signature`), Ed25519
+   * primitive, base64url signature encoding, hex public-key encoding.
+   * Verifiers reject missing or unknown suite values fail-closed.
    */
   suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;

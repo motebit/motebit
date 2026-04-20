@@ -122,6 +122,8 @@ import {
   type ConsolidationCycleConfig,
   type ConsolidationCycleResult,
 } from "./consolidation-cycle.js";
+import { signConsolidationReceipt } from "@motebit/crypto";
+import type { ConsolidationReceipt } from "@motebit/sdk";
 
 /** Tools the runtime allows during a tending cycle, regardless of user
  *  config. The proactive scope intersects user opt-in WITH this set, so a
@@ -2063,7 +2065,7 @@ export class MotebitRuntime {
       combinedSignal = internalCtrl.signal;
     }
     try {
-      return await runConsolidationCycle(
+      const result = await runConsolidationCycle(
         {
           motebitId: this.motebitId,
           memory: this.memory,
@@ -2090,6 +2092,16 @@ export class MotebitRuntime {
           },
         },
       );
+      // Sign + emit a ConsolidationReceipt when signing keys are present
+      // and the cycle did meaningful work (at least one phase ran). The
+      // receipt is structural-only (counts + ids + timestamps); the
+      // privacy boundary is the protocol type. See
+      // `docs/doctrine/proactive-interior.md`. Best-effort — a signing
+      // or emission failure never throws past the cycle boundary.
+      if (this._signingKeys && result.phasesRun.length > 0) {
+        await this.signAndEmitConsolidationReceipt(result);
+      }
+      return result;
     } finally {
       if (config.signal && callerOnAbort) {
         config.signal.removeEventListener("abort", callerOnAbort);
@@ -2103,6 +2115,54 @@ export class MotebitRuntime {
    *  runtime aborts this from `sendMessage` / `sendMessageStreaming` so
    *  user messages preempt proactive work. */
   private _currentCycleAbortController: AbortController | null = null;
+
+  /**
+   * Sign a `ConsolidationReceipt` over the cycle result and emit it as
+   * a `ConsolidationReceiptSigned` event. Best-effort — never throws
+   * past the cycle boundary. The receipt commits to structural counts
+   * only (privacy boundary is the type, not policy: see
+   * `@motebit/protocol`'s `ConsolidationReceipt` shape).
+   */
+  private async signAndEmitConsolidationReceipt(
+    cycleResult: ConsolidationCycleResult,
+  ): Promise<void> {
+    const keys = this._signingKeys;
+    if (!keys) return;
+    try {
+      const unsigned: Omit<ConsolidationReceipt, "signature" | "suite" | "public_key"> = {
+        receipt_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        cycle_id: cycleResult.cycleId,
+        started_at: cycleResult.startedAt,
+        finished_at: cycleResult.finishedAt,
+        phases_run: cycleResult.phasesRun,
+        phases_yielded: cycleResult.phasesYielded,
+        summary: {
+          orient_nodes: cycleResult.summary.orientNodes,
+          gather_clusters: cycleResult.summary.gatherClusters,
+          gather_notable: cycleResult.summary.gatherNotable,
+          consolidate_merged: cycleResult.summary.consolidateMerged,
+          pruned_decay: cycleResult.summary.prunedDecay,
+          pruned_notability: cycleResult.summary.prunedNotability,
+          pruned_retention: cycleResult.summary.prunedRetention,
+        },
+      };
+      const signed = await signConsolidationReceipt(unsigned, keys.privateKey, keys.publicKey);
+      await this.events.appendWithClock({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: signed.finished_at,
+        event_type: EventType.ConsolidationReceiptSigned,
+        payload: { receipt: signed },
+        tombstoned: false,
+      });
+    } catch (err: unknown) {
+      this._logger.warn("consolidation receipt sign/emit failed", {
+        cycle_id: cycleResult.cycleId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   /** Called from user-message entry points to preempt an in-flight cycle.
    *  Idempotent — no-op when no cycle is running. */

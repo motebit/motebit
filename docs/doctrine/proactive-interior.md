@@ -48,6 +48,23 @@ The strategic prize: every proactive AI tool today binds the agent's identity to
 
 See [`scripts/check-consolidation-primitives.ts`](../../scripts/check-consolidation-primitives.ts) (drift gate #34) for the canonical-vs-inline test.
 
+## Self-attesting consolidation — the receipt
+
+Every consolidation cycle that runs at least one phase produces a signed `ConsolidationReceipt` when the runtime has signing keys configured. The receipt is the foundation of the moat: third parties verify the motebit's proactive work from the receipt alone, no relay contact required.
+
+Shape (in `@motebit/protocol`):
+
+- `motebit_id`, `cycle_id`, `started_at`, `finished_at`, `phases_run`, `phases_yielded`
+- `summary` — structural counts only (orient nodes, gather clusters, gather notable, consolidate merged, prune counts)
+- `public_key` (embedded, hex) for portable verification
+- `suite: "motebit-jcs-ed25519-b64-v1"` + `signature` (base64url Ed25519 over JCS canonical body)
+
+**Privacy boundary is the type.** There is no field on `ConsolidationReceipt` that could carry memory content, embeddings, or sensitive identifiers. Adding such a field is a protocol break — surface it for review, never inline. The summary commits to "merged 12 clusters into 3 semantics," not to which 12 or what they contained.
+
+Sign + verify primitives live in `@motebit/crypto` (`signConsolidationReceipt`, `verifyConsolidationReceipt`); the runtime calls the signer in `consolidationCycle`'s post-phase hook and emits a `ConsolidationReceiptSigned` event with the signed body in the payload. Best-effort emission — a signing or event-store failure never throws past the cycle boundary.
+
+**Anchoring** the receipt onchain is the next layer (deferred follow-up). The shape is anchor-ready: a stable hash over the canonical body can be Merkle-batched and submitted to Solana via the existing `SolanaMemoSubmitter` (the same pattern `spec/credential-anchor-v1` defines for credentials). Until then, the receipt is self-attesting — anchoring is the additive proof that the receipt existed at the time it claims, not a precondition for it being verifiable.
+
 ## What the user sees
 
 A motebit running with the proactive interior enabled:

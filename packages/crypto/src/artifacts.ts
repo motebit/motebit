@@ -683,6 +683,67 @@ export async function verifyDisputeResolution(
   return true;
 }
 
+// === Consolidation Receipts (proactive interior — `docs/doctrine/proactive-interior.md`) ===
+
+import type { ConsolidationReceipt } from "@motebit/protocol";
+export type { ConsolidationReceipt };
+
+/** The one suite ConsolidationReceipts sign under today. */
+export const CONSOLIDATION_RECEIPT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Sign a consolidation receipt. The motebit's Ed25519 identity key
+ * commits to the structural counts of work performed during a
+ * consolidation cycle. Receipt is self-attesting: any holder of the
+ * signer's public key verifies without contacting any relay.
+ *
+ * Callers pass the body without `signature` or `suite`; the signer
+ * owns both. Pass `publicKey` to embed it in the receipt for portable
+ * verification (recommended — third parties verify from the receipt
+ * alone).
+ *
+ * The signed receipt is `Object.freeze`d before return so any
+ * post-sign mutation throws synchronously at the producer instead of
+ * surfacing as wire-corruption noise on a downstream verifier.
+ */
+export async function signConsolidationReceipt(
+  receipt: Omit<ConsolidationReceipt, "signature" | "suite" | "public_key">,
+  privateKey: Uint8Array,
+  publicKey?: Uint8Array,
+): Promise<ConsolidationReceipt> {
+  const withKey: Omit<ConsolidationReceipt, "signature" | "suite"> = publicKey
+    ? { ...receipt, public_key: bytesToHex(publicKey) }
+    : receipt;
+  const body = { ...withKey, suite: CONSOLIDATION_RECEIPT_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(CONSOLIDATION_RECEIPT_SUITE, message, privateKey);
+  return Object.freeze({ ...body, signature: toBase64Url(sig) });
+}
+
+/**
+ * Verify a consolidation receipt against the signer's public key.
+ * Fail-closed on unknown `suite`, base64url decode error, primitive
+ * verification failure. The caller is responsible for matching
+ * `motebit_id` to whoever they expect signed; the cryptographic
+ * property here is "this body was signed by the holder of this key."
+ */
+export async function verifyConsolidationReceipt(
+  receipt: ConsolidationReceipt,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  if (receipt.suite !== CONSOLIDATION_RECEIPT_SUITE) return false;
+  const { signature, ...body } = receipt;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(receipt.suite, message, sig, publicKey);
+  } catch {
+    return false;
+  }
+}
+
 // === Balance Waivers (migration §7.2) ===
 
 import type { BalanceWaiver } from "@motebit/protocol";

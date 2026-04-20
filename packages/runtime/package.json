@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@motebit/sdk": "workspace:*",
+    "@motebit/crypto": "workspace:*",
     "@motebit/ai-core": "workspace:*",
     "@motebit/gradient": "workspace:*",
     "@motebit/reflection": "workspace:*",
