@@ -80,6 +80,9 @@ const persistenceThresholdValue = document.getElementById(
 ) as HTMLSpanElement;
 const rejectSecrets = document.getElementById("settings-reject-secrets") as HTMLInputElement;
 const maxCalls = document.getElementById("settings-max-calls") as HTMLInputElement;
+const proactiveEnabled = document.getElementById(
+  "settings-proactive-enabled",
+) as HTMLInputElement | null;
 
 const settingsWhisperApiKey = document.getElementById(
   "settings-whisper-apikey",
@@ -1674,6 +1677,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       rejectSecrets.checked = config.governance.rejectSecrets;
       maxCalls.value = String(config.governance.maxCallsPerTurn);
     }
+    if (proactiveEnabled != null) {
+      proactiveEnabled.checked = config?.proactive?.enabled === true;
+    }
     selectApprovalPreset(selectedApprovalPreset);
 
     switchTab("appearance");
@@ -1851,6 +1857,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     // survive the save. The old code only carried over `apiKey` and
     // `invoke`, silently dropping everything else.
     const localServerEndpointValue = settingsOnDeviceEndpoint.value.trim();
+    // Read the proactive-interior toggle (DOM source of truth, not a
+    // staged param — the user's final click wins over whatever was in
+    // pendingSettingsSave). Preserves other `proactive` sub-fields
+    // (tickIntervalMs, quietWindowMs, capabilities) via spread.
+    const proactiveNext = {
+      ...(currentConfig?.proactive ?? {}),
+      enabled: proactiveEnabled?.checked === true,
+    };
     const newConfig: DesktopAIConfig = {
       ...(currentConfig ?? { isTauri, provider }),
       provider,
@@ -1861,6 +1875,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       maxTokens,
       invoke: currentConfig?.invoke,
       governance: governance ?? currentConfig?.governance,
+      proactive: proactiveNext,
     };
     ctx.setConfig(newConfig);
 

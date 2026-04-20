@@ -75,20 +75,14 @@ Receipt ordering inside a batch is stable: by `finished_at` ascending, with `rec
 
 A motebit running with the proactive interior enabled:
 
-- Settles into `tending` during quiet windows. The creature shows a subtle visual cue (TBD per surface — desktop renders via existing `BehaviorCues.eye_dilation` + `glow_intensity` modulation).
+- Settles into `tending` during quiet windows. The creature shows a subtle visual cue — `MotebitRuntime.renderFrame` applies a presence modulation when `presence.mode === "tending"`: `eye_dilation` capped at 0.5 (half-closed) and `glow_intensity` scaled ×0.85 (slightly dimmer). Every surface consuming `renderFrame` gets the modulation for free; no per-surface override needed.
 - Returns to `idle` when the cycle completes. No toast, no notification, no chat bubble.
-- Surfaces consolidation activity post-hoc in the memory panel: "Consolidated overnight: 12 memories merged, 3 promoted." Records, not interruptions.
+- Surfaces consolidation activity post-hoc in the memory panel. Desktop: "Consolidation log" view lists each cycle with a status badge — `cycleId ⚓` for signed+anchored, `cycleId ✓` for signed-only, `cycleId` for unsigned (no keys or zero-phase cycle) — plus a one-line summary ("merged 3, pruned-decay 7") and time-ago. Records, not interruptions.
 - Yields immediately when the user sends a message. `presence.enterResponsive()` triggers the cycle's AbortSignal; in-flight phase yields on the next checkpoint; partial work persists (memory writes are atomic).
 
 ## What's deferred
 
-Surface polish for desktop landed in this PR as the runtime config wire + integration test only. Three follow-up pieces are explicitly deferred so the foundation can ship first:
-
-- **Settings UI toggles** — two opt-in checkboxes in `apps/desktop/src/ui/settings.ts`: "Allow [name] to act on its own time" and "Allow [name] to consolidate memory while idle." Persistence already supported via `DesktopAIConfig.proactive`.
-- **Creature presence visual** — modulate `BehaviorCues.eye_dilation` + `glow_intensity` based on `presence.mode === "tending"`. Subscribe pattern is in place; adapter rendering is the missing piece.
-- **Memory panel "Consolidation log"** — disclosure card querying `events.query({ event_types: [EventType.ConsolidationCycleRun] })` with the existing expandable-card pattern.
-
-Web + mobile + spatial follow one-pass after desktop's UI lands.
+Desktop UI landed (settings toggle + creature presence modulation + memory-panel consolidation log). Web + mobile + spatial follow one-pass after desktop's UI dogfoods.
 
 The unification of `runHousekeeping` is also deferred: `housekeeping.ts` stays as a deprecated alias on the consolidation drift gate's allowlist with a named follow-up. Migrating the cli/web/mobile schedulers and the 30+ test sites in one PR was deemed unsafe; the deprecation window holds them green while the cycle proves out on desktop.
 

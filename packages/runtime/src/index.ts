@@ -1926,8 +1926,21 @@ export class MotebitRuntime {
   // === Rendering ===
 
   renderFrame(deltaTime: number, time: number): void {
+    // Presence modulation — subtle visual cue when the motebit is tending
+    // to its own interior. "Calm software" doctrine: the user should be
+    // able to notice the creature is occupied without being interrupted.
+    // Half-closed eye + slightly dimmer glow; no toasts, no bubbles.
+    // Responsive + idle: passthrough. See docs/doctrine/proactive-interior.md.
+    let cues = this.latestCues;
+    if (this.presence.get().mode === "tending") {
+      cues = {
+        ...cues,
+        eye_dilation: Math.min(cues.eye_dilation, 0.5),
+        glow_intensity: cues.glow_intensity * 0.85,
+      };
+    }
     this.renderer.render({
-      cues: this.latestCues,
+      cues,
       delta_time: deltaTime,
       time,
     });

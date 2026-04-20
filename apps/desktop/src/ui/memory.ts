@@ -22,6 +22,9 @@ const memoryGraphTooltip = document.getElementById("memory-graph-tooltip") as HT
 const viewListBtn = document.getElementById("mem-view-list") as HTMLButtonElement;
 const viewGraphBtn = document.getElementById("mem-view-graph") as HTMLButtonElement;
 const viewDeletionsBtn = document.getElementById("mem-view-deletions") as HTMLButtonElement;
+const viewConsolidationsBtn = document.getElementById(
+  "mem-view-consolidations",
+) as HTMLButtonElement;
 
 // === Memory Panel ===
 
@@ -30,7 +33,7 @@ export interface MemoryAPI {
   close(): void;
 }
 
-type ViewMode = "list" | "graph" | "deletions";
+type ViewMode = "list" | "graph" | "deletions" | "consolidations";
 
 // Graph view still uses raw node/edge arrays — the force simulation cares
 // about every node regardless of the list-view filter. The controller owns
@@ -389,6 +392,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     viewListBtn.classList.toggle("active", mode === "list");
     viewGraphBtn.classList.toggle("active", mode === "graph");
     viewDeletionsBtn.classList.toggle("active", mode === "deletions");
+    viewConsolidationsBtn.classList.toggle("active", mode === "consolidations");
 
     if (graphAnimFrame !== null) {
       cancelAnimationFrame(graphAnimFrame);
@@ -407,6 +411,10 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       memoryList.style.display = "";
       memoryGraphWrap.style.display = "none";
       renderDeletionLog();
+    } else if (mode === "consolidations") {
+      memoryList.style.display = "";
+      memoryGraphWrap.style.display = "none";
+      void renderConsolidationLog();
     }
   }
 
@@ -623,6 +631,129 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   }
 
   // === Deletion Log View ===
+
+  async function renderConsolidationLog(): Promise<void> {
+    memoryList.innerHTML = "";
+    const loading = document.createElement("div");
+    loading.className = "mem-empty";
+    loading.textContent = "";
+    memoryList.appendChild(loading);
+
+    const runtime = ctx.app.getRuntime();
+    if (runtime == null) {
+      memoryList.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "mem-empty";
+      empty.textContent = "Runtime not initialized";
+      memoryList.appendChild(empty);
+      return;
+    }
+
+    const { EventType } = await import("@motebit/sdk");
+    const [cycleEvents, receiptEvents, anchorEvents] = await Promise.all([
+      runtime.events.query({
+        motebit_id: runtime.motebitId,
+        event_types: [EventType.ConsolidationCycleRun],
+      }),
+      runtime.events.query({
+        motebit_id: runtime.motebitId,
+        event_types: [EventType.ConsolidationReceiptSigned],
+      }),
+      runtime.events.query({
+        motebit_id: runtime.motebitId,
+        event_types: [EventType.ConsolidationReceiptsAnchored],
+      }),
+    ]);
+
+    memoryList.innerHTML = "";
+
+    if (cycleEvents.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "mem-empty";
+      empty.textContent = "No consolidation cycles yet";
+      memoryList.appendChild(empty);
+      return;
+    }
+
+    // Index receipts + anchors by cycle_id so we can decorate each cycle row
+    // with "signed" and "anchored" indicators.
+    const receiptByCycle = new Map<string, unknown>();
+    for (const e of receiptEvents) {
+      const p = e.payload as { receipt?: { cycle_id?: string } };
+      if (p.receipt?.cycle_id) receiptByCycle.set(p.receipt.cycle_id, p.receipt);
+    }
+    const anchoredReceiptIds = new Set<string>();
+    for (const e of anchorEvents) {
+      const p = e.payload as { anchor?: { receipt_ids?: string[] } };
+      for (const id of p.anchor?.receipt_ids ?? []) anchoredReceiptIds.add(id);
+    }
+
+    // Newest first.
+    const sorted = [...cycleEvents].sort((a, b) => b.timestamp - a.timestamp);
+
+    for (const ev of sorted) {
+      const payload = ev.payload as {
+        cycle_id?: string;
+        phases_run?: string[];
+        phases_yielded?: string[];
+        summary?: {
+          orient_nodes?: number;
+          gather_clusters?: number;
+          gather_notable?: number;
+          consolidate_merged?: number;
+          pruned_decay?: number;
+          pruned_notability?: number;
+          pruned_retention?: number;
+        };
+      };
+      const cycleId = payload.cycle_id ?? "";
+      const receipt = receiptByCycle.get(cycleId) as
+        | { receipt_id?: string; signature?: string }
+        | undefined;
+      const receiptId = receipt?.receipt_id;
+      const anchored = receiptId !== undefined && anchoredReceiptIds.has(receiptId);
+
+      const row = document.createElement("div");
+      row.className = "mem-cert-row";
+
+      const badge = document.createElement("span");
+      badge.className = "mem-cert-hash";
+      const idShort = cycleId ? cycleId.slice(0, 8) : "cycle";
+      if (anchored) {
+        badge.textContent = `${idShort} ⚓`;
+        badge.title = `Cycle ${cycleId} — signed and anchored onchain`;
+      } else if (receipt) {
+        badge.textContent = `${idShort} ✓`;
+        badge.title = `Cycle ${cycleId} — signed receipt; not yet anchored`;
+      } else {
+        badge.textContent = idShort;
+        badge.title = `Cycle ${cycleId} — unsigned (no signing keys configured or cycle ran zero phases)`;
+      }
+
+      const summary = document.createElement("span");
+      summary.className = "mem-cert-target";
+      const parts: string[] = [];
+      const s = payload.summary ?? {};
+      if (s.consolidate_merged) parts.push(`merged ${s.consolidate_merged}`);
+      if (s.pruned_decay) parts.push(`pruned-decay ${s.pruned_decay}`);
+      if (s.pruned_notability) parts.push(`pruned-noise ${s.pruned_notability}`);
+      if (s.pruned_retention) parts.push(`retention ${s.pruned_retention}`);
+      if (s.gather_clusters) parts.push(`clusters ${s.gather_clusters}`);
+      if (s.orient_nodes != null) parts.push(`oriented ${s.orient_nodes}`);
+      const yielded = (payload.phases_yielded ?? []).length;
+      if (yielded > 0) parts.push(`${yielded} yielded`);
+      summary.textContent = parts.length > 0 ? parts.join(", ") : "(no work)";
+
+      const timeSpan = document.createElement("span");
+      timeSpan.className = "mem-cert-time";
+      timeSpan.textContent = formatTimeAgo(ev.timestamp);
+
+      row.appendChild(badge);
+      row.appendChild(summary);
+      row.appendChild(timeSpan);
+      memoryList.appendChild(row);
+    }
+  }
 
   function renderDeletionLog(): void {
     memoryList.innerHTML = "";
@@ -863,6 +994,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   viewListBtn.addEventListener("click", () => setView("list"));
   viewGraphBtn.addEventListener("click", () => setView("graph"));
   viewDeletionsBtn.addEventListener("click", () => setView("deletions"));
+  viewConsolidationsBtn.addEventListener("click", () => setView("consolidations"));
 
   // Debounced search — pushes into the controller, which re-emits so the
   // subscription's renderer re-runs with the new filteredView.

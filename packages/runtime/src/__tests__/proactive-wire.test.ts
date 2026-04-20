@@ -345,6 +345,7 @@ describe("Runtime — proactive interior wire-in", () => {
       submitMerkleRoot: vi
         .fn<(root: string, motebitId: string, leafCount: number) => Promise<{ txHash: string }>>()
         .mockResolvedValue({ txHash: "fake-tx-signature-base58" }),
+      isAvailable: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
     };
     const anchor = await rt.anchorPendingConsolidationReceipts(submitter);
     expect(anchor!.tx_hash).toBe("fake-tx-signature-base58");
@@ -368,6 +369,7 @@ describe("Runtime — proactive interior wire-in", () => {
       submitMerkleRoot: vi
         .fn<(root: string, motebitId: string, leafCount: number) => Promise<{ txHash: string }>>()
         .mockRejectedValue(new Error("RPC down")),
+      isAvailable: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
     };
     const anchor = await rt.anchorPendingConsolidationReceipts(submitter);
     expect(anchor).not.toBeNull();

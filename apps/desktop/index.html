@@ -4200,6 +4200,9 @@
         <button class="mem-view-btn" id="mem-view-deletions" title="Deletion log">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4h8M5 4V3h4v1M4 4v7.5a1 1 0 001 1h4a1 1 0 001-1V4"/></svg>
         </button>
+        <button class="mem-view-btn" id="mem-view-consolidations" title="Consolidation log">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="4" cy="4" r="1.5"/><circle cx="10" cy="4" r="1.5"/><circle cx="7" cy="10" r="1.5"/><path d="M5 5l1.5 4M9 5l-1.5 4"/></svg>
+        </button>
       </span>
       <button class="mem-panel-close" id="memory-close-btn">&times;</button>
     </div>
@@ -4731,6 +4734,26 @@
           <div class="settings-field">
             <label for="settings-max-calls">Max tool calls per turn</label>
             <input id="settings-max-calls" type="number" min="1" max="50" value="10" />
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="card-title">Proactive Interior</div>
+          <div class="settings-field">
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Memory consolidation while idle</div>
+                <div class="toggle-desc">
+                  Runs the four-phase consolidation cycle during quiet windows
+                  (orient → gather → consolidate → prune). Signed receipts of
+                  the cycle's structural counts land in the memory panel.
+                  Default off — sovereign fail-closed.
+                </div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settings-proactive-enabled" />
+                <span class="slider"></span>
+              </label>
+            </div>
           </div>
         </div>
         <div class="settings-card">
