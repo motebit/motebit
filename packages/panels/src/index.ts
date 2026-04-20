@@ -36,6 +36,8 @@ export {
 export {
   createMemoryController,
   filterMemoriesView,
+  classifyCertainty,
+  type Certainty,
   type MemoryController,
   type MemoryControllerOptions,
   type MemoryFetchAdapter,

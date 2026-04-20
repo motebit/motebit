@@ -111,6 +111,35 @@ function initialState(): MemoryState {
   };
 }
 
+// ── Certainty classification (shared across surfaces) ────────────────
+//
+// The three-state discrete answer to "is this memory ground truth?" —
+// derived from the same `decayedConfidence` all surfaces already
+// render. Mirrors the classification in `@motebit/memory-graph`'s
+// `memory-index.ts` so an "absolute" badge in the panel and the
+// "(absolute)" label in the agent's own memory index stay
+// synchronized. Inlined rather than imported to preserve the panels
+// package's zero-internal-deps posture.
+
+export type Certainty = "absolute" | "confident" | "tentative";
+
+/**
+ * Confidence ≥ 0.95 = absolute (crossed the `memory_promoted`
+ * threshold, spec/memory-delta-v1.md §5.8).
+ * 0.7 ≤ confidence < 0.95 = confident.
+ * Below 0.7 = tentative.
+ *
+ * Surfaces that render a certainty badge should call this against the
+ * same `getDecayedConfidence(node)` they already pass to the UI — not
+ * raw `node.confidence` — so the badge reflects current belief, not
+ * the confidence at memory formation.
+ */
+export function classifyCertainty(decayedConfidence: number): Certainty {
+  if (decayedConfidence >= 0.95) return "absolute";
+  if (decayedConfidence >= 0.7) return "confident";
+  return "tentative";
+}
+
 // ── Derived-view filter (pure, exported for test + direct surface use) ─
 
 /**
