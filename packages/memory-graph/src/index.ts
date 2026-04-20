@@ -3,6 +3,7 @@ import { EventType, MemoryType, RelationType as RT } from "@motebit/sdk";
 import { ConsolidationAction } from "./consolidation.js";
 import type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
 import { shouldPromote, buildPromotionPayload } from "./promotion.js";
+import { buildMemoryIndex as buildMemoryIndexFn } from "./memory-index.js";
 import type { EventStore } from "@motebit/event-log";
 
 export {
@@ -1093,5 +1094,122 @@ export class MemoryGraph {
     const nodes = await this.storage.getAllNodes(this.motebitId);
     const edges = await this.storage.getAllEdges(this.motebitId);
     return { nodes, edges };
+  }
+
+  /**
+   * Build the Layer-1 memory index string (spec/memory-delta-v1.md
+   * §5.8 + §3) — a compact rolling projection of live memory sorted
+   * by index-worthiness. Called once per AI turn by the runtime and
+   * folded into the system prompt's dynamic suffix. See
+   * `./memory-index.ts` for the pure ranking + rendering logic.
+   */
+  async getMemoryIndex(options?: Parameters<typeof buildMemoryIndexFn>[2]): Promise<string> {
+    const { nodes, edges } = await this.exportAll();
+    return buildMemoryIndexFn(nodes, edges, options);
+  }
+
+  /**
+   * Resolve an 8-char short prefix (surfaced by the memory index's
+   * `[xxxxxxxx]` labels) or a full UUID to a single live node id.
+   * Used by the `rewrite_memory` tool handler so the agent can
+   * supersede entries by the id it reads from the index, not a UUID
+   * it has to spell out.
+   *
+   * Returns:
+   *   - `{ kind: "ok", nodeId }` when exactly one live node matches.
+   *   - `{ kind: "not_found" }` when no live node matches.
+   *   - `{ kind: "ambiguous", matches }` when >1 live nodes match the
+   *     prefix — caller can render the candidate list and retry.
+   */
+  async resolveNodeIdPrefix(
+    shortIdOrUuid: string,
+  ): Promise<
+    | { kind: "ok"; nodeId: string }
+    | { kind: "not_found" }
+    | { kind: "ambiguous"; matches: string[] }
+  > {
+    const needle = shortIdOrUuid.trim().toLowerCase();
+    if (needle.length === 0) return { kind: "not_found" };
+
+    const allNodes = await this.storage.getAllNodes(this.motebitId);
+    const live = allNodes.filter((n) => !n.tombstoned);
+
+    // Exact match first — if the agent passes a full UUID, return it.
+    const exact = live.find((n) => n.node_id.toLowerCase() === needle);
+    if (exact) return { kind: "ok", nodeId: exact.node_id };
+
+    const prefixed = live.filter((n) => n.node_id.toLowerCase().startsWith(needle));
+    if (prefixed.length === 0) return { kind: "not_found" };
+    if (prefixed.length === 1) return { kind: "ok", nodeId: prefixed[0]!.node_id };
+    return { kind: "ambiguous", matches: prefixed.map((n) => n.node_id) };
+  }
+
+  /**
+   * Supersede a memory node directly — the `rewrite_memory` tool
+   * path. Unlike `consolidateAndForm`, this bypasses the
+   * consolidation LLM classifier because the agent has already
+   * decided the rewrite is correct. Preserves the original
+   * `memory_formed` event (append-only; §3.1) — the old node is
+   * tombstoned + marked `valid_until` now, a fresh node carries the
+   * new content, a Supersedes edge links them, and a
+   * `memory_consolidated` event with `action: "supersede"` is
+   * emitted for the sync layer.
+   *
+   * Returns the new node id. Throws when `oldNodeId` is unknown or
+   * already tombstoned — the tool handler turns that into a
+   * user-surface error.
+   */
+  async supersedeMemoryByNodeId(
+    oldNodeId: string,
+    newContent: string,
+    reason: string,
+  ): Promise<string> {
+    const oldNode = await this.storage.getNode(oldNodeId);
+    if (!oldNode) throw new Error(`No memory node with id ${oldNodeId}`);
+    if (oldNode.tombstoned) throw new Error(`Memory ${oldNodeId} is already tombstoned`);
+
+    // Embed the new content so retrieval works against the replacement
+    // immediately. Sensitivity + memory_type inherit from the old node —
+    // the rewrite is a correction, not a re-classification.
+    const { embedText } = await import("./embeddings.js");
+    const embedding = await embedText(newContent);
+
+    const newNode = await this.formMemory(
+      {
+        content: newContent,
+        confidence: oldNode.confidence,
+        sensitivity: oldNode.sensitivity,
+        memory_type: oldNode.memory_type,
+      },
+      embedding,
+      oldNode.half_life,
+    );
+
+    const now = Date.now();
+    oldNode.valid_until = now;
+    oldNode.tombstoned = true;
+    await this.storage.saveNode(oldNode);
+
+    await this.link(newNode.node_id, oldNodeId, RT.Supersedes);
+
+    try {
+      await this.eventStore.appendWithClock({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: now,
+        event_type: EventType.MemoryConsolidated,
+        payload: {
+          action: "supersede",
+          existing_node_id: oldNodeId,
+          new_node_id: newNode.node_id,
+          reason,
+        },
+        tombstoned: false,
+      });
+    } catch {
+      // Event logging is best-effort; the node mutations above are authoritative.
+    }
+
+    return newNode.node_id;
   }
 }

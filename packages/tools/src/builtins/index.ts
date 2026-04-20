@@ -38,6 +38,11 @@ import { writeFileDefinition, createWriteFileHandler } from "./write-file.js";
 import { shellExecDefinition, createShellExecHandler } from "./shell-exec.js";
 import { undoWriteDefinition, createUndoWriteHandler } from "./undo-write.js";
 import { recallMemoriesDefinition, createRecallMemoriesHandler } from "./recall-memories.js";
+import {
+  rewriteMemoryDefinition,
+  createRewriteMemoryHandler,
+  type RewriteMemoryDeps,
+} from "./rewrite-memory.js";
 import { currentTimeDefinition, createCurrentTimeHandler } from "./current-time.js";
 import { listEventsDefinition, createListEventsHandler } from "./list-events.js";
 
@@ -58,6 +63,14 @@ export interface BuiltinToolOptions {
     limit: number,
     eventType?: string,
   ) => Promise<Array<{ event_type: string; timestamp: number; payload: Record<string, unknown> }>>;
+  /**
+   * When provided, registers the `rewrite_memory` tool (spec/memory-delta-v1.md
+   * §5.8 companion). The agent uses this to supersede a stale memory by the
+   * short node id surfaced in the Layer-1 memory index. Omitted when the
+   * surface doesn't expose the index (no value in registering a tool whose
+   * primary input — the short id — isn't visible to the agent).
+   */
+  rewriteMemoryDeps?: RewriteMemoryDeps;
 }
 
 export function registerBuiltinTools(
@@ -99,5 +112,11 @@ export function registerBuiltinTools(
   }
   if (options.eventQueryFn) {
     registry.register(listEventsDefinition, createListEventsHandler(options.eventQueryFn));
+  }
+  if (options.rewriteMemoryDeps) {
+    registry.register(
+      rewriteMemoryDefinition,
+      createRewriteMemoryHandler(options.rewriteMemoryDeps),
+    );
   }
 }

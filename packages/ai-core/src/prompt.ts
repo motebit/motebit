@@ -315,6 +315,17 @@ function buildDynamicSuffix(contextPack: ContextPack, config?: MotebitPersonalit
     }
   }
 
+  // Layer-1 memory index — always-loaded pointer list over the live
+  // memory graph (spec/memory-delta-v1.md §5.8 + §3 "three-layer
+  // retrieval"). Inserted BEFORE packed context so the agent reads
+  // "here's what I know generally" before "here's what's relevant to
+  // this turn." Iteration-stable across tool-loop continuations in
+  // the same turn — memory doesn't change mid-turn — which keeps the
+  // prompt-cache matchable.
+  if (contextPack.memoryIndex && contextPack.memoryIndex.trim()) {
+    sections.push(contextPack.memoryIndex);
+  }
+
   // Packed context (state + events + memories)
   const packed = packContext(contextPack);
   const contextLines = packed.split("\n").filter((l) => !l.startsWith("[User]"));

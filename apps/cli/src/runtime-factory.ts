@@ -52,6 +52,8 @@ import {
   readUrlDefinition,
   createReadUrlHandler,
   recallMemoriesDefinition,
+  rewriteMemoryDefinition,
+  createRewriteMemoryHandler,
   createRecallMemoriesHandler,
   recallSelfDefinition,
   createRecallSelfHandler,
@@ -321,6 +323,25 @@ export function buildToolRegistry(
   };
 
   registry.register(recallMemoriesDefinition, createRecallMemoriesHandler(memorySearchFn));
+
+  // Register `rewrite_memory` so the agent can correct a stale entry
+  // by the short node id from the Layer-1 memory index. Deps close
+  // over runtimeRef so the registration is safe during bootstrap (the
+  // runtime exists by the time the tool is invoked). See
+  // spec/memory-delta-v1.md §5.8.
+  registry.register(
+    rewriteMemoryDefinition,
+    createRewriteMemoryHandler({
+      resolveNodeId: async (shortIdOrUuid) => {
+        if (!runtimeRef.current) return { kind: "not_found" };
+        return runtimeRef.current.memory.resolveNodeIdPrefix(shortIdOrUuid);
+      },
+      supersedeMemory: async (nodeId, newContent, reason) => {
+        if (!runtimeRef.current) throw new Error("Runtime not initialized");
+        return runtimeRef.current.memory.supersedeMemoryByNodeId(nodeId, newContent, reason);
+      },
+    }),
+  );
   registry.register(
     recallSelfDefinition,
     createRecallSelfHandler((query, limit) =>

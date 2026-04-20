@@ -442,6 +442,11 @@ export class WebApp {
         }));
       },
       reflectFn: () => runtime.reflect(),
+      rewriteMemoryDeps: {
+        resolveNodeId: (shortIdOrUuid) => runtime.memory.resolveNodeIdPrefix(shortIdOrUuid),
+        supersedeMemory: (nodeId, newContent, reason) =>
+          runtime.memory.supersedeMemoryByNodeId(nodeId, newContent, reason),
+      },
     });
 
     // Interior tier of the answer engine — BM25 over committed motebit docs.

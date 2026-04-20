@@ -15,6 +15,11 @@ import {
 import { currentTimeDefinition, createCurrentTimeHandler } from "./builtins/current-time.js";
 import { listEventsDefinition, createListEventsHandler } from "./builtins/list-events.js";
 import {
+  rewriteMemoryDefinition,
+  createRewriteMemoryHandler,
+  type RewriteMemoryDeps,
+} from "./builtins/rewrite-memory.js";
+import {
   selfReflectDefinition,
   createSelfReflectHandler,
   type ReflectionToolResult,
@@ -70,6 +75,14 @@ export interface BrowserSafeBuiltinOptions {
     eventType?: string,
   ) => Promise<Array<{ event_type: string; timestamp: number; payload: Record<string, unknown> }>>;
   reflectFn?: () => Promise<ReflectionToolResult>;
+  /**
+   * When provided, registers the `rewrite_memory` tool. The agent
+   * uses this to supersede a stale memory by the short node id
+   * surfaced in the Layer-1 memory index (spec/memory-delta-v1.md
+   * §5.8). Absent when the surface hasn't wired the memory-graph
+   * resolvers yet — the tool is useless without them.
+   */
+  rewriteMemoryDeps?: RewriteMemoryDeps;
 }
 
 /**
@@ -105,5 +118,11 @@ export function registerBrowserSafeBuiltins(
   }
   if (options.reflectFn) {
     registry.register(selfReflectDefinition, createSelfReflectHandler(options.reflectFn));
+  }
+  if (options.rewriteMemoryDeps) {
+    registry.register(
+      rewriteMemoryDefinition,
+      createRewriteMemoryHandler(options.rewriteMemoryDeps),
+    );
   }
 }

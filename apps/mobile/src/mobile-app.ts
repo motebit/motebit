@@ -946,6 +946,11 @@ export class MobileApp {
         }));
       },
       reflectFn: () => runtime.reflect(),
+      rewriteMemoryDeps: {
+        resolveNodeId: (shortIdOrUuid) => runtime.memory.resolveNodeIdPrefix(shortIdOrUuid),
+        supersedeMemory: (nodeId, newContent, reason) =>
+          runtime.memory.supersedeMemoryByNodeId(nodeId, newContent, reason),
+      },
     });
 
     // Goal management tools (available during goal execution).

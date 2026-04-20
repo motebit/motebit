@@ -188,6 +188,17 @@ export interface ContextPack {
   firstConversation?: boolean;
   /** System-triggered generation — appended to system prompt, no user message sent. */
   activationPrompt?: string;
+  /**
+   * Layer-1 memory index (spec/memory-delta-v1.md §5.8) — a compact
+   * always-loaded projection of the motebit's live memory graph as
+   * short-id + summary + certainty lines. Injected into the system
+   * prompt's dynamic suffix so the agent has a cheap overview of what
+   * it knows without round-tripping retrieval.
+   *
+   * Absent on iterations past the first (memory doesn't change
+   * mid-turn) and absent on surfaces that haven't opted in yet.
+   */
+  memoryIndex?: string;
 }
 
 export type ConversationMessage =

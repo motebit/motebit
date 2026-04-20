@@ -324,6 +324,17 @@ export async function* runTurnStreaming(
   const dedupedSimilarity = similarityMemories.filter((m) => !pinnedIds.has(m.node_id));
   const relevantMemories = [...pinnedMemories.slice(0, 5), ...dedupedSimilarity];
 
+  // Layer-1 memory index — best-effort; a failure here must not fail the
+  // turn. The agent still gets Layer-2 retrieval via `relevant_memories`.
+  let memoryIndex: string | undefined;
+  try {
+    const maybe = await memoryGraph.getMemoryIndex?.();
+    if (typeof maybe === "string" && maybe.length > 0) memoryIndex = maybe;
+  } catch {
+    // Index is a pure projection; a store error is the deps' problem, not
+    // the turn's. Swallow and continue.
+  }
+
   // 3. Pack context and stream from provider (agentic loop)
   const currentState = stateEngine.getState();
   const rawToolDefs = deps.tools ? deps.tools.list() : undefined;
@@ -387,6 +398,11 @@ export async function* runTurnStreaming(
       precisionContext: iteration === 1 ? options?.precisionContext : undefined,
       firstConversation: iteration === 1 ? options?.firstConversation : undefined,
       activationPrompt: iteration === 1 ? options?.activationPrompt : undefined,
+      // Layer-1 memory index: first iteration only. Memory doesn't
+      // change mid-turn; re-emitting it on tool-loop continuations
+      // would bloat the conversation without benefit and break
+      // prompt-cache matching across iterations.
+      memoryIndex: iteration === 1 ? memoryIndex : undefined,
     };
 
     // On continuation turns, the conversation history carries the context

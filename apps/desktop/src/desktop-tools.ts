@@ -77,6 +77,11 @@ export function registerDesktopTools(
       }));
     },
     reflectFn: () => runtime.reflect(),
+    rewriteMemoryDeps: {
+      resolveNodeId: (shortIdOrUuid) => runtime.memory.resolveNodeIdPrefix(shortIdOrUuid),
+      supersedeMemory: (nodeId, newContent, reason) =>
+        runtime.memory.supersedeMemoryByNodeId(nodeId, newContent, reason),
+    },
   });
 
   // Tauri-privileged tools — only available when running inside Tauri
