@@ -304,12 +304,15 @@ function renderBudget(
     return;
   }
 
-  if (!state.balance && !state.budget) {
-    budgetEmpty.style.display = "block";
-    budgetEmpty.textContent = "No budget data available.";
-    return;
-  }
-
+  // Always render the Sovereign reserve row (below) — it carries the onchain
+  // USDC balance + "Fund sovereign" button, which is the user's only deposit
+  // path. Short-circuiting on missing state.balance / state.budget blocked
+  // fresh motebits from ever seeing the fund button; they'd land on "No
+  // budget data available" and have no way to deposit. The row gracefully
+  // degrades to "no wallet configured" when the sovereign address isn't
+  // resolvable, so there's no scenario where hiding it reads cleaner than
+  // showing it. Operating balance + budget allocations below are already
+  // individually guarded.
   budgetEmpty.style.display = "none";
 
   // Sovereign reserve + operating balance, rendered with the sweep readout so
