@@ -517,6 +517,36 @@ describe("sendMessageStreaming", () => {
     expect(phaseLog).toContain("dissolving");
   });
 
+  it("opens + ends a tool_call slab item per tool invocation", async () => {
+    const result = makeTurnResult("done");
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "bash", status: "calling" },
+        { type: "tool_status", name: "bash", status: "done", result: "ok" },
+        { type: "result", result },
+      ),
+    );
+
+    const observations: Array<{ kind: string; phase: string; payload: unknown }> = [];
+    runtime.slab.subscribe((state) => {
+      for (const item of state.items.values()) {
+        if (item.kind === "tool_call") {
+          observations.push({ kind: item.kind, phase: item.phase, payload: item.payload });
+        }
+      }
+    });
+
+    await collectChunks(runtime.sendMessageStreaming("hi"));
+
+    // Lifecycle seen: emerging → active (promoted on end) → dissolving.
+    const phases = observations.map((o) => o.phase);
+    expect(phases).toContain("emerging");
+    expect(phases).toContain("dissolving");
+    // Payload carries the tool name for the renderer.
+    const first = observations[0]!;
+    expect((first.payload as { name?: string }).name).toBe("bash");
+  });
+
   it("slab is active while streaming, returns to idle after", async () => {
     const result = makeTurnResult();
     mockRunTurnStreaming.mockReturnValue(

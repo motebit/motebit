@@ -1143,10 +1143,35 @@ export class MotebitRuntime {
         text,
         runId,
       );
+      // Tool-call slab items — one per invocation, keyed by tool name.
+      // The upstream `tool_status` chunk doesn't carry a call id; last
+      // invocation of the same tool wins (accurate for serial execution,
+      // the common case). Add per-call IDs upstream if/when parallel
+      // same-tool calls become real.
+      const slabToolItemIds = new Map<string, string>();
       for await (const chunk of processed) {
         if (chunk.type === "text") {
           slabAccumulatedText += chunk.text;
           this.slab.updateItem(slabTurnId, { text: slabAccumulatedText, runId });
+        } else if (chunk.type === "tool_status") {
+          if (chunk.status === "calling") {
+            const toolItemId = `slab-tool-${slabTurnId}-${chunk.name}-${Date.now()}`;
+            slabToolItemIds.set(chunk.name, toolItemId);
+            this.slab.openItem({
+              id: toolItemId,
+              kind: "tool_call",
+              payload: { name: chunk.name, context: chunk.context, status: "calling" },
+            });
+          } else if (chunk.status === "done") {
+            const toolItemId = slabToolItemIds.get(chunk.name);
+            if (toolItemId != null) {
+              slabToolItemIds.delete(chunk.name);
+              this.slab.endItem(toolItemId, {
+                kind: "completed",
+                result: chunk.result,
+              });
+            }
+          }
         }
         yield chunk;
       }
@@ -1225,6 +1250,7 @@ export class MotebitRuntime {
         activationPrompt,
       });
       const processed = this.streaming.processStream(stream, "", runId, { activationOnly: true });
+      const slabToolItemIds = new Map<string, string>();
       for await (const chunk of processed) {
         if (chunk.type === "text") {
           slabAccumulatedText += chunk.text;
@@ -1233,6 +1259,25 @@ export class MotebitRuntime {
             runId,
             activationOnly: true,
           });
+        } else if (chunk.type === "tool_status") {
+          if (chunk.status === "calling") {
+            const toolItemId = `slab-tool-${slabTurnId}-${chunk.name}-${Date.now()}`;
+            slabToolItemIds.set(chunk.name, toolItemId);
+            this.slab.openItem({
+              id: toolItemId,
+              kind: "tool_call",
+              payload: { name: chunk.name, context: chunk.context, status: "calling" },
+            });
+          } else if (chunk.status === "done") {
+            const toolItemId = slabToolItemIds.get(chunk.name);
+            if (toolItemId != null) {
+              slabToolItemIds.delete(chunk.name);
+              this.slab.endItem(toolItemId, {
+                kind: "completed",
+                result: chunk.result,
+              });
+            }
+          }
         }
         yield chunk;
       }
