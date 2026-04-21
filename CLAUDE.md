@@ -4,7 +4,7 @@ A motebit is a droplet of intelligence under surface tension. You own the identi
 
 The body is passive. The interior is active. Memory, trust, identity, tool use are interior structures. The policy gate, the privacy layer, the governance are the surface tension. Maximum interiority, minimum display.
 
-Read `DROPLET.md` for the physics of form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `THE_METABOLIC_PRINCIPLE.md` for what to build vs. absorb. Read `THE_SELF_SIGNING_BODY.md` for the moat — what makes the motebit's proactive work portably, third-party verifiable. Every decision traces to droplet physics or it doesn't belong.
+Read `DROPLET.md` for the physics of form. Read `THE_SOVEREIGN_INTERIOR.md` for the identity thesis. Read `THE_METABOLIC_PRINCIPLE.md` for what to build vs. absorb. Read `THE_SELF_SIGNING_BODY.md` for the moat — what makes the motebit's proactive work portably, third-party verifiable. Read `THE_ACTOR_PRINCIPLE.md` for what motebits are to each other — address, broker, causal log, supervision. Every decision traces to droplet physics or it doesn't belong.
 
 ## The three things no one else is building together
 
