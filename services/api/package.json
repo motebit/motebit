@@ -38,6 +38,7 @@
     "@motebit/settlement-rails": "workspace:*",
     "@motebit/virtual-accounts": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
+    "@motebit/wire-schemas": "workspace:*",
     "@x402/core": "^2.6.0",
     "@x402/evm": "^2.6.0",
     "@x402/hono": "^2.6.0",

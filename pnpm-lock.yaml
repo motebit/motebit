@@ -1694,6 +1694,9 @@ importers:
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:../../packages/wallet-solana
+      '@motebit/wire-schemas':
+        specifier: workspace:*
+        version: link:../../packages/wire-schemas
       '@x402/core':
         specifier: ^2.6.0
         version: 2.6.0

@@ -39,6 +39,7 @@ import {
 import { createCredentialAnchoringTables } from "./credential-anchoring.js";
 import { nextRetryDelay, DEFAULT_RETRY_POLICY } from "./retry-policy.js";
 import type { RetryPolicy } from "./retry-policy.js";
+import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 
 const logger = createLogger({ service: "relay", module: "federation" });
 
@@ -1471,6 +1472,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     if (!body.task_id || !body.origin_relay || body.receipt == null) {
       throw new HTTPException(400, { message: "Missing required fields" });
+    }
+
+    // Validate nested ExecutionReceipt against the wire schema before any
+    // downstream processing. Fail-closed on malformed bodies.
+    const parsedReceipt = ExecutionReceiptSchema.safeParse(body.receipt);
+    if (!parsedReceipt.success) {
+      return c.json({ error: parsedReceipt.error.flatten() }, 400);
     }
 
     checkPeerLimit(body.origin_relay);
