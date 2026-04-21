@@ -269,6 +269,62 @@ describe("SlabController — defensive behavior", () => {
     );
   });
 
+  it("delegation kind opens + ends as a receipt artifact when detachAs is set", () => {
+    // The Hand organ's load-bearing entry (motebit-computer.md §Hand):
+    // delegation arrives with a signed receipt → end with
+    // detachAs: "receipt" → item pinches to artifact. Proves the
+    // kind-agnostic controller handles the delegation kind + the
+    // receipt graduation path end-to-end.
+    const { ctrl, sched } = makeController();
+    ctrl.openItem({
+      id: "d1",
+      kind: "delegation",
+      payload: { server: "peer", tool: "motebit_task", motebit_id: "mot_abcd" },
+    });
+    expect(ctrl.getState().items.get("d1")?.kind).toBe("delegation");
+    expect(ctrl.getState().items.get("d1")?.phase).toBe("emerging");
+
+    const fullReceipt = {
+      task_id: "task_1",
+      status: "completed",
+      motebit_id: "mot_abcd",
+      signature: "sig_deadbeef",
+      tools_used: ["web_search", "read_url"],
+    };
+    ctrl.endItem("d1", {
+      kind: "completed",
+      result: { full_receipt: fullReceipt },
+      detachAs: "receipt",
+    });
+    expect(ctrl.getState().items.get("d1")?.phase).toBe("pinching");
+
+    // Mid-tail: item has not detached yet.
+    sched.advance(600);
+    expect(ctrl.getState().items.get("d1")?.phase).toBe("pinching");
+    // Pinch tail + zero-delay detached→gone chain fires within the same
+    // advance call: the item graduates to artifact and releases from
+    // slab state in one motion. The payload carries the signed receipt
+    // so the renderer's detach callback has everything it needs.
+    sched.advance(200);
+    expect(ctrl.getState().items.get("d1")).toBeUndefined();
+  });
+
+  it("delegation kind without detachAs dissolves (unsigned summary)", () => {
+    const { ctrl, sched } = makeController();
+    ctrl.openItem({
+      id: "d1",
+      kind: "delegation",
+      payload: { server: "peer", tool: "motebit_task" },
+    });
+    ctrl.endItem("d1", {
+      kind: "completed",
+      result: { receipt: { task_id: "t1", status: "ok", tools_used: [] } },
+    });
+    expect(ctrl.getState().items.get("d1")?.phase).toBe("dissolving");
+    sched.advance(300);
+    expect(ctrl.getState().items.get("d1")).toBeUndefined();
+  });
+
   it("dismissItem force-dissolves — bypasses the detach policy", () => {
     // Detach policy that would graduate *every* item. If dismissItem
     // honored it, this would pinch. It must dissolve instead.

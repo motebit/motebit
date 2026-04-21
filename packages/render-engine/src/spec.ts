@@ -165,8 +165,20 @@ export interface RenderAdapter {
  *   - `shell` — bash/command output streaming.
  *   - `fetch` — web fetch / search / read-url in flight.
  *   - `embedding` — inference / embedding call in flight.
+ *   - `delegation` — outbound task to a peer motebit on the relay.
+ *     A packet leaves the slab with the target's identity visible;
+ *     returns as a bead carrying a signed ExecutionReceipt. Doctrine:
+ *     motebit-computer.md §Hand — "Delegation outbound." The returned
+ *     receipt is durable — the item pinches to a receipt artifact.
  */
-export type SlabItemKind = "stream" | "tool_call" | "plan_step" | "shell" | "fetch" | "embedding";
+export type SlabItemKind =
+  | "stream"
+  | "tool_call"
+  | "plan_step"
+  | "shell"
+  | "fetch"
+  | "embedding"
+  | "delegation";
 
 /**
  * Lifecycle phase for a slab item. The doctrine treats detachment as a

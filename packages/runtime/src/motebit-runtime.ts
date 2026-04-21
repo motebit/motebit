@@ -1149,13 +1149,68 @@ export class MotebitRuntime {
       // invocation of the same tool wins (accurate for serial execution,
       // the common case). Add per-call IDs upstream if/when parallel
       // same-tool calls become real.
+      //
+      // Motebit-to-motebit delegations surface as `delegation_start`
+      // chunks that arrive immediately before the `tool_status: calling`
+      // for the same tool. The delegation signal is richer (peer
+      // identity, later the signed receipt), so we open a `delegation`-
+      // kind slab item on delegation_start and skip the tool_status
+      // calling for that tool — the Hand organ's "a packet leaves the
+      // slab toward a peer, returns as a bead with a signed receipt."
+      // See docs/doctrine/motebit-computer.md §Hand.
       const slabToolItemIds = new Map<string, string>();
+      const slabDelegationToolNames = new Set<string>();
       for await (const chunk of processed) {
         if (chunk.type === "text") {
           slabAccumulatedText += chunk.text;
           this.slab.updateItem(slabTurnId, { text: slabAccumulatedText, runId });
+        } else if (chunk.type === "delegation_start") {
+          slabDelegationToolNames.add(chunk.tool);
+          const delegationItemId = `slab-delegation-${slabTurnId}-${chunk.tool}-${Date.now()}`;
+          slabToolItemIds.set(chunk.tool, delegationItemId);
+          this.slab.openItem({
+            id: delegationItemId,
+            kind: "delegation",
+            payload: {
+              server: chunk.server,
+              tool: chunk.tool,
+              motebit_id: chunk.motebit_id,
+              status: "outbound",
+            },
+          });
+        } else if (chunk.type === "delegation_complete") {
+          const delegationItemId = slabToolItemIds.get(chunk.tool);
+          if (delegationItemId != null) {
+            slabToolItemIds.delete(chunk.tool);
+            slabDelegationToolNames.delete(chunk.tool);
+            // A signed receipt is durable — pinch to a receipt artifact
+            // in the scene so the proof persists after the slab item
+            // returns. Unsigned summaries dissolve; the turn's prose
+            // already references the outcome.
+            const outcome: SlabItemOutcome = chunk.full_receipt
+              ? {
+                  kind: "completed",
+                  result: {
+                    server: chunk.server,
+                    tool: chunk.tool,
+                    receipt: chunk.receipt,
+                    full_receipt: chunk.full_receipt,
+                  },
+                  detachAs: "receipt",
+                }
+              : {
+                  kind: "completed",
+                  result: { server: chunk.server, tool: chunk.tool, receipt: chunk.receipt },
+                };
+            this.slab.endItem(delegationItemId, outcome);
+          }
         } else if (chunk.type === "tool_status") {
-          if (chunk.status === "calling") {
+          // Motebit delegations own their own slab item (opened on
+          // delegation_start, ended on delegation_complete). Skip the
+          // generic tool_call path for them to avoid dual-render.
+          if (slabDelegationToolNames.has(chunk.name)) {
+            // no-op — delegation slab item handles lifecycle
+          } else if (chunk.status === "calling") {
             const toolItemId = `slab-tool-${slabTurnId}-${chunk.name}-${Date.now()}`;
             slabToolItemIds.set(chunk.name, toolItemId);
             this.slab.openItem({
@@ -1251,7 +1306,12 @@ export class MotebitRuntime {
         activationPrompt,
       });
       const processed = this.streaming.processStream(stream, "", runId, { activationOnly: true });
+      // Mirrors sendMessageStreaming — delegation events open/close
+      // delegation-kind slab items; tool_status for delegation tools
+      // is skipped to avoid dual-rendering. See the parallel branch
+      // in sendMessageStreaming for the full rationale.
       const slabToolItemIds = new Map<string, string>();
+      const slabDelegationToolNames = new Set<string>();
       for await (const chunk of processed) {
         if (chunk.type === "text") {
           slabAccumulatedText += chunk.text;
@@ -1260,8 +1320,46 @@ export class MotebitRuntime {
             runId,
             activationOnly: true,
           });
+        } else if (chunk.type === "delegation_start") {
+          slabDelegationToolNames.add(chunk.tool);
+          const delegationItemId = `slab-delegation-${slabTurnId}-${chunk.tool}-${Date.now()}`;
+          slabToolItemIds.set(chunk.tool, delegationItemId);
+          this.slab.openItem({
+            id: delegationItemId,
+            kind: "delegation",
+            payload: {
+              server: chunk.server,
+              tool: chunk.tool,
+              motebit_id: chunk.motebit_id,
+              status: "outbound",
+            },
+          });
+        } else if (chunk.type === "delegation_complete") {
+          const delegationItemId = slabToolItemIds.get(chunk.tool);
+          if (delegationItemId != null) {
+            slabToolItemIds.delete(chunk.tool);
+            slabDelegationToolNames.delete(chunk.tool);
+            const outcome: SlabItemOutcome = chunk.full_receipt
+              ? {
+                  kind: "completed",
+                  result: {
+                    server: chunk.server,
+                    tool: chunk.tool,
+                    receipt: chunk.receipt,
+                    full_receipt: chunk.full_receipt,
+                  },
+                  detachAs: "receipt",
+                }
+              : {
+                  kind: "completed",
+                  result: { server: chunk.server, tool: chunk.tool, receipt: chunk.receipt },
+                };
+            this.slab.endItem(delegationItemId, outcome);
+          }
         } else if (chunk.type === "tool_status") {
-          if (chunk.status === "calling") {
+          if (slabDelegationToolNames.has(chunk.name)) {
+            // no-op — delegation slab item handles lifecycle
+          } else if (chunk.status === "calling") {
             const toolItemId = `slab-tool-${slabTurnId}-${chunk.name}-${Date.now()}`;
             slabToolItemIds.set(chunk.name, toolItemId);
             this.slab.openItem({

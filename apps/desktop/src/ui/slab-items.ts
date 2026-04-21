@@ -90,6 +90,8 @@ function kindGlyph(kind: SlabItem["kind"]): string {
       return "↗";
     case "embedding":
       return "∿";
+    case "delegation":
+      return "⇝";
     case "stream":
     case "plan_step":
     default:
@@ -480,6 +482,223 @@ function formatStepStatus(
   return "running…";
 }
 
+// ── Delegation — the Hand organ's most load-bearing entry ─────────────
+//
+// The motebit reaches across the network to a peer agent on the relay.
+// Doctrine (motebit-computer.md §Hand): "a packet leaves the slab when
+// the motebit delegates to a peer; returns as a bead with a signed
+// receipt, the peer's identity visible on arrival."
+//
+// What the card shows:
+//   - Outbound: peer's short motebit id (or "peer" if unknown) and
+//     the tool being invoked. The body is honestly empty — the peer
+//     hasn't replied yet. Nothing to perceive.
+//   - Returned: a compact receipt summary — short task id, peer's
+//     tool count, status. If the receipt is signed, the end-of-life
+//     policy will pinch this card to a `receipt` artifact in the
+//     scene (detachAs: "receipt" is set upstream in motebit-runtime).
+//
+// Gestures: tap to expand and see the full receipt chain; swipe to
+// dismiss (the network request still completes; the UI just stops
+// showing it — the returned artifact, if any, still graduates).
+
+function renderDelegation(item: SlabItem, actions: SlabItemActions): HTMLElement {
+  const card = baseCard();
+  card.classList.add("slab-item-delegation");
+  card.style.maxWidth = "240px";
+  card.style.cursor = "pointer";
+  card.style.touchAction = "pan-y";
+
+  // Head: ⇝ glyph + peer identity.
+  const head = document.createElement("div");
+  head.style.display = "flex";
+  head.style.alignItems = "center";
+  head.style.gap = "6px";
+  head.style.marginBottom = "4px";
+  head.style.minWidth = "0";
+
+  const glyph = document.createElement("span");
+  glyph.textContent = "⇝";
+  glyph.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  glyph.style.fontSize = "12px";
+  glyph.style.color = "rgba(90, 120, 175, 0.92)";
+  head.appendChild(glyph);
+
+  const peer = document.createElement("span");
+  peer.dataset.slot = "peer";
+  peer.style.fontSize = "9.5px";
+  peer.style.fontWeight = "600";
+  peer.style.letterSpacing = "0.08em";
+  peer.style.textTransform = "uppercase";
+  peer.style.color = "rgba(55, 72, 110, 0.82)";
+  peer.style.whiteSpace = "nowrap";
+  peer.style.overflow = "hidden";
+  peer.style.textOverflow = "ellipsis";
+  head.appendChild(peer);
+
+  card.appendChild(head);
+
+  // Secondary: the tool being invoked, monospace and subtle.
+  const toolEl = document.createElement("div");
+  toolEl.dataset.slot = "tool";
+  toolEl.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  toolEl.style.fontSize = "10.5px";
+  toolEl.style.color = "rgba(80, 110, 165, 0.88)";
+  toolEl.style.whiteSpace = "nowrap";
+  toolEl.style.overflow = "hidden";
+  toolEl.style.textOverflow = "ellipsis";
+  toolEl.style.marginBottom = "6px";
+  card.appendChild(toolEl);
+
+  // Body: receipt summary when returned. Empty while outbound —
+  // nothing to perceive yet.
+  const body = document.createElement("div");
+  body.className = "slab-item-text";
+  body.dataset.slot = "body";
+  body.style.fontSize = "11.5px";
+  body.style.lineHeight = "1.5";
+  body.style.color = "rgba(18, 28, 50, 0.92)";
+  body.style.whiteSpace = "pre-wrap";
+  body.style.wordBreak = "break-word";
+  card.appendChild(body);
+
+  // Expanded detail (receipt chain). Hidden until tap.
+  const detail = document.createElement("div");
+  detail.dataset.slot = "detail";
+  detail.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  detail.style.fontSize = "10px";
+  detail.style.lineHeight = "1.55";
+  detail.style.color = "rgba(45, 60, 95, 0.82)";
+  detail.style.whiteSpace = "pre-wrap";
+  detail.style.wordBreak = "break-all";
+  detail.style.marginTop = "6px";
+  detail.style.paddingTop = "6px";
+  detail.style.borderTop = "1px solid rgba(120, 140, 180, 0.22)";
+  detail.style.display = "none";
+  card.appendChild(detail);
+
+  applyDelegationPayload(item.payload, peer, toolEl, body, detail);
+  attachDelegationGestures(card, actions);
+  return card;
+}
+
+function updateDelegation(item: SlabItem, element: HTMLElement): void {
+  const peer = element.querySelector('[data-slot="peer"]');
+  const toolEl = element.querySelector('[data-slot="tool"]');
+  const body = element.querySelector('[data-slot="body"]');
+  const detail = element.querySelector('[data-slot="detail"]');
+  if (
+    peer instanceof HTMLElement &&
+    toolEl instanceof HTMLElement &&
+    body instanceof HTMLElement &&
+    detail instanceof HTMLElement
+  ) {
+    applyDelegationPayload(item.payload, peer, toolEl, body, detail);
+  }
+}
+
+function applyDelegationPayload(
+  payload: unknown,
+  peerEl: HTMLElement,
+  toolEl: HTMLElement,
+  body: HTMLElement,
+  detail: HTMLElement,
+): void {
+  const p = payload as {
+    server?: string;
+    tool?: string;
+    motebit_id?: string;
+    status?: string;
+    receipt?: { task_id?: string; status?: string; tools_used?: string[] };
+    full_receipt?: {
+      task_id?: string;
+      status?: string;
+      motebit_id?: string;
+      signature?: string;
+      tools_used?: string[];
+      duration_ms?: number;
+    };
+  } | null;
+  const peerId = p?.motebit_id ?? p?.full_receipt?.motebit_id ?? "";
+  peerEl.textContent = peerId ? `→ ${peerId.slice(0, 10)}…` : `→ ${p?.server ?? "peer"}`;
+  toolEl.textContent = p?.tool ?? "";
+
+  const r = p?.full_receipt ?? p?.receipt;
+  if (!r) {
+    body.textContent = ""; // Outbound — nothing perceived yet.
+    detail.textContent = "";
+    return;
+  }
+  const toolsCount = Array.isArray(r.tools_used) ? r.tools_used.length : 0;
+  const durationMs = p?.full_receipt?.duration_ms;
+  const parts = [
+    r.status ?? "returned",
+    toolsCount > 0 ? `${toolsCount} tool${toolsCount === 1 ? "" : "s"}` : "",
+    typeof durationMs === "number" ? formatDuration(durationMs) : "",
+  ].filter(Boolean);
+  body.textContent = parts.join(" · ");
+
+  // Detail: signed receipt fields (task id, signature prefix, tools list).
+  const detailLines: string[] = [];
+  if (r.task_id) detailLines.push(`task  ${r.task_id}`);
+  if (p?.full_receipt?.signature) {
+    detailLines.push(`sig   ${p.full_receipt.signature.slice(0, 18)}…`);
+  }
+  if (Array.isArray(r.tools_used) && r.tools_used.length > 0) {
+    detailLines.push(`tools ${r.tools_used.join(", ")}`);
+  }
+  detail.textContent = detailLines.join("\n");
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  return s < 10 ? `${s.toFixed(1)}s` : `${Math.round(s)}s`;
+}
+
+function attachDelegationGestures(card: HTMLDivElement, actions: SlabItemActions): void {
+  // Tap — toggle the expanded detail block. Pure client-side.
+  card.addEventListener("click", () => {
+    const detail = card.querySelector('[data-slot="detail"]');
+    if (!(detail instanceof HTMLElement)) return;
+    const expanded = card.dataset.expanded === "true";
+    if (expanded) {
+      card.dataset.expanded = "false";
+      detail.style.display = "none";
+    } else {
+      card.dataset.expanded = "true";
+      detail.style.display = "block";
+    }
+  });
+
+  // Swipe — dismiss via typed capability. Network request still
+  // completes; UI stops rendering it.
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  card.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    startX = ev.clientX;
+    startY = ev.clientY;
+    tracking = true;
+  });
+  card.addEventListener("pointerup", (ev) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (Math.abs(dx) < SWIPE_PX) return;
+    if (Math.abs(dy) > Math.abs(dx) * Math.tan(SWIPE_MAX_ANGLE)) return;
+    card.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
+    card.style.transform = `translateX(${dx > 0 ? 180 : -180}px)`;
+    card.style.opacity = "0";
+    actions.dismiss();
+  });
+  card.addEventListener("pointercancel", () => {
+    tracking = false;
+  });
+}
+
 function renderGeneric(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add(`slab-item-${item.kind}`);
@@ -506,6 +725,8 @@ export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLEl
       return renderToolCall(item, actions);
     case "plan_step":
       return renderPlanStep(item);
+    case "delegation":
+      return renderDelegation(item, actions);
     case "shell":
     case "fetch":
     case "embedding":
@@ -525,6 +746,9 @@ export function updateSlabItem(item: SlabItem, element: HTMLElement): void {
       break;
     case "plan_step":
       updatePlanStep(item, element);
+      break;
+    case "delegation":
+      updateDelegation(item, element);
       break;
     case "shell":
     case "fetch":
