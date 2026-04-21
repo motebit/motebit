@@ -68,10 +68,12 @@ export function initKeyboard(callbacks: KeyboardCallbacks): void {
       return;
     }
 
-    // Cmd+\ — toggle the Motebit Computer screen. Convention for
-    // "toggle side panel" in macOS apps; the slab is the motebit's
-    // workstation, so Cmd+\ pulls it in and out of view.
-    if (meta && e.key === "\\") {
+    // Cmd+Shift+S — toggle the Motebit Computer screen. Matches the
+    // Cmd+Shift+N "new conversation" pattern already in this file.
+    // (Cmd+\ was the first pick but conflicts with 1Password's global
+    // Quick Access hotkey on macOS — the 1Password dialog captured
+    // the keystroke before the browser ever saw it.)
+    if (meta && e.shiftKey && (e.key === "S" || e.key === "s")) {
       e.preventDefault();
       callbacks.toggleScreen();
       return;
