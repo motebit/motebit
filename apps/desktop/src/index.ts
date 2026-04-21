@@ -10,7 +10,13 @@ import {
   ProxySession,
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
+  bindSlabControllerToRenderer,
 } from "@motebit/runtime";
+import {
+  renderSlabItem,
+  updateSlabItem,
+  renderDetachArtifact as renderSlabDetachArtifact,
+} from "./ui/slab-items";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import type {
   TurnResult,
@@ -388,6 +394,13 @@ export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
   private renderer: ThreeJSAdapter;
   /**
+   * Unsubscribe returned by `bindSlabControllerToRenderer`. Sibling
+   * of the web surface's same-named field; wired after `this.runtime`
+   * is constructed in `initAI`, cleared in `stop()`. See
+   * docs/doctrine/motebit-computer.md.
+   */
+  private slabBridgeUnsub: (() => void) | null = null;
+  /**
    * The MCP manager owns the mcpAdapters / mcpConfigs / mcpToolCounts
    * maps + the connect / disconnect / tool-dispatch lifecycle. It reads
    * the runtime lazily via a getter so DesktopApp can swap the runtime
@@ -496,6 +509,10 @@ export class DesktopApp {
   }
 
   stop(): void {
+    if (this.slabBridgeUnsub != null) {
+      this.slabBridgeUnsub();
+      this.slabBridgeUnsub = null;
+    }
     this.runtime?.stop();
     this.renderer.dispose();
   }
@@ -877,6 +894,17 @@ export class DesktopApp {
       DeviceCapability.Keyring,
       DeviceCapability.Background,
     ]);
+
+    // Wire the slab bridge — matches apps/web's bootstrap. Sibling-
+    // boundary rule: when web changes, desktop changes too.
+    // See docs/doctrine/motebit-computer.md.
+    this.slabBridgeUnsub = bindSlabControllerToRenderer({
+      controller: this.runtime.slab,
+      renderer: this.renderer,
+      renderItem: renderSlabItem,
+      updateItem: updateSlabItem,
+      renderDetachArtifact: renderSlabDetachArtifact,
+    });
 
     // Create PlanEngine for multi-step goal execution
     if (config.isTauri && config.invoke) {

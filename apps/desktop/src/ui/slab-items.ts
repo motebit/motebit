@@ -1,16 +1,16 @@
 /**
- * Per-kind slab-item renderers for the web surface.
+ * Per-kind slab-item renderers for the desktop surface.
  *
- * Sibling-boundary note: this file mirrors `apps/desktop/src/ui/slab-items.ts`.
+ * Sibling-boundary note: this file mirrors `apps/web/src/ui/slab-items.ts`.
  * Both surfaces render HTML cards onto the Three.js slab plane via
  * CSS2DObject and produce identical output. Changes here MUST be
- * mirrored to the desktop sibling (and any future HTML-surface
- * sibling) until three consumers exist — at that point, extract to
- * a shared `@motebit/panels`-style render package per the panels-
- * pattern doctrine. Two copies is the pre-extraction threshold.
+ * mirrored to the web sibling (and any future HTML-surface sibling)
+ * until three consumers exist — at that point, extract to a shared
+ * `@motebit/panels`-style render package per the panels-pattern
+ * doctrine. Two copies is the pre-extraction threshold.
  *
  * The runtime's `SlabController` emits typed `SlabItem` events, the
- * runtime's bridge diffs them, and here — the web-specific rendering
+ * runtime's bridge diffs them, and here — the desktop-specific rendering
  * layer — is where each kind becomes a real HTMLElement mounted on
  * the slab's liquid-glass plane.
  *
