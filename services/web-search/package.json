@@ -17,19 +17,17 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@motebit/core-identity": "workspace:*",
-    "@motebit/encryption": "workspace:*",
-    "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
-    "@motebit/mcp-server": "workspace:*",
-    "@motebit/memory-graph": "workspace:*",
-    "@motebit/persistence": "workspace:*",
-    "@motebit/runtime": "workspace:*",
-    "@motebit/sdk": "workspace:*",
+    "@motebit/molecule-runner": "workspace:*",
     "@motebit/tools": "workspace:*"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@motebit/encryption": "workspace:*",
+    "@motebit/identity-file": "workspace:*",
+    "@motebit/mcp-server": "workspace:*",
+    "@motebit/runtime": "workspace:*",
+    "@motebit/sdk": "workspace:*",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",

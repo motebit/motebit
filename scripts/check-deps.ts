@@ -78,8 +78,9 @@ const LAYER: Record<string, number> = {
   "@motebit/browser-persistence": 5,
   "@motebit/panels": 5,
 
-  // Layer 6 — Applications (apps/*, services/*, create-motebit)
+  // Layer 6 — Applications (apps/*, services/*, create-motebit, molecule-runner)
   "create-motebit": 6,
+  "@motebit/molecule-runner": 6,
 };
 
 const APP_LAYER = 6;
