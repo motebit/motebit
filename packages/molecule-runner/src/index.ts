@@ -29,6 +29,7 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
+import { RiskLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@motebit/mcp-server";
 import type {
@@ -294,11 +295,8 @@ function assembleStorageAdapters(db: MotebitDatabase): StorageAdapters {
  * locks in the fix.
  */
 const DEFAULT_POLICY_OVERRIDES: Partial<PolicyConfig> = {
-  // RiskLevel.R3_EXECUTE = 3. Hard-coding the numeric avoids importing
-  // an enum from @motebit/sdk just for a constant — keeps the boot
-  // module dependency-light.
-  requireApprovalAbove: 3 as PolicyConfig["requireApprovalAbove"],
-  denyAbove: 3 as PolicyConfig["denyAbove"],
+  requireApprovalAbove: RiskLevel.R3_EXECUTE,
+  denyAbove: RiskLevel.R3_EXECUTE,
 };
 
 // ---------------------------------------------------------------------------
