@@ -269,6 +269,51 @@ describe("SlabController — defensive behavior", () => {
     );
   });
 
+  it("dismissItem force-dissolves — bypasses the detach policy", () => {
+    // Detach policy that would graduate *every* item. If dismissItem
+    // honored it, this would pinch. It must dissolve instead.
+    const detachEverything: DetachPolicy = () => ({ action: "detach", artifactKind: "text" });
+    const { ctrl, sched } = makeController({ detachPolicy: detachEverything });
+    ctrl.openItem({ id: "s1", kind: "tool_call" });
+    ctrl.dismissItem("s1");
+    expect(ctrl.getState().items.get("s1")?.phase).toBe("dissolving");
+    sched.advance(300);
+    expect(ctrl.getState().items.get("s1")).toBeUndefined();
+  });
+
+  it("dismissItem on an emerging item promotes to active first, then dissolves", () => {
+    const { ctrl, sched } = makeController();
+    ctrl.openItem({ id: "s1", kind: "stream" });
+    expect(ctrl.getState().items.get("s1")?.phase).toBe("emerging");
+    ctrl.dismissItem("s1");
+    expect(ctrl.getState().items.get("s1")?.phase).toBe("dissolving");
+    sched.advance(300);
+    expect(ctrl.getState().items.get("s1")).toBeUndefined();
+  });
+
+  it("dismissItem against unknown id warns and is a no-op", () => {
+    const warn = vi.fn();
+    const { ctrl } = makeController({ logger: { warn } });
+    ctrl.dismissItem("does-not-exist");
+    expect(warn).toHaveBeenCalledWith(
+      "slab dismissItem ignored — unknown id",
+      expect.objectContaining({ id: "does-not-exist" }),
+    );
+  });
+
+  it("dismissItem against terminal-phase item warns and is a no-op", () => {
+    const warn = vi.fn();
+    const { ctrl } = makeController({ logger: { warn } });
+    ctrl.openItem({ id: "s1", kind: "stream" });
+    ctrl.endItem("s1", { kind: "interrupted" });
+    // Now dissolving
+    ctrl.dismissItem("s1");
+    expect(warn).toHaveBeenCalledWith(
+      "slab dismissItem ignored — item already in terminal phase",
+      expect.objectContaining({ id: "s1", phase: "dissolving" }),
+    );
+  });
+
   it("clearAll drops every item immediately and resets ambient to idle", () => {
     const { ctrl } = makeController();
     ctrl.openItem({ id: "s1", kind: "stream" });

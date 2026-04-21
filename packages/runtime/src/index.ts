@@ -222,4 +222,4 @@ export type {
 // any renderer that implements the RenderAdapter slab methods.
 // Surfaces supply per-item-kind element factories.
 export { bindSlabControllerToRenderer } from "./slab-bridge.js";
-export type { SlabBridgeDeps, SlabRendererTarget } from "./slab-bridge.js";
+export type { SlabBridgeDeps, SlabRendererTarget, SlabItemActions } from "./slab-bridge.js";

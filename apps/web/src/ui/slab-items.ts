@@ -31,7 +31,7 @@
  *     glyph-and-label head.
  */
 
-import type { SlabItem, ArtifactKindForDetach } from "@motebit/runtime";
+import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/runtime";
 
 // ── Common card chrome ────────────────────────────────────────────────
 
@@ -156,7 +156,7 @@ function updateStream(item: SlabItem, element: HTMLElement): void {
 // renders perception, not a label describing the act.
 const FETCH_TOOLS: ReadonlySet<string> = new Set(["read_url", "fetch_url"]);
 
-function renderToolCall(item: SlabItem): HTMLElement {
+function renderToolCall(item: SlabItem, actions: SlabItemActions): HTMLElement {
   const payload = item.payload as {
     name?: string;
     status?: string;
@@ -164,7 +164,7 @@ function renderToolCall(item: SlabItem): HTMLElement {
     result?: unknown;
   } | null;
   if (payload?.name != null && FETCH_TOOLS.has(payload.name)) {
-    return renderFetch(item);
+    return renderFetch(item, actions);
   }
   const card = baseCard();
   card.classList.add("slab-item-tool-call");
@@ -221,10 +221,13 @@ function formatToolStatus(
 // first ~240 characters of the cleaned page appear — that's what the
 // motebit perceived at the moment of reading.
 
-function renderFetch(item: SlabItem): HTMLElement {
+function renderFetch(item: SlabItem, actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-fetch");
   card.style.maxWidth = "240px";
+  card.style.cursor = "pointer";
+  card.style.touchAction = "pan-y"; // keep vertical page scroll; horizontal becomes swipe
+  attachFetchGestures(card, actions);
 
   const head = document.createElement("div");
   head.style.marginBottom = "6px";
@@ -336,6 +339,79 @@ function extractFetchPreview(payload: { status?: string; result?: unknown } | nu
   return cleaned.length > 240 ? cleaned.slice(0, 237) + "…" : cleaned;
 }
 
+// ── Gestures: tap to expand, swipe to dismiss ─────────────────────────
+//
+// Doctrine (motebit-computer.md §"The user's touch — supervised agency"):
+// gestures are physical forces on the droplets, not chrome. Tap pauses
+// the dissolve timer and reveals detail in place — here, it toggles
+// the fetch preview's truncation vignette so the user can read the
+// whole thing. Swipe is force-dissolve: the card ripples back into
+// the slab surface immediately, via the typed `actions.dismiss`
+// capability.
+//
+// Only the fetch kind wires these on this pass. Subsequent rich
+// kinds (shell, delegation, memory) attach the same scaffolding;
+// extracting to a helper when that happens is the three-consumer
+// threshold from the panels-pattern doctrine.
+
+const SWIPE_PX = 60; // horizontal threshold before swipe fires
+const SWIPE_MAX_ANGLE = 0.8; // radians — ignore vertical-heavy motion
+
+function attachFetchGestures(card: HTMLDivElement, actions: SlabItemActions): void {
+  // Tap — toggle expanded state. Clears the max-height + bottom
+  // vignette so the full preview shows. Pure client-side; no
+  // controller call. Re-tap collapses.
+  card.addEventListener("click", () => {
+    const body = card.querySelector('[data-slot="body"]');
+    if (!(body instanceof HTMLElement)) return;
+    const expanded = card.dataset.expanded === "true";
+    if (expanded) {
+      card.dataset.expanded = "false";
+      body.style.maxHeight = "84px";
+      body.style.maskImage = "linear-gradient(180deg, black 72%, transparent 100%)";
+      body.style.setProperty(
+        "-webkit-mask-image",
+        "linear-gradient(180deg, black 72%, transparent 100%)",
+      );
+    } else {
+      card.dataset.expanded = "true";
+      body.style.maxHeight = "none";
+      body.style.maskImage = "none";
+      body.style.setProperty("-webkit-mask-image", "none");
+    }
+  });
+
+  // Swipe — pointer down, track horizontal delta, release past
+  // threshold triggers dismiss. Routes through `actions.dismiss`
+  // which the bridge mapped to `controller.dismissItem(id)`. No
+  // prompt construction; typed capability per surface-determinism.
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  card.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    startX = ev.clientX;
+    startY = ev.clientY;
+    tracking = true;
+  });
+  card.addEventListener("pointerup", (ev) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (Math.abs(dx) < SWIPE_PX) return;
+    if (Math.abs(dy) > Math.abs(dx) * Math.tan(SWIPE_MAX_ANGLE)) return;
+    // Brief visual feedback — slide in swipe direction, then dismiss.
+    card.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
+    card.style.transform = `translateX(${dx > 0 ? 180 : -180}px)`;
+    card.style.opacity = "0";
+    actions.dismiss();
+  });
+  card.addEventListener("pointercancel", () => {
+    tracking = false;
+  });
+}
+
 function renderPlanStep(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-plan-step");
@@ -413,13 +489,21 @@ function renderGeneric(item: SlabItem): HTMLElement {
 
 // ── Public factory + updater ────────────────────────────────────────
 
-/** Element factory — routed by `SlabItem.kind`. Caller mounts result on the slab. */
-export function renderSlabItem(item: SlabItem): HTMLElement {
+/**
+ * Element factory — routed by `SlabItem.kind`. The second argument
+ * is the bridge-supplied action set (see `SlabItemActions`) carrying
+ * typed per-item capabilities: `dismiss`, future `pin` / `feed`.
+ * Kind-specific renderers wire pointer/touch handlers to these
+ * closures per the surface-determinism doctrine.
+ *
+ * Caller (slab-bridge) mounts the returned element on the slab.
+ */
+export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLElement {
   switch (item.kind) {
     case "stream":
       return renderStream(item);
     case "tool_call":
-      return renderToolCall(item);
+      return renderToolCall(item, actions);
     case "plan_step":
       return renderPlanStep(item);
     case "shell":

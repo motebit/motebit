@@ -220,6 +220,21 @@ export interface SlabController {
   endItem(id: string, outcome: SlabItemOutcome): void;
 
   /**
+   * User-initiated force-dissolve — the swipe gesture from
+   * docs/doctrine/motebit-computer.md §"The user's touch." Unlike
+   * `endItem`, `dismissItem` bypasses the detach policy entirely: a
+   * swipe means "no, I don't want this," regardless of whether the
+   * outcome would have been durable. The item transitions to
+   * `dissolving` immediately and gone after the dissolve tail. No
+   * artifact spawns.
+   *
+   * No-op against an unknown id or an item already in a terminal
+   * phase (logged). Safe to wire directly to pointer/touch event
+   * handlers; the controller is idempotent against extra calls.
+   */
+  dismissItem(id: string): void;
+
+  /**
    * Clear every active item without running end-phase animations.
    * Used for runtime teardown / disposal; prefer `endItem` in normal
    * operation so the slab's physics remain honest.
@@ -541,6 +556,34 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
 
       // dissolve path — outcome is ephemeral (or interrupted / failed).
       updatePhase(id, "dissolving", currentAfterPromote.payload);
+      recomputeAmbient();
+      notify();
+      scheduleTail(id, "gone", DISSOLVING_TAIL_MS);
+    },
+
+    dismissItem(id: string): void {
+      if (disposed) return;
+      const current = items.get(id);
+      if (!current) {
+        warn("slab dismissItem ignored — unknown id", { id });
+        return;
+      }
+      if (
+        current.phase === "pinching" ||
+        current.phase === "dissolving" ||
+        current.phase === "detached" ||
+        current.phase === "gone"
+      ) {
+        warn("slab dismissItem ignored — item already in terminal phase", {
+          id,
+          phase: current.phase,
+        });
+        return;
+      }
+      if (current.phase === "emerging") {
+        promoteFromEmerging(id);
+      }
+      updatePhase(id, "dissolving");
       recomputeAmbient();
       notify();
       scheduleTail(id, "gone", DISSOLVING_TAIL_MS);

@@ -44,6 +44,26 @@ import type {
 } from "./slab-controller.js";
 
 /**
+ * Typed action set scoped to one slab item. The bridge constructs
+ * one of these per mounted item and passes it to `renderItem` so
+ * the surface-native renderer can wire pointer/touch handlers to
+ * user-touch capabilities without reaching back into the controller.
+ *
+ * Doctrine (motebit-computer.md §"The user's touch"): gestures route
+ * through typed capabilities, not constructed prompts. Closing over
+ * the item id at mount time keeps the renderer stateless about
+ * controller plumbing.
+ */
+export interface SlabItemActions {
+  /**
+   * User-initiated force-dissolve. The swipe gesture. Bypasses the
+   * detach policy — a swipe means "no, I don't want this," not
+   * "graduate this to an artifact." No-op on already-terminal items.
+   */
+  dismiss(): void;
+}
+
+/**
  * The subset of `RenderAdapter` the bridge needs. Declared inline
  * here so this module doesn't depend on `@motebit/render-engine`
  * directly (avoids a circular-dep risk and keeps the coupling
@@ -68,8 +88,17 @@ export interface SlabBridgeDeps {
    * renderer will mount on the slab surface. The element may be
    * styled / populated to reflect the initial `item.payload`; later
    * payload updates route through `updateItem`.
+   *
+   * The second argument is a typed action set scoped to this item —
+   * the bridge passes closures that invoke the controller's user-
+   * touch capabilities (`dismiss`, future `pin` / `feed`). Renderers
+   * wire pointer/touch event handlers to these actions per the
+   * surface-determinism doctrine: each gesture routes through a typed
+   * capability, never a constructed prompt. See
+   * docs/doctrine/motebit-computer.md §"The user's touch — supervised
+   * agency" for the canonical gesture set.
    */
-  renderItem: (item: SlabItem) => HTMLElement;
+  renderItem: (item: SlabItem, actions: SlabItemActions) => HTMLElement;
 
   /**
    * Optional. Called when the controller emits a new state whose
@@ -163,7 +192,10 @@ export function bindSlabControllerToRenderer(deps: SlabBridgeDeps): () => void {
       if (!mounted.has(id)) {
         mounted.add(id);
         try {
-          const element = renderItem(item);
+          const actions: SlabItemActions = {
+            dismiss: () => controller.dismissItem(id),
+          };
+          const element = renderItem(item, actions);
           mountedElements.set(id, element);
           renderer.addSlabItem?.({ id, kind: item.kind, element });
         } catch (err: unknown) {
