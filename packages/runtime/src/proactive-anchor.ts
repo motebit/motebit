@@ -19,7 +19,7 @@
  */
 
 import type { ChainAnchorSubmitter } from "@motebit/sdk";
-import type { RuntimeConfig } from "./index.js";
+import type { RuntimeConfig } from "./runtime-config.js";
 
 export interface ResolveProactiveAnchorArgs {
   proactiveEnabled: boolean;
