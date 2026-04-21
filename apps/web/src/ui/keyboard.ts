@@ -5,6 +5,8 @@ export interface KeyboardCallbacks {
   openSettings(): void;
   openConversations(): void;
   newConversation(): void;
+  /** Show/hide the Motebit Computer slab plane. */
+  toggleScreen(): void;
 }
 
 const shortcutBackdrop = document.getElementById("shortcut-backdrop") as HTMLDivElement;
@@ -63,6 +65,15 @@ export function initKeyboard(callbacks: KeyboardCallbacks): void {
     if (meta && e.shiftKey && e.key === "N") {
       e.preventDefault();
       callbacks.newConversation();
+      return;
+    }
+
+    // Cmd+\ — toggle the Motebit Computer screen. Convention for
+    // "toggle side panel" in macOS apps; the slab is the motebit's
+    // workstation, so Cmd+\ pulls it in and out of view.
+    if (meta && e.key === "\\") {
+      e.preventDefault();
+      callbacks.toggleScreen();
       return;
     }
 

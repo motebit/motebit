@@ -624,6 +624,32 @@ export class WebApp {
     this.renderer.setDarkEnvironment();
   }
 
+  // === Motebit Computer — screen visibility ===
+
+  /** Whether the user has the slab plane visible. True by default. */
+  private _screenVisible = true;
+
+  get screenVisible(): boolean {
+    return this._screenVisible;
+  }
+
+  /**
+   * Toggle the slab plane on/off. The motebit's underlying work
+   * continues — items still open, update, and age in controller
+   * state. Just pulls the screen out of the scene. Wired to both the
+   * Cmd+\ hotkey and the `/screen` slash command.
+   */
+  toggleScreen(): boolean {
+    this._screenVisible = !this._screenVisible;
+    this.renderer.setSlabVisible?.(this._screenVisible);
+    return this._screenVisible;
+  }
+
+  setScreenVisible(visible: boolean): void {
+    this._screenVisible = visible;
+    this.renderer.setSlabVisible?.(visible);
+  }
+
   // === Conversation ===
 
   get activeConversationId(): string | null {

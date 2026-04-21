@@ -146,6 +146,17 @@ export interface RenderAdapter {
   ): Promise<ArtifactHandle | undefined>;
   /** Clear every slab item immediately (no dissolution animation). */
   clearSlabItems?(): void;
+  /**
+   * User-driven toggle for the slab plane's visibility. When `false`,
+   * the plane is forced hidden regardless of ambient state (items may
+   * still exist in the controller; they're just not on screen). When
+   * `true` (default), visibility is driven by ambient as usual.
+   *
+   * Surfaces wire this to a hotkey and/or a `/screen` slash command so
+   * the user can pull the Motebit Computer out of the scene without
+   * touching the motebit's work underneath.
+   */
+  setSlabVisible?(visible: boolean): void;
 }
 
 // === Slab ("Motebit Computer") — scene primitive types ===

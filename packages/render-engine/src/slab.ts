@@ -188,6 +188,15 @@ export class SlabManager {
   private soulGlow: [number, number, number] = [0.55, 0.78, 1.0];
   /** Current emissive coupling 0..1. Eased toward the target each frame. */
   private activeWarmth = 0;
+  /**
+   * User-driven visibility toggle. When `false`, the plane (and all
+   * mounted items) are forced hidden regardless of ambient state —
+   * the motebit's work still happens underneath; the user has just
+   * pulled the screen out of view. Wired to `setSlabVisible` on the
+   * adapter, bound to a hotkey and `/screen` slash command surface-
+   * side. True by default: visibility driven by ambient as usual.
+   */
+  private userVisible = true;
 
   constructor(
     creatureGroup: THREE.Group,
@@ -309,6 +318,21 @@ export class SlabManager {
   setInteriorColor(color: InteriorColor): void {
     this.soulTint = [color.tint[0], color.tint[1], color.tint[2]];
     this.soulGlow = [color.glow[0], color.glow[1], color.glow[2]];
+  }
+
+  /**
+   * Show / hide the slab plane on user request. Doesn't touch
+   * controller state — items still open, update, and age inside; the
+   * plane is just pulled out of view. Toggling back to visible
+   * restores the ambient-driven visibility immediately.
+   */
+  setUserVisible(visible: boolean): void {
+    this.userVisible = visible;
+    // Reflect on the items container too so its DOM node doesn't
+    // continue capturing pointer events while the plane is gone.
+    if (this.itemsContainerEl.style) {
+      this.itemsContainerEl.style.display = visible ? "flex" : "none";
+    }
   }
 
   // ── Public API — mirrors the RenderAdapter slab methods ───────────
@@ -458,6 +482,15 @@ export class SlabManager {
     this.planeMaterial.emissive.setRGB(this.soulGlow[0], this.soulGlow[1], this.soulGlow[2]);
     this.planeMaterial.emissiveIntensity = w * 0.12 * (0.85 + 0.15 * breatheRaw);
 
+    // User-driven hide overrides the ambient visibility entirely.
+    // The mesh stops rendering and the material reads 0 opacity so
+    // any lingering transparency sort doesn't paint a ghost rectangle.
+    if (!this.userVisible) {
+      this.planeMaterial.opacity = 0;
+      this.planeMesh.visible = false;
+      this.planeMesh.scale.set(1, 1, 1);
+      return;
+    }
     this.planeMaterial.opacity = this.planeVisibility;
     this.planeMesh.visible = this.planeVisibility > 0.01;
     this.planeMesh.scale.set(1 + breathe, 1 + breathe, 1);

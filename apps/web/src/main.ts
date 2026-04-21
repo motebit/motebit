@@ -176,6 +176,13 @@ const slashCommands = initSlashCommands(ctx, {
     const chatLog = document.getElementById("chat-log") as HTMLDivElement;
     chatLog.innerHTML = "";
   },
+  toggleScreen: () => {
+    const visible = app.toggleScreen();
+    // Quiet system-message confirmation — one line, fades on its own.
+    // The visual effect (screen appearing / disappearing) is the
+    // primary feedback; this is just an accessibility echo.
+    addMessage("system", visible ? "Screen on" : "Screen off");
+  },
 });
 chatAPI.setSlashCommands(slashCommands);
 
@@ -188,6 +195,9 @@ initKeyboard({
     app.resetConversation();
     const chatLog = document.getElementById("chat-log") as HTMLDivElement;
     chatLog.innerHTML = "";
+  },
+  toggleScreen: () => {
+    app.toggleScreen();
   },
 });
 

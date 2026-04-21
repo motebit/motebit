@@ -75,6 +75,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "summarize", description: "Summarize conversation" },
   { name: "model", description: "Show current model" },
   { name: "help", description: "Show keyboard shortcuts" },
+  { name: "screen", description: "Show / hide the Motebit Computer" },
   { name: "agents", description: "List known agents" },
   { name: "graph", description: "Memory graph stats" },
   { name: "curious", description: "Show curiosity targets" },
@@ -113,6 +114,8 @@ export interface SlashCommandsCallbacks {
   openGoals(): void;
   openAgents(): void;
   newConversation(): void;
+  /** Show/hide the Motebit Computer slab plane. */
+  toggleScreen(): void;
 }
 
 export interface SlashCommandsHandle {
@@ -202,6 +205,10 @@ export function initSlashCommands(
       case "help":
         chatInput.value = "";
         callbacks.openShortcuts();
+        return;
+      case "screen":
+        chatInput.value = "";
+        callbacks.toggleScreen();
         return;
       case "memories":
         chatInput.value = "";

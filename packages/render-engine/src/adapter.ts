@@ -227,6 +227,10 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.slabManager?.clearItems();
   }
 
+  setSlabVisible(visible: boolean): void {
+    this.slabManager?.setUserVisible(visible);
+  }
+
   setBackground(color: number | null): void {
     if (this.scene) {
       this.scene.background = color === null ? null : new THREE.Color(color);
