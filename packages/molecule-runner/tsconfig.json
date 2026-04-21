@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../mcp-server"
+    },
+    {
+      "path": "../memory-graph"
+    },
+    {
+      "path": "../persistence"
+    },
+    {
+      "path": "../runtime"
+    },
+    {
+      "path": "../sdk"
+    },
+    {
+      "path": "../tools"
+    }
+  ]
+}

@@ -1,15 +1,17 @@
 /**
  * Motebit Read-URL Service (Charlie)
  *
- * A minimal tool server exposing only read_url via MCP.
- * Used as the second hop in multi-hop delegation: Alice → Bob → Charlie.
+ * A minimal tool server exposing only read_url via MCP. Used as the
+ * second hop in multi-hop delegation: Alice → Bob → Charlie.
  *
  * ### Identity lifecycle
  *
  * The service self-bootstraps its motebit identity on first boot via
- * `bootstrapAndEmitIdentity()` from `@motebit/mcp-server` — same
- * shared protocol every other surface (desktop/mobile/web/spatial/cli)
- * uses, just with filesystem-backed storage targeting the data dir.
+ * `runMolecule()` from `@motebit/molecule-runner`, which composes
+ * `bootstrapAndEmitIdentity` + database open + runtime init + MCP
+ * server start. Same shared protocol every other surface
+ * (desktop/mobile/web/spatial/cli) uses, just with filesystem-backed
+ * storage targeting the data dir.
  *
  * First boot under a fresh Fly volume:
  *   1. `/data/motebit.json` doesn't exist → bootstrap generates a
@@ -18,31 +20,17 @@
  *      file for inbound callers that want to verify our identity
  *
  * Every subsequent boot:
- *   1. `/data/motebit.json` + `/data/motebit.key` already exist →
- *      reload
+ *   1. `/data/motebit.json` + `/data/motebit.key` already exist → reload
  *   2. `/data/motebit.md` is regenerated with a fresh `created_at`
- *      timestamp but the same motebit_id / keypair (signature differs
- *      only in the field that changes)
+ *      timestamp but the same motebit_id / keypair
  *
- * The volume is the persistence layer. Losing it = losing this
- * agent's accumulated trust. Fly volume snapshots are the backup
- * primitive — same as any persistent-state service.
+ * The volume is the persistence layer. Losing it = losing this agent's
+ * accumulated trust. Fly volume snapshots are the backup primitive —
+ * same as any persistent-state service.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
-import type { StorageAdapters } from "@motebit/runtime";
-import { openMotebitDatabase } from "@motebit/persistence";
+import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry, readUrlDefinition, createReadUrlHandler } from "@motebit/tools";
-import {
-  wireServerDeps,
-  startServiceServer,
-  buildServiceReceipt,
-  bootstrapAndEmitIdentity,
-} from "@motebit/mcp-server";
-import { parseRiskLevel } from "@motebit/identity-file";
-import { embedText } from "@motebit/memory-graph";
 import { loadConfig } from "./helpers.js";
 
 function log(msg: string): void {
@@ -52,151 +40,79 @@ function log(msg: string): void {
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const serviceName = "motebit-read-url";
 
-  // 1-2. Bootstrap identity + emit signed motebit.md. Regenerating on every
-  //      boot is deterministic except for the `created_at` field (intentionally
-  //      fresh). This is what wireServerDeps serves to inbound callers.
-  const identity = await bootstrapAndEmitIdentity({
-    dataDir: config.dataDir,
-    serviceName,
-    displayName: "Read URL",
-    serviceDescription: "Minimal URL reader (second hop in multi-hop delegation proof)",
-    capabilities: ["read_url"],
-  });
-  const { motebitId, deviceId, publicKeyHex, publicKey, identityContent } = identity;
-  const privateKeyBytes = identity.privateKey;
-  log(
-    `Identity ${identity.isFirstLaunch ? "generated" : "loaded"}: ${motebitId} ` +
-      `(data dir: ${config.dataDir})`,
+  const handle = await runMolecule(
+    {
+      dataDir: config.dataDir,
+      dbPath: config.dbPath,
+      port: config.port,
+      serviceName: "motebit-read-url",
+      displayName: "Read URL",
+      serviceDescription: "Minimal URL reader (second hop in multi-hop delegation proof)",
+      capabilities: ["read_url"],
+      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
+      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
+      ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+    },
+    (identity) => {
+      const { motebitId, deviceId, publicKey, privateKey } = identity;
+
+      const registry = new InMemoryToolRegistry();
+      registry.register(readUrlDefinition, createReadUrlHandler());
+
+      const handleAgentTask = async function* (
+        prompt: string,
+        options?: { delegatedScope?: string; relayTaskId?: string },
+      ) {
+        const taskId = crypto.randomUUID();
+        const submittedAt = Date.now();
+
+        let result: { ok: boolean; data?: unknown; error?: string };
+        try {
+          result = await registry.execute("read_url", { url: prompt });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          result = { ok: false, error: msg };
+        }
+        const completedAt = Date.now();
+
+        const resultStr = result.ok
+          ? typeof result.data === "string"
+            ? result.data
+            : JSON.stringify(result.data ?? null)
+          : (result.error ?? "error");
+        const signed = await buildServiceReceipt({
+          motebitId,
+          deviceId,
+          privateKey,
+          publicKey,
+          prompt,
+          taskId,
+          submittedAt,
+          completedAt,
+          result: resultStr,
+          ok: result.ok,
+          toolsUsed: ["read_url"],
+          relayTaskId: options?.relayTaskId,
+          delegatedScope: options?.delegatedScope,
+        });
+        log(`receipt=${signed.signature.slice(0, 12)}… url="${prompt.slice(0, 60)}"`);
+        yield {
+          type: "task_result" as const,
+          receipt: signed as unknown as Record<string, unknown>,
+        };
+      };
+
+      return { toolRegistry: registry, handleAgentTask };
+    },
   );
 
-  // 3. Build tool registry — one tool only (read_url)
-  const registry = new InMemoryToolRegistry();
-  registry.register(readUrlDefinition, createReadUrlHandler());
-
-  // 4. Open database + create runtime
-  const dbDir = path.dirname(path.resolve(config.dbPath));
-  if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-  const moteDb = await openMotebitDatabase(path.resolve(config.dbPath));
-
-  const storage: StorageAdapters = {
-    eventStore: moteDb.eventStore,
-    memoryStorage: moteDb.memoryStorage,
-    identityStorage: moteDb.identityStorage,
-    auditLog: moteDb.auditLog,
-    stateSnapshot: moteDb.stateSnapshot,
-    toolAuditSink: moteDb.toolAuditSink,
-    conversationStore: moteDb.conversationStore,
-    planStore: moteDb.planStore,
-    gradientStore: moteDb.gradientStore as unknown as StorageAdapters["gradientStore"],
-    agentTrustStore: moteDb.agentTrustStore,
-    serviceListingStore: moteDb.serviceListingStore,
-    budgetAllocationStore: moteDb.budgetAllocationStore,
-    settlementStore: moteDb.settlementStore,
-    latencyStatsStore: moteDb.latencyStatsStore,
-    credentialStore: moteDb.credentialStore,
-    approvalStore: moteDb.approvalStore,
-  };
-
-  // Service motebit: auto-allow up to R3_EXECUTE so the relay-forwarded
-  // motebit_task call (R3) and code-review's downstream motebit_task call
-  // (also R3, when this atom is itself a delegation target) both run
-  // without a human-in-the-loop. Anything above R3 is denied.
-  //
-  // Bands path requires BOTH thresholds set — earlier code only set
-  // requireApprovalAbove with a typoed `maxRiskAuto` field that PolicyConfig
-  // does not define, falling through to the legacy two-state path with
-  // maxRiskLevel undefined → default R1_DRAFT → every R3+ tool denied.
-  // This was the sibling of the same drift in code-review.
-  const policyOverrides = {
-    requireApprovalAbove: parseRiskLevel("R3_EXECUTE"),
-    denyAbove: parseRiskLevel("R3_EXECUTE"),
-  };
-
-  const runtime = new MotebitRuntime(
-    { motebitId, policy: { ...policyOverrides } },
-    { storage, renderer: new NullRenderer(), tools: registry },
-  );
-  await runtime.init();
-  log("Runtime initialized (tool server mode — read_url only)");
-
-  // 5. Wire handleAgentTask — direct tool execution with signed receipts
-  const handleAgentTask = async function* (
-    prompt: string,
-    options?: { delegatedScope?: string; relayTaskId?: string },
-  ) {
-    const taskId = crypto.randomUUID();
-    const submittedAt = Date.now();
-
-    let result: { ok: boolean; data?: unknown; error?: string };
-    try {
-      result = await runtime.getToolRegistry().execute("read_url", { url: prompt });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result = { ok: false, error: msg };
-    }
-    const completedAt = Date.now();
-
-    const resultStr = result.ok
-      ? typeof result.data === "string"
-        ? result.data
-        : JSON.stringify(result.data ?? null)
-      : (result.error ?? "error");
-    const signed = await buildServiceReceipt({
-      motebitId,
-      deviceId,
-      privateKey: privateKeyBytes,
-      publicKey,
-      prompt,
-      taskId,
-      submittedAt,
-      completedAt,
-      result: resultStr,
-      ok: result.ok,
-      toolsUsed: ["read_url"],
-      relayTaskId: options?.relayTaskId,
-      delegatedScope: options?.delegatedScope,
-    });
-    log(`receipt=${signed.signature.slice(0, 12)}… url="${prompt.slice(0, 60)}"`);
-    yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
-  };
-
-  // 6. Wire deps + start server
-  const deps = wireServerDeps(runtime, {
-    motebitId,
-    publicKeyHex,
-    identityFileContent: identityContent,
-    embedText,
-    handleAgentTask,
-    syncUrl: config.syncUrl,
-    apiToken: config.apiToken,
-  });
-
-  await startServiceServer(deps, {
-    name: `motebit-read-url-${motebitId.slice(0, 8)}`,
-    port: config.port,
-    motebitType: "service",
-    // authToken protects the MCP HTTP endpoint — relay's `forwardTaskViaMcp`
-    // sends `Bearer ${MOTEBIT_API_TOKEN}` and the MCP server only accepts
-    // it when authToken is configured. Without this, every relay-forwarded
-    // task to read-url is silently 401'd by the MCP server.
-    authToken: config.authToken,
-    syncUrl: config.syncUrl,
-    apiToken: config.apiToken,
-    publicEndpointUrl: config.publicUrl,
-    onStart: (port, toolCount) => {
-      log(`MCP server running on http://localhost:${port} (SSE). ${toolCount} tools exposed.`);
-    },
-    onStop: () => {
-      log("Shutting down...");
-      runtime.stop();
-      moteDb.close();
-      // Zero the private key bytes from memory on shutdown.
-      privateKeyBytes.fill(0);
-    },
-    log,
-  });
+  // Keep the handle in scope so the server's process-signal handlers
+  // can invoke shutdown — the process blocks on the HTTP server,
+  // returning here would let the event loop drain. `handle.shutdown` is
+  // wired inside `startServiceServer` to SIGINT/SIGTERM already.
+  void handle;
 }
 
 main().catch((err: unknown) => {

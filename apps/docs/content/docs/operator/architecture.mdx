@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **36 packages · 7 architectural layers · 5 surfaces + 3 supporting apps · 8 services · 12 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **37 packages · 7 architectural layers · 5 surfaces + 3 supporting apps · 8 services · 12 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 ## Directory tree
 
@@ -77,6 +77,7 @@ motebit/
 │   │
 │   │   # Layer 6 — Applications
 │   ├── create-motebit/        [L6 · MIT]    Public scaffolder. npm create motebit.
+│   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.
