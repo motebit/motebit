@@ -554,6 +554,24 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
       ),
   },
   {
+    script: "check-wire-schema-usage",
+    proves:
+      "flags a manifest-listed inbound wire handler that drops its wire-schemas import — mutates services/api/src/agents.ts to remove the @motebit/wire-schemas import statement, which Rule B (manifest-missing-import) catches",
+    perturb: () =>
+      // Strip the @motebit/wire-schemas import line(s) from agents.ts.
+      // The gate's manifest requires ExecutionReceiptSchema in agents.ts;
+      // removing the import means the file no longer satisfies the
+      // requirement and Rule B fires. Rule A would also fire if a call
+      // remained without an import, but Rule B is the doctrine-load-bearing
+      // rule (it catches handlers that bypass the schema entirely).
+      mutateFile("services/api/src/agents.ts", (src) =>
+        src.replace(
+          /import\s*\{[^}]*\}\s*from\s*["']@motebit\/wire-schemas["'];?\n/g,
+          "/* check-gates-effective probe — wire-schemas import removed */\n",
+        ),
+      ),
+  },
+  {
     script: "check-consolidation-primitives",
     proves:
       "flags inline consolidation cycle — clusterBySimilarity + LLM summarization + formMemory + deleteMemory in one file without importing the canonical runConsolidationCycle",

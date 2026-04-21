@@ -27,6 +27,7 @@ import {
   MigrationTokenSchema,
   DepartureAttestationSchema,
   CredentialBundleSchema,
+  BalanceWaiverSchema,
 } from "@motebit/wire-schemas";
 
 const logger = createLogger({ service: "relay", module: "migration" });
@@ -546,14 +547,20 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     // Optional balance waiver in the request body. Empty / no-JSON body
     // is the zero-balance path; a present-but-malformed body is a 400.
+    // The waiver parses through BalanceWaiverSchema so a shape-drifted
+    // body fails-closed at the boundary rather than slipping through to
+    // `verifyBalanceWaiver` as untyped input.
     let balanceWaiver: BalanceWaiver | undefined;
-    try {
-      const body = (await c.req.json().catch(() => null)) as {
-        balance_waiver?: BalanceWaiver;
-      } | null;
-      balanceWaiver = body?.balance_waiver;
-    } catch {
-      balanceWaiver = undefined;
+    const rawBody: unknown = await c.req.json().catch(() => null);
+    const candidate = (rawBody as { balance_waiver?: unknown } | null)?.balance_waiver;
+    if (candidate !== undefined) {
+      const parsed = BalanceWaiverSchema.safeParse(candidate);
+      if (!parsed.success) {
+        throw new HTTPException(400, {
+          message: `Invalid balance_waiver: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        });
+      }
+      balanceWaiver = parsed.data;
     }
 
     // Check balance settled (§7.3) — zero balance or valid BalanceWaiver.
