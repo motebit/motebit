@@ -76,6 +76,48 @@ Rule of thumb:
 - **Minimal textual echo** — a one-line status, completed with a checkmark — may live in chat. Acceptable when it serves accessibility, voice, or Ring-3-unavailable surfaces. Kept intentionally thin so it doesn't compete with the slab for attention.
 - **Rich in both** is the failure mode. If chat also renders the fetched page's full content, or the terminal's full output, or the memory node's detail — the slab isn't canonical and the frames have collapsed into each other.
 
+## The user's touch — supervised agency
+
+The Motebit Computer is not a movie and not a remote desktop. It is a third state: **supervised agency**. The motebit has its own momentum — it perceives, acts, reflects on its own schedule. The user can _touch_ that momentum: redirect it, pin what matters, feed it new perception, halt it, or let it go. Two agents share one surface.
+
+Frames the doctrine rules out:
+
+- **Movie** — the user only observes. There is no way for them to arrest, redirect, or contribute. The motebit runs on rails.
+- **Remote desktop** — the user drives every tool call; the motebit has no initiative. The slab is just a viewport onto the user's own hands.
+
+Frame the doctrine holds us to:
+
+- **Supervised agency** — the motebit leads; the user can perturb. The slab's items have their own lifecycle (emerge, active, dissolve, pinch) set by the motebit's work. The user's touch is another force that acts on that lifecycle — a second tension on the same surface.
+
+### Gestures as forces, not chrome
+
+The slab has **no chrome** — no buttons, no "Cancel" affordances, no close boxes. That rule holds. User control happens through _physical gestures on the droplets themselves_, the same way a finger on a water surface is not a button. The slab has surface tension; the user's touch is additional tension.
+
+The minimum viable set of gestures (per the surface-determinism doctrine — each routes through `invokeCapability`, never through a constructed prompt):
+
+| Gesture                                     | Effect                                                                                           |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Tap an item                                 | Focus — pauses its dissolve timer, reveals detail in place. No modal, no overlay.                |
+| Long-press an item                          | Pin — converts to a scene artifact that won't dissolve on its own. The motebit can still see it. |
+| Drag item off the slab                      | Force-detach — runs the pinch animation eagerly, settles as a scene artifact.                    |
+| Drag a file / URL / snippet _onto_ the slab | Feed perception — the motebit now sees that; its next turn incorporates it.                      |
+| Swipe an item away                          | Force-dissolve — it ripples back into the slab surface immediately.                              |
+| Two-finger hold on the plane                | Halt — motebit pauses its current work; items stop their lifecycle; release to resume.           |
+
+Additions to this set need a justification: they must be physical interactions with droplets, not chrome, and must route through a typed capability — no prompt-injection backdoor.
+
+### What the user's touch is _not_
+
+- **Not a kill switch.** The halt gesture is a pause, not a disconnect. Killing the motebit happens at the identity layer, not on the slab.
+- **Not a tool driver.** The user does not steer individual tool calls from the slab. If the motebit chose to fetch X, the user can swipe that away or redirect the focus, but they do not directly invoke the fetch themselves from here — affordances for the user's own actions live on the creature or in panels.
+- **Not a chat input.** Feeding perception via drag is not the same as sending a message; it adds context the motebit perceives, but does not enter the conversational turn.
+
+### Failure modes specific to supervised agency
+
+- **Drift toward movie.** Shipping rich rendering without any gestures. The slab becomes a window you can't open. Every per-kind renderer needs at least `tap` (focus) and `swipe` (dismiss) before it counts as shipped.
+- **Drift toward remote desktop.** Adding "run tool X" chrome, "re-run", or "edit this call's arguments" buttons to slab items. That collapses the motebit's agency into the user's. Kill on sight.
+- **Prompt-backdoor gestures.** A drag-to-feed that secretly appends text to the next user message. Perception is not a message; keep the two channels typed and separate.
+
 ## Lifecycle
 
 Three transitions — each one rooted in droplet physics, not CSS easing:
@@ -130,6 +172,7 @@ The idle state is not a bug. It is the proof that the slab respects silence — 
 
 - **Third-person logging disguised as experience.** A card that says `fetch → status: calling` is a log line. The Motebit Computer renders _the page being fetched_, not the act of fetching described. If a card reads like a CloudWatch stream, the metaphor has collapsed. Status strings, event names, and log-shaped presentation don't belong on the slab.
 - **Rich-duplicating chat.** Chat and slab both rendering the _full_ content of an act — the whole fetched page in chat AND as a slab card, the complete terminal output in both — is the collapse. Chat may carry a one-line textual echo (accessibility + Ring-1 fallback); it must not replicate the slab's rich content. If the chat rendering grows beyond a one-liner, the frames have merged.
+- **Drift toward movie or remote desktop.** See "The user's touch — supervised agency." A slab with no user gestures becomes a movie; a slab with "run this tool" buttons becomes a remote desktop. Both break the third state.
 - **Growing chrome.** The first "let's add a close button so users can dismiss it" turns the slab into a browser tab. Users dismiss the slab by the motebit going idle; that's the doctrine.
 - **Persistent items.** An item that stayed on the slab after work ended has either detached (artifact) or should have dissolved. Persistent-item-on-slab is the records-vs-acts boundary breaking.
 - **Uncoordinated emergence.** The slab's emergence and the first item's emergence fighting for the user's attention. Sequence: slab emerges, pauses briefly (~150ms), first item pops. Never concurrent.
@@ -167,6 +210,7 @@ One type surface, one event stream, three renderers — following the existing p
 5. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? If yes, it's probably chrome or a record in disguise.
 6. Does its transition obey **droplet physics** — emergence as meniscus-expansion, dissolution as surface-ripple-absorption, detachment as bead-tension-release? If not, the metaphor is leaking.
 7. Does it render **identically across web, desktop, spatial, and mobile**? If surface-specific, it's either a renderer detail (fine) or a capability split (needs justification per the capability-rings doctrine).
+8. Does it have the **minimum gesture set** — tap (focus) and swipe (dismiss) at least? A kind with rich rendering but no user touch drifts toward movie. A kind with "run tool" chrome drifts toward remote desktop. Ship the third state, not either adjacent one.
 
 ## References
 
