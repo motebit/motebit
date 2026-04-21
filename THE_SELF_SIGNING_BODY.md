@@ -22,7 +22,7 @@ This document derives that chain.
 
 A body that cannot prove its own activity is not sovereign.
 
-THE_SOVEREIGN_INTERIOR.md §II.2 established that identity is the keypair the motebit owns. THE_EMERGENT_INTERIOR.md established that the interior acts on its own time. These two together imply a third claim: the activity must be attributable _to the identity_, not to whatever operator hosts the activity. Otherwise the identity is a label and the activity is somebody else's.
+THE*SOVEREIGN_INTERIOR.md §II.2 established that identity is the keypair the motebit owns. THE_EMERGENT_INTERIOR.md established that the interior acts on its own time. These two together imply a third claim: the activity must be attributable \_to the identity*, not to whatever operator hosts the activity. Otherwise the identity is a label and the activity is somebody else's.
 
 Most AI agents fail this test. They run on someone else's infrastructure, sign with someone else's key, account through someone else's billing. The agent is a process; the process belongs to the operator; the operator owns the receipt. The "agent" never speaks in the first person about what it has done. It cannot. The signing key is not its own.
 
