@@ -459,12 +459,14 @@ describe("sendMessageStreaming", () => {
     });
 
     await collectChunks(runtime.sendMessageStreaming("hi"));
-    // Phases seen across subscription fires: emerging, active, dissolving.
-    // (Detached phase not expected — default policy dissolves without
-    // detachAs.) Order-independent existence assertions.
+    // Phases seen across subscription fires: emerging, active, resting.
+    // On successful completion the turn's response card settles into
+    // rest (motebit-computer.md §"Three end states") — it's working
+    // material the user may still be reading. Failed turns dissolve
+    // instead; that case is covered by a separate test below.
     expect(observed).toContain("emerging");
     expect(observed).toContain("active");
-    expect(observed).toContain("dissolving");
+    expect(observed).toContain("resting");
   });
 
   it("accumulates streamed text on the slab item payload", async () => {
@@ -538,16 +540,19 @@ describe("sendMessageStreaming", () => {
 
     await collectChunks(runtime.sendMessageStreaming("hi"));
 
-    // Lifecycle seen: emerging → active (promoted on end) → dissolving.
+    // Lifecycle seen: emerging → active → resting. `bash` is a
+    // resting tool (motebit-computer.md §"Three end states") — the
+    // shell's output is working material the user may still be
+    // reading; it stays on the slab as an open tab until dismissed.
     const phases = observations.map((o) => o.phase);
     expect(phases).toContain("emerging");
-    expect(phases).toContain("dissolving");
+    expect(phases).toContain("resting");
     // Payload carries the tool name for the renderer.
     const first = observations[0]!;
     expect((first.payload as { name?: string }).name).toBe("bash");
   });
 
-  it("slab is active while streaming, returns to idle after", async () => {
+  it("slab stays active after a successful turn — response card rests", async () => {
     const result = makeTurnResult();
     mockRunTurnStreaming.mockReturnValue(
       yieldChunks({ type: "text", text: "x" }, { type: "result", result }),
@@ -559,12 +564,16 @@ describe("sendMessageStreaming", () => {
     runtime.slab.subscribe((state) => ambients.push(state.ambient));
 
     await collectChunks(runtime.sendMessageStreaming("hi"));
-    // Over the turn's lifetime: transitioned to active, back to idle
-    // after the dissolve tail (300ms).
+    // The turn's response card settles into `resting` on successful
+    // completion (motebit-computer.md §"Three end states") — the user
+    // may still be reading it. The slab therefore stays `active`
+    // past the turn's end; a workstation with an open response tab
+    // doesn't recede.
     expect(ambients).toContain("active");
-    // Wait for the dissolve tail to fire so the item is dropped.
     await new Promise((r) => setTimeout(r, 400));
-    expect(runtime.slab.getState().ambient).toBe("idle");
+    expect(runtime.slab.getState().ambient).toBe("active");
+    const items = [...runtime.slab.getState().items.values()];
+    expect(items.some((i) => i.kind === "stream" && i.phase === "resting")).toBe(true);
   });
 });
 

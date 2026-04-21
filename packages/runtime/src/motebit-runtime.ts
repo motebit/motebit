@@ -168,6 +168,37 @@ const TENDING_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "search_conversations",
 ]);
 
+/**
+ * Tool names whose completed slab items settle into `resting` rather
+ * than dissolving. Doctrine (motebit-computer.md §"Three end states"):
+ * working material — fetched pages, terminal output, search results —
+ * stays on the workstation as reference until the user dismisses it.
+ * Everything else (embedding calls, plumbing tools, failed invocations)
+ * dissolves through the default endItem path.
+ *
+ * This list is the runtime's _end-state policy_ for tool calls; it
+ * does not affect which renderer handles the card (that's the
+ * renderer's name-routing, FETCH_TOOLS / SHELL_TOOLS). The runtime
+ * decides the phase; the renderer decides the visual.
+ */
+const RESTING_TOOLS: ReadonlySet<string> = new Set([
+  "read_url",
+  "fetch_url",
+  "web_search",
+  "shell_exec",
+  "bash",
+  "shell",
+  "exec",
+  "run_command",
+  "read_file",
+  "recall_memories",
+  "search_memories",
+]);
+
+function isRestingTool(name: string): boolean {
+  return RESTING_TOOLS.has(name);
+}
+
 export class MotebitRuntime {
   readonly motebitId: string;
   readonly state: StateVectorEngine;
@@ -1222,10 +1253,27 @@ export class MotebitRuntime {
             const toolItemId = slabToolItemIds.get(chunk.name);
             if (toolItemId != null) {
               slabToolItemIds.delete(chunk.name);
-              this.slab.endItem(toolItemId, {
-                kind: "completed",
-                result: chunk.result,
-              });
+              // End state: dissolve, rest, or detach?
+              //
+              // Doctrine (motebit-computer.md §"Three end states"): the
+              // workstation holds working material. Fetched pages,
+              // terminal output, and search results are the motebit's
+              // open tabs — they stay on the slab as reference until
+              // the user dismisses them. Everything else (embedding
+              // calls, plumbing tools, failed invocations) dissolves.
+              if (isRestingTool(chunk.name) && chunk.result != null) {
+                this.slab.restItem(toolItemId, {
+                  name: chunk.name,
+                  context: chunk.context,
+                  status: "done",
+                  result: chunk.result,
+                });
+              } else {
+                this.slab.endItem(toolItemId, {
+                  kind: "completed",
+                  result: chunk.result,
+                });
+              }
             }
           }
         }
@@ -1255,10 +1303,20 @@ export class MotebitRuntime {
       });
       throw err;
     } finally {
-      // End the slab stream item. Default detach policy dissolves on
-      // `completed` without detachAs; surfaces that want the completed
-      // stream to graduate to a text artifact inject their own policy.
-      this.slab.endItem(slabTurnId, slabOutcome);
+      // End the slab stream item.
+      //
+      // On successful completion, the turn's response is durable
+      // working material — the user may still be reading it, may
+      // want to refer back to it, or to compare it against the next
+      // answer. Doctrine (§"Three end states") puts this in `rest`:
+      // it stays on the slab as the response card until the user
+      // dismisses it or a fresh turn replaces it. Failures and
+      // interruptions still dissolve — there's nothing to hold.
+      if (slabOutcome.kind === "completed") {
+        this.slab.restItem(slabTurnId, { text: slabAccumulatedText, runId });
+      } else {
+        this.slab.endItem(slabTurnId, slabOutcome);
+      }
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
@@ -1371,10 +1429,19 @@ export class MotebitRuntime {
             const toolItemId = slabToolItemIds.get(chunk.name);
             if (toolItemId != null) {
               slabToolItemIds.delete(chunk.name);
-              this.slab.endItem(toolItemId, {
-                kind: "completed",
-                result: chunk.result,
-              });
+              if (isRestingTool(chunk.name) && chunk.result != null) {
+                this.slab.restItem(toolItemId, {
+                  name: chunk.name,
+                  context: chunk.context,
+                  status: "done",
+                  result: chunk.result,
+                });
+              } else {
+                this.slab.endItem(toolItemId, {
+                  kind: "completed",
+                  result: chunk.result,
+                });
+              }
             }
           }
         }
@@ -1387,7 +1454,15 @@ export class MotebitRuntime {
       };
       throw err;
     } finally {
-      this.slab.endItem(slabTurnId, slabOutcome);
+      if (slabOutcome.kind === "completed") {
+        this.slab.restItem(slabTurnId, {
+          text: slabAccumulatedText,
+          runId,
+          activationOnly: true,
+        });
+      } else {
+        this.slab.endItem(slabTurnId, slabOutcome);
+      }
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
