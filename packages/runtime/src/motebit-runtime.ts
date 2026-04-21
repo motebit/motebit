@@ -94,6 +94,7 @@ import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
+import { createSlabController, type SlabController } from "./slab-controller.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
 import { createIdleTickController, type IdleTickController } from "./idle-tick.js";
 import { formMemoriesFromCandidates } from "@motebit/memory-graph";
@@ -181,6 +182,15 @@ export class MotebitRuntime {
    */
   readonly goals: GoalsEmitter;
   private _goalStatusResolver: ((goalId: string) => GoalLifecycleStatus) | null = null;
+  /**
+   * Slab controller — translates the runtime's internal event streams
+   * (tokens, tool calls, plan steps) into typed `SlabItem*` lifecycle
+   * events that renderers consume. See docs/doctrine/motebit-computer.md
+   * for the semantic contract. Runtime-path wiring lands in a follow-up
+   * commit; the controller is instantiated here so surfaces can already
+   * subscribe (they'll see the idle state until wiring lands).
+   */
+  readonly slab: SlabController;
   /**
    * Background memory-formation queue. Populated only when
    * `RuntimeConfig.deferMemoryFormation === true`; otherwise inert.
@@ -382,6 +392,7 @@ export class MotebitRuntime {
       getGoalStatus: (goalId) => this._goalStatusResolver?.(goalId) ?? null,
       logger: this._logger,
     });
+    this.slab = createSlabController({ logger: this._logger });
     this._deferMemoryFormation = config.deferMemoryFormation ?? false;
     this.memoryFormation = createMemoryFormationQueue({ logger: this._logger });
     if (config.proactiveTickMs != null && config.proactiveTickMs > 0) {
@@ -699,6 +710,7 @@ export class MotebitRuntime {
     // Disconnect MCP servers in background
     void Promise.allSettled(this.mcpAdapters.map((a) => a.disconnect()));
     this.renderer.dispose();
+    this.slab.dispose();
     this.clearSigningKeys();
     this.running = false;
   }

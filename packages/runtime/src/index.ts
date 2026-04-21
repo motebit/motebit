@@ -200,3 +200,20 @@ export { deriveStreamActivity, derivePlanActivity, ActivityTracker } from "./act
 export type { ActivityLabel } from "./activity.js";
 export { resolveProactiveAnchor } from "./proactive-anchor.js";
 export type { ResolveProactiveAnchorArgs } from "./proactive-anchor.js";
+
+// "Motebit Computer" (slab) — runtime event translation layer.
+// See docs/doctrine/motebit-computer.md for semantics.
+export { createSlabController, defaultDetachPolicy } from "./slab-controller.js";
+export type {
+  SlabController,
+  SlabControllerDeps,
+  SlabState,
+  SlabAmbient,
+  SlabItem,
+  SlabItemOutcome,
+  SlabSubscriber,
+  DetachPolicy,
+  DetachDecision,
+  ArtifactKindForDetach,
+  TimeoutHandle,
+} from "./slab-controller.js";
