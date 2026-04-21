@@ -1,14 +1,57 @@
 /**
  * Dispute endpoint tests — motebit/dispute@1.0.
+ *
+ * Per spec/dispute-v1.md §4.2 + §5.2 + §8.2 every inbound dispute body is
+ * a signed wire artifact. Helpers below register an agent's keypair, then
+ * sign DisputeRequest / DisputeEvidence / DisputeAppeal on its behalf so
+ * tests read like the relay's eligibility logic and not like crypto setup.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
-import { generateKeypair, bytesToHex } from "@motebit/encryption";
+import {
+  generateKeypair,
+  bytesToHex,
+  signDisputeRequest,
+  signDisputeEvidence,
+  signDisputeAppeal,
+} from "@motebit/encryption";
+import type {
+  DisputeAppeal,
+  DisputeCategory,
+  DisputeEvidence,
+  DisputeEvidenceType,
+  DisputeRequest,
+} from "@motebit/protocol";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+
+// === Test keystore ===
+//
+// Per-relay map of motebit_id → keypair so dispute helpers can sign on
+// behalf of named agents. Cleared implicitly when the relay closes (the
+// next createTestRelay produces a fresh SyncRelay key).
+type Keypair = { publicKey: Uint8Array; privateKey: Uint8Array };
+const keystore = new WeakMap<SyncRelay, Map<string, Keypair>>();
+
+function keysFor(relay: SyncRelay): Map<string, Keypair> {
+  let m = keystore.get(relay);
+  if (!m) {
+    m = new Map();
+    keystore.set(relay, m);
+  }
+  return m;
+}
+
+function keyFor(relay: SyncRelay, motebitId: string): Keypair {
+  const kp = keysFor(relay).get(motebitId);
+  if (!kp) throw new Error(`no test keypair for ${motebitId}`);
+  return kp;
+}
 
 // === Helpers ===
 
-async function registerAgent(relay: SyncRelay, motebitId: string, publicKeyHex: string) {
+async function registerAgent(relay: SyncRelay, motebitId: string): Promise<Keypair> {
+  const kp = await generateKeypair();
+  keysFor(relay).set(motebitId, kp);
   await relay.app.request(`/api/v1/agents/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -16,9 +59,49 @@ async function registerAgent(relay: SyncRelay, motebitId: string, publicKeyHex: 
       motebit_id: motebitId,
       endpoint_url: "http://localhost:9999/mcp",
       capabilities: ["web_search"],
-      public_key: publicKeyHex,
+      public_key: bytesToHex(kp.publicKey),
     }),
   });
+  return kp;
+}
+
+/**
+ * Inject a dispute row directly into `relay_disputes`, bypassing the
+ * filing endpoint and its signature requirement. Used by the self-
+ * adjudication tests, where the relay's own identity key is internal
+ * to `createSyncRelay` (not exposed on the test's `SyncRelay` shape).
+ * The point of those tests is the resolve handler's refusal, not the
+ * filing path — the filing path is exercised across the rest of this
+ * suite under signed bodies.
+ */
+function injectDispute(
+  relay: SyncRelay,
+  args: {
+    dispute_id: string;
+    task_id: string;
+    allocation_id: string;
+    filed_by: string;
+    respondent: string;
+    amount_locked?: number;
+  },
+): void {
+  const filed_at = Date.now();
+  relay.moteDb.db
+    .prepare(
+      `INSERT INTO relay_disputes
+         (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline)
+       VALUES (?, ?, ?, ?, ?, 'quality', 'Injected for self-adjudication test', 'evidence', ?, 0, ?, ?)`,
+    )
+    .run(
+      args.dispute_id,
+      args.task_id,
+      args.allocation_id,
+      args.filed_by,
+      args.respondent,
+      args.amount_locked ?? 100000,
+      filed_at,
+      filed_at + 48 * 60 * 60 * 1000,
+    );
 }
 
 function createAllocation(
@@ -34,27 +117,110 @@ function createAllocation(
     .run(allocationId, taskId, motebitId, 100000, Date.now());
 }
 
+let disputeIdCounter = 0;
+function nextDisputeId(): string {
+  disputeIdCounter += 1;
+  return `dsp-test-${Date.now().toString(36)}-${disputeIdCounter.toString(36).padStart(4, "0")}`;
+}
+
 async function openDispute(
   relay: SyncRelay,
   allocationId: string,
   filedBy: string,
   respondent: string,
   taskId = "task-1",
+  overrides: Partial<{
+    evidence_refs: string[];
+    category: DisputeCategory;
+    description: string;
+    dispute_id: string;
+    filed_at: number;
+  }> = {},
 ) {
-  const res = await relay.app.request(`/api/v1/allocations/${allocationId}/dispute`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-    body: JSON.stringify({
+  const filerKey = keyFor(relay, filedBy);
+  const signed = await signDisputeRequest(
+    {
+      dispute_id: overrides.dispute_id ?? nextDisputeId(),
       task_id: taskId,
+      allocation_id: allocationId,
       filed_by: filedBy,
       respondent,
-      category: "quality",
-      description: "Work quality was inadequate",
-      evidence_refs: ["receipt-123"],
-    }),
+      category: overrides.category ?? "quality",
+      description: overrides.description ?? "Work quality was inadequate",
+      evidence_refs: overrides.evidence_refs ?? ["receipt-123"],
+      filed_at: overrides.filed_at ?? Date.now(),
+    },
+    filerKey.privateKey,
+  );
+  return relay.app.request(`/api/v1/allocations/${allocationId}/dispute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    body: JSON.stringify(signed),
   });
-  return res;
 }
+
+async function submitEvidence(
+  relay: SyncRelay,
+  disputeId: string,
+  submittedBy: string,
+  overrides: Partial<{
+    evidence_type: DisputeEvidenceType;
+    evidence_data: Record<string, unknown>;
+    description: string;
+    submitted_at: number;
+  }> = {},
+  signWith?: Keypair,
+) {
+  const submitterKey = signWith ?? keyFor(relay, submittedBy);
+  const signed = await signDisputeEvidence(
+    {
+      dispute_id: disputeId,
+      submitted_by: submittedBy,
+      evidence_type: overrides.evidence_type ?? "execution_receipt",
+      evidence_data: overrides.evidence_data ?? { receipt_id: "rcpt-1", result: "success" },
+      description: overrides.description ?? "Evidence",
+      submitted_at: overrides.submitted_at ?? Date.now(),
+    },
+    submitterKey.privateKey,
+  );
+  return relay.app.request(`/api/v1/disputes/${disputeId}/evidence`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    body: JSON.stringify(signed),
+  });
+}
+
+async function fileAppeal(
+  relay: SyncRelay,
+  disputeId: string,
+  appealedBy: string,
+  overrides: Partial<{
+    reason: string;
+    additional_evidence: string[];
+    appealed_at: number;
+  }> = {},
+) {
+  const appealerKey = keyFor(relay, appealedBy);
+  const body: Omit<DisputeAppeal, "signature" | "suite"> = {
+    dispute_id: disputeId,
+    appealed_by: appealedBy,
+    reason: overrides.reason ?? "Appeal reason",
+    appealed_at: overrides.appealed_at ?? Date.now(),
+  };
+  if (overrides.additional_evidence !== undefined) {
+    body.additional_evidence = overrides.additional_evidence;
+  }
+  const signed = await signDisputeAppeal(body, appealerKey.privateKey);
+  return relay.app.request(`/api/v1/disputes/${disputeId}/appeal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    body: JSON.stringify(signed),
+  });
+}
+
+// Type-only barrel — quiet "value imported but never used" once strict tests
+// reference these types in inline overrides. Erased at compile time.
+export type { DisputeRequest, DisputeEvidence, DisputeAppeal };
 
 // === Tests ===
 
@@ -63,10 +229,8 @@ describe("Dispute: POST /api/v1/allocations/:allocationId/dispute", () => {
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp1 = await generateKeypair();
-    const kp2 = await generateKeypair();
-    await registerAgent(relay, "delegator-1", bytesToHex(kp1.publicKey));
-    await registerAgent(relay, "worker-1", bytesToHex(kp2.publicKey));
+    await registerAgent(relay, "delegator-1");
+    await registerAgent(relay, "worker-1");
   });
 
   afterEach(async () => {
@@ -94,17 +258,11 @@ describe("Dispute: POST /api/v1/allocations/:allocationId/dispute", () => {
   it("rejects dispute without evidence refs", async () => {
     createAllocation(relay, "alloc-2", "task-2", "delegator-1");
 
-    const res = await relay.app.request(`/api/v1/allocations/alloc-2/dispute`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({
-        task_id: "task-2",
-        filed_by: "delegator-1",
-        respondent: "worker-1",
-        category: "quality",
-        description: "Bad work",
-        evidence_refs: [],
-      }),
+    // Schema enforces evidence_refs.min(1); the relay rejects at parse
+    // before any signature work (the body is still well-signed, but the
+    // shape is invalid).
+    const res = await openDispute(relay, "alloc-2", "delegator-1", "worker-1", "task-2", {
+      evidence_refs: [],
     });
     expect(res.status).toBe(400);
   });
@@ -120,10 +278,8 @@ describe("Dispute: evidence + resolve", () => {
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp1 = await generateKeypair();
-    const kp2 = await generateKeypair();
-    await registerAgent(relay, "del-ev", bytesToHex(kp1.publicKey));
-    await registerAgent(relay, "wrk-ev", bytesToHex(kp2.publicKey));
+    await registerAgent(relay, "del-ev");
+    await registerAgent(relay, "wrk-ev");
     createAllocation(relay, "alloc-ev", "task-ev", "del-ev");
   });
 
@@ -135,15 +291,8 @@ describe("Dispute: evidence + resolve", () => {
     const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
-    const evidenceRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/evidence`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({
-        submitted_by: "wrk-ev",
-        evidence_type: "execution_receipt",
-        evidence_data: { receipt_id: "rcpt-1", result: "success" },
-        description: "Task was completed successfully",
-      }),
+    const evidenceRes = await submitEvidence(relay, dispute_id, "wrk-ev", {
+      description: "Task was completed successfully",
     });
     expect(evidenceRes.status).toBe(200);
 
@@ -156,16 +305,22 @@ describe("Dispute: evidence + resolve", () => {
     const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
-    const evidenceRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/evidence`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({
-        submitted_by: "random-agent",
+    // Sign with a fresh keypair we never registered — the body parses
+    // cleanly because it carries a valid signature, but the relay's
+    // party-membership check fires before signature verification (a
+    // stranger doesn't even reach the keystore lookup).
+    const stranger = await generateKeypair();
+    const evidenceRes = await submitEvidence(
+      relay,
+      dispute_id,
+      "random-agent",
+      {
         evidence_type: "attestation",
         evidence_data: { claim: "I witnessed it" },
         description: "Third party attestation",
-      }),
-    });
+      },
+      stranger,
+    );
     expect(evidenceRes.status).toBe(403);
   });
 
@@ -222,14 +377,14 @@ describe("Dispute: evidence + resolve", () => {
   it("refuses to self-adjudicate when relay is the respondent (§6.5)", async () => {
     const relayMotebitId = relay.relayIdentity.relayMotebitId;
     createAllocation(relay, "alloc-defendant", "task-defendant", "del-ev");
-    const openRes = await openDispute(
-      relay,
-      "alloc-defendant",
-      "del-ev",
-      relayMotebitId,
-      "task-defendant",
-    );
-    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+    const dispute_id = nextDisputeId();
+    injectDispute(relay, {
+      dispute_id,
+      task_id: "task-defendant",
+      allocation_id: "alloc-defendant",
+      filed_by: "del-ev",
+      respondent: relayMotebitId,
+    });
 
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
@@ -247,8 +402,14 @@ describe("Dispute: evidence + resolve", () => {
   it("refuses to self-adjudicate when relay is the filer (§6.2)", async () => {
     const relayMotebitId = relay.relayIdentity.relayMotebitId;
     createAllocation(relay, "alloc-filer", "task-filer", relayMotebitId);
-    const openRes = await openDispute(relay, "alloc-filer", relayMotebitId, "wrk-ev", "task-filer");
-    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+    const dispute_id = nextDisputeId();
+    injectDispute(relay, {
+      dispute_id,
+      task_id: "task-filer",
+      allocation_id: "alloc-filer",
+      filed_by: relayMotebitId,
+      respondent: "wrk-ev",
+    });
 
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
@@ -324,10 +485,8 @@ describe("Dispute: appeal", () => {
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp1 = await generateKeypair();
-    const kp2 = await generateKeypair();
-    await registerAgent(relay, "del-ap", bytesToHex(kp1.publicKey));
-    await registerAgent(relay, "wrk-ap", bytesToHex(kp2.publicKey));
+    await registerAgent(relay, "del-ap");
+    await registerAgent(relay, "wrk-ap");
     createAllocation(relay, "alloc-ap", "task-ap", "del-ap");
   });
 
@@ -350,14 +509,8 @@ describe("Dispute: appeal", () => {
       }),
     });
 
-    // Appeal
-    const appealRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/appeal`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({
-        appealed_by: "del-ap",
-        reason: "New evidence contradicts resolution",
-      }),
+    const appealRes = await fileAppeal(relay, dispute_id, "del-ap", {
+      reason: "New evidence contradicts resolution",
     });
     expect(appealRes.status).toBe(200);
 
@@ -380,11 +533,7 @@ describe("Dispute: appeal", () => {
     });
 
     // First appeal — OK
-    await relay.app.request(`/api/v1/disputes/${dispute_id}/appeal`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({ appealed_by: "del-ap", reason: "Appeal 1" }),
-    });
+    await fileAppeal(relay, dispute_id, "del-ap", { reason: "Appeal 1" });
 
     // Resolve appeal to get back to resolved
     await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
@@ -399,11 +548,7 @@ describe("Dispute: appeal", () => {
     });
 
     // Second appeal — should be rejected (appealed_at already set)
-    const appeal2 = await relay.app.request(`/api/v1/disputes/${dispute_id}/appeal`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({ appealed_by: "wrk-ap", reason: "Appeal 2" }),
-    });
+    const appeal2 = await fileAppeal(relay, dispute_id, "wrk-ap", { reason: "Appeal 2" });
     // State is not "resolved" anymore so should fail
     expect(appeal2.status).not.toBe(200);
   });
@@ -414,8 +559,7 @@ describe("Dispute: GET status + admin", () => {
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp = await generateKeypair();
-    await registerAgent(relay, "del-get", bytesToHex(kp.publicKey));
+    await registerAgent(relay, "del-get");
     createAllocation(relay, "alloc-get", "task-get", "del-get");
   });
 
@@ -471,10 +615,8 @@ describe("Dispute: fund execution integrity", () => {
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp1 = await generateKeypair();
-    const kp2 = await generateKeypair();
-    await registerAgent(relay, "del-fund", bytesToHex(kp1.publicKey));
-    await registerAgent(relay, "wrk-fund", bytesToHex(kp2.publicKey));
+    await registerAgent(relay, "del-fund");
+    await registerAgent(relay, "wrk-fund");
     createAllocation(relay, "alloc-fund", "task-fund", "del-fund");
   });
 

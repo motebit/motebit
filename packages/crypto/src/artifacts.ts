@@ -556,15 +556,26 @@ export async function verifyDelegationChain(
 }
 
 // === Dispute Resolution + Adjudicator Votes (dispute §6.4 + §6.5) ===
+// === Dispute Request / Evidence / Appeal (dispute §4.2 + §5.2 + §8.2) ===
 
-import type { AdjudicatorVote, DisputeResolution } from "@motebit/protocol";
-export type { AdjudicatorVote, DisputeResolution };
+// prettier-ignore
+import type { AdjudicatorVote, DisputeAppeal, DisputeEvidence, DisputeRequest, DisputeResolution } from "@motebit/protocol";
+export type { AdjudicatorVote, DisputeAppeal, DisputeEvidence, DisputeRequest, DisputeResolution };
 
 /** The one suite AdjudicatorVotes sign under today — matches spec/dispute-v1.md §6.4. */
 export const ADJUDICATOR_VOTE_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 
 /** The one suite DisputeResolutions sign under today — matches spec/dispute-v1.md §6.4. */
 export const DISPUTE_RESOLUTION_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/** The one suite DisputeRequest filings sign under today — spec/dispute-v1.md §4.2. */
+export const DISPUTE_REQUEST_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/** The one suite DisputeEvidence submissions sign under today — spec/dispute-v1.md §5.2. */
+export const DISPUTE_EVIDENCE_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/** The one suite DisputeAppeal filings sign under today — spec/dispute-v1.md §8.2. */
+export const DISPUTE_APPEAL_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 
 /**
  * Sign a federation peer's adjudication vote. The `dispute_id` IS part
@@ -681,6 +692,130 @@ export async function verifyDisputeResolution(
     }
   }
   return true;
+}
+
+/**
+ * Sign a DisputeRequest. Filing party signs over canonical JSON of
+ * every field except `signature`. The relay verifies against the
+ * filer's registered public key before accepting the filing — without
+ * the signature, anyone could file a dispute as anyone (foundation
+ * law §4.4: filing party must be a direct party to the task; without
+ * the signature binding, the relay cannot enforce that). Callers pass
+ * the body without `signature` or `suite`; the signer owns both.
+ */
+export async function signDisputeRequest(
+  request: Omit<DisputeRequest, "signature" | "suite">,
+  filerPrivateKey: Uint8Array,
+): Promise<DisputeRequest> {
+  const body = { ...request, suite: DISPUTE_REQUEST_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(DISPUTE_REQUEST_SUITE, message, filerPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a DisputeRequest against the filing party's public key.
+ * Fail-closed on unknown suite, base64url decode error, and primitive
+ * verification failure. Eligibility checks (`filed_by` is a real party
+ * to `task_id`, trust threshold, evidence_refs non-empty) are the
+ * caller's responsibility — this verifies the signature only.
+ */
+export async function verifyDisputeRequest(
+  request: DisputeRequest,
+  filerPublicKey: Uint8Array,
+): Promise<boolean> {
+  if (request.suite !== DISPUTE_REQUEST_SUITE) return false;
+  const { signature, ...body } = request;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(request.suite, message, sig, filerPublicKey);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sign a DisputeEvidence submission. The submitting party — either
+ * the dispute's filer or respondent — signs over the canonical JSON
+ * of every field except `signature`. The relay verifies against the
+ * submitter's registered public key (foundation law §5.4: evidence
+ * must be cryptographically verifiable; unsigned/tampered evidence
+ * is rejected).
+ */
+export async function signDisputeEvidence(
+  evidence: Omit<DisputeEvidence, "signature" | "suite">,
+  submitterPrivateKey: Uint8Array,
+): Promise<DisputeEvidence> {
+  const body = { ...evidence, suite: DISPUTE_EVIDENCE_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(DISPUTE_EVIDENCE_SUITE, message, submitterPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a DisputeEvidence submission against the submitting party's
+ * public key. Inner `evidence_data` validation against its own per-
+ * type schema (e.g. ExecutionReceiptSchema for `execution_receipt`)
+ * is the adjudicator's responsibility — this verifies the outer
+ * envelope signature only.
+ */
+export async function verifyDisputeEvidence(
+  evidence: DisputeEvidence,
+  submitterPublicKey: Uint8Array,
+): Promise<boolean> {
+  if (evidence.suite !== DISPUTE_EVIDENCE_SUITE) return false;
+  const { signature, ...body } = evidence;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(evidence.suite, message, sig, submitterPublicKey);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sign a DisputeAppeal. The appealing party — filer or respondent —
+ * signs over the canonical JSON of every field except `signature`.
+ * Foundation law §8.4: one appeal per dispute; the post-appeal state
+ * is terminal. The relay verifies against the appealer's registered
+ * public key before transitioning the dispute to `appealed`.
+ */
+export async function signDisputeAppeal(
+  appeal: Omit<DisputeAppeal, "signature" | "suite">,
+  appealerPrivateKey: Uint8Array,
+): Promise<DisputeAppeal> {
+  const body = { ...appeal, suite: DISPUTE_APPEAL_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(DISPUTE_APPEAL_SUITE, message, appealerPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a DisputeAppeal against the appealing party's public key.
+ * Fail-closed on unknown suite, base64url decode error, and primitive
+ * verification failure.
+ */
+export async function verifyDisputeAppeal(
+  appeal: DisputeAppeal,
+  appealerPublicKey: Uint8Array,
+): Promise<boolean> {
+  if (appeal.suite !== DISPUTE_APPEAL_SUITE) return false;
+  const { signature, ...body } = appeal;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(appeal.suite, message, sig, appealerPublicKey);
+  } catch {
+    return false;
+  }
 }
 
 // === Consolidation Receipts (proactive interior — `docs/doctrine/proactive-interior.md`) ===

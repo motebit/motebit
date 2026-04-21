@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
-import { generateKeypair, bytesToHex } from "@motebit/encryption";
+import { generateKeypair, bytesToHex, signDisputeRequest } from "@motebit/encryption";
 import { evaluateSettlementEligibility } from "../task-routing.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
@@ -245,12 +245,13 @@ describe("P2P task submission", () => {
 
 describe("P2P disputes (trust-layer)", () => {
   let relay: SyncRelay;
+  let delDspKp: { publicKey: Uint8Array; privateKey: Uint8Array };
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp1 = await generateKeypair();
+    delDspKp = await generateKeypair();
     const kp2 = await generateKeypair();
-    await registerAgent(relay, "del-dsp", bytesToHex(kp1.publicKey));
+    await registerAgent(relay, "del-dsp", bytesToHex(delDspKp.publicKey));
     await registerAgent(relay, "wrk-dsp", bytesToHex(kp2.publicKey));
 
     // Create a p2p settlement record (simulating a completed p2p task)
@@ -270,17 +271,24 @@ describe("P2P disputes (trust-layer)", () => {
   });
 
   it("opens a trust-layer dispute on a p2p task", async () => {
-    const res = await relay.app.request(`/api/v1/allocations/p2p-alloc-1/dispute`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({
+    const signed = await signDisputeRequest(
+      {
+        dispute_id: `dsp-p2p-${crypto.randomUUID()}`,
         task_id: "task-p2p-1",
+        allocation_id: "p2p-alloc-1",
         filed_by: "del-dsp",
         respondent: "wrk-dsp",
         category: "quality",
         description: "P2P task output was inadequate",
         evidence_refs: ["receipt-p2p-1"],
-      }),
+        filed_at: Date.now(),
+      },
+      delDspKp.privateKey,
+    );
+    const res = await relay.app.request(`/api/v1/allocations/p2p-alloc-1/dispute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(signed),
     });
     expect(res.status).toBe(200);
 
@@ -296,17 +304,24 @@ describe("P2P disputes (trust-layer)", () => {
   });
 
   it("returns 404 when neither allocation nor p2p settlement exists", async () => {
-    const res = await relay.app.request(`/api/v1/allocations/nonexistent/dispute`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({
+    const signed = await signDisputeRequest(
+      {
+        dispute_id: `dsp-p2p-${crypto.randomUUID()}`,
         task_id: "task-nonexistent",
+        allocation_id: "nonexistent",
         filed_by: "del-dsp",
         respondent: "wrk-dsp",
         category: "quality",
         description: "No task",
         evidence_refs: ["ref-1"],
-      }),
+        filed_at: Date.now(),
+      },
+      delDspKp.privateKey,
+    );
+    const res = await relay.app.request(`/api/v1/allocations/nonexistent/dispute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(signed),
     });
     expect(res.status).toBe(404);
   });

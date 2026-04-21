@@ -12,6 +12,7 @@ import {
   generateKeypair,
   bytesToHex,
   signExecutionReceipt,
+  signDisputeRequest,
   hash as sha256,
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
@@ -137,19 +138,39 @@ describe("Dispute Cycle E2E", () => {
       .prepare("SELECT allocation_id FROM relay_allocations WHERE task_id = ?")
       .get(taskId) as { allocation_id: string };
 
+    // Per spec/dispute-v1.md §4.2 the body is a signed DisputeRequest.
+    // Register the delegator in agent_registry so the relay can resolve
+    // their public key for signature verification, then sign + post.
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: delegator.motebitId,
+        endpoint_url: "http://localhost:3201/mcp",
+        capabilities: [],
+        public_key: bytesToHex(delegatorKp.publicKey),
+      }),
+    });
+    const signedRequest = await signDisputeRequest(
+      {
+        dispute_id: `dsp-e2e-${crypto.randomUUID()}`,
+        task_id: taskId,
+        allocation_id: alloc.allocation_id,
+        filed_by: delegator.motebitId,
+        respondent: worker.motebitId,
+        category: "quality",
+        description: "Work was inadequate",
+        evidence_refs: ["receipt-hash"],
+        filed_at: Date.now(),
+      },
+      delegatorKp.privateKey,
+    );
     const disputeRes = await relay.app.request(
       `/api/v1/allocations/${alloc.allocation_id}/dispute`,
       {
         method: "POST",
         headers: JSON_AUTH,
-        body: JSON.stringify({
-          task_id: taskId,
-          filed_by: delegator.motebitId,
-          respondent: worker.motebitId,
-          category: "quality",
-          description: "Work was inadequate",
-          evidence_refs: ["receipt-hash"],
-        }),
+        body: JSON.stringify(signedRequest),
       },
     );
     expect(disputeRes.status).toBe(200);
@@ -279,19 +300,36 @@ describe("Dispute Cycle E2E", () => {
       .prepare("SELECT allocation_id FROM relay_allocations WHERE task_id = ?")
       .get(taskId) as { allocation_id: string };
 
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: delegator.motebitId,
+        endpoint_url: "http://localhost:3201/mcp",
+        capabilities: [],
+        public_key: bytesToHex(delegatorKp.publicKey),
+      }),
+    });
+    const signedRequest = await signDisputeRequest(
+      {
+        dispute_id: `dsp-e2e-${crypto.randomUUID()}`,
+        task_id: taskId,
+        allocation_id: alloc.allocation_id,
+        filed_by: delegator.motebitId,
+        respondent: worker.motebitId,
+        category: "quality",
+        description: "Partial quality",
+        evidence_refs: ["evidence-1"],
+        filed_at: Date.now(),
+      },
+      delegatorKp.privateKey,
+    );
     const disputeRes = await relay.app.request(
       `/api/v1/allocations/${alloc.allocation_id}/dispute`,
       {
         method: "POST",
         headers: JSON_AUTH,
-        body: JSON.stringify({
-          task_id: taskId,
-          filed_by: delegator.motebitId,
-          respondent: worker.motebitId,
-          category: "quality",
-          description: "Partial quality",
-          evidence_refs: ["evidence-1"],
-        }),
+        body: JSON.stringify(signedRequest),
       },
     );
     const { dispute_id: disputeId } = (await disputeRes.json()) as { dispute_id: string };

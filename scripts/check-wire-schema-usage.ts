@@ -77,6 +77,11 @@ const REQUIRED_USAGE: ReadonlyArray<{
     ],
     note: "POST /agents/:id/migrate/* — four signed wire artifacts",
   },
+  {
+    file: "services/api/src/disputes.ts",
+    schemas: ["DisputeRequestSchema", "DisputeEvidenceSchema", "DisputeAppealSchema"],
+    note: "POST /allocations/:id/dispute + /:disputeId/evidence + /:disputeId/appeal — three client-signed wire artifacts (DisputeResolution is relay-constructed, not inbound)",
+  },
 ];
 
 // ── Waivers ────────────────────────────────────────────────────────────
@@ -90,20 +95,7 @@ const WAIVERS: ReadonlyArray<{
   schemas: ReadonlyArray<string>;
   reason: string;
   since: string;
-}> = [
-  {
-    file: "services/api/src/disputes.ts",
-    schemas: [
-      "DisputeRequestSchema",
-      "DisputeEvidenceSchema",
-      "DisputeResolutionSchema",
-      "DisputeAppealSchema",
-    ],
-    reason:
-      "Dispute handlers accept relay-construction inputs (task_id + filed_by + category + …) rather than signed DisputeRequest artifacts; the relay generates dispute_id and signs resolution internally. Wiring safeParse against DisputeRequestSchema today would fail-close every filing because inbound bodies lack `signature` + `suite` + server-generated `dispute_id`. The fix is a protocol-shape migration per spec/dispute-v1.md §4 — changing the POST body to a signed DisputeRequest — not a one-line safeParse. Tracked as protocol-compliance debt, not validation drift.",
-    since: "2026-04-20",
-  },
-];
+}> = [];
 
 // ── Helpers ────────────────────────────────────────────────────────────
 

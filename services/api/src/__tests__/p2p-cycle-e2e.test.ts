@@ -12,6 +12,7 @@ import type { SyncRelay } from "../index.js";
 import {
   generateKeypair,
   bytesToHex,
+  signDisputeRequest,
   signExecutionReceipt,
   hash as sha256,
 } from "@motebit/encryption";
@@ -232,18 +233,38 @@ describe("P2P Settlement Cycle E2E", () => {
       body: JSON.stringify(receipt),
     });
 
-    // File p2p dispute (no allocation exists)
-    const disputeRes = await relay.app.request(`/api/v1/allocations/p2p-${taskId}/dispute`, {
+    // File p2p dispute (no allocation exists). Per spec/dispute-v1.md §4.2
+    // the body is a signed DisputeRequest — register the delegator's
+    // identity in agent_registry first so the relay can verify the
+    // signature, then sign + post.
+    await relay.app.request("/api/v1/agents/register", {
       method: "POST",
       headers: JSON_AUTH,
       body: JSON.stringify({
+        motebit_id: delegator.motebitId,
+        endpoint_url: "http://localhost:3201/mcp",
+        capabilities: [],
+        public_key: bytesToHex(delegatorKp.publicKey),
+      }),
+    });
+    const signedRequest = await signDisputeRequest(
+      {
+        dispute_id: `dsp-p2p-${crypto.randomUUID()}`,
         task_id: taskId,
+        allocation_id: `p2p-${taskId}`,
         filed_by: delegator.motebitId,
         respondent: worker.motebitId,
         category: "quality",
         description: "P2P work was bad",
         evidence_refs: ["receipt-1"],
-      }),
+        filed_at: Date.now(),
+      },
+      delegatorKp.privateKey,
+    );
+    const disputeRes = await relay.app.request(`/api/v1/allocations/p2p-${taskId}/dispute`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(signedRequest),
     });
     expect(disputeRes.status).toBe(200);
     const disputeBody = (await disputeRes.json()) as {

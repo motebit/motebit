@@ -11,13 +11,19 @@
  */
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { signDisputeResolution } from "@motebit/encryption";
-import type {
-  DisputeState,
-  DisputeOutcome,
-  DisputeCategory,
-  DisputeFundAction,
-} from "@motebit/protocol";
+import {
+  hexToBytes,
+  signDisputeResolution,
+  verifyDisputeAppeal,
+  verifyDisputeEvidence,
+  verifyDisputeRequest,
+} from "@motebit/encryption";
+import type { DisputeState, DisputeOutcome, DisputeFundAction } from "@motebit/protocol";
+import {
+  DisputeAppealSchema,
+  DisputeEvidenceSchema,
+  DisputeRequestSchema,
+} from "@motebit/wire-schemas";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity } from "./federation.js";
 import { creditAccount as creditAccountCanonical } from "./accounts.js";
@@ -109,12 +115,6 @@ export function createDisputeTables(db: DatabaseDriver): void {
 
 // === Helpers ===
 
-function generateDisputeId(): string {
-  const ts = Date.now().toString(36);
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `dsp-${ts}-${rand}`;
-}
-
 function getDispute(db: DatabaseDriver, disputeId: string) {
   return db.prepare("SELECT * FROM relay_disputes WHERE dispute_id = ?").get(disputeId) as
     | Record<string, unknown>
@@ -135,24 +135,54 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   const { db, app, relayIdentity } = deps;
 
   // ── POST /api/v1/allocations/:allocationId/dispute (§4) ──
-  // Open a dispute, lock funds.
+  // Open a dispute, lock funds. The body MUST be a signed `DisputeRequest`
+  // wire artifact per spec/dispute-v1.md §4.2 — the relay verifies the
+  // signature against the filer's registered public key before accepting.
+  // The unsigned-construction-input shape is gone; without the signature
+  // binding the relay could not enforce foundation law §4.4 ("filing
+  // party must be a direct party to the task").
   app.post("/api/v1/allocations/:allocationId/dispute", async (c) => {
     const allocationId = c.req.param("allocationId");
-    const body = await c.req.json<{
-      task_id: string;
-      filed_by: string;
-      respondent: string;
-      category: DisputeCategory;
-      description: string;
-      evidence_refs: string[];
-    }>();
-
-    // Validate required fields (§4.4)
-    if (body.task_id == null || allocationId == null) {
-      throw new HTTPException(400, { message: "task_id and allocation_id are required" });
+    const rawBody: unknown = await c.req.json().catch(() => null);
+    const parsed = DisputeRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
     }
-    if (body.evidence_refs == null || body.evidence_refs.length === 0) {
-      throw new HTTPException(400, { message: "At least one evidence reference is required" });
+    const req = parsed.data;
+
+    // Path/body consistency. The path is the canonical address; the body
+    // must agree or the relay rejects (prevents replay across allocations).
+    if (req.allocation_id !== allocationId) {
+      throw new HTTPException(400, {
+        message: "DisputeRequest.allocation_id does not match path parameter",
+      });
+    }
+
+    // Verify the signature against the filer's registered public key.
+    // No public key on file = no signature can be verified = filing
+    // rejected (foundation law §4.4 + §10).
+    const filerRow = db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(req.filed_by) as { public_key: string } | undefined;
+    if (!filerRow?.public_key) {
+      throw new HTTPException(401, {
+        message: "Filing party is not registered; cannot verify DisputeRequest signature",
+      });
+    }
+    const filerPubKey = hexToBytes(filerRow.public_key);
+    const sigValid = await verifyDisputeRequest(req, filerPubKey);
+    if (!sigValid) {
+      throw new HTTPException(401, {
+        message: "DisputeRequest signature verification failed",
+      });
+    }
+
+    // Replay defense — dispute_id is client-generated (UUIDv7 per §4.2);
+    // the relay rejects collisions so a replay of the same signed body
+    // cannot create a second dispute row.
+    const existing = getDispute(db, req.dispute_id);
+    if (existing) {
+      throw new HTTPException(409, { message: "Dispute with this dispute_id already exists" });
     }
 
     // Check allocation exists — or if p2p, check settlement exists
@@ -178,7 +208,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
         .prepare(
           "SELECT settlement_id, task_id, motebit_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
         )
-        .get(body.task_id) as
+        .get(req.task_id) as
         | { settlement_id: string; task_id: string; motebit_id: string }
         | undefined;
 
@@ -188,15 +218,12 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       isP2pDispute = true;
     }
 
-    // Check filing party is a direct party to the task (§4.3)
-    // (The filing party should be either the delegator or worker)
-
     // Rate limit: max active disputes per agent (§9.2)
     const activeCount = db
       .prepare(
         "SELECT COUNT(*) as cnt FROM relay_disputes WHERE filed_by = ? AND state NOT IN ('final', 'expired')",
       )
-      .get(body.filed_by) as { cnt: number };
+      .get(req.filed_by) as { cnt: number };
 
     if (activeCount.cnt >= MAX_ACTIVE_DISPUTES_PER_AGENT) {
       throw new HTTPException(429, {
@@ -211,9 +238,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       );
     }
 
-    const disputeId = generateDisputeId();
-    const filedAt = Date.now();
-    const evidenceDeadline = filedAt + EVIDENCE_WINDOW_MS;
+    const evidenceDeadline = req.filed_at + EVIDENCE_WINDOW_MS;
     const amountLocked = isP2pDispute ? 0 : allocation!.amount_locked;
     const filingFee = Math.floor(amountLocked * FILING_FEE_RATE);
 
@@ -222,35 +247,37 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
        (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'opened', ?, ?, ?, ?)`,
     ).run(
-      disputeId,
-      body.task_id,
+      req.dispute_id,
+      req.task_id,
       allocationId,
-      body.filed_by,
-      body.respondent,
-      body.category,
-      body.description,
+      req.filed_by,
+      req.respondent,
+      req.category,
+      req.description,
       amountLocked,
       filingFee,
-      filedAt,
+      req.filed_at,
       evidenceDeadline,
     );
 
     // Transition to evidence state immediately (dispute has initial evidence)
-    db.prepare("UPDATE relay_disputes SET state = 'evidence' WHERE dispute_id = ?").run(disputeId);
+    db.prepare("UPDATE relay_disputes SET state = 'evidence' WHERE dispute_id = ?").run(
+      req.dispute_id,
+    );
 
     logger.info("dispute.opened", {
-      disputeId,
-      taskId: body.task_id,
+      disputeId: req.dispute_id,
+      taskId: req.task_id,
       allocationId,
-      filedBy: body.filed_by,
-      category: body.category,
+      filedBy: req.filed_by,
+      category: req.category,
       amountLocked,
       isP2pDispute,
     });
 
     return c.json({
       ok: true,
-      dispute_id: disputeId,
+      dispute_id: req.dispute_id,
       state: "evidence" as DisputeState,
       evidence_deadline: evidenceDeadline,
       amount_locked: amountLocked,
@@ -260,15 +287,24 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   });
 
   // ── POST /api/v1/disputes/:disputeId/evidence (§5) ──
-  // Submit evidence in an open dispute.
+  // Submit evidence in an open dispute. The body MUST be a signed
+  // `DisputeEvidence` wire artifact per spec §5.2 — verified against the
+  // submitter's registered public key (foundation law §5.4: evidence
+  // must be cryptographically verifiable; unsigned/tampered rejected).
   app.post("/api/v1/disputes/:disputeId/evidence", async (c) => {
     const disputeId = c.req.param("disputeId");
-    const body = await c.req.json<{
-      submitted_by: string;
-      evidence_type: string;
-      evidence_data: Record<string, unknown>;
-      description: string;
-    }>();
+    const rawBody: unknown = await c.req.json().catch(() => null);
+    const parsed = DisputeEvidenceSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+    const ev = parsed.data;
+
+    if (ev.dispute_id !== disputeId) {
+      throw new HTTPException(400, {
+        message: "DisputeEvidence.dispute_id does not match path parameter",
+      });
+    }
 
     const dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
@@ -283,9 +319,26 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       throw new HTTPException(400, { message: "Evidence window has closed" });
     }
 
-    // Check party is involved (§5.4: equal access)
-    if (body.submitted_by !== dispute.filed_by && body.submitted_by !== dispute.respondent) {
+    // Check party is involved (§5.4: equal access). Done before signature
+    // verification so an unrelated third party doesn't even reach the
+    // public-key lookup.
+    if (ev.submitted_by !== dispute.filed_by && ev.submitted_by !== dispute.respondent) {
       throw new HTTPException(403, { message: "Only dispute parties can submit evidence" });
+    }
+
+    const submitterRow = db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(ev.submitted_by) as { public_key: string } | undefined;
+    if (!submitterRow?.public_key) {
+      throw new HTTPException(401, {
+        message: "Submitting party is not registered; cannot verify DisputeEvidence signature",
+      });
+    }
+    const sigValid = await verifyDisputeEvidence(ev, hexToBytes(submitterRow.public_key));
+    if (!sigValid) {
+      throw new HTTPException(401, {
+        message: "DisputeEvidence signature verification failed",
+      });
     }
 
     // Check max evidence per party (§5.5)
@@ -293,7 +346,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       .prepare(
         "SELECT COUNT(*) as cnt FROM relay_dispute_evidence WHERE dispute_id = ? AND submitted_by = ?",
       )
-      .get(disputeId, body.submitted_by) as { cnt: number };
+      .get(disputeId, ev.submitted_by) as { cnt: number };
 
     if (evidenceCount.cnt >= MAX_EVIDENCE_PER_PARTY) {
       throw new HTTPException(429, {
@@ -308,18 +361,18 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     ).run(
       evidenceId,
       disputeId,
-      body.submitted_by,
-      body.evidence_type,
-      JSON.stringify(body.evidence_data),
-      body.description,
-      Date.now(),
+      ev.submitted_by,
+      ev.evidence_type,
+      JSON.stringify(ev.evidence_data),
+      ev.description,
+      ev.submitted_at,
     );
 
     logger.info("dispute.evidence_submitted", {
       disputeId,
       evidenceId,
-      submittedBy: body.submitted_by,
-      evidenceType: body.evidence_type,
+      submittedBy: ev.submitted_by,
+      evidenceType: ev.evidence_type,
     });
 
     return c.json({ ok: true, evidence_id: evidenceId });
@@ -458,14 +511,23 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   });
 
   // ── POST /api/v1/disputes/:disputeId/appeal (§8) ──
-  // File appeal against a resolution.
+  // File appeal against a resolution. The body MUST be a signed
+  // `DisputeAppeal` wire artifact per spec §8.2 — verified against the
+  // appealing party's registered public key.
   app.post("/api/v1/disputes/:disputeId/appeal", async (c) => {
     const disputeId = c.req.param("disputeId");
-    const body = await c.req.json<{
-      appealed_by: string;
-      reason: string;
-      additional_evidence?: string[];
-    }>();
+    const rawBody: unknown = await c.req.json().catch(() => null);
+    const parsed = DisputeAppealSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+    const ap = parsed.data;
+
+    if (ap.dispute_id !== disputeId) {
+      throw new HTTPException(400, {
+        message: "DisputeAppeal.dispute_id does not match path parameter",
+      });
+    }
 
     const dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
@@ -479,8 +541,9 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       throw new HTTPException(400, { message: "Appeal window has expired" });
     }
 
-    // Check appealer is a party
-    if (body.appealed_by !== dispute.filed_by && body.appealed_by !== dispute.respondent) {
+    // Check appealer is a party (party-membership check before signature
+    // verification — strangers don't even reach the keystore).
+    if (ap.appealed_by !== dispute.filed_by && ap.appealed_by !== dispute.respondent) {
       throw new HTTPException(403, { message: "Only dispute parties can appeal" });
     }
 
@@ -489,22 +552,36 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       throw new HTTPException(409, { message: "Dispute has already been appealed" });
     }
 
-    const appealedAt = Date.now();
+    const appealerRow = db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(ap.appealed_by) as { public_key: string } | undefined;
+    if (!appealerRow?.public_key) {
+      throw new HTTPException(401, {
+        message: "Appealing party is not registered; cannot verify DisputeAppeal signature",
+      });
+    }
+    const sigValid = await verifyDisputeAppeal(ap, hexToBytes(appealerRow.public_key));
+    if (!sigValid) {
+      throw new HTTPException(401, {
+        message: "DisputeAppeal signature verification failed",
+      });
+    }
+
     db.prepare(
       "UPDATE relay_disputes SET state = 'appealed', appealed_at = ? WHERE dispute_id = ?",
-    ).run(appealedAt, disputeId);
+    ).run(ap.appealed_at, disputeId);
 
     logger.info("dispute.appealed", {
       disputeId,
-      appealedBy: body.appealed_by,
-      reason: body.reason,
+      appealedBy: ap.appealed_by,
+      reason: ap.reason,
     });
 
     return c.json({
       ok: true,
       dispute_id: disputeId,
       state: "appealed" as DisputeState,
-      appealed_at: appealedAt,
+      appealed_at: ap.appealed_at,
     });
   });
 

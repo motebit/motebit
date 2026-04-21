@@ -21,6 +21,12 @@ import {
   verifyAdjudicatorVote,
   signDisputeResolution,
   verifyDisputeResolution,
+  signDisputeRequest,
+  verifyDisputeRequest,
+  signDisputeEvidence,
+  verifyDisputeEvidence,
+  signDisputeAppeal,
+  verifyDisputeAppeal,
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   signKeySuccession,
@@ -747,6 +753,124 @@ describe("signDisputeResolution / verifyDisputeResolution", () => {
     const signed = await signDisputeResolution(makeResolution(), relayKp.privateKey);
     const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
     expect(await verifyDisputeResolution(wrongSuite, relayKp.publicKey)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signDisputeRequest / verifyDisputeRequest  (dispute-v1 §4.2)
+// signDisputeEvidence / verifyDisputeEvidence  (dispute-v1 §5.2)
+// signDisputeAppeal / verifyDisputeAppeal  (dispute-v1 §8.2)
+// ---------------------------------------------------------------------------
+
+describe("signDisputeRequest / verifyDisputeRequest", () => {
+  function makeRequest(): Parameters<typeof signDisputeRequest>[0] {
+    return {
+      dispute_id: "dsp-test-1",
+      task_id: "task-1",
+      allocation_id: "alloc-1",
+      filed_by: "did:motebit:filer",
+      respondent: "did:motebit:resp",
+      category: "quality",
+      description: "Work was inadequate",
+      evidence_refs: ["receipt-1"],
+      filed_at: 1700000000000,
+    };
+  }
+
+  it("round-trips: signed by the filer, verified with the filer's public key", async () => {
+    const filerKp = await generateKeypair();
+    const signed = await signDisputeRequest(makeRequest(), filerKp.privateKey);
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(typeof signed.signature).toBe("string");
+    expect(await verifyDisputeRequest(signed, filerKp.publicKey)).toBe(true);
+  });
+
+  it("rejects under the wrong public key", async () => {
+    const filerKp = await generateKeypair();
+    const otherKp = await generateKeypair();
+    const signed = await signDisputeRequest(makeRequest(), filerKp.privateKey);
+    expect(await verifyDisputeRequest(signed, otherKp.publicKey)).toBe(false);
+  });
+
+  it("rejects tampered fields", async () => {
+    const filerKp = await generateKeypair();
+    const signed = await signDisputeRequest(makeRequest(), filerKp.privateKey);
+    const tampered = { ...signed, filed_by: "did:motebit:attacker" };
+    expect(await verifyDisputeRequest(tampered, filerKp.publicKey)).toBe(false);
+  });
+
+  it("rejects unknown suite (fail-closed)", async () => {
+    const filerKp = await generateKeypair();
+    const signed = await signDisputeRequest(makeRequest(), filerKp.privateKey);
+    const wrongSuite = { ...signed, suite: "motebit-future-pqc-v9" as never };
+    expect(await verifyDisputeRequest(wrongSuite, filerKp.publicKey)).toBe(false);
+  });
+});
+
+describe("signDisputeEvidence / verifyDisputeEvidence", () => {
+  function makeEvidence(): Parameters<typeof signDisputeEvidence>[0] {
+    return {
+      dispute_id: "dsp-test-1",
+      submitted_by: "did:motebit:resp",
+      evidence_type: "execution_receipt",
+      evidence_data: { receipt_id: "rcpt-1" },
+      description: "Receipt showing the task completed",
+      submitted_at: 1700000005000,
+    };
+  }
+
+  it("round-trips: signed by the submitter, verified with submitter's public key", async () => {
+    const submitterKp = await generateKeypair();
+    const signed = await signDisputeEvidence(makeEvidence(), submitterKp.privateKey);
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(await verifyDisputeEvidence(signed, submitterKp.publicKey)).toBe(true);
+  });
+
+  it("rejects under the wrong public key", async () => {
+    const submitterKp = await generateKeypair();
+    const otherKp = await generateKeypair();
+    const signed = await signDisputeEvidence(makeEvidence(), submitterKp.privateKey);
+    expect(await verifyDisputeEvidence(signed, otherKp.publicKey)).toBe(false);
+  });
+
+  it("rejects tampered evidence_data", async () => {
+    const submitterKp = await generateKeypair();
+    const signed = await signDisputeEvidence(makeEvidence(), submitterKp.privateKey);
+    const tampered = { ...signed, evidence_data: { receipt_id: "rcpt-FAKE" } };
+    expect(await verifyDisputeEvidence(tampered, submitterKp.publicKey)).toBe(false);
+  });
+});
+
+describe("signDisputeAppeal / verifyDisputeAppeal", () => {
+  function makeAppeal(): Parameters<typeof signDisputeAppeal>[0] {
+    return {
+      dispute_id: "dsp-test-1",
+      appealed_by: "did:motebit:filer",
+      reason: "New evidence overturns the resolution",
+      additional_evidence: ["evi-2"],
+      appealed_at: 1700000010000,
+    };
+  }
+
+  it("round-trips: signed by the appealer, verified with appealer's public key", async () => {
+    const appealerKp = await generateKeypair();
+    const signed = await signDisputeAppeal(makeAppeal(), appealerKp.privateKey);
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(await verifyDisputeAppeal(signed, appealerKp.publicKey)).toBe(true);
+  });
+
+  it("rejects under the wrong public key", async () => {
+    const appealerKp = await generateKeypair();
+    const otherKp = await generateKeypair();
+    const signed = await signDisputeAppeal(makeAppeal(), appealerKp.privateKey);
+    expect(await verifyDisputeAppeal(signed, otherKp.publicKey)).toBe(false);
+  });
+
+  it("rejects tampered reason", async () => {
+    const appealerKp = await generateKeypair();
+    const signed = await signDisputeAppeal(makeAppeal(), appealerKp.privateKey);
+    const tampered = { ...signed, reason: "Different reason after-the-fact" };
+    expect(await verifyDisputeAppeal(tampered, appealerKp.publicKey)).toBe(false);
   });
 });
 
