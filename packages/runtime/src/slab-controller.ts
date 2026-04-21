@@ -216,17 +216,38 @@ export interface SlabController {
    * transitions through `pinching → detached` or `dissolving`. The
    * item remains in state through those phases and is removed on
    * reaching `gone`.
+   *
+   * `endItem` picks between two end states — dissolve (default) and
+   * detach (when `outcome.detachAs` or the policy says so). It does
+   * _not_ produce a rest item; callers that want the finished work to
+   * stay on the slab as working material use `restItem` instead.
    */
   endItem(id: string, outcome: SlabItemOutcome): void;
 
   /**
+   * Settle an item into the **resting** phase — the third end state
+   * from docs/doctrine/motebit-computer.md §"Three end states." The
+   * item's active work has finished, but the content is still
+   * load-bearing in the session: a fetched page the motebit may
+   * consult again, a terminal output the user is still reading, the
+   * turn's response card. Stays on the slab until the user dismisses
+   * it (via `dismissItem`), the motebit closes it explicitly, or the
+   * session's broader context ends.
+   *
+   * No-op against unknown or terminal-phase items. Emerging items
+   * promote to active first so renderers can chain arrival then rest
+   * settling; calling `restItem` on an already-resting item is
+   * idempotent (logged and skipped).
+   */
+  restItem(id: string, payload?: unknown): void;
+
+  /**
    * User-initiated force-dissolve — the swipe gesture from
-   * docs/doctrine/motebit-computer.md §"The user's touch." Unlike
-   * `endItem`, `dismissItem` bypasses the detach policy entirely: a
-   * swipe means "no, I don't want this," regardless of whether the
-   * outcome would have been durable. The item transitions to
-   * `dissolving` immediately and gone after the dissolve tail. No
-   * artifact spawns.
+   * docs/doctrine/motebit-computer.md §"The user's touch." Bypasses
+   * the detach policy: a swipe means "no, I don't want this,"
+   * regardless of whether the outcome would have been durable. Works
+   * on active or resting items; in both cases the item transitions
+   * to `dissolving` and then `gone`. No artifact spawns.
    *
    * No-op against an unknown id or an item already in a terminal
    * phase (logged). Safe to wire directly to pointer/touch event
@@ -485,7 +506,11 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
         warn("slab updateItem ignored — unknown id", { id });
         return;
       }
-      // Don't update terminal-phase items — they're on their way out.
+      // Don't update items that are finishing — pinching, dissolving,
+      // detached, gone. Resting IS updatable (motebit may add to a
+      // resting fetch's content, or the user may edit a resting
+      // note). The phase itself doesn't change on update; resting
+      // stays resting, active stays active.
       if (
         current.phase === "pinching" ||
         current.phase === "dissolving" ||
@@ -532,6 +557,11 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
         promoteFromEmerging(id);
         notify();
       }
+      // Resting items that receive an explicit endItem also transition
+      // through dissolve / detach normally — the motebit calling
+      // endItem on a resting fetch (e.g., to graduate it to a signed
+      // receipt) is a legitimate flow. Any pending rest-state timers
+      // are cleared below when we schedule the new tail.
       const currentAfterPromote = items.get(id)!;
 
       const decision = detachPolicy(currentAfterPromote, outcome);
@@ -561,6 +591,49 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
       scheduleTail(id, "gone", DISSOLVING_TAIL_MS);
     },
 
+    restItem(id: string, payload?: unknown): void {
+      if (disposed) return;
+      const current = items.get(id);
+      if (!current) {
+        warn("slab restItem ignored — unknown id", { id });
+        return;
+      }
+      if (
+        current.phase === "pinching" ||
+        current.phase === "dissolving" ||
+        current.phase === "detached" ||
+        current.phase === "gone"
+      ) {
+        warn("slab restItem ignored — item already in terminal phase", {
+          id,
+          phase: current.phase,
+        });
+        return;
+      }
+      if (current.phase === "resting") {
+        // Idempotent — already resting. If the caller provided a fresh
+        // payload, merge that in; otherwise no-op.
+        if (payload !== undefined) {
+          updatePhase(id, "resting", payload);
+          notify();
+        }
+        return;
+      }
+      if (current.phase === "emerging") {
+        promoteFromEmerging(id);
+        notify();
+      }
+      // Cancel any pending end-phase tail — restItem supersedes
+      // whatever was queued (e.g., an earlier speculative endItem).
+      cancelPendingTimer(id);
+      updatePhase(id, "resting", payload !== undefined ? payload : current.payload);
+      recomputeAmbient();
+      notify();
+      // No tail timer — resting has no timeout; the item stays until
+      // the user dismisses it, the motebit ends it explicitly, or
+      // clearAll fires.
+    },
+
     dismissItem(id: string): void {
       if (disposed) return;
       const current = items.get(id);
@@ -583,6 +656,10 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
       if (current.phase === "emerging") {
         promoteFromEmerging(id);
       }
+      // Resting items dismiss normally — same dissolve physics as
+      // active items. The motebit's swipe is just another force on
+      // the surface regardless of whether the item was mid-work or
+      // holding steady.
       updatePhase(id, "dissolving");
       recomputeAmbient();
       notify();

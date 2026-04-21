@@ -193,16 +193,30 @@ export type SlabItemKind =
  *
  *   - `emerging` — item is materializing onto the slab.
  *   - `active` — item is present and may be streaming updates.
+ *   - `resting` — active work has finished, the item remains on the
+ *     slab as working material (open tab / reference). Stays until
+ *     dismissed by the user, closed by the motebit, or evicted.
+ *     The workstation's natural state; third end-branch alongside
+ *     `pinching` and `dissolving`. Doctrine: motebit-computer.md
+ *     §"Three end states — dissolve, rest, detach."
  *   - `pinching` — item has produced a durable output; surface dimples
  *     and the bead is separating under surface tension. Artifact is
  *     about to spawn; slab is about to ripple back to flat.
  *   - `detached` — item has left the slab as an artifact in the wider
  *     scene. The slab's own ripple may still be settling.
  *   - `dissolving` — item is fading back into the slab surface with
- *     no artifact spawn (ephemeral end, interrupt, failure).
+ *     no artifact spawn (ephemeral end, interrupt, failure, or
+ *     user-dismissed rest item).
  *   - `gone` — item no longer on the slab; no further transitions.
  */
-export type SlabItemPhase = "emerging" | "active" | "pinching" | "detached" | "dissolving" | "gone";
+export type SlabItemPhase =
+  | "emerging"
+  | "active"
+  | "resting"
+  | "pinching"
+  | "detached"
+  | "dissolving"
+  | "gone";
 
 /**
  * Specification for a slab item. The host-element pattern mirrors

@@ -269,6 +269,100 @@ describe("SlabController — defensive behavior", () => {
     );
   });
 
+  it("restItem settles an active item into resting with no tail timer", () => {
+    const { ctrl, sched } = makeController();
+    ctrl.openItem({ id: "f1", kind: "tool_call", payload: { name: "read_url" } });
+    ctrl.updateItem("f1", { name: "read_url", result: { data: "page text" } });
+    ctrl.restItem("f1");
+    expect(ctrl.getState().items.get("f1")?.phase).toBe("resting");
+    // Advance far past any dissolve / detach tail — the resting
+    // item persists. A workstation holds open tabs indefinitely.
+    sched.advance(60_000);
+    expect(ctrl.getState().items.get("f1")?.phase).toBe("resting");
+  });
+
+  it("restItem on an emerging item promotes to active first, then rests", () => {
+    const { ctrl, states } = makeController();
+    ctrl.openItem({ id: "f1", kind: "tool_call" });
+    expect(ctrl.getState().items.get("f1")?.phase).toBe("emerging");
+    ctrl.restItem("f1", { name: "read_url", data: "page" });
+    // Full sequence in the subscription stream: emerging → active → resting
+    const phases = states
+      .map((s) => s.items.get("f1")?.phase)
+      .filter((p): p is NonNullable<typeof p> => p != null);
+    expect(phases).toContain("emerging");
+    expect(phases).toContain("active");
+    expect(phases).toContain("resting");
+    expect(ctrl.getState().items.get("f1")?.payload).toEqual({
+      name: "read_url",
+      data: "page",
+    });
+  });
+
+  it("restItem is idempotent; re-rest updates payload when provided", () => {
+    const { ctrl } = makeController();
+    ctrl.openItem({ id: "f1", kind: "tool_call", payload: { v: 1 } });
+    ctrl.restItem("f1");
+    ctrl.restItem("f1"); // no-op, no warn (no unknown id / terminal)
+    expect(ctrl.getState().items.get("f1")?.phase).toBe("resting");
+    expect(ctrl.getState().items.get("f1")?.payload).toEqual({ v: 1 });
+    ctrl.restItem("f1", { v: 2 });
+    expect(ctrl.getState().items.get("f1")?.payload).toEqual({ v: 2 });
+  });
+
+  it("resting items are updatable without leaving rest", () => {
+    const { ctrl } = makeController();
+    ctrl.openItem({ id: "f1", kind: "tool_call" });
+    ctrl.restItem("f1", { text: "initial" });
+    ctrl.updateItem("f1", { text: "extended" });
+    expect(ctrl.getState().items.get("f1")?.phase).toBe("resting");
+    expect(ctrl.getState().items.get("f1")?.payload).toEqual({ text: "extended" });
+  });
+
+  it("dismissItem on a resting item dissolves it through the normal tail", () => {
+    const { ctrl, sched } = makeController();
+    ctrl.openItem({ id: "f1", kind: "tool_call" });
+    ctrl.restItem("f1", { data: "page" });
+    ctrl.dismissItem("f1");
+    expect(ctrl.getState().items.get("f1")?.phase).toBe("dissolving");
+    sched.advance(300);
+    expect(ctrl.getState().items.get("f1")).toBeUndefined();
+  });
+
+  it("endItem on a resting item can still detach to an artifact", () => {
+    const { ctrl, sched } = makeController();
+    ctrl.openItem({ id: "d1", kind: "delegation" });
+    ctrl.restItem("d1", { server: "peer", tool: "motebit_task" });
+    // Motebit later signs the delegation's result and graduates the
+    // resting item to a receipt artifact.
+    ctrl.endItem("d1", {
+      kind: "completed",
+      result: { full_receipt: { task_id: "t1", signature: "s" } },
+      detachAs: "receipt",
+    });
+    expect(ctrl.getState().items.get("d1")?.phase).toBe("pinching");
+    sched.advance(900);
+    expect(ctrl.getState().items.get("d1")).toBeUndefined();
+  });
+
+  it("recomputeAmbient treats resting items as active presence", () => {
+    const { ctrl, sched } = makeController();
+    ctrl.openItem({ id: "f1", kind: "tool_call" });
+    ctrl.restItem("f1");
+    expect(ctrl.getState().ambient).toBe("active");
+    // Advance past the recession delay — resting items keep the slab
+    // from going idle. A workstation with open tabs doesn't recede.
+    sched.advance(20_000);
+    expect(ctrl.getState().ambient).toBe("active");
+    // Once the user dismisses the last resting item, recession fires
+    // after the idle delay.
+    ctrl.dismissItem("f1");
+    sched.advance(300);
+    expect(ctrl.getState().ambient).toBe("idle");
+    sched.advance(10_000);
+    expect(ctrl.getState().ambient).toBe("recessed");
+  });
+
   it("delegation kind opens + ends as a receipt artifact when detachAs is set", () => {
     // The Hand organ's load-bearing entry (motebit-computer.md §Hand):
     // delegation arrives with a signed receipt → end with
