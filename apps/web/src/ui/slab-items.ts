@@ -92,6 +92,8 @@ function kindGlyph(kind: SlabItem["kind"]): string {
       return "∿";
     case "delegation":
       return "⇝";
+    case "memory":
+      return "◉";
     case "stream":
     case "plan_step":
     default:
@@ -904,6 +906,155 @@ function attachDelegationGestures(card: HTMLDivElement, actions: SlabItemActions
   });
 }
 
+// ── Memory — the Mind organ's visible breath ──────────────────────────
+//
+// Doctrine (motebit-computer.md §Mind): "memory surfaces on the slab
+// as it becomes relevant; drifts back down as it falls away." A
+// node rising into attention is not a tool-call result — it is the
+// motebit remembering, and the slab shows the remembering as it
+// happens. Ephemeral by default; dissolves when attention moves on.
+//
+// Visual: a softer card than the action kinds — no hard borders on
+// the content, a short-id pill showing the node's short identity,
+// and the content in readable prose. The glyph is a small filled
+// circle ("◉"), matching the "mote" vocabulary ("memory_mote") that
+// already lives in the scene-primitive catalog.
+
+function renderMemory(item: SlabItem, actions: SlabItemActions): HTMLElement {
+  const card = baseCard();
+  card.classList.add("slab-item-memory");
+  card.style.maxWidth = "236px";
+  card.style.cursor = "pointer";
+  card.style.touchAction = "pan-y";
+
+  // Head: ◉ glyph + "memory" + short-id pill.
+  const head = document.createElement("div");
+  head.style.display = "flex";
+  head.style.alignItems = "center";
+  head.style.gap = "6px";
+  head.style.marginBottom = "6px";
+  head.style.minWidth = "0";
+
+  const glyph = document.createElement("span");
+  glyph.textContent = "◉";
+  glyph.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  glyph.style.fontSize = "10.5px";
+  glyph.style.color = "rgba(95, 125, 180, 0.88)";
+  head.appendChild(glyph);
+
+  const label = document.createElement("span");
+  label.textContent = "memory";
+  label.style.fontSize = "9.5px";
+  label.style.fontWeight = "600";
+  label.style.letterSpacing = "0.08em";
+  label.style.textTransform = "uppercase";
+  label.style.color = "rgba(55, 72, 110, 0.82)";
+  label.style.flex = "1 1 auto";
+  head.appendChild(label);
+
+  const shortId = document.createElement("span");
+  shortId.dataset.slot = "short_id";
+  shortId.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  shortId.style.fontSize = "9.5px";
+  shortId.style.color = "rgba(95, 115, 155, 0.72)";
+  shortId.style.padding = "1px 6px";
+  shortId.style.borderRadius = "999px";
+  shortId.style.background = "rgba(255, 255, 255, 0.45)";
+  shortId.style.border = "1px solid rgba(120, 140, 180, 0.3)";
+  shortId.style.letterSpacing = "0.04em";
+  head.appendChild(shortId);
+
+  card.appendChild(head);
+
+  // Body — the memory's content, readable prose.
+  const body = document.createElement("div");
+  body.className = "slab-item-text";
+  body.dataset.slot = "body";
+  body.style.fontSize = "11.5px";
+  body.style.lineHeight = "1.5";
+  body.style.color = "rgba(18, 28, 50, 0.92)";
+  body.style.whiteSpace = "pre-wrap";
+  body.style.wordBreak = "break-word";
+  body.style.maxHeight = "72px";
+  body.style.overflow = "hidden";
+  body.style.maskImage = "linear-gradient(180deg, black 72%, transparent 100%)";
+  body.style.setProperty(
+    "-webkit-mask-image",
+    "linear-gradient(180deg, black 72%, transparent 100%)",
+  );
+  card.appendChild(body);
+
+  applyMemoryPayload(item.payload, shortId, body);
+  attachMemoryGestures(card, actions);
+  return card;
+}
+
+function updateMemory(item: SlabItem, element: HTMLElement): void {
+  const shortId = element.querySelector('[data-slot="short_id"]');
+  const body = element.querySelector('[data-slot="body"]');
+  if (shortId instanceof HTMLElement && body instanceof HTMLElement) {
+    applyMemoryPayload(item.payload, shortId, body);
+  }
+}
+
+function applyMemoryPayload(payload: unknown, shortId: HTMLElement, body: HTMLElement): void {
+  const p = payload as {
+    node_id?: string;
+    content?: string;
+    short_id?: string;
+  } | null;
+  shortId.textContent = p?.short_id ?? (p?.node_id ? p.node_id.slice(0, 8) : "");
+  const content = (p?.content ?? "").trim();
+  body.textContent = content;
+}
+
+function attachMemoryGestures(card: HTMLDivElement, actions: SlabItemActions): void {
+  card.addEventListener("click", () => {
+    const body = card.querySelector('[data-slot="body"]');
+    if (!(body instanceof HTMLElement)) return;
+    const expanded = card.dataset.expanded === "true";
+    if (expanded) {
+      card.dataset.expanded = "false";
+      body.style.maxHeight = "72px";
+      body.style.maskImage = "linear-gradient(180deg, black 72%, transparent 100%)";
+      body.style.setProperty(
+        "-webkit-mask-image",
+        "linear-gradient(180deg, black 72%, transparent 100%)",
+      );
+    } else {
+      card.dataset.expanded = "true";
+      body.style.maxHeight = "none";
+      body.style.maskImage = "none";
+      body.style.setProperty("-webkit-mask-image", "none");
+    }
+  });
+
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  card.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    startX = ev.clientX;
+    startY = ev.clientY;
+    tracking = true;
+  });
+  card.addEventListener("pointerup", (ev) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (Math.abs(dx) < SWIPE_PX) return;
+    if (Math.abs(dy) > Math.abs(dx) * Math.tan(SWIPE_MAX_ANGLE)) return;
+    card.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
+    card.style.transform = `translateX(${dx > 0 ? 180 : -180}px)`;
+    card.style.opacity = "0";
+    actions.dismiss();
+  });
+  card.addEventListener("pointercancel", () => {
+    tracking = false;
+  });
+}
+
 function renderGeneric(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add(`slab-item-${item.kind}`);
@@ -932,6 +1083,8 @@ export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLEl
       return renderPlanStep(item);
     case "delegation":
       return renderDelegation(item, actions);
+    case "memory":
+      return renderMemory(item, actions);
     case "shell":
     case "fetch":
     case "embedding":
@@ -954,6 +1107,9 @@ export function updateSlabItem(item: SlabItem, element: HTMLElement): void {
       break;
     case "delegation":
       updateDelegation(item, element);
+      break;
+    case "memory":
+      updateMemory(item, element);
       break;
     case "shell":
     case "fetch":

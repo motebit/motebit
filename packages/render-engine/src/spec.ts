@@ -170,6 +170,11 @@ export interface RenderAdapter {
  *     returns as a bead carrying a signed ExecutionReceipt. Doctrine:
  *     motebit-computer.md §Hand — "Delegation outbound." The returned
  *     receipt is durable — the item pinches to a receipt artifact.
+ *   - `memory` — a memory node rising into attention as the motebit
+ *     thinks (proactive consolidation, same-turn recall). The Mind
+ *     organ's visible breath: "memory surfaces on the slab as it
+ *     becomes relevant." Ephemeral — dissolves when attention moves
+ *     on. Doctrine: motebit-computer.md §Mind.
  */
 export type SlabItemKind =
   | "stream"
@@ -178,7 +183,8 @@ export type SlabItemKind =
   | "shell"
   | "fetch"
   | "embedding"
-  | "delegation";
+  | "delegation"
+  | "memory";
 
 /**
  * Lifecycle phase for a slab item. The doctrine treats detachment as a

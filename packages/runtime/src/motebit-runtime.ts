@@ -1790,6 +1790,39 @@ export class MotebitRuntime {
       combinedSignal = internalCtrl.signal;
     }
     try {
+      // Memory surfacing (Mind organ) — wire the consolidation cycle's
+      // onMemoryAttention to the slab. Each surfaced node gets a
+      // short-lived `memory`-kind slab item: opens as the phase visits
+      // it, auto-dissolves after a perceptible dwell. Bounded to avoid
+      // overwhelming the slab in a long cycle.
+      //
+      // Timers are tracked so `clearAll` semantics on a disposed
+      // runtime don't leak. The cycle itself is the budget owner;
+      // we just ride its attention events.
+      const memorySurfaceTimers = new Set<ReturnType<typeof setTimeout>>();
+      const MEMORY_DWELL_MS = 2_500;
+      const onMemoryAttention = (node: { node_id: string; content: string }): void => {
+        const id = `slab-memory-${cycleId}-${node.node_id}`;
+        this.slab.openItem({
+          id,
+          kind: "memory",
+          payload: {
+            node_id: node.node_id,
+            content: node.content,
+            short_id: node.node_id.slice(0, 8),
+          },
+        });
+        const handle = setTimeout(() => {
+          memorySurfaceTimers.delete(handle);
+          // endItem without detachAs — the default policy dissolves,
+          // which is the doctrine-right outcome: memory surfacing is
+          // ephemeral. The node itself persists in the graph; the
+          // slab appearance is transient.
+          this.slab.endItem(id, { kind: "completed" });
+        }, MEMORY_DWELL_MS);
+        memorySurfaceTimers.add(handle);
+      };
+
       const result = await runConsolidationCycle(
         {
           motebitId: this.motebitId,
@@ -1815,8 +1848,13 @@ export class MotebitRuntime {
             }
             config.onPhaseStart?.(phase, id);
           },
+          onMemoryAttention,
         },
       );
+      // Cycle finished — any timers still outstanding will fire and
+      // dissolve their items normally; nothing to clean up proactively
+      // unless the runtime disposes, which dispose() handles.
+      void memorySurfaceTimers;
       // Sign + emit a ConsolidationReceipt when signing keys are present
       // and the cycle did meaningful work (at least one phase ran). The
       // receipt is structural-only (counts + ids + timestamps); the

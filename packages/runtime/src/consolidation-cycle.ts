@@ -92,6 +92,18 @@ export interface ConsolidationCycleConfig {
    *  before the phase function runs. The runtime wires this to
    *  `PresenceController.advancePhase` so surfaces see the live phase. */
   onPhaseStart?: (phase: Phase, cycleId: string) => void;
+  /**
+   * Invoked when a memory node rises into attention during the cycle
+   * — top-ranked notable nodes in gather, each cluster head before
+   * consolidate merges. The Mind organ's visible breath: the runtime
+   * wires this to `slab.openItem({ kind: "memory" })` so the user can
+   * watch memories surface and fall away as the motebit thinks.
+   *
+   * Synchronous + best-effort; exceptions are swallowed by the
+   * invoker so a slab failure can never break a consolidation cycle.
+   * Doctrine: docs/doctrine/motebit-computer.md §Mind.
+   */
+  onMemoryAttention?: (node: MemoryNode, phase: Phase) => void;
 }
 
 export interface ConsolidationCycleResult {
@@ -117,6 +129,36 @@ interface PhaseContext {
   now: number;
   prunabilityThreshold: number;
   consolidationClusterThreshold: number;
+  /** Invoked on each memory that rises into attention during this phase.
+   *  Optional — when omitted, the phase runs without surfacing. */
+  onMemoryAttention?: (node: MemoryNode, phase: Phase) => void;
+}
+
+/**
+ * How many top-ranked notable memories to surface on the slab during
+ * the gather phase. Small enough that the user can perceive each one
+ * (droplet physics — the slab has finite real estate); the full
+ * notable list is still accounted for in `result.summary.gatherNotable`.
+ */
+const GATHER_ATTENTION_LIMIT = 3;
+
+function safeAttention(
+  cb: ((node: MemoryNode, phase: Phase) => void) | undefined,
+  node: MemoryNode,
+  phase: Phase,
+  logger: { warn(message: string, context?: Record<string, unknown>): void },
+): void {
+  if (!cb) return;
+  try {
+    cb(node, phase);
+  } catch (err: unknown) {
+    // Best-effort — a slab failure must never break a consolidation
+    // cycle. Swallow + log.
+    logger.warn("onMemoryAttention threw — dropping", {
+      phase,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 interface GatheredState {
@@ -171,6 +213,7 @@ export async function runConsolidationCycle(
       now: config.nowMs ?? Date.now(),
       prunabilityThreshold,
       consolidationClusterThreshold,
+      onMemoryAttention: config.onMemoryAttention,
     };
 
     try {
@@ -275,6 +318,18 @@ async function gatherPhase(
 
   const notable = rankNotableMemories(live, edges, { nowMs: ctx.now });
 
+  // Surface the top-N notable nodes on the slab — the Mind organ's
+  // visible breath during gather. Doctrine (motebit-computer.md §Mind):
+  // "memory surfaces on the slab as it becomes relevant." Bounded to
+  // GATHER_ATTENTION_LIMIT so the plane has room for other acts in
+  // flight; the full ranked list still accounts for `notableCount`.
+  if (ctx.onMemoryAttention) {
+    for (const entry of notable.slice(0, GATHER_ATTENTION_LIMIT)) {
+      if (ctx.signal.aborted) break;
+      safeAttention(ctx.onMemoryAttention, entry.node, "gather", deps.logger);
+    }
+  }
+
   const candidates = live.filter((n) => {
     if (n.pinned) return false;
     if (n.memory_type !== MemoryType.Episodic) return false;
@@ -304,6 +359,11 @@ async function consolidatePhase(
 
     const head = cluster[0];
     if (!head) continue;
+
+    // Surface the cluster head on the slab as the motebit consolidates.
+    // The Mind organ's visible breath during consolidate — the user
+    // sees which memory is being absorbed as the merge happens.
+    safeAttention(ctx.onMemoryAttention, head, "consolidate", deps.logger);
 
     const contents = cluster.map((n) => `- ${n.content}`).join("\n");
     const prompt = `Summarize the following episodic observations into a single factual statement:\n${contents}\n\nRespond with ONLY the summary sentence.`;

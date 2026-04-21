@@ -144,6 +144,64 @@ describe("runConsolidationCycle", () => {
     expect(after.nodes.filter((n) => !n.tombstoned)).toHaveLength(0);
   });
 
+  it("onMemoryAttention fires during gather for the top-ranked notable nodes", async () => {
+    // Seed two high-confidence, low-phantom memories that will rank
+    // as notable (the gather phase's `rankNotableMemories` surfaces
+    // them). The callback should fire once per node with phase="gather".
+    const embedding = new Array(384).fill(0.1);
+    const n1 = await harness.runtime.memory.formMemory(
+      { content: "first notable fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      embedding,
+      SEVEN_DAYS,
+    );
+    const n2 = await harness.runtime.memory.formMemory(
+      { content: "second notable fact", confidence: 0.85, sensitivity: SensitivityLevel.None },
+      embedding,
+      SEVEN_DAYS,
+    );
+
+    const seen: Array<{ id: string; phase: Phase }> = [];
+    await runConsolidationCycle(harness.deps, {
+      phases: ["gather"],
+      onMemoryAttention: (node, phase) => {
+        seen.push({ id: node.node_id, phase });
+      },
+    });
+
+    // At least one of the seeded nodes must have risen into attention
+    // with phase="gather". Exact ranking is a notability-module concern
+    // we don't pin here; the wire-in is what this test locks down.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((s) => s.phase === "gather")).toBe(true);
+    const seenIds = new Set(seen.map((s) => s.id));
+    expect(seenIds.has(n1.node_id) || seenIds.has(n2.node_id)).toBe(true);
+  });
+
+  it("onMemoryAttention exceptions are swallowed — cycle still completes", async () => {
+    const embedding = new Array(384).fill(0.1);
+    await harness.runtime.memory.formMemory(
+      {
+        content: "surfacing triggers a throw",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+      },
+      embedding,
+      SEVEN_DAYS,
+    );
+
+    const result = await runConsolidationCycle(harness.deps, {
+      phases: ["gather"],
+      onMemoryAttention: () => {
+        throw new Error("slab blew up");
+      },
+    });
+
+    // Callback throws must not promote to cycle failures — the Mind
+    // organ's visible breath is best-effort by doctrine.
+    expect(result.phasesRun).toContain("gather");
+    expect(result.phasesErrored).toEqual([]);
+  });
+
   it("preserves pinned memories during prune even when decayed", async () => {
     const embedding = new Array(384).fill(0.1);
     const node = await harness.runtime.memory.formMemory(
