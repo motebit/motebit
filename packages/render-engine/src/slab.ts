@@ -106,13 +106,11 @@ const RECESSION_DELAY_S = 10.0;
 interface ManagedSlabItem {
   id: string;
   kind: SlabItemSpec["kind"];
-  object: CSS2DObject;
+  /** The mounted DOM element — a flex-column child of the shared items container. */
   element: HTMLElement;
   phase: SlabItemPhase;
   /** Seconds elapsed within the current phase. */
   phaseTime: number;
-  /** Grid slot index for layout. */
-  slot: number;
   /** Subscribers to phase transitions. */
   phaseListeners: Set<(phase: SlabItemPhase) => void>;
   /**
@@ -143,7 +141,20 @@ export class SlabManager {
   private readonly group: THREE.Group;
   private readonly planeMesh: THREE.Mesh;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
-  private readonly itemsGroup: THREE.Group;
+  /**
+   * One CSS2DObject anchored at the plane's center, holding a flex-
+   * column container whose children are the individual slab items.
+   *
+   * The previous design placed each item in its own CSS2DObject at a
+   * computed 3D slot position — which meant variable-height cards
+   * overlapped because 3D anchors don't know about CSS layout. The
+   * workstation frame (motebit-computer.md §"Three end states") needs
+   * items to pile up cleanly as research accumulates, so now a single
+   * container handles the flow via standard CSS, and items are plain
+   * DOM children that gap, wrap, and scroll natively.
+   */
+  private readonly itemsContainer: CSS2DObject;
+  private readonly itemsContainerEl: HTMLDivElement;
   private readonly css2dRenderer: CSS2DRenderer;
   private readonly items = new Map<string, ManagedSlabItem>();
   private readonly detachHandler: DetachArtifactHandler | null;
@@ -245,11 +256,19 @@ export class SlabManager {
     this.planeMesh.visible = false; // skip GL work when truly recessed
     this.group.add(this.planeMesh);
 
-    // Items group sits in the plane's local space so rotation is
-    // shared — items tilt with the slab.
-    this.itemsGroup = new THREE.Group();
-    this.itemsGroup.name = "slab-items";
-    this.group.add(this.itemsGroup);
+    // Items container — one CSS2DObject rooted at the plane's center,
+    // wrapping a flex-column div whose children are slab items. CSS
+    // handles the flow; items never overlap, a scroll bar appears if
+    // the stack grows past the visible area.
+    //
+    // When `document` is unavailable (headless tests), build a minimal
+    // stand-in with the same API shape. The stand-in satisfies the
+    // test's item-tracking assertions without needing a real DOM; a
+    // real surface will always have `document`.
+    this.itemsContainerEl = createContainerElement();
+    this.itemsContainer = new CSS2DObject(this.itemsContainerEl);
+    this.itemsContainer.position.set(0, 0, 0.001);
+    this.group.add(this.itemsContainer);
 
     // Reuse a CSS2DRenderer pattern for mounting HTML items on the slab
     // surface. The artifact manager already creates one; we add our own
@@ -289,35 +308,31 @@ export class SlabManager {
   // ── Public API — mirrors the RenderAdapter slab methods ───────────
 
   addItem(spec: SlabItemSpec): SlabItemHandle {
-    // Mount the caller's HTML into a CSS2DObject anchored to the
-    // plane's center. Items stack vertically with simple slot indexing
-    // — Pass 2 doesn't do reflow; first item, bottom of plane.
+    // Append the caller's element as a DOM child of the items
+    // container. CSS flex-column handles the stacking — no per-item
+    // 3D position, no slot math, no reflow pass. Cards gap naturally
+    // and the container scrolls when the stack overflows. Doctrine:
+    // motebit-computer.md §"Three end states" — a workstation holds
+    // working material as it accumulates.
     spec.element.style.pointerEvents = "auto";
     spec.element.style.transform = "scale(0)";
     spec.element.style.transformOrigin = "center center";
     spec.element.style.opacity = "0";
-
-    const cssObject = new CSS2DObject(spec.element);
-    const slot = this.items.size;
-    cssObject.position.set(...this.slotPosition(slot));
-    this.itemsGroup.add(cssObject);
+    // `flex: 0 0 auto` prevents the flex container from shrinking or
+    // stretching individual items. Each card keeps its intrinsic
+    // height as defined by its content + padding.
+    spec.element.style.flex = "0 0 auto";
+    this.itemsContainerEl.appendChild(spec.element);
 
     const managed: ManagedSlabItem = {
       id: spec.id,
       kind: spec.kind,
-      object: cssObject,
       element: spec.element,
       phase: "emerging",
       phaseTime: 0,
-      slot,
       phaseListeners: new Set(),
     };
     this.items.set(spec.id, managed);
-    // Reflow — `slotPosition` compresses spacing as the stack grows,
-    // so the newly-added item changes the layout for the existing
-    // items too. Cheap (items.size is small) and keeps the stack
-    // readable as research accumulates.
-    this.reflowStack();
 
     const handle: SlabItemHandle = {
       id: spec.id,
@@ -614,31 +629,13 @@ export class SlabManager {
   private removeImmediate(id: string): void {
     const item = this.items.get(id);
     if (!item) return;
-    this.itemsGroup.remove(item.object);
+    // Remove the element from the container. CSS flex will reflow
+    // the remaining items automatically — no manual layout pass.
+    if (item.element.parentNode === this.itemsContainerEl) {
+      this.itemsContainerEl.removeChild(item.element);
+    }
     item.phaseListeners.clear();
     this.items.delete(id);
-    // Reflow — the stack's spacing recomputes based on total count,
-    // so a removal relaxes the spacing for the remaining items.
-    // Cheap and keeps the layout honest as items dismiss.
-    this.reflowStack();
-  }
-
-  /**
-   * Recompute every mounted item's slot position based on the current
-   * total count. Called after addItem / removeImmediate so the stack's
-   * compression stays consistent as items arrive and leave. Slot
-   * indices assign by insertion order (Map iteration is insertion-
-   * ordered in JS); pinned items (future) will anchor to the top and
-   * exempt themselves from FIFO pressure.
-   */
-  private reflowStack(): void {
-    let slot = 0;
-    for (const item of this.items.values()) {
-      const [x, y, z] = this.slotPosition(slot);
-      item.object.position.set(x, y, z);
-      item.slot = slot;
-      slot += 1;
-    }
   }
 
   /**
@@ -668,6 +665,13 @@ export class SlabManager {
     const positions = positionAttr.array as Float32Array;
 
     // Collect pinching items with amplitudes. Empty → fast path.
+    //
+    // With the single-container layout, items no longer have a
+    // per-item 3D anchor — their position lives in CSS flow. We
+    // approximate each pinching item's center in plane-local
+    // coordinates by measuring its DOM rect relative to the
+    // container's rect (see `pinchCenterForElement`). The Gaussian
+    // bump is still local to the item's visible location.
     const pinches: Array<{ x: number; y: number; amplitude: number }> = [];
     for (const item of this.items.values()) {
       if (item.phase !== "pinching") continue;
@@ -680,8 +684,8 @@ export class SlabManager {
       if (t < 0.35) amp = easeInOutQuad(t / 0.35) * 0.008;
       else if (t < 0.55) amp = 0.008 + easeInOutQuad((t - 0.35) / 0.2) * 0.006;
       else amp = 0.014 * (1 - easeInQuad((t - 0.55) / 0.45));
-      const pos = item.object.position;
-      pinches.push({ x: pos.x, y: pos.y, amplitude: amp });
+      const [px, py] = this.pinchCenterForElement(item.element);
+      pinches.push({ x: px, y: py, amplitude: amp });
     }
 
     // Fast path: no active pinches — copy rest positions and bail.
@@ -717,31 +721,110 @@ export class SlabManager {
   }
 
   /**
-   * Slot layout in plane-local space. Items stack vertically from the
-   * plane's top edge downward. Under the workstation frame
-   * (motebit-computer.md §"Three end states"), items rest on the slab
-   * until dismissed — so the layout must accommodate accumulation.
+   * Approximate an item element's center in plane-local coordinates,
+   * used only by the pinch displacement to place the Gaussian dimple
+   * under the item that's graduating. With the single-container
+   * layout, items have no 3D anchor — we read DOM rects instead and
+   * map them onto the plane's local X/Y via the container's bbox.
    *
-   * Strategy: tighten the stack as more items land, so a research
-   * session with 6–10 resting items stays legible without overflow.
-   * The CSS2D overlay already handles in-card scroll for long content;
-   * this function just picks where the card's anchor sits in 3D space.
-   *
-   * Pinned items (future) will exempt themselves from FIFO pressure;
-   * for now every item stacks in arrival order.
+   * Returns (0, 0) if rects aren't available (headless / not yet
+   * attached). The pinch is subtle at that amplitude; a fallback
+   * center-of-plane dimple is fine in those cases.
    */
-  private slotPosition(slot: number): [number, number, number] {
-    const topY = SLAB_HEIGHT / 2 - 0.02;
-    const total = Math.max(1, this.items.size);
-    // Spacing compresses as the stack grows — 0.05 for a light stack,
-    // easing down to 0.034 once ~8 items are held. Keeps the whole
-    // stack visible on the 0.22m-tall plane without hard clipping.
-    const spacing = total <= 4 ? 0.05 : Math.max(0.034, 0.05 - (total - 4) * 0.003);
-    return [0, topY - slot * spacing, 0.001];
+  private pinchCenterForElement(el: HTMLElement): [number, number] {
+    if (typeof el.getBoundingClientRect !== "function") return [0, 0];
+    const containerEl = this.itemsContainerEl;
+    if (typeof containerEl.getBoundingClientRect !== "function") return [0, 0];
+    const elRect = el.getBoundingClientRect();
+    const contRect = containerEl.getBoundingClientRect();
+    if (contRect.width === 0 || contRect.height === 0) return [0, 0];
+    const cx = elRect.left + elRect.width / 2 - (contRect.left + contRect.width / 2);
+    const cy = elRect.top + elRect.height / 2 - (contRect.top + contRect.height / 2);
+    // CSS2DRenderer maps 1 plane-meter to roughly (contRect.width /
+    // containerWidthInPixels) screen-ratio, but we just need an
+    // approximation: treat the container's on-screen rect as a
+    // bounded mapping to the plane's local span. Plane-local Y is
+    // inverted (screen y-down vs plane y-up).
+    const pxPerMeter = contRect.width / SLAB_WIDTH;
+    const planeX = cx / pxPerMeter;
+    const planeY = -cy / pxPerMeter;
+    return [planeX, planeY];
   }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Build the items-container element. In a browser this is a real
+ * `<div>` styled as a flex column. In headless tests there is no
+ * `document`, so return a minimal stand-in with `style`, `className`,
+ * `appendChild` / `removeChild`, and a `getBoundingClientRect` that
+ * returns a zero-size rect — enough to satisfy the `pinchCenterForElement`
+ * fallback without crashing. A real surface always has `document`;
+ * the stand-in is purely for unit-test plumbing.
+ */
+function createContainerElement(): HTMLDivElement {
+  if (typeof document === "undefined") {
+    const children: HTMLElement[] = [];
+    const stub = {
+      className: "slab-items-container",
+      style: new Proxy(
+        {},
+        {
+          get: () => "",
+          set: () => true,
+        },
+      ) as unknown as CSSStyleDeclaration,
+      appendChild: (child: HTMLElement) => {
+        children.push(child);
+        (child as unknown as { parentNode: unknown }).parentNode = stub;
+        return child;
+      },
+      removeChild: (child: HTMLElement) => {
+        const i = children.indexOf(child);
+        if (i >= 0) children.splice(i, 1);
+        (child as unknown as { parentNode: unknown }).parentNode = null;
+        return child;
+      },
+      getBoundingClientRect: () => ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+      }),
+    };
+    return stub as unknown as HTMLDivElement;
+  }
+  const el = document.createElement("div");
+  el.className = "slab-items-container";
+  el.style.display = "flex";
+  el.style.flexDirection = "column";
+  el.style.alignItems = "flex-start";
+  el.style.gap = "6px";
+  el.style.padding = "10px";
+  el.style.boxSizing = "border-box";
+  // Plane is ~0.36 m × 0.22 m; container is sized to fit comfortably
+  // within its visible footprint at the default camera. Cards are
+  // all narrower than the container, so they left-align and leave
+  // room for a scroll track on the right when many items rest.
+  el.style.width = "360px";
+  el.style.maxHeight = "240px";
+  el.style.overflowY = "auto";
+  el.style.overflowX = "hidden";
+  // Scroll is a first-party affordance — droplet-physics-native,
+  // not conventional chrome. Thin scrollbar so it reads as a
+  // hairline meniscus dip, not an OS widget.
+  el.style.setProperty("scrollbar-width", "thin");
+  el.style.setProperty("scrollbar-color", "rgba(120,140,180,0.35) transparent");
+  // Container itself accepts pointer events (scroll capture + pass-
+  // through to items). Items already set their own pointerEvents:auto.
+  el.style.pointerEvents = "auto";
+  return el;
+}
 
 function easeOutQuad(t: number): number {
   return 1 - (1 - t) * (1 - t);
