@@ -520,36 +520,39 @@ function renderFetch(item: SlabItem, actions: SlabItemActions): HTMLElement {
 
   card.appendChild(chrome);
 
-  // Reader view — fetched content rendered as legible, scrollable
-  // prose that fills the window. Not a log tail; a reading surface.
-  const body = document.createElement("div");
-  body.className = "slab-item-text";
-  body.dataset.slot = "body";
-  body.style.fontSize = "12.5px";
-  body.style.lineHeight = "1.55";
-  body.style.color = "rgba(18, 28, 50, 0.94)";
-  body.style.whiteSpace = "pre-wrap";
-  body.style.wordBreak = "break-word";
-  body.style.padding = "12px 14px";
-  body.style.maxHeight = "240px";
-  body.style.overflowY = "auto";
-  body.style.overflowX = "hidden";
-  card.appendChild(body);
+  // Reader view — the fetched page rendered inside a sandboxed
+  // iframe. `srcdoc` with our own reader-mode HTML wraps the
+  // motebit's cleaned text content in legible article typography.
+  // The iframe is a real browser rendering surface, not a text
+  // block — scroll, copy, selection all behave natively. Sandbox
+  // locks scripts/forms/popups so untrusted page content can't
+  // escape. No external resources fetched (self-contained srcdoc).
+  const frame = document.createElement("iframe");
+  frame.dataset.slot = "frame";
+  frame.setAttribute("sandbox", "allow-same-origin");
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  frame.style.border = "none";
+  frame.style.width = "100%";
+  frame.style.height = "280px";
+  frame.style.display = "block";
+  frame.style.background = "transparent";
+  frame.style.colorScheme = "light";
+  card.appendChild(frame);
 
-  applyFetchPayload(item.payload, hostEl, pathEl, body);
+  applyFetchPayload(item.payload, hostEl, pathEl, frame);
   return card;
 }
 
 function updateFetch(item: SlabItem, element: HTMLElement): void {
   const hostEl = element.querySelector('[data-slot="host"]');
   const pathEl = element.querySelector('[data-slot="path"]');
-  const body = element.querySelector('[data-slot="body"]');
+  const frame = element.querySelector('[data-slot="frame"]');
   if (
     hostEl instanceof HTMLElement &&
     pathEl instanceof HTMLElement &&
-    body instanceof HTMLElement
+    frame instanceof HTMLIFrameElement
   ) {
-    applyFetchPayload(item.payload, hostEl, pathEl, body);
+    applyFetchPayload(item.payload, hostEl, pathEl, frame);
   }
 }
 
@@ -557,14 +560,81 @@ function applyFetchPayload(
   payload: unknown,
   hostEl: HTMLElement,
   pathEl: HTMLElement,
-  body: HTMLElement,
+  frame: HTMLIFrameElement,
 ): void {
   const p = payload as { context?: string; status?: string; result?: unknown } | null;
   const raw = p?.context ?? "";
   const parsed = parseUrl(raw);
   hostEl.textContent = parsed.host || (p?.status === "calling" ? "reading" : "");
   pathEl.textContent = parsed.path || (parsed.host ? "/" : raw);
-  body.textContent = extractFetchPreview(p);
+  const preview = extractFetchPreview(p);
+  const srcdoc = buildReaderSrcdoc(preview, parsed.host);
+  // Only re-assign srcdoc when content actually changes — avoids
+  // reloading the iframe on every tick during streaming state
+  // transitions.
+  if (frame.dataset.content !== preview) {
+    frame.dataset.content = preview;
+    frame.srcdoc = srcdoc;
+  }
+}
+
+/**
+ * Build a self-contained HTML document to hand to the iframe's
+ * `srcdoc`. Wraps the motebit's cleaned text in reader-mode article
+ * typography — the page is *rendered* in the plane, not displayed as
+ * text about the page. No scripts, no external resources; the iframe's
+ * `sandbox` attribute enforces that at the browser level too.
+ *
+ * Paragraph structure comes from double-newlines in the source text
+ * (the `read_url` tool preserves those when cleaning HTML). Headings
+ * are not reconstructed in this pass — the upstream tool strips
+ * structural tags before returning the text, so heading hierarchy
+ * is lost. A follow-up pass can preserve a subset of tags at the
+ * tool layer to restore headings.
+ */
+function buildReaderSrcdoc(text: string, host: string): string {
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  const paragraphs = escaped
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+    .join("\n");
+  const body =
+    paragraphs.length > 0
+      ? paragraphs
+      : `<p class="empty">${host ? "reading " + host + "…" : ""}</p>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    html, body { margin: 0; padding: 0; background: transparent; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Georgia, serif;
+      font-size: 14px;
+      line-height: 1.7;
+      color: rgba(14, 22, 40, 0.94);
+      padding: 18px 24px 24px;
+      max-width: 560px;
+      word-wrap: break-word;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    article { letter-spacing: -0.005em; }
+    p { margin: 0 0 12px 0; }
+    p:last-child { margin-bottom: 0; }
+    p.empty {
+      color: rgba(80, 110, 165, 0.6);
+      font-style: italic;
+    }
+    a { color: rgba(80, 110, 165, 0.95); }
+    ::selection { background: rgba(80, 110, 165, 0.25); }
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(120, 140, 180, 0.3); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(120, 140, 180, 0.5); }
+  </style></head><body><article>${body}</article></body></html>`;
 }
 
 function parseUrl(raw: string): { host: string; path: string } {
@@ -1310,28 +1380,11 @@ function renderGeneric(item: SlabItem): HTMLElement {
  * Caller (slab-bridge) mounts the returned element on the slab.
  */
 export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLElement {
-  // STRIPPED STATE — deliberately silent. The slab is being redesigned
-  // from the screen outward; cards are temporarily off so we can see
-  // the plane itself as the foundation and brainstorm what belongs on
-  // it. Runtime + controller + bridge are unchanged — items still
-  // open/update/rest/dissolve in state, so the plane's ambient still
-  // goes active when work is in flight. Only the DOM content is muted.
-  //
-  // Re-enable by restoring the `buildCardForKind(item, actions)` +
-  // `attachHoverClose` path. Helpers are kept intact (not deleted) so
-  // the rebuild lands as additive work.
-  void item;
-  void actions;
-  // Reference the stripped helpers so they stay compiled and ready
-  // for the rebuild — no dead-code elimination, no rename dance.
-  void attachHoverClose;
-  void buildCardForKind;
-  const el = document.createElement("div");
-  el.className = "slab-item-stripped";
-  el.style.display = "none";
-  el.style.width = "0";
-  el.style.height = "0";
-  return el;
+  const card = buildCardForKind(item, actions);
+  if (card instanceof HTMLDivElement) {
+    attachHoverClose(card, actions);
+  }
+  return card;
 }
 
 function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement {
