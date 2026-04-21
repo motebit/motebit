@@ -56,14 +56,69 @@ export function createReadUrlHandler(opts?: { proxyUrl?: string }): ToolHandler 
       }
 
       const text = await res.text();
-      // Strip HTML tags for readability
+      // Strip HTML while preserving semantic structure as Markdown-style
+      // markers. The LLM gets efficient structured text it handles
+      // natively; the slab renderer parses the markers back into proper
+      // HTML for reader-mode display (virtual_browser embodiment mode
+      // — see docs/doctrine/motebit-computer.md §"Embodiment modes").
+      //
+      // Preserved as markers:
+      //   <h1>–<h6>   →  # / ## / ### / … title text
+      //   <p>, <div>  →  paragraph break (\n\n)
+      //   <br>        →  line break (\n)
+      //   <li>        →  "- " prefixed bullet
+      //   <a href>    →  [text](href) — keeps link targets for the reader
+      //
+      // Stripped:
+      //   <script>, <style>, <noscript>, <iframe>, <object>, <embed>
+      //   all attributes except href on <a>
+      //   everything else (including nav, aside, footer — they're UI
+      //   chrome of the source page, not content).
       const cleaned = text
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+        .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "")
+        .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, "")
+        .replace(/<(?:object|embed)[^>]*>[\s\S]*?<\/(?:object|embed)>/gi, "")
+        .replace(/<h1[^>]*>/gi, "\n\n# ")
+        .replace(/<\/h1>/gi, "\n\n")
+        .replace(/<h2[^>]*>/gi, "\n\n## ")
+        .replace(/<\/h2>/gi, "\n\n")
+        .replace(/<h3[^>]*>/gi, "\n\n### ")
+        .replace(/<\/h3>/gi, "\n\n")
+        .replace(/<h4[^>]*>/gi, "\n\n#### ")
+        .replace(/<\/h4>/gi, "\n\n")
+        .replace(/<h5[^>]*>/gi, "\n\n##### ")
+        .replace(/<\/h5>/gi, "\n\n")
+        .replace(/<h6[^>]*>/gi, "\n\n###### ")
+        .replace(/<\/h6>/gi, "\n\n")
+        .replace(/<\/(?:p|div|section|article|blockquote|pre)>/gi, "\n\n")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<li[^>]*>/gi, "\n- ")
+        .replace(/<\/li>/gi, "")
+        // Preserve <a href> as [text](url). Capture text then href.
+        .replace(
+          /<a\b[^>]*\shref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+          (_m, href: string, inner: string) => {
+            const t = inner.replace(/<[^>]+>/g, "").trim();
+            return t ? `[${t}](${href})` : "";
+          },
+        )
+        // Strip all remaining tags.
         .replace(/<[^>]+>/g, " ")
-        .replace(/\s{2,}/g, " ")
+        // Decode a handful of common entities.
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        // Normalise whitespace inside each line; preserve paragraph breaks.
+        .replace(/[ \t]+/g, " ")
+        .replace(/ *\n */g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
         .trim();
-      return { ok: true, data: cleaned.slice(0, 8000) };
+      return { ok: true, data: cleaned.slice(0, 16000) };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `Fetch error: ${msg}` };

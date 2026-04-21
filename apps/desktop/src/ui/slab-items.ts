@@ -568,7 +568,7 @@ function applyFetchPayload(
   hostEl.textContent = parsed.host || (p?.status === "calling" ? "reading" : "");
   pathEl.textContent = parsed.path || (parsed.host ? "/" : raw);
   const preview = extractFetchPreview(p);
-  const srcdoc = buildReaderSrcdoc(preview, parsed.host);
+  const srcdoc = buildReaderSrcdoc(preview, parsed.host, raw);
   // Only re-assign srcdoc when content actually changes — avoids
   // reloading the iframe on every tick during streaming state
   // transitions.
@@ -580,35 +580,31 @@ function applyFetchPayload(
 
 /**
  * Build a self-contained HTML document to hand to the iframe's
- * `srcdoc`. Wraps the motebit's cleaned text in reader-mode article
- * typography — the page is *rendered* in the plane, not displayed as
- * text about the page. No scripts, no external resources; the iframe's
- * `sandbox` attribute enforces that at the browser level too.
+ * `srcdoc`. Parses the motebit's structured-text output (from the
+ * upgraded read_url tool) back into proper HTML — headings, lists,
+ * links — and wraps in reader-mode article typography.
  *
- * Paragraph structure comes from double-newlines in the source text
- * (the `read_url` tool preserves those when cleaning HTML). Headings
- * are not reconstructed in this pass — the upstream tool strips
- * structural tags before returning the text, so heading hierarchy
- * is lost. A follow-up pass can preserve a subset of tags at the
- * tool layer to restore headings.
+ * Under the `virtual_browser` embodiment mode, this is the page the
+ * motebit is looking at, rendered as a real article in the plane —
+ * not "text about the page."
+ *
+ * Marker conventions (produced by read_url):
+ *   `# Title`        → <h1>Title</h1>
+ *   `## Subhead`     → <h2>…</h2>, up to ###### h6
+ *   `- bullet item`  → <ul><li>…</li></ul> (consecutive grouped)
+ *   `[text](href)`   → <a href="href">text</a>
+ *   double newline   → paragraph break
+ *   single newline   → <br>
+ *
+ * No scripts, no external resources in the rendered fragment; sandbox
+ * on the iframe enforces it at the browser level too. Relative links
+ * in the source `<a href>` resolve against a `<base>` pointed at the
+ * source host.
  */
-function buildReaderSrcdoc(text: string, host: string): string {
-  const escaped = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-  const paragraphs = escaped
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0)
-    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
-    .join("\n");
-  const body =
-    paragraphs.length > 0
-      ? paragraphs
-      : `<p class="empty">${host ? "reading " + host + "…" : ""}</p>`;
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+function buildReaderSrcdoc(text: string, host: string, baseUrl?: string): string {
+  const body = text.trim().length > 0 ? parseStructuredText(text) : emptyPlaceholder(host);
+  const base = baseUrl ? `<base href="${escapeHtml(baseUrl)}">` : "";
+  return `<!doctype html><html><head><meta charset="utf-8">${base}<style>
     html, body { margin: 0; padding: 0; background: transparent; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Georgia, serif;
@@ -616,25 +612,131 @@ function buildReaderSrcdoc(text: string, host: string): string {
       line-height: 1.7;
       color: rgba(14, 22, 40, 0.94);
       padding: 18px 24px 24px;
-      max-width: 560px;
+      max-width: 640px;
       word-wrap: break-word;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
     article { letter-spacing: -0.005em; }
+    h1, h2, h3, h4, h5, h6 {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+      color: rgba(10, 18, 32, 0.98);
+      line-height: 1.3;
+      margin: 22px 0 10px;
+      letter-spacing: -0.015em;
+    }
+    h1 { font-size: 22px; font-weight: 700; margin-top: 0; }
+    h2 { font-size: 18px; font-weight: 600; }
+    h3 { font-size: 16px; font-weight: 600; }
+    h4, h5, h6 { font-size: 14px; font-weight: 600; }
     p { margin: 0 0 12px 0; }
-    p:last-child { margin-bottom: 0; }
+    p:last-child, li:last-child { margin-bottom: 0; }
+    ul { padding-left: 22px; margin: 0 0 12px 0; }
+    li { margin-bottom: 4px; }
+    a { color: rgba(80, 110, 165, 0.95); text-decoration: underline; text-underline-offset: 2px; }
+    a:hover { color: rgba(55, 85, 140, 1); }
     p.empty {
       color: rgba(80, 110, 165, 0.6);
       font-style: italic;
     }
-    a { color: rgba(80, 110, 165, 0.95); }
     ::selection { background: rgba(80, 110, 165, 0.25); }
     ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(120, 140, 180, 0.3); border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(120, 140, 180, 0.5); }
   </style></head><body><article>${body}</article></body></html>`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function emptyPlaceholder(host: string): string {
+  return `<p class="empty">${host ? "reading " + escapeHtml(host) + "…" : ""}</p>`;
+}
+
+/**
+ * Parse the structured-text markers produced by read_url back into
+ * HTML. Consumes the source line-by-line, grouping consecutive list
+ * items into a single <ul>, wrapping non-marker paragraphs in <p>,
+ * and converting inline `[text](href)` patterns to anchor tags.
+ *
+ * All text is HTML-escaped before marker interpretation so the
+ * source content can't inject tags. Link hrefs are validated to
+ * http(s) schemes so javascript: URLs can't slip in.
+ */
+function parseStructuredText(source: string): string {
+  const lines = source.split(/\n/);
+  const out: string[] = [];
+  let inList = false;
+  let paragraphBuffer: string[] = [];
+
+  const flushParagraph = (): void => {
+    if (paragraphBuffer.length === 0) return;
+    out.push(`<p>${paragraphBuffer.join("<br>")}</p>`);
+    paragraphBuffer = [];
+  };
+  const closeList = (): void => {
+    if (inList) {
+      out.push("</ul>");
+      inList = false;
+    }
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line === "") {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+    // Heading (# .. ######)
+    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      flushParagraph();
+      closeList();
+      const level = headingMatch[1]!.length;
+      const content = inlineMarkdown(headingMatch[2]!);
+      out.push(`<h${level}>${content}</h${level}>`);
+      continue;
+    }
+    // List item
+    if (line.startsWith("- ")) {
+      flushParagraph();
+      if (!inList) {
+        out.push("<ul>");
+        inList = true;
+      }
+      out.push(`<li>${inlineMarkdown(line.slice(2))}</li>`);
+      continue;
+    }
+    // Regular paragraph line
+    closeList();
+    paragraphBuffer.push(inlineMarkdown(line));
+  }
+  flushParagraph();
+  closeList();
+  return out.join("\n");
+}
+
+/** Convert inline `[text](href)` markers to anchor tags. Escapes text. */
+function inlineMarkdown(s: string): string {
+  const escaped = escapeHtml(s);
+  // Inline link pattern. After escaping, brackets and parens are still
+  // `[` `]` `(` `)` — they weren't entity-encoded above — so the regex
+  // still matches. href is validated to http(s) only; anything else
+  // renders as plain text to avoid javascript: URLs.
+  return escaped.replace(
+    /\[([^\]]+)\]\(([^)]+)\)/g,
+    (match: string, text: string, href: string) => {
+      if (!/^https?:\/\//i.test(href)) return match;
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+    },
+  );
 }
 
 function parseUrl(raw: string): { host: string; path: string } {
@@ -670,16 +772,16 @@ function extractFetchPreview(payload: { status?: string; result?: unknown } | nu
     // symbol / function — not reachable from tool results in practice.
     text = "";
   }
-  // Collapse runs of whitespace so the preview reads as flowing prose
-  // rather than reflowed HTML whitespace. Keep paragraph breaks by
-  // preserving double-newlines first, then collapsing.
+  // Preserve paragraph breaks and Markdown-ish structure markers from
+  // the tool; the renderer parses them back into HTML headings, lists,
+  // and links. Only collapse intra-line whitespace.
   const cleaned = text
     .replace(/\n\s*\n/g, "\n\n")
     .replace(/[^\S\n]+/g, " ")
     .trim();
-  // Reader view: show the full fetched content (capped to 4KB so we
-  // don't balloon the DOM for a 64KB page). The body scrolls.
-  return cleaned.length > 4000 ? cleaned.slice(0, 4000) + "\n\n…" : cleaned;
+  // Reader view caps at 16KB (matches read_url tool's new cap). The
+  // iframe scrolls for longer pages.
+  return cleaned.length > 16000 ? cleaned.slice(0, 16000) + "\n\n…" : cleaned;
 }
 
 // ── Gestures: tap to expand, swipe to dismiss ─────────────────────────

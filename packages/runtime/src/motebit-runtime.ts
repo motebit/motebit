@@ -199,6 +199,19 @@ function isRestingTool(name: string): boolean {
   return RESTING_TOOLS.has(name);
 }
 
+/**
+ * Tool names whose slab items belong to the `virtual_browser`
+ * embodiment mode — the motebit is navigating an isolated browser
+ * viewport, and the user sees the rendered page in the plane.
+ * Doctrine (motebit-computer.md §"Embodiment modes"). Anything not
+ * in this set uses the default inference (tool_result).
+ */
+const VIRTUAL_BROWSER_TOOLS: ReadonlySet<string> = new Set(["read_url", "fetch_url"]);
+
+function embodimentForTool(name: string): "virtual_browser" | "tool_result" {
+  return VIRTUAL_BROWSER_TOOLS.has(name) ? "virtual_browser" : "tool_result";
+}
+
 export class MotebitRuntime {
   readonly motebitId: string;
   readonly state: StateVectorEngine;
@@ -1247,6 +1260,7 @@ export class MotebitRuntime {
             this.slab.openItem({
               id: toolItemId,
               kind: "tool_call",
+              mode: embodimentForTool(chunk.name),
               payload: { name: chunk.name, context: chunk.context, status: "calling" },
             });
           } else if (chunk.status === "done") {
@@ -1423,6 +1437,7 @@ export class MotebitRuntime {
             this.slab.openItem({
               id: toolItemId,
               kind: "tool_call",
+              mode: embodimentForTool(chunk.name),
               payload: { name: chunk.name, context: chunk.context, status: "calling" },
             });
           } else if (chunk.status === "done") {
