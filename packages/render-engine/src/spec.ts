@@ -198,6 +198,66 @@ export type SlabItemKind =
   | "memory";
 
 /**
+ * Embodiment mode — the coarse-grained perceptual category the slab
+ * item belongs to. Orthogonal to `SlabItemKind` (which is the fine-
+ * grained content shape). A single item has both: a `fetch` kind is
+ * typically `tool_result` mode today and may become `virtual_browser`
+ * mode when the renderer ships real embedded pages.
+ *
+ * The motebit perceives through many embodiments, not one. The
+ * Motebit Computer is the single surface where whichever embodiment
+ * is active is rendered live, governed by what the user has granted.
+ * See docs/doctrine/motebit-computer.md §"Embodiment modes" for the
+ * spectrum, the mode × end-state matrix, and the governance gates.
+ *
+ *   - `mind` — internal memory / reasoning surfacing. Always
+ *     permitted; no external governance gate.
+ *   - `tool_result` — cleaned output from a sandboxed tool call.
+ *     Turn-scoped by invocation. The thinnest embodiment.
+ *   - `virtual_browser` — an isolated browser viewport the motebit
+ *     is navigating (Operator-shape). Session-scoped consent.
+ *   - `shared_gaze` — a source both the motebit and the user look
+ *     at (Zed-pattern). Per-source consent.
+ *   - `desktop_drive` — the motebit acts on the user's real desktop
+ *     (Claude Cowork-shape). Explicit, revocable grant.
+ *   - `peer_viewport` — looking into a peer motebit's work via
+ *     federation. Signed delegation + trust graph.
+ */
+export type EmbodimentMode =
+  | "mind"
+  | "tool_result"
+  | "virtual_browser"
+  | "shared_gaze"
+  | "desktop_drive"
+  | "peer_viewport";
+
+/**
+ * Sensible default mapping from `SlabItemKind` to `EmbodimentMode`.
+ * Runtime can override per item when the embodiment doesn't match the
+ * default (e.g., a `fetch` kind opened inside a consented virtual
+ * browser upgrades from `tool_result` to `virtual_browser`).
+ *
+ * The defaults are published in the protocol so every consumer
+ * (controller, bridge, renderer, tests) agrees on what an un-
+ * annotated kind means.
+ */
+export function defaultEmbodimentMode(kind: SlabItemKind): EmbodimentMode {
+  switch (kind) {
+    case "stream":
+    case "plan_step":
+    case "embedding":
+    case "memory":
+      return "mind";
+    case "tool_call":
+    case "shell":
+    case "fetch":
+      return "tool_result";
+    case "delegation":
+      return "peer_viewport";
+  }
+}
+
+/**
  * Lifecycle phase for a slab item. The doctrine treats detachment as a
  * typed phase (not a private animation detail) so cross-surface
  * renderers can't silently diverge on the pinch physics.

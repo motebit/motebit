@@ -49,6 +49,15 @@ vi.mock("@motebit/render-engine", () => {
     // the web-app renders without satellites (same contract as when
     // getCreatureGroup() returns null).
     mountCredentialSatellites: () => null,
+    // The embodiment-mode default inference is a pure function; mock
+    // it so the runtime's import through render-engine resolves.
+    defaultEmbodimentMode: (kind: string) => {
+      if (kind === "stream" || kind === "plan_step" || kind === "embedding" || kind === "memory") {
+        return "mind";
+      }
+      if (kind === "delegation") return "peer_viewport";
+      return "tool_result";
+    },
   };
 });
 

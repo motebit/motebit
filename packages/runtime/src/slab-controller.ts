@@ -56,7 +56,8 @@
  *     state containing those types and nothing more.
  */
 
-import type { SlabItemKind, SlabItemPhase } from "@motebit/render-engine";
+import type { EmbodimentMode, SlabItemKind, SlabItemPhase } from "@motebit/render-engine";
+import { defaultEmbodimentMode } from "@motebit/render-engine";
 
 /**
  * Ambient state of the slab plane itself, independent of individual
@@ -143,6 +144,14 @@ export interface SlabItem {
    * `unknown` here because the controller is shape-agnostic.
    */
   readonly payload: unknown;
+  /**
+   * Embodiment mode — the coarse-grained perceptual category this
+   * item belongs to. Orthogonal to `kind` (fine-grained content
+   * shape). Inferred from `kind` via `defaultEmbodimentMode` when the
+   * opener doesn't specify one. Doctrine: motebit-computer.md
+   * §"Embodiment modes — governance-gated perception."
+   */
+  readonly mode: EmbodimentMode;
 }
 
 export interface SlabState {
@@ -201,8 +210,18 @@ export interface SlabController {
    * Idempotent on `id` collisions: a second call with the same id is
    * dropped with a logger warning. Callers that legitimately reopen
    * (e.g., a tool call retried) should use a fresh id.
+   *
+   * `mode` is optional — defaults from `kind` via
+   * `defaultEmbodimentMode`. Callers that need a non-default mode
+   * (e.g., a fetch served from a consented virtual_browser rather
+   * than a sandboxed tool call) pass it explicitly.
    */
-  openItem(spec: { id: string; kind: SlabItemKind; payload?: unknown }): void;
+  openItem(spec: {
+    id: string;
+    kind: SlabItemKind;
+    payload?: unknown;
+    mode?: EmbodimentMode;
+  }): void;
 
   /**
    * Replace or extend a live item's payload. No phase change. The
@@ -474,7 +493,7 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
       };
     },
 
-    openItem({ id, kind, payload }): void {
+    openItem({ id, kind, payload, mode }): void {
       if (disposed) return;
       if (items.has(id)) {
         warn("slab openItem ignored — item id already present", { id, kind });
@@ -488,6 +507,7 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
         openedAt: ts,
         lastUpdatedAt: ts,
         payload,
+        mode: mode ?? defaultEmbodimentMode(kind),
       });
       recomputeAmbient();
       notify();

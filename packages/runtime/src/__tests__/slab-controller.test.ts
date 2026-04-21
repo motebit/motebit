@@ -87,6 +87,47 @@ describe("SlabController — initial state", () => {
   });
 });
 
+describe("SlabController — embodiment mode", () => {
+  it("openItem infers mode from kind when unspecified", () => {
+    const { ctrl } = makeController();
+    ctrl.openItem({ id: "s1", kind: "stream" });
+    ctrl.openItem({ id: "t1", kind: "tool_call" });
+    ctrl.openItem({ id: "m1", kind: "memory" });
+    ctrl.openItem({ id: "d1", kind: "delegation" });
+    ctrl.openItem({ id: "f1", kind: "fetch" });
+    ctrl.openItem({ id: "sh1", kind: "shell" });
+    ctrl.openItem({ id: "p1", kind: "plan_step" });
+    ctrl.openItem({ id: "e1", kind: "embedding" });
+    const state = ctrl.getState();
+    expect(state.items.get("s1")?.mode).toBe("mind");
+    expect(state.items.get("t1")?.mode).toBe("tool_result");
+    expect(state.items.get("m1")?.mode).toBe("mind");
+    expect(state.items.get("d1")?.mode).toBe("peer_viewport");
+    expect(state.items.get("f1")?.mode).toBe("tool_result");
+    expect(state.items.get("sh1")?.mode).toBe("tool_result");
+    expect(state.items.get("p1")?.mode).toBe("mind");
+    expect(state.items.get("e1")?.mode).toBe("mind");
+  });
+
+  it("openItem honors an explicit mode override", () => {
+    // A fetch that's actually rendered through a consented virtual
+    // browser upgrades from tool_result → virtual_browser. Protocol
+    // doesn't lock mode to kind.
+    const { ctrl } = makeController();
+    ctrl.openItem({ id: "f1", kind: "fetch", mode: "virtual_browser" });
+    expect(ctrl.getState().items.get("f1")?.mode).toBe("virtual_browser");
+  });
+
+  it("mode persists across phase transitions", () => {
+    const { ctrl } = makeController();
+    ctrl.openItem({ id: "d1", kind: "delegation" });
+    ctrl.updateItem("d1", { peer: "x" });
+    ctrl.endItem("d1", { kind: "completed", detachAs: "receipt" });
+    // Through emerging → active → pinching, mode stays peer_viewport.
+    expect(ctrl.getState().items.get("d1")?.mode).toBe("peer_viewport");
+  });
+});
+
 describe("SlabController — item lifecycle", () => {
   it("openItem emits emerging; first update promotes to active", () => {
     const { ctrl, states } = makeController();
@@ -516,6 +557,7 @@ describe("defaultDetachPolicy", () => {
     openedAt: 0,
     lastUpdatedAt: 0,
     payload: null,
+    mode: "tool_result" as const,
   };
 
   it("dissolves on interrupted", () => {
