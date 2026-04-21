@@ -351,8 +351,11 @@ function extractFetchPreview(payload: { status?: string; result?: unknown } | nu
     if (typeof data === "string") text = data;
     else if (typeof error === "string") text = error;
     else text = JSON.stringify(r);
-  } else {
+  } else if (typeof r === "number" || typeof r === "boolean" || typeof r === "bigint") {
     text = String(r);
+  } else {
+    // symbol / function — not reachable from tool results in practice.
+    text = "";
   }
   // Collapse runs of whitespace so the preview reads as flowing prose
   // rather than reflowed HTML whitespace.
@@ -561,8 +564,10 @@ function applyShellPayload(payload: unknown, cmd: HTMLElement, out: HTMLElement)
         isError = true;
       }
     }
-  } else {
+  } else if (typeof r === "number" || typeof r === "boolean" || typeof r === "bigint") {
     text = String(r);
+  } else {
+    text = "";
   }
 
   out.textContent = text.trimEnd();
