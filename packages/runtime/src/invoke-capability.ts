@@ -13,7 +13,7 @@
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
 
-import type { StreamChunk } from "./index.js";
+import type { StreamChunk } from "./runtime-config.js";
 import {
   submitAndPollDelegation,
   type DelegationError,

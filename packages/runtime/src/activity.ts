@@ -21,7 +21,7 @@
  * default. Returning `undefined` from a derivation means "chunk doesn't
  * change the current activity" — the tracker keeps whatever was set.
  */
-import type { StreamChunk } from "./index.js";
+import type { StreamChunk } from "./runtime-config.js";
 import type { PlanChunk } from "@motebit/planner";
 
 export type ActivityLabel = string | null;

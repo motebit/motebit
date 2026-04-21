@@ -17,7 +17,7 @@ import type { BehaviorCues } from "@motebit/sdk";
 import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
 import { extractStateTags, runTurnStreaming } from "@motebit/ai-core";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
-import type { StreamChunk } from "./index.js";
+import type { StreamChunk } from "./runtime-config.js";
 
 // Re-import the helper — it's file-local in index.ts, so we duplicate it here.
 // Exact copy of the function from index.ts.

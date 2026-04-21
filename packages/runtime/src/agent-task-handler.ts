@@ -18,7 +18,7 @@ import { hash, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/enc
 import { composeDelegationTrust, trustLevelToScore } from "@motebit/semiring";
 import type { EventStore } from "@motebit/event-log";
 import type { AgentGraphManager } from "./agent-graph.js";
-import type { StreamChunk } from "./index.js";
+import type { StreamChunk } from "./runtime-config.js";
 
 /** Saved conversation context for restore after task execution. */
 export type SavedConversationContext = { history: ConversationMessage[]; id: string | null };
