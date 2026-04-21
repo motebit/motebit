@@ -126,6 +126,63 @@ Additions to this set need a justification: they must be physical interactions w
 - **Conventional window chrome.** Gray drop-shadow close buttons, titlebars, tab strips with stoplight controls, OS-style resize grips. These turn the slab into a program window and break the metaphor. See "Affordances that emerge from the surface" above — droplet-native affordances are allowed; OS-native chrome is not.
 - **Prompt-backdoor gestures.** A drag-to-feed that secretly appends text to the next user message. Perception is not a message; keep the two channels typed and separate.
 
+## Embodiment modes — governance-gated perception
+
+A motebit perceives through many embodiments, not one. The tool result is the thinnest embodiment; the others land on the same surface as the motebit grows. The Motebit Computer is **the single liquid-glass surface where whatever embodiment the motebit is currently occupying is rendered live**, governed by what the user has granted.
+
+This is the load-bearing distinction from the market. Operator picks one cell (virtual browser). Cowork picks another (desktop drive). Nobody unifies the spectrum. The slab does.
+
+### The spectrum
+
+| Mode                | What the motebit sees / does                                                         | Governance gate                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| **mind**            | Its own memory / reasoning surfacing; internal state reorganizing.                   | Always permitted — it's the interior. No external gate.                                                 |
+| **tool_result**     | Cleaned output from a sandboxed tool call (fetch text, shell output, search hits).   | Turn-scoped; implicit by invocation. The thinnest embodiment.                                           |
+| **virtual_browser** | An isolated browser viewport the motebit is navigating; user watches.                | Session-scoped consent. User can revoke; motebit can't persist beyond the session without explicit pin. |
+| **shared_gaze**     | A source the user and motebit both look at (Zed-pattern): user's tab, motebit reads. | Per-source consent. User points the motebit at something.                                               |
+| **desktop_drive**   | The motebit acts on the user's real desktop (Claude Cowork shape).                   | Explicit, revocable grant. Highest agency. Halt gesture always in reach.                                |
+| **peer_viewport**   | Looking through a peer motebit's work via federation; a signed delegation returning. | Signed delegation + trust graph. Peer identity visible on arrival.                                      |
+
+Every slab item carries a mode. Most tool calls default to `tool_result`; memory surfacing defaults to `mind`; delegation to `peer_viewport`. The runtime can override per item (e.g., a `read_url` that ships with a real embedded page upgrades from `tool_result` to `virtual_browser`).
+
+### Mode × end state matrix
+
+Modes and end states are **orthogonal**. Any mode can land in any end state. Sensible defaults:
+
+|                     | dissolve (ephemeral) | rest (working material)     | detach (graduate)           |
+| ------------------- | -------------------- | --------------------------- | --------------------------- |
+| **mind**            | memory that fades    | pinned reasoning            | formed / promoted memory    |
+| **tool_result**     | plumbing call        | fetched page, shell output  | receipt-bearing tool result |
+| **virtual_browser** | failed session       | in-flight research tabs     | captured page artifact      |
+| **shared_gaze**     | glanced, moved on    | source the user is on       | screenshot / snapshot       |
+| **desktop_drive**   | aborted action       | sequence of actions in view | completed workflow receipt  |
+| **peer_viewport**   | unsigned reply       | delegation in flight        | signed ExecutionReceipt     |
+
+The default for most items is `rest`. Detach is reserved for genuinely durable outputs.
+
+### Governance as first-class
+
+Under polymorphic embodiment, the user's supervised agency (see "The user's touch") extends from _per-item dismiss/pin_ to _per-mode grant/revoke_:
+
+- **Granting a mode** — the user opens a new embodiment for the motebit (e.g., "you may drive my desktop for this session"). Before the grant, items of that mode cannot appear on the slab.
+- **Revoking a mode** — the user closes an embodiment mid-session. Active items of that mode dissolve; new items of that mode won't emerge until the grant is reinstated.
+- **Mode visibility** — the slab visibly reflects which modes are currently permitted. Granted modes light a small meniscus marker on the plane's edge; revoked modes are dark. (Implementation is a follow-up pass; the primitive lands first.)
+
+Governance gates live in the runtime, not the renderer. The slab renders the _consequence_ of governance (what's permitted is what appears), never the mechanism.
+
+### Failure modes specific to modes
+
+- **Collapsing modes into one.** Treating every slab item as `tool_result` — the current poverty. Mode makes the spectrum first-class so embodiments can grow.
+- **Mode without governance.** Adding `desktop_drive` or `virtual_browser` without the grant/revoke gate. High-agency modes without explicit consent break supervised agency.
+- **Mode mixed into kind.** Don't rename `fetch` to `virtual_browser_fetch`. Kind is the fine-grained shape of the content; mode is the coarse-grained embodiment category. A `fetch` kind can be `tool_result` mode today and `virtual_browser` mode tomorrow without a protocol break.
+- **Governance as chrome.** Don't show granted modes as a settings panel bolted to the slab's edge. Mode visibility emerges from the surface (a meniscus marker, a plane-color wash) — same doctrine as other affordances.
+
+### Why this completes the doctrine
+
+The first-person framing was right but the implementation constrained "eye" to tool output. That's the thinnest embodiment. The spectrum names what the motebit's eye can _become_ — and the Motebit Computer is the one surface where whichever embodiment is active gets rendered, with three end states, droplet physics, body-adjacency to the creature, and governance made visible.
+
+That configuration is unclaimed by the incumbents. Operator ships `virtual_browser`. Cowork ships `desktop_drive`. Comet ships a variant of `shared_gaze`. Nobody ships all of them unified on one surface with governance, three end states, and a body-adjacent display. The slab does.
+
 ## Three end states — dissolve, rest, detach
 
 An item that finishes its active work has three possible next states. The motebit-computer is a **workstation**, not a theater — most of what finishes on the slab doesn't graduate to the scene and doesn't vanish; it _stays on the workstation_ as working material. Picking the wrong end state for a kind makes the slab feel either like a log stream (everything dissolves, nothing persists) or like a magical factory (everything graduates into the scene).
@@ -248,11 +305,12 @@ One type surface, one event stream, three renderers — following the existing p
 1. Is this a **first-person perception / action / thought**, or a third-person label about one? Status strings ("calling…"), event names ("fetch", "tool*call"), and log-shaped cards are labels. The slab renders what the motebit \_sees, does, and thinks*, in the modality that belongs to. If you're rendering a noun for an experience instead of the experience itself, you're on the wrong surface.
 2. Is the thing you're adding an **act** (on-slab) or a **record** (off-slab, in a panel)? If record, stop.
 3. Does **chat already render this richly** as text? A one-line textual echo in chat ("reading example.com…") is acceptable as Ring-1 fallback; a full reproduction of the act's content in both places is the collapse. If chat renders more than a thin status, the frames have merged — trim chat back to a one-liner.
-4. Which of the **three end states** does the item land in when its active work finishes — dissolve (ephemeral plumbing, nothing to keep), rest (working material, stays on the workstation), or detach (graduate, pinches to scene)? The default for most tool calls is rest, not dissolve. Explicitly chose one; don't leave it to an implicit policy.
-5. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? Active items say no (they shouldn't persist after their work ends). Resting items say yes (they persist through the motebit's idle until the user or the session dismisses them). Records-in-disguise also say yes — if the answer is yes for a reason other than rest, it's probably a panel record, not a slab item.
-6. Does its transition obey **droplet physics** — emergence as meniscus-expansion, dissolution as surface-ripple-absorption, detachment as bead-tension-release? If not, the metaphor is leaking.
-7. Does it render **identically across web, desktop, spatial, and mobile**? If surface-specific, it's either a renderer detail (fine) or a capability split (needs justification per the capability-rings doctrine).
-8. Does it have the **minimum gesture set** — tap (focus) and swipe (dismiss) at least? A kind with rich rendering but no user touch drifts toward movie. A kind with "run tool" chrome drifts toward remote desktop. Ship the third state, not either adjacent one.
+4. Which **embodiment mode** does the item belong to — `mind`, `tool_result`, `virtual_browser`, `shared_gaze`, `desktop_drive`, or `peer_viewport`? Most items default from their kind (tool_call → tool_result, memory → mind, delegation → peer_viewport); higher-agency modes need an explicit governance grant. If you're unsure, you're probably flattening modes into `tool_result` — the failure mode the spectrum was introduced to prevent.
+5. Which of the **three end states** does the item land in when its active work finishes — dissolve (ephemeral plumbing, nothing to keep), rest (working material, stays on the workstation), or detach (graduate, pinches to scene)? The default for most tool calls is rest, not dissolve. Explicitly chose one; don't leave it to an implicit policy.
+6. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? Active items say no (they shouldn't persist after their work ends). Resting items say yes (they persist through the motebit's idle until the user or the session dismisses them). Records-in-disguise also say yes — if the answer is yes for a reason other than rest, it's probably a panel record, not a slab item.
+7. Does its transition obey **droplet physics** — emergence as meniscus-expansion, dissolution as surface-ripple-absorption, detachment as bead-tension-release? If not, the metaphor is leaking.
+8. Does it render **identically across web, desktop, spatial, and mobile**? If surface-specific, it's either a renderer detail (fine) or a capability split (needs justification per the capability-rings doctrine).
+9. Does it have the **minimum gesture set** — tap (focus) and swipe (dismiss) at least? A kind with rich rendering but no user touch drifts toward movie. A kind with "run tool" chrome drifts toward remote desktop. Ship the third state, not either adjacent one.
 
 ## References
 
