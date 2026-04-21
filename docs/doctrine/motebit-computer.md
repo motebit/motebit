@@ -87,11 +87,18 @@ Frames the doctrine rules out:
 
 Frame the doctrine holds us to:
 
-- **Supervised agency** — the motebit leads; the user can perturb. The slab's items have their own lifecycle (emerge, active, dissolve, pinch) set by the motebit's work. The user's touch is another force that acts on that lifecycle — a second tension on the same surface.
+- **Supervised agency** — the motebit leads; the user can perturb. The slab's items have their own lifecycle (emerge, active, rest, dissolve / pinch) set by the motebit's work. The user's touch is another force that acts on that lifecycle — a second tension on the same surface.
 
-### Gestures as forces, not chrome
+### Affordances that emerge from the surface, not conventional window chrome
 
-The slab has **no chrome** — no buttons, no "Cancel" affordances, no close boxes. That rule holds. User control happens through _physical gestures on the droplets themselves_, the same way a finger on a water surface is not a button. The slab has surface tension; the user's touch is additional tension.
+The slab has **no conventional window chrome** — no macOS stoplight buttons, no titlebar, no tab strip with drop-shadow, no resize grips. That rule holds. But a workstation holding resting items needs _some_ affordances for workstation operations: closing an item you no longer need, scrolling when work accumulates, pinning something so the FIFO pressure doesn't evict it. The doctrine draws the line at **how** the affordance is expressed, not whether:
+
+- **Allowed** — affordances that _emerge from the surface itself_ and feel like interactions with the droplet. A close-× that materializes as a meniscus dip in the card's upper-right corner when the pointer enters; a pinned state rendered as a visible tension-knot on the card; native scroll within a card's content when it overflows; a plane-level scroll or deck-stack when many items rest. These are not chrome — they're how the surface responds to intent.
+- **Forbidden** — conventional window chrome bolted on. Gray square close buttons with drop-shadows. A title bar running across the top of the plane. A tab strip with macOS-style tabs. "Minimize / maximize / resize" grips. The moment the slab starts looking like a program window, the metaphor has collapsed.
+
+The test: if the affordance would feel at home on a water droplet or a sheet of liquid glass, ship it. If it would feel at home in a 1990s OS chrome library, it's the wrong direction.
+
+User control primarily happens through _physical gestures on the droplets themselves_. Gestures are first-class; affordances are the desktop-native equivalent that emerges when gestures aren't natural (hover, right-click surface).
 
 The minimum viable set of gestures (per the surface-determinism doctrine — each routes through `invokeCapability`, never through a constructed prompt):
 
@@ -114,67 +121,102 @@ Additions to this set need a justification: they must be physical interactions w
 
 ### Failure modes specific to supervised agency
 
-- **Drift toward movie.** Shipping rich rendering without any gestures. The slab becomes a window you can't open. Every per-kind renderer needs at least `tap` (focus) and `swipe` (dismiss) before it counts as shipped.
-- **Drift toward remote desktop.** Adding "run tool X" chrome, "re-run", or "edit this call's arguments" buttons to slab items. That collapses the motebit's agency into the user's. Kill on sight.
+- **Drift toward movie.** Shipping rich rendering without any gestures or affordances. The slab becomes a window you can't open. Every per-kind renderer needs at least `tap` (focus) and a dismiss path (swipe or hover-close) before it counts as shipped.
+- **Drift toward remote desktop.** Adding affordances that let the user _drive the motebit's tools_ from the slab — "run tool X," "re-run this call with different args," "pick which URL to fetch next." That collapses the motebit's agency into the user's. Dismissing / pinning / feeding perception is fine; steering individual tool invocations is not.
+- **Conventional window chrome.** Gray drop-shadow close buttons, titlebars, tab strips with stoplight controls, OS-style resize grips. These turn the slab into a program window and break the metaphor. See "Affordances that emerge from the surface" above — droplet-native affordances are allowed; OS-native chrome is not.
 - **Prompt-backdoor gestures.** A drag-to-feed that secretly appends text to the next user message. Perception is not a message; keep the two channels typed and separate.
+
+## Three end states — dissolve, rest, detach
+
+An item that finishes its active work has three possible next states. The motebit-computer is a **workstation**, not a theater — most of what finishes on the slab doesn't graduate to the scene and doesn't vanish; it _stays on the workstation_ as working material. Picking the wrong end state for a kind makes the slab feel either like a log stream (everything dissolves, nothing persists) or like a magical factory (everything graduates into the scene).
+
+| End state    | What it means                                                                                                                           | Examples                                                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Dissolve** | Ephemeral plumbing; the work is done _and_ there's nothing meaningful to keep. Ripples back into the slab surface, ~300ms.              | Embedding / inference call that returned a vector; memory touched in transit; a tool call that failed uninformatively.   |
+| **Rest**     | Working material; the content is still load-bearing in the session. Stays on the slab, available to consult, until dismissed.           | Fetched page the motebit read; terminal output the motebit's still using; the turn's streamed response card; open "tab." |
+| **Detach**   | Graduation; the output is a finished, portable piece the user may want to keep separate from the current workstation. Pinches to scene. | Signed ExecutionReceipt; a formed/promoted memory the motebit decided to commit; a finalized artifact the user accepted. |
+
+The default for most tool calls is **rest**, not dissolve. The previous doctrine implicitly treated finishing as an either-dissolve-or-detach decision; that's wrong. A workstation's natural state is work piling up, being consulted, being dismissed by the user when done — not auto-dissolving seconds after arriving.
+
+### What ends rest
+
+An item leaves rest when one of:
+
+- The user dismisses it (swipe, hover-close, or explicit gesture).
+- The motebit explicitly closes it ("done with this source, moving on") — a runtime signal.
+- The turn's broader context ends (user starts a fresh unrelated thread; rest items from the prior thread dissolve after a short grace window, ~10–30s).
+- The slab runs out of visible room and the item is the oldest, least-touched rest item (FIFO pressure; the motebit or user can pin items to exempt them).
+
+Dissolution still means dissolution — items leaving rest use the same physics (soft outline fade, brief ripple). Dissolution is the mechanism; rest is the prior life.
+
+### What ends the session
+
+The motebit going idle does **not** force the slab to empty. A workstation with open tabs doesn't disappear when you stop typing. The slab recedes (§Recession below) only when it holds _no_ items — neither active nor resting. Rest persists through the motebit's idle.
 
 ## Lifecycle
 
-Three transitions — each one rooted in droplet physics, not CSS easing:
+Four transitions — each one rooted in droplet physics, not CSS easing:
 
 ### Emergence
 
 When work starts, a small glass droplet forms at the slab's anchor point and expands into a plane. The transition is the inverse of a droplet collapsing: a sphere relaxes into an oblate disk. ~400ms; size and opacity co-animate.
 
+### Settling into rest
+
+When an item's active work finishes and the end state is rest, the card's edges soften slightly — its internal warmth eases, its shadow deepens a touch — marking it as "held" rather than "in motion." ~200ms. The card retains its position and content; the change is purely in how it sits on the surface. Subsequent updates (a parent motebit reopening it, the user tapping to expand) can re-animate within rest without a full re-emergence.
+
 ### Dissolution
 
-When an item on the slab ends without producing a durable output (ephemeral tool result, interrupted stream, failed step), it **dissolves back into the slab surface** — the item's outline softens, the content fades inward, the slab's own surface briefly ripples at the dissolution site. ~300ms. No artifact is spawned.
+When an item dissolves — either because its end state was dissolve, or because it's leaving rest (user-dismissed, grace-window-expired, FIFO-evicted) — it **dissolves back into the slab surface**: the item's outline softens, the content fades inward, the slab's own surface briefly ripples at the dissolution site. ~300ms. No artifact is spawned.
 
 ### Detachment (the pinch)
 
-When an item on the slab produces a durable output (a completed essay, a finalized code file, a signed receipt, a formed memory), it **detaches** into its own scene object. This is the load-bearing transition; get it wrong and the metaphor collapses into a CSS transform.
+When an item on the slab produces a durable output that should **graduate to the scene** (a completed essay, a finalized code file, a signed receipt, a formed memory), it **detaches** into its own scene object. This is the load-bearing transition; get it wrong and the metaphor collapses into a CSS transform.
 
 The physics: the slab surface dimples upward at the item's center as internal pressure rises. The dimple grows into a bead under surface tension. The bead separates from the slab with a brief tendril that snaps (Rayleigh–Plateau instability — the same physics the creature's breathing borrows from). The detached bead takes its artifact-appropriate shape mid-flight (text card, code pane, plan scroll, receipt orb, memory mote) and continues outward into the scene. The slab's surface ripples back to flat with a small residual oscillation. ~600–800ms total, eased on tension-release curves, not on generic `ease-out`.
 
-Droplets bead → tension → release. The slab obeys the same law as its parent body.
+Droplets bead → tension → release. The slab obeys the same law as its parent body. Detachment is **not** what happens to every finished item — only the ones that have become _graduates_ of the workstation.
 
 ### Recession
 
-When all work completes and the slab holds no active items, the slab itself recedes: it fades to near-invisible refraction, retaining only its meniscus and a faint specular mark at the right edge of the scene. The plane is still present (identity preserved, no remount cost on the next turn) — just honest-empty. Reappears without re-emergence animation when the next item arrives; the emergence is the _first_ item's physics, not the plane's.
+When the slab holds no items at all — neither active nor resting — it recedes: fades to near-invisible refraction, retaining only its meniscus and a faint specular mark at the right edge of the scene. The plane is still present (identity preserved, no remount cost on the next turn) — just honest-empty. Reappears without re-emergence animation when the next item arrives; the emergence is the _first_ item's physics, not the plane's.
 
 ## Silent state
 
 The slab has three ambient states; the doctrine requires all three to be implemented:
 
-| State        | Visual                                                             | When                                                         |
-| ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------ |
-| **idle**     | meniscus + refraction + faint specular; zero content, zero glow    | no active items; motebit thinking-without-tool-calling       |
-| **active**   | internal warmth matched to soul color; items visible through glass | at least one item on the slab; work in progress              |
-| **recessed** | edge refraction only, plane retained behind the scene envelope     | prolonged idle; next item will re-animate the first-item pop |
+| State        | Visual                                                             | When                                                                                             |
+| ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| **idle**     | meniscus + refraction + faint specular; zero content, zero glow    | no items of any kind on the slab; motebit thinking-without-tool-calling                          |
+| **active**   | internal warmth matched to soul color; items visible through glass | at least one active or resting item on the slab; work in progress _or_ work resting as reference |
+| **recessed** | edge refraction only, plane retained behind the scene envelope     | prolonged idle — no items at all; next item will re-animate the first-item pop                   |
 
 The idle state is not a bug. It is the proof that the slab respects silence — the motebit can think without performing for you. Do not fill the idle state with skeleton loaders, typing dots, progress bars, or "thinking…" strings. If the slab is idle, the slab shows idle.
 
+The **active** state covers both kinds of presence: the motebit currently working (emerging / active items), and the workstation holding material the user may still consult (resting items). The slab does not go idle just because no tool is running; it goes idle when the workstation itself is empty.
+
 ## Visual properties (binding)
 
-| Property              | Value                                                                               | Reason                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Material              | Apple-Liquid-Glass (same cryst. family as the creature; same IOR derivation)        | One body, one material.                                                            |
-| Aspect ratio          | ~16:9 to golden-ratio (~1.618:1)                                                    | Held-tablet feel, not wall-monitor.                                                |
-| Tilt                  | ~10–15° forward (toward camera), ~5° yaw toward the motebit                         | Gaze axis. Makes the creature's attention legible.                                 |
-| Edges                 | meniscus (rounded surface-tension curve), **no frame, no border, no corner radius** | Droplet family. The moment it has corners, it stops being a droplet.               |
-| Breathing             | ~0.3 Hz sympathetic with the creature, amplitude ~30% of creature amplitude         | One body, one respiratory rhythm. The slab inherits, not imitates.                 |
-| Tint when active      | derived from current soul color (cyan creature → cyan slab warmth)                  | The slab is body-adjacent, not brand-adjacent.                                     |
-| Tint when idle        | none; refraction only                                                               | Idle has no identity to project.                                                   |
-| Items on slab surface | ~1mm forward depth; subtle Fresnel on edges                                         | Cards feel lifted, not painted.                                                    |
-| Chrome                | **none**                                                                            | No titlebar, no close, no scroll, no resize. Controls appear on gaze and dissolve. |
+| Property              | Value                                                                               | Reason                                                                                                                                                                                                                                                                                    |
+| --------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Material              | Apple-Liquid-Glass (same cryst. family as the creature; same IOR derivation)        | One body, one material.                                                                                                                                                                                                                                                                   |
+| Aspect ratio          | ~16:9 to golden-ratio (~1.618:1)                                                    | Held-tablet feel, not wall-monitor.                                                                                                                                                                                                                                                       |
+| Tilt                  | ~10–15° forward (toward camera), ~5° yaw toward the motebit                         | Gaze axis. Makes the creature's attention legible.                                                                                                                                                                                                                                        |
+| Edges                 | meniscus (rounded surface-tension curve), **no frame, no border, no corner radius** | Droplet family. The moment it has corners, it stops being a droplet.                                                                                                                                                                                                                      |
+| Breathing             | ~0.3 Hz sympathetic with the creature, amplitude ~30% of creature amplitude         | One body, one respiratory rhythm. The slab inherits, not imitates.                                                                                                                                                                                                                        |
+| Tint when active      | derived from current soul color (cyan creature → cyan slab warmth)                  | The slab is body-adjacent, not brand-adjacent.                                                                                                                                                                                                                                            |
+| Tint when idle        | none; refraction only                                                               | Idle has no identity to project.                                                                                                                                                                                                                                                          |
+| Items on slab surface | ~1mm forward depth; subtle Fresnel on edges                                         | Cards feel lifted, not painted.                                                                                                                                                                                                                                                           |
+| Chrome                | **no conventional window chrome**; droplet-native affordances allowed               | No OS-style titlebar, stoplight buttons, tab strip, resize grips. Affordances that emerge from the surface (hover-reveal close as a meniscus dip; pinned state as a tension knot; native scroll within / between cards when work accumulates) are how the workstation responds to intent. |
 
 ## Failure modes to avoid
 
 - **Third-person logging disguised as experience.** A card that says `fetch → status: calling` is a log line. The Motebit Computer renders _the page being fetched_, not the act of fetching described. If a card reads like a CloudWatch stream, the metaphor has collapsed. Status strings, event names, and log-shaped presentation don't belong on the slab.
 - **Rich-duplicating chat.** Chat and slab both rendering the _full_ content of an act — the whole fetched page in chat AND as a slab card, the complete terminal output in both — is the collapse. Chat may carry a one-line textual echo (accessibility + Ring-1 fallback); it must not replicate the slab's rich content. If the chat rendering grows beyond a one-liner, the frames have merged.
 - **Drift toward movie or remote desktop.** See "The user's touch — supervised agency." A slab with no user gestures becomes a movie; a slab with "run this tool" buttons becomes a remote desktop. Both break the third state.
-- **Growing chrome.** The first "let's add a close button so users can dismiss it" turns the slab into a browser tab. Users dismiss the slab by the motebit going idle; that's the doctrine.
-- **Persistent items.** An item that stayed on the slab after work ended has either detached (artifact) or should have dissolved. Persistent-item-on-slab is the records-vs-acts boundary breaking.
+- **Conventional window chrome.** OS-style titlebars, stoplight close buttons with gray drop shadows, resize grips, tab strips with program-window affordances. Turns the slab into a browser tab. Droplet-native affordances (hover-reveal meniscus close, tension-knot pin, native surface scroll) are not chrome — they're how the workstation responds to intent. See the "Affordances" subsection of "The user's touch" for the boundary.
+- **Everything-dissolves mindset.** Treating every finished item as something that must either dissolve or graduate. A workstation's natural state is work resting on it — read-and-consulted pages, the turn's response, open "tabs." Rest is the third end state; most tool calls end _there_. Collapsing that to dissolve makes the slab feel like a log stream, not a computer.
+- **Everything-detaches mindset.** The opposite failure — graduating every finished tool call to a scene artifact. The scene fills with crates; nothing stays on the workstation. Detach is for _graduates_ (signed receipts, committed memories, accepted artifacts), not ordinary working material.
 - **Uncoordinated emergence.** The slab's emergence and the first item's emergence fighting for the user's attention. Sequence: slab emerges, pauses briefly (~150ms), first item pops. Never concurrent.
 - **CSS-transform detachment.** A `translate3d` sliding an item off the slab while the slab surface stays rigid. That's not physics, that's animation. The slab must dimple, bead, release.
 - **Idle-state chatter.** Skeleton loaders, "thinking…" text, or persistent progress bars in idle. Kill on sight.
@@ -206,8 +248,8 @@ One type surface, one event stream, three renderers — following the existing p
 1. Is this a **first-person perception / action / thought**, or a third-person label about one? Status strings ("calling…"), event names ("fetch", "tool*call"), and log-shaped cards are labels. The slab renders what the motebit \_sees, does, and thinks*, in the modality that belongs to. If you're rendering a noun for an experience instead of the experience itself, you're on the wrong surface.
 2. Is the thing you're adding an **act** (on-slab) or a **record** (off-slab, in a panel)? If record, stop.
 3. Does **chat already render this richly** as text? A one-line textual echo in chat ("reading example.com…") is acceptable as Ring-1 fallback; a full reproduction of the act's content in both places is the collapse. If chat renders more than a thin status, the frames have merged — trim chat back to a one-liner.
-4. Does it have a **durable output** that outlives the work? If yes, it must detach as an artifact — not persist on the slab.
-5. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? If yes, it's probably chrome or a record in disguise.
+4. Which of the **three end states** does the item land in when its active work finishes — dissolve (ephemeral plumbing, nothing to keep), rest (working material, stays on the workstation), or detach (graduate, pinches to scene)? The default for most tool calls is rest, not dissolve. Explicitly chose one; don't leave it to an implicit policy.
+5. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? Active items say no (they shouldn't persist after their work ends). Resting items say yes (they persist through the motebit's idle until the user or the session dismisses them). Records-in-disguise also say yes — if the answer is yes for a reason other than rest, it's probably a panel record, not a slab item.
 6. Does its transition obey **droplet physics** — emergence as meniscus-expansion, dissolution as surface-ripple-absorption, detachment as bead-tension-release? If not, the metaphor is leaking.
 7. Does it render **identically across web, desktop, spatial, and mobile**? If surface-specific, it's either a renderer detail (fine) or a capability split (needs justification per the capability-rings doctrine).
 8. Does it have the **minimum gesture set** — tap (focus) and swipe (dismiss) at least? A kind with rich rendering but no user touch drifts toward movie. A kind with "run tool" chrome drifts toward remote desktop. Ship the third state, not either adjacent one.
