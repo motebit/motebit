@@ -170,7 +170,19 @@ export class SlabManager {
     // comes from the liquid-glass material's edge Fresnel, not geometry.
     // Pass 3 may extrude the edges for a more pronounced surface-tension
     // curve if it reads flat against the creature.
-    const planeGeo = new THREE.PlaneGeometry(SLAB_WIDTH, SLAB_HEIGHT, 1, 1);
+    // Segmented plane so the pinch physics (Pass 3) has vertices to
+    // displace. 16×16 gives a visible Gaussian bump without overhead
+    // that matters on any device that runs Three.js. The unpinched
+    // geometry is co-planar — vertex Z stays at 0 except during
+    // active pinch displacement.
+    const planeGeo = new THREE.PlaneGeometry(SLAB_WIDTH, SLAB_HEIGHT, 16, 16);
+    // Preserve the flat Z=0 positions so the pinch code can reset to
+    // rest without a geometry rebuild each frame.
+    const posAttr = planeGeo.attributes.position;
+    if (posAttr != null) {
+      const restPositions = posAttr.array.slice();
+      (planeGeo.userData as { restPositions?: ArrayLike<number> }).restPositions = restPositions;
+    }
     this.planeMaterial = new THREE.MeshPhysicalMaterial({
       // Same material family as the creature — same IOR, roughness,
       // transmission. The slab is body-adjacent, not a UI element.
@@ -310,6 +322,11 @@ export class SlabManager {
       this.animateItem(item);
     }
 
+    // Plane surface displacement from any pinching items. Rebuilt each
+    // frame from the rest positions so vertices cleanly return to
+    // flat when no item is pinching. See `applyPinchDisplacement`.
+    this.applyPinchDisplacement();
+
     // Ambient: count non-terminal items; fade the plane accordingly
     const active = [...this.items.values()].filter(
       (i) => i.phase !== "dissolving" && i.phase !== "detached" && i.phase !== "gone",
@@ -408,20 +425,69 @@ export class SlabManager {
         break;
       }
       case "pinching": {
-        // Pass 2 placeholder — scale up slightly, then hand off the
-        // artifact. Pass 3 replaces this with Rayleigh-Plateau vertex
-        // displacement (dimple → bead → tendril snap).
-        const t = item.phaseTime / PINCH_DURATION_S;
-        const scale = 1 + easeInOutQuad(Math.min(1, t)) * 0.1;
-        item.element.style.transform = `scale(${scale})`;
-        item.element.style.opacity = String(1 - easeInQuad(Math.min(1, t)) * 0.5);
+        // Rayleigh-Plateau-inspired three-phase pinch. The element's
+        // motion mirrors the physics of a droplet beading off a
+        // parent surface:
+        //
+        //   Phase 1: tension (t ∈ [0, 0.35])
+        //     Element grows slightly in place. Doctrine dimple is
+        //     building on the plane beneath it (handled by
+        //     `applyPinchDisplacement`). Position stays at the
+        //     anchor; only scale ramps.
+        //
+        //   Phase 2: bead separation (t ∈ [0.35, 0.55])
+        //     Element accelerates outward along the detach vector
+        //     (positive Y in plane-local = upward toward the
+        //     detaching bead), with slight squash-stretch to read
+        //     as surface-tension release. The tendril "snaps" at
+        //     the phase boundary — this is where the artifact is
+        //     handed off so caller's detach artifact appears as
+        //     the bead separates.
+        //
+        //   Phase 3: dissipation (t ∈ [0.55, 1.0])
+        //     Element continues traveling outward while fading to
+        //     zero opacity and returning to scale=1 (the bead has
+        //     reached its destination; the slab-mounted copy
+        //     dissipates). The plane's dimple collapses back to
+        //     flat during this phase.
+        const t = Math.min(1, item.phaseTime / PINCH_DURATION_S);
 
-        // Midway through the pinch, spawn the detached artifact so
-        // the visual transition feels continuous (slab item fades out
-        // as artifact fades in). Handler may be absent in headless
-        // tests — in that case we just log and proceed.
-        if (item.detachTo && !item.detachArtifactHandle && t >= 0.5) {
-          if (this.detachHandler) {
+        if (t < 0.35) {
+          // Tension — bead building
+          const local = t / 0.35;
+          const scale = 1 + easeInOutQuad(local) * 0.15;
+          item.element.style.transform = `scale(${scale.toFixed(3)})`;
+          item.element.style.opacity = "1";
+        } else if (t < 0.55) {
+          // Separation — squash-stretch + launch
+          const local = (t - 0.35) / 0.2;
+          const scaleY = 1.15 + local * 0.15; // elongate along launch axis
+          const scaleX = 1.15 - local * 0.25; // narrow perpendicular (squash)
+          const liftPx = easeInOutQuad(local) * 14; // translate upward (plane-local +Y)
+          item.element.style.transform = `translateY(${(-liftPx).toFixed(1)}px) scale(${scaleX.toFixed(3)}, ${scaleY.toFixed(3)})`;
+          item.element.style.opacity = (1 - local * 0.25).toFixed(3);
+
+          // Detach handoff fires at the tendril snap (phase 2 end),
+          // exactly when the bead has finished separating from the
+          // plane. The artifact appears as the slab item dissipates.
+          if (item.detachTo && !item.detachArtifactHandle && local >= 0.85) {
+            if (this.detachHandler) {
+              item.detachArtifactHandle = this.detachHandler(item.detachTo);
+            }
+          }
+        } else {
+          // Dissipation — bead gone, the slab-mounted copy fades
+          const local = (t - 0.55) / 0.45;
+          const scale = 1.15 - local * 0.3; // collapse scale toward 0.85
+          const liftPx = 14 + local * 10;
+          item.element.style.transform = `translateY(${(-liftPx).toFixed(1)}px) scale(${scale.toFixed(3)})`;
+          item.element.style.opacity = (0.75 * (1 - easeInQuad(local))).toFixed(3);
+
+          // Defensive: if the handoff didn't fire in phase 2 (edge
+          // case — phaseTime jumped past the window in a slow frame),
+          // fire it here so the caller isn't left without the
+          // artifact.
+          if (item.detachTo && !item.detachArtifactHandle && this.detachHandler) {
             item.detachArtifactHandle = this.detachHandler(item.detachTo);
           }
         }
@@ -454,6 +520,81 @@ export class SlabManager {
     this.itemsGroup.remove(item.object);
     item.phaseListeners.clear();
     this.items.delete(id);
+  }
+
+  /**
+   * Rayleigh-Plateau-inspired plane surface displacement during the
+   * pinching phase.
+   *
+   * For each pinching item, we raise a Gaussian bump in the plane's
+   * vertex Z around the item's anchor point. The bump amplitude
+   * follows a curve matching the element's own three-phase
+   * trajectory: tension (bump grows), separation (bump peaks + releases
+   * in a small snap), dissipation (bump collapses back to flat).
+   *
+   * Every frame we rebuild from the rest positions, apply all active
+   * pinches' displacements additively, then mark the position
+   * attribute dirty. That keeps the plane clean when no pinch is
+   * active (no cumulative drift) and handles multiple parallel
+   * pinches correctly (rare but possible under heavy tool-call
+   * parallelism).
+   */
+  private applyPinchDisplacement(): void {
+    const geometry = this.planeMesh.geometry as THREE.PlaneGeometry;
+    const positionAttr = geometry.attributes.position;
+    if (positionAttr == null) return;
+    const rest = (geometry.userData as { restPositions?: ArrayLike<number> }).restPositions;
+    if (rest == null) return;
+
+    const positions = positionAttr.array as Float32Array;
+
+    // Collect pinching items with amplitudes. Empty → fast path.
+    const pinches: Array<{ x: number; y: number; amplitude: number }> = [];
+    for (const item of this.items.values()) {
+      if (item.phase !== "pinching") continue;
+      const t = Math.min(1, item.phaseTime / PINCH_DURATION_S);
+      // Amplitude curve: grow during tension, peak at separation,
+      // collapse during dissipation. Peak matches the element's
+      // liftoff moment (t ≈ 0.45) so the dimple is deepest when the
+      // bead is actually separating.
+      let amp: number;
+      if (t < 0.35) amp = easeInOutQuad(t / 0.35) * 0.008;
+      else if (t < 0.55) amp = 0.008 + easeInOutQuad((t - 0.35) / 0.2) * 0.006;
+      else amp = 0.014 * (1 - easeInQuad((t - 0.55) / 0.45));
+      const pos = item.object.position;
+      pinches.push({ x: pos.x, y: pos.y, amplitude: amp });
+    }
+
+    // Fast path: no active pinches — copy rest positions and bail.
+    if (pinches.length === 0) {
+      // Only reset if the plane has been displaced at some point —
+      // check one Z value as a cheap dirty-bit stand-in.
+      if (positions[2] !== rest[2]) {
+        positions.set(rest);
+        positionAttr.needsUpdate = true;
+      }
+      return;
+    }
+
+    // Gaussian bump: z(p) = Σᵢ ampᵢ · exp(-|p - centerᵢ|² / 2σ²)
+    // σ chosen ~ half an item-slot width so a single item's dimple
+    // stays locally contained and doesn't flood the whole plane.
+    const SIGMA = 0.06;
+    const TWO_SIGMA_SQ = 2 * SIGMA * SIGMA;
+
+    for (let i = 0; i < positions.length; i += 3) {
+      const x = rest[i]!;
+      const y = rest[i + 1]!;
+      let z = rest[i + 2]!; // should be 0 on a flat plane
+      for (const p of pinches) {
+        const dx = x - p.x;
+        const dy = y - p.y;
+        const r2 = dx * dx + dy * dy;
+        z += p.amplitude * Math.exp(-r2 / TWO_SIGMA_SQ);
+      }
+      positions[i + 2] = z;
+    }
+    positionAttr.needsUpdate = true;
   }
 
   /**
