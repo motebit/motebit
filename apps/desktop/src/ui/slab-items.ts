@@ -147,19 +147,19 @@ function baseCard(): HTMLDivElement {
   const el = document.createElement("div");
   el.className = "slab-item";
   el.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif";
-  el.style.fontSize = "12px";
-  el.style.lineHeight = "1.45";
+  el.style.fontSize = "12.5px";
+  el.style.lineHeight = "1.5";
   el.style.letterSpacing = "-0.005em";
   // Near-black ink. The slab below is glass, so the text has to be
   // dark enough to read against any environment behind the plane.
   el.style.color = "rgba(14, 22, 40, 0.96)";
-  el.style.padding = "9px 11px";
+  el.style.padding = "0";
   // Frosted-glass body with a gradient top→bottom so the card
   // appears to catch light from above, like a droplet frozen on a
   // sheet. Values are tuned for the light environment; the backdrop
   // blur carries refraction from whatever's behind the plane.
   el.style.background =
-    "linear-gradient(180deg, rgba(255,255,255,0.74) 0%, rgba(246,250,255,0.58) 100%)";
+    "linear-gradient(180deg, rgba(255,255,255,0.78) 0%, rgba(246,250,255,0.64) 100%)";
   el.style.border = "1px solid rgba(255, 255, 255, 0.55)";
   el.style.borderRadius = "10px";
   el.style.backdropFilter = "blur(14px) saturate(1.25)";
@@ -173,11 +173,78 @@ function baseCard(): HTMLDivElement {
     // (doctrine: "cards feel lifted, not painted").
     "0 2px 10px rgba(20,30,60,0.14)",
   ].join(", ");
-  el.style.minWidth = "148px";
-  el.style.maxWidth = "228px";
+  // Cards are window-sized — full container width — so each one reads
+  // as a first-class viewport for the motebit's current activity, not
+  // a chiplet floating on the glass. The plane is the display; these
+  // are the windows on it.
+  el.style.width = "100%";
+  el.style.boxSizing = "border-box";
   el.style.overflow = "hidden";
   el.style.wordBreak = "break-word";
   return el;
+}
+
+/**
+ * Window chrome — a subtle header strip at the top of a card that names
+ * what kind of activity this window is, the way a browser tab strip
+ * or a terminal's prompt line tells you what you're looking at.
+ * Droplet-physics-native, not OS chrome: it's a hairline band, not a
+ * titlebar with stoplights.
+ */
+function windowChrome(glyph: string, label: string, context?: string): HTMLDivElement {
+  const bar = document.createElement("div");
+  bar.className = "slab-item-chrome";
+  bar.style.display = "flex";
+  bar.style.alignItems = "center";
+  bar.style.gap = "8px";
+  bar.style.padding = "8px 12px";
+  bar.style.borderBottom = "1px solid rgba(120, 140, 180, 0.18)";
+  bar.style.background = "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 100%)";
+  bar.style.fontSize = "10px";
+  bar.style.letterSpacing = "0.08em";
+  bar.style.textTransform = "uppercase";
+  bar.style.color = "rgba(55, 72, 110, 0.82)";
+  bar.style.fontWeight = "600";
+  if (glyph) {
+    const g = document.createElement("span");
+    g.textContent = glyph;
+    g.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+    g.style.fontSize = "11px";
+    g.style.color = "rgba(80, 110, 165, 0.92)";
+    g.style.textTransform = "none";
+    g.style.letterSpacing = "0";
+    bar.appendChild(g);
+  }
+  const l = document.createElement("span");
+  l.textContent = label;
+  l.style.flex = "0 0 auto";
+  bar.appendChild(l);
+  if (context) {
+    const c = document.createElement("span");
+    c.dataset.slot = "chrome-context";
+    c.textContent = context;
+    c.style.flex = "1 1 auto";
+    c.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+    c.style.fontSize = "11px";
+    c.style.fontWeight = "400";
+    c.style.letterSpacing = "0";
+    c.style.textTransform = "none";
+    c.style.color = "rgba(80, 110, 165, 0.85)";
+    c.style.whiteSpace = "nowrap";
+    c.style.overflow = "hidden";
+    c.style.textOverflow = "ellipsis";
+    c.style.marginLeft = "4px";
+    bar.appendChild(c);
+  }
+  return bar;
+}
+
+/** Card body — the content area below the window chrome. */
+function cardBody(): HTMLDivElement {
+  const body = document.createElement("div");
+  body.className = "slab-item-body";
+  body.style.padding = "12px 14px";
+  return body;
 }
 
 function textRow(): HTMLDivElement {
@@ -241,22 +308,23 @@ function headRow(glyph: string, label: string): HTMLDivElement {
 function renderStream(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-stream");
-  card.style.maxWidth = "280px";
+  // Stream is the motebit's response — a document view, not a status
+  // chip. No URL bar or prompt chrome; clean rendered prose fills
+  // the window like a reader view.
+  const body = cardBody();
+  body.style.padding = "14px 16px";
   const text = document.createElement("div");
   text.className = "slab-item-text";
-  // Response prose — render markdown like chat does, so `### Key
-  // Figures` / tables / bold don't arrive as raw source. Text is
-  // the same family as the chat bubble; the slab is the first-person
-  // view of the same composition.
-  text.style.fontSize = "11.5px";
+  text.style.fontSize = "12.5px";
   text.style.lineHeight = "1.55";
   text.style.color = "rgba(18, 28, 50, 0.94)";
-  text.style.maxHeight = "220px";
+  text.style.maxHeight = "260px";
   text.style.overflow = "auto";
   text.style.wordBreak = "break-word";
   const payload = item.payload as { text?: string } | null;
   text.innerHTML = renderStreamMarkdown(payload?.text ?? "");
-  card.appendChild(text);
+  body.appendChild(text);
+  card.appendChild(body);
   return card;
 }
 
@@ -264,7 +332,13 @@ function updateStream(item: SlabItem, element: HTMLElement): void {
   const text = element.querySelector(".slab-item-text");
   const payload = item.payload as { text?: string } | null;
   if (text instanceof HTMLElement) {
+    // Preserve scroll position if the user has scrolled up to read;
+    // stick to the bottom when they're already at the bottom. This
+    // matches standard chat-log behavior — follow-the-tail by default,
+    // but don't yank the user away from their reading position.
+    const atBottom = text.scrollTop + text.clientHeight >= text.scrollHeight - 8;
     text.innerHTML = renderStreamMarkdown(payload?.text ?? "");
+    if (atBottom) text.scrollTop = text.scrollHeight;
   }
 }
 
@@ -338,13 +412,15 @@ function renderToolCall(item: SlabItem, actions: SlabItemActions): HTMLElement {
   }
   const card = baseCard();
   card.classList.add("slab-item-tool-call");
-  card.appendChild(headRow("◇", payload?.name ?? "tool"));
+  card.appendChild(windowChrome("◇", payload?.name ?? "tool"));
+  const body = cardBody();
   const status = textRow();
-  status.style.fontSize = "11.5px";
+  status.style.fontSize = "12.5px";
   status.style.color = "rgba(50, 66, 98, 0.82)";
   status.textContent = formatToolStatus(payload);
   status.dataset.slot = "status";
-  card.appendChild(status);
+  body.appendChild(status);
+  card.appendChild(body);
   return card;
 }
 
@@ -398,52 +474,66 @@ function formatToolStatus(
 function renderFetch(item: SlabItem, actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-fetch");
-  card.style.maxWidth = "240px";
   card.style.cursor = "pointer";
   card.style.touchAction = "pan-y"; // keep vertical page scroll; horizontal becomes swipe
   attachFetchGestures(card, actions);
 
-  const head = document.createElement("div");
-  head.style.marginBottom = "6px";
-  head.style.minWidth = "0";
+  // URL bar — browser-like window chrome. Host name left, path inline,
+  // all on one row. Together they tell the reader "this is the page
+  // the motebit is reading right now."
+  const chrome = document.createElement("div");
+  chrome.className = "slab-item-chrome";
+  chrome.style.display = "flex";
+  chrome.style.alignItems = "center";
+  chrome.style.gap = "10px";
+  chrome.style.padding = "8px 12px";
+  chrome.style.borderBottom = "1px solid rgba(120, 140, 180, 0.18)";
+  chrome.style.background = "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 100%)";
 
-  const hostEl = document.createElement("div");
+  const glyph = document.createElement("span");
+  glyph.textContent = "↗";
+  glyph.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  glyph.style.fontSize = "12px";
+  glyph.style.color = "rgba(80, 110, 165, 0.92)";
+  chrome.appendChild(glyph);
+
+  const hostEl = document.createElement("span");
   hostEl.dataset.slot = "host";
-  hostEl.style.fontSize = "9.5px";
+  hostEl.style.fontSize = "10px";
   hostEl.style.fontWeight = "600";
   hostEl.style.letterSpacing = "0.08em";
   hostEl.style.textTransform = "uppercase";
   hostEl.style.color = "rgba(55, 72, 110, 0.82)";
-  head.appendChild(hostEl);
+  hostEl.style.flex = "0 0 auto";
+  chrome.appendChild(hostEl);
 
-  const pathEl = document.createElement("div");
+  const pathEl = document.createElement("span");
   pathEl.dataset.slot = "path";
   pathEl.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
-  pathEl.style.fontSize = "10.5px";
-  pathEl.style.color = "rgba(80, 110, 165, 0.92)";
+  pathEl.style.fontSize = "11px";
+  pathEl.style.color = "rgba(80, 110, 165, 0.78)";
   pathEl.style.whiteSpace = "nowrap";
   pathEl.style.overflow = "hidden";
   pathEl.style.textOverflow = "ellipsis";
-  head.appendChild(pathEl);
+  pathEl.style.flex = "1 1 auto";
+  chrome.appendChild(pathEl);
 
-  card.appendChild(head);
+  card.appendChild(chrome);
 
+  // Reader view — fetched content rendered as legible, scrollable
+  // prose that fills the window. Not a log tail; a reading surface.
   const body = document.createElement("div");
   body.className = "slab-item-text";
   body.dataset.slot = "body";
-  body.style.fontSize = "11.5px";
-  body.style.lineHeight = "1.5";
-  body.style.color = "rgba(18, 28, 50, 0.9)";
+  body.style.fontSize = "12.5px";
+  body.style.lineHeight = "1.55";
+  body.style.color = "rgba(18, 28, 50, 0.94)";
   body.style.whiteSpace = "pre-wrap";
   body.style.wordBreak = "break-word";
-  body.style.maxHeight = "84px";
-  body.style.overflow = "hidden";
-  // Soft fade at bottom so truncation reads as a vignette, not a cut.
-  body.style.maskImage = "linear-gradient(180deg, black 72%, transparent 100%)";
-  body.style.setProperty(
-    "-webkit-mask-image",
-    "linear-gradient(180deg, black 72%, transparent 100%)",
-  );
+  body.style.padding = "12px 14px";
+  body.style.maxHeight = "240px";
+  body.style.overflowY = "auto";
+  body.style.overflowX = "hidden";
   card.appendChild(body);
 
   applyFetchPayload(item.payload, hostEl, pathEl, body);
@@ -511,9 +601,15 @@ function extractFetchPreview(payload: { status?: string; result?: unknown } | nu
     text = "";
   }
   // Collapse runs of whitespace so the preview reads as flowing prose
-  // rather than reflowed HTML whitespace.
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  return cleaned.length > 240 ? cleaned.slice(0, 237) + "…" : cleaned;
+  // rather than reflowed HTML whitespace. Keep paragraph breaks by
+  // preserving double-newlines first, then collapsing.
+  const cleaned = text
+    .replace(/\n\s*\n/g, "\n\n")
+    .replace(/[^\S\n]+/g, " ")
+    .trim();
+  // Reader view: show the full fetched content (capped to 4KB so we
+  // don't balloon the DOM for a 64KB page). The body scrolls.
+  return cleaned.length > 4000 ? cleaned.slice(0, 4000) + "\n\n…" : cleaned;
 }
 
 // ── Gestures: tap to expand, swipe to dismiss ─────────────────────────
@@ -535,28 +631,9 @@ const SWIPE_PX = 60; // horizontal threshold before swipe fires
 const SWIPE_MAX_ANGLE = 0.8; // radians — ignore vertical-heavy motion
 
 function attachFetchGestures(card: HTMLDivElement, actions: SlabItemActions): void {
-  // Tap — toggle expanded state. Clears the max-height + bottom
-  // vignette so the full preview shows. Pure client-side; no
-  // controller call. Re-tap collapses.
-  card.addEventListener("click", () => {
-    const body = card.querySelector('[data-slot="body"]');
-    if (!(body instanceof HTMLElement)) return;
-    const expanded = card.dataset.expanded === "true";
-    if (expanded) {
-      card.dataset.expanded = "false";
-      body.style.maxHeight = "84px";
-      body.style.maskImage = "linear-gradient(180deg, black 72%, transparent 100%)";
-      body.style.setProperty(
-        "-webkit-mask-image",
-        "linear-gradient(180deg, black 72%, transparent 100%)",
-      );
-    } else {
-      card.dataset.expanded = "true";
-      body.style.maxHeight = "none";
-      body.style.maskImage = "none";
-      body.style.setProperty("-webkit-mask-image", "none");
-    }
-  });
+  // Body scrolls natively now — no expand/collapse toggle needed. The
+  // window-sized reader view gives enough room that users can read
+  // long pages inline by scrolling within the body element.
 
   // Swipe — pointer down, track horizontal delta, release past
   // threshold triggers dismiss. Routes through `actions.dismiss`
@@ -608,48 +685,56 @@ function attachFetchGestures(card: HTMLDivElement, actions: SlabItemActions): vo
 function renderShell(item: SlabItem, actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-shell");
-  card.style.maxWidth = "260px";
   card.style.cursor = "pointer";
   card.style.touchAction = "pan-y";
 
-  // Head: `$` glyph + "shell" label.
-  card.appendChild(headRow("$", "shell"));
+  // Terminal-style window chrome — $ glyph + command inline in the
+  // chrome bar, exactly like a shell's prompt at the top of a terminal
+  // window. No separate command line below; the chrome IS the prompt.
+  const chrome = document.createElement("div");
+  chrome.className = "slab-item-chrome";
+  chrome.style.display = "flex";
+  chrome.style.alignItems = "center";
+  chrome.style.gap = "10px";
+  chrome.style.padding = "8px 12px";
+  chrome.style.borderBottom = "1px solid rgba(120, 140, 180, 0.18)";
+  chrome.style.background = "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 100%)";
+  chrome.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
 
-  // Command line — the prompt the motebit typed.
-  const cmd = document.createElement("div");
+  const prompt = document.createElement("span");
+  prompt.textContent = "$";
+  prompt.style.fontSize = "12px";
+  prompt.style.color = "rgba(80, 110, 165, 0.92)";
+  chrome.appendChild(prompt);
+
+  const cmd = document.createElement("span");
   cmd.dataset.slot = "cmd";
-  cmd.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
-  cmd.style.fontSize = "11px";
-  cmd.style.color = "rgba(70, 95, 150, 0.96)";
-  cmd.style.marginBottom = "6px";
+  cmd.style.fontSize = "11.5px";
+  cmd.style.color = "rgba(55, 72, 110, 0.92)";
   cmd.style.whiteSpace = "nowrap";
   cmd.style.overflow = "hidden";
   cmd.style.textOverflow = "ellipsis";
-  card.appendChild(cmd);
+  cmd.style.flex = "1 1 auto";
+  chrome.appendChild(cmd);
 
-  // Output block — terminal-style dark panel inside the frosted card.
-  // Not a pure black box; a softened "terminal through glass" tone
-  // that still reads as a console but doesn't break the slab's calm.
+  card.appendChild(chrome);
+
+  // Terminal output — dark panel filling the window body, scrollable.
+  // Looking at a shell session through the slab's surface tension.
   const out = document.createElement("div");
   out.dataset.slot = "out";
   out.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
-  out.style.fontSize = "10.5px";
-  out.style.lineHeight = "1.5";
-  out.style.color = "rgba(220, 232, 250, 0.94)";
-  out.style.background = "rgba(18, 26, 46, 0.82)";
-  out.style.padding = "7px 9px";
-  out.style.borderRadius = "6px";
+  out.style.fontSize = "11.5px";
+  out.style.lineHeight = "1.55";
+  out.style.color = "rgba(220, 232, 250, 0.96)";
+  out.style.background = "rgba(18, 26, 46, 0.85)";
+  out.style.padding = "12px 14px";
   out.style.whiteSpace = "pre-wrap";
   out.style.wordBreak = "break-word";
-  out.style.maxHeight = "96px";
-  out.style.overflow = "hidden";
-  out.style.minHeight = "18px";
-  // Soft fade at bottom for truncation — vignette, not cut.
-  out.style.maskImage = "linear-gradient(180deg, black 78%, transparent 100%)";
-  out.style.setProperty(
-    "-webkit-mask-image",
-    "linear-gradient(180deg, black 78%, transparent 100%)",
-  );
+  out.style.maxHeight = "240px";
+  out.style.minHeight = "80px";
+  out.style.overflowY = "auto";
+  out.style.overflowX = "hidden";
   card.appendChild(out);
 
   applyShellPayload(item.payload, cmd, out);
@@ -661,7 +746,9 @@ function updateShell(item: SlabItem, element: HTMLElement): void {
   const cmd = element.querySelector('[data-slot="cmd"]');
   const out = element.querySelector('[data-slot="out"]');
   if (cmd instanceof HTMLElement && out instanceof HTMLElement) {
+    const atBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 8;
     applyShellPayload(item.payload, cmd, out);
+    if (atBottom) out.scrollTop = out.scrollHeight;
   }
 }
 
@@ -730,27 +817,8 @@ function applyShellPayload(payload: unknown, cmd: HTMLElement, out: HTMLElement)
 }
 
 function attachShellGestures(card: HTMLDivElement, actions: SlabItemActions): void {
-  // Tap — toggle expanded state on the output block. Lets the user
-  // read the whole log without a modal. Pure client-side.
-  card.addEventListener("click", () => {
-    const out = card.querySelector('[data-slot="out"]');
-    if (!(out instanceof HTMLElement)) return;
-    const expanded = card.dataset.expanded === "true";
-    if (expanded) {
-      card.dataset.expanded = "false";
-      out.style.maxHeight = "96px";
-      out.style.maskImage = "linear-gradient(180deg, black 78%, transparent 100%)";
-      out.style.setProperty(
-        "-webkit-mask-image",
-        "linear-gradient(180deg, black 78%, transparent 100%)",
-      );
-    } else {
-      card.dataset.expanded = "true";
-      out.style.maxHeight = "none";
-      out.style.maskImage = "none";
-      out.style.setProperty("-webkit-mask-image", "none");
-    }
-  });
+  // Output block scrolls natively now — no expand toggle needed.
+  // Terminal fills the window; long output stays readable in place.
 
   // Swipe — dismiss via typed capability.
   let startX = 0;
@@ -788,44 +856,63 @@ function renderPlanStep(item: SlabItem): HTMLElement {
     status?: "running" | "delegated";
     task_id?: string;
   } | null;
-  const head = document.createElement("div");
-  head.style.display = "flex";
-  head.style.alignItems = "flex-start";
-  head.style.gap = "8px";
+  const chrome = document.createElement("div");
+  chrome.className = "slab-item-chrome";
+  chrome.style.display = "flex";
+  chrome.style.alignItems = "center";
+  chrome.style.gap = "10px";
+  chrome.style.padding = "8px 12px";
+  chrome.style.borderBottom = "1px solid rgba(120, 140, 180, 0.18)";
+  chrome.style.background = "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 100%)";
+
   const badge = document.createElement("span");
   badge.textContent = String(payload?.ordinal ?? "?");
   badge.style.flex = "0 0 auto";
-  badge.style.minWidth = "18px";
-  badge.style.height = "18px";
+  badge.style.minWidth = "20px";
+  badge.style.height = "20px";
   badge.style.display = "inline-flex";
   badge.style.alignItems = "center";
   badge.style.justifyContent = "center";
-  badge.style.fontSize = "10.5px";
+  badge.style.fontSize = "11px";
   badge.style.fontWeight = "600";
   badge.style.color = "rgba(45, 62, 100, 0.9)";
-  badge.style.background = "rgba(255, 255, 255, 0.55)";
+  badge.style.background = "rgba(255, 255, 255, 0.6)";
   badge.style.border = "1px solid rgba(120, 140, 180, 0.38)";
   badge.style.borderRadius = "999px";
   badge.style.lineHeight = "1";
-  head.appendChild(badge);
-  const desc = document.createElement("span");
+  chrome.appendChild(badge);
+
+  const label = document.createElement("span");
+  label.textContent = "step";
+  label.style.fontSize = "10px";
+  label.style.fontWeight = "600";
+  label.style.letterSpacing = "0.08em";
+  label.style.textTransform = "uppercase";
+  label.style.color = "rgba(55, 72, 110, 0.82)";
+  label.style.flex = "0 0 auto";
+  chrome.appendChild(label);
+
+  const status = document.createElement("span");
+  status.dataset.slot = "status";
+  status.style.fontStyle = "italic";
+  status.style.fontSize = "11px";
+  status.style.color = "rgba(55, 72, 108, 0.78)";
+  status.style.flex = "1 1 auto";
+  status.style.textAlign = "right";
+  status.textContent = formatStepStatus(payload);
+  chrome.appendChild(status);
+
+  card.appendChild(chrome);
+
+  const body = cardBody();
+  const desc = document.createElement("div");
   desc.textContent = payload?.description ?? "";
   desc.dataset.slot = "description";
-  desc.style.fontSize = "12px";
+  desc.style.fontSize = "12.5px";
+  desc.style.lineHeight = "1.55";
   desc.style.color = "rgba(18, 28, 50, 0.94)";
-  desc.style.flex = "1 1 auto";
-  desc.style.paddingTop = "1px";
-  head.appendChild(desc);
-  card.appendChild(head);
-  const status = textRow();
-  status.style.fontStyle = "italic";
-  status.style.fontSize = "10.5px";
-  status.style.color = "rgba(55, 72, 108, 0.72)";
-  status.style.marginLeft = "26px";
-  status.style.marginTop = "3px";
-  status.textContent = formatStepStatus(payload);
-  status.dataset.slot = "status";
-  card.appendChild(status);
+  body.appendChild(desc);
+  card.appendChild(body);
   return card;
 }
 
@@ -870,79 +957,81 @@ function formatStepStatus(
 function renderDelegation(item: SlabItem, actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-delegation");
-  card.style.maxWidth = "240px";
   card.style.cursor = "pointer";
   card.style.touchAction = "pan-y";
 
-  // Head: ⇝ glyph + peer identity.
-  const head = document.createElement("div");
-  head.style.display = "flex";
-  head.style.alignItems = "center";
-  head.style.gap = "6px";
-  head.style.marginBottom = "4px";
-  head.style.minWidth = "0";
+  // Delegation chrome — ⇝ glyph, peer identity, tool name. One-line
+  // window header that reads as "packet outbound to peer X, tool Y."
+  const chrome = document.createElement("div");
+  chrome.className = "slab-item-chrome";
+  chrome.style.display = "flex";
+  chrome.style.alignItems = "center";
+  chrome.style.gap = "10px";
+  chrome.style.padding = "8px 12px";
+  chrome.style.borderBottom = "1px solid rgba(120, 140, 180, 0.18)";
+  chrome.style.background = "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 100%)";
 
   const glyph = document.createElement("span");
   glyph.textContent = "⇝";
   glyph.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
   glyph.style.fontSize = "12px";
   glyph.style.color = "rgba(90, 120, 175, 0.92)";
-  head.appendChild(glyph);
+  chrome.appendChild(glyph);
 
   const peer = document.createElement("span");
   peer.dataset.slot = "peer";
-  peer.style.fontSize = "9.5px";
+  peer.style.fontSize = "10px";
   peer.style.fontWeight = "600";
   peer.style.letterSpacing = "0.08em";
   peer.style.textTransform = "uppercase";
   peer.style.color = "rgba(55, 72, 110, 0.82)";
-  peer.style.whiteSpace = "nowrap";
-  peer.style.overflow = "hidden";
-  peer.style.textOverflow = "ellipsis";
-  head.appendChild(peer);
+  peer.style.flex = "0 0 auto";
+  chrome.appendChild(peer);
 
-  card.appendChild(head);
-
-  // Secondary: the tool being invoked, monospace and subtle.
-  const toolEl = document.createElement("div");
+  const toolEl = document.createElement("span");
   toolEl.dataset.slot = "tool";
   toolEl.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
-  toolEl.style.fontSize = "10.5px";
-  toolEl.style.color = "rgba(80, 110, 165, 0.88)";
+  toolEl.style.fontSize = "11px";
+  toolEl.style.color = "rgba(80, 110, 165, 0.78)";
   toolEl.style.whiteSpace = "nowrap";
   toolEl.style.overflow = "hidden";
   toolEl.style.textOverflow = "ellipsis";
-  toolEl.style.marginBottom = "6px";
-  card.appendChild(toolEl);
+  toolEl.style.flex = "1 1 auto";
+  chrome.appendChild(toolEl);
+
+  card.appendChild(chrome);
 
   // Body: receipt summary when returned. Empty while outbound —
   // nothing to perceive yet.
-  const body = document.createElement("div");
-  body.className = "slab-item-text";
-  body.dataset.slot = "body";
-  body.style.fontSize = "11.5px";
-  body.style.lineHeight = "1.5";
-  body.style.color = "rgba(18, 28, 50, 0.92)";
-  body.style.whiteSpace = "pre-wrap";
-  body.style.wordBreak = "break-word";
-  card.appendChild(body);
+  const body = cardBody();
+  const bodyText = document.createElement("div");
+  bodyText.className = "slab-item-text";
+  bodyText.dataset.slot = "body";
+  bodyText.style.fontSize = "12.5px";
+  bodyText.style.lineHeight = "1.55";
+  bodyText.style.color = "rgba(18, 28, 50, 0.94)";
+  bodyText.style.whiteSpace = "pre-wrap";
+  bodyText.style.wordBreak = "break-word";
+  body.appendChild(bodyText);
 
   // Expanded detail (receipt chain). Hidden until tap.
   const detail = document.createElement("div");
   detail.dataset.slot = "detail";
   detail.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
-  detail.style.fontSize = "10px";
-  detail.style.lineHeight = "1.55";
-  detail.style.color = "rgba(45, 60, 95, 0.82)";
+  detail.style.fontSize = "10.5px";
+  detail.style.lineHeight = "1.6";
+  detail.style.color = "rgba(45, 60, 95, 0.85)";
   detail.style.whiteSpace = "pre-wrap";
   detail.style.wordBreak = "break-all";
-  detail.style.marginTop = "6px";
-  detail.style.paddingTop = "6px";
+  detail.style.marginTop = "10px";
+  detail.style.paddingTop = "10px";
   detail.style.borderTop = "1px solid rgba(120, 140, 180, 0.22)";
   detail.style.display = "none";
-  card.appendChild(detail);
+  body.appendChild(detail);
 
-  applyDelegationPayload(item.payload, peer, toolEl, body, detail);
+  card.appendChild(body);
+
+  applyDelegationPayload(item.payload, peer, toolEl, bodyText, detail);
   attachDelegationGestures(card, actions);
   return card;
 }
@@ -1081,68 +1170,69 @@ function attachDelegationGestures(card: HTMLDivElement, actions: SlabItemActions
 function renderMemory(item: SlabItem, actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-memory");
-  card.style.maxWidth = "236px";
   card.style.cursor = "pointer";
   card.style.touchAction = "pan-y";
 
-  // Head: ◉ glyph + "memory" + short-id pill.
-  const head = document.createElement("div");
-  head.style.display = "flex";
-  head.style.alignItems = "center";
-  head.style.gap = "6px";
-  head.style.marginBottom = "6px";
-  head.style.minWidth = "0";
+  // Memory chrome: ◉ glyph + "memory" label + short-id pill all in
+  // the window header. Memory surfacings are ephemeral (short dwell,
+  // dissolve) so the body stays compact — one or two lines of the
+  // node's content is enough to read before it fades.
+  const chrome = document.createElement("div");
+  chrome.className = "slab-item-chrome";
+  chrome.style.display = "flex";
+  chrome.style.alignItems = "center";
+  chrome.style.gap = "8px";
+  chrome.style.padding = "8px 12px";
+  chrome.style.borderBottom = "1px solid rgba(120, 140, 180, 0.18)";
+  chrome.style.background = "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 100%)";
 
   const glyph = document.createElement("span");
   glyph.textContent = "◉";
   glyph.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
-  glyph.style.fontSize = "10.5px";
-  glyph.style.color = "rgba(95, 125, 180, 0.88)";
-  head.appendChild(glyph);
+  glyph.style.fontSize = "11px";
+  glyph.style.color = "rgba(95, 125, 180, 0.92)";
+  chrome.appendChild(glyph);
 
   const label = document.createElement("span");
   label.textContent = "memory";
-  label.style.fontSize = "9.5px";
+  label.style.fontSize = "10px";
   label.style.fontWeight = "600";
   label.style.letterSpacing = "0.08em";
   label.style.textTransform = "uppercase";
   label.style.color = "rgba(55, 72, 110, 0.82)";
   label.style.flex = "1 1 auto";
-  head.appendChild(label);
+  chrome.appendChild(label);
 
   const shortId = document.createElement("span");
   shortId.dataset.slot = "short_id";
   shortId.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
   shortId.style.fontSize = "9.5px";
-  shortId.style.color = "rgba(95, 115, 155, 0.72)";
-  shortId.style.padding = "1px 6px";
+  shortId.style.color = "rgba(95, 115, 155, 0.85)";
+  shortId.style.padding = "2px 8px";
   shortId.style.borderRadius = "999px";
-  shortId.style.background = "rgba(255, 255, 255, 0.45)";
+  shortId.style.background = "rgba(255, 255, 255, 0.55)";
   shortId.style.border = "1px solid rgba(120, 140, 180, 0.3)";
   shortId.style.letterSpacing = "0.04em";
-  head.appendChild(shortId);
+  chrome.appendChild(shortId);
 
-  card.appendChild(head);
+  card.appendChild(chrome);
 
   // Body — the memory's content, readable prose.
-  const body = document.createElement("div");
-  body.className = "slab-item-text";
-  body.dataset.slot = "body";
-  body.style.fontSize = "11.5px";
-  body.style.lineHeight = "1.5";
-  body.style.color = "rgba(18, 28, 50, 0.92)";
-  body.style.whiteSpace = "pre-wrap";
-  body.style.wordBreak = "break-word";
-  body.style.maxHeight = "72px";
-  body.style.overflow = "hidden";
-  body.style.maskImage = "linear-gradient(180deg, black 72%, transparent 100%)";
-  body.style.setProperty(
-    "-webkit-mask-image",
-    "linear-gradient(180deg, black 72%, transparent 100%)",
-  );
+  const body = cardBody();
+  const text = document.createElement("div");
+  text.className = "slab-item-text";
+  text.dataset.slot = "body";
+  text.style.fontSize = "12.5px";
+  text.style.lineHeight = "1.55";
+  text.style.color = "rgba(18, 28, 50, 0.94)";
+  text.style.whiteSpace = "pre-wrap";
+  text.style.wordBreak = "break-word";
+  text.style.maxHeight = "140px";
+  text.style.overflowY = "auto";
+  body.appendChild(text);
   card.appendChild(body);
 
-  applyMemoryPayload(item.payload, shortId, body);
+  applyMemoryPayload(item.payload, shortId, text);
   attachMemoryGestures(card, actions);
   return card;
 }
@@ -1167,25 +1257,7 @@ function applyMemoryPayload(payload: unknown, shortId: HTMLElement, body: HTMLEl
 }
 
 function attachMemoryGestures(card: HTMLDivElement, actions: SlabItemActions): void {
-  card.addEventListener("click", () => {
-    const body = card.querySelector('[data-slot="body"]');
-    if (!(body instanceof HTMLElement)) return;
-    const expanded = card.dataset.expanded === "true";
-    if (expanded) {
-      card.dataset.expanded = "false";
-      body.style.maxHeight = "72px";
-      body.style.maskImage = "linear-gradient(180deg, black 72%, transparent 100%)";
-      body.style.setProperty(
-        "-webkit-mask-image",
-        "linear-gradient(180deg, black 72%, transparent 100%)",
-      );
-    } else {
-      card.dataset.expanded = "true";
-      body.style.maxHeight = "none";
-      body.style.maskImage = "none";
-      body.style.setProperty("-webkit-mask-image", "none");
-    }
-  });
+  // Body scrolls natively; no expand toggle needed.
 
   let startX = 0;
   let startY = 0;
@@ -1216,7 +1288,13 @@ function attachMemoryGestures(card: HTMLDivElement, actions: SlabItemActions): v
 function renderGeneric(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add(`slab-item-${item.kind}`);
-  card.appendChild(headRow(kindGlyph(item.kind), item.kind));
+  card.appendChild(windowChrome(kindGlyph(item.kind), item.kind));
+  const body = cardBody();
+  body.style.color = "rgba(55, 72, 108, 0.72)";
+  body.style.fontStyle = "italic";
+  body.style.fontSize = "12px";
+  body.textContent = "…";
+  card.appendChild(body);
   return card;
 }
 

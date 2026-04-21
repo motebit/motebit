@@ -71,15 +71,21 @@ import { CANONICAL_MATERIAL } from "./spec.js";
  * the plane's right edge sat past the viewport; cards mounted on
  * the outer slots clipped out of view on narrower windows.
  */
-const SLAB_OFFSET_X = 0.3; // right of creature (meters)
+const SLAB_OFFSET_X = 0.38; // right of creature (meters)
 const SLAB_OFFSET_Y = 0.0; // creature eye level
 const SLAB_OFFSET_Z = -0.02; // just behind creature's front face
 const SLAB_TILT_X = -0.22; // ~12.5° forward (radians)
 const SLAB_TILT_Y = -0.09; // ~5° yaw toward creature (radians) — doctrine
 
-/** Golden-ratio-ish aspect. ~1.3 body radii wide; fits the viewport. */
-const SLAB_WIDTH = 0.36;
-const SLAB_HEIGHT = 0.22;
+/**
+ * Workstation-scale plane — sized to host window-pane cards (~520×320
+ * CSS px at the default camera) without visible empty margins around
+ * the container. Aspect stays ~16:10 so the display reads as a screen
+ * rather than a HUD strip. Doctrine: the plane is the display, not a
+ * backdrop.
+ */
+const SLAB_WIDTH = 0.54;
+const SLAB_HEIGHT = 0.34;
 
 /**
  * Sympathetic breathing amplitude factor. 0.3 of the creature's
@@ -803,16 +809,18 @@ function createContainerElement(): HTMLDivElement {
   el.className = "slab-items-container";
   el.style.display = "flex";
   el.style.flexDirection = "column";
-  el.style.alignItems = "flex-start";
-  el.style.gap = "6px";
-  el.style.padding = "10px";
+  el.style.alignItems = "stretch";
+  el.style.gap = "8px";
+  el.style.padding = "14px";
   el.style.boxSizing = "border-box";
-  // Plane is ~0.36 m × 0.22 m; container is sized to fit comfortably
-  // within its visible footprint at the default camera. Cards are
-  // all narrower than the container, so they left-align and leave
-  // room for a scroll track on the right when many items rest.
-  el.style.width = "360px";
-  el.style.maxHeight = "240px";
+  // The plane is visible real estate; the container fills it. Sized
+  // for the 0.36 m × 0.22 m plane at the default camera, aspect-
+  // matched so the display looks like a screen, not a HUD. Cards
+  // stretch to the container's full width — they're window panes,
+  // not chiplets, so the motebit's work reads as "this is what it's
+  // doing now," not "these are log chips."
+  el.style.width = "520px";
+  el.style.maxHeight = "320px";
   el.style.overflowY = "auto";
   el.style.overflowX = "hidden";
   // Scroll is a first-party affordance — droplet-physics-native,
