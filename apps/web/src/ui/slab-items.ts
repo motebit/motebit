@@ -478,24 +478,38 @@ function renderFetch(item: SlabItem, actions: SlabItemActions): HTMLElement {
   card.style.touchAction = "pan-y"; // keep vertical page scroll; horizontal becomes swipe
   attachFetchGestures(card, actions);
 
-  // URL bar — browser-like window chrome. Host name left, path inline,
-  // all on one row. Together they tell the reader "this is the page
-  // the motebit is reading right now."
+  // Browser-like window chrome. Favicon + host (left), path (middle),
+  // reading time (right). The entire bar is clickable — opens the
+  // source URL in a new tab for users who want to see the live page.
   const chrome = document.createElement("div");
   chrome.className = "slab-item-chrome";
+  chrome.dataset.slot = "chrome";
   chrome.style.display = "flex";
   chrome.style.alignItems = "center";
   chrome.style.gap = "10px";
   chrome.style.padding = "8px 12px";
   chrome.style.borderBottom = "1px solid rgba(120, 140, 180, 0.18)";
   chrome.style.background = "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 100%)";
+  chrome.style.cursor = "pointer";
+  chrome.title = "Open source page";
 
-  const glyph = document.createElement("span");
-  glyph.textContent = "↗";
-  glyph.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
-  glyph.style.fontSize = "12px";
-  glyph.style.color = "rgba(80, 110, 165, 0.92)";
-  chrome.appendChild(glyph);
+  const favicon = document.createElement("img");
+  favicon.dataset.slot = "favicon";
+  favicon.width = 14;
+  favicon.height = 14;
+  favicon.style.width = "14px";
+  favicon.style.height = "14px";
+  favicon.style.borderRadius = "2px";
+  favicon.style.flex = "0 0 auto";
+  favicon.style.visibility = "hidden"; // becomes visible on load
+  favicon.alt = "";
+  favicon.onerror = () => {
+    favicon.style.visibility = "hidden";
+  };
+  favicon.onload = () => {
+    favicon.style.visibility = "visible";
+  };
+  chrome.appendChild(favicon);
 
   const hostEl = document.createElement("span");
   hostEl.dataset.slot = "host";
@@ -518,6 +532,14 @@ function renderFetch(item: SlabItem, actions: SlabItemActions): HTMLElement {
   pathEl.style.flex = "1 1 auto";
   chrome.appendChild(pathEl);
 
+  const metaEl = document.createElement("span");
+  metaEl.dataset.slot = "meta";
+  metaEl.style.fontSize = "10px";
+  metaEl.style.color = "rgba(95, 115, 155, 0.72)";
+  metaEl.style.flex = "0 0 auto";
+  metaEl.style.letterSpacing = "0.02em";
+  chrome.appendChild(metaEl);
+
   card.appendChild(chrome);
 
   // Reader view — the fetched page rendered inside a sandboxed
@@ -539,43 +561,93 @@ function renderFetch(item: SlabItem, actions: SlabItemActions): HTMLElement {
   frame.style.colorScheme = "light";
   card.appendChild(frame);
 
-  applyFetchPayload(item.payload, hostEl, pathEl, frame);
+  applyFetchPayload(item.payload, { chrome, favicon, hostEl, pathEl, metaEl, frame });
   return card;
 }
 
 function updateFetch(item: SlabItem, element: HTMLElement): void {
+  const chrome = element.querySelector('[data-slot="chrome"]');
+  const favicon = element.querySelector('[data-slot="favicon"]');
   const hostEl = element.querySelector('[data-slot="host"]');
   const pathEl = element.querySelector('[data-slot="path"]');
+  const metaEl = element.querySelector('[data-slot="meta"]');
   const frame = element.querySelector('[data-slot="frame"]');
   if (
+    chrome instanceof HTMLElement &&
+    favicon instanceof HTMLImageElement &&
     hostEl instanceof HTMLElement &&
     pathEl instanceof HTMLElement &&
+    metaEl instanceof HTMLElement &&
     frame instanceof HTMLIFrameElement
   ) {
-    applyFetchPayload(item.payload, hostEl, pathEl, frame);
+    applyFetchPayload(item.payload, { chrome, favicon, hostEl, pathEl, metaEl, frame });
   }
 }
 
-function applyFetchPayload(
-  payload: unknown,
-  hostEl: HTMLElement,
-  pathEl: HTMLElement,
-  frame: HTMLIFrameElement,
-): void {
+interface FetchCardParts {
+  chrome: HTMLElement;
+  favicon: HTMLImageElement;
+  hostEl: HTMLElement;
+  pathEl: HTMLElement;
+  metaEl: HTMLElement;
+  frame: HTMLIFrameElement;
+}
+
+function applyFetchPayload(payload: unknown, parts: FetchCardParts): void {
   const p = payload as { context?: string; status?: string; result?: unknown } | null;
   const raw = p?.context ?? "";
   const parsed = parseUrl(raw);
-  hostEl.textContent = parsed.host || (p?.status === "calling" ? "reading" : "");
-  pathEl.textContent = parsed.path || (parsed.host ? "/" : raw);
+  parts.hostEl.textContent = parsed.host || (p?.status === "calling" ? "reading" : "");
+  parts.pathEl.textContent = parsed.path || (parsed.host ? "/" : raw);
+
+  // Favicon via Google's favicon service — no CORS, small, reliable.
+  // Doesn't leak referer (Google's service is the origin that hits
+  // the target site, not the user). Updates when the host changes.
+  if (parsed.host && parts.favicon.dataset.host !== parsed.host) {
+    parts.favicon.dataset.host = parsed.host;
+    parts.favicon.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(
+      parsed.host,
+    )}&sz=32`;
+  }
+
+  // Source-URL click — the chrome bar opens the original page in a
+  // new tab. Noopener/noreferrer prevents the opened page from
+  // reaching back into the app.
+  if (raw && parts.chrome.dataset.sourceUrl !== raw) {
+    parts.chrome.dataset.sourceUrl = raw;
+    parts.chrome.onclick = (ev) => {
+      // Don't trigger if the user is swiping — gestures handled
+      // at the card level. Chrome click is a deliberate tap.
+      ev.stopPropagation();
+      window.open(raw, "_blank", "noopener,noreferrer");
+    };
+  }
+
   const preview = extractFetchPreview(p);
+  parts.metaEl.textContent = estimateReadingTime(preview);
   const srcdoc = buildReaderSrcdoc(preview, parsed.host, raw);
   // Only re-assign srcdoc when content actually changes — avoids
   // reloading the iframe on every tick during streaming state
   // transitions.
-  if (frame.dataset.content !== preview) {
-    frame.dataset.content = preview;
-    frame.srcdoc = srcdoc;
+  if (parts.frame.dataset.content !== preview) {
+    parts.frame.dataset.content = preview;
+    parts.frame.srcdoc = srcdoc;
   }
+}
+
+/**
+ * Human-readable reading-time estimate from the page's word count.
+ * 220 wpm is the commonly-cited average adult reading speed (slightly
+ * faster than Medium's 200; slightly slower than speed-readers'
+ * 250+). Ceiling at 30 min — longer than that we just show "30m+".
+ * Empty content → empty string (no label while the page is loading).
+ */
+function estimateReadingTime(text: string): string {
+  if (!text) return "";
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words === 0) return "";
+  const minutes = Math.max(1, Math.round(words / 220));
+  return minutes >= 30 ? "30m+" : `${minutes} min read`;
 }
 
 /**
@@ -607,34 +679,63 @@ function buildReaderSrcdoc(text: string, host: string, baseUrl?: string): string
   return `<!doctype html><html><head><meta charset="utf-8">${base}<style>
     html, body { margin: 0; padding: 0; background: transparent; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Georgia, serif;
-      font-size: 14px;
+      /* ui-serif is the CSS4 keyword for "the system's serif body
+         font" — on macOS this resolves to New York (Apple's system
+         serif), on Windows to Cambria, with Iowan Old Style / Charter
+         / Georgia as graceful fallbacks. A real article-quality
+         reading typeface across every platform. */
+      font-family: ui-serif, "New York", "Iowan Old Style", Charter,
+        "Palatino Linotype", Palatino, Georgia, serif;
+      font-size: 15px;
       line-height: 1.7;
       color: rgba(14, 22, 40, 0.94);
-      padding: 18px 24px 24px;
+      padding: 22px 28px 28px;
       max-width: 640px;
       word-wrap: break-word;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+      font-feature-settings: "kern", "liga", "calt";
     }
-    article { letter-spacing: -0.005em; }
+    article { letter-spacing: -0.003em; }
     h1, h2, h3, h4, h5, h6 {
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+      /* Headings lift into the system sans — tighter, more display-
+         oriented. Mirrors the aesthetic split in Apple's own reader
+         views (New York body, SF display headers). */
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+        system-ui, sans-serif;
       color: rgba(10, 18, 32, 0.98);
-      line-height: 1.3;
-      margin: 22px 0 10px;
-      letter-spacing: -0.015em;
+      line-height: 1.25;
+      margin: 26px 0 12px;
+      letter-spacing: -0.02em;
+      font-feature-settings: "kern", "liga", "ss01";
     }
-    h1 { font-size: 22px; font-weight: 700; margin-top: 0; }
-    h2 { font-size: 18px; font-weight: 600; }
+    h1 { font-size: 24px; font-weight: 700; margin-top: 0; letter-spacing: -0.025em; }
+    h2 { font-size: 19px; font-weight: 600; }
     h3 { font-size: 16px; font-weight: 600; }
-    h4, h5, h6 { font-size: 14px; font-weight: 600; }
-    p { margin: 0 0 12px 0; }
+    h4, h5, h6 { font-size: 14px; font-weight: 600; text-transform: none; }
+    /* Magazine-style first-paragraph opener after H1 — subtle drop-cap-
+       adjacent treatment via a raised first-letter size. Gives the
+       article a "beginning," not just a top line. */
+    h1 + p::first-letter {
+      font-size: 1.3em;
+      font-weight: 500;
+    }
+    p { margin: 0 0 14px 0; }
     p:last-child, li:last-child { margin-bottom: 0; }
-    ul { padding-left: 22px; margin: 0 0 12px 0; }
-    li { margin-bottom: 4px; }
-    a { color: rgba(80, 110, 165, 0.95); text-decoration: underline; text-underline-offset: 2px; }
-    a:hover { color: rgba(55, 85, 140, 1); }
+    ul { padding-left: 22px; margin: 0 0 14px 0; }
+    li { margin-bottom: 6px; }
+    a {
+      color: rgba(80, 110, 165, 0.95);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      text-decoration-thickness: 0.5px;
+      text-decoration-color: rgba(120, 140, 180, 0.55);
+    }
+    a:hover {
+      color: rgba(55, 85, 140, 1);
+      text-decoration-color: rgba(80, 110, 165, 0.8);
+    }
     p.empty {
       color: rgba(80, 110, 165, 0.6);
       font-style: italic;

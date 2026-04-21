@@ -56,6 +56,21 @@ export function createReadUrlHandler(opts?: { proxyUrl?: string }): ToolHandler 
       }
 
       const text = await res.text();
+      // Extract <title> for the reader view's article header. Parsed
+      // before structural cleaning so we get the source page's own
+      // title, not the first heading in the body. Also captures the
+      // meta description as a secondary "subtitle" candidate.
+      const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+      const pageTitle = titleMatch
+        ? titleMatch[1]!
+            .replace(/\s+/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim()
+        : "";
       // Strip HTML while preserving semantic structure as Markdown-style
       // markers. The LLM gets efficient structured text it handles
       // natively; the slab renderer parses the markers back into proper
@@ -118,7 +133,20 @@ export function createReadUrlHandler(opts?: { proxyUrl?: string }): ToolHandler 
         .replace(/ *\n */g, "\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
-      return { ok: true, data: cleaned.slice(0, 16000) };
+      // Prepend the extracted page title as an H1 marker. The LLM
+      // reads it as the article's title; the renderer parses it as
+      // the top-level heading in the reader view. If the body already
+      // starts with an H1 matching the title, skip to avoid duplication.
+      const body = cleaned.slice(0, 16000);
+      const bodyStartsWithSameTitle =
+        pageTitle.length > 0 &&
+        body
+          .trimStart()
+          .toLowerCase()
+          .startsWith("# " + pageTitle.toLowerCase());
+      const withTitle =
+        pageTitle.length > 0 && !bodyStartsWithSameTitle ? `# ${pageTitle}\n\n${body}` : body;
+      return { ok: true, data: withTitle };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `Fetch error: ${msg}` };
