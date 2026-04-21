@@ -1,20 +1,25 @@
 # Motebit Computer — the slab
 
-A motebit is a droplet under surface tension. The body is passive; the interior is active. When the motebit _does something_ — calls a tool, executes a plan step, streams a response — that doing needs somewhere to become visible. Not buried in a transcript, not flattened into a sidebar, not painted as chrome on the droplet's surface. The slab is that somewhere.
+A motebit is a droplet under surface tension. Inside the droplet, a mind — it _perceives, acts, and reflects_. Motebits travel the web, drive the desktop, delegate to peers across a global network of agents. All of that work is experience the motebit is living through. Chat is the second-person surface where you _speak to_ the motebit. The Motebit Computer is the first-person surface where you _see through its eye, watch its hand move, and glimpse its mind reorganize_. Not a log. Not a sidebar. The motebit's experience, rendered in its own frame, while it lives.
 
 This doctrine pins what the slab is, what renders on it, how items leave it, and what it looks like when nothing is happening. Every future renderer and controller binds to this shape.
 
 ## What it is
 
-The slab is a **liquid glass plane** floating to the right of the motebit in the spatial scene. Sibling to: **constellation** (clusters of related records), **artifact** (detached, persistent outputs), **chat bubble** (ephemeral conversational messages). It is not a panel, not a window, not a HUD. It has a meniscus, not a frame; no titlebar, no close button, no scrollbar chrome.
+The slab is the motebit's **perceptual field rendered as a liquid-glass plane** floating to the right of the motebit in the spatial scene. Sibling to: **constellation** (clusters of related records), **artifact** (detached, persistent outputs), **chat bubble** (ephemeral conversational messages). It is not a panel, not a window, not a HUD. It has a meniscus, not a frame; no titlebar, no close button, no scrollbar chrome.
 
-The slab is **the substrate on which acts materialize**. In the records-vs-acts categorization ([`records-vs-acts.md`](records-vs-acts.md)), the slab is the canonical surface for acts-in-progress. Records belong in panels. Completed artifacts detach from the slab into their own scene objects. The slab holds only the live middle — the tokens streaming, the tool call resolving, the plan step running.
+What appears on the slab is what the motebit is **seeing, doing, and attending to** — in its own first-person frame. The motebit doesn't describe the page it's fetching; the page _appears_ on the slab as the motebit reads it. The motebit doesn't narrate its shell command; the terminal _scrolls_ on the slab as the command runs. The motebit doesn't report a memory-recall tool call; memory _surfaces_ on the slab as it becomes relevant.
+
+- **Chat is second-person** — you ↔ motebit, words exchanged.
+- **Slab is first-person** — you watching through the motebit's eye, at what it lives.
+
+In the records-vs-acts categorization ([`records-vs-acts.md`](records-vs-acts.md)), the slab is the canonical surface for acts. But acts are not _events_ — they are lived experiences, rendered in the perceptual modality they belong to. A web fetch is not "fetch status"; it is a page being seen. A delegation is not "task_request dispatched"; it is a bead leaving the slab toward a peer and returning with a signed receipt.
 
 ## Why it exists
 
 Three structural gaps the slab closes:
 
-1. **Records-vs-acts has no active-work primitive.** Panels hold records. The creature shows ephemeral acts (attention, mood, speaking). Chat bubbles carry conversational moments. But there was no canonical place for _computation in progress_ — tool calls, plan steps, streaming output. Those either buried in the transcript or flashed briefly as chat-adjacent text. The slab is the missing primitive.
+1. **No first-person surface.** Every AI UI — chat bubble, panel, sidebar, HUD, status board — is a third-person or second-person view. There was no surface where the user can see the _motebit's own perceptual field_ as it lives. A motebit that browses the web, drives the desktop, and delegates to peers needs a surface where those experiences are what you see, not summaries of them. The slab is that surface.
 
 2. **The spatial-canvas thesis ("objects materialize in scene, not chat") needs somewhere to materialize into before they detach.** An artifact that springs from nothing is magical; an artifact that _beads off_ a working surface is physical. The slab is the working surface.
 
@@ -22,19 +27,44 @@ Three structural gaps the slab closes:
 
 ## What renders on the slab
 
-- **Streaming model tokens** — before they crystallize into a chat bubble or an artifact. If the user interrupts or the turn fails, the stream dissolves back into the slab.
-- **Tool call cards** — `{tool name, input → output}` materializing as the call streams. One card per call. Persistent through the call's lifetime; either dissolves (ephemeral result) or detaches as an artifact (durable result).
-- **Plan step rows** — each step of a running plan appears as it begins, updates with `running | complete | failed` state, and either dissolves with the plan or contributes to a detached plan artifact at the end.
-- **Bash / shell output streams** — scroll on the slab as output emits.
-- **Web fetch / search results** — appear while retrieving; either dissolve after a read or detach as a memory artifact.
-- **Embedding / inference calls** — in-progress markers; dissolve on completion unless explicitly pinned.
+What appears on the slab is organized into three organs of the motebit's experience.
+
+### Eye — perception
+
+What the motebit is _seeing_ right now. The first-person visual field.
+
+- **Web pages** the motebit is reading render on the slab — the actual page content (or a faithful preview of it), not a URL string. If the motebit fetches a URL, the page _appears_ as it loads.
+- **Search results** appear as the motebit reads them; each result is rendered as the motebit's eye moves through it.
+- **Files** it opens are shown as they are — code highlighted, text rendered, images displayed.
+- **Peer motebit replies** land as beads arriving from offscreen, carrying the peer's identity and the returned receipt.
+- **Desktop regions** the motebit is attending to (when driving the user's desktop) render as a live fragment.
+
+### Hand — action
+
+What the motebit is _doing_ right now. Work in motion, not work being labeled.
+
+- **Shell / terminal output** scrolls on the slab as commands run.
+- **Forms filling** — fields populate as the motebit completes them.
+- **Code being written** — the editor-like surface types as the motebit codes.
+- **Files being edited** — diffs appear as the motebit applies them.
+- **Delegation outbound** — a packet leaves the slab when the motebit delegates to a peer; returns as a bead with a signed receipt, the peer's identity visible on arrival.
+
+### Mind — reflection
+
+What the motebit is _thinking_ right now. Internal reorganization made visible.
+
+- **Streaming tokens** of its current response — before crystallization into a chat bubble.
+- **Memory surfacing** — nodes rise into attention as they become relevant to the current task; drift back down as they fall away.
+- **Plan walking** — the current step focuses on the slab; prior steps recede; next steps ghost in.
+- **Embedding / inference** — the moment of a thought being formed, rendered as a brief condensation on the slab.
 
 **Not on the slab:**
 
-- Records (credentials, settled receipts, memory index, balance history). Those are panel content.
-- Chat bubbles. Those drift between motebit and user; they're conversational, not procedural.
-- Constellations. Those cluster above the slab when their domain is active, but they are their own scene object.
-- UI chrome (buttons, menus, inputs). If the user must click something, it's an affordance and lives on the creature or in a panel, not the slab.
+- **Records** (credentials, settled receipts, memory index, balance history). Those are panel content — what the motebit _has_, not what it is doing right now.
+- **Chat bubbles.** Second-person conversational moments. The slab is first-person experience.
+- **Third-person summaries of experience.** A card that says `fetch: calling…` is a log entry, not a perception. The slab renders what the motebit _sees_, not a label describing the fetch.
+- **Constellations.** Those cluster above the slab when their domain is active, but they are their own scene object.
+- **UI chrome** (buttons, menus, inputs). If the user must click something, it's an affordance and lives on the creature or in a panel, not the slab.
 
 ## Lifecycle
 
@@ -88,6 +118,8 @@ The idle state is not a bug. It is the proof that the slab respects silence — 
 
 ## Failure modes to avoid
 
+- **Third-person logging disguised as experience.** A card that says `fetch → status: calling` is a log line. The Motebit Computer renders _the page being fetched_, not the act of fetching described. If a card reads like a CloudWatch stream, the metaphor has collapsed. Status strings, event names, and log-shaped presentation don't belong on the slab.
+- **Duplicating chat.** The slab and the chat transcript must not both render the same act as text. The slab is canonical for acts (first-person perception/action/thought); chat owns the conversational wrapper (second-person turn). One surface per thing. If removing the slab's rendering of X leaves chat showing the same content, X is on the wrong surface.
 - **Growing chrome.** The first "let's add a close button so users can dismiss it" turns the slab into a browser tab. Users dismiss the slab by the motebit going idle; that's the doctrine.
 - **Persistent items.** An item that stayed on the slab after work ended has either detached (artifact) or should have dissolved. Persistent-item-on-slab is the records-vs-acts boundary breaking.
 - **Uncoordinated emergence.** The slab's emergence and the first item's emergence fighting for the user's attention. Sequence: slab emerges, pauses briefly (~150ms), first item pops. Never concurrent.
@@ -108,21 +140,23 @@ One type surface, one event stream, three renderers — following the existing p
 
 ## Relationship to other scene primitives
 
-| Primitive     | Role                                | Relationship to slab                                                                                                                                                                                                                         |
-| ------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Creature      | identity, mood, attention           | The source. Slab work originates from the creature's current activity. Slab tilts toward the creature; breathing is sympathetic.                                                                                                             |
-| Chat bubble   | user ↔ motebit conversational turns | Parallel. Chat bubbles render the dialogue; slab renders the work the dialogue triggered. Never collapse into one surface.                                                                                                                   |
-| Artifact      | durable, detached output            | Downstream. Artifacts are what graduate off the slab via the detachment pinch. Before artifact, it lived on the slab.                                                                                                                        |
-| Constellation | cluster of related records          | Above. When the slab's active items touch a domain with an associated constellation (credentials during an auth tool call, agents during a delegation), the constellation materializes above the slab area for the duration of the activity. |
-| Panel         | record surface, user-summoned       | Orthogonal. Panels hold what the motebit _has_; the slab shows what the motebit is _doing_. Never duplicate data between them.                                                                                                               |
+| Primitive     | Role                                | Relationship to slab                                                                                                                                                                                                                                                                       |
+| ------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Creature      | identity, mood, attention           | The source. Slab work originates from the creature's current activity. Slab tilts toward the creature; breathing is sympathetic.                                                                                                                                                           |
+| Chat bubble   | user ↔ motebit conversational turns | Parallel, different frames. Chat bubbles render the dialogue in second-person (you talking with the motebit); the slab renders the motebit's first-person experience of the work that dialogue triggered. Same turn, two surfaces, two frames — never both rendering the same act as text. |
+| Artifact      | durable, detached output            | Downstream. Artifacts are what graduate off the slab via the detachment pinch. Before artifact, it lived on the slab.                                                                                                                                                                      |
+| Constellation | cluster of related records          | Above. When the slab's active items touch a domain with an associated constellation (credentials during an auth tool call, agents during a delegation), the constellation materializes above the slab area for the duration of the activity.                                               |
+| Panel         | record surface, user-summoned       | Orthogonal. Panels hold what the motebit _has_; the slab shows what the motebit is _doing_. Never duplicate data between them.                                                                                                                                                             |
 
 ## Doctrine check before any slab PR
 
-1. Is the thing you're adding an **act** (on-slab) or a **record** (off-slab, in a panel)? If record, stop.
-2. Does it have a **durable output** that outlives the work? If yes, it must detach as an artifact — not persist on the slab.
-3. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? If yes, it's probably chrome or a record in disguise.
-4. Does its transition obey **droplet physics** — emergence as meniscus-expansion, dissolution as surface-ripple-absorption, detachment as bead-tension-release? If not, the metaphor is leaking.
-5. Does it render **identically across web, desktop, spatial, and mobile**? If surface-specific, it's either a renderer detail (fine) or a capability split (needs justification per the capability-rings doctrine).
+1. Is this a **first-person perception / action / thought**, or a third-person label about one? Status strings ("calling…"), event names ("fetch", "tool*call"), and log-shaped cards are labels. The slab renders what the motebit \_sees, does, and thinks*, in the modality that belongs to. If you're rendering a noun for an experience instead of the experience itself, you're on the wrong surface.
+2. Is the thing you're adding an **act** (on-slab) or a **record** (off-slab, in a panel)? If record, stop.
+3. Does **chat already render this** as text? If yes, one of the two is wrong — the slab is canonical for acts, chat for the conversational wrapper. Don't ship the same act twice.
+4. Does it have a **durable output** that outlives the work? If yes, it must detach as an artifact — not persist on the slab.
+5. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? If yes, it's probably chrome or a record in disguise.
+6. Does its transition obey **droplet physics** — emergence as meniscus-expansion, dissolution as surface-ripple-absorption, detachment as bead-tension-release? If not, the metaphor is leaking.
+7. Does it render **identically across web, desktop, spatial, and mobile**? If surface-specific, it's either a renderer detail (fine) or a capability split (needs justification per the capability-rings doctrine).
 
 ## References
 
