@@ -67,10 +67,13 @@ beforeAll(() => {
 // Dynamic import so the stubs are in place first
 let renderMarkdown: (raw: string) => string;
 
+// 30s hook timeout (default 10s): Vite's dynamic import of ../ui/chat
+// can take >10s under parallel turbo pre-push load. Runs in <1s in
+// isolation but crossed 10s under pre-push on 2026-04-21.
 beforeAll(async () => {
   const mod = await import("../ui/chat");
   renderMarkdown = mod.renderMarkdown;
-});
+}, 30_000);
 
 // ─── stripInternalTags (exercised through renderMarkdown) ─────────────
 
