@@ -234,19 +234,31 @@ export function bindSlabControllerToRenderer(deps: SlabBridgeDeps): () => void {
         }
       }
 
-      // Payload change without phase change — update in place.
-      if (prevItem != null && prevItem.phase === item.phase) {
-        if (prevItem.lastUpdatedAt !== item.lastUpdatedAt && updateItem) {
-          const element = mountedElements.get(id);
-          if (element) {
-            try {
-              updateItem(item, element);
-            } catch (err: unknown) {
-              warn("slab bridge updateItem threw", {
-                id,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
+      // Payload change — update in place.
+      //
+      // Fires when the item's payload has changed (lastUpdatedAt
+      // advanced) and the current phase is non-terminal. We include
+      // the active → resting transition here: restItem updates both
+      // the phase AND the payload (the status moves from "calling" to
+      // "done" with a full result), and the renderer needs to redraw
+      // with the new content. Without this, resting cards freeze on
+      // their "calling…" state even after the motebit has the result.
+      //
+      // Terminal phases (pinching, dissolving, detached, gone) don't
+      // get updates — any content change would fight the exit
+      // animation.
+      const isNonTerminal = item.phase === "active" || item.phase === "resting";
+      const payloadChanged = prevItem != null && prevItem.lastUpdatedAt !== item.lastUpdatedAt;
+      if (isNonTerminal && payloadChanged && updateItem) {
+        const element = mountedElements.get(id);
+        if (element) {
+          try {
+            updateItem(item, element);
+          } catch (err: unknown) {
+            warn("slab bridge updateItem threw", {
+              id,
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         }
       }

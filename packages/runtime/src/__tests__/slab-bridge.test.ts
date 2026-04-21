@@ -169,19 +169,52 @@ describe("bindSlabControllerToRenderer — mount + unmount", () => {
 });
 
 describe("bindSlabControllerToRenderer — updates", () => {
-  it("calls updateItem when payload changes without phase change", () => {
+  it("calls updateItem whenever the payload changes while the item's phase is non-terminal", () => {
     const updateItem = vi.fn();
     const { controller } = setupBridge({ updateItem });
     controller.openItem({ id: "s1", kind: "stream", payload: { tokens: "" } });
-    // First update fires the emerging → active phase promotion — that's
-    // a phase change, not a payload-only change, so no updateItem call.
+    // The bridge fires updateItem whenever the payload changed
+    // (lastUpdatedAt advanced) and the current phase is non-terminal
+    // (active or resting). This includes the emerging → active
+    // promotion on the first update — renderItem saw the emerging
+    // payload, updateItem then replays the active-state payload.
+    // It also covers active → resting, which is the key fix for the
+    // "web_search card stuck on 'calling…'" regression: restItem
+    // both changes phase AND updates payload, and the rendered card
+    // needs to redraw with the result.
     controller.updateItem("s1", { tokens: "hello" });
-    // Subsequent updates are phase-stable (active → active with new
-    // payload) and flow through updateItem.
     controller.updateItem("s1", { tokens: "hello world" });
     controller.updateItem("s1", { tokens: "hello world!" });
-    expect(updateItem).toHaveBeenCalledTimes(2);
-    expect(updateItem.mock.calls[1]![0].payload).toEqual({ tokens: "hello world!" });
+    expect(updateItem).toHaveBeenCalledTimes(3);
+    expect(updateItem.mock.calls[2]![0].payload).toEqual({ tokens: "hello world!" });
+  });
+
+  it("fires updateItem on the active → resting transition with a payload update", () => {
+    const updateItem = vi.fn();
+    const { controller } = setupBridge({ updateItem });
+    controller.openItem({
+      id: "t1",
+      kind: "tool_call",
+      payload: { name: "web_search", status: "calling", context: "Tesla balance sheet" },
+    });
+    // Active — the in-flight card.
+    controller.updateItem("t1", {
+      name: "web_search",
+      status: "calling",
+      context: "Tesla balance sheet",
+    });
+    updateItem.mockClear();
+    // Controller restItem with the completed result — phase goes
+    // active → resting and payload updates in the same state emit.
+    controller.restItem("t1", {
+      name: "web_search",
+      status: "done",
+      context: "Tesla balance sheet",
+      result: "3 results found",
+    });
+    expect(updateItem).toHaveBeenCalledTimes(1);
+    const lastCall = updateItem.mock.calls[0]!;
+    expect((lastCall[0] as { payload: { status: string } }).payload.status).toBe("done");
   });
 
   it("no-op update when updateItem is not provided", () => {
