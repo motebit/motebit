@@ -47,56 +47,93 @@ import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/
 // the card so a click on × is unambiguously "dismiss," not "expand."
 
 function attachHoverClose(card: HTMLDivElement, actions: SlabItemActions): void {
-  const close = document.createElement("button");
-  close.type = "button";
+  // Use a span with role=button rather than an HTMLButtonElement. Inside
+  // a CSS2DRenderer overlay (which applies 3D transforms + positions its
+  // root with `pointer-events: none`), <button>s can swallow the
+  // synthesized `click` event inconsistently — the user sees a styled
+  // button that doesn't fire. A role=button span with an explicit
+  // `pointerup` activation is the defensive path and routes through
+  // `actions.dismiss` per surface-determinism.
+  const close = document.createElement("span");
+  close.setAttribute("role", "button");
   close.setAttribute("aria-label", "Dismiss");
+  close.setAttribute("tabindex", "0");
   close.textContent = "×";
   close.style.position = "absolute";
   close.style.top = "4px";
   close.style.right = "4px";
-  close.style.width = "16px";
-  close.style.height = "16px";
+  close.style.width = "18px";
+  close.style.height = "18px";
   close.style.display = "inline-flex";
   close.style.alignItems = "center";
   close.style.justifyContent = "center";
   close.style.fontSize = "13px";
   close.style.lineHeight = "1";
-  close.style.color = "rgba(40, 55, 90, 0.78)";
-  // Meniscus dip — a soft circular dimple, not a gray OS button. The
-  // background is a subtle darkening of the card's own tone so it
-  // reads as part of the droplet's surface.
-  close.style.background = "rgba(255, 255, 255, 0.55)";
+  close.style.color = "rgba(40, 55, 90, 0.82)";
+  // Meniscus dip — soft circular dimple, not a gray OS button. Reads
+  // as part of the droplet's surface.
+  close.style.background = "rgba(255, 255, 255, 0.62)";
   close.style.border = "1px solid rgba(120, 140, 180, 0.35)";
   close.style.borderRadius = "999px";
-  close.style.padding = "0";
   close.style.cursor = "pointer";
+  close.style.userSelect = "none";
   close.style.opacity = "0";
   close.style.transform = "scale(0.85)";
   close.style.transition = "opacity 120ms ease-out, transform 120ms ease-out";
-  close.style.pointerEvents = "none";
-  // Only interactive when visible — prevents phantom clicks.
+  // `visibility` (rather than `pointer-events: none`) gates
+  // interactability — avoids a pointer-events race in CSS2DRenderer
+  // where a freshly-revealed button could miss the first click.
+  close.style.visibility = "hidden";
+  // Always pointer-events: auto so when visible, the span is a
+  // reliable click target; visibility handles the rest.
+  close.style.pointerEvents = "auto";
+  // Z-layer the close above any other absolutely-positioned siblings
+  // so it's never occluded by card content that happens to stack.
+  close.style.zIndex = "10";
+
+  let concealTimer: ReturnType<typeof setTimeout> | null = null;
   const reveal = (): void => {
+    if (concealTimer != null) {
+      clearTimeout(concealTimer);
+      concealTimer = null;
+    }
+    close.style.visibility = "visible";
     close.style.opacity = "1";
     close.style.transform = "scale(1)";
-    close.style.pointerEvents = "auto";
   };
   const conceal = (): void => {
     close.style.opacity = "0";
     close.style.transform = "scale(0.85)";
-    close.style.pointerEvents = "none";
+    // Let the fade play, then pull visibility so the element stops
+    // being a hit target. ~150ms > the 120ms transition.
+    if (concealTimer != null) clearTimeout(concealTimer);
+    concealTimer = setTimeout(() => {
+      concealTimer = null;
+      close.style.visibility = "hidden";
+    }, 150);
   };
   card.addEventListener("pointerenter", reveal);
   card.addEventListener("pointerleave", conceal);
-  close.addEventListener("click", (ev) => {
+
+  const dismiss = (ev: Event): void => {
     ev.stopPropagation();
+    ev.preventDefault();
     // Soft exit animation; dissolve physics handled by the controller.
     card.style.transition = "transform 140ms ease-out, opacity 140ms ease-out";
     card.style.opacity = "0";
     card.style.transform = "scale(0.94)";
     actions.dismiss();
-  });
-  // Stop pointer events from bubbling to card's click/pointer handlers.
+  };
+  // Use pointerup (not click). Click synthesis inside CSS2DRenderer is
+  // unreliable in some browsers; pointerup fires directly from the
+  // input pipeline and is robust.
+  close.addEventListener("pointerup", dismiss);
   close.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  // Keyboard path — when the × has focus, Enter/Space activate.
+  close.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") dismiss(ev);
+  });
+
   // Card must be positioned for absolute child to anchor correctly.
   if (card.style.position === "" || card.style.position === "static") {
     card.style.position = "relative";
