@@ -17,16 +17,18 @@
  * See docs/doctrine/motebit-computer.md for what each kind means in
  * the slab's lifecycle. Styling conventions:
  *
- *   - One card per slab item; the slab's plane IS the substrate, so
- *     items stay low-chrome and let the material speak (no heavy
- *     backgrounds, no borders louder than a hairline).
- *   - Inline styles keep the items self-contained — no new CSS class
- *     lookups that could drift out of sync with the rest of the
- *     stylesheet. Future work may migrate to class-based styling
- *     once the slab's visual language is settled.
- *   - Typography matches the chat surface (system-ui, ~12-13px) so
- *     items on the slab read as part of the same conversation, not
- *     as a different product.
+ *   - The slab's plane is the substrate — cards are what's *on* it,
+ *     not a separate product. They read as frosted droplets frozen
+ *     to a glass sheet: high-contrast ink, rim-lit top edge, soft
+ *     cast shadow below. The slab-ness shows through the glass
+ *     between and beneath them.
+ *   - Inline styles only — no stylesheet coupling. Values match
+ *     across web and desktop so the siblings stay byte-aligned until
+ *     a third HTML surface justifies extraction.
+ *   - Per-kind identity lives in typography and a hairline glyph,
+ *     not color-noise. Stream is monospace (live typing). Tool call
+ *     is a chip. Plan step is a numbered badge. The others share a
+ *     glyph-and-label head.
  */
 
 import type { SlabItem, ArtifactKindForDetach } from "@motebit/runtime";
@@ -36,39 +38,37 @@ import type { SlabItem, ArtifactKindForDetach } from "@motebit/runtime";
 function baseCard(): HTMLDivElement {
   const el = document.createElement("div");
   el.className = "slab-item";
-  // Inline fallbacks so items remain legible even if the slab CSS
-  // block hasn't loaded (fresh install, cache miss). Values mirror
-  // index.html's `.slab-item` rule so there's no style flash.
-  el.style.fontFamily = "-apple-system, BlinkMacSystemFont, system-ui, sans-serif";
+  el.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif";
   el.style.fontSize = "12px";
   el.style.lineHeight = "1.45";
-  el.style.color = "rgba(20, 30, 50, 0.82)";
-  el.style.padding = "8px 10px";
-  el.style.background = "rgba(255, 255, 255, 0.22)";
-  el.style.border = "1px solid rgba(255, 255, 255, 0.35)";
-  el.style.borderRadius = "6px";
-  el.style.backdropFilter = "blur(4px)";
-  // @ts-expect-error — vendor-prefixed compatibility
-  el.style.webkitBackdropFilter = "blur(4px)";
-  el.style.boxShadow = "0 1px 3px rgba(0, 0, 0, 0.06)";
-  el.style.minWidth = "140px";
-  el.style.maxWidth = "240px";
+  el.style.letterSpacing = "-0.005em";
+  // Near-black ink. The slab below is glass, so the text has to be
+  // dark enough to read against any environment behind the plane.
+  el.style.color = "rgba(14, 22, 40, 0.96)";
+  el.style.padding = "9px 11px";
+  // Frosted-glass body with a gradient top→bottom so the card
+  // appears to catch light from above, like a droplet frozen on a
+  // sheet. Values are tuned for the light environment; the backdrop
+  // blur carries refraction from whatever's behind the plane.
+  el.style.background =
+    "linear-gradient(180deg, rgba(255,255,255,0.74) 0%, rgba(246,250,255,0.58) 100%)";
+  el.style.border = "1px solid rgba(255, 255, 255, 0.55)";
+  el.style.borderRadius = "10px";
+  el.style.backdropFilter = "blur(14px) saturate(1.25)";
+  el.style.setProperty("-webkit-backdrop-filter", "blur(14px) saturate(1.25)");
+  el.style.boxShadow = [
+    // Top rim — the surface-tension highlight where the card meets light.
+    "0 1px 0 rgba(255,255,255,0.72) inset",
+    // Bottom inset — a thin darker line reading as the droplet's base.
+    "0 -1px 0 rgba(25,35,60,0.06) inset",
+    // External cast — lifts the card off the slab's glass surface
+    // (doctrine: "cards feel lifted, not painted").
+    "0 2px 10px rgba(20,30,60,0.14)",
+  ].join(", ");
+  el.style.minWidth = "148px";
+  el.style.maxWidth = "228px";
   el.style.overflow = "hidden";
   el.style.wordBreak = "break-word";
-  return el;
-}
-
-function labelRow(text: string): HTMLSpanElement {
-  const el = document.createElement("span");
-  el.className = "slab-item-label";
-  el.style.display = "block";
-  el.style.fontSize = "10px";
-  el.style.fontWeight = "600";
-  el.style.letterSpacing = "0.04em";
-  el.style.textTransform = "uppercase";
-  el.style.color = "rgba(60, 70, 100, 0.55)";
-  el.style.marginBottom = "4px";
-  el.textContent = text;
   return el;
 }
 
@@ -79,12 +79,64 @@ function textRow(): HTMLDivElement {
   return el;
 }
 
+/** Kind-specific glyph shown before the label row. Empty string for stream. */
+function kindGlyph(kind: SlabItem["kind"]): string {
+  switch (kind) {
+    case "tool_call":
+      return "◇";
+    case "shell":
+      return "$";
+    case "fetch":
+      return "↗";
+    case "embedding":
+      return "∿";
+    case "stream":
+    case "plan_step":
+    default:
+      return "";
+  }
+}
+
+function headRow(glyph: string, label: string): HTMLDivElement {
+  const head = document.createElement("div");
+  head.className = "slab-item-head";
+  head.style.display = "flex";
+  head.style.alignItems = "center";
+  head.style.gap = "6px";
+  head.style.marginBottom = "4px";
+  if (glyph) {
+    const g = document.createElement("span");
+    g.textContent = glyph;
+    g.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+    g.style.fontSize = "11px";
+    g.style.color = "rgba(80, 110, 165, 0.9)";
+    head.appendChild(g);
+  }
+  const l = document.createElement("span");
+  l.className = "slab-item-label";
+  l.textContent = label;
+  l.style.fontSize = "9.5px";
+  l.style.fontWeight = "600";
+  l.style.letterSpacing = "0.08em";
+  l.style.textTransform = "uppercase";
+  l.style.color = "rgba(55, 72, 110, 0.82)";
+  head.appendChild(l);
+  return head;
+}
+
 // ── Per-kind renderers ───────────────────────────────────────────────
 
 function renderStream(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-stream");
   const text = textRow();
+  // Stream is live LLM tokens arriving character-by-character — the
+  // monospace typeface reads as "something is being typed right now."
+  // No label row; let the text fill the card.
+  text.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  text.style.fontSize = "11.5px";
+  text.style.lineHeight = "1.55";
+  text.style.color = "rgba(18, 28, 50, 0.94)";
   const payload = item.payload as { text?: string } | null;
   text.textContent = payload?.text ?? "";
   card.appendChild(text);
@@ -108,10 +160,10 @@ function renderToolCall(item: SlabItem): HTMLElement {
     context?: string;
     result?: unknown;
   } | null;
-  card.appendChild(labelRow(payload?.name ?? "tool"));
+  card.appendChild(headRow("◇", payload?.name ?? "tool"));
   const status = textRow();
-  status.style.fontStyle = "italic";
-  status.style.color = "rgba(60, 70, 100, 0.6)";
+  status.style.fontSize = "11.5px";
+  status.style.color = "rgba(50, 66, 98, 0.82)";
   status.textContent = formatToolStatus(payload);
   status.dataset.slot = "status";
   card.appendChild(status);
@@ -157,15 +209,41 @@ function renderPlanStep(item: SlabItem): HTMLElement {
     status?: "running" | "delegated";
     task_id?: string;
   } | null;
-  card.appendChild(labelRow(`step ${payload?.ordinal ?? "?"}`));
-  const desc = textRow();
+  const head = document.createElement("div");
+  head.style.display = "flex";
+  head.style.alignItems = "flex-start";
+  head.style.gap = "8px";
+  const badge = document.createElement("span");
+  badge.textContent = String(payload?.ordinal ?? "?");
+  badge.style.flex = "0 0 auto";
+  badge.style.minWidth = "18px";
+  badge.style.height = "18px";
+  badge.style.display = "inline-flex";
+  badge.style.alignItems = "center";
+  badge.style.justifyContent = "center";
+  badge.style.fontSize = "10.5px";
+  badge.style.fontWeight = "600";
+  badge.style.color = "rgba(45, 62, 100, 0.9)";
+  badge.style.background = "rgba(255, 255, 255, 0.55)";
+  badge.style.border = "1px solid rgba(120, 140, 180, 0.38)";
+  badge.style.borderRadius = "999px";
+  badge.style.lineHeight = "1";
+  head.appendChild(badge);
+  const desc = document.createElement("span");
   desc.textContent = payload?.description ?? "";
   desc.dataset.slot = "description";
-  card.appendChild(desc);
+  desc.style.fontSize = "12px";
+  desc.style.color = "rgba(18, 28, 50, 0.94)";
+  desc.style.flex = "1 1 auto";
+  desc.style.paddingTop = "1px";
+  head.appendChild(desc);
+  card.appendChild(head);
   const status = textRow();
   status.style.fontStyle = "italic";
-  status.style.color = "rgba(60, 70, 100, 0.6)";
-  status.style.fontSize = "11px";
+  status.style.fontSize = "10.5px";
+  status.style.color = "rgba(55, 72, 108, 0.72)";
+  status.style.marginLeft = "26px";
+  status.style.marginTop = "3px";
   status.textContent = formatStepStatus(payload);
   status.dataset.slot = "status";
   card.appendChild(status);
@@ -193,7 +271,7 @@ function formatStepStatus(
 function renderGeneric(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add(`slab-item-${item.kind}`);
-  card.appendChild(labelRow(item.kind));
+  card.appendChild(headRow(kindGlyph(item.kind), item.kind));
   return card;
 }
 
@@ -258,9 +336,10 @@ export function renderDetachArtifact(
   card.classList.add("slab-detach-artifact", `slab-detach-${artifactKind}`);
   card.style.maxWidth = "320px";
   card.style.padding = "10px 12px";
-  card.appendChild(labelRow(`${artifactKind} · from ${item.kind}`));
+  card.appendChild(headRow("◆", `${artifactKind} · from ${item.kind}`));
   const body = textRow();
   body.style.fontSize = "12px";
+  body.style.color = "rgba(14, 22, 40, 0.95)";
   const payload = item.payload as Record<string, unknown> | null;
   if (payload) {
     const detach = payload.__slabDetach as { outcome?: { result?: unknown } } | undefined;
