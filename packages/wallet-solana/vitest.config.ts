@@ -1,22 +1,24 @@
 import { defineMotebitTest } from "../../vitest.shared.js";
 
 // Sovereign rail coverage floor. Policy: never lower thresholds; write
-// tests to meet them. Raised 2026-04-20 from the original
-// 2026-04-16 baseline (42/86/58/42 → 61/86/71/61) as part of the
-// coverage-graduation commitment — the moat path through
-// `memo-submitter.ts` is now 100% covered (consolidation receipts
-// anchor through it; it had to be robust). Remaining gap is
-// concentrated in `web3js-adapter.ts` (USDC transfer path) and
-// `rail.ts` — both pending Connection-mock tests in a follow-up pass.
+// tests to meet them. Raised 2026-04-20 in two passes:
+//   1. 42/86/58/42 → 61/86/71/61 (memo-submitter.ts to 100% — the
+//      consolidation-anchor moat path).
+//   2. 61/86/71/61 → 95/95/100/95 (rail.ts to 100% + web3js-adapter.ts
+//      to ~96% via Connection-mock + spl-token-mock pattern, mirroring
+//      the memo-submitter approach for sendUsdc / sendUsdcBatch /
+//      ensureGas / Jupiter auto-swap branches).
+//
+// 80/80/80/80 graduation target met ahead of the 2026-06-01 deadline;
+// `wallet-solana` is removed from `coverage-graduation.json` per the
+// doctrine ("When all targets are met, remove the entry").
 //
 // adapter.ts is excluded (types-only; no runtime emit), matching the
 // identity-file/schema.ts and protocol/*.ts exclusion precedent.
 //
-// Graduation target: 80/80/80/80 by 2026-06-01 (see
-// `coverage-graduation.json`). Each raise MUST update both this file
-// and the manifest in the same PR per the graduation doctrine's
-// drift rule.
+// Each raise MUST update both this file and any matching manifest
+// entry in the same PR per the graduation doctrine's drift rule.
 export default defineMotebitTest({
   coverageExclude: ["src/adapter.ts"],
-  thresholds: { statements: 61, branches: 86, functions: 71, lines: 61 },
+  thresholds: { statements: 95, branches: 95, functions: 100, lines: 95 },
 });

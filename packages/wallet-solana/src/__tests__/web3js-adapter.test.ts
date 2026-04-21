@@ -13,12 +13,49 @@
  * seed length" footguns.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Keypair } from "@solana/web3.js";
+
+// Mock just `getAccount` from @solana/spl-token. Everything else
+// (TokenAccountNotFoundError, getAssociatedTokenAddress, instruction
+// builders) is pure crypto/derivation and stays real — the only
+// network-touching call is `getAccount`. `vi.hoisted` is required
+// because vi.mock is hoisted above plain const declarations.
+const { getAccountMock } = vi.hoisted(() => ({ getAccountMock: vi.fn() }));
+vi.mock("@solana/spl-token", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@solana/spl-token")>();
+  return {
+    ...actual,
+    getAccount: getAccountMock,
+  };
+});
+
+import { TokenAccountNotFoundError } from "@solana/spl-token";
 
 import { Web3JsRpcAdapter } from "../web3js-adapter.js";
-import { USDC_MINT_MAINNET } from "../constants.js";
+import {
+  USDC_MINT_MAINNET,
+  InsufficientUsdcBalanceError,
+  InvalidSolanaAddressError,
+} from "../constants.js";
 
 const ZERO_SEED = new Uint8Array(32); // 32 zero bytes
+
+/** Generate a fresh valid base58 Solana address for use as a recipient. */
+function validBase58Address(): string {
+  return Keypair.generate().publicKey.toBase58();
+}
+
+/** A valid base58-encoded 32-byte blockhash — Transaction.serialize
+ *  decodes `recentBlockhash` and expects exactly 32 bytes. A keypair's
+ *  base58 address is the cheapest way to produce that. */
+function validBlockhash(): string {
+  return Keypair.generate().publicKey.toBase58();
+}
+
+beforeEach(() => {
+  getAccountMock.mockReset();
+});
 
 describe("Web3JsRpcAdapter", () => {
   it("derives a deterministic address from a 32-byte Ed25519 seed", () => {
@@ -254,5 +291,401 @@ describe("Web3JsRpcAdapter.getTransaction", () => {
 
     const result = await adapter.getTransaction("sigAmbiguous");
     expect(result).toEqual({ status: "not_found" });
+  });
+
+  it("returns not_found when multiple recipients are present (ambiguous transfer)", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    vi.spyOn(conn, "getTransaction").mockResolvedValue(
+      txResponse({
+        slot: 78,
+        entries: [
+          { accountIndex: 0, owner: "payer", pre: "1000000", post: "0" },
+          { accountIndex: 1, owner: "recipient-1", pre: "0", post: "500000" },
+          { accountIndex: 2, owner: "recipient-2", pre: "0", post: "500000" },
+        ],
+      }) as never,
+    );
+
+    const result = await adapter.getTransaction("sigAmbiguousTo");
+    expect(result).toEqual({ status: "not_found" });
+  });
+
+  it("skips token-balance entries with no owner (defensive against partial wire data)", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    // The first entry has owner: undefined and should be ignored entirely;
+    // we expect to fall through to not_found because no payer / recipient
+    // could be resolved.
+    vi.spyOn(conn, "getTransaction").mockResolvedValue(
+      txResponse({
+        slot: 11,
+        entries: [{ accountIndex: 0, owner: undefined, pre: "1000000", post: "500000" }],
+      }) as never,
+    );
+
+    const result = await adapter.getTransaction("sigNoOwner");
+    expect(result).toEqual({ status: "not_found" });
+  });
+
+  it("skips token-balance entries with non-numeric amount strings", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    // Amount string "not-a-number" should fail BigInt() and be silently
+    // skipped — no payer/recipient resolves, fall through to not_found.
+    vi.spyOn(conn, "getTransaction").mockResolvedValue(
+      txResponse({
+        slot: 12,
+        entries: [{ accountIndex: 0, owner: "payer", pre: "not-a-number", post: "abc" }],
+      }) as never,
+    );
+
+    const result = await adapter.getTransaction("sigBadAmount");
+    expect(result).toEqual({ status: "not_found" });
+  });
+
+  it("uses 'finalized' commitment when adapter is configured for finalized", async () => {
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+      commitment: "finalized",
+    });
+    const spy = vi.spyOn(adapter.getConnection(), "getTransaction").mockResolvedValue(null);
+
+    await adapter.getTransaction("sigFin");
+    expect(spy).toHaveBeenCalledWith(
+      "sigFin",
+      expect.objectContaining({ commitment: "finalized" }),
+    );
+  });
+
+  it("narrows 'processed' commitment up to 'confirmed' for getTransaction", async () => {
+    // getTransaction only accepts Finality ("confirmed" | "finalized");
+    // the adapter narrows "processed" → "confirmed" so the RPC accepts the call.
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+      commitment: "processed",
+    });
+    const spy = vi.spyOn(adapter.getConnection(), "getTransaction").mockResolvedValue(null);
+
+    await adapter.getTransaction("sigProc");
+    expect(spy).toHaveBeenCalledWith(
+      "sigProc",
+      expect.objectContaining({ commitment: "confirmed" }),
+    );
+  });
+});
+
+// ── Balances ──────────────────────────────────────────────────────────────
+//
+// `getSolBalance` is a one-line BigInt wrap; `getUsdcBalance` exercises
+// the TokenAccountNotFoundError branch (returns 0n for an uncreated ATA)
+// and the rethrow branch (other errors propagate). Both shapes are part
+// of the rail's public contract — wallet UIs depend on 0-not-throw for
+// fresh accounts.
+
+describe("Web3JsRpcAdapter balance methods", () => {
+  it("getSolBalance reads lamports and wraps into BigInt", async () => {
+    const adapter = makeAdapterForTx();
+    vi.spyOn(adapter.getConnection(), "getBalance").mockResolvedValue(123_456);
+    expect(await adapter.getSolBalance()).toBe(123_456n);
+  });
+
+  it("getUsdcBalance returns the ATA amount when the account exists", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock.mockResolvedValue({ amount: 250_000n });
+    expect(await adapter.getUsdcBalance()).toBe(250_000n);
+  });
+
+  it("getUsdcBalance returns 0n when the ATA has not been created yet", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock.mockRejectedValue(new TokenAccountNotFoundError());
+    expect(await adapter.getUsdcBalance()).toBe(0n);
+  });
+
+  it("getUsdcBalance rethrows non-TokenAccountNotFoundError failures", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock.mockRejectedValue(new Error("RPC down"));
+    await expect(adapter.getUsdcBalance()).rejects.toThrow("RPC down");
+  });
+});
+
+// ── sendUsdc ──────────────────────────────────────────────────────────────
+//
+// The sovereign-rail USDC transfer path. We mock the SPL token-account
+// lookup (`getAccount`) and the Connection's submission methods; the
+// transaction-build + signing stays real so anything that would have
+// crashed at serialize-time still does.
+
+describe("Web3JsRpcAdapter.sendUsdc", () => {
+  it("rejects garbage recipient addresses with InvalidSolanaAddressError", async () => {
+    const adapter = makeAdapterForTx();
+    await expect(
+      adapter.sendUsdc({ toAddress: "not-base58!!!", microAmount: 100n }),
+    ).rejects.toBeInstanceOf(InvalidSolanaAddressError);
+  });
+
+  it("throws InsufficientUsdcBalanceError when source balance < microAmount", async () => {
+    const adapter = makeAdapterForTx();
+    // First getAccount = balance check (returns 10 micro)
+    getAccountMock.mockResolvedValueOnce({ amount: 10n });
+    await expect(
+      adapter.sendUsdc({
+        toAddress: validBase58Address(),
+        microAmount: 1_000_000n,
+      }),
+    ).rejects.toBeInstanceOf(InsufficientUsdcBalanceError);
+  });
+
+  it("happy path: ATA exists, transfer confirms cleanly", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    // 1st getAccount = own balance, 2nd getAccount = dest exists (succeeds)
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigHappy");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 42 },
+      value: { err: null },
+    });
+
+    const result = await adapter.sendUsdc({
+      toAddress: validBase58Address(),
+      microAmount: 1_000_000n,
+    });
+    expect(result).toEqual({ signature: "sigHappy", slot: 42, confirmed: true });
+  });
+
+  it("auto-creates destination ATA when missing (TokenAccountNotFoundError)", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n }) // own balance
+      .mockRejectedValueOnce(new TokenAccountNotFoundError()); // dest missing
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigCreated");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 7 },
+      value: { err: null },
+    });
+
+    const result = await adapter.sendUsdc({
+      toAddress: validBase58Address(),
+      microAmount: 500_000n,
+    });
+    expect(result).toEqual({ signature: "sigCreated", slot: 7, confirmed: true });
+    expect(sendSpy).toHaveBeenCalledOnce();
+  });
+
+  it("rethrows non-TANF errors during the dest ATA existence check", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n }) // own balance ok
+      .mockRejectedValueOnce(new Error("RPC down")); // dest check transient
+    await expect(
+      adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
+    ).rejects.toThrow("RPC down");
+  });
+
+  it("returns confirmed=false when the network reports a transaction error", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 50,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigErr");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 99 },
+      value: { err: { InstructionError: [0, "Custom"] } },
+    });
+    const result = await adapter.sendUsdc({
+      toAddress: validBase58Address(),
+      microAmount: 1n,
+    });
+    expect(result.confirmed).toBe(false);
+    expect(result.signature).toBe("sigErr");
+    expect(result.slot).toBe(99);
+  });
+});
+
+// ── sendUsdcBatch ─────────────────────────────────────────────────────────
+//
+// Multi-recipient USDC transfer. Lock the chunk boundary and the
+// fail-fast contract: once a chunk fails, subsequent chunks are NOT
+// submitted; their items return ok=false with reason "prior chunk failed".
+
+describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
+  it("returns [] for an empty batch", async () => {
+    const adapter = makeAdapterForTx();
+    expect(await adapter.sendUsdcBatch([])).toEqual([]);
+  });
+
+  it("delegates to sendUsdc for a single-item batch", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n }) // own balance
+      .mockResolvedValueOnce({ amount: 0n }); // dest exists
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 1,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigSingle");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 1 },
+      value: { err: null },
+    });
+
+    const results = await adapter.sendUsdcBatch([
+      { toAddress: validBase58Address(), microAmount: 1n },
+    ]);
+    expect(results).toEqual([{ ok: true, signature: "sigSingle", slot: 1, reason: null }]);
+  });
+
+  it("throws InsufficientUsdcBalanceError when the total exceeds available balance", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock.mockResolvedValueOnce({ amount: 100n }); // balance 100 < total 120
+    await expect(
+      adapter.sendUsdcBatch([
+        { toAddress: validBase58Address(), microAmount: 60n },
+        { toAddress: validBase58Address(), microAmount: 60n },
+      ]),
+    ).rejects.toBeInstanceOf(InsufficientUsdcBalanceError);
+  });
+
+  it("submits a multi-item chunk and reports per-item ok=true on success", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    // 1 balance check + 2 dest checks
+    getAccountMock.mockImplementation(async () => ({ amount: 10_000_000n }));
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 200,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigMulti");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 200 },
+      value: { err: null },
+    });
+
+    const results = await adapter.sendUsdcBatch([
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { toAddress: validBase58Address(), microAmount: 2n },
+    ]);
+    expect(results).toEqual([
+      { ok: true, signature: "sigMulti", slot: 200, reason: null },
+      { ok: true, signature: "sigMulti", slot: 200, reason: null },
+    ]);
+  });
+
+  it("marks subsequent chunks as 'prior chunk failed' when the first chunk's tx errors", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock.mockImplementation(async () => ({ amount: 100_000_000n }));
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 1,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigFailingFirst");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 5 },
+      value: { err: { CustomError: 1 } },
+    });
+
+    // 9 items spans 2 chunks at MAX_TRANSFERS_PER_TX=8 (8 + 1).
+    const items = Array.from({ length: 9 }, () => ({
+      toAddress: validBase58Address(),
+      microAmount: 1n,
+    }));
+    const results = await adapter.sendUsdcBatch(items);
+
+    expect(results).toHaveLength(9);
+    // First chunk tx failed
+    for (let i = 0; i < 8; i++) {
+      expect(results[i]!.ok).toBe(false);
+      expect(results[i]!.reason).toBe("tx failed");
+    }
+    // Second chunk skipped
+    expect(results[8]!.ok).toBe(false);
+    expect(results[8]!.reason).toBe("prior chunk failed");
+    expect(results[8]!.signature).toBeNull();
+  });
+
+  it("aborts the batch when an invalid mid-batch address is encountered", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock.mockImplementation(async () => ({ amount: 100_000_000n }));
+    const results = await adapter.sendUsdcBatch([
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { toAddress: "totally-not-base58!!!", microAmount: 1n },
+    ]);
+
+    expect(results).toHaveLength(2);
+    // Both items in the failing chunk get the catch-block reason.
+    for (const r of results) {
+      expect(r.ok).toBe(false);
+      expect(r.reason).toContain("Invalid Solana address");
+    }
+  });
+});
+
+// ── isReachable ───────────────────────────────────────────────────────────
+
+describe("Web3JsRpcAdapter.isReachable", () => {
+  it("returns true when getLatestBlockhash succeeds", async () => {
+    const adapter = makeAdapterForTx();
+    vi.spyOn(adapter.getConnection(), "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 1,
+    });
+    expect(await adapter.isReachable()).toBe(true);
+  });
+
+  it("returns false when getLatestBlockhash throws", async () => {
+    const adapter = makeAdapterForTx();
+    vi.spyOn(adapter.getConnection(), "getLatestBlockhash").mockRejectedValue(new Error("nope"));
+    expect(await adapter.isReachable()).toBe(false);
+  });
+});
+
+// ── Exposed getters ──────────────────────────────────────────────────────
+//
+// The keypair / connection / commitment / mint accessors are how the
+// rail's auto-gas path (and Jupiter swaps) reach into the adapter. They
+// must round-trip the constructor inputs.
+
+describe("Web3JsRpcAdapter exposed getters", () => {
+  it("exposes keypair, connection, commitment, and usdc mint matching constructor input", () => {
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+      commitment: "finalized",
+      usdcMint: USDC_MINT_MAINNET,
+    });
+    expect(adapter.getKeypair().publicKey.toBase58()).toBe(adapter.ownAddress);
+    expect(adapter.getConnection()).toBeDefined();
+    expect(adapter.getCommitment()).toBe("finalized");
+    expect(adapter.getUsdcMint()).toBe(USDC_MINT_MAINNET);
+  });
+
+  it("defaults commitment to 'confirmed' and mint to mainnet USDC when omitted", () => {
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+    });
+    expect(adapter.getCommitment()).toBe("confirmed");
+    expect(adapter.getUsdcMint()).toBe(USDC_MINT_MAINNET);
   });
 });
