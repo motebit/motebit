@@ -153,10 +153,20 @@ function updateStream(item: SlabItem, element: HTMLElement): void {
   }
 }
 
-// Tool names whose cards render as a `fetch` — the motebit is reading
-// a page, and the slab shows the page being read. Doctrine: the slab
-// renders perception, not a label describing the act.
+// Tool-name → kind-of-experience routing. The runtime emits
+// `tool_call` slab items uniformly with `payload.name`; the renderer
+// specializes per-kind so the slab shows perception/action instead of
+// a status label. Doctrine (motebit-computer.md): the slab renders
+// what the motebit sees, does, and thinks — the tool name tells us
+// which organ's rendering to reach for.
 const FETCH_TOOLS: ReadonlySet<string> = new Set(["read_url", "fetch_url"]);
+const SHELL_TOOLS: ReadonlySet<string> = new Set([
+  "shell_exec",
+  "bash",
+  "shell",
+  "exec",
+  "run_command",
+]);
 
 function renderToolCall(item: SlabItem, actions: SlabItemActions): HTMLElement {
   const payload = item.payload as {
@@ -167,6 +177,9 @@ function renderToolCall(item: SlabItem, actions: SlabItemActions): HTMLElement {
   } | null;
   if (payload?.name != null && FETCH_TOOLS.has(payload.name)) {
     return renderFetch(item, actions);
+  }
+  if (payload?.name != null && SHELL_TOOLS.has(payload.name)) {
+    return renderShell(item, actions);
   }
   const card = baseCard();
   card.classList.add("slab-item-tool-call");
@@ -189,6 +202,10 @@ function updateToolCall(item: SlabItem, element: HTMLElement): void {
   } | null;
   if (payload?.name != null && FETCH_TOOLS.has(payload.name)) {
     updateFetch(item, element);
+    return;
+  }
+  if (payload?.name != null && SHELL_TOOLS.has(payload.name)) {
+    updateShell(item, element);
     return;
   }
   const status = element.querySelector('[data-slot="status"]');
@@ -404,6 +421,194 @@ function attachFetchGestures(card: HTMLDivElement, actions: SlabItemActions): vo
     if (Math.abs(dx) < SWIPE_PX) return;
     if (Math.abs(dy) > Math.abs(dx) * Math.tan(SWIPE_MAX_ANGLE)) return;
     // Brief visual feedback — slide in swipe direction, then dismiss.
+    card.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
+    card.style.transform = `translateX(${dx > 0 ? 180 : -180}px)`;
+    card.style.opacity = "0";
+    actions.dismiss();
+  });
+  card.addEventListener("pointercancel", () => {
+    tracking = false;
+  });
+}
+
+// ── Shell — the Hand organ, terminal scrolling on the slab ─────────────
+//
+// Doctrine (motebit-computer.md §Hand): "Shell / terminal output
+// scrolls on the slab as commands run." The motebit doesn't narrate
+// its shell command; the terminal *scrolls*. Rendered as a frosted-
+// glass card with a dark terminal block inside — looking at a shell
+// session through the slab's surface tension.
+//
+// While calling: the command line shows with a `$` prompt; the
+// output block is honestly empty. No "running…" string.
+// When done: stdout fills the output block. Non-zero exit → stderr
+// shown in the same block with a muted warning tint.
+//
+// Gestures: tap expands the output area (removes the max-height
+// cap so long logs can be read); swipe dismisses.
+
+function renderShell(item: SlabItem, actions: SlabItemActions): HTMLElement {
+  const card = baseCard();
+  card.classList.add("slab-item-shell");
+  card.style.maxWidth = "260px";
+  card.style.cursor = "pointer";
+  card.style.touchAction = "pan-y";
+
+  // Head: `$` glyph + "shell" label.
+  card.appendChild(headRow("$", "shell"));
+
+  // Command line — the prompt the motebit typed.
+  const cmd = document.createElement("div");
+  cmd.dataset.slot = "cmd";
+  cmd.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  cmd.style.fontSize = "11px";
+  cmd.style.color = "rgba(70, 95, 150, 0.96)";
+  cmd.style.marginBottom = "6px";
+  cmd.style.whiteSpace = "nowrap";
+  cmd.style.overflow = "hidden";
+  cmd.style.textOverflow = "ellipsis";
+  card.appendChild(cmd);
+
+  // Output block — terminal-style dark panel inside the frosted card.
+  // Not a pure black box; a softened "terminal through glass" tone
+  // that still reads as a console but doesn't break the slab's calm.
+  const out = document.createElement("div");
+  out.dataset.slot = "out";
+  out.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  out.style.fontSize = "10.5px";
+  out.style.lineHeight = "1.5";
+  out.style.color = "rgba(220, 232, 250, 0.94)";
+  out.style.background = "rgba(18, 26, 46, 0.82)";
+  out.style.padding = "7px 9px";
+  out.style.borderRadius = "6px";
+  out.style.whiteSpace = "pre-wrap";
+  out.style.wordBreak = "break-word";
+  out.style.maxHeight = "96px";
+  out.style.overflow = "hidden";
+  out.style.minHeight = "18px";
+  // Soft fade at bottom for truncation — vignette, not cut.
+  out.style.maskImage = "linear-gradient(180deg, black 78%, transparent 100%)";
+  out.style.setProperty(
+    "-webkit-mask-image",
+    "linear-gradient(180deg, black 78%, transparent 100%)",
+  );
+  card.appendChild(out);
+
+  applyShellPayload(item.payload, cmd, out);
+  attachShellGestures(card, actions);
+  return card;
+}
+
+function updateShell(item: SlabItem, element: HTMLElement): void {
+  const cmd = element.querySelector('[data-slot="cmd"]');
+  const out = element.querySelector('[data-slot="out"]');
+  if (cmd instanceof HTMLElement && out instanceof HTMLElement) {
+    applyShellPayload(item.payload, cmd, out);
+  }
+}
+
+function applyShellPayload(payload: unknown, cmd: HTMLElement, out: HTMLElement): void {
+  const p = payload as {
+    context?: string;
+    status?: string;
+    result?: unknown;
+  } | null;
+  const command = p?.context ?? "";
+  cmd.textContent = command ? `$ ${command}` : "$";
+
+  // While calling: out is honestly empty — no "running…" string.
+  if (p == null || p.status === "calling") {
+    out.textContent = "";
+    return;
+  }
+
+  const r = p.result;
+  if (r == null) {
+    out.textContent = "";
+    return;
+  }
+
+  // Shell result shapes we handle:
+  //   - { ok, data: { stdout, stderr, exitCode } } — tauriShellExec
+  //   - string — generic shell tool
+  //   - { error: "..." } — failure
+  let text = "";
+  let isError = false;
+  if (typeof r === "string") {
+    text = r;
+  } else if (typeof r === "object") {
+    const obj = r as {
+      data?: { stdout?: string; stderr?: string; exitCode?: number };
+      stdout?: string;
+      stderr?: string;
+      exitCode?: number;
+      error?: string;
+    };
+    const stdout = obj.data?.stdout ?? obj.stdout ?? "";
+    const stderr = obj.data?.stderr ?? obj.stderr ?? "";
+    const exitCode = obj.data?.exitCode ?? obj.exitCode;
+    if (typeof obj.error === "string" && obj.error) {
+      text = obj.error;
+      isError = true;
+    } else {
+      text = stdout;
+      if (stderr) {
+        text = text ? `${text}\n${stderr}` : stderr;
+      }
+      if (typeof exitCode === "number" && exitCode !== 0) {
+        isError = true;
+      }
+    }
+  } else {
+    text = String(r);
+  }
+
+  out.textContent = text.trimEnd();
+  // Tint for non-zero exit / error — stays legible, just warms the
+  // block toward a terracotta so the reader's eye catches it.
+  out.style.color = isError ? "rgba(255, 200, 180, 0.95)" : "rgba(220, 232, 250, 0.94)";
+}
+
+function attachShellGestures(card: HTMLDivElement, actions: SlabItemActions): void {
+  // Tap — toggle expanded state on the output block. Lets the user
+  // read the whole log without a modal. Pure client-side.
+  card.addEventListener("click", () => {
+    const out = card.querySelector('[data-slot="out"]');
+    if (!(out instanceof HTMLElement)) return;
+    const expanded = card.dataset.expanded === "true";
+    if (expanded) {
+      card.dataset.expanded = "false";
+      out.style.maxHeight = "96px";
+      out.style.maskImage = "linear-gradient(180deg, black 78%, transparent 100%)";
+      out.style.setProperty(
+        "-webkit-mask-image",
+        "linear-gradient(180deg, black 78%, transparent 100%)",
+      );
+    } else {
+      card.dataset.expanded = "true";
+      out.style.maxHeight = "none";
+      out.style.maskImage = "none";
+      out.style.setProperty("-webkit-mask-image", "none");
+    }
+  });
+
+  // Swipe — dismiss via typed capability.
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  card.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    startX = ev.clientX;
+    startY = ev.clientY;
+    tracking = true;
+  });
+  card.addEventListener("pointerup", (ev) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (Math.abs(dx) < SWIPE_PX) return;
+    if (Math.abs(dy) > Math.abs(dx) * Math.tan(SWIPE_MAX_ANGLE)) return;
     card.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
     card.style.transform = `translateX(${dx > 0 ? 180 : -180}px)`;
     card.style.opacity = "0";
