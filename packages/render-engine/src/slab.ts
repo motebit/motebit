@@ -240,9 +240,14 @@ export class SlabManager {
       // meniscus specular sharp. Thickness 0.04 deepens the refraction
       // through the glass without distorting items mounted on its
       // near face.
+      // Less transmission than before so the plane reads as a frosted
+      // display rather than near-clear glass that disappears into the
+      // environment. Roughness bumped slightly for a more obvious
+      // frosted surface treatment — still glass, but a screen you can
+      // see when it's on. Clearcoat keeps the meniscus spec sharp.
       ior: CANONICAL_MATERIAL.ior,
-      roughness: 0.06,
-      transmission: 0.82,
+      roughness: 0.12,
+      transmission: 0.55,
       thickness: 0.04,
       clearcoat: 0.6,
       clearcoatRoughness: 0.05,
@@ -336,13 +341,13 @@ export class SlabManager {
     if (this.itemsContainerEl.style) {
       this.itemsContainerEl.style.display = visible ? "flex" : "none";
     }
-    // When turning back on, pre-warm the visibility to at least the
-    // idle baseline so the user sees the screen immediately without
-    // waiting for the first next item. The next update() tick will
+    // When turning back on, pre-warm the visibility to the idle
+    // baseline so the user sees the screen immediately without
+    // waiting for the fade-in curve. The next update() tick will
     // pick the right target (active if items present, idle otherwise)
-    // and smooth toward it from here.
-    if (visible && this.planeVisibility < 0.2) {
-      this.planeVisibility = 0.32;
+    // and smooth from here.
+    if (visible && this.planeVisibility < 0.5) {
+      this.planeVisibility = 0.85;
       this.emptyTime = 0;
     }
   }
@@ -461,12 +466,13 @@ export class SlabManager {
       this.planeVisibility = 0;
     } else {
       this.emptyTime += deltaTime;
-      // Idle window: plane stays at meniscus (refraction + a trace of
-      // body so the glass is *present*, honestly empty). Past the
-      // recession delay, fades to near-invisible but the plane mesh
-      // stays mounted — identity preserved.
+      // Idle window: plane sits at a clearly-visible baseline. The
+      // workstation is on; its display is perceptible even when no
+      // content is rendered. Past the recession delay, fades to near-
+      // invisible (the machine goes to sleep) but the mesh stays
+      // mounted — identity preserved.
       const recessFactor = Math.max(0, Math.min(1, (this.emptyTime - RECESSION_DELAY_S) / 2));
-      const idleVisibility = 0.32 * (1 - recessFactor);
+      const idleVisibility = 0.85 * (1 - recessFactor);
       this.planeVisibility = smoothToward(this.planeVisibility, idleVisibility, deltaTime, 4);
     }
 
