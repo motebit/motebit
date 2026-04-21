@@ -1310,15 +1310,28 @@ function renderGeneric(item: SlabItem): HTMLElement {
  * Caller (slab-bridge) mounts the returned element on the slab.
  */
 export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLElement {
-  const card = buildCardForKind(item, actions);
-  // Universal hover-close affordance — the workstation's droplet-
-  // physics-native dismiss, applied to every kind so the user can
-  // close any resting item without memorizing per-kind gestures.
-  // Typed capability path per surface-determinism doctrine.
-  if (card instanceof HTMLDivElement) {
-    attachHoverClose(card, actions);
-  }
-  return card;
+  // STRIPPED STATE — deliberately silent. The slab is being redesigned
+  // from the screen outward; cards are temporarily off so we can see
+  // the plane itself as the foundation and brainstorm what belongs on
+  // it. Runtime + controller + bridge are unchanged — items still
+  // open/update/rest/dissolve in state, so the plane's ambient still
+  // goes active when work is in flight. Only the DOM content is muted.
+  //
+  // Re-enable by restoring the `buildCardForKind(item, actions)` +
+  // `attachHoverClose` path. Helpers are kept intact (not deleted) so
+  // the rebuild lands as additive work.
+  void item;
+  void actions;
+  // Reference the stripped helpers so they stay compiled and ready
+  // for the rebuild — no dead-code elimination, no rename dance.
+  void attachHoverClose;
+  void buildCardForKind;
+  const el = document.createElement("div");
+  el.className = "slab-item-stripped";
+  el.style.display = "none";
+  el.style.width = "0";
+  el.style.height = "0";
+  return el;
 }
 
 function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement {
