@@ -10,6 +10,8 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  AppState,
+  Linking,
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
@@ -165,6 +167,71 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
 
   const loadGoalDetail = useCallback(async (goalId: string) => {
     await ctrlRef.current?.loadLedgerDetail(goalId);
+  }, []);
+
+  // "Fund sovereign" handler — mirrors web's openSovereignFundingFlow.
+  // Requests a Stripe crypto onramp session from the relay, opens it in the
+  // system browser, and tracks a pending-funding flag so AppState returns
+  // to foreground trigger a balance refresh. The relay never touches keys
+  // or funds: Stripe delivers USDC directly to the motebit's sovereign
+  // Solana address. See `payment_rails_strategy.md` doctrine.
+  const [fundingInFlight, setFundingInFlight] = useState(false);
+  const pendingFundReturnRef = useRef(false);
+
+  const handleFundSovereign = useCallback(
+    async (address: string) => {
+      const syncUrl = syncUrlRef.current;
+      const motebitId = app.motebitId !== "mobile-local" ? app.motebitId : null;
+      if (!syncUrl) {
+        Alert.alert("No relay configured", "Connect to a relay first.");
+        return;
+      }
+      if (!motebitId) {
+        Alert.alert("No motebit identity", "Can't create an onramp session.");
+        return;
+      }
+      setFundingInFlight(true);
+      try {
+        const token = await app.createSyncToken("device:auth");
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const response = await fetch(`${syncUrl}/api/v1/onramp/session`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ motebit_id: motebitId, destination_address: address }),
+        });
+        if (!response.ok) {
+          if (response.status === 503) {
+            Alert.alert("Unavailable", "Funding is not yet available on this relay.");
+          } else {
+            Alert.alert("Funding failed", `HTTP ${response.status}`);
+          }
+          return;
+        }
+        const body = (await response.json()) as { redirect_url: string; provider: string };
+        pendingFundReturnRef.current = true;
+        await Linking.openURL(body.redirect_url);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        Alert.alert("Funding error", msg);
+      } finally {
+        setFundingInFlight(false);
+      }
+    },
+    [app],
+  );
+
+  // When the user returns from Stripe (app regains focus), refresh so the
+  // onchain USDC deposit lands in the Sovereign reserve row without needing
+  // a manual pull-to-refresh.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (next === "active" && pendingFundReturnRef.current) {
+        pendingFundReturnRef.current = false;
+        void ctrlRef.current?.refresh();
+      }
+    });
+    return () => subscription.remove();
   }, []);
 
   // Count by type for the badge row
@@ -364,6 +431,8 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
                 sweepEditValue={sweepEditValue}
                 setSweepEditValue={setSweepEditValue}
                 commitSweepFromUi={commitSweepFromUi}
+                onFundSovereign={handleFundSovereign}
+                fundingInFlight={fundingInFlight}
               />
             }
             renderItem={({ item: a }) => (
@@ -439,8 +508,19 @@ function BudgetHeader(props: {
     thresholdMicro: number | null,
     addressOverride: string | undefined,
   ) => Promise<void>;
+  onFundSovereign: (address: string) => Promise<void>;
+  fundingInFlight: boolean;
 }): React.ReactElement {
-  const { state, styles, colors, sweepEditValue, setSweepEditValue, commitSweepFromUi } = props;
+  const {
+    state,
+    styles,
+    colors,
+    sweepEditValue,
+    setSweepEditValue,
+    commitSweepFromUi,
+    onFundSovereign,
+    fundingInFlight,
+  } = props;
   const { balance, budget, sovereignAddress, sovereignBalanceUsdc } = state;
 
   const effectiveAddress = balance?.settlement_address ?? sovereignAddress;
@@ -464,6 +544,20 @@ function BudgetHeader(props: {
         <Text style={styles.balanceNote}>
           {sovereignAddress ? "onchain USDC, yours" : "no wallet configured"}
         </Text>
+        {sovereignAddress != null && (
+          <TouchableOpacity
+            style={[styles.fundBtn, fundingInFlight && styles.fundBtnDisabled]}
+            disabled={fundingInFlight}
+            onPress={() => void onFundSovereign(sovereignAddress)}
+            activeOpacity={0.7}
+          >
+            {fundingInFlight ? (
+              <ActivityIndicator size="small" color={colors.accentText} />
+            ) : (
+              <Text style={styles.fundBtnText}>Fund sovereign</Text>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
       {balance != null && (
         <View style={styles.budgetSection}>
@@ -644,6 +738,18 @@ function createStyles(c: ThemeColors) {
       marginTop: 6,
       marginBottom: 4,
     },
+    fundBtn: {
+      alignSelf: "flex-start",
+      marginTop: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: 6,
+      backgroundColor: c.accent,
+      minWidth: 120,
+      alignItems: "center",
+    },
+    fundBtnDisabled: { opacity: 0.5 },
+    fundBtnText: { color: c.accentText, fontSize: 13, fontWeight: "600" },
     sweepActionBtn: {
       paddingHorizontal: 6,
       paddingVertical: 2,
