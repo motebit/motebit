@@ -609,6 +609,7 @@ export class MotebitRuntime {
       getLoopDeps: () => this.loopDeps,
       getLocalCapabilities: () => this._localCapabilities,
       getTaskRouter: () => this.taskRouter,
+      slab: this.slab,
     });
 
     // Interactive delegation — delegate_to_agent tool + receipt stash

@@ -20,6 +20,7 @@ import type { PlanEngine, PlanChunk, PlanStoreAdapter } from "@motebit/planner";
 import type { AuditLogSink } from "@motebit/policy";
 import type { DeviceCapability } from "@motebit/sdk";
 import { replayGoal, hashString, computeTimelineHash } from "./execution-ledger.js";
+import type { SlabController } from "./slab-controller.js";
 
 export interface PlanExecutionDeps {
   motebitId: string;
@@ -35,6 +36,13 @@ export interface PlanExecutionDeps {
   getLocalCapabilities(): DeviceCapability[];
   /** Resolve task router for model selection (may be null). */
   getTaskRouter?(): TaskRouter | null;
+  /**
+   * Optional slab controller. When provided, plan step lifecycle events
+   * open/update/end `plan_step` slab items so renderers can project plan
+   * execution onto the Motebit Computer. When absent (tests, headless
+   * contexts), plan execution still runs — slab wiring is additive.
+   */
+  slab?: SlabController;
 }
 
 /**
@@ -352,6 +360,18 @@ export class PlanExecutionManager {
           ordinal: chunk.step.ordinal,
           description: chunk.step.description,
         };
+        // Slab wiring — one `plan_step` item per step, keyed by step_id.
+        this.deps.slab?.openItem({
+          id: `slab-step-${chunk.step.step_id}`,
+          kind: "plan_step",
+          payload: {
+            plan_id: chunk.step.plan_id,
+            step_id: chunk.step.step_id,
+            ordinal: chunk.step.ordinal,
+            description: chunk.step.description,
+            status: "running",
+          },
+        });
         break;
       case "step_completed": {
         if (!this._advanceStep(chunk.step.step_id, "terminal", "plan_step_completed")) return;
@@ -365,6 +385,13 @@ export class PlanExecutionManager {
         const taskId = this._stepDelegationTaskIds.get(chunk.step.step_id);
         if (taskId != null) base.task_id = taskId;
         payload = base;
+        // Slab: end with completed (default policy dissolves; individual
+        // steps don't graduate to artifacts — the completed plan as a
+        // whole does, via the plan_completed case's callback).
+        this.deps.slab?.endItem(`slab-step-${chunk.step.step_id}`, {
+          kind: "completed",
+          result: { tool_calls_made: chunk.step.tool_calls_made },
+        });
         break;
       }
       case "step_failed": {
@@ -379,6 +406,10 @@ export class PlanExecutionManager {
         const taskId = this._stepDelegationTaskIds.get(chunk.step.step_id);
         if (taskId != null) base.task_id = taskId;
         payload = base;
+        this.deps.slab?.endItem(`slab-step-${chunk.step.step_id}`, {
+          kind: "failed",
+          error: chunk.error,
+        });
         break;
       }
       case "step_delegated":
@@ -392,6 +423,17 @@ export class PlanExecutionManager {
           task_id: chunk.task_id,
           routing_choice: chunk.routing_choice,
         };
+        // Slab: step is mid-flight via delegation — update payload so
+        // the renderer can show "delegated to task X" but don't end
+        // the item yet; the terminal step_completed/step_failed closes it.
+        this.deps.slab?.updateItem(`slab-step-${chunk.step.step_id}`, {
+          plan_id: chunk.step.plan_id,
+          step_id: chunk.step.step_id,
+          ordinal: chunk.step.ordinal,
+          status: "delegated",
+          task_id: chunk.task_id,
+          routing_choice: chunk.routing_choice,
+        });
         break;
       case "plan_completed":
         eventType = EventType.PlanCompleted;

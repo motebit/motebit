@@ -109,7 +109,7 @@ describe("SlabController — item lifecycle", () => {
     // arrival + departure animations chain cleanly even for brief items.
     const phases = states
       .map((s) => s.items.get("s1")?.phase)
-      .filter((p): p is string => typeof p === "string");
+      .filter((p): p is NonNullable<typeof p> => p != null);
     expect(phases).toContain("emerging");
     expect(phases).toContain("active");
     expect(phases).toContain("dissolving");
@@ -258,7 +258,7 @@ describe("SlabController — defensive behavior", () => {
 
   it("endItem against already-terminal item warns and is a no-op", () => {
     const warn = vi.fn();
-    const { ctrl, sched } = makeController({ logger: { warn } });
+    const { ctrl } = makeController({ logger: { warn } });
     ctrl.openItem({ id: "s1", kind: "stream" });
     ctrl.endItem("s1", { kind: "interrupted" });
     // Item is now dissolving
