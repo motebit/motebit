@@ -9,8 +9,11 @@ import type {
   AudioReactivity,
   ArtifactSpec,
   ArtifactHandle,
+  SlabItemSpec,
+  SlabItemHandle,
 } from "./spec.js";
 import { ArtifactManager } from "./artifacts.js";
+import { SlabManager } from "./slab.js";
 import {
   createCreature,
   createCreatureState,
@@ -80,6 +83,7 @@ export class ThreeJSAdapter implements RenderAdapter {
 
   private controls: OrbitControls | null = null;
   private artifactManager: ArtifactManager | null = null;
+  private slabManager: SlabManager | null = null;
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -116,6 +120,15 @@ export class ThreeJSAdapter implements RenderAdapter {
     const container = canvas.parentElement ?? document.body;
     if (this.creatureRefs) {
       this.artifactManager = new ArtifactManager(this.creatureRefs.group, container);
+      // Slab — "Motebit Computer." Hangs off the creature group so it
+      // inherits world transform (drift, bob, sag). Detach handler
+      // routes detached slab items through the artifact manager so
+      // graduated artifacts settle into the same spatial canvas as
+      // any other artifact. See docs/doctrine/motebit-computer.md.
+      const artifactManager = this.artifactManager;
+      this.slabManager = new SlabManager(this.creatureRefs.group, container, {
+        detachHandler: (spec) => artifactManager.add(spec),
+      });
     }
 
     // === Lighting ===
@@ -151,6 +164,13 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.artifactManager.update(frame.delta_time);
       this.artifactManager.render(this.scene, this.camera);
     }
+    // Slab: same pattern, runs the plane's own breathing + item phase
+    // animations and syncs its CSS2D overlay. The slab's CSS renderer
+    // is independently z-ordered above the artifact renderer.
+    if (this.slabManager) {
+      this.slabManager.update(frame.time, frame.delta_time);
+      this.slabManager.render(this.scene, this.camera);
+    }
   }
 
   getSpec(): RenderSpec {
@@ -166,6 +186,7 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.renderer.setSize(width, height, false);
     }
     this.artifactManager?.resize(width, height);
+    this.slabManager?.resize(width, height);
   }
 
   // === Spatial Canvas ===
@@ -181,6 +202,29 @@ export class ThreeJSAdapter implements RenderAdapter {
 
   clearArtifacts(): void {
     this.artifactManager?.clear();
+  }
+
+  // ── Slab ("Motebit Computer") ──
+
+  addSlabItem(spec: SlabItemSpec): SlabItemHandle | undefined {
+    return this.slabManager?.addItem(spec);
+  }
+
+  dissolveSlabItem(id: string): Promise<void> {
+    if (!this.slabManager) return Promise.resolve();
+    return this.slabManager.dissolveItem(id);
+  }
+
+  detachSlabItemAsArtifact(
+    id: string,
+    artifact: ArtifactSpec,
+  ): Promise<ArtifactHandle | undefined> {
+    if (!this.slabManager) return Promise.resolve(undefined);
+    return this.slabManager.detachItemAsArtifact(id, artifact);
+  }
+
+  clearSlabItems(): void {
+    this.slabManager?.clearItems();
   }
 
   setBackground(color: number | null): void {
@@ -261,6 +305,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     }
 
     this.artifactManager?.dispose();
+    this.slabManager?.dispose();
     this.artifactManager = null;
 
     if (this.scene?.environment) this.scene.environment.dispose();
