@@ -100,13 +100,6 @@ const EMERGE_DURATION_S = 0.4;
 const DISSOLVE_DURATION_S = 0.3;
 const PINCH_DURATION_S = 0.8;
 
-/**
- * Idle → recessed delay. Consistent with the controller's default
- * recessionDelayMs (10s), so renderer + controller visual states
- * align without explicit coordination.
- */
-const RECESSION_DELAY_S = 10.0;
-
 // ── Types ────────────────────────────────────────────────────────────
 
 interface ManagedSlabItem {
@@ -466,13 +459,13 @@ export class SlabManager {
       this.planeVisibility = 0;
     } else {
       this.emptyTime += deltaTime;
-      // Idle window: plane sits at a clearly-visible baseline. The
-      // workstation is on; its display is perceptible even when no
-      // content is rendered. Past the recession delay, fades to near-
-      // invisible (the machine goes to sleep) but the mesh stays
-      // mounted — identity preserved.
-      const recessFactor = Math.max(0, Math.min(1, (this.emptyTime - RECESSION_DELAY_S) / 2));
-      const idleVisibility = 0.85 * (1 - recessFactor);
+      // Idle baseline. The workstation is always on — the display
+      // stays perceptible even when no content is rendered and even
+      // after prolonged idleness. Only the user toggle (Cmd+Shift+S
+      // / `/screen`) can hide the plane; recession as auto-fade was a
+      // holdover from the earlier "acts-only, dims when silent"
+      // doctrine and collides with the workstation framing.
+      const idleVisibility = 0.85;
       this.planeVisibility = smoothToward(this.planeVisibility, idleVisibility, deltaTime, 4);
     }
 

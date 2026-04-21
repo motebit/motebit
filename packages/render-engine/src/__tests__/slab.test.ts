@@ -209,25 +209,30 @@ describe("SlabManager — plane visibility + ambient", () => {
     expect(material.opacity).toBeGreaterThan(0);
   });
 
-  it("plane recedes after the idle window when no items are present", async () => {
+  it("plane holds its idle baseline after prolonged idleness — no auto-recession", async () => {
+    // Under the always-on workstation frame, the display stays
+    // visible indefinitely when no items are present. Only the user
+    // toggle (setUserVisible) can hide it; auto-recession was
+    // dropped when the slab stopped being an acts-only transient
+    // surface and became a persistent workstation display.
     const mgr = makeManager();
     const h = mgr.addItem(makeSpec("s1"));
     for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
-    // Start dissolution, advance frames for it to complete.
     const dissolvePromise = mgr.dissolveItem("s1");
     for (let i = 0; i < 10; i++) mgr.update(1 + i * 0.1, 0.1);
     await dissolvePromise;
     expect(h.getPhase()).toBe("gone");
 
-    // Advance well past the 10s recession delay (already idle)
+    // Advance well past what used to be the recession window.
     for (let i = 0; i < 200; i++) mgr.update(2 + i * 0.1, 0.1);
 
     const group = mgr.getGroup();
     const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
     const material = planeMesh.material as THREE.MeshPhysicalMaterial;
-    // Past recession: opacity has decayed toward zero (not pure 0 due to
-    // smoothToward easing — we just assert the recession happened).
-    expect(material.opacity).toBeLessThan(0.05);
+    // Holds the idle baseline (~0.85). Not 1.0 because smoothToward
+    // eases but doesn't snap, and the idle target is 0.85.
+    expect(material.opacity).toBeGreaterThan(0.7);
+    expect(planeMesh.visible).toBe(true);
   });
 });
 
