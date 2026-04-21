@@ -23,6 +23,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { generateKeypair } from "@motebit/encryption";
+import { deriveSolanaAddress } from "@motebit/wallet-solana";
 import { AgentTrustLevel } from "@motebit/sdk";
 
 import {
@@ -106,7 +107,10 @@ describe("HTTP direct receipt exchange — cross-process sovereign loop", () => 
       },
       bobSetup.adapters,
     );
-    expect(bob.getSolanaAddress()).toBeNull(); // no solana config needed for the trust loop
+    // No Solana RPC rail wired — balance query returns null. The address
+    // itself resolves from signing keys (new behavior: address is
+    // rail-independent); that's not what this test is probing.
+    expect(await bob.getSolanaBalance()).toBeNull();
 
     // 5. Alice's runtime with signing keys and the client transport.
     const aliceSetup = createAdaptersWithTrust();
@@ -135,7 +139,8 @@ describe("HTTP direct receipt exchange — cross-process sovereign loop", () => 
       tx_hash: "CrossProcessTxHashDemoOnly",
       amount_micro: 5_000n,
       asset: "USDC",
-      payee_address: "BobAddressPlaceholder",
+      // Bob's address resolves from signing keys (rail-independent).
+      payee_address: bob.getSolanaAddress()!,
       service_description:
         "Cross-process sovereign trust loop integration test payload with enough detail to satisfy quality thresholds.",
       prompt_hash: "sha256:prompt-http-integration",
@@ -251,7 +256,7 @@ describe("HTTP direct receipt exchange — cross-process sovereign loop", () => 
       },
       createAdaptersWithTrust().adapters,
     );
-    expect(bob.getSolanaAddress()).toBeNull();
+    expect(await bob.getSolanaBalance()).toBeNull();
 
     const alice = new MotebitRuntime(
       {
@@ -269,7 +274,7 @@ describe("HTTP direct receipt exchange — cross-process sovereign loop", () => 
       tx_hash: "dynamic-peer-tx",
       amount_micro: 1_000n,
       asset: "USDC",
-      payee_address: "addr",
+      payee_address: deriveSolanaAddress(bobKp.publicKey),
       service_description: "dynamic peer registration test payload",
       prompt_hash: "p",
       result_hash: "r",
@@ -318,7 +323,7 @@ describe("HTTP direct receipt exchange — cross-process sovereign loop", () => 
       },
       createAdaptersWithTrust().adapters,
     );
-    expect(bob.getSolanaAddress()).toBeNull();
+    expect(await bob.getSolanaBalance()).toBeNull();
 
     const alice = new MotebitRuntime(
       {
@@ -337,7 +342,7 @@ describe("HTTP direct receipt exchange — cross-process sovereign loop", () => 
       tx_hash: "bigint-round-trip-tx",
       amount_micro: bigAmount,
       asset: "USDC",
-      payee_address: "addr",
+      payee_address: deriveSolanaAddress(bobKp.publicKey),
       service_description: "big amount round trip test payload",
       prompt_hash: "p",
       result_hash: "r",

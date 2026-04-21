@@ -82,7 +82,7 @@ import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
-import { createSolanaWalletRail } from "@motebit/wallet-solana";
+import { createSolanaWalletRail, deriveSolanaAddress } from "@motebit/wallet-solana";
 import {
   verifyExecutionReceipt,
   signSovereignPaymentReceipt,
@@ -2104,14 +2104,26 @@ export class MotebitRuntime {
   /**
    * The motebit's sovereign Solana wallet address (base58).
    *
-   * Returns null when no Solana wallet is configured. When present, this
-   * address is identical to the base58-encoded Ed25519 identity public
-   * key — the same key that signs receipts, credentials, and federation
-   * messages. Other motebits and external counterparties can send USDC
-   * (or SOL) directly to this address.
+   * The address is `base58(publicKey)` — a pure function of the Ed25519
+   * identity public key. It's knowable whenever signing keys are loaded,
+   * independent of whether the full Solana rail (RPC-backed balance and
+   * send) has been instantiated. Callers that need the deposit
+   * destination (Stripe onramp, "Fund sovereign" button, display on the
+   * Sovereign panel) get the address even when `config.solana` is
+   * unconfigured or RPC init failed — those paths don't need the rail,
+   * only the address.
+   *
+   * Balance queries (`getSolanaBalance`) and transaction signing
+   * (`sendUsdc`) still require the rail because they need network access
+   * and keypair material.
+   *
+   * Returns null only when no signing keys are loaded (fresh install, no
+   * identity yet, or keystore read failed).
    */
   getSolanaAddress(): string | null {
-    return this._solanaWallet?.address ?? null;
+    if (this._solanaWallet) return this._solanaWallet.address;
+    if (this._signingKeys) return deriveSolanaAddress(this._signingKeys.publicKey);
+    return null;
   }
 
   /**

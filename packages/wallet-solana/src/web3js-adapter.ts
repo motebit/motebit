@@ -19,6 +19,27 @@
  */
 
 import { Connection, Keypair, PublicKey, Transaction, type Commitment } from "@solana/web3.js";
+
+/**
+ * Derive the motebit's sovereign Solana address from its Ed25519 identity
+ * public key — a pure base58 encoding of the 32-byte key.
+ *
+ * The address is knowable from the public key alone. No RPC call, no
+ * Keypair, no ATA resolution, no rail instantiation. Callers that need
+ * the deposit destination (Stripe onramp, display, verification) should
+ * use this helper so address resolution never depends on the RPC rail
+ * being up or `SolanaWalletRail` being instantiated. Balance queries and
+ * transaction signing still require the full rail — those need the
+ * keypair and a connection.
+ */
+export function deriveSolanaAddress(publicKey: Uint8Array): string {
+  if (publicKey.length !== 32) {
+    throw new Error(
+      `deriveSolanaAddress expects a 32-byte Ed25519 public key, got ${publicKey.length} bytes`,
+    );
+  }
+  return new PublicKey(publicKey).toBase58();
+}
 import {
   createAssociatedTokenAccountInstruction,
   createTransferInstruction,

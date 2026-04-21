@@ -57,10 +57,33 @@ function createAdapters(): PlatformAdapters {
 // ── Tests ─────────────────────────────────────────────────────────────
 
 describe("MotebitRuntime — sovereign Solana wallet (no rail configured)", () => {
-  it("returns null from every Solana method when no wallet is configured", async () => {
+  it("returns null from every Solana method when no wallet AND no signing keys are configured", async () => {
     const runtime = new MotebitRuntime({ motebitId: "bare-mote", tickRateHz: 0 }, createAdapters());
 
     expect(runtime.getSolanaAddress()).toBeNull();
+    expect(await runtime.getSolanaBalance()).toBeNull();
+    expect(await runtime.sendUsdc("any-address", 1n)).toBeNull();
+    expect(await runtime.isSolanaAvailable()).toBeNull();
+  });
+
+  it("derives the address from signing keys even when no rail is configured", async () => {
+    // Fallback shape — the deposit destination should resolve whenever the
+    // public key is known, independent of RPC/rail state. Lets the Stripe
+    // onramp + the Sovereign panel's Fund button work before (or when)
+    // the rail's RPC adapter isn't instantiated.
+    const { generateKeypair } = await import("@motebit/encryption");
+    const kp = await generateKeypair();
+    const runtime = new MotebitRuntime(
+      { motebitId: "key-only-mote", tickRateHz: 0, signingKeys: kp },
+      createAdapters(),
+    );
+
+    const address = runtime.getSolanaAddress();
+    expect(address).not.toBeNull();
+    // base58 Solana addresses are 32–44 chars, never containing 0 / O / I / l.
+    expect(address!).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+
+    // Balance + send still return null — those need the full rail.
     expect(await runtime.getSolanaBalance()).toBeNull();
     expect(await runtime.sendUsdc("any-address", 1n)).toBeNull();
     expect(await runtime.isSolanaAvailable()).toBeNull();

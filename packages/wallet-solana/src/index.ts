@@ -32,7 +32,7 @@ export {
   type TxVerificationResult,
 } from "./adapter.js";
 
-export { Web3JsRpcAdapter } from "./web3js-adapter.js";
+export { Web3JsRpcAdapter, deriveSolanaAddress } from "./web3js-adapter.js";
 
 export {
   USDC_MINT_MAINNET,

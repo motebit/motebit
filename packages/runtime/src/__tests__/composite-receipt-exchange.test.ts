@@ -20,6 +20,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { generateKeypair } from "@motebit/encryption";
+import { deriveSolanaAddress } from "@motebit/wallet-solana";
 import { AgentTrustLevel } from "@motebit/sdk";
 
 import {
@@ -286,7 +287,9 @@ describe("CompositeReceiptExchange — end-to-end trust loop", () => {
       },
       bobSetup.adapters,
     );
-    expect(bob.getSolanaAddress()).toBeNull();
+    // No Solana RPC rail — balance returns null. Address resolves from
+    // signing keys (rail-independent); not what this test is probing.
+    expect(await bob.getSolanaBalance()).toBeNull();
 
     const aliceSetup = createAdaptersWithTrust();
     const alice = new MotebitRuntime(
@@ -312,7 +315,7 @@ describe("CompositeReceiptExchange — end-to-end trust loop", () => {
       tx_hash: "composite-e2e-tx",
       amount_micro: 5_000n,
       asset: "USDC",
-      payee_address: "addr",
+      payee_address: deriveSolanaAddress(bobKp.publicKey),
       service_description:
         "Composite adapter end-to-end sovereign trust loop fallback test payload.",
       prompt_hash: "sha256:prompt",
@@ -372,7 +375,7 @@ describe("CompositeReceiptExchange — end-to-end trust loop", () => {
       tx_hash: "via-hub-a",
       amount_micro: 1_000n,
       asset: "USDC",
-      payee_address: "addr",
+      payee_address: deriveSolanaAddress(bobKp.publicKey),
       service_description: "request routed through hub A",
       prompt_hash: "p",
       result_hash: "r",
@@ -402,7 +405,7 @@ describe("CompositeReceiptExchange — end-to-end trust loop", () => {
       tx_hash: "via-hub-b",
       amount_micro: 1_000n,
       asset: "USDC",
-      payee_address: "addr",
+      payee_address: deriveSolanaAddress(bobKp.publicKey),
       service_description: "request routed through hub B",
       prompt_hash: "p",
       result_hash: "r",

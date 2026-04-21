@@ -101,7 +101,10 @@ describe("Sovereign trust loop — end to end, no relay", () => {
     );
     // Unused reference but needed so bob's handler stays registered
     // through the test. TypeScript would otherwise mark it unused.
-    expect(bob.getSolanaAddress()).toBeNull(); // no solana config
+    // No Solana RPC rail wired — balance query returns null. The address
+    // itself resolves from signing keys (new behavior: address is
+    // rail-independent); that's not what this test is probing.
+    expect(await bob.getSolanaBalance()).toBeNull();
 
     // 4. Alice has never interacted with Bob before. Trust store is empty.
     expect(await aliceSetup.trustStore.getAgentTrust("alice", "bob")).toBeNull();
@@ -122,7 +125,10 @@ describe("Sovereign trust loop — end to end, no relay", () => {
       tx_hash: mockTxHash,
       amount_micro: 5_000n,
       asset: "USDC",
-      payee_address: "BobSolanaAddressNotYetSet",
+      // Bob's address resolves from his signing keys (rail-independent).
+      // The confused-deputy defense requires payee_address to match —
+      // that's the whole point of the cross-check.
+      payee_address: bob.getSolanaAddress()!,
       service_description:
         "Search query rendered with verifiable result and tool usage producing meaningful content for the user.",
       prompt_hash: "sha256:prompt-alice-to-bob",
@@ -225,7 +231,9 @@ describe("Sovereign trust loop — end to end, no relay", () => {
       },
       createAdaptersWithTrust().adapters,
     );
-    expect(bob.getSolanaAddress()).toBeNull();
+    // No Solana RPC rail — balance returns null. Address resolves from
+    // signing keys (rail-independent); not what this test is probing.
+    expect(await bob.getSolanaBalance()).toBeNull();
 
     // Alice addresses the request to "bob" (the hub routes on this)
     // but puts payee_motebit_id: "eve" in the payload. Bob's handler
