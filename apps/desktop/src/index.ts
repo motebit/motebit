@@ -456,6 +456,19 @@ export class DesktopApp {
     return this.identity.getDeviceKeypair(invoke);
   }
 
+  /**
+   * Reveal the Ed25519 private seed for backup. Returns the 64-char hex
+   * string from the OS keyring. The caller (settings UI) is responsible
+   * for the user-facing protection: explicit click, blur-on-display,
+   * copy + auto-hide. The keyring backend (macOS Keychain / Windows
+   * Credential Manager / Linux Secret Service) gates access via OS-level
+   * authentication where supported; this method just reads what's there.
+   */
+  async revealRecoverySeed(invoke: InvokeFn): Promise<string | null> {
+    const kp = await this.identity.getDeviceKeypair(invoke);
+    return kp?.privateKey ?? null;
+  }
+
   registerWithRelay(
     invoke: InvokeFn,
     syncUrl: string,

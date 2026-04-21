@@ -167,7 +167,7 @@ async function main(): Promise<void> {
   let identity: { privateKey: Uint8Array; publicKey: Uint8Array };
   if (args.seedHex) {
     const privateKey = hexToBytes(args.seedHex);
-    const publicKey = await getPublicKeyBySuite("motebit-jcs-ed25519-b64-v1", privateKey);
+    const publicKey = await getPublicKeyBySuite(privateKey, "motebit-jcs-ed25519-b64-v1");
     identity = { privateKey, publicKey };
   } else {
     identity = await generateKeypair();

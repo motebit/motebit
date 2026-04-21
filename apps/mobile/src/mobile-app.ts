@@ -1392,6 +1392,18 @@ export class MobileApp {
     };
   }
 
+  /**
+   * Reveal the Ed25519 private seed for backup. Returns the 64-char hex
+   * string from expo-secure-store (iOS Keychain / Android Keystore;
+   * hardware-backed on most modern devices). The caller (IdentityTab) is
+   * responsible for the user-facing protection: confirm modal, copy +
+   * auto-hide. The secure-store backend gates access via OS-level
+   * authentication where supported; this method just reads what's there.
+   */
+  async revealRecoverySeed(): Promise<string | null> {
+    return this.keyring.get("device_private_key");
+  }
+
   // === Key Rotation ===
 
   /**

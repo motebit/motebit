@@ -518,8 +518,104 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const walletAddr = document.getElementById("wallet-solana-address") as HTMLElement;
     walletAddr.textContent = runtime?.getSolanaAddress() ?? "-";
 
+    // Reset recovery-seed UI to hidden state every panel open. Sensitive
+    // value never persists across opens.
+    resetRecoverySeedUi();
+
     // Populate credentials and budget from relay
     void populateCredentialsAndBudget(info.motebitId);
+  }
+
+  // === Recovery Seed Reveal ===
+  //
+  // Sensitive action — gated behind explicit click + confirmation +
+  // auto-hide. The keyring backend (macOS Keychain / Windows Credential
+  // Manager / Linux Secret Service) already protects at-rest; this is
+  // the user-facing affordance to back the seed up to a password
+  // manager. Reset on every panel open so it never persists across opens.
+  const RECOVERY_SEED_AUTOHIDE_MS = 60_000;
+  let recoverySeedAutoHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function resetRecoverySeedUi(): void {
+    const seedEl = document.getElementById("identity-recovery-seed");
+    const revealBtn = document.getElementById("reveal-recovery-seed") as HTMLButtonElement | null;
+    const copyBtn = document.getElementById("copy-recovery-seed") as HTMLButtonElement | null;
+    const hideBtn = document.getElementById("hide-recovery-seed") as HTMLButtonElement | null;
+    if (seedEl != null) {
+      seedEl.textContent = "— hidden —";
+      seedEl.dataset.state = "hidden";
+    }
+    if (revealBtn != null) revealBtn.style.display = "";
+    if (copyBtn != null) copyBtn.style.display = "none";
+    if (hideBtn != null) hideBtn.style.display = "none";
+    if (recoverySeedAutoHideTimer != null) {
+      clearTimeout(recoverySeedAutoHideTimer);
+      recoverySeedAutoHideTimer = null;
+    }
+  }
+
+  const revealSeedBtn = document.getElementById("reveal-recovery-seed") as HTMLButtonElement | null;
+  const copySeedBtn = document.getElementById("copy-recovery-seed") as HTMLButtonElement | null;
+  const hideSeedBtn = document.getElementById("hide-recovery-seed") as HTMLButtonElement | null;
+  const seedDisplay = document.getElementById("identity-recovery-seed");
+
+  if (revealSeedBtn != null && seedDisplay != null) {
+    revealSeedBtn.addEventListener("click", () => {
+      const confirmed = window.confirm(
+        "Reveal recovery seed?\n\n" +
+          "Anyone with this string can sign as your motebit forever and spend any SOL at " +
+          "your sovereign address. Make sure no one else can see your screen.\n\n" +
+          "The seed will auto-hide in 60 seconds.",
+      );
+      if (!confirmed) return;
+      const config = ctx.getConfig();
+      const invoke = config?.invoke;
+      if (invoke == null) {
+        seedDisplay.textContent = "(invoke unavailable — non-Tauri context)";
+        seedDisplay.dataset.state = "error";
+        return;
+      }
+      void (async () => {
+        try {
+          const seed = await ctx.app.revealRecoverySeed(invoke);
+          if (seed == null || seed === "") {
+            seedDisplay.textContent = "(no seed found — keyring empty)";
+            seedDisplay.dataset.state = "error";
+            return;
+          }
+          seedDisplay.textContent = seed;
+          seedDisplay.dataset.state = "revealed";
+          if (revealSeedBtn != null) revealSeedBtn.style.display = "none";
+          if (copySeedBtn != null) copySeedBtn.style.display = "";
+          if (hideSeedBtn != null) hideSeedBtn.style.display = "";
+          if (recoverySeedAutoHideTimer != null) clearTimeout(recoverySeedAutoHideTimer);
+          recoverySeedAutoHideTimer = setTimeout(() => {
+            resetRecoverySeedUi();
+          }, RECOVERY_SEED_AUTOHIDE_MS);
+        } catch (err: unknown) {
+          seedDisplay.textContent = `(reveal failed: ${err instanceof Error ? err.message : String(err)})`;
+          seedDisplay.dataset.state = "error";
+        }
+      })();
+    });
+  }
+  if (copySeedBtn != null && seedDisplay != null) {
+    copySeedBtn.addEventListener("click", () => {
+      const seed = seedDisplay.textContent ?? "";
+      if (seed === "" || seed === "— hidden —") return;
+      void navigator.clipboard.writeText(seed).then(() => {
+        const original = copySeedBtn.textContent;
+        copySeedBtn.textContent = "Copied";
+        setTimeout(() => {
+          copySeedBtn.textContent = original;
+        }, 1200);
+      });
+    });
+  }
+  if (hideSeedBtn != null) {
+    hideSeedBtn.addEventListener("click", () => {
+      resetRecoverySeedUi();
+    });
   }
 
   async function populateCredentialsAndBudget(motebitId: string): Promise<void> {

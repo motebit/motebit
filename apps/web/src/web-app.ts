@@ -733,6 +733,18 @@ export class WebApp {
     return this.runtime;
   }
 
+  /**
+   * Reveal the Ed25519 private seed for backup. Returns the 64-char hex
+   * string from the encrypted keystore. The caller (settings UI) is
+   * responsible for the user-facing protection: explicit click,
+   * blur-on-display, copy + auto-hide. The keystore itself decrypts via
+   * the browser-held WebCrypto key — the same path the runtime uses at
+   * boot to load identity for signing.
+   */
+  async revealRecoverySeed(): Promise<string | null> {
+    return this.keyStore.loadPrivateKey();
+  }
+
   get motebitId(): string {
     return this._motebitId;
   }

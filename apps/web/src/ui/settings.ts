@@ -124,6 +124,24 @@ const identityPublicKey = document.getElementById("identity-public-key") as HTML
 // Settings = who you are; Sovereign panel = what you have, what's flowing.
 const walletSolanaAddress = document.getElementById("wallet-solana-address") as HTMLDivElement;
 
+// Recovery seed reveal — sensitive action, gated behind explicit click +
+// auto-hide. The keystore is already encrypted at rest; this is the
+// user-facing affordance to back the seed up to a password manager.
+const identityRecoverySeed = document.getElementById(
+  "identity-recovery-seed",
+) as HTMLDivElement | null;
+const revealRecoverySeedBtn = document.getElementById(
+  "reveal-recovery-seed",
+) as HTMLButtonElement | null;
+const copyRecoverySeedBtn = document.getElementById(
+  "copy-recovery-seed",
+) as HTMLButtonElement | null;
+const hideRecoverySeedBtn = document.getElementById(
+  "hide-recovery-seed",
+) as HTMLButtonElement | null;
+let recoverySeedAutoHideTimer: ReturnType<typeof setTimeout> | null = null;
+const RECOVERY_SEED_AUTOHIDE_MS = 60_000;
+
 // === Provider Tab DOM ===
 const providerTabs = document.querySelectorAll<HTMLButtonElement>("#provider-tabs .provider-tab");
 const providerConfigs = {
@@ -281,6 +299,81 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     identityDid.textContent = pubHex ? hexPublicKeyToDidKey(pubHex) : "—";
     identityPublicKey.textContent = pubHex || "—";
     populateWalletFields();
+    resetRecoverySeedUi();
+  }
+
+  /** Reset the recovery seed UI to the hidden state. Called every time
+   *  the settings panel opens (so the seed never persists across opens)
+   *  and on auto-hide timer expiry. */
+  function resetRecoverySeedUi(): void {
+    if (identityRecoverySeed != null) {
+      identityRecoverySeed.textContent = "— hidden —";
+      identityRecoverySeed.dataset.state = "hidden";
+      identityRecoverySeed.title = "Reveal recovery seed";
+    }
+    if (revealRecoverySeedBtn != null) revealRecoverySeedBtn.style.display = "";
+    if (copyRecoverySeedBtn != null) copyRecoverySeedBtn.style.display = "none";
+    if (hideRecoverySeedBtn != null) hideRecoverySeedBtn.style.display = "none";
+    if (recoverySeedAutoHideTimer != null) {
+      clearTimeout(recoverySeedAutoHideTimer);
+      recoverySeedAutoHideTimer = null;
+    }
+  }
+
+  // Wire the recovery-seed reveal flow once. Confirm before reveal —
+  // sensitive action, screen-share protection. Auto-hides after a fixed
+  // interval so an unattended browser tab doesn't leak the seed.
+  if (revealRecoverySeedBtn != null && identityRecoverySeed != null) {
+    revealRecoverySeedBtn.addEventListener("click", () => {
+      const confirmed = window.confirm(
+        "Reveal recovery seed?\n\n" +
+          "Anyone with this string can sign as your motebit forever and spend any SOL at " +
+          "your sovereign address. Make sure no one else can see your screen.\n\n" +
+          "The seed will auto-hide in 60 seconds.",
+      );
+      if (!confirmed) return;
+      void (async () => {
+        try {
+          const seed = await ctx.app.revealRecoverySeed();
+          if (seed == null || seed === "") {
+            identityRecoverySeed.textContent = "(no seed found — keystore empty)";
+            identityRecoverySeed.dataset.state = "error";
+            return;
+          }
+          identityRecoverySeed.textContent = seed;
+          identityRecoverySeed.dataset.state = "revealed";
+          identityRecoverySeed.title = "Click Copy or Hide";
+          if (revealRecoverySeedBtn != null) revealRecoverySeedBtn.style.display = "none";
+          if (copyRecoverySeedBtn != null) copyRecoverySeedBtn.style.display = "";
+          if (hideRecoverySeedBtn != null) hideRecoverySeedBtn.style.display = "";
+          if (recoverySeedAutoHideTimer != null) clearTimeout(recoverySeedAutoHideTimer);
+          recoverySeedAutoHideTimer = setTimeout(() => {
+            resetRecoverySeedUi();
+          }, RECOVERY_SEED_AUTOHIDE_MS);
+        } catch (err: unknown) {
+          identityRecoverySeed.textContent = `(reveal failed: ${err instanceof Error ? err.message : String(err)})`;
+          identityRecoverySeed.dataset.state = "error";
+        }
+      })();
+    });
+  }
+  if (copyRecoverySeedBtn != null && identityRecoverySeed != null) {
+    copyRecoverySeedBtn.addEventListener("click", () => {
+      const seed = identityRecoverySeed.textContent ?? "";
+      if (seed === "" || seed === "— hidden —") return;
+      void navigator.clipboard.writeText(seed).then(() => {
+        const original = copyRecoverySeedBtn.textContent;
+        copyRecoverySeedBtn.textContent = "Copied";
+        setTimeout(() => {
+          copyRecoverySeedBtn.textContent = original;
+        }, 1200);
+      });
+    });
+  }
+  if (hideRecoverySeedBtn != null) {
+    hideRecoverySeedBtn.addEventListener("click", () => {
+      resetRecoverySeedUi();
+    });
   }
 
   /**

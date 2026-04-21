@@ -154,6 +154,7 @@ The asymmetry is structural, not engineered. It is the moat.
 - **Solana memo submitter**: [`packages/wallet-solana/src/memo-submitter.ts`](packages/wallet-solana/src/memo-submitter.ts)
 - **Demo script**: [`scripts/demo-anchor.ts`](scripts/demo-anchor.ts)
 - **Drift defense (canonical-vs-inline gate)**: [`scripts/check-consolidation-primitives.ts`](scripts/check-consolidation-primitives.ts) (invariant #34)
+- **Recovery seed UI**: Settings → Identity → Recovery Seed on every surface (web / desktop / mobile). Reveal-on-click, confirm modal, copy + auto-hide. The seed IS the identity; users back it up to a password manager. Implementation per surface: `apps/web/src/ui/settings.ts`, `apps/desktop/src/ui/settings.ts`, `apps/mobile/src/components/settings/IdentityTab.tsx`.
 
 ---
 
