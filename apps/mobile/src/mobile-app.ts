@@ -13,7 +13,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
-import { MotebitRuntime, ProxySession, PLANNING_TASK_ROUTER } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  ProxySession,
+  PLANNING_TASK_ROUTER,
+  resolveProactiveAnchor,
+} from "@motebit/runtime";
 import type {
   StreamChunk,
   OperatorModeResult,
@@ -182,6 +187,14 @@ export interface MobileSettings {
    */
   voice: VoiceConfig;
   maxTokens: number;
+  /**
+   * Proactive interior — opt-in. When `enabled`, the runtime fires the
+   * 4-phase consolidation cycle on idle ticks. When `anchorOnchain` is
+   * also true, batches publish to Solana via the SolanaMemoSubmitter
+   * (requires signing keys). Both default false — sovereign fail-closed
+   * matches the doctrine in `docs/doctrine/proactive-interior.md`.
+   */
+  proactive: { enabled: boolean; anchorOnchain: boolean };
 }
 
 const DEFAULT_SETTINGS: MobileSettings = {
@@ -196,6 +209,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   maxCallsPerTurn: 20,
   voice: { ...DEFAULT_VOICE_CONFIG },
   maxTokens: 4096,
+  proactive: { enabled: false, anchorOnchain: false },
 };
 
 // Legacy module-level constants kept for call-site compatibility. The
@@ -898,6 +912,23 @@ export class MobileApp {
       // Secure store read failed — runtime runs without signing keys
     }
 
+    const solanaRpcUrl = "https://api.mainnet-beta.solana.com";
+    // Proactive interior — opt-in via persisted MobileSettings.proactive.
+    // Same shape as desktop + web (capability rings: ring 1 identical
+    // everywhere). The anchor policy resolves through the runtime's
+    // shared helper. Settings load is best-effort; on failure we run
+    // with the disabled defaults so initAI never blocks on a corrupt
+    // settings blob.
+    const persistedSettings = await this.loadSettings().catch(() => ({
+      proactive: { enabled: false, anchorOnchain: false },
+    }));
+    const proactiveAnchor = await resolveProactiveAnchor({
+      proactiveEnabled: persistedSettings.proactive.enabled,
+      anchorOnchain: persistedSettings.proactive.anchorOnchain,
+      signingKeys,
+      solanaRpcUrl,
+    });
+
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
@@ -905,7 +936,7 @@ export class MobileApp {
         policy: policyConfig,
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
-        solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
+        solana: signingKeys ? { rpcUrl: solanaRpcUrl } : undefined,
         // Deferred memory formation — mobile benefits most from the
         // autoDream-shape path because on-device embedding is slower
         // than on desktop/web. Turns return as soon as the response
@@ -914,6 +945,13 @@ export class MobileApp {
         // the next turn's retrieval. See
         // packages/runtime/src/memory-formation-queue.ts.
         deferMemoryFormation: true,
+        // Proactive interior — defaults off; user opts in via Settings →
+        // Governance → Proactive Interior. See
+        // `docs/doctrine/proactive-interior.md`.
+        proactiveTickMs: persistedSettings.proactive.enabled ? 5 * 60_000 : undefined,
+        proactiveQuietWindowMs: 90_000,
+        proactiveAction: persistedSettings.proactive.enabled ? "consolidate" : "none",
+        proactiveAnchor,
       },
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );

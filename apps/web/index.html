@@ -5229,6 +5229,34 @@
           </div>
         </div>
         <div class="settings-card">
+          <div class="card-title">Proactive Interior</div>
+          <div class="settings-field">
+            <label class="checkbox-label">
+              <input type="checkbox" id="gov-proactive-enabled">
+              Memory consolidation while idle
+            </label>
+            <div class="settings-help">
+              Runs the four-phase consolidation cycle during quiet windows
+              (orient → gather → consolidate → prune). Signed receipts are
+              local until anchored. Default off — sovereign fail-closed.
+              Reload after toggling so the runtime picks up the new config.
+            </div>
+          </div>
+          <div class="settings-field">
+            <label class="checkbox-label">
+              <input type="checkbox" id="gov-proactive-anchor">
+              Publish consolidation proofs onchain
+            </label>
+            <div class="settings-help">
+              Anchors batches of receipts to Solana as Merkle memos
+              (~$0.001 per batch, 8 receipts per batch). Requires
+              consolidation above AND a signing identity. The motebit's
+              Solana address is its identity public key; it pays its own
+              fees. Default off.
+            </div>
+          </div>
+        </div>
+        <div class="settings-card">
           <div class="card-title">Recent Activity</div>
           <div id="audit-activity-list" class="audit-activity-list"></div>
           <div id="audit-activity-empty" class="audit-activity-empty" style="display:none;">No tool activity yet</div>

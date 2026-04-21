@@ -173,6 +173,43 @@ export function loadGovernanceConfig(): GovernanceConfig | null {
   return null;
 }
 
+// === Proactive Interior Config ===
+//
+// Mirrors `DesktopAIConfig.proactive`. Defaults to disabled — sovereign
+// fail-closed posture matches the doctrine in
+// `docs/doctrine/proactive-interior.md`.
+
+export interface WebProactiveConfig {
+  enabled: boolean;
+  anchorOnchain: boolean;
+}
+
+const PROACTIVE_KEY = "motebit-proactive";
+
+const DEFAULT_PROACTIVE_CONFIG: WebProactiveConfig = {
+  enabled: false,
+  anchorOnchain: false,
+};
+
+export function saveProactiveConfig(config: WebProactiveConfig): void {
+  try {
+    localStorage.setItem(PROACTIVE_KEY, JSON.stringify(config));
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function loadProactiveConfig(): WebProactiveConfig {
+  try {
+    const raw = localStorage.getItem(PROACTIVE_KEY);
+    if (raw == null || raw === "") return { ...DEFAULT_PROACTIVE_CONFIG };
+    const parsed = JSON.parse(raw) as Partial<WebProactiveConfig>;
+    return { ...DEFAULT_PROACTIVE_CONFIG, ...parsed };
+  } catch {
+    return { ...DEFAULT_PROACTIVE_CONFIG };
+  }
+}
+
 // === Voice Config ===
 //
 // The authoritative `VoiceConfig` shape lives in `@motebit/sdk`. Web persists

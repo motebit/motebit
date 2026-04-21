@@ -4,9 +4,9 @@ import {
   createTauriStorage,
   isSlashCommand,
   parseSlashCommand,
-  resolveProactiveAnchor,
   type InvokeFn,
 } from "../index";
+import { resolveProactiveAnchor } from "@motebit/runtime";
 
 // ---------------------------------------------------------------------------
 // DesktopApp

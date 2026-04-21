@@ -5,6 +5,8 @@ import {
   saveProviderConfig,
   saveSoulColor,
   saveGovernanceConfig,
+  saveProactiveConfig,
+  loadProactiveConfig,
   loadGovernanceConfig,
   saveVoiceConfig,
   loadVoiceConfig,
@@ -157,6 +159,12 @@ const govPersistenceThreshold = document.getElementById(
 const govPersistenceValue = document.getElementById("gov-persistence-value") as HTMLSpanElement;
 const govRejectSecrets = document.getElementById("gov-reject-secrets") as HTMLInputElement;
 const govMaxCalls = document.getElementById("gov-max-calls") as HTMLSelectElement;
+const govProactiveEnabled = document.getElementById(
+  "gov-proactive-enabled",
+) as HTMLInputElement | null;
+const govProactiveAnchor = document.getElementById(
+  "gov-proactive-anchor",
+) as HTMLInputElement | null;
 
 // Voice elements
 const ttsVoiceSelect = document.getElementById("settings-tts-voice") as HTMLSelectElement;
@@ -793,6 +801,10 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       govRejectSecrets.checked = govConfig.rejectSecrets;
       govMaxCalls.value = String(govConfig.maxCallsPerTurn);
     }
+    // Pre-fill proactive interior config
+    const proactiveConfig = loadProactiveConfig();
+    if (govProactiveEnabled != null) govProactiveEnabled.checked = proactiveConfig.enabled;
+    if (govProactiveAnchor != null) govProactiveAnchor.checked = proactiveConfig.anchorOnchain;
     // Show active policy summary and update on preset change
     const activePreset = govConfig?.approvalPreset ?? "balanced";
     updatePolicySummary(activePreset);
@@ -1070,6 +1082,14 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     };
     saveGovernanceConfig(govCfg);
     applyGovernanceToRuntime(ctx, govCfg);
+
+    // Persist proactive interior config. Runtime picks up the change on
+    // next bootstrap (idle-tick + auto-anchor are constructor-time
+    // wiring) — the help text under the toggle tells the user to reload.
+    saveProactiveConfig({
+      enabled: govProactiveEnabled?.checked === true,
+      anchorOnchain: govProactiveAnchor?.checked === true,
+    });
 
     // Persist BYOK TTS keys first so the rebuild below sees fresh values.
     // Empty-string clears the slot (setTTSKey removes the localStorage entry).

@@ -4,6 +4,7 @@ import {
   executeCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
+  resolveProactiveAnchor,
 } from "@motebit/runtime";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import type {
@@ -81,6 +82,7 @@ import {
   loadLegacyConversations,
   markMigrationDone,
   loadGovernanceConfig,
+  loadProactiveConfig,
   loadSyncUrl,
 } from "./storage";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
@@ -266,6 +268,19 @@ export class WebApp {
     const env = (import.meta as { env?: Record<string, string | undefined> }).env;
     const solanaRpcUrl = env?.VITE_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 
+    // Proactive interior — opt-in. Mirrors desktop's wire shape so the
+    // same toggle does the same thing on every surface (capability rings
+    // doctrine: ring 1 identical everywhere). Anchor policy resolves
+    // through the runtime's shared helper so producer + consumer +
+    // submitter wire-up stays one source of truth.
+    const proactive = loadProactiveConfig();
+    const proactiveAnchor = await resolveProactiveAnchor({
+      proactiveEnabled: proactive.enabled,
+      anchorOnchain: proactive.anchorOnchain,
+      signingKeys,
+      solanaRpcUrl,
+    });
+
     this.runtime = new MotebitRuntime(
       {
         motebitId: this._motebitId,
@@ -294,6 +309,16 @@ export class WebApp {
         // queue; the next turn's pre-idle barrier preserves graph
         // consistency. See packages/runtime/src/memory-formation-queue.ts.
         deferMemoryFormation: true,
+        // Proactive interior — defaults off; user opts in via Settings →
+        // Governance → Proactive Interior. When enabled, idle-tick fires
+        // the consolidation cycle; when anchorOnchain is also on,
+        // batches publish to Solana via the SolanaMemoSubmitter
+        // constructed inside resolveProactiveAnchor. See
+        // `docs/doctrine/proactive-interior.md`.
+        proactiveTickMs: proactive.enabled ? 5 * 60_000 : undefined,
+        proactiveQuietWindowMs: 90_000,
+        proactiveAction: proactive.enabled ? "consolidate" : "none",
+        proactiveAnchor,
       },
       { storage, renderer: this.renderer, ai: undefined, keyring },
     );

@@ -5,9 +5,13 @@
  * Provides Tauri-specific storage adapters and AI provider creation.
  */
 
-import { MotebitRuntime, ProxySession, PLANNING_TASK_ROUTER } from "@motebit/runtime";
-import type { ProxyProviderConfig, ProxySessionAdapter, RuntimeConfig } from "@motebit/runtime";
-import type { ChainAnchorSubmitter } from "@motebit/sdk";
+import {
+  MotebitRuntime,
+  ProxySession,
+  PLANNING_TASK_ROUTER,
+  resolveProactiveAnchor,
+} from "@motebit/runtime";
+import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import type {
   TurnResult,
   StorageAdapters,
@@ -376,43 +380,6 @@ export interface BootstrapResult {
   isFirstLaunch: boolean;
   motebitId: string;
   deviceId: string;
-}
-
-/**
- * Resolve the runtime's `proactiveAnchor` config from the desktop's
- * settings + identity state. Extracted out of `initAI` so the four
- * branches (no-keys, no-toggle, local-only, onchain) are unit-testable
- * without booting the whole DesktopApp.
- *
- * Branches:
- *   - proactive disabled OR no signing keys → undefined (no auto-anchor)
- *   - proactive enabled + keys + anchorOnchain=false → local-only policy
- *   - proactive enabled + keys + anchorOnchain=true → policy with
- *     SolanaMemoSubmitter constructed from the identity seed
- *   - submitter construction throws (shouldn't, with valid inputs) →
- *     falls through to local-only — no surprise crash
- */
-export async function resolveProactiveAnchor(args: {
-  proactiveEnabled: boolean;
-  anchorOnchain: boolean;
-  signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
-  solanaRpcUrl: string;
-}): Promise<RuntimeConfig["proactiveAnchor"] | undefined> {
-  if (!args.proactiveEnabled || !args.signingKeys) return undefined;
-  let submitter: ChainAnchorSubmitter | undefined;
-  if (args.anchorOnchain) {
-    try {
-      const { createSolanaMemoSubmitter } = await import("@motebit/wallet-solana");
-      submitter = createSolanaMemoSubmitter({
-        rpcUrl: args.solanaRpcUrl,
-        identitySeed: args.signingKeys.privateKey,
-      });
-    } catch {
-      // Submitter construction failure (shouldn't happen with valid
-      // inputs) falls through to local-only anchoring.
-    }
-  }
-  return { submitter, batchThreshold: 8 };
 }
 
 export type GovernanceStatus = { governed: true } | { governed: false; reason: string };

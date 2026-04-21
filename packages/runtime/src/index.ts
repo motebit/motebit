@@ -2957,3 +2957,5 @@ export class MotebitRuntime {
 
 export { deriveStreamActivity, derivePlanActivity, ActivityTracker } from "./activity.js";
 export type { ActivityLabel } from "./activity.js";
+export { resolveProactiveAnchor } from "./proactive-anchor.js";
+export type { ResolveProactiveAnchorArgs } from "./proactive-anchor.js";

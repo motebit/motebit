@@ -101,6 +101,26 @@ export function GovernanceTab({
           placeholderTextColor={colors.inputPlaceholder}
         />
       </View>
+
+      <Text style={styles.sectionTitle}>Proactive Interior</Text>
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>Memory consolidation while idle</Text>
+        <Switch
+          value={draft.proactive.enabled}
+          onValueChange={(v) => onUpdate({ proactive: { ...draft.proactive, enabled: v } })}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={draft.proactive.enabled ? colors.textPrimary : colors.textMuted}
+        />
+      </View>
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>Publish proofs onchain (Solana, ~$0.001/batch)</Text>
+        <Switch
+          value={draft.proactive.anchorOnchain}
+          onValueChange={(v) => onUpdate({ proactive: { ...draft.proactive, anchorOnchain: v } })}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={draft.proactive.anchorOnchain ? colors.textPrimary : colors.textMuted}
+        />
+      </View>
     </View>
   );
 }

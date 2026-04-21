@@ -360,6 +360,7 @@ describe("MobileApp.settings", () => {
         neuralVad: true,
       },
       maxTokens: 4096,
+      proactive: { enabled: false, anchorOnchain: false },
     };
     await app.saveSettings(custom);
     const loaded = await app.loadSettings();
