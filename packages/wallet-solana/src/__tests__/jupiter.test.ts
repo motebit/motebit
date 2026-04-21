@@ -10,7 +10,7 @@
  * "Jupiter is down" from "the signed tx was rejected."
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { Keypair, Connection } from "@solana/web3.js";
+import { Keypair, Connection, VersionedTransaction } from "@solana/web3.js";
 
 import { swapUsdcToSol } from "../jupiter.js";
 
@@ -25,6 +25,7 @@ function makeKeypairAndConnection(): { keypair: Keypair; connection: Connection 
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("swapUsdcToSol", () => {
@@ -65,6 +66,81 @@ describe("swapUsdcToSol", () => {
       /Jupiter swap failed: HTTP 429/,
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("submits the signed swap and returns signature + outAmount on the happy path", async () => {
+    // Fake VersionedTransaction so we don't have to construct a real
+    // serialized swap tx. The function-under-test only calls .sign() and
+    // .serialize() on the result of `VersionedTransaction.deserialize`.
+    const fakeTx = {
+      sign: vi.fn(),
+      serialize: vi.fn(() => new Uint8Array([1, 2, 3])),
+    } as unknown as VersionedTransaction;
+    vi.spyOn(VersionedTransaction, "deserialize").mockReturnValue(fakeTx);
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ outAmount: "12345" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        // Real base64; deserialize is mocked, so the bytes don't matter.
+        json: async () => ({ swapTransaction: "AAAA" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { keypair, connection } = makeKeypairAndConnection();
+    const blockhash = Keypair.generate().publicKey.toBase58(); // 32-byte base58
+    vi.spyOn(connection, "sendRawTransaction").mockResolvedValue("sigJupiter");
+    vi.spyOn(connection, "getLatestBlockhash").mockResolvedValue({
+      blockhash,
+      lastValidBlockHeight: 100,
+    });
+    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({
+      context: { slot: 1 },
+      value: { err: null },
+    });
+
+    const result = await swapUsdcToSol(20_000n, keypair, connection);
+
+    expect(result).toEqual({
+      signature: "sigJupiter",
+      inputAmount: 20_000n,
+      outputAmount: 12_345n,
+    });
+    expect(fakeTx.sign).toHaveBeenCalledWith([keypair]);
+    expect(fakeTx.serialize).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to outputAmount=0n when Jupiter quote response omits outAmount", async () => {
+    // Defensive: protect against an empty/changed Jupiter response shape.
+    const fakeTx = {
+      sign: vi.fn(),
+      serialize: vi.fn(() => new Uint8Array([1])),
+    } as unknown as VersionedTransaction;
+    vi.spyOn(VersionedTransaction, "deserialize").mockReturnValue(fakeTx);
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({}) }) // no outAmount
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ swapTransaction: "AAAA" }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { keypair, connection } = makeKeypairAndConnection();
+    vi.spyOn(connection, "sendRawTransaction").mockResolvedValue("sigEmpty");
+    vi.spyOn(connection, "getLatestBlockhash").mockResolvedValue({
+      blockhash: Keypair.generate().publicKey.toBase58(),
+      lastValidBlockHeight: 1,
+    });
+    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({
+      context: { slot: 1 },
+      value: { err: null },
+    });
+
+    const result = await swapUsdcToSol(1n, keypair, connection);
+    expect(result.outputAmount).toBe(0n);
   });
 
   it("propagates a deserialization error when Jupiter returns a malformed swap transaction", async () => {

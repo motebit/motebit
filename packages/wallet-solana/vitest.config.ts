@@ -8,6 +8,9 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 //      to ~96% via Connection-mock + spl-token-mock pattern, mirroring
 //      the memo-submitter approach for sendUsdc / sendUsdcBatch /
 //      ensureGas / Jupiter auto-swap branches).
+//   3. 95/95/100/95 → 97/96/100/97 (jupiter.ts to 100% via a fake
+//      VersionedTransaction so the post-swap confirm + return path
+//      runs without a real serialized swap tx).
 //
 // 80/80/80/80 graduation target met ahead of the 2026-06-01 deadline;
 // `wallet-solana` is removed from `coverage-graduation.json` per the
@@ -20,5 +23,5 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // entry in the same PR per the graduation doctrine's drift rule.
 export default defineMotebitTest({
   coverageExclude: ["src/adapter.ts"],
-  thresholds: { statements: 95, branches: 95, functions: 100, lines: 95 },
+  thresholds: { statements: 97, branches: 96, functions: 100, lines: 97 },
 });
