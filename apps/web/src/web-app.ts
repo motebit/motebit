@@ -5,6 +5,7 @@ import {
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
+  bindSlabControllerToRenderer,
 } from "@motebit/runtime";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import type {
@@ -78,6 +79,11 @@ import { CursorPresence } from "./cursor-presence";
 import { createProvider, WebLLMProvider, PROXY_BASE_URL } from "./providers";
 import type { ProviderConfig } from "./storage";
 import {
+  renderSlabItem,
+  updateSlabItem,
+  renderDetachArtifact as renderSlabDetachArtifact,
+} from "./ui/slab-items";
+import {
   needsMigration,
   loadLegacyConversations,
   markMigrationDone,
@@ -137,6 +143,14 @@ export class WebApp {
   private _conversationSyncEngine: ConversationSyncEngine | null = null;
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Unsubscribe returned by `bindSlabControllerToRenderer`. The slab
+   * bridge is the runtime-side subscription to `runtime.slab` that
+   * translates controller events into ThreeJS renderer calls so
+   * slab items materialize on the Motebit Computer plane. Detached
+   * in stop() alongside the other intervals.
+   */
+  private slabBridgeUnsub: (() => void) | null = null;
   private idleCues: BehaviorCues = {
     hover_distance: 0.4,
     drift_amplitude: 0.02,
@@ -354,6 +368,21 @@ export class WebApp {
     this.runtime.start();
     this.cursorPresence.start();
 
+    // Wire the slab bridge — runtime.slab emits lifecycle events for
+    // every turn's stream + tool calls + plan steps; the bridge diffs
+    // state and mounts per-item HTMLElements on the Three.js slab
+    // plane via `renderer.addSlabItem` / `dissolveSlabItem` /
+    // `detachSlabItemAsArtifact`. Element factories live in
+    // ui/slab-items.ts so per-kind rendering stays out of this file.
+    // See docs/doctrine/motebit-computer.md.
+    this.slabBridgeUnsub = bindSlabControllerToRenderer({
+      controller: this.runtime.slab,
+      renderer: this.renderer,
+      renderItem: renderSlabItem,
+      updateItem: updateSlabItem,
+      renderDetachArtifact: renderSlabDetachArtifact,
+    });
+
     // 30fps cursor tick: merge cursor presence into runtime state
     this.cuesTickInterval = setInterval(() => {
       const cursorUpdates = this.cursorPresence.getUpdates();
@@ -508,6 +537,10 @@ export class WebApp {
     if (this.housekeepingInterval != null) {
       clearInterval(this.housekeepingInterval);
       this.housekeepingInterval = null;
+    }
+    if (this.slabBridgeUnsub != null) {
+      this.slabBridgeUnsub();
+      this.slabBridgeUnsub = null;
     }
     this.runtime?.stop();
     this.renderer.dispose();
