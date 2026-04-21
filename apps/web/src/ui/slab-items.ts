@@ -33,6 +33,77 @@
 
 import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/runtime";
 
+// ── Hover-close affordance ────────────────────────────────────────────
+//
+// Under the workstation frame (motebit-computer.md §"Affordances that
+// emerge from the surface, not conventional window chrome"): desktop
+// pointers need a close affordance, but it must read as a droplet
+// meniscus-dip, not a gray OS button. The × only materializes on
+// pointerenter, dissolves on leave, and routes through the typed
+// `actions.dismiss` capability — never a constructed prompt.
+//
+// The card stays operational (tap-to-expand, pointerdown tracking)
+// while the close is present; the × stops pointer events from reaching
+// the card so a click on × is unambiguously "dismiss," not "expand."
+
+function attachHoverClose(card: HTMLDivElement, actions: SlabItemActions): void {
+  const close = document.createElement("button");
+  close.type = "button";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "×";
+  close.style.position = "absolute";
+  close.style.top = "4px";
+  close.style.right = "4px";
+  close.style.width = "16px";
+  close.style.height = "16px";
+  close.style.display = "inline-flex";
+  close.style.alignItems = "center";
+  close.style.justifyContent = "center";
+  close.style.fontSize = "13px";
+  close.style.lineHeight = "1";
+  close.style.color = "rgba(40, 55, 90, 0.78)";
+  // Meniscus dip — a soft circular dimple, not a gray OS button. The
+  // background is a subtle darkening of the card's own tone so it
+  // reads as part of the droplet's surface.
+  close.style.background = "rgba(255, 255, 255, 0.55)";
+  close.style.border = "1px solid rgba(120, 140, 180, 0.35)";
+  close.style.borderRadius = "999px";
+  close.style.padding = "0";
+  close.style.cursor = "pointer";
+  close.style.opacity = "0";
+  close.style.transform = "scale(0.85)";
+  close.style.transition = "opacity 120ms ease-out, transform 120ms ease-out";
+  close.style.pointerEvents = "none";
+  // Only interactive when visible — prevents phantom clicks.
+  const reveal = (): void => {
+    close.style.opacity = "1";
+    close.style.transform = "scale(1)";
+    close.style.pointerEvents = "auto";
+  };
+  const conceal = (): void => {
+    close.style.opacity = "0";
+    close.style.transform = "scale(0.85)";
+    close.style.pointerEvents = "none";
+  };
+  card.addEventListener("pointerenter", reveal);
+  card.addEventListener("pointerleave", conceal);
+  close.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    // Soft exit animation; dissolve physics handled by the controller.
+    card.style.transition = "transform 140ms ease-out, opacity 140ms ease-out";
+    card.style.opacity = "0";
+    card.style.transform = "scale(0.94)";
+    actions.dismiss();
+  });
+  // Stop pointer events from bubbling to card's click/pointer handlers.
+  close.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  // Card must be positioned for absolute child to anchor correctly.
+  if (card.style.position === "" || card.style.position === "static") {
+    card.style.position = "relative";
+  }
+  card.appendChild(close);
+}
+
 // ── Common card chrome ────────────────────────────────────────────────
 
 function baseCard(): HTMLDivElement {
@@ -133,16 +204,21 @@ function headRow(glyph: string, label: string): HTMLDivElement {
 function renderStream(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-stream");
-  const text = textRow();
-  // Stream is live LLM tokens arriving character-by-character — the
-  // monospace typeface reads as "something is being typed right now."
-  // No label row; let the text fill the card.
-  text.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  card.style.maxWidth = "280px";
+  const text = document.createElement("div");
+  text.className = "slab-item-text";
+  // Response prose — render markdown like chat does, so `### Key
+  // Figures` / tables / bold don't arrive as raw source. Text is
+  // the same family as the chat bubble; the slab is the first-person
+  // view of the same composition.
   text.style.fontSize = "11.5px";
   text.style.lineHeight = "1.55";
   text.style.color = "rgba(18, 28, 50, 0.94)";
+  text.style.maxHeight = "220px";
+  text.style.overflow = "auto";
+  text.style.wordBreak = "break-word";
   const payload = item.payload as { text?: string } | null;
-  text.textContent = payload?.text ?? "";
+  text.innerHTML = renderStreamMarkdown(payload?.text ?? "");
   card.appendChild(text);
   return card;
 }
@@ -151,8 +227,48 @@ function updateStream(item: SlabItem, element: HTMLElement): void {
   const text = element.querySelector(".slab-item-text");
   const payload = item.payload as { text?: string } | null;
   if (text instanceof HTMLElement) {
-    text.textContent = payload?.text ?? "";
+    text.innerHTML = renderStreamMarkdown(payload?.text ?? "");
   }
+}
+
+// Local markdown renderer — intentionally inlined (not imported from
+// chat.ts) so the web + desktop siblings stay byte-aligned. If a third
+// HTML surface justifies extraction, lift this and chat's copy into a
+// shared package per the panels-pattern doctrine.
+function stripStreamInternalTags(text: string): string {
+  return text
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
+    .replace(/\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\]/g, "")
+    .replace(/\[\/MEMORY_DATA\]/g, "")
+    .replace(/<(?:state|thinking|memory)[^>]*$/g, "");
+}
+
+function renderStreamMarkdown(raw: string): string {
+  const cleaned = stripStreamInternalTags(raw).trim();
+  const escaped = cleaned.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return escaped
+    .replace(/```(\w*)\n([\s\S]*?)```/g, "<pre><code>$2</code></pre>")
+    .replace(
+      /`([^`]+)`/g,
+      '<code style="background:rgba(0,0,0,0.06);padding:1px 4px;border-radius:3px;font-size:0.9em;">$1</code>',
+    )
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/^#{3,6}\s+(.+)$/gm, '<div style="font-weight:600;margin:8px 0 4px;">$1</div>')
+    .replace(
+      /^#{1,2}\s+(.+)$/gm,
+      '<div style="font-weight:600;font-size:1.05em;margin:8px 0 4px;">$1</div>',
+    )
+    .replace(/^[*-]\s+(.+)$/gm, '<div style="padding-left:12px;">• $1</div>')
+    .replace(/^(\d+)\.\s+(.+)$/gm, '<div style="padding-left:12px;">$1. $2</div>')
+    .replace(/\n\n/g, '<div style="height:8px;"></div>')
+    .replace(/\n/g, "<br>");
 }
 
 // Tool-name → kind-of-experience routing. The runtime emits
@@ -1079,6 +1195,18 @@ function renderGeneric(item: SlabItem): HTMLElement {
  * Caller (slab-bridge) mounts the returned element on the slab.
  */
 export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLElement {
+  const card = buildCardForKind(item, actions);
+  // Universal hover-close affordance — the workstation's droplet-
+  // physics-native dismiss, applied to every kind so the user can
+  // close any resting item without memorizing per-kind gestures.
+  // Typed capability path per surface-determinism doctrine.
+  if (card instanceof HTMLDivElement) {
+    attachHoverClose(card, actions);
+  }
+  return card;
+}
+
+function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement {
   switch (item.kind) {
     case "stream":
       return renderStream(item);

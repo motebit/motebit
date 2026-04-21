@@ -313,6 +313,11 @@ export class SlabManager {
       phaseListeners: new Set(),
     };
     this.items.set(spec.id, managed);
+    // Reflow — `slotPosition` compresses spacing as the stack grows,
+    // so the newly-added item changes the layout for the existing
+    // items too. Cheap (items.size is small) and keeps the stack
+    // readable as research accumulates.
+    this.reflowStack();
 
     const handle: SlabItemHandle = {
       id: spec.id,
@@ -486,6 +491,24 @@ export class SlabManager {
         // Steady state — item stays at scale 1. Future phases handle
         // layout reflow + hover affordances.
         break;
+      case "resting":
+        // The item has settled into working-material state. Visual
+        // cue: add a class the per-surface renderer can style, and
+        // apply a soft global "held, not active" filter so resting
+        // items read as calm even before the renderer reacts. The
+        // DOM stays in place; scale / opacity untouched so the user's
+        // reading isn't interrupted. Doctrine: motebit-computer.md
+        // §"Settling into rest."
+        if (!item.element.classList.contains("slab-item-resting")) {
+          item.element.classList.add("slab-item-resting");
+          item.element.classList.remove("slab-item-active");
+          // Subtle desaturation — reads as "held" without hiding
+          // content. 0.92 is barely perceptible in isolation but
+          // clearly differentiates a resting stack from an active
+          // item.
+          item.element.style.filter = "saturate(0.92)";
+        }
+        break;
       case "dissolving": {
         const t = item.phaseTime / DISSOLVE_DURATION_S;
         const progress = 1 - easeInQuad(Math.min(1, t));
@@ -594,6 +617,28 @@ export class SlabManager {
     this.itemsGroup.remove(item.object);
     item.phaseListeners.clear();
     this.items.delete(id);
+    // Reflow — the stack's spacing recomputes based on total count,
+    // so a removal relaxes the spacing for the remaining items.
+    // Cheap and keeps the layout honest as items dismiss.
+    this.reflowStack();
+  }
+
+  /**
+   * Recompute every mounted item's slot position based on the current
+   * total count. Called after addItem / removeImmediate so the stack's
+   * compression stays consistent as items arrive and leave. Slot
+   * indices assign by insertion order (Map iteration is insertion-
+   * ordered in JS); pinned items (future) will anchor to the top and
+   * exempt themselves from FIFO pressure.
+   */
+  private reflowStack(): void {
+    let slot = 0;
+    for (const item of this.items.values()) {
+      const [x, y, z] = this.slotPosition(slot);
+      item.object.position.set(x, y, z);
+      item.slot = slot;
+      slot += 1;
+    }
   }
 
   /**
@@ -672,16 +717,26 @@ export class SlabManager {
   }
 
   /**
-   * Slot layout in plane-local space. Pass 2 uses a simple vertical
-   * stack growing downward from the plane's top edge. Reflow on
-   * removal is the Pass 3 concern along with the pinch.
+   * Slot layout in plane-local space. Items stack vertically from the
+   * plane's top edge downward. Under the workstation frame
+   * (motebit-computer.md §"Three end states"), items rest on the slab
+   * until dismissed — so the layout must accommodate accumulation.
+   *
+   * Strategy: tighten the stack as more items land, so a research
+   * session with 6–10 resting items stays legible without overflow.
+   * The CSS2D overlay already handles in-card scroll for long content;
+   * this function just picks where the card's anchor sits in 3D space.
+   *
+   * Pinned items (future) will exempt themselves from FIFO pressure;
+   * for now every item stacks in arrival order.
    */
   private slotPosition(slot: number): [number, number, number] {
-    // Plane spans ±SLAB_WIDTH/2 horizontally, ±SLAB_HEIGHT/2 vertically.
-    // Items mounted near the top, stacked downward. Z = 0.001 so they
-    // render fractionally in front of the plane (not z-fighting).
     const topY = SLAB_HEIGHT / 2 - 0.02;
-    const spacing = 0.05;
+    const total = Math.max(1, this.items.size);
+    // Spacing compresses as the stack grows — 0.05 for a light stack,
+    // easing down to 0.034 once ~8 items are held. Keeps the whole
+    // stack visible on the 0.22m-tall plane without hard clipping.
+    const spacing = total <= 4 ? 0.05 : Math.max(0.034, 0.05 - (total - 4) * 0.003);
     return [0, topY - slot * spacing, 0.001];
   }
 }
