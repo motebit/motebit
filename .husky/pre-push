@@ -25,6 +25,23 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
 
   # Typecheck/lint/test scoped to affected packages — cheaper than full run;
   # CI's check job runs these unfiltered across the whole graph.
-  pnpm turbo run typecheck lint test --filter="...[origin/main]"
+  #
+  # `--concurrency=6` caps turbo's parallel task count. Without it, a change
+  # low in the dependency graph (crypto, render-engine, runtime) pulls in a
+  # ~30-package transitive closure and turbo runs ~10 tasks at once, each
+  # spawning its own vitest worker pool. On a 16GB machine this
+  # oversubscribes CPU + memory: vitest workers get starved of cycles, hooks
+  # and tests cross their default timeouts (5s / 10s), and behaviorally
+  # correct tests false-fail under contention. The cap bounds total in-flight
+  # tasks to a count this host can sustain without contention spikes.
+  #
+  # This is the right level to solve it — one config line, harness-scoped,
+  # reversible with one edit. NOT per-test timeout bumps: those embed
+  # per-machine workarounds in test files that outlive the hardware and
+  # confuse readers ("why is this timeout 15s when the test runs in 1s?").
+  # Raise this number on a more capable host or delete the flag entirely.
+  # CI itself skips this hook (`$CI` check at the top of the file), so
+  # production CI runs at its own full parallelism regardless.
+  pnpm turbo run typecheck lint test --filter="...[origin/main]" --concurrency=6
   pnpm format:check
 fi

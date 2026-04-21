@@ -123,9 +123,6 @@ function swapProvider(deps: MotebitLoopDependencies, provider: StreamingProvider
 
 describe("Terrarium", () => {
   describe("Scenario 1: Baseline memory formation", () => {
-    // 15s timeout (default 5s): this is the file's first runTurn invocation
-    // and pays the worker warm-up cost. Runs in <1s in isolation but flakes
-    // past 5s under parallel turbo load — caught by pre-push 2026-04-21.
     it("intro message forms memories about the user, not excessive", async () => {
       const deps = makeDeps(
         mockProvider([
@@ -152,7 +149,7 @@ describe("Terrarium", () => {
       for (const m of memories) {
         expect(m.content.toLowerCase()).not.toMatch(/\b(i am|my memory|my tool|i store|i use)\b/);
       }
-    }, 15_000);
+    });
   });
 
   // ---------------------------------------------------------------------------

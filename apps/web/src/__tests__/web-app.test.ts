@@ -252,9 +252,6 @@ describe("Streaming chat", () => {
     app.stop();
   });
 
-  // 15s timeout (default 5s): WebApp bootstrap + streaming loop paid
-  // its worker warm-up cost here, flaking past 5s under parallel turbo
-  // pre-push load on 2026-04-21. Runs in ~800ms in isolation.
   it("streams response chunks from provider", async () => {
     const app = new WebApp();
     await app.init(null as unknown as HTMLCanvasElement);
@@ -291,7 +288,7 @@ describe("Streaming chat", () => {
     expect(app.isProcessing).toBe(false);
 
     app.stop();
-  }, 15_000);
+  });
 
   it("prevents concurrent message processing", async () => {
     const app = new WebApp();

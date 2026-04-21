@@ -268,9 +268,6 @@ describe("GoalScheduler — approval lifecycle", () => {
     expect(item!.args_hash).toBe(expectedHash);
   });
 
-  // 15s timeout (default 5s): scheduler.tickOnce spins up the runtime
-  // tool-registration path; flakes past 5s under parallel turbo pre-push
-  // load on 2026-04-21. Runs in ~500ms in isolation.
   it("completes goals without approval when no approval_request", async () => {
     const { runtime } = createMockRuntime({ yieldApproval: false });
     moteDb.goalStore.add(makeGoal());
@@ -293,7 +290,7 @@ describe("GoalScheduler — approval lifecycle", () => {
     // Goal should have last_run_at updated
     const goals = moteDb.goalStore.list("mote-test");
     expect(goals[0]!.last_run_at).not.toBeNull();
-  }, 15_000);
+  });
 });
 
 describe("GoalScheduler — report_progress invariant", () => {

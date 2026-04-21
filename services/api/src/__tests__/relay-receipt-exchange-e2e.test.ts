@@ -36,6 +36,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { generateKeypair } from "@motebit/encryption";
+import { deriveSolanaAddress } from "@motebit/wallet-solana";
 import { AgentTrustLevel } from "@motebit/sdk";
 import type { SyncRelay } from "../index.js";
 import {
@@ -185,7 +186,9 @@ describe("Relay-mediated sovereign receipt exchange — full e2e", () => {
       },
       bobSetup.adapters,
     );
-    expect(bob.getSolanaAddress()).toBeNull(); // no solana config required
+    // No Solana RPC rail — balance returns null. Address resolves from
+    // signing keys (rail-independent); not what this test is probing.
+    expect(await bob.getSolanaBalance()).toBeNull();
     expect(bobTransport.polling).toBe(true); // long-poll loop is live
 
     // 5. Alice's runtime.
@@ -216,7 +219,7 @@ describe("Relay-mediated sovereign receipt exchange — full e2e", () => {
       tx_hash: "RelayMediatedSovereignTxHash",
       amount_micro: 5_000n,
       asset: "USDC",
-      payee_address: "BobAddressPlaceholder",
+      payee_address: deriveSolanaAddress(bobKp.publicKey),
       service_description:
         "Relay-mediated sovereign trust loop full e2e test payload with enough detail to satisfy quality gates.",
       prompt_hash: "sha256:prompt-relay-e2e",
@@ -270,7 +273,9 @@ describe("Relay-mediated sovereign receipt exchange — full e2e", () => {
     // No bob transport = no one polling. The request sits in the pending
     // queue until the exchange timeout fires, at which point the relay
     // returns an error response. The runtime throws at the verification
-    // layer because the response is an error.
+    // layer because the response is an error. Placeholder payee_address
+    // is fine here — the test expects rejection on the timeout path
+    // before any confused-deputy cross-check matters.
     await expect(
       alice.requestSovereignReceipt("bob", {
         payee_motebit_id: "bob",
@@ -278,7 +283,7 @@ describe("Relay-mediated sovereign receipt exchange — full e2e", () => {
         tx_hash: "timeout-tx",
         amount_micro: 1_000n,
         asset: "USDC",
-        payee_address: "addr",
+        payee_address: "timeout-path-placeholder",
         service_description: "timeout test",
         prompt_hash: "p",
         result_hash: "r",
@@ -323,7 +328,9 @@ describe("Relay-mediated sovereign receipt exchange — full e2e", () => {
       },
       createAdaptersWithTrust().adapters,
     );
-    expect(bob.getSolanaAddress()).toBeNull();
+    // No Solana RPC rail — balance returns null. Address resolves from
+    // signing keys (rail-independent); not what this test is probing.
+    expect(await bob.getSolanaBalance()).toBeNull();
 
     const alice = new MotebitRuntime(
       {
@@ -343,7 +350,7 @@ describe("Relay-mediated sovereign receipt exchange — full e2e", () => {
       tx_hash: "bigint-relay-tx",
       amount_micro: bigAmount,
       asset: "USDC",
-      payee_address: "addr",
+      payee_address: deriveSolanaAddress(bobKp.publicKey),
       service_description: "bigint relay round trip payload",
       prompt_hash: "p",
       result_hash: "r",
