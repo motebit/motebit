@@ -553,6 +553,21 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
 `,
       ),
   },
+  {
+    script: "check-consolidation-primitives",
+    proves:
+      "flags inline consolidation cycle — clusterBySimilarity + LLM summarization + formMemory + deleteMemory in one file without importing the canonical runConsolidationCycle",
+    perturb: () =>
+      // Fixture matches the four-condition heuristic: clusterBySimilarity
+      // call + summariz keyword + formMemory + deleteMemory. This is the
+      // exact shape that diverged into housekeeping.ts vs the reflection
+      // engine before the cycle unification — the gate exists so the third
+      // copy can never land.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}inline_consolidation.ts`,
+        `import { clusterBySimilarity } from "@motebit/memory-graph";\nimport type { MemoryNode } from "@motebit/sdk";\nexport async function rogueConsolidate(\n  nodes: MemoryNode[],\n  memory: { formMemory: (...a: unknown[]) => Promise<unknown>; deleteMemory: (id: string) => Promise<void> },\n): Promise<void> {\n  const clusters = clusterBySimilarity(nodes, 0.6);\n  for (const cluster of clusters) {\n    if (cluster.length < 2) continue;\n    // pretend to summarize via an LLM here\n    const summary = "summarize: " + cluster.map((n) => n.content).join(" / ");\n    await memory.formMemory({ content: summary }, [], 0);\n    for (const n of cluster) await memory.deleteMemory(n.node_id);\n  }\n}\n`,
+      ),
+  },
 ];
 
 /**
