@@ -39,9 +39,9 @@
     "@motebit/virtual-accounts": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@motebit/wire-schemas": "workspace:*",
-    "@x402/core": "^2.6.0",
-    "@x402/evm": "^2.6.0",
-    "@x402/hono": "^2.6.0",
+    "@x402/core": "^2.10.0",
+    "@x402/evm": "^2.10.0",
+    "@x402/hono": "^2.10.0",
     "hono": "^4.12.9",
     "stripe": "^17.0.0"
   },
