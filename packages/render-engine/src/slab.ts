@@ -49,6 +49,7 @@ import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer
 import type {
   ArtifactSpec,
   ArtifactHandle,
+  InteriorColor,
   SlabItemSpec,
   SlabItemHandle,
   SlabItemPhase,
@@ -60,19 +61,25 @@ import { CANONICAL_MATERIAL } from "./spec.js";
 /**
  * Slab position relative to the creature. Held-tablet pose — offset
  * right, at the creature's eye level, tilted forward toward the
- * camera (~12°) and slightly toward the creature (~5° yaw). Values
+ * camera (~12°) and turned toward the creature (~9° yaw). Values
  * chosen to read as "the motebit is holding up a glass slate and
  * showing you what's on it."
+ *
+ * X/width tuned so the right edge stays on-screen on a 16:9 canvas
+ * at the default camera (pos z=0.85, fov 45°, half-screen-width at
+ * slab depth ≈ 0.35m). At the previous offset/width (0.42/0.42)
+ * the plane's right edge sat past the viewport; cards mounted on
+ * the outer slots clipped out of view on narrower windows.
  */
-const SLAB_OFFSET_X = 0.42; // right of creature (meters)
+const SLAB_OFFSET_X = 0.3; // right of creature (meters)
 const SLAB_OFFSET_Y = 0.0; // creature eye level
-const SLAB_OFFSET_Z = -0.05; // slightly behind
-const SLAB_TILT_X = -0.21; // ~12° forward (radians)
-const SLAB_TILT_Y = -0.09; // ~5° yaw toward creature (radians)
+const SLAB_OFFSET_Z = -0.02; // just behind creature's front face
+const SLAB_TILT_X = -0.22; // ~12.5° forward (radians)
+const SLAB_TILT_Y = -0.09; // ~5° yaw toward creature (radians) — doctrine
 
-/** Golden-ratio-ish aspect. ~1.5 body radii wide. */
-const SLAB_WIDTH = 0.42;
-const SLAB_HEIGHT = 0.26;
+/** Golden-ratio-ish aspect. ~1.3 body radii wide; fits the viewport. */
+const SLAB_WIDTH = 0.36;
+const SLAB_HEIGHT = 0.22;
 
 /**
  * Sympathetic breathing amplitude factor. 0.3 of the creature's
@@ -152,6 +159,18 @@ export class SlabManager {
    * decay back toward invisible.
    */
   private hasBeenActive = false;
+  /**
+   * Current soul color. Doctrine mandates the slab's active tint
+   * derives from the creature's interior color — "cyan creature → cyan
+   * slab warmth." The plane's attenuation + emissive lerp toward this
+   * when ambient is active, and back toward neutral when idle. Set via
+   * `setInteriorColor`; host adapters route the creature's interior
+   * color through here at the same time they set the creature's.
+   */
+  private soulTint: [number, number, number] = [0.95, 0.97, 1.0];
+  private soulGlow: [number, number, number] = [0.55, 0.78, 1.0];
+  /** Current emissive coupling 0..1. Eased toward the target each frame. */
+  private activeWarmth = 0;
 
   constructor(
     creatureGroup: THREE.Group,
@@ -184,19 +203,40 @@ export class SlabManager {
       (planeGeo.userData as { restPositions?: ArrayLike<number> }).restPositions = restPositions;
     }
     this.planeMaterial = new THREE.MeshPhysicalMaterial({
-      // Same material family as the creature — same IOR, roughness,
-      // transmission. The slab is body-adjacent, not a UI element.
+      // Same material family as the creature — same IOR, same clearcoat
+      // chemistry. The slab is body-adjacent, not a UI element.
+      //
+      // Transmission is pulled back from 0.94 so the plane reads as a
+      // held sheet rather than a ghost. A trace of surface roughness
+      // (0.06) breaks perfect mirror reflection into a frosted glow
+      // that catches the environment; clearcoat on top keeps the
+      // meniscus specular sharp. Thickness 0.04 deepens the refraction
+      // through the glass without distorting items mounted on its
+      // near face.
       ior: CANONICAL_MATERIAL.ior,
-      roughness: CANONICAL_MATERIAL.roughness,
-      transmission: 0.94,
-      thickness: 0.02,
-      clearcoat: CANONICAL_MATERIAL.clearcoat,
+      roughness: 0.06,
+      transmission: 0.82,
+      thickness: 0.04,
+      clearcoat: 0.6,
       clearcoatRoughness: 0.05,
-      color: new THREE.Color(
-        CANONICAL_MATERIAL.tint[0],
-        CANONICAL_MATERIAL.tint[1],
-        CANONICAL_MATERIAL.tint[2],
-      ),
+      // `color` is the base color behind transmission — the slab's
+      // body. A touch of warm-white keeps it from reading as a TV.
+      color: new THREE.Color(0.98, 0.985, 1.0),
+      // Attenuation through the glass — what tints the refracted
+      // background when the soul color couples in. Lerps between
+      // neutral-cool (idle) and soul tint (active) each frame.
+      attenuationColor: new THREE.Color(0.92, 0.95, 1.0),
+      attenuationDistance: 0.6,
+      // Sheen gives the frosted edge a soft frosted halo — reads as
+      // a meniscus against a bright sky environment. Kept subtle;
+      // too much sheen makes the plane look like fabric.
+      sheen: 0.35,
+      sheenRoughness: 0.9,
+      sheenColor: new THREE.Color(0.75, 0.85, 1.0),
+      // Emissive carries the soul-color warmth when active. Starts
+      // black; update() breathes it in and out with the ambient.
+      emissive: new THREE.Color(0, 0, 0),
+      emissiveIntensity: 0,
       transparent: true,
       opacity: 0, // Starts invisible; reveals on first item.
       side: THREE.DoubleSide,
@@ -229,6 +269,21 @@ export class SlabManager {
   /** Expose the THREE group so the adapter can position/animate externally if needed. */
   getGroup(): THREE.Group {
     return this.group;
+  }
+
+  /**
+   * Couple the slab's active tint to the creature's soul color. The
+   * plane lerps toward this when items are on the slab and back
+   * toward neutral-cool when idle — "cyan creature → cyan slab
+   * warmth," per motebit-computer.md §"Visual properties."
+   *
+   * Host adapters call this from their own `setInteriorColor` at
+   * the same moment they update the creature's interior. One body,
+   * one respiratory rhythm, one color.
+   */
+  setInteriorColor(color: InteriorColor): void {
+    this.soulTint = [color.tint[0], color.tint[1], color.tint[2]];
+    this.soulGlow = [color.glow[0], color.glow[1], color.glow[2]];
   }
 
   // ── Public API — mirrors the RenderAdapter slab methods ───────────
@@ -332,22 +387,30 @@ export class SlabManager {
       (i) => i.phase !== "dissolving" && i.phase !== "detached" && i.phase !== "gone",
     ).length;
 
+    let warmthTarget = 0;
     if (active > 0) {
       this.emptyTime = 0;
       this.hasBeenActive = true;
       this.planeVisibility = Math.min(1, this.planeVisibility + deltaTime * 3);
+      warmthTarget = 1;
     } else if (!this.hasBeenActive) {
       // Before first activity ever, the slab is fully invisible — no
       // droplet has emerged from nothing to show.
       this.planeVisibility = 0;
     } else {
       this.emptyTime += deltaTime;
-      // Idle window: plane stays at meniscus (low opacity). Past the
-      // recession delay, plane fades to near-invisible.
+      // Idle window: plane stays at meniscus (refraction + a trace of
+      // body so the glass is *present*, honestly empty). Past the
+      // recession delay, fades to near-invisible but the plane mesh
+      // stays mounted — identity preserved.
       const recessFactor = Math.max(0, Math.min(1, (this.emptyTime - RECESSION_DELAY_S) / 2));
-      const idleVisibility = 0.15 * (1 - recessFactor);
+      const idleVisibility = 0.32 * (1 - recessFactor);
       this.planeVisibility = smoothToward(this.planeVisibility, idleVisibility, deltaTime, 4);
     }
+
+    // Ease the active warmth toward its target — soul color only shows
+    // on the slab when the slab is doing something. Idle = no identity.
+    this.activeWarmth = smoothToward(this.activeWarmth, warmthTarget, deltaTime, 2.5);
 
     // Sympathetic breathing — ~0.3 Hz, 30% creature amplitude. Uses the
     // same time base as the creature's breathing formula, so phases
@@ -358,7 +421,18 @@ export class SlabManager {
       SLAB_BREATHE_AMPLITUDE_FACTOR *
       0.012;
 
-    this.planeMaterial.opacity = this.planeVisibility * 0.7; // ceiling keeps the slab readable
+    // Apply soul coupling to attenuation + emissive. Neutral-cool at
+    // warmth=0, full soul tint at warmth=1. Emissive intensity is
+    // gentle (peak ~0.12) so the plane never outshines the creature.
+    const w = this.activeWarmth;
+    const attR = 0.92 * (1 - w) + this.soulTint[0] * w;
+    const attG = 0.95 * (1 - w) + this.soulTint[1] * w;
+    const attB = 1.0 * (1 - w) + this.soulTint[2] * w;
+    this.planeMaterial.attenuationColor.setRGB(attR, attG, attB);
+    this.planeMaterial.emissive.setRGB(this.soulGlow[0], this.soulGlow[1], this.soulGlow[2]);
+    this.planeMaterial.emissiveIntensity = w * 0.12 * (0.85 + 0.15 * breatheRaw);
+
+    this.planeMaterial.opacity = this.planeVisibility;
     this.planeMesh.visible = this.planeVisibility > 0.01;
     this.planeMesh.scale.set(1 + breathe, 1 + breathe, 1);
   }

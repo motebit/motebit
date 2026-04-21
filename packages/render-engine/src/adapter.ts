@@ -261,6 +261,10 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.creatureRefs.bodyMaterial.emissiveIntensity = color.glowIntensity ?? 0.0;
       this.creatureRefs.bodyMaterial.needsUpdate = true;
     }
+    // The slab is body-adjacent, not brand-adjacent — route the same
+    // color through to the Motebit Computer plane so its active
+    // warmth matches the creature's interior.
+    this.slabManager?.setInteriorColor(color);
   }
 
   setAudioReactivity(energy: AudioReactivity | null): void {
