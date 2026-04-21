@@ -9,7 +9,7 @@
 
 import { openMotebitDatabase } from "@motebit/persistence";
 import { EventStore } from "@motebit/event-log";
-import { createGoalsController } from "@motebit/runtime";
+import { createGoalsEmitter } from "@motebit/runtime";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -77,7 +77,7 @@ export async function handleGoalAdd(config: CliConfig): Promise<void> {
 
   // Emit goal_created via the shared primitive so every surface writes
   // the same wire-format shape (spec/goal-lifecycle-v1.md §5.1).
-  const goals = createGoalsController({
+  const goals = createGoalsEmitter({
     motebitId,
     events: new EventStore(moteDb.eventStore),
   });
@@ -212,7 +212,7 @@ export async function handleGoalRemove(config: CliConfig): Promise<void> {
   moteDb.goalStore.remove(match.goal_id);
 
   // Emit goal_removed via the shared primitive (spec/goal-lifecycle-v1.md §5.5).
-  const goalsController = createGoalsController({
+  const goalsController = createGoalsEmitter({
     motebitId,
     events: new EventStore(moteDb.eventStore),
   });

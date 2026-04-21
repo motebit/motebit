@@ -39,7 +39,7 @@
  *     existing `_TYPE_PARITY` guards make the chain zod ↔ TS ↔ JSON
  *     Schema drift-proof. Callers cannot drift the wire from here.
  *
- * Consumers instantiate via `createGoalsController(deps)` and call the
+ * Consumers instantiate via `createGoalsEmitter(deps)` and call the
  * five methods mirroring the spec. The `MotebitRuntime` class wires one
  * up in its constructor and exposes it as `runtime.goals`.
  */
@@ -57,7 +57,7 @@ import type { EventStore } from "@motebit/event-log";
 /** Status values a `getGoalStatus` resolver may return; `null` means the goal is unknown to the resolver. */
 export type GoalLifecycleStatus = "active" | "paused" | "completed" | "failed" | null;
 
-export interface GoalsControllerDeps {
+export interface GoalsEmitterDeps {
   motebitId: string;
   /** Event log surface. Only the append + clock methods are used. */
   events: Pick<EventStore, "append" | "getLatestClock" | "appendWithClock">;
@@ -72,7 +72,7 @@ export interface GoalsControllerDeps {
   logger?: { warn(message: string, context?: Record<string, unknown>): void };
 }
 
-export interface GoalsController {
+export interface GoalsEmitter {
   /** Emit `goal_created`. Initial creation or yaml-driven revision (§5.1). */
   created(payload: GoalCreatedPayload): Promise<void>;
   /** Emit `goal_executed` for a successful or failed run (§5.2 — `error` distinguishes). */
@@ -90,7 +90,7 @@ const TERMINAL_STATUSES: ReadonlySet<GoalLifecycleStatus> = new Set<GoalLifecycl
   "failed",
 ]);
 
-export function createGoalsController(deps: GoalsControllerDeps): GoalsController {
+export function createGoalsEmitter(deps: GoalsEmitterDeps): GoalsEmitter {
   const { motebitId, events, getGoalStatus, logger } = deps;
   const warn = logger?.warn.bind(logger) ?? ((msg, ctx) => console.warn(msg, ctx));
 

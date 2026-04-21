@@ -267,7 +267,7 @@ Non-conformance modes and their consequences:
 
 ## 9. Known Emitter Gaps
 
-None. The three convergence items tracked by v1.0 as §9.1 (failed-run emission), §9.2 (runtime.goals.\* primitive), and §9.3 (terminal-state guard) all landed in v1.1 alongside the additive `error` field on `GoalExecutedPayload`. The authoritative emitter now lives at `packages/runtime/src/goals.ts` (`createGoalsController` → `runtime.goals`); every in-tree surface calls it instead of constructing event payloads inline. The terminal-state guard fires via an optional `getGoalStatus` resolver that the CLI scheduler registers on start. See the 2026-04-19 line in the Change Log.
+None. The three convergence items tracked by v1.0 as §9.1 (failed-run emission), §9.2 (runtime.goals.\* primitive), and §9.3 (terminal-state guard) all landed in v1.1 alongside the additive `error` field on `GoalExecutedPayload`. The authoritative emitter now lives at `packages/runtime/src/goals.ts` (`createGoalsEmitter` → `runtime.goals`); every in-tree surface calls it instead of constructing event payloads inline. The terminal-state guard fires via an optional `getGoalStatus` resolver that the CLI scheduler registers on start. See the 2026-04-19 line in the Change Log.
 
 ---
 

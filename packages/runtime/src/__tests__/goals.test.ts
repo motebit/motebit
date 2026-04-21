@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
-import { createGoalsController, type GoalLifecycleStatus } from "../goals.js";
+import { createGoalsEmitter, type GoalLifecycleStatus } from "../goals.js";
 
 /**
  * Minimal in-memory event store stub matching the slice of `EventStore`
@@ -30,10 +30,10 @@ function makeEventStub() {
   };
 }
 
-describe("createGoalsController — wire-format emission", () => {
+describe("createGoalsEmitter — wire-format emission", () => {
   it("emits goal_created with the full payload intact", async () => {
     const ev = makeEventStub();
-    const goals = createGoalsController({ motebitId: "mb-1", events: ev.stub });
+    const goals = createGoalsEmitter({ motebitId: "mb-1", events: ev.stub });
 
     await goals.created({
       goal_id: "g-1",
@@ -56,7 +56,7 @@ describe("createGoalsController — wire-format emission", () => {
 
   it("emits goal_executed with success metrics (no error field)", async () => {
     const ev = makeEventStub();
-    const goals = createGoalsController({ motebitId: "mb-1", events: ev.stub });
+    const goals = createGoalsEmitter({ motebitId: "mb-1", events: ev.stub });
 
     await goals.executed({ goal_id: "g-1", summary: "done", tool_calls: 3, memories: 1 });
 
@@ -72,7 +72,7 @@ describe("createGoalsController — wire-format emission", () => {
 
   it("emits goal_executed with an error field on failure path (spec §9.1 fix)", async () => {
     const ev = makeEventStub();
-    const goals = createGoalsController({ motebitId: "mb-1", events: ev.stub });
+    const goals = createGoalsEmitter({ motebitId: "mb-1", events: ev.stub });
 
     await goals.executed({ goal_id: "g-1", error: "tool budget exhausted" });
 
@@ -85,7 +85,7 @@ describe("createGoalsController — wire-format emission", () => {
 
   it("emits goal_progress, goal_completed, and goal_removed with their respective payloads", async () => {
     const ev = makeEventStub();
-    const goals = createGoalsController({ motebitId: "mb-1", events: ev.stub });
+    const goals = createGoalsEmitter({ motebitId: "mb-1", events: ev.stub });
 
     await goals.progress({ goal_id: "g-1", note: "halfway" });
     await goals.completed({ goal_id: "g-1", reason: "done by agent" });
@@ -102,12 +102,12 @@ describe("createGoalsController — wire-format emission", () => {
   });
 });
 
-describe("createGoalsController — terminal-state guard (spec §3.4)", () => {
+describe("createGoalsEmitter — terminal-state guard (spec §3.4)", () => {
   it("drops goal_executed / goal_progress / goal_completed when the goal is already completed", async () => {
     const ev = makeEventStub();
     const status = new Map<string, GoalLifecycleStatus>([["g-done", "completed"]]);
     const warnings: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
-    const goals = createGoalsController({
+    const goals = createGoalsEmitter({
       motebitId: "mb-1",
       events: ev.stub,
       getGoalStatus: (id) => status.get(id) ?? null,
@@ -125,7 +125,7 @@ describe("createGoalsController — terminal-state guard (spec §3.4)", () => {
 
   it("allows goal_removed even when terminal — idempotent defensive removal is spec-permitted", async () => {
     const ev = makeEventStub();
-    const goals = createGoalsController({
+    const goals = createGoalsEmitter({
       motebitId: "mb-1",
       events: ev.stub,
       getGoalStatus: () => "completed",
@@ -139,7 +139,7 @@ describe("createGoalsController — terminal-state guard (spec §3.4)", () => {
 
   it("emits normally when no status resolver is configured (trust-the-caller mode)", async () => {
     const ev = makeEventStub();
-    const goals = createGoalsController({ motebitId: "mb-1", events: ev.stub });
+    const goals = createGoalsEmitter({ motebitId: "mb-1", events: ev.stub });
 
     await goals.executed({ goal_id: "g-1" });
     await goals.completed({ goal_id: "g-1" });
@@ -149,7 +149,7 @@ describe("createGoalsController — terminal-state guard (spec §3.4)", () => {
 
   it("emits normally when the goal is active", async () => {
     const ev = makeEventStub();
-    const goals = createGoalsController({
+    const goals = createGoalsEmitter({
       motebitId: "mb-1",
       events: ev.stub,
       getGoalStatus: () => "active",
@@ -163,10 +163,10 @@ describe("createGoalsController — terminal-state guard (spec §3.4)", () => {
   });
 });
 
-describe("createGoalsController — failure tolerance", () => {
+describe("createGoalsEmitter — failure tolerance", () => {
   it("logs a warning and swallows event store errors so callers don't crash on log write failures", async () => {
     const warnings: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
-    const goals = createGoalsController({
+    const goals = createGoalsEmitter({
       motebitId: "mb-1",
       events: {
         async append() {},

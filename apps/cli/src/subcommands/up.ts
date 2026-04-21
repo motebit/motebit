@@ -21,7 +21,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { EventStore } from "@motebit/event-log";
-import { createGoalsController } from "@motebit/runtime";
+import { createGoalsEmitter } from "@motebit/runtime";
 import type { Goal } from "@motebit/persistence";
 import { openMotebitDatabase } from "@motebit/persistence";
 
@@ -151,7 +151,7 @@ export async function applyMotebitYaml(opts: ApplyOptions): Promise<ApplyResult>
     // Goal-level changes — route through the shared primitive so yaml-
     // driven emission matches `motebit goal add` / `goal remove` in
     // shape. Spec/goal-lifecycle-v1.md §5.1 §5.5.
-    const goals = createGoalsController({
+    const goals = createGoalsEmitter({
       motebitId: opts.motebitId,
       events: new EventStore(moteDb.eventStore),
     });

@@ -91,7 +91,7 @@ import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { PlanExecutionManager } from "./plan-execution.js";
-import { createGoalsController, type GoalsController, type GoalLifecycleStatus } from "./goals.js";
+import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
 import { createIdleTickController, type IdleTickController } from "./idle-tick.js";
 import { formMemoriesFromCandidates } from "@motebit/memory-graph";
@@ -259,8 +259,8 @@ export {
   buildPrecisionContext,
 } from "./gradient.js";
 export { AgentGraphManager } from "./agent-graph.js";
-export { createGoalsController } from "./goals.js";
-export type { GoalsController, GoalsControllerDeps, GoalLifecycleStatus } from "./goals.js";
+export { createGoalsEmitter } from "./goals.js";
+export type { GoalsEmitter, GoalsEmitterDeps, GoalLifecycleStatus } from "./goals.js";
 export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";
 
@@ -713,7 +713,7 @@ export class MotebitRuntime {
    * (CLI, desktop, mobile, web) call `runtime.goals.*` instead of
    * constructing payloads inline. See `packages/runtime/src/goals.ts`.
    */
-  readonly goals: GoalsController;
+  readonly goals: GoalsEmitter;
   private _goalStatusResolver: ((goalId: string) => GoalLifecycleStatus) | null = null;
   /**
    * Background memory-formation queue. Populated only when
@@ -910,7 +910,7 @@ export class MotebitRuntime {
 
     // Data stores
     this.events = new EventStore(adapters.storage.eventStore);
-    this.goals = createGoalsController({
+    this.goals = createGoalsEmitter({
       motebitId: this.motebitId,
       events: this.events,
       getGoalStatus: (goalId) => this._goalStatusResolver?.(goalId) ?? null,
