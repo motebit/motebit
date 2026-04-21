@@ -141,19 +141,18 @@ export class SlabManager {
   private readonly planeMesh: THREE.Mesh;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
   /**
-   * One CSS2DObject anchored at the plane's center, holding a flex-
-   * column container whose children are the individual slab items.
-   *
-   * The previous design placed each item in its own CSS2DObject at a
-   * computed 3D slot position — which meant variable-height cards
-   * overlapped because 3D anchors don't know about CSS layout. The
-   * workstation frame (motebit-computer.md §"Three end states") needs
-   * items to pile up cleanly as research accumulates, so now a single
-   * container handles the flow via standard CSS, and items are plain
-   * DOM children that gap, wrap, and scroll natively.
+   * One CSS2DObject anchored at the plane's center, holding a single
+   * "stage" div — the plane renders ONE primary embodiment at a time
+   * (doctrine: motebit-computer.md §"Embodiment modes"). No flex
+   * stacking, no cards-on-glass. The stage's child is whatever the
+   * motebit is currently working on (a browser page, a terminal, an
+   * IDE); when work finishes it either dissolves off the plane or
+   * pinches off into the scene as an artifact — it never rests as a
+   * rectangle *on* the plane. Cards only exist outside the plane's
+   * bounds, as graduated scene objects.
    */
-  private readonly itemsContainer: CSS2DObject;
-  private readonly itemsContainerEl: HTMLDivElement;
+  private readonly stageAnchor: CSS2DObject;
+  private readonly stageEl: HTMLDivElement;
   private readonly css2dRenderer: CSS2DRenderer;
   private readonly items = new Map<string, ManagedSlabItem>();
   private readonly detachHandler: DetachArtifactHandler | null;
@@ -279,10 +278,10 @@ export class SlabManager {
     // stand-in with the same API shape. The stand-in satisfies the
     // test's item-tracking assertions without needing a real DOM; a
     // real surface will always have `document`.
-    this.itemsContainerEl = createContainerElement();
-    this.itemsContainer = new CSS2DObject(this.itemsContainerEl);
-    this.itemsContainer.position.set(0, 0, 0.001);
-    this.group.add(this.itemsContainer);
+    this.stageEl = createContainerElement();
+    this.stageAnchor = new CSS2DObject(this.stageEl);
+    this.stageAnchor.position.set(0, 0, 0.001);
+    this.group.add(this.stageAnchor);
 
     // Reuse a CSS2DRenderer pattern for mounting HTML items on the slab
     // surface. The artifact manager already creates one; we add our own
@@ -329,10 +328,10 @@ export class SlabManager {
    */
   setUserVisible(visible: boolean): void {
     this.userVisible = visible;
-    // Reflect on the items container too so its DOM node doesn't
-    // continue capturing pointer events while the plane is gone.
-    if (this.itemsContainerEl.style) {
-      this.itemsContainerEl.style.display = visible ? "flex" : "none";
+    // Reflect on the stage too so its DOM node doesn't continue
+    // capturing pointer events while the plane is gone.
+    if (this.stageEl.style) {
+      this.stageEl.style.display = visible ? "block" : "none";
     }
     // When turning back on, pre-warm the visibility to the idle
     // baseline so the user sees the screen immediately without
@@ -348,21 +347,40 @@ export class SlabManager {
   // ── Public API — mirrors the RenderAdapter slab methods ───────────
 
   addItem(spec: SlabItemSpec): SlabItemHandle {
-    // Append the caller's element as a DOM child of the items
-    // container. CSS flex-column handles the stacking — no per-item
-    // 3D position, no slot math, no reflow pass. Cards gap naturally
-    // and the container scrolls when the stack overflows. Doctrine:
-    // motebit-computer.md §"Three end states" — a workstation holds
-    // working material as it accumulates.
+    // Single-stage model (motebit-computer.md §"Embodiment modes"):
+    // the plane renders ONE primary embodiment at a time. The stage
+    // element hosts whichever item is currently the motebit's active
+    // work; adding a new item REPLACES whatever was there. This
+    // mirrors a real computer's screen — one app in focus, others
+    // minimized / elsewhere.
+    //
+    // Items that belong in the creature/chat rather than the plane
+    // (mind-mode: stream tokens, embeddings, plan steps, memory
+    // surfacing) render as hidden placeholders — the bridge still
+    // tracks them for state, but they don't occupy the screen.
     spec.element.style.pointerEvents = "auto";
     spec.element.style.transform = "scale(0)";
     spec.element.style.transformOrigin = "center center";
     spec.element.style.opacity = "0";
-    // `flex: 0 0 auto` prevents the flex container from shrinking or
-    // stretching individual items. Each card keeps its intrinsic
-    // height as defined by its content + padding.
-    spec.element.style.flex = "0 0 auto";
-    this.itemsContainerEl.appendChild(spec.element);
+
+    // If the caller flagged this element as slab-hidden (mind-mode
+    // items), mount it off-DOM so it has no visible presence. Phase
+    // animations still run against it so the handle's lifecycle
+    // contract holds; it's just never rendered to the plane.
+    // `.dataset` may be absent in headless tests — read defensively.
+    const slabHidden =
+      (spec.element as { dataset?: Record<string, string> }).dataset?.slabHidden === "true";
+    if (!slabHidden) {
+      // Replace the current stage content with this new element.
+      // Previous primary exits via its own phase physics (its
+      // dissolve/pinch animation completes even though it's no
+      // longer visible, resolving any pending promises cleanly).
+      if (typeof this.stageEl.replaceChildren === "function") {
+        this.stageEl.replaceChildren(spec.element);
+      } else {
+        this.stageEl.appendChild(spec.element);
+      }
+    }
 
     const managed: ManagedSlabItem = {
       id: spec.id,
@@ -679,10 +697,11 @@ export class SlabManager {
   private removeImmediate(id: string): void {
     const item = this.items.get(id);
     if (!item) return;
-    // Remove the element from the container. CSS flex will reflow
-    // the remaining items automatically — no manual layout pass.
-    if (item.element.parentNode === this.itemsContainerEl) {
-      this.itemsContainerEl.removeChild(item.element);
+    // Remove the element from the stage if it was the primary. Items
+    // that were mind-mode (slab-hidden) never mounted; no DOM cleanup
+    // needed for those.
+    if (item.element.parentNode === this.stageEl) {
+      this.stageEl.removeChild(item.element);
     }
     item.phaseListeners.clear();
     this.items.delete(id);
@@ -783,7 +802,7 @@ export class SlabManager {
    */
   private pinchCenterForElement(el: HTMLElement): [number, number] {
     if (typeof el.getBoundingClientRect !== "function") return [0, 0];
-    const containerEl = this.itemsContainerEl;
+    const containerEl = this.stageEl;
     if (typeof containerEl.getBoundingClientRect !== "function") return [0, 0];
     const elRect = el.getBoundingClientRect();
     const contRect = containerEl.getBoundingClientRect();
@@ -817,7 +836,7 @@ function createContainerElement(): HTMLDivElement {
   if (typeof document === "undefined") {
     const children: HTMLElement[] = [];
     const stub = {
-      className: "slab-items-container",
+      className: "slab-stage",
       style: new Proxy(
         {},
         {
@@ -836,6 +855,16 @@ function createContainerElement(): HTMLDivElement {
         (child as unknown as { parentNode: unknown }).parentNode = null;
         return child;
       },
+      replaceChildren: (...newChildren: HTMLElement[]) => {
+        for (const c of children) {
+          (c as unknown as { parentNode: unknown }).parentNode = null;
+        }
+        children.length = 0;
+        for (const c of newChildren) {
+          children.push(c);
+          (c as unknown as { parentNode: unknown }).parentNode = stub;
+        }
+      },
       getBoundingClientRect: () => ({
         x: 0,
         y: 0,
@@ -850,30 +879,20 @@ function createContainerElement(): HTMLDivElement {
     return stub as unknown as HTMLDivElement;
   }
   const el = document.createElement("div");
-  el.className = "slab-items-container";
-  el.style.display = "flex";
-  el.style.flexDirection = "column";
-  el.style.alignItems = "stretch";
-  el.style.gap = "8px";
-  el.style.padding = "14px";
+  el.className = "slab-stage";
+  // Single-stage — one primary embodiment at a time fills the plane.
+  // Sized to fit within the 0.54 × 0.34m plane's on-screen projection
+  // at the default camera (~670×410 CSS px on a 900px canvas); kept
+  // slightly smaller so content has visible breathing room around
+  // the plane's meniscus. Dimensions chosen conservatively so the
+  // stage doesn't overflow on narrower viewports.
+  el.style.width = "480px";
+  el.style.height = "300px";
   el.style.boxSizing = "border-box";
-  // The plane is visible real estate; the container fills it. Sized
-  // for the 0.36 m × 0.22 m plane at the default camera, aspect-
-  // matched so the display looks like a screen, not a HUD. Cards
-  // stretch to the container's full width — they're window panes,
-  // not chiplets, so the motebit's work reads as "this is what it's
-  // doing now," not "these are log chips."
-  el.style.width = "520px";
-  el.style.maxHeight = "320px";
-  el.style.overflowY = "auto";
-  el.style.overflowX = "hidden";
-  // Scroll is a first-party affordance — droplet-physics-native,
-  // not conventional chrome. Thin scrollbar so it reads as a
-  // hairline meniscus dip, not an OS widget.
-  el.style.setProperty("scrollbar-width", "thin");
-  el.style.setProperty("scrollbar-color", "rgba(120,140,180,0.35) transparent");
-  // Container itself accepts pointer events (scroll capture + pass-
-  // through to items). Items already set their own pointerEvents:auto.
+  el.style.display = "block";
+  el.style.overflow = "hidden";
+  // Stage accepts pointer events so its primary child can be
+  // interacted with (iframe navigation, text selection, etc.).
   el.style.pointerEvents = "auto";
   return el;
 }

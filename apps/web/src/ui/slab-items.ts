@@ -169,18 +169,21 @@ function baseCard(): HTMLDivElement {
     "0 1px 0 rgba(255,255,255,0.72) inset",
     // Bottom inset — a thin darker line reading as the droplet's base.
     "0 -1px 0 rgba(25,35,60,0.06) inset",
-    // External cast — lifts the card off the slab's glass surface
-    // (doctrine: "cards feel lifted, not painted").
-    "0 2px 10px rgba(20,30,60,0.14)",
+    // Subtle cast — the primary embodiment sits ON the plane, not
+    // levitating off it. Lighter shadow than when cards stacked.
+    "0 1px 4px rgba(20,30,60,0.08)",
   ].join(", ");
-  // Cards are window-sized — full container width — so each one reads
-  // as a first-class viewport for the motebit's current activity, not
-  // a chiplet floating on the glass. The plane is the display; these
-  // are the windows on it.
+  // Primary embodiment fills the stage entirely — it IS the screen's
+  // current view. Width/height 100% inherits from the stage's fixed
+  // 480×300 footprint; cards aren't stacked anymore so there's no
+  // flex child sizing to accommodate.
   el.style.width = "100%";
+  el.style.height = "100%";
   el.style.boxSizing = "border-box";
   el.style.overflow = "hidden";
   el.style.wordBreak = "break-word";
+  el.style.display = "flex";
+  el.style.flexDirection = "column";
   return el;
 }
 
@@ -555,7 +558,9 @@ function renderFetch(item: SlabItem, actions: SlabItemActions): HTMLElement {
   frame.setAttribute("referrerpolicy", "no-referrer");
   frame.style.border = "none";
   frame.style.width = "100%";
-  frame.style.height = "280px";
+  // Fill whatever vertical space the card has after the chrome.
+  frame.style.flex = "1 1 auto";
+  frame.style.minHeight = "0";
   frame.style.display = "block";
   frame.style.background = "transparent";
   frame.style.colorScheme = "light";
@@ -1583,6 +1588,19 @@ function renderGeneric(item: SlabItem): HTMLElement {
  * Caller (slab-bridge) mounts the returned element on the slab.
  */
 export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLElement {
+  // Mind-mode items (stream tokens, memory surfacing, plan steps,
+  // embeddings) don't render on the plane — they live in chat and
+  // in the creature's own animations. The plane is for external
+  // embodiments (virtual_browser, desktop_drive, shared_gaze,
+  // peer_viewport) and their returned tool_results. Doctrine:
+  // motebit-computer.md §"Embodiment modes."
+  if (item.mode === "mind") {
+    const hidden = document.createElement("div");
+    hidden.className = "slab-item-mind-hidden";
+    hidden.dataset.slabHidden = "true";
+    hidden.style.display = "none";
+    return hidden;
+  }
   const card = buildCardForKind(item, actions);
   if (card instanceof HTMLDivElement) {
     attachHoverClose(card, actions);
