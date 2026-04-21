@@ -151,15 +151,23 @@ function updateStream(item: SlabItem, element: HTMLElement): void {
   }
 }
 
+// Tool names whose cards render as a `fetch` — the motebit is reading
+// a page, and the slab shows the page being read. Doctrine: the slab
+// renders perception, not a label describing the act.
+const FETCH_TOOLS: ReadonlySet<string> = new Set(["read_url", "fetch_url"]);
+
 function renderToolCall(item: SlabItem): HTMLElement {
-  const card = baseCard();
-  card.classList.add("slab-item-tool-call");
   const payload = item.payload as {
     name?: string;
     status?: string;
     context?: string;
     result?: unknown;
   } | null;
+  if (payload?.name != null && FETCH_TOOLS.has(payload.name)) {
+    return renderFetch(item);
+  }
+  const card = baseCard();
+  card.classList.add("slab-item-tool-call");
   card.appendChild(headRow("◇", payload?.name ?? "tool"));
   const status = textRow();
   status.style.fontSize = "11.5px";
@@ -171,14 +179,18 @@ function renderToolCall(item: SlabItem): HTMLElement {
 }
 
 function updateToolCall(item: SlabItem, element: HTMLElement): void {
+  const payload = item.payload as {
+    name?: string;
+    status?: string;
+    context?: string;
+    result?: unknown;
+  } | null;
+  if (payload?.name != null && FETCH_TOOLS.has(payload.name)) {
+    updateFetch(item, element);
+    return;
+  }
   const status = element.querySelector('[data-slot="status"]');
   if (status instanceof HTMLElement) {
-    const payload = item.payload as {
-      name?: string;
-      status?: string;
-      context?: string;
-      result?: unknown;
-    } | null;
     status.textContent = formatToolStatus(payload);
   }
 }
@@ -198,6 +210,130 @@ function formatToolStatus(
     return resultText.length > 100 ? resultText.slice(0, 97) + "…" : resultText;
   }
   return "done";
+}
+
+// ── Fetch — the motebit's eye on a page ───────────────────────────────
+//
+// The first kind rendered as perception rather than status. The card
+// shows the host/path the motebit is looking at, and the page text
+// fades in as the motebit reads it. No "calling…" string; the empty
+// body IS the "not yet seen" state. When the fetch completes, the
+// first ~240 characters of the cleaned page appear — that's what the
+// motebit perceived at the moment of reading.
+
+function renderFetch(item: SlabItem): HTMLElement {
+  const card = baseCard();
+  card.classList.add("slab-item-fetch");
+  card.style.maxWidth = "240px";
+
+  const head = document.createElement("div");
+  head.style.marginBottom = "6px";
+  head.style.minWidth = "0";
+
+  const hostEl = document.createElement("div");
+  hostEl.dataset.slot = "host";
+  hostEl.style.fontSize = "9.5px";
+  hostEl.style.fontWeight = "600";
+  hostEl.style.letterSpacing = "0.08em";
+  hostEl.style.textTransform = "uppercase";
+  hostEl.style.color = "rgba(55, 72, 110, 0.82)";
+  head.appendChild(hostEl);
+
+  const pathEl = document.createElement("div");
+  pathEl.dataset.slot = "path";
+  pathEl.style.fontFamily = "'SF Mono', Menlo, Consolas, monospace";
+  pathEl.style.fontSize = "10.5px";
+  pathEl.style.color = "rgba(80, 110, 165, 0.92)";
+  pathEl.style.whiteSpace = "nowrap";
+  pathEl.style.overflow = "hidden";
+  pathEl.style.textOverflow = "ellipsis";
+  head.appendChild(pathEl);
+
+  card.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "slab-item-text";
+  body.dataset.slot = "body";
+  body.style.fontSize = "11.5px";
+  body.style.lineHeight = "1.5";
+  body.style.color = "rgba(18, 28, 50, 0.9)";
+  body.style.whiteSpace = "pre-wrap";
+  body.style.wordBreak = "break-word";
+  body.style.maxHeight = "84px";
+  body.style.overflow = "hidden";
+  // Soft fade at bottom so truncation reads as a vignette, not a cut.
+  body.style.maskImage = "linear-gradient(180deg, black 72%, transparent 100%)";
+  body.style.setProperty(
+    "-webkit-mask-image",
+    "linear-gradient(180deg, black 72%, transparent 100%)",
+  );
+  card.appendChild(body);
+
+  applyFetchPayload(item.payload, hostEl, pathEl, body);
+  return card;
+}
+
+function updateFetch(item: SlabItem, element: HTMLElement): void {
+  const hostEl = element.querySelector('[data-slot="host"]');
+  const pathEl = element.querySelector('[data-slot="path"]');
+  const body = element.querySelector('[data-slot="body"]');
+  if (
+    hostEl instanceof HTMLElement &&
+    pathEl instanceof HTMLElement &&
+    body instanceof HTMLElement
+  ) {
+    applyFetchPayload(item.payload, hostEl, pathEl, body);
+  }
+}
+
+function applyFetchPayload(
+  payload: unknown,
+  hostEl: HTMLElement,
+  pathEl: HTMLElement,
+  body: HTMLElement,
+): void {
+  const p = payload as { context?: string; status?: string; result?: unknown } | null;
+  const raw = p?.context ?? "";
+  const parsed = parseUrl(raw);
+  hostEl.textContent = parsed.host || (p?.status === "calling" ? "reading" : "");
+  pathEl.textContent = parsed.path || (parsed.host ? "/" : raw);
+  body.textContent = extractFetchPreview(p);
+}
+
+function parseUrl(raw: string): { host: string; path: string } {
+  if (!raw) return { host: "", path: "" };
+  try {
+    const u = new URL(raw);
+    const host = u.host.replace(/^www\./, "");
+    const path = u.pathname + u.search;
+    return { host, path: path === "" ? "/" : path };
+  } catch {
+    return { host: "", path: raw };
+  }
+}
+
+function extractFetchPreview(payload: { status?: string; result?: unknown } | null): string {
+  // While the fetch is in flight, the body is honestly empty — no
+  // "calling…" string. The motebit has not perceived anything yet.
+  if (payload == null || payload.status === "calling") return "";
+  const r = payload.result;
+  if (r == null) return "";
+  let text: string;
+  if (typeof r === "string") {
+    text = r;
+  } else if (typeof r === "object") {
+    const data = (r as { data?: unknown; error?: unknown }).data;
+    const error = (r as { data?: unknown; error?: unknown }).error;
+    if (typeof data === "string") text = data;
+    else if (typeof error === "string") text = error;
+    else text = JSON.stringify(r);
+  } else {
+    text = String(r);
+  }
+  // Collapse runs of whitespace so the preview reads as flowing prose
+  // rather than reflowed HTML whitespace.
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  return cleaned.length > 240 ? cleaned.slice(0, 237) + "…" : cleaned;
 }
 
 function renderPlanStep(item: SlabItem): HTMLElement {
