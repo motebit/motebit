@@ -94,7 +94,11 @@ import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
-import { createSlabController, type SlabController } from "./slab-controller.js";
+import {
+  createSlabController,
+  type SlabController,
+  type SlabItemOutcome,
+} from "./slab-controller.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
 import { createIdleTickController, type IdleTickController } from "./idle-tick.js";
 import { formMemoriesFromCandidates } from "@motebit/memory-graph";
@@ -1090,6 +1094,16 @@ export class MotebitRuntime {
     // `packages/ai-core/src/core.ts#withStageTimeout`.
     const turnStartedAt = Date.now();
 
+    // Slab item — one `stream` per turn. Opens on turn start, updates
+    // with accumulated text on each `type: "text"` chunk so renderers
+    // see the stream materialize live on the slab surface, ends in the
+    // finally block so interrupt / throw / normal-completion all close
+    // the item. See docs/doctrine/motebit-computer.md.
+    const slabTurnId = `slab-turn-${runId ?? crypto.randomUUID()}`;
+    this.slab.openItem({ id: slabTurnId, kind: "stream", payload: { text: "", runId } });
+    let slabAccumulatedText = "";
+    let slabOutcome: SlabItemOutcome = { kind: "completed" };
+
     try {
       const trimmed = this.conversation.trimmed();
       const { knownAgents, agentCapabilities } = await withStageTimeout(
@@ -1124,12 +1138,27 @@ export class MotebitRuntime {
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
-      yield* this.streaming.processStream(this._catchDeferredFormationChunks(stream), text, runId);
+      const processed = this.streaming.processStream(
+        this._catchDeferredFormationChunks(stream),
+        text,
+        runId,
+      );
+      for await (const chunk of processed) {
+        if (chunk.type === "text") {
+          slabAccumulatedText += chunk.text;
+          this.slab.updateItem(slabTurnId, { text: slabAccumulatedText, runId });
+        }
+        yield chunk;
+      }
       // First-conversation guidance fades after a few exchanges
       if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
         this._isFirstConversation = false;
       }
     } catch (err: unknown) {
+      slabOutcome = {
+        kind: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      };
       // Telemetry only — rethrow preserves the UI error path (chat.ts
       // maps labeled errors to user-visible system messages).
       const stage = err instanceof StageTimeoutError ? err.stage : "unknown";
@@ -1145,6 +1174,10 @@ export class MotebitRuntime {
       });
       throw err;
     } finally {
+      // End the slab stream item. Default detach policy dissolves on
+      // `completed` without detachAs; surfaces that want the completed
+      // stream to graduate to a text artifact inject their own policy.
+      this.slab.endItem(slabTurnId, slabOutcome);
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
@@ -1172,6 +1205,17 @@ export class MotebitRuntime {
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 
+    // Same slab wiring as sendMessageStreaming — activation turns are
+    // still user-observable streams, just system-initiated.
+    const slabTurnId = `slab-activation-${runId ?? crypto.randomUUID()}`;
+    this.slab.openItem({
+      id: slabTurnId,
+      kind: "stream",
+      payload: { text: "", runId, activationOnly: true },
+    });
+    let slabAccumulatedText = "";
+    let slabOutcome: SlabItemOutcome = { kind: "completed" };
+
     try {
       const stream = runTurnStreaming(this.loopDeps, "", {
         conversationHistory: [],
@@ -1180,8 +1224,26 @@ export class MotebitRuntime {
         firstConversation: true,
         activationPrompt,
       });
-      yield* this.streaming.processStream(stream, "", runId, { activationOnly: true });
+      const processed = this.streaming.processStream(stream, "", runId, { activationOnly: true });
+      for await (const chunk of processed) {
+        if (chunk.type === "text") {
+          slabAccumulatedText += chunk.text;
+          this.slab.updateItem(slabTurnId, {
+            text: slabAccumulatedText,
+            runId,
+            activationOnly: true,
+          });
+        }
+        yield chunk;
+      }
+    } catch (err: unknown) {
+      slabOutcome = {
+        kind: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      };
+      throw err;
     } finally {
+      this.slab.endItem(slabTurnId, slabOutcome);
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;

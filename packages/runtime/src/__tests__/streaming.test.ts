@@ -437,6 +437,105 @@ describe("sendMessageStreaming", () => {
     await collectChunks(runtime.sendMessageStreaming("hello"));
     expect(runtime.hasPendingApproval).toBe(false);
   });
+
+  // === Slab wiring ===
+  //
+  // The runtime's SlabController should see one `stream` item per turn:
+  // opens on turn start, receives accumulated-text updates on each
+  // `type: "text"` chunk, ends when the turn finishes. See
+  // docs/doctrine/motebit-computer.md + slab-controller.ts.
+
+  it("opens a stream slab item on turn start", async () => {
+    const result = makeTurnResult("Hello");
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "Hello" }, { type: "result", result }),
+    );
+
+    const observed: string[] = [];
+    runtime.slab.subscribe((state) => {
+      for (const item of state.items.values()) {
+        if (item.kind === "stream") observed.push(item.phase);
+      }
+    });
+
+    await collectChunks(runtime.sendMessageStreaming("hi"));
+    // Phases seen across subscription fires: emerging, active, dissolving.
+    // (Detached phase not expected — default policy dissolves without
+    // detachAs.) Order-independent existence assertions.
+    expect(observed).toContain("emerging");
+    expect(observed).toContain("active");
+    expect(observed).toContain("dissolving");
+  });
+
+  it("accumulates streamed text on the slab item payload", async () => {
+    const result = makeTurnResult("Streamed response");
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "text", text: "Streamed " },
+        { type: "text", text: "response" },
+        { type: "result", result },
+      ),
+    );
+
+    const texts: string[] = [];
+    runtime.slab.subscribe((state) => {
+      for (const item of state.items.values()) {
+        if (item.kind === "stream" && item.phase === "active") {
+          const p = item.payload as { text?: string };
+          if (typeof p.text === "string") texts.push(p.text);
+        }
+      }
+    });
+
+    await collectChunks(runtime.sendMessageStreaming("hi"));
+    // The incremental accumulation is observable — initial empty, then
+    // first chunk, then full text.
+    expect(texts).toContain("Streamed ");
+    expect(texts).toContain("Streamed response");
+  });
+
+  it("ends the stream item with failed outcome on error", async () => {
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield { type: "text" as const, text: "partial" };
+        throw new Error("stream failed");
+      })(),
+    );
+
+    const phaseLog: string[] = [];
+    runtime.slab.subscribe((state) => {
+      for (const item of state.items.values()) {
+        if (item.kind === "stream") phaseLog.push(item.phase);
+      }
+    });
+
+    await expect(async () => {
+      await collectChunks(runtime.sendMessageStreaming("hi"));
+    }).rejects.toThrow("stream failed");
+
+    // Item ended via dissolution (failed outcomes dissolve by default).
+    expect(phaseLog).toContain("dissolving");
+  });
+
+  it("slab is active while streaming, returns to idle after", async () => {
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "x" }, { type: "result", result }),
+    );
+
+    expect(runtime.slab.getState().ambient).toBe("idle");
+
+    const ambients: string[] = [];
+    runtime.slab.subscribe((state) => ambients.push(state.ambient));
+
+    await collectChunks(runtime.sendMessageStreaming("hi"));
+    // Over the turn's lifetime: transitioned to active, back to idle
+    // after the dissolve tail (300ms).
+    expect(ambients).toContain("active");
+    // Wait for the dissolve tail to fire so the item is dropped.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(runtime.slab.getState().ambient).toBe("idle");
+  });
 });
 
 // === processStream: state extraction and side effects ===

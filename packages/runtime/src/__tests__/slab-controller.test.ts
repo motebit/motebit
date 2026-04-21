@@ -88,23 +88,36 @@ describe("SlabController — initial state", () => {
 });
 
 describe("SlabController — item lifecycle", () => {
-  it("openItem emits emerging → active in order", () => {
-    const { ctrl, states, sched } = makeController();
+  it("openItem emits emerging; first update promotes to active", () => {
+    const { ctrl, states } = makeController();
     ctrl.openItem({ id: "s1", kind: "stream", payload: { tokens: "" } });
-    // Emerging phase should be observable before the scheduled transition runs
+    // Emerging phase is observable on the open notify
     const emergingState = states.find((s) => s.items.get("s1")?.phase === "emerging");
     expect(emergingState).toBeDefined();
-    // Advance past the emerging tail
-    sched.advance(1);
+    // Update promotes to active synchronously
+    ctrl.updateItem("s1", { tokens: "h" });
     const activeState = states[states.length - 1]!;
     expect(activeState.items.get("s1")?.phase).toBe("active");
     expect(activeState.ambient).toBe("active");
   });
 
-  it("updateItem changes payload in place, no phase change", () => {
-    const { ctrl, sched } = makeController();
+  it("endItem promotes emerging → active → end even without intervening update", () => {
+    const { ctrl, states } = makeController();
+    ctrl.openItem({ id: "s1", kind: "stream" });
+    ctrl.endItem("s1", { kind: "interrupted" });
+    // Full sequence observable: emerging, active, dissolving — renderer
+    // arrival + departure animations chain cleanly even for brief items.
+    const phases = states
+      .map((s) => s.items.get("s1")?.phase)
+      .filter((p): p is string => typeof p === "string");
+    expect(phases).toContain("emerging");
+    expect(phases).toContain("active");
+    expect(phases).toContain("dissolving");
+  });
+
+  it("updateItem changes payload in place", () => {
+    const { ctrl } = makeController();
     ctrl.openItem({ id: "s1", kind: "stream", payload: { tokens: "hel" } });
-    sched.advance(1);
     ctrl.updateItem("s1", { tokens: "hello" });
     const state = ctrl.getState();
     expect(state.items.get("s1")?.phase).toBe("active");
@@ -114,7 +127,7 @@ describe("SlabController — item lifecycle", () => {
   it("dissolving path: interrupted stream → dissolving → gone", () => {
     const { ctrl, sched } = makeController();
     ctrl.openItem({ id: "s1", kind: "stream" });
-    sched.advance(1);
+    ctrl.updateItem("s1", { tokens: "partial" }); // promote to active
     ctrl.endItem("s1", { kind: "interrupted" });
     expect(ctrl.getState().items.get("s1")?.phase).toBe("dissolving");
     // After the dissolving tail (300ms), item is gone
@@ -125,7 +138,7 @@ describe("SlabController — item lifecycle", () => {
   it("detach path: completed with detachAs → pinching → detached → gone", () => {
     const { ctrl, states, sched } = makeController();
     ctrl.openItem({ id: "t1", kind: "tool_call" });
-    sched.advance(1);
+    ctrl.updateItem("t1", {}); // promote to active
     ctrl.endItem("t1", { kind: "completed", result: { code: "..." }, detachAs: "code" });
     expect(ctrl.getState().items.get("t1")?.phase).toBe("pinching");
     // After the 800ms detachment tail + 0ms cleanup, the item has passed
@@ -139,9 +152,9 @@ describe("SlabController — item lifecycle", () => {
   });
 
   it("payload during pinching carries the detach artifact kind for renderers", () => {
-    const { ctrl, sched } = makeController();
+    const { ctrl } = makeController();
     ctrl.openItem({ id: "t1", kind: "tool_call", payload: { tool: "bash" } });
-    sched.advance(1);
+    ctrl.updateItem("t1", { tool: "bash", progress: "running" });
     ctrl.endItem("t1", { kind: "completed", result: "out", detachAs: "text" });
     const pinching = ctrl.getState().items.get("t1");
     expect(pinching?.phase).toBe("pinching");
@@ -156,9 +169,8 @@ describe("SlabController — item lifecycle", () => {
 
 describe("SlabController — detachPolicy", () => {
   it("default policy dissolves unless detachAs is explicit", () => {
-    const { ctrl, sched } = makeController();
+    const { ctrl } = makeController();
     ctrl.openItem({ id: "t1", kind: "tool_call" });
-    sched.advance(1);
     ctrl.endItem("t1", { kind: "completed", result: "ephemeral" });
     // No detachAs → default policy dissolves
     expect(ctrl.getState().items.get("t1")?.phase).toBe("dissolving");
@@ -171,9 +183,8 @@ describe("SlabController — detachPolicy", () => {
       }
       return { action: "dissolve" };
     };
-    const { ctrl, sched } = makeController({ detachPolicy: customPolicy });
+    const { ctrl } = makeController({ detachPolicy: customPolicy });
     ctrl.openItem({ id: "s1", kind: "stream" });
-    sched.advance(1);
     ctrl.endItem("s1", { kind: "completed", result: "final text" });
     // Custom policy detached without explicit detachAs
     expect(ctrl.getState().items.get("s1")?.phase).toBe("pinching");
@@ -183,9 +194,8 @@ describe("SlabController — detachPolicy", () => {
     // The default policy handles this correctly (only completed + detachAs
     // detaches). Asserting explicitly because the contract matters for
     // renderers: failures should not leave artifact droppings.
-    const { ctrl, sched } = makeController();
+    const { ctrl } = makeController();
     ctrl.openItem({ id: "t1", kind: "tool_call" });
-    sched.advance(1);
     ctrl.endItem("t1", { kind: "failed", error: "rpc error" });
     expect(ctrl.getState().items.get("t1")?.phase).toBe("dissolving");
   });
@@ -196,7 +206,6 @@ describe("SlabController — ambient state", () => {
     const { ctrl, sched } = makeController({ recessionDelayMs: 5_000 });
     expect(ctrl.getState().ambient).toBe("idle");
     ctrl.openItem({ id: "s1", kind: "stream" });
-    sched.advance(1);
     expect(ctrl.getState().ambient).toBe("active");
     ctrl.endItem("s1", { kind: "interrupted" });
     sched.advance(300); // past dissolving tail
@@ -209,14 +218,12 @@ describe("SlabController — ambient state", () => {
   it("a new item during idle-before-recession returns to active and cancels recession", () => {
     const { ctrl, sched } = makeController({ recessionDelayMs: 5_000 });
     ctrl.openItem({ id: "s1", kind: "stream" });
-    sched.advance(1);
     ctrl.endItem("s1", { kind: "interrupted" });
     sched.advance(300);
     // Mid-idle, before the recession timer fires, open another item
     sched.advance(2_000);
     expect(ctrl.getState().ambient).toBe("idle"); // not yet recessed
     ctrl.openItem({ id: "s2", kind: "stream" });
-    sched.advance(1);
     expect(ctrl.getState().ambient).toBe("active");
     // Recession timer should have been cancelled — advancing past where
     // it would've fired still shows active (s2 is live).
@@ -228,9 +235,8 @@ describe("SlabController — ambient state", () => {
 describe("SlabController — defensive behavior", () => {
   it("openItem with duplicate id warns and is a no-op", () => {
     const warn = vi.fn();
-    const { ctrl, sched } = makeController({ logger: { warn } });
+    const { ctrl } = makeController({ logger: { warn } });
     ctrl.openItem({ id: "s1", kind: "stream", payload: { tokens: "a" } });
-    sched.advance(1);
     ctrl.openItem({ id: "s1", kind: "stream", payload: { tokens: "b" } });
     expect(warn).toHaveBeenCalledWith(
       "slab openItem ignored — item id already present",
@@ -254,7 +260,6 @@ describe("SlabController — defensive behavior", () => {
     const warn = vi.fn();
     const { ctrl, sched } = makeController({ logger: { warn } });
     ctrl.openItem({ id: "s1", kind: "stream" });
-    sched.advance(1);
     ctrl.endItem("s1", { kind: "interrupted" });
     // Item is now dissolving
     ctrl.endItem("s1", { kind: "interrupted" });
@@ -265,10 +270,9 @@ describe("SlabController — defensive behavior", () => {
   });
 
   it("clearAll drops every item immediately and resets ambient to idle", () => {
-    const { ctrl, sched } = makeController();
+    const { ctrl } = makeController();
     ctrl.openItem({ id: "s1", kind: "stream" });
     ctrl.openItem({ id: "t1", kind: "tool_call" });
-    sched.advance(1);
     expect(ctrl.getState().items.size).toBe(2);
     ctrl.clearAll();
     const state = ctrl.getState();

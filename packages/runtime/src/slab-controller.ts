@@ -244,11 +244,11 @@ const DISSOLVING_TAIL_MS = 300;
 const DETACHED_TAIL_MS = 800;
 
 /**
- * The `emerging → active` transition is async-immediate. We use 0ms so
- * renderers receive both states within a microtask, but distinctly — the
- * emerging phase is the animation-in signal, active is the steady state.
+ * The `detached → gone` tail is zero — once the item has detached, it's
+ * released from the slab's state immediately on the next notify. The
+ * artifact lives on as its own scene object; the slab holds no reference.
  */
-const EMERGING_TAIL_MS = 0;
+const POST_DETACHED_TAIL_MS = 0;
 
 // ── Implementation ───────────────────────────────────────────────────
 
@@ -394,10 +394,25 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
         items.delete(id);
         recomputeAmbient();
         notify();
-      }, EMERGING_TAIL_MS);
+      }, POST_DETACHED_TAIL_MS);
       pendingTimers.set(id, toGone);
     }, DETACHED_TAIL_MS);
     pendingTimers.set(id, toDetached);
+  };
+
+  /**
+   * Promote `emerging → active` synchronously if the item is still in
+   * the emerging phase when an update / end arrives. The emerging
+   * phase is the "item is being born" state — renderers observe it on
+   * the first notify and animate the arrival. Once a real event
+   * follows (update with new payload, or end), the item is by
+   * definition active, so we flip the phase before the caller's
+   * change applies.
+   */
+  const promoteFromEmerging = (id: string): void => {
+    const current = items.get(id);
+    if (!current || current.phase !== "emerging") return;
+    updatePhase(id, "active");
   };
 
   // ── Public API ────────────────────────────────────────────────────
@@ -440,7 +455,12 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
       });
       recomputeAmbient();
       notify();
-      scheduleTail(id, "active", EMERGING_TAIL_MS);
+      // No timer-based `emerging → active` transition. The phase
+      // promotes synchronously on the first update or end call via
+      // `promoteFromEmerging`. Callers that open and never update
+      // (e.g., an instantaneous tool call that completes before any
+      // progress emits) still see the correct sequence via the end
+      // path's promotion.
     },
 
     updateItem(id: string, payload: unknown): void {
@@ -463,7 +483,9 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
         });
         return;
       }
-      updatePhase(id, current.phase, payload);
+      promoteFromEmerging(id);
+      const promoted = items.get(id)!;
+      updatePhase(id, promoted.phase, payload);
       notify();
     },
 
@@ -487,13 +509,23 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
         return;
       }
 
-      const decision = detachPolicy(current, outcome);
+      // Promote an emerging item to active with its own notify before
+      // transitioning onwards. Renderers rely on the full phase
+      // sequence (emerging → active → end) so arrival and departure
+      // animations chain cleanly even when the item lives briefly.
+      if (current.phase === "emerging") {
+        promoteFromEmerging(id);
+        notify();
+      }
+      const currentAfterPromote = items.get(id)!;
+
+      const decision = detachPolicy(currentAfterPromote, outcome);
       if (decision.action === "detach") {
         // pinching → detached → gone. The item carries the artifact kind
         // in its payload so the renderer's detach callback can spawn
         // the right artifact-scene-object when the bead separates.
         updatePhase(id, "pinching", {
-          ...(current.payload as Record<string, unknown> | undefined),
+          ...(currentAfterPromote.payload as Record<string, unknown> | undefined),
           __slabDetach: { artifactKind: decision.artifactKind, outcome },
         });
         recomputeAmbient();
@@ -508,7 +540,7 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
       }
 
       // dissolve path — outcome is ephemeral (or interrupted / failed).
-      updatePhase(id, "dissolving", current.payload);
+      updatePhase(id, "dissolving", currentAfterPromote.payload);
       recomputeAmbient();
       notify();
       scheduleTail(id, "gone", DISSOLVING_TAIL_MS);
