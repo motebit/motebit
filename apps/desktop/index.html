@@ -14,6 +14,41 @@
       })();
     </script>
     <style>
+      /* === Selection-leak defense ===
+       *
+       * Side panels (conversations, memory, goals, agents, sovereign) and the
+       * settings modal remain mounted in the DOM when closed — they slide off-
+       * screen via `transform: translateX(±100%)` or fade via `opacity: 0` so
+       * reopens animate cleanly. Neither technique removes the element from
+       * the browser's selection tree, which means drag-selecting a chat
+       * message picks up every closed panel's text content (credential DIDs,
+       * ledger entries, memories, goals, settings labels) and lands it on
+       * the clipboard. A user trying to share a reply would silently ship
+       * their entire sovereign state.
+       *
+       * Fix: closed panels are `user-select: none`. `.open` restores `text`.
+       * One rule, no JS, no animation impact. Sibling defense mirrors the
+       * web surface (apps/web/index.html).
+       */
+      #conversations-panel,
+      #memory-panel,
+      #goals-panel,
+      #agents-panel,
+      #sovereign-panel,
+      #settings-modal {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      #conversations-panel.open,
+      #memory-panel.open,
+      #goals-panel.open,
+      #agents-panel.open,
+      #sovereign-panel.open,
+      #settings-modal.open {
+        user-select: text;
+        -webkit-user-select: text;
+      }
+
       /* === Theme Variables === */
       :root {
         --bg-primary: rgba(255, 255, 255, 0.88);
