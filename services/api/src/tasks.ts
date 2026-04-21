@@ -66,6 +66,7 @@ import { persistReceiptChain } from "./receipts-store.js";
 import type { ConnectedDevice } from "./index.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
+import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import {
   RelayError,
   AuthenticationError,
@@ -2228,26 +2229,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       );
     }
 
-    const receipt = await c.req.json<ExecutionReceipt>();
-
-    // Structural validation: require essential receipt fields
-    const validStatuses = ["completed", "failed", "denied"];
-    if (
-      typeof receipt.task_id !== "string" ||
-      receipt.task_id === "" ||
-      typeof receipt.motebit_id !== "string" ||
-      receipt.motebit_id === "" ||
-      typeof receipt.signature !== "string" ||
-      receipt.signature === "" ||
-      typeof receipt.status !== "string" ||
-      !validStatuses.includes(receipt.status)
-    ) {
-      throw new TaskError(
-        "TASK_INVALID_INPUT",
-        "Invalid receipt: must include non-empty task_id, motebit_id, signature, and valid status",
-        400,
-      );
+    const rawBody: unknown = await c.req.json().catch(() => null);
+    const parsedReceipt = ExecutionReceiptSchema.safeParse(rawBody);
+    if (!parsedReceipt.success) {
+      return c.json({ error: parsedReceipt.error.flatten() }, 400);
     }
+    const receipt = parsedReceipt.data as unknown as ExecutionReceipt;
 
     // Reject stale receipts — completed_at must be within 1 hour of submitted_at
     if (receipt.completed_at && entry.task.submitted_at) {

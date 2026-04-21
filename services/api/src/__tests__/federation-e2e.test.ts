@@ -814,13 +814,30 @@ describe("Federation E2E", () => {
     });
 
     it("rejects task result from unknown peer", async () => {
+      const now = Date.now();
       const res = await relayA.app.request("/federation/v1/task/result", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task_id: crypto.randomUUID(),
           origin_relay: "unknown-relay",
-          receipt: { task_id: "test", status: "completed" },
+          // Wire-format-conforming ExecutionReceipt (ExecutionReceiptSchema);
+          // peer-auth must reject before relay trusts the body.
+          receipt: {
+            task_id: "test",
+            motebit_id: "unknown-agent",
+            device_id: "unknown-device",
+            submitted_at: now - 1000,
+            completed_at: now,
+            status: "completed",
+            result: "",
+            tools_used: [],
+            memories_formed: 0,
+            prompt_hash: "",
+            result_hash: "",
+            suite: "motebit-jcs-ed25519-b64-v1",
+            signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
+          },
           signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
         }),
       });

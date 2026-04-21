@@ -23,6 +23,11 @@ import type { RelayIdentity, FederationConfig } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { getCredentialAnchorProof } from "./credential-anchoring.js";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
+import {
+  MigrationTokenSchema,
+  DepartureAttestationSchema,
+  CredentialBundleSchema,
+} from "@motebit/wire-schemas";
 
 const logger = createLogger({ service: "relay", module: "migration" });
 
@@ -367,6 +372,22 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       motebit_id: string;
       public_key: string;
     }>();
+
+    // Validate the three nested wire artifacts (MigrationToken,
+    // DepartureAttestation, CredentialBundle) against their schemas
+    // before any downstream use. Fail-closed on shape drift.
+    const parsedToken = MigrationTokenSchema.safeParse(body.migration_token);
+    if (!parsedToken.success) {
+      return c.json({ error: parsedToken.error.flatten() }, 400);
+    }
+    const parsedAttestation = DepartureAttestationSchema.safeParse(body.departure_attestation);
+    if (!parsedAttestation.success) {
+      return c.json({ error: parsedAttestation.error.flatten() }, 400);
+    }
+    const parsedBundle = CredentialBundleSchema.safeParse(body.credential_bundle);
+    if (!parsedBundle.success) {
+      return c.json({ error: parsedBundle.error.flatten() }, 400);
+    }
 
     const { migration_token, departure_attestation, credential_bundle } = body;
 

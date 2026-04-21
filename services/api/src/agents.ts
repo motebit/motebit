@@ -24,6 +24,7 @@ import {
   bytesToHex,
 } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/encryption";
+import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
 import { createLogger } from "./logger.js";
@@ -227,7 +228,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   // POST /agent/:motebitId/verify-receipt — public receipt verification
   app.post("/agent/:motebitId/verify-receipt", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
-    const receipt = await c.req.json<ExecutionReceipt>();
+    const rawBody: unknown = await c.req.json().catch(() => null);
+    const parsed = ExecutionReceiptSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+    const receipt = parsed.data as unknown as ExecutionReceipt;
 
     if (receipt.motebit_id !== motebitId) {
       return c.json({ valid: false, reason: "motebit_id mismatch" });
