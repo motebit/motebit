@@ -61,10 +61,20 @@ What the motebit is _thinking_ right now. Internal reorganization made visible.
 **Not on the slab:**
 
 - **Records** (credentials, settled receipts, memory index, balance history). Those are panel content — what the motebit _has_, not what it is doing right now.
-- **Chat bubbles.** Second-person conversational moments. The slab is first-person experience.
-- **Third-person summaries of experience.** A card that says `fetch: calling…` is a log entry, not a perception. The slab renders what the motebit _sees_, not a label describing the fetch.
+- **Chat bubbles.** Second-person conversational moments. The slab is first-person experience. (Chat may carry a _minimal textual echo_ of an act — "reading example.com…" — for accessibility and Ring-1 fallback when the slab isn't visible. See "Rings-aware duplication" below.)
+- **Third-person summaries of experience rendered as the slab's main content.** A slab card whose entire content is `fetch: calling…` is a log entry, not a perception. The slab renders what the motebit _sees_, not a label describing the fetch.
 - **Constellations.** Those cluster above the slab when their domain is active, but they are their own scene object.
 - **UI chrome** (buttons, menus, inputs). If the user must click something, it's an affordance and lives on the creature or in a panel, not the slab.
+
+### Rings-aware duplication — when chat _may_ echo the slab
+
+The slab is a **Ring 3 capability** (3D creature / scene; requires WebGL, an on-screen creature, and a wide-enough viewport). Chat is **Ring 1** (identical everywhere; text always available). A rule that says "one surface per act" would sound clean but silently regresses accessibility whenever Ring 3 isn't available — screen-reader users, voice-first users, headless browsers, and narrow viewports would lose all signal that a tool ran.
+
+Rule of thumb:
+
+- **Rich experience** — the page rendering, the terminal scrolling, the memory node surfacing — lives on the slab. One rich rendering, in the perceptual modality the act belongs to.
+- **Minimal textual echo** — a one-line status, completed with a checkmark — may live in chat. Acceptable when it serves accessibility, voice, or Ring-3-unavailable surfaces. Kept intentionally thin so it doesn't compete with the slab for attention.
+- **Rich in both** is the failure mode. If chat also renders the fetched page's full content, or the terminal's full output, or the memory node's detail — the slab isn't canonical and the frames have collapsed into each other.
 
 ## Lifecycle
 
@@ -119,7 +129,7 @@ The idle state is not a bug. It is the proof that the slab respects silence — 
 ## Failure modes to avoid
 
 - **Third-person logging disguised as experience.** A card that says `fetch → status: calling` is a log line. The Motebit Computer renders _the page being fetched_, not the act of fetching described. If a card reads like a CloudWatch stream, the metaphor has collapsed. Status strings, event names, and log-shaped presentation don't belong on the slab.
-- **Duplicating chat.** The slab and the chat transcript must not both render the same act as text. The slab is canonical for acts (first-person perception/action/thought); chat owns the conversational wrapper (second-person turn). One surface per thing. If removing the slab's rendering of X leaves chat showing the same content, X is on the wrong surface.
+- **Rich-duplicating chat.** Chat and slab both rendering the _full_ content of an act — the whole fetched page in chat AND as a slab card, the complete terminal output in both — is the collapse. Chat may carry a one-line textual echo (accessibility + Ring-1 fallback); it must not replicate the slab's rich content. If the chat rendering grows beyond a one-liner, the frames have merged.
 - **Growing chrome.** The first "let's add a close button so users can dismiss it" turns the slab into a browser tab. Users dismiss the slab by the motebit going idle; that's the doctrine.
 - **Persistent items.** An item that stayed on the slab after work ended has either detached (artifact) or should have dissolved. Persistent-item-on-slab is the records-vs-acts boundary breaking.
 - **Uncoordinated emergence.** The slab's emergence and the first item's emergence fighting for the user's attention. Sequence: slab emerges, pauses briefly (~150ms), first item pops. Never concurrent.
@@ -140,19 +150,19 @@ One type surface, one event stream, three renderers — following the existing p
 
 ## Relationship to other scene primitives
 
-| Primitive     | Role                                | Relationship to slab                                                                                                                                                                                                                                                                       |
-| ------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Creature      | identity, mood, attention           | The source. Slab work originates from the creature's current activity. Slab tilts toward the creature; breathing is sympathetic.                                                                                                                                                           |
-| Chat bubble   | user ↔ motebit conversational turns | Parallel, different frames. Chat bubbles render the dialogue in second-person (you talking with the motebit); the slab renders the motebit's first-person experience of the work that dialogue triggered. Same turn, two surfaces, two frames — never both rendering the same act as text. |
-| Artifact      | durable, detached output            | Downstream. Artifacts are what graduate off the slab via the detachment pinch. Before artifact, it lived on the slab.                                                                                                                                                                      |
-| Constellation | cluster of related records          | Above. When the slab's active items touch a domain with an associated constellation (credentials during an auth tool call, agents during a delegation), the constellation materializes above the slab area for the duration of the activity.                                               |
-| Panel         | record surface, user-summoned       | Orthogonal. Panels hold what the motebit _has_; the slab shows what the motebit is _doing_. Never duplicate data between them.                                                                                                                                                             |
+| Primitive     | Role                                | Relationship to slab                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Creature      | identity, mood, attention           | The source. Slab work originates from the creature's current activity. Slab tilts toward the creature; breathing is sympathetic.                                                                                                                                                                                                                                                                |
+| Chat bubble   | user ↔ motebit conversational turns | Parallel, different frames. Chat bubbles render the dialogue in second-person (you talking with the motebit); the slab renders the motebit's first-person experience of the work that dialogue triggered. Chat may carry a _minimal textual echo_ of acts for a11y and Ring-1 fallback; rich rendering stays on the slab. Rich-duplication is the failure mode (see "Rings-aware duplication"). |
+| Artifact      | durable, detached output            | Downstream. Artifacts are what graduate off the slab via the detachment pinch. Before artifact, it lived on the slab.                                                                                                                                                                                                                                                                           |
+| Constellation | cluster of related records          | Above. When the slab's active items touch a domain with an associated constellation (credentials during an auth tool call, agents during a delegation), the constellation materializes above the slab area for the duration of the activity.                                                                                                                                                    |
+| Panel         | record surface, user-summoned       | Orthogonal. Panels hold what the motebit _has_; the slab shows what the motebit is _doing_. Never duplicate data between them.                                                                                                                                                                                                                                                                  |
 
 ## Doctrine check before any slab PR
 
 1. Is this a **first-person perception / action / thought**, or a third-person label about one? Status strings ("calling…"), event names ("fetch", "tool*call"), and log-shaped cards are labels. The slab renders what the motebit \_sees, does, and thinks*, in the modality that belongs to. If you're rendering a noun for an experience instead of the experience itself, you're on the wrong surface.
 2. Is the thing you're adding an **act** (on-slab) or a **record** (off-slab, in a panel)? If record, stop.
-3. Does **chat already render this** as text? If yes, one of the two is wrong — the slab is canonical for acts, chat for the conversational wrapper. Don't ship the same act twice.
+3. Does **chat already render this richly** as text? A one-line textual echo in chat ("reading example.com…") is acceptable as Ring-1 fallback; a full reproduction of the act's content in both places is the collapse. If chat renders more than a thin status, the frames have merged — trim chat back to a one-liner.
 4. Does it have a **durable output** that outlives the work? If yes, it must detach as an artifact — not persist on the slab.
 5. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? If yes, it's probably chrome or a record in disguise.
 6. Does its transition obey **droplet physics** — emergence as meniscus-expansion, dissolution as surface-ripple-absorption, detachment as bead-tension-release? If not, the metaphor is leaking.
