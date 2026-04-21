@@ -169,13 +169,14 @@ export class SlabManager {
   /** Cached ambient visibility of the plane — used to skip per-frame reruns. */
   private planeVisibility = 0;
   /**
-   * Whether the slab has ever hosted an active item. Before first
-   * activity the plane stays fully invisible — there's no emergence
-   * from nothing to show. Once an item has opened, the idle state
-   * becomes the meniscus-only baseline; recessed is the long-idle
-   * decay back toward invisible.
+   * Workstation default: the screen is on. `hasBeenActive` was a hold-
+   * over from the earlier doctrine where the plane emerged only with
+   * the first item; under the workstation frame the plane is a display
+   * that stays visible, and items appear on it. Kept as `true` so the
+   * idle visibility kicks in from the start; the user's Cmd+Shift+S /
+   * `/screen` toggle is now the only thing that can hide the plane.
    */
-  private hasBeenActive = false;
+  private hasBeenActive = true;
   /**
    * Current soul color. Doctrine mandates the slab's active tint
    * derives from the creature's interior color — "cyan creature → cyan
@@ -324,7 +325,9 @@ export class SlabManager {
    * Show / hide the slab plane on user request. Doesn't touch
    * controller state — items still open, update, and age inside; the
    * plane is just pulled out of view. Toggling back to visible
-   * restores the ambient-driven visibility immediately.
+   * restores the ambient-driven visibility immediately; if no items
+   * are active, the plane sits at its idle baseline (refraction +
+   * meniscus) rather than waiting for new work to reveal it.
    */
   setUserVisible(visible: boolean): void {
     this.userVisible = visible;
@@ -332,6 +335,15 @@ export class SlabManager {
     // continue capturing pointer events while the plane is gone.
     if (this.itemsContainerEl.style) {
       this.itemsContainerEl.style.display = visible ? "flex" : "none";
+    }
+    // When turning back on, pre-warm the visibility to at least the
+    // idle baseline so the user sees the screen immediately without
+    // waiting for the first next item. The next update() tick will
+    // pick the right target (active if items present, idle otherwise)
+    // and smooth toward it from here.
+    if (visible && this.planeVisibility < 0.2) {
+      this.planeVisibility = 0.32;
+      this.emptyTime = 0;
     }
   }
 

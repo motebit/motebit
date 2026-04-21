@@ -158,12 +158,43 @@ describe("SlabManager — item lifecycle", () => {
 });
 
 describe("SlabManager — plane visibility + ambient", () => {
-  it("plane stays invisible before any item is added", () => {
+  it("plane is visible at its idle baseline before any item is added", () => {
+    // Under the workstation frame the plane is an always-on display:
+    // the user expects the screen to be present, with items appearing
+    // on it. The earlier "hidden until first item" behavior was a
+    // holdover from the emergence-as-droplet-pop doctrine, now
+    // replaced by the supervised-agency workstation framing.
     const mgr = makeManager();
-    mgr.update(0, 0.1);
+    // Run enough frames for the idle visibility to settle in.
+    for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
+    const group = mgr.getGroup();
+    const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    expect(planeMesh.visible).toBe(true);
+    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
+    expect(material.opacity).toBeGreaterThan(0);
+  });
+
+  it("setUserVisible(false) hides the plane regardless of ambient state", () => {
+    const mgr = makeManager();
+    for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
+    mgr.setUserVisible(false);
+    mgr.update(2, 0.1);
     const group = mgr.getGroup();
     const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
     expect(planeMesh.visible).toBe(false);
+    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
+    expect(material.opacity).toBe(0);
+  });
+
+  it("setUserVisible(true) restores the plane without waiting for new items", () => {
+    const mgr = makeManager();
+    mgr.setUserVisible(false);
+    mgr.update(0, 0.1);
+    mgr.setUserVisible(true);
+    mgr.update(0.2, 0.1);
+    const group = mgr.getGroup();
+    const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    expect(planeMesh.visible).toBe(true);
   });
 
   it("plane reveals when an item is present", () => {
