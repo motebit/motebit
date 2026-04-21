@@ -118,6 +118,97 @@ export interface RenderAdapter {
   removeArtifact?(id: string): Promise<void>;
   /** Remove all artifacts immediately. */
   clearArtifacts?(): void;
+
+  // ── Slab ("Motebit Computer") — see docs/doctrine/motebit-computer.md ──
+  //
+  // A liquid-glass plane floating to the right of the creature where
+  // computation materializes. Sibling to constellation / artifact / chat
+  // bubble. The slab itself is implicit (renderer-managed); callers add
+  // slab ITEMS and the renderer handles the plane's emergence, idle
+  // state, and recession. Items either dissolve (ephemeral work) or
+  // detach as artifacts (durable output). Detachment is the pinch — a
+  // typed lifecycle phase, not a private animation detail.
+
+  /** Place a slab item on the working surface. */
+  addSlabItem?(spec: SlabItemSpec): SlabItemHandle | undefined;
+  /** Dissolve a slab item back into the surface (ephemeral end, no artifact). */
+  dissolveSlabItem?(id: string): Promise<void>;
+  /**
+   * Detach a slab item as an artifact via the surface-tension pinch.
+   * Returns the artifact handle the item becomes in the wider scene.
+   * The slab runs the detachment physics (dimple → bead → snap); the
+   * provided `artifact` describes what the detached bead should settle
+   * into mid-flight.
+   */
+  detachSlabItemAsArtifact?(
+    id: string,
+    artifact: ArtifactSpec,
+  ): Promise<ArtifactHandle | undefined>;
+  /** Clear every slab item immediately (no dissolution animation). */
+  clearSlabItems?(): void;
+}
+
+// === Slab ("Motebit Computer") — scene primitive types ===
+//
+// See docs/doctrine/motebit-computer.md. The slab is the canonical
+// surface for acts-in-progress; records go in panels, durable outputs
+// detach as artifacts. These types are the cross-surface contract.
+
+/**
+ * Kind of in-progress work a slab item represents. Unlike `ArtifactKind`
+ * (which describes detached, durable outputs), SlabItemKind enumerates
+ * the procedural categories of live work the slab renders.
+ *
+ *   - `stream` — live LLM token stream before it crystallizes.
+ *   - `tool_call` — MCP or function call, {input → output} card.
+ *   - `plan_step` — one step of a running plan.
+ *   - `shell` — bash/command output streaming.
+ *   - `fetch` — web fetch / search / read-url in flight.
+ *   - `embedding` — inference / embedding call in flight.
+ */
+export type SlabItemKind = "stream" | "tool_call" | "plan_step" | "shell" | "fetch" | "embedding";
+
+/**
+ * Lifecycle phase for a slab item. The doctrine treats detachment as a
+ * typed phase (not a private animation detail) so cross-surface
+ * renderers can't silently diverge on the pinch physics.
+ *
+ *   - `emerging` — item is materializing onto the slab.
+ *   - `active` — item is present and may be streaming updates.
+ *   - `pinching` — item has produced a durable output; surface dimples
+ *     and the bead is separating under surface tension. Artifact is
+ *     about to spawn; slab is about to ripple back to flat.
+ *   - `detached` — item has left the slab as an artifact in the wider
+ *     scene. The slab's own ripple may still be settling.
+ *   - `dissolving` — item is fading back into the slab surface with
+ *     no artifact spawn (ephemeral end, interrupt, failure).
+ *   - `gone` — item no longer on the slab; no further transitions.
+ */
+export type SlabItemPhase = "emerging" | "active" | "pinching" | "detached" | "dissolving" | "gone";
+
+/**
+ * Specification for a slab item. The host-element pattern mirrors
+ * `ArtifactSpec` (surface-native HTMLElement held by the caller, slab
+ * positions and animates it in 3D) — keeps the renderer Three.js-free
+ * and lets each surface render content with its native text/streaming
+ * primitives.
+ */
+export interface SlabItemSpec {
+  /** Unique ID for lifecycle management. Stable across phase transitions. */
+  id: string;
+  /** Procedural category (informs default positioning + Fresnel treatment). */
+  kind: SlabItemKind;
+  /** The HTML element to mount onto the slab surface. Owned by the caller. */
+  element: HTMLElement;
+}
+
+/** Handle returned after placing a slab item — controls its lifecycle. */
+export interface SlabItemHandle {
+  id: string;
+  /** Current phase. Renderer drives transitions; callers read for coordination. */
+  getPhase(): SlabItemPhase;
+  /** Subscribe to phase transitions. Returns an unsubscribe thunk. */
+  onPhaseChange(listener: (phase: SlabItemPhase) => void): () => void;
 }
 
 // === Frame-Independent Delta Smoothing ===
