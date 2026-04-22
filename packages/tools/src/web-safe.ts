@@ -65,6 +65,13 @@ export {
   completeGoalDefinition,
   reportProgressDefinition,
 } from "./builtins/goal-tools.js";
+export {
+  computerDefinition,
+  createComputerHandler,
+  type ComputerDispatcher,
+  type ComputerHandlerOptions,
+  type ComputerUnsupportedReason,
+} from "./builtins/computer.js";
 export { InMemoryToolRegistry } from "./registry.js";
 export type { ToolDefinition, ToolResult, ToolHandler, ToolRegistry } from "@motebit/sdk";
 

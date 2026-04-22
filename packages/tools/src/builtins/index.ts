@@ -35,6 +35,13 @@ export {
   completeGoalDefinition,
   reportProgressDefinition,
 } from "./goal-tools.js";
+export {
+  computerDefinition,
+  createComputerHandler,
+  type ComputerDispatcher,
+  type ComputerHandlerOptions,
+  type ComputerUnsupportedReason,
+} from "./computer.js";
 
 import { webSearchDefinition, createWebSearchHandler } from "./web-search.js";
 import { readUrlDefinition, createReadUrlHandler } from "./read-url.js";

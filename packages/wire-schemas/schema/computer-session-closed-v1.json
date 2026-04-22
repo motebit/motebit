@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/computer-session-closed-v1.json",
+  "title": "ComputerSessionClosed (v1)",
+  "description": "Signed event emitted when a computer-use session ends. See spec/computer-use-v1.md §5.4.",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "closed_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix ms."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Free-text code. Examples: 'user_closed', 'timeout', 'error'."
+    }
+  },
+  "required": ["session_id", "closed_at"],
+  "additionalProperties": true,
+  "definitions": {
+    "ComputerSessionClosed": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "closed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix ms."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Free-text code. Examples: 'user_closed', 'timeout', 'error'."
+        }
+      },
+      "required": ["session_id", "closed_at"],
+      "additionalProperties": true
+    }
+  }
+}

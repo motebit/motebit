@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/computer-session-opened-v1.json",
+  "title": "ComputerSessionOpened (v1)",
+  "description": "Signed event emitted when a computer-use session begins. See spec/computer-use-v1.md §5.3.",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Newly allocated session identifier."
+    },
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identity binding."
+    },
+    "display_width": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Primary display logical width in pixels."
+    },
+    "display_height": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Primary display logical height in pixels."
+    },
+    "scaling_factor": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Display scaling factor. Retina = 2.0, HiDPI variable."
+    },
+    "opened_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix ms."
+    }
+  },
+  "required": [
+    "session_id",
+    "motebit_id",
+    "display_width",
+    "display_height",
+    "scaling_factor",
+    "opened_at"
+  ],
+  "additionalProperties": true,
+  "definitions": {
+    "ComputerSessionOpened": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Newly allocated session identifier."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identity binding."
+        },
+        "display_width": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Primary display logical width in pixels."
+        },
+        "display_height": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Primary display logical height in pixels."
+        },
+        "scaling_factor": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Display scaling factor. Retina = 2.0, HiDPI variable."
+        },
+        "opened_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix ms."
+        }
+      },
+      "required": [
+        "session_id",
+        "motebit_id",
+        "display_width",
+        "display_height",
+        "scaling_factor",
+        "opened_at"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

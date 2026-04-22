@@ -77,6 +77,12 @@ import {
   buildPlanCompletedPayloadJsonSchema,
   buildPlanFailedPayloadJsonSchema,
 } from "../src/plan-lifecycle.js";
+import {
+  buildComputerActionRequestJsonSchema,
+  buildComputerObservationResultJsonSchema,
+  buildComputerSessionOpenedJsonSchema,
+  buildComputerSessionClosedJsonSchema,
+} from "../src/computer-use.js";
 import { buildRouteScoreJsonSchema } from "../src/route-score.js";
 import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
 
@@ -159,6 +165,13 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "plan-completed-payload-v1.json", build: buildPlanCompletedPayloadJsonSchema },
   { filename: "plan-failed-payload-v1.json", build: buildPlanFailedPayloadJsonSchema },
+  { filename: "computer-action-request-v1.json", build: buildComputerActionRequestJsonSchema },
+  {
+    filename: "computer-observation-result-v1.json",
+    build: buildComputerObservationResultJsonSchema,
+  },
+  { filename: "computer-session-opened-v1.json", build: buildComputerSessionOpenedJsonSchema },
+  { filename: "computer-session-closed-v1.json", build: buildComputerSessionClosedJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

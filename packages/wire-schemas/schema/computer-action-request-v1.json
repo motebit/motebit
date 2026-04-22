@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/computer-action-request-v1.json",
+  "title": "ComputerActionRequest (v1)",
+  "description": "One invocation of the `computer` tool — observation or input action. Discriminated by `action`. See spec/computer-use-v1.md §5.1.",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Open session the action belongs to."
+    },
+    "action": {
+      "type": "string",
+      "description": "Discriminator. One of: screenshot, cursor_position, click, double_click, mouse_move, drag, type, key, scroll."
+    },
+    "x": {
+      "type": "integer",
+      "description": "Target X pixel coordinate."
+    },
+    "y": {
+      "type": "integer",
+      "description": "Target Y pixel coordinate."
+    },
+    "x1": {
+      "type": "integer",
+      "description": "Drag-end X. Required when action === 'drag'."
+    },
+    "y1": {
+      "type": "integer",
+      "description": "Drag-end Y. Required when action === 'drag'."
+    },
+    "button": {
+      "type": "string",
+      "description": "Mouse button. Defaults to \"left\"."
+    },
+    "modifiers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Modifier keys held. Subset of `[\"cmd\", \"ctrl\", \"alt\", \"shift\"]`."
+    },
+    "text": {
+      "type": "string",
+      "description": "Keyboard text. Required when action === 'type'."
+    },
+    "key": {
+      "type": "string",
+      "description": "Key combination. Required when action === 'key'. Example: 'cmd+c'."
+    },
+    "dx": {
+      "type": "integer",
+      "description": "Scroll wheel delta X."
+    },
+    "dy": {
+      "type": "integer",
+      "description": "Scroll wheel delta Y."
+    }
+  },
+  "required": ["session_id", "action"],
+  "additionalProperties": true,
+  "definitions": {
+    "ComputerActionRequest": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Open session the action belongs to."
+        },
+        "action": {
+          "type": "string",
+          "description": "Discriminator. One of: screenshot, cursor_position, click, double_click, mouse_move, drag, type, key, scroll."
+        },
+        "x": {
+          "type": "integer",
+          "description": "Target X pixel coordinate."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Target Y pixel coordinate."
+        },
+        "x1": {
+          "type": "integer",
+          "description": "Drag-end X. Required when action === 'drag'."
+        },
+        "y1": {
+          "type": "integer",
+          "description": "Drag-end Y. Required when action === 'drag'."
+        },
+        "button": {
+          "type": "string",
+          "description": "Mouse button. Defaults to \"left\"."
+        },
+        "modifiers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Modifier keys held. Subset of `[\"cmd\", \"ctrl\", \"alt\", \"shift\"]`."
+        },
+        "text": {
+          "type": "string",
+          "description": "Keyboard text. Required when action === 'type'."
+        },
+        "key": {
+          "type": "string",
+          "description": "Key combination. Required when action === 'key'. Example: 'cmd+c'."
+        },
+        "dx": {
+          "type": "integer",
+          "description": "Scroll wheel delta X."
+        },
+        "dy": {
+          "type": "integer",
+          "description": "Scroll wheel delta Y."
+        }
+      },
+      "required": ["session_id", "action"],
+      "additionalProperties": true
+    }
+  }
+}

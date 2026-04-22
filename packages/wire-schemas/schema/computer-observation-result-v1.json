@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/computer-observation-result-v1.json",
+  "title": "ComputerObservationResult (v1)",
+  "description": "Result payload of a computer-use observation action (screenshot or cursor_position). See spec/computer-use-v1.md §5.2.",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Session the observation belongs to."
+    },
+    "kind": {
+      "type": "string",
+      "description": "Discriminator. 'screenshot' or 'cursor_position'."
+    },
+    "image_format": {
+      "type": "string",
+      "description": "Screenshot only. 'png' or 'jpeg'."
+    },
+    "image_base64": {
+      "type": "string",
+      "description": "Screenshot only. Base64-encoded image bytes."
+    },
+    "width": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Screenshot image width (px)."
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Screenshot image height (px)."
+    },
+    "x": {
+      "type": "integer",
+      "description": "Cursor-position only. Cursor X."
+    },
+    "y": {
+      "type": "integer",
+      "description": "Cursor-position only. Cursor Y."
+    },
+    "captured_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix ms of the capture."
+    },
+    "redaction_applied": {
+      "type": "boolean",
+      "description": "True iff the sensitivity classification layer masked one or more regions before these bytes left the OS-access boundary."
+    }
+  },
+  "required": ["session_id", "kind", "captured_at", "redaction_applied"],
+  "additionalProperties": true,
+  "definitions": {
+    "ComputerObservationResult": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Session the observation belongs to."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Discriminator. 'screenshot' or 'cursor_position'."
+        },
+        "image_format": {
+          "type": "string",
+          "description": "Screenshot only. 'png' or 'jpeg'."
+        },
+        "image_base64": {
+          "type": "string",
+          "description": "Screenshot only. Base64-encoded image bytes."
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Screenshot image width (px)."
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Screenshot image height (px)."
+        },
+        "x": {
+          "type": "integer",
+          "description": "Cursor-position only. Cursor X."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Cursor-position only. Cursor Y."
+        },
+        "captured_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix ms of the capture."
+        },
+        "redaction_applied": {
+          "type": "boolean",
+          "description": "True iff the sensitivity classification layer masked one or more regions before these bytes left the OS-access boundary."
+        }
+      },
+      "required": ["session_id", "kind", "captured_at", "redaction_applied"],
+      "additionalProperties": true
+    }
+  }
+}

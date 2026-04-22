@@ -204,3 +204,17 @@ export {
   PLAN_FAILED_PAYLOAD_SCHEMA_ID,
   buildPlanFailedPayloadJsonSchema,
 } from "./plan-lifecycle.js";
+export {
+  ComputerActionRequestSchema,
+  COMPUTER_ACTION_REQUEST_SCHEMA_ID,
+  buildComputerActionRequestJsonSchema,
+  ComputerObservationResultSchema,
+  COMPUTER_OBSERVATION_RESULT_SCHEMA_ID,
+  buildComputerObservationResultJsonSchema,
+  ComputerSessionOpenedSchema,
+  COMPUTER_SESSION_OPENED_SCHEMA_ID,
+  buildComputerSessionOpenedJsonSchema,
+  ComputerSessionClosedSchema,
+  COMPUTER_SESSION_CLOSED_SCHEMA_ID,
+  buildComputerSessionClosedJsonSchema,
+} from "./computer-use.js";

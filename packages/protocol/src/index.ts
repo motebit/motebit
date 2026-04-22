@@ -2123,3 +2123,11 @@ export type {
   PlanCompletedPayload,
   PlanFailedPayload,
 } from "./plan-lifecycle.js";
+
+// ── Computer-use payloads (spec/computer-use-v1.md) ──────────────
+export type {
+  ComputerActionRequest,
+  ComputerObservationResult,
+  ComputerSessionOpened,
+  ComputerSessionClosed,
+} from "./computer-use.js";
