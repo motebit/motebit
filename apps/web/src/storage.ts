@@ -13,8 +13,8 @@
 //
 //   "motebit:*"  (colon) — Identity and system-level state managed by WebApp.
 //                          Examples: motebit:motebit_id, motebit:device_id,
-//                          motebit:device_public_key, motebit:mcp_servers,
-//                          motebit:goals. Defined in web-app.ts / main.ts.
+//                          motebit:device_public_key, motebit:mcp_servers.
+//                          Defined in web-app.ts / main.ts.
 //
 // Rule of thumb: if a new key is a user preference a user would toggle in
 // settings, it belongs in the dash namespace (this file). If it's cryptographic

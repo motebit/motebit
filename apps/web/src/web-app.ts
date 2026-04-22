@@ -87,7 +87,8 @@ import {
 } from "./storage";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
-import { createScheduledAgentsRunner, type ScheduledAgentsRunner } from "./scheduled-agents";
+import { createWebGoalsRunner } from "./goals-runner";
+import type { GoalsRunner } from "@motebit/panels";
 
 // Re-export shared presets for color-picker and settings modules
 import { COLOR_PRESETS } from "@motebit/sdk";
@@ -166,11 +167,12 @@ export class WebApp {
   private _toolActivityListeners = new Set<
     (event: import("@motebit/runtime").ToolActivityEvent) => void
   >();
-  // Scheduled agents runner — recurring tasks the motebit fires on
-  // cadence. Started in bootstrap() after the runtime is ready;
-  // disposed on teardown. Each fire drives the normal chat pipeline
-  // so runs produce signed ExecutionReceipts via the existing seam.
-  private _scheduledAgents: ScheduledAgentsRunner | null = null;
+  // Goals runner — user-declared outcomes the motebit pursues on
+  // cadence (recurring) or on demand (once). Started in bootstrap()
+  // after runtime is ready. Fires drive the normal chat pipeline so
+  // runs produce signed ExecutionReceipts via the existing seam. See
+  // `docs/doctrine/goals-vs-tasks.md` for the goal/task distinction.
+  private _goalsRunner: GoalsRunner | null = null;
 
   async init(canvas: HTMLCanvasElement): Promise<void> {
     try {
@@ -425,35 +427,15 @@ export class WebApp {
     // Reconnect saved MCP servers
     void this.reconnectMcpServers();
 
-    // Start the scheduled-agents runner. Fires tab-local; each run
-    // drives `sendMessageStreaming` with suppressHistory so the
-    // response doesn't land in the user's chat transcript (scheduled
-    // runs have their own surface in the workstation panel). The
-    // pipeline emits signed ExecutionReceipts regardless — audit
-    // trail verifiable the same way user-typed runs are.
-    this._scheduledAgents = createScheduledAgentsRunner({
-      fire: async (prompt) => {
-        // Never preempt a user's in-flight turn. Signal `skipped`
-        // so the runner doesn't advance next_run_at — retry on the
-        // next 30s tick rather than waiting a full cadence.
-        if (this._isProcessing) return { status: "skipped" };
-        let accumulated = "";
-        try {
-          for await (const chunk of this.sendMessageStreaming(prompt, undefined, {
-            suppressHistory: true,
-          })) {
-            if (chunk.type === "text") accumulated += chunk.text;
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { status: "error", error: msg };
-        }
-        // Preview to a single row; full response lives on the signed
-        // receipts the workstation's audit log already captures.
-        const responsePreview = accumulated.trim().slice(0, 160) || null;
-        return { status: "fired", responsePreview };
-      },
-    });
+    // Start the goals runner. Fires tab-local; recurring goals fire on
+    // cadence, once goals fire on explicit runNow. Each fire drives the
+    // normal chat pipeline (plan stream for once goals, single turn for
+    // recurring) with suppressHistory so scheduled runs don't land in
+    // the user's chat transcript. Pipeline emits signed
+    // ExecutionReceipts regardless — audit trail verifiable the same
+    // way user-typed runs are.
+    this._goalsRunner = createWebGoalsRunner(this);
+    this._goalsRunner.start();
   }
 
   /**
@@ -810,12 +792,12 @@ export class WebApp {
   }
 
   /**
-   * Access to the scheduled-agents runner — the workstation panel's
-   * scheduled section reads / mutates via this. Null if bootstrap
-   * hasn't finished yet.
+   * Access to the goals runner — the workstation panel's scheduled
+   * section AND the Goals panel both read / mutate via this. Null if
+   * bootstrap hasn't finished yet.
    */
-  getScheduledAgents(): ScheduledAgentsRunner | null {
-    return this._scheduledAgents;
+  getGoalsRunner(): GoalsRunner | null {
+    return this._goalsRunner;
   }
 
   /**

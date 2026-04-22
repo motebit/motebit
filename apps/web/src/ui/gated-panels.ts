@@ -1,7 +1,9 @@
 // === Gated HUD Panels ===
 // Memory panel is functional (IDB-backed via runtime).
 // Sync popup is functional (connects to relay via signed tokens).
-// Goals panel is functional (one-shot plan execution, IDB-backed).
+// Goals panel is functional — reads/writes the shared GoalsRunner in
+// @motebit/panels, filtered to one-shot goals (mode: "once"). Recurring
+// goals render in the Workstation plane instead.
 
 import type { WebContext } from "../types";
 import type { WebSyncStatus } from "../web-app";
@@ -22,9 +24,11 @@ import {
   type AgentsFetchAdapter,
   type AgentsState,
   type DiscoveredAgent,
+  type GoalRunRecord,
   type MemoryFetchAdapter,
   type MemoryState,
   type PricingEntry,
+  type ScheduledGoal,
 } from "@motebit/panels";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 
@@ -35,27 +39,23 @@ export interface GatedPanelsAPI {
   closeAll(): void;
 }
 
-interface WebGoal {
-  goal_id: string;
-  prompt: string;
-  status: "pending" | "running" | "completed" | "failed";
-  created_at: number;
-}
+/**
+ * UI-facing status for the Goals panel, derived from (goal.status, latest
+ * run for this goal).
+ *
+ *   pending   — active, never run
+ *   running   — has an in-flight run
+ *   completed — terminal success
+ *   failed    — terminal failure
+ */
+type GoalPanelStatus = "pending" | "running" | "completed" | "failed";
 
-const GOALS_STORAGE_KEY = "motebit:goals";
-
-function loadGoals(): WebGoal[] {
-  try {
-    const raw = localStorage.getItem(GOALS_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as WebGoal[];
-  } catch {
-    // corrupted
-  }
-  return [];
-}
-
-function saveGoals(goals: WebGoal[]): void {
-  localStorage.setItem(GOALS_STORAGE_KEY, JSON.stringify(goals));
+function panelStatus(goal: ScheduledGoal, runs: GoalRunRecord[]): GoalPanelStatus {
+  if (goal.status === "completed") return "completed";
+  if (goal.status === "failed") return "failed";
+  const latest = runs.find((r) => r.goal_id === goal.goal_id);
+  if (latest?.status === "running") return "running";
+  return "pending";
 }
 
 function formatTimeAgo(timestamp: number): string {
@@ -79,8 +79,6 @@ const SYNC_STATUS_LABELS: Record<WebSyncStatus, string> = {
 };
 
 export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
-  let goals = loadGoals();
-
   // === Memory Panel (functional) ===
   // Fetch + filter + delete live in @motebit/panels MemoryController.
   // This block owns DOM rendering + markdown + the inline delete-confirm UX.
@@ -233,6 +231,10 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   memoryBackdrop.addEventListener("click", closeMemory);
 
   // === Goals Panel (functional) ===
+  // Reads from the shared GoalsRunner in @motebit/panels, filtered to
+  // one-shot goals (mode: "once"). Recurring goals render in the
+  // Workstation plane. Plan chunks stream inline via the runner's
+  // onChunk callback so the panel shows step-by-step progress.
   const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
   const goalsBackdrop = document.getElementById("goals-backdrop") as HTMLDivElement;
   const goalList = document.getElementById("goal-list") as HTMLDivElement;
@@ -240,119 +242,11 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   const goalPromptInput = document.getElementById("goal-prompt") as HTMLTextAreaElement;
   const goalAddBtn = document.getElementById("goal-add-btn") as HTMLButtonElement;
 
-  function renderGoals(): void {
-    goalList.innerHTML = "";
-    if (goals.length === 0) {
-      goalEmpty.style.display = "block";
-      return;
-    }
-    goalEmpty.style.display = "none";
-
-    for (const goal of goals) {
-      const item = document.createElement("div");
-      item.className = "goal-item";
-
-      const header = document.createElement("div");
-      header.className = "goal-item-header";
-
-      const dot = document.createElement("span");
-      dot.className = `goal-status-dot ${goal.status}`;
-      header.appendChild(dot);
-
-      const text = document.createElement("span");
-      text.className = "goal-prompt-text";
-      text.textContent = goal.prompt;
-      text.title = goal.prompt;
-      header.appendChild(text);
-
-      const actions = document.createElement("div");
-      actions.className = "goal-actions";
-
-      if (goal.status === "pending") {
-        const execBtn = document.createElement("button");
-        execBtn.textContent = "Execute";
-        execBtn.addEventListener("click", () => void executeGoal(goal));
-        actions.appendChild(execBtn);
-      }
-
-      const deleteBtn = document.createElement("button");
-      deleteBtn.textContent = "\u00d7";
-      deleteBtn.className = "goal-delete-btn";
-      let goalConfirmTimer: ReturnType<typeof setTimeout> | null = null;
-      deleteBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (deleteBtn.classList.contains("confirming")) {
-          if (goalConfirmTimer != null) clearTimeout(goalConfirmTimer);
-          goals = goals.filter((g) => g.goal_id !== goal.goal_id);
-          saveGoals(goals);
-          renderGoals();
-        } else {
-          deleteBtn.classList.add("confirming");
-          deleteBtn.textContent = "Delete?";
-          goalConfirmTimer = setTimeout(() => {
-            deleteBtn.classList.remove("confirming");
-            deleteBtn.textContent = "\u00d7";
-          }, 3000);
-        }
-      });
-      actions.appendChild(deleteBtn);
-
-      header.appendChild(actions);
-      item.appendChild(header);
-
-      // Step progress area
-      const stepsEl = document.createElement("div");
-      stepsEl.className = "goal-steps";
-      stepsEl.id = `goal-steps-${goal.goal_id}`;
-      item.appendChild(stepsEl);
-
-      goalList.appendChild(item);
-    }
-  }
-
-  async function executeGoal(goal: WebGoal): Promise<void> {
-    if (!ctx.app.isProviderConnected) {
-      ctx.showToast("Connect an AI provider first");
-      return;
-    }
-
-    goal.status = "running";
-    saveGoals(goals);
-    renderGoals();
-
-    const goalsBtn = document.getElementById("goals-btn");
-    goalsBtn?.classList.add("executing");
-
-    const stepsEl = document.getElementById(`goal-steps-${goal.goal_id}`);
-
-    try {
-      const gen: AsyncGenerator<PlanChunk> = ctx.app.executeGoal(goal.goal_id, goal.prompt);
-      for await (const chunk of gen) {
-        if (stepsEl) {
-          renderPlanChunk(stepsEl, chunk);
-        }
-      }
-      goal.status = "completed";
-    } catch (err: unknown) {
-      goal.status = "failed";
-      const msg = err instanceof Error ? err.message : String(err);
-      if (stepsEl) {
-        const errEl = document.createElement("div");
-        errEl.className = "goal-step failed";
-        errEl.textContent = `Error: ${msg}`;
-        stepsEl.appendChild(errEl);
-      }
-    } finally {
-      goalsBtn?.classList.remove("executing");
-      saveGoals(goals);
-      renderGoals();
-    }
-  }
+  let goalsSubscribed = false;
 
   function renderPlanChunk(container: HTMLElement, chunk: PlanChunk): void {
     const el = document.createElement("div");
     el.className = "goal-step";
-
     switch (chunk.type) {
       case "plan_created":
         el.textContent = `Plan: ${chunk.plan.title} (${chunk.plan.total_steps} steps)`;
@@ -378,30 +272,136 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         el.textContent = `Plan failed: ${chunk.reason}`;
         break;
       default:
-        return; // skip text chunks in step view
+        return;
     }
     container.appendChild(el);
   }
 
+  function renderGoals(): void {
+    const runner = ctx.app.getGoalsRunner?.();
+    if (!runner) {
+      goalList.innerHTML = "";
+      goalEmpty.style.display = "block";
+      return;
+    }
+    const state = runner.getState();
+    const panelGoals = state.goals
+      .filter((g) => g.mode === "once")
+      .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+
+    goalList.innerHTML = "";
+    if (panelGoals.length === 0) {
+      goalEmpty.style.display = "block";
+      return;
+    }
+    goalEmpty.style.display = "none";
+
+    for (const goal of panelGoals) {
+      const status = panelStatus(goal, state.runs);
+
+      const item = document.createElement("div");
+      item.className = "goal-item";
+
+      const header = document.createElement("div");
+      header.className = "goal-item-header";
+
+      const dot = document.createElement("span");
+      dot.className = `goal-status-dot ${status}`;
+      header.appendChild(dot);
+
+      const text = document.createElement("span");
+      text.className = "goal-prompt-text";
+      text.textContent = goal.prompt;
+      text.title = goal.prompt;
+      header.appendChild(text);
+
+      const actions = document.createElement("div");
+      actions.className = "goal-actions";
+
+      if (status === "pending") {
+        const execBtn = document.createElement("button");
+        execBtn.textContent = "Execute";
+        execBtn.addEventListener("click", () => void executeGoal(goal.goal_id));
+        actions.appendChild(execBtn);
+      }
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.textContent = "\u00d7";
+      deleteBtn.className = "goal-delete-btn";
+      let goalConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (deleteBtn.classList.contains("confirming")) {
+          if (goalConfirmTimer != null) clearTimeout(goalConfirmTimer);
+          runner.removeGoal(goal.goal_id);
+        } else {
+          deleteBtn.classList.add("confirming");
+          deleteBtn.textContent = "Delete?";
+          goalConfirmTimer = setTimeout(() => {
+            deleteBtn.classList.remove("confirming");
+            deleteBtn.textContent = "\u00d7";
+          }, 3000);
+        }
+      });
+      actions.appendChild(deleteBtn);
+
+      header.appendChild(actions);
+      item.appendChild(header);
+
+      const stepsEl = document.createElement("div");
+      stepsEl.className = "goal-steps";
+      stepsEl.id = `goal-steps-${goal.goal_id}`;
+      item.appendChild(stepsEl);
+
+      goalList.appendChild(item);
+    }
+  }
+
+  async function executeGoal(goalId: string): Promise<void> {
+    const runner = ctx.app.getGoalsRunner?.();
+    if (!runner) return;
+    if (!ctx.app.isProviderConnected) {
+      ctx.showToast("Connect an AI provider first");
+      return;
+    }
+
+    const goalsBtn = document.getElementById("goals-btn");
+    goalsBtn?.classList.add("executing");
+
+    try {
+      await runner.runNow(goalId, (chunk) => {
+        const stepsEl = document.getElementById(`goal-steps-${goalId}`);
+        if (!stepsEl) return;
+        if (chunk && typeof chunk === "object" && "type" in chunk) {
+          renderPlanChunk(stepsEl, chunk as PlanChunk);
+        }
+      });
+    } finally {
+      goalsBtn?.classList.remove("executing");
+    }
+  }
+
   goalAddBtn.addEventListener("click", () => {
+    const runner = ctx.app.getGoalsRunner?.();
+    if (!runner) return;
     const prompt = goalPromptInput.value.trim();
     if (!prompt) return;
-
-    const goal: WebGoal = {
-      goal_id: crypto.randomUUID(),
-      prompt,
-      status: "pending",
-      created_at: Date.now(),
-    };
-    goals.unshift(goal);
-    saveGoals(goals);
+    runner.addGoal({ prompt, mode: "once" });
     goalPromptInput.value = "";
-    renderGoals();
   });
 
   function openGoals(): void {
     closeAll();
-    goals = loadGoals(); // Refresh from storage
+    // Lazy-attach the runner subscription on first open — the runner is
+    // constructed during `app.bootstrap()`, which runs AFTER
+    // `initGatedPanels`, so an init-time subscription would see null.
+    if (!goalsSubscribed) {
+      const runner = ctx.app.getGoalsRunner?.();
+      if (runner) {
+        runner.subscribe(() => renderGoals());
+        goalsSubscribed = true;
+      }
+    }
     renderGoals();
     goalsPanel.classList.add("open");
     goalsBackdrop.classList.add("open");

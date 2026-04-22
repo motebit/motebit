@@ -25,13 +25,21 @@ import {
   type WorkstationFetchAdapter,
   type WorkstationState,
 } from "@motebit/panels";
-import {
-  formatCountdownUntil,
-  type ScheduledAgent,
-  type ScheduledAgentCadence,
-  type ScheduledAgentsRunner,
-  type ScheduledRunRecord,
-} from "../scheduled-agents";
+import { formatCountdownUntil } from "../goals-runner";
+import type { GoalRunRecord, GoalsRunner, ScheduledGoal } from "@motebit/panels";
+
+function cadenceLabel(goal: ScheduledGoal): "hourly" | "daily" | "weekly" | "custom" {
+  switch (goal.interval_ms) {
+    case 3_600_000:
+      return "hourly";
+    case 86_400_000:
+      return "daily";
+    case 604_800_000:
+      return "weekly";
+    default:
+      return "custom";
+  }
+}
 
 export interface WorkstationPanelAPI {
   open(): void;
@@ -564,7 +572,7 @@ function formatRelativePast(ts: number, now: number = Date.now()): string {
   return `${d}d ago`;
 }
 
-function statusMark(status: ScheduledRunRecord["status"]): string {
+function statusMark(status: GoalRunRecord["status"]): string {
   switch (status) {
     case "fired":
       return "✓";
@@ -574,10 +582,12 @@ function statusMark(status: ScheduledRunRecord["status"]): string {
       return "⏸";
     case "error":
       return "✗";
+    default:
+      return "?";
   }
 }
 
-function statusColor(status: ScheduledRunRecord["status"]): string {
+function statusColor(status: GoalRunRecord["status"]): string {
   switch (status) {
     case "fired":
       return "rgba(80, 140, 100, 0.85)";
@@ -587,10 +597,12 @@ function statusColor(status: ScheduledRunRecord["status"]): string {
       return "rgba(150, 120, 60, 0.82)";
     case "error":
       return "rgba(170, 80, 100, 0.85)";
+    default:
+      return "rgba(100, 120, 155, 0.72)";
   }
 }
 
-function buildRunRow(run: ScheduledRunRecord): HTMLDivElement {
+function buildRunRow(run: GoalRunRecord, promptByGoalId: Map<string, string>): HTMLDivElement {
   const row = document.createElement("div");
   row.dataset.runId = run.run_id;
   Object.assign(row.style, {
@@ -625,9 +637,12 @@ function buildRunRow(run: ScheduledRunRecord): HTMLDivElement {
     flex: "0 0 auto",
   });
 
+  const previewText =
+    run.status === "error"
+      ? (run.error_message ?? "error")
+      : (run.response_preview ?? promptByGoalId.get(run.goal_id) ?? "");
   const preview = document.createElement("span");
-  preview.textContent =
-    run.status === "error" ? (run.errorMessage ?? "error") : (run.responsePreview ?? run.prompt);
+  preview.textContent = previewText;
   Object.assign(preview.style, {
     color: run.status === "error" ? statusColor("error") : "rgba(30, 50, 90, 0.86)",
     overflow: "hidden",
@@ -643,32 +658,28 @@ function buildRunRow(run: ScheduledRunRecord): HTMLDivElement {
 }
 
 /**
- * Build a row for one scheduled agent. Shows prompt + cadence badge +
- * countdown to next fire + quick actions (toggle enabled, run now,
- * delete). Recurring-task rows are rendered incrementally so adding a
- * new one doesn't re-render siblings.
+ * Build a row for one recurring goal. Shows prompt + cadence badge +
+ * countdown to next fire + quick actions (pause/resume, run now, delete).
+ * Rows render incrementally so adding one doesn't disturb siblings.
  */
-function buildScheduledRow(
-  agent: ScheduledAgent,
-  runner: ScheduledAgentsRunner,
-  nowMs: number,
-): HTMLDivElement {
+function buildGoalRow(goal: ScheduledGoal, runner: GoalsRunner, nowMs: number): HTMLDivElement {
+  const active = goal.status === "active" && goal.enabled !== false;
   const row = document.createElement("div");
-  row.dataset.agentId = agent.id;
+  row.dataset.goalId = goal.goal_id;
   Object.assign(row.style, {
     display: "flex",
     alignItems: "center",
     gap: "8px",
     padding: "6px 8px",
-    background: agent.enabled ? "rgba(255, 255, 255, 0.28)" : "rgba(255, 255, 255, 0.12)",
+    background: active ? "rgba(255, 255, 255, 0.28)" : "rgba(255, 255, 255, 0.12)",
     borderRadius: "5px",
     border: "1px solid rgba(100, 120, 155, 0.08)",
     fontSize: "11px",
-    opacity: agent.enabled ? "1" : "0.64",
+    opacity: active ? "1" : "0.64",
   });
 
   const cadenceBadge = document.createElement("span");
-  cadenceBadge.textContent = agent.cadence;
+  cadenceBadge.textContent = cadenceLabel(goal);
   Object.assign(cadenceBadge.style, {
     fontSize: "9px",
     letterSpacing: "0.08em",
@@ -682,7 +693,7 @@ function buildScheduledRow(
   });
 
   const promptEl = document.createElement("span");
-  promptEl.textContent = agent.prompt;
+  promptEl.textContent = goal.prompt;
   Object.assign(promptEl.style, {
     flex: "1 1 auto",
     color: "rgba(20, 30, 50, 0.9)",
@@ -692,7 +703,11 @@ function buildScheduledRow(
   });
 
   const next = document.createElement("span");
-  next.textContent = agent.enabled ? formatCountdownUntil(agent.next_run_at, nowMs) : "paused";
+  next.textContent = active
+    ? typeof goal.next_run_at === "number"
+      ? formatCountdownUntil(goal.next_run_at, nowMs)
+      : "—"
+    : "paused";
   Object.assign(next.style, {
     fontSize: "10px",
     color: "rgba(90, 110, 150, 0.72)",
@@ -702,8 +717,8 @@ function buildScheduledRow(
 
   const toggleBtn = document.createElement("button");
   toggleBtn.type = "button";
-  toggleBtn.textContent = agent.enabled ? "⏸" : "▶";
-  toggleBtn.title = agent.enabled ? "Pause" : "Resume";
+  toggleBtn.textContent = active ? "⏸" : "▶";
+  toggleBtn.title = active ? "Pause" : "Resume";
   Object.assign(toggleBtn.style, {
     background: "transparent",
     border: "none",
@@ -712,7 +727,7 @@ function buildScheduledRow(
     fontSize: "11px",
     padding: "0 4px",
   });
-  toggleBtn.addEventListener("click", () => runner.setEnabled(agent.id, !agent.enabled));
+  toggleBtn.addEventListener("click", () => runner.setPaused(goal.goal_id, active));
 
   const runBtn = document.createElement("button");
   runBtn.type = "button";
@@ -727,7 +742,9 @@ function buildScheduledRow(
     padding: "0 4px",
     fontFamily: "'SF Mono', Menlo, Consolas, monospace",
   });
-  runBtn.addEventListener("click", () => runner.runNow(agent.id));
+  runBtn.addEventListener("click", () => {
+    void runner.runNow(goal.goal_id);
+  });
 
   const delBtn = document.createElement("button");
   delBtn.type = "button";
@@ -742,7 +759,7 @@ function buildScheduledRow(
     lineHeight: "1",
     padding: "0 4px",
   });
-  delBtn.addEventListener("click", () => runner.remove(agent.id));
+  delBtn.addEventListener("click", () => runner.removeGoal(goal.goal_id));
 
   row.appendChild(cadenceBadge);
   row.appendChild(promptEl);
@@ -1159,42 +1176,37 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     closeBtn.addEventListener("click", close);
     clearBtn.addEventListener("click", () => controller?.clearHistory());
 
-    // Scheduled agents — list + add-compose inline. The runner lives
-    // on `WebApp`; this panel is the UI seam.
-    const scheduledRunner = ctx.app.getScheduledAgents?.() ?? null;
-    if (scheduledRunner) {
-      const runner = scheduledRunner; // narrow the capture for closures
-      const renderScheduled = (agents: ScheduledAgent[]): void => {
+    // Recurring goals — list + add-compose inline. The runner lives on
+    // `WebApp`; this panel is the UI seam for the recurring subset.
+    // One-shot goals render in the Goals panel instead.
+    const goalsRunner = ctx.app.getGoalsRunner?.() ?? null;
+    if (goalsRunner) {
+      const runner = goalsRunner;
+      const recurringOnly = (goals: ScheduledGoal[]): ScheduledGoal[] =>
+        goals.filter((g) => g.mode === "recurring");
+
+      const renderGoals = (goals: ScheduledGoal[]): void => {
         const now = Date.now();
-        if (agents.length === 0) {
+        if (goals.length === 0) {
           scheduledList.style.display = "none";
           scheduledEmpty.style.display = "block";
         } else {
           scheduledList.style.display = "flex";
           scheduledEmpty.style.display = "none";
-          // Rebuild — the list is small (< 10 typical) so full
-          // re-render is fine; avoids diff bookkeeping for minimal
-          // churn gain.
           while (scheduledList.firstChild) {
             scheduledList.removeChild(scheduledList.firstChild);
           }
-          for (const a of agents) {
-            scheduledList.appendChild(buildScheduledRow(a, runner, now));
+          for (const g of goals) {
+            scheduledList.appendChild(buildGoalRow(g, runner, now));
           }
         }
       };
-      renderScheduled(scheduledRunner.list());
-      scheduledRunner.subscribe(renderScheduled);
-      // Refresh countdown labels every 30s — the rest of the row
-      // doesn't change unless the runner fires an event, so a light
-      // label-only repaint is sufficient.
-      setInterval(() => {
-        if (scheduledRunner.list().length > 0) renderScheduled(scheduledRunner.list());
-      }, 30_000);
 
-      // Recent runs view — most-recent-first, bounded to 10 rendered.
-      const renderRuns = (incoming: ScheduledRunRecord[]): void => {
-        if (incoming.length === 0) {
+      const renderRuns = (runs: GoalRunRecord[], goals: ScheduledGoal[]): void => {
+        // Filter runs to the recurring subset shown here.
+        const recurringIds = new Set(goals.map((g) => g.goal_id));
+        const filtered = runs.filter((r) => recurringIds.has(r.goal_id));
+        if (filtered.length === 0) {
           runsHeader.style.display = "none";
           runsList.style.display = "none";
           while (runsList.firstChild) runsList.removeChild(runsList.firstChild);
@@ -1202,14 +1214,25 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
         }
         runsHeader.style.display = "block";
         runsList.style.display = "flex";
-        // Simple re-render — history is bounded and changes infrequently.
         while (runsList.firstChild) runsList.removeChild(runsList.firstChild);
-        for (const r of incoming.slice(0, 10)) {
-          runsList.appendChild(buildRunRow(r));
+        const promptByGoalId = new Map(goals.map((g) => [g.goal_id, g.prompt]));
+        for (const r of filtered.slice(0, 10)) {
+          runsList.appendChild(buildRunRow(r, promptByGoalId));
         }
       };
-      renderRuns(scheduledRunner.listRuns());
-      scheduledRunner.subscribeRuns(renderRuns);
+
+      const renderAll = (): void => {
+        const state = runner.getState();
+        const recurring = recurringOnly(state.goals);
+        renderGoals(recurring);
+        renderRuns(state.runs, recurring);
+      };
+      renderAll();
+      runner.subscribe(() => renderAll());
+      // Refresh countdown labels every 30s.
+      setInterval(() => {
+        if (recurringOnly(runner.getState().goals).length > 0) renderAll();
+      }, 30_000);
 
       scheduledAddBtn.addEventListener("click", () => {
         scheduledCompose.style.display =
@@ -1220,21 +1243,22 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
         scheduledCompose.style.display = "none";
         scheduledPromptInput.value = "";
       });
-      const submitNewAgent = (): void => {
+      const submitNewGoal = (): void => {
         const prompt = scheduledPromptInput.value.trim();
         if (!prompt) return;
-        scheduledRunner.add({
+        runner.addGoal({
           prompt,
-          cadence: scheduledCadenceSelect.value as ScheduledAgentCadence,
+          mode: "recurring",
+          cadence: scheduledCadenceSelect.value as "hourly" | "daily" | "weekly",
         });
         scheduledPromptInput.value = "";
         scheduledCompose.style.display = "none";
       };
-      scheduledCreateBtn.addEventListener("click", submitNewAgent);
+      scheduledCreateBtn.addEventListener("click", submitNewGoal);
       scheduledPromptInput.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter") {
           ev.preventDefault();
-          submitNewAgent();
+          submitNewGoal();
         }
       });
     } else {
