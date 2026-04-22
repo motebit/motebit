@@ -66,7 +66,6 @@ function shortHash(hex: string, chars: number = 8): string {
 // panel stabilizes and needs the stylesheet of a first-class surface.
 
 function buildScaffold(): {
-  backdrop: HTMLDivElement;
   panel: HTMLDivElement;
   list: HTMLDivElement;
   empty: HTMLDivElement;
@@ -77,92 +76,83 @@ function buildScaffold(): {
   browserUrl: HTMLSpanElement;
   browserFrame: HTMLIFrameElement;
 } {
-  const backdrop = document.createElement("div");
-  backdrop.id = "workstation-backdrop";
-  backdrop.setAttribute("aria-hidden", "true");
-  Object.assign(backdrop.style, {
-    position: "fixed",
-    inset: "0",
-    background: "rgba(6, 10, 18, 0.42)",
-    opacity: "0",
-    pointerEvents: "none",
-    transition: "opacity 0.2s ease",
-    zIndex: "99",
-  });
-
+  // The panel mounts INSIDE the liquid-glass workstation plane via
+  // the renderer's CSS2DObject stage — not as a fixed overlay. Sizing
+  // fills the stage element (580×360 by convention); the plane owns
+  // the positioning in 3D space, the breathing, and the visibility
+  // fade. No backdrop, no fixed-position chrome, no z-index battles
+  // with other surfaces.
   const panel = document.createElement("div");
   panel.id = "workstation-panel";
   panel.setAttribute("role", "region");
   panel.setAttribute("aria-label", "Workstation — motebit tool calls");
   Object.assign(panel.style, {
-    position: "fixed",
-    top: "50%",
-    right: "24px",
-    transform: "translate(calc(100% + 40px), -50%)",
-    width: "min(680px, calc(100vw - 48px))",
-    maxHeight: "min(820px, calc(100vh - 48px))",
-    background: "rgba(18, 22, 34, 0.92)",
-    color: "rgba(230, 235, 245, 0.94)",
-    borderRadius: "14px",
-    boxShadow: "0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(120, 140, 180, 0.18)",
-    backdropFilter: "blur(22px) saturate(1.3)",
-    transition: "transform 0.24s ease",
+    width: "100%",
+    height: "100%",
+    color: "rgba(14, 22, 40, 0.96)",
+    // Transparent background — the plane IS the surface. Content sits
+    // directly on the glass; no overlay card, no drop shadow, no
+    // backdrop-filter duplication.
+    background: "transparent",
     overflow: "hidden",
     display: "flex",
     flexDirection: "column",
     fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif",
-    zIndex: "100",
+    pointerEvents: "auto",
   });
 
-  // Header
+  // Header — tuned for the liquid-glass substrate. Lower contrast
+  // than the old dark-panel treatment so text sits on the glass, not
+  // against a filled background. No bottom border; a soft separator
+  // below is enough on a translucent plane.
   const header = document.createElement("div");
   Object.assign(header.style, {
     display: "flex",
     alignItems: "center",
-    padding: "14px 16px",
-    borderBottom: "1px solid rgba(120, 140, 180, 0.14)",
+    padding: "12px 14px 10px",
     flex: "0 0 auto",
+    borderBottom: "1px solid rgba(60, 75, 105, 0.12)",
   });
 
   const title = document.createElement("span");
   title.textContent = "Workstation";
   Object.assign(title.style, {
-    fontSize: "13px",
+    fontSize: "12.5px",
     fontWeight: "600",
-    letterSpacing: "0.01em",
+    letterSpacing: "0.02em",
     flex: "1 1 auto",
+    color: "rgba(20, 30, 50, 0.92)",
   });
 
   const headerCount = document.createElement("span");
   headerCount.id = "workstation-count";
   Object.assign(headerCount.style, {
-    fontSize: "10.5px",
-    color: "rgba(170, 180, 200, 0.72)",
-    letterSpacing: "0.02em",
-    marginRight: "12px",
+    fontSize: "10px",
+    color: "rgba(80, 100, 140, 0.72)",
+    letterSpacing: "0.04em",
+    marginRight: "10px",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
   });
 
   const clearBtn = document.createElement("button");
   clearBtn.type = "button";
-  clearBtn.textContent = "Clear";
+  clearBtn.textContent = "clear";
   clearBtn.title = "Clear history";
   Object.assign(clearBtn.style, {
     background: "transparent",
     border: "none",
-    color: "rgba(170, 180, 200, 0.72)",
+    color: "rgba(80, 100, 140, 0.72)",
     cursor: "pointer",
-    fontSize: "11px",
+    fontSize: "10.5px",
     padding: "2px 6px",
-    marginRight: "8px",
-    borderRadius: "4px",
+    marginRight: "6px",
+    borderRadius: "3px",
+    letterSpacing: "0.04em",
   });
-  clearBtn.addEventListener(
-    "mouseenter",
-    () => (clearBtn.style.color = "rgba(230, 235, 245, 0.94)"),
-  );
+  clearBtn.addEventListener("mouseenter", () => (clearBtn.style.color = "rgba(20, 30, 50, 0.92)"));
   clearBtn.addEventListener(
     "mouseleave",
-    () => (clearBtn.style.color = "rgba(170, 180, 200, 0.72)"),
+    () => (clearBtn.style.color = "rgba(80, 100, 140, 0.72)"),
   );
 
   const closeBtn = document.createElement("button");
@@ -172,9 +162,9 @@ function buildScaffold(): {
   Object.assign(closeBtn.style, {
     background: "transparent",
     border: "none",
-    color: "rgba(230, 235, 245, 0.78)",
+    color: "rgba(60, 80, 120, 0.78)",
     cursor: "pointer",
-    fontSize: "20px",
+    fontSize: "18px",
     lineHeight: "1",
     padding: "0 4px",
   });
@@ -186,10 +176,9 @@ function buildScaffold(): {
   panel.appendChild(header);
 
   // === Browser pane (virtual_browser mode) ===
-  // When the motebit fetches a page (read_url / virtual_browser /
-  // browse_page), the fetched content renders here as a sandboxed
-  // iframe. Hidden until the first fetch arrives; the URL strip
-  // shows what the motebit is currently reading.
+  // Renders the motebit's currently-read page as a sandboxed iframe
+  // sitting directly on the glass. Hidden until the first read_url /
+  // virtual_browser / browse_page call arrives.
   const browserPane = document.createElement("div");
   browserPane.id = "workstation-browser";
   Object.assign(browserPane.style, {
@@ -197,8 +186,8 @@ function buildScaffold(): {
     flexDirection: "column",
     flex: "1 1 auto",
     minHeight: "0",
-    borderBottom: "1px solid rgba(120, 140, 180, 0.14)",
-    background: "rgba(10, 14, 22, 0.55)",
+    borderBottom: "1px solid rgba(60, 75, 105, 0.10)",
+    background: "transparent",
   });
 
   const browserStrip = document.createElement("div");
@@ -206,29 +195,29 @@ function buildScaffold(): {
     display: "flex",
     alignItems: "center",
     gap: "8px",
-    padding: "8px 14px",
-    borderBottom: "1px solid rgba(120, 140, 180, 0.08)",
+    padding: "6px 14px",
+    borderBottom: "1px solid rgba(60, 75, 105, 0.08)",
     flex: "0 0 auto",
-    fontSize: "11px",
-    letterSpacing: "0.02em",
-    color: "rgba(170, 180, 200, 0.72)",
+    fontSize: "10.5px",
+    letterSpacing: "0.04em",
+    color: "rgba(80, 100, 140, 0.72)",
   });
 
   const browserLabel = document.createElement("span");
   browserLabel.textContent = "reading";
   Object.assign(browserLabel.style, {
-    color: "rgba(150, 160, 180, 0.62)",
-    fontSize: "10.5px",
+    color: "rgba(100, 120, 155, 0.62)",
+    fontSize: "9.5px",
     textTransform: "uppercase",
-    letterSpacing: "0.08em",
+    letterSpacing: "0.1em",
   });
 
   const browserUrl = document.createElement("span");
   browserUrl.id = "workstation-browser-url";
   Object.assign(browserUrl.style, {
     fontFamily: "'SF Mono', Menlo, Consolas, monospace",
-    fontSize: "11px",
-    color: "rgba(200, 210, 225, 0.88)",
+    fontSize: "10.5px",
+    color: "rgba(30, 50, 90, 0.86)",
     flex: "1 1 auto",
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -248,8 +237,7 @@ function buildScaffold(): {
     border: "none",
     width: "100%",
     flex: "1 1 auto",
-    minHeight: "280px",
-    maxHeight: "420px",
+    minHeight: "180px",
     background: "transparent",
     colorScheme: "light",
   });
@@ -273,16 +261,15 @@ function buildScaffold(): {
   empty.id = "workstation-empty";
   empty.textContent = "No tool calls yet.";
   Object.assign(empty.style, {
-    padding: "48px 24px",
+    padding: "36px 20px",
     textAlign: "center",
-    fontSize: "12px",
-    color: "rgba(150, 160, 180, 0.62)",
+    fontSize: "11.5px",
+    color: "rgba(90, 110, 150, 0.58)",
     fontStyle: "italic",
   });
   panel.appendChild(empty);
 
   return {
-    backdrop,
     panel,
     list,
     empty,
@@ -309,40 +296,40 @@ function buildReaderSrcdoc(content: string, sourceUrl: string): string {
     }
   })();
   return `<!doctype html><html><head><meta charset="utf-8">${hostAttr ? `<base href="${hostAttr}">` : ""}<style>
-    html, body { margin: 0; padding: 0; background: transparent; color-scheme: dark; }
+    html, body { margin: 0; padding: 0; background: transparent; color-scheme: light; }
     body {
       font-family: ui-serif, "New York", "Iowan Old Style", Charter,
         "Palatino Linotype", Palatino, Georgia, serif;
-      font-size: 14.5px;
-      line-height: 1.7;
-      color: rgba(230, 235, 245, 0.94);
-      padding: 20px 26px 26px;
-      max-width: 620px;
+      font-size: 13.5px;
+      line-height: 1.65;
+      color: rgba(14, 22, 40, 0.92);
+      padding: 16px 22px 22px;
+      max-width: 560px;
       word-wrap: break-word;
     }
     h1, h2, h3, h4, h5, h6 {
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
-      color: rgba(245, 248, 254, 0.98);
+      color: rgba(10, 18, 32, 0.98);
       line-height: 1.25;
-      margin: 24px 0 10px;
+      margin: 20px 0 8px;
       letter-spacing: -0.02em;
     }
-    h1 { font-size: 22px; font-weight: 700; margin-top: 0; }
-    h2 { font-size: 18px; font-weight: 600; }
-    h3 { font-size: 15px; font-weight: 600; }
-    p { margin: 0 0 14px 0; }
-    ul { padding-left: 22px; margin: 0 0 14px 0; }
-    li { margin-bottom: 5px; }
+    h1 { font-size: 19px; font-weight: 700; margin-top: 0; }
+    h2 { font-size: 16px; font-weight: 600; }
+    h3 { font-size: 14px; font-weight: 600; }
+    p { margin: 0 0 12px 0; }
+    ul { padding-left: 20px; margin: 0 0 12px 0; }
+    li { margin-bottom: 4px; }
     a {
-      color: rgba(140, 180, 230, 0.92);
+      color: rgba(60, 100, 170, 0.92);
       text-decoration: underline;
       text-decoration-thickness: 0.5px;
       text-underline-offset: 3px;
     }
-    ::selection { background: rgba(100, 140, 200, 0.35); }
-    ::-webkit-scrollbar { width: 7px; }
+    ::selection { background: rgba(80, 110, 165, 0.25); }
+    ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(140, 160, 200, 0.25); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb { background: rgba(100, 120, 160, 0.3); border-radius: 3px; }
   </style></head><body><article>${body}</article></body></html>`;
 }
 
@@ -407,13 +394,15 @@ function inlineMarkdown(s: string): string {
 function buildReceiptRow(receipt: ToolInvocationReceiptLike): HTMLDivElement {
   const row = document.createElement("div");
   Object.assign(row.style, {
-    padding: "10px 12px",
-    borderRadius: "8px",
-    marginBottom: "6px",
-    background: "rgba(35, 42, 56, 0.48)",
-    fontSize: "12px",
-    lineHeight: "1.45",
-    border: "1px solid rgba(120, 140, 180, 0.08)",
+    padding: "8px 10px",
+    borderRadius: "6px",
+    marginBottom: "4px",
+    // Ultra-subtle background — just enough differentiation to let
+    // rows settle into the glass as frosted droplets.
+    background: "rgba(255, 255, 255, 0.32)",
+    fontSize: "11.5px",
+    lineHeight: "1.4",
+    border: "1px solid rgba(100, 120, 155, 0.08)",
   });
 
   const durationMs = Math.max(0, receipt.completed_at - receipt.started_at);
@@ -436,25 +425,25 @@ function buildReceiptRow(receipt: ToolInvocationReceiptLike): HTMLDivElement {
   toolName.textContent = receipt.tool_name;
   Object.assign(toolName.style, {
     fontWeight: "600",
-    fontSize: "12.5px",
-    color: "rgba(230, 235, 245, 0.98)",
+    fontSize: "11.5px",
+    color: "rgba(20, 30, 50, 0.96)",
     fontFamily: "'SF Mono', Menlo, Consolas, monospace",
   });
 
   const relTime = document.createElement("span");
   relTime.textContent = formatRelativeTime(receipt.completed_at);
   Object.assign(relTime.style, {
-    fontSize: "10.5px",
-    color: "rgba(150, 160, 180, 0.72)",
-    letterSpacing: "0.02em",
+    fontSize: "10px",
+    color: "rgba(90, 110, 150, 0.72)",
+    letterSpacing: "0.03em",
     marginLeft: "auto",
   });
 
   const durationEl = document.createElement("span");
   durationEl.textContent = duration;
   Object.assign(durationEl.style, {
-    fontSize: "10.5px",
-    color: "rgba(150, 160, 180, 0.72)",
+    fontSize: "10px",
+    color: "rgba(90, 110, 150, 0.72)",
     fontFamily: "'SF Mono', Menlo, Consolas, monospace",
   });
 
@@ -464,14 +453,16 @@ function buildReceiptRow(receipt: ToolInvocationReceiptLike): HTMLDivElement {
   row.appendChild(topLine);
 
   const meta = document.createElement("div");
+  const labelColor = "rgba(90, 110, 150, 0.72)";
+  const valColor = "rgba(40, 60, 100, 0.82)";
   meta.innerHTML = [
-    `<span style="color: rgba(150,160,180,0.72)">args</span> <span style="font-family:'SF Mono',Menlo,Consolas,monospace;color:rgba(200,210,225,0.82)">${escapeHtml(shortHash(receipt.args_hash))}…</span>`,
-    `<span style="color: rgba(150,160,180,0.72)">result</span> <span style="font-family:'SF Mono',Menlo,Consolas,monospace;color:rgba(200,210,225,0.82)">${escapeHtml(shortHash(receipt.result_hash))}…</span>`,
-    `<span style="color: rgba(150,160,180,0.72)">sig</span> <span style="font-family:'SF Mono',Menlo,Consolas,monospace;color:rgba(200,210,225,0.82)">${escapeHtml(shortHash(receipt.signature))}…</span>`,
+    `<span style="color: ${labelColor}">args</span> <span style="font-family:'SF Mono',Menlo,Consolas,monospace;color:${valColor}">${escapeHtml(shortHash(receipt.args_hash))}…</span>`,
+    `<span style="color: ${labelColor}">result</span> <span style="font-family:'SF Mono',Menlo,Consolas,monospace;color:${valColor}">${escapeHtml(shortHash(receipt.result_hash))}…</span>`,
+    `<span style="color: ${labelColor}">sig</span> <span style="font-family:'SF Mono',Menlo,Consolas,monospace;color:${valColor}">${escapeHtml(shortHash(receipt.signature))}…</span>`,
   ].join(" &nbsp; ");
   Object.assign(meta.style, {
-    fontSize: "10.5px",
-    letterSpacing: "0.01em",
+    fontSize: "10px",
+    letterSpacing: "0.02em",
   });
   row.appendChild(meta);
 
@@ -484,10 +475,10 @@ function buildReceiptRow(receipt: ToolInvocationReceiptLike): HTMLDivElement {
     void navigator.clipboard.writeText(JSON.stringify(receipt, null, 2));
   });
   row.addEventListener("mouseenter", () => {
-    row.style.background = "rgba(45, 54, 72, 0.62)";
+    row.style.background = "rgba(255, 255, 255, 0.56)";
   });
   row.addEventListener("mouseleave", () => {
-    row.style.background = "rgba(35, 42, 56, 0.48)";
+    row.style.background = "rgba(255, 255, 255, 0.32)";
   });
 
   return row;
@@ -561,20 +552,26 @@ function buildLauncher(onClick: () => void): HTMLButtonElement {
     height: "36px",
     borderRadius: "50%",
     border: "none",
-    background: "rgba(18, 22, 34, 0.82)",
-    color: "rgba(200, 210, 225, 0.82)",
+    background: "rgba(255, 255, 255, 0.62)",
+    color: "rgba(40, 60, 100, 0.78)",
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    boxShadow: "0 6px 18px rgba(0,0,0,0.28)",
-    backdropFilter: "blur(12px) saturate(1.2)",
+    boxShadow: "0 4px 14px rgba(80, 100, 140, 0.2)",
+    backdropFilter: "blur(10px) saturate(1.2)",
     zIndex: "98",
-    transition: "transform 0.12s ease, background 0.16s ease",
+    transition: "background 0.16s ease, color 0.16s ease",
   });
   btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="1.5"/><line x1="3" y1="20" x2="21" y2="20"/><line x1="9" y1="16" x2="9" y2="20"/><line x1="15" y1="16" x2="15" y2="20"/></svg>`;
-  btn.addEventListener("mouseenter", () => (btn.style.background = "rgba(30, 38, 52, 0.94)"));
-  btn.addEventListener("mouseleave", () => (btn.style.background = "rgba(18, 22, 34, 0.82)"));
+  btn.addEventListener("mouseenter", () => {
+    btn.style.background = "rgba(255, 255, 255, 0.82)";
+    btn.style.color = "rgba(20, 40, 80, 0.92)";
+  });
+  btn.addEventListener("mouseleave", () => {
+    btn.style.background = "rgba(255, 255, 255, 0.62)";
+    btn.style.color = "rgba(40, 60, 100, 0.78)";
+  });
   btn.addEventListener("click", onClick);
   return btn;
 }
@@ -584,24 +581,18 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
   let controller: WorkstationController | null = null;
   let open_ = false;
 
+  // The renderer exposes the liquid-glass plane's stage mount. When
+  // present, we render ONTO the plane (primary path). When absent
+  // (headless tests, WebGL unavailable) we fall back to a fixed
+  // overlay so the surface still functions without 3D.
+  const renderer = ctx.app.getRenderer?.() ?? null;
+
   function ensureBuilt(): ReturnType<typeof buildScaffold> {
     if (scaffold) return scaffold;
 
     scaffold = buildScaffold();
-    const {
-      backdrop,
-      panel,
-      list,
-      empty,
-      closeBtn,
-      headerCount,
-      clearBtn,
-      browserPane,
-      browserUrl,
-      browserFrame,
-    } = scaffold;
-    document.body.appendChild(backdrop);
-    document.body.appendChild(panel);
+    const { list, empty, closeBtn, headerCount, clearBtn, browserPane, browserUrl, browserFrame } =
+      scaffold;
 
     const adapter: WorkstationFetchAdapter = {
       subscribeToolInvocations: (listener) => ctx.app.subscribeToolInvocations(listener),
@@ -619,7 +610,6 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     render(controller.getState(), renderRefs, renderCache);
 
     closeBtn.addEventListener("click", close);
-    backdrop.addEventListener("click", close);
     clearBtn.addEventListener("click", () => controller?.clearHistory());
 
     return scaffold;
@@ -627,22 +617,44 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
 
   function open(): void {
     if (open_) return;
-    const { backdrop, panel } = ensureBuilt();
+    const { panel } = ensureBuilt();
     open_ = true;
-    // Animate in the next frame so the transition fires.
-    requestAnimationFrame(() => {
-      backdrop.style.opacity = "1";
-      backdrop.style.pointerEvents = "auto";
-      panel.style.transform = "translate(0, -50%)";
-    });
+
+    if (renderer?.setWorkstationStageChild && renderer?.setWorkstationVisible) {
+      // Primary path: mount the panel on the liquid-glass plane. The
+      // plane owns positioning (next to the creature), breathing, and
+      // the visibility fade. No fixed-position overlay, no backdrop.
+      renderer.setWorkstationStageChild(panel);
+      renderer.setWorkstationVisible(true);
+    } else {
+      // Fallback path (WebGL unavailable / NullAdapter / tests):
+      // float as a fixed overlay so the surface still functions.
+      Object.assign(panel.style, {
+        position: "fixed",
+        top: "50%",
+        right: "24px",
+        transform: "translate(0, -50%)",
+        width: "min(680px, calc(100vw - 48px))",
+        maxHeight: "min(820px, calc(100vh - 48px))",
+        background: "rgba(245, 248, 252, 0.9)",
+        color: "rgba(14, 22, 40, 0.96)",
+        borderRadius: "14px",
+        boxShadow: "0 20px 60px rgba(80, 100, 140, 0.28)",
+        backdropFilter: "blur(22px) saturate(1.3)",
+        zIndex: "100",
+      });
+      document.body.appendChild(panel);
+    }
   }
 
   function close(): void {
     if (!open_ || !scaffold) return;
     open_ = false;
-    scaffold.backdrop.style.opacity = "0";
-    scaffold.backdrop.style.pointerEvents = "none";
-    scaffold.panel.style.transform = "translate(calc(100% + 40px), -50%)";
+    if (renderer?.setWorkstationVisible) {
+      renderer.setWorkstationVisible(false);
+    } else if (scaffold.panel.parentElement) {
+      scaffold.panel.parentElement.removeChild(scaffold.panel);
+    }
   }
 
   function toggle(): void {
@@ -654,10 +666,9 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     return open_;
   }
 
-  // Mount a floating launcher button in the bottom-right corner so the
-  // panel is reachable without a keyboard shortcut. The button itself
-  // is tiny and intentionally low-contrast — it's a utility affordance,
-  // not a primary surface.
+  // Floating launcher button — bottom-right, beside the sovereign
+  // button. Tuned for the liquid-glass aesthetic (semi-transparent
+  // white with blur) instead of the previous dark chip.
   const launcher = buildLauncher(() => toggle());
   document.body.appendChild(launcher);
 

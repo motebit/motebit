@@ -757,6 +757,16 @@ export class WebApp {
     };
   }
 
+  /**
+   * Expose the render adapter so surface modules that need to drive
+   * scene primitives directly (workstation plane, artifact manager)
+   * can reach them without holding a reference through every seam.
+   * Returns the concrete `ThreeJSAdapter` the web app instantiates.
+   */
+  getRenderer(): ThreeJSAdapter {
+    return this.renderer;
+  }
+
   // === Approval Flow ===
 
   get hasPendingApproval(): boolean {

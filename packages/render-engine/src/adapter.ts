@@ -11,6 +11,7 @@ import type {
   ArtifactHandle,
 } from "./spec.js";
 import { ArtifactManager } from "./artifacts.js";
+import { WorkstationPlane } from "./workstation-plane.js";
 import {
   createCreature,
   createCreatureState,
@@ -80,6 +81,7 @@ export class ThreeJSAdapter implements RenderAdapter {
 
   private controls: OrbitControls | null = null;
   private artifactManager: ArtifactManager | null = null;
+  private workstationPlane: WorkstationPlane | null = null;
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -116,6 +118,12 @@ export class ThreeJSAdapter implements RenderAdapter {
     const container = canvas.parentElement ?? document.body;
     if (this.creatureRefs) {
       this.artifactManager = new ArtifactManager(this.creatureRefs.group, container);
+      // Liquid-glass workstation plane floats to the creature's right,
+      // hung off the creature group so it inherits world transform
+      // (drift, bob, sag). Hosts the workstation panel DOM via its
+      // single-stage CSS2D anchor. Hidden by default — revealed by
+      // the launcher button / Option+W hotkey.
+      this.workstationPlane = new WorkstationPlane(this.creatureRefs.group, container);
     }
 
     // === Lighting ===
@@ -151,6 +159,10 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.artifactManager.update(frame.delta_time);
       this.artifactManager.render(this.scene, this.camera);
     }
+    if (this.workstationPlane) {
+      this.workstationPlane.update(frame.time, frame.delta_time);
+      this.workstationPlane.render(this.scene, this.camera);
+    }
   }
 
   getSpec(): RenderSpec {
@@ -166,6 +178,7 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.renderer.setSize(width, height, false);
     }
     this.artifactManager?.resize(width, height);
+    this.workstationPlane?.resize(width, height);
   }
 
   // === Spatial Canvas ===
@@ -181,6 +194,16 @@ export class ThreeJSAdapter implements RenderAdapter {
 
   clearArtifacts(): void {
     this.artifactManager?.clear();
+  }
+
+  // === Workstation Plane ===
+
+  setWorkstationStageChild(el: HTMLElement | null): void {
+    this.workstationPlane?.setStageChild(el);
+  }
+
+  setWorkstationVisible(visible: boolean): void {
+    this.workstationPlane?.setUserVisible(visible);
   }
 
   setBackground(color: number | null): void {
@@ -217,6 +240,9 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.creatureRefs.bodyMaterial.emissiveIntensity = color.glowIntensity ?? 0.0;
       this.creatureRefs.bodyMaterial.needsUpdate = true;
     }
+    // Mirror the soul color onto the workstation plane so the plane
+    // and the creature read as one body when the plane is open.
+    this.workstationPlane?.setInteriorColor(color);
   }
 
   setAudioReactivity(energy: AudioReactivity | null): void {
@@ -262,6 +288,8 @@ export class ThreeJSAdapter implements RenderAdapter {
 
     this.artifactManager?.dispose();
     this.artifactManager = null;
+    this.workstationPlane?.dispose();
+    this.workstationPlane = null;
 
     if (this.scene?.environment) this.scene.environment.dispose();
     if (this.scene) {

@@ -118,6 +118,28 @@ export interface RenderAdapter {
   removeArtifact?(id: string): Promise<void>;
   /** Remove all artifacts immediately. */
   clearArtifacts?(): void;
+
+  // === Workstation Plane ===
+  //
+  // A liquid-glass plane floating to the right of the creature where
+  // the agent-workstation surface mounts its content (receipt log,
+  // browser pane). Same material family as the creature, held-tablet
+  // pose, sympathetic breathing. The plane is implicit — the renderer
+  // owns it — callers drive it via these two methods only.
+
+  /**
+   * Mount a caller-owned HTML element as the workstation plane's
+   * stage content. Replaces whatever was there; `null` clears.
+   * The element is positioned on the plane via a CSS2DObject; the
+   * renderer handles projection to screen space.
+   */
+  setWorkstationStageChild?(el: HTMLElement | null): void;
+  /**
+   * Toggle the workstation plane's visibility. The launcher button
+   * and Option+W hotkey route through here. When `false`, the plane
+   * fades out and its DOM stops capturing pointer events.
+   */
+  setWorkstationVisible?(visible: boolean): void;
 }
 
 // === Frame-Independent Delta Smoothing ===
