@@ -23,3 +23,9 @@ packages/*/etc/*.api.md
 # between the committed file and renderMarkdown() output. Prettier
 # reformatting it breaks that test.
 services/api/PRIVACY.md
+
+# Tauri auto-generated schema + capability artifacts. Regenerated on
+# every `cargo check` / `tauri dev` / `tauri build`; gitignored at
+# apps/desktop/src-tauri/.gitignore but Prettier doesn't respect
+# nested .gitignore.
+apps/desktop/src-tauri/gen
