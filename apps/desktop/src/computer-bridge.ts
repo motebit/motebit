@@ -8,10 +8,12 @@
  * outcome taxonomy (policy_denied / permission_denied / platform_blocked /
  * target_not_found / …) stays well-typed end-to-end.
  *
- * Status: pairs with the v1 Rust stub. Every call currently surfaces
- * `not_supported`. When the real screen-capture / input-injection
- * implementations land on the Rust side, only those `#[tauri::command]`
- * function bodies change — this TS wrapper is already the seam.
+ * Rust side is the real implementation (`xcap` for capture + display
+ * info, `enigo` for input dispatch) as of the Rust-v1 landing. macOS
+ * Screen Recording / Accessibility permission faults come back as
+ * `permission_denied`; unknown action kinds, empty specs, and generic
+ * dispatcher errors map to `platform_blocked`. The wire shape of this
+ * TS seam is unchanged from the stub era — the switch was Rust-local.
  */
 
 import {

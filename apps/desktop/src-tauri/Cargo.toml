@@ -12,6 +12,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 keyring = "3"
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+xcap = "0.9"
+enigo = "0.6"
+image = "0.25"
+sha2 = "0.10"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

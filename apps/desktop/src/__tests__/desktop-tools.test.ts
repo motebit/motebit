@@ -72,12 +72,13 @@ describe("registerDesktopTools", () => {
     expect(result.computer).toBeNull();
   });
 
-  it("computer tool, when invoked, proxies through the Tauri bridge and surfaces not_supported", async () => {
+  it("computer tool, when invoked, proxies through the Tauri bridge and surfaces the Rust FailureEnvelope reason", async () => {
     const registry = new SimpleToolRegistry();
     const runtime = makeRuntime();
-    // Rust stub returns Err({ reason: "not_supported", message }).
-    // Mock invoke to mimic that rejection shape so the bridge's
-    // FailureEnvelope unwrapping path runs.
+    // Mock invoke to mimic a Rust-side rejection with a FailureEnvelope
+    // so the TS bridge's unwrap + mapping path runs. `not_supported` is
+    // a valid ComputerFailureReason even after the real xcap/enigo
+    // implementation landed — e.g. a future surface lacking hardware.
     const invoke = vi.fn(async (_cmd: string) => {
       // Mimic Tauri's invoke() rejection with a plain object matching
       // Rust's FailureEnvelope shape. eslint wants Error instances;
