@@ -206,6 +206,10 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.workstationPlane?.setUserVisible(visible);
   }
 
+  pulseWorkstationActivity(): void {
+    this.workstationPlane?.pulseActivity();
+  }
+
   setBackground(color: number | null): void {
     if (this.scene) {
       this.scene.background = color === null ? null : new THREE.Color(color);

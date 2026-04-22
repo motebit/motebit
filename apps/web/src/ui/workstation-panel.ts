@@ -403,6 +403,17 @@ function buildReceiptRow(receipt: ToolInvocationReceiptLike): HTMLDivElement {
     fontSize: "11.5px",
     lineHeight: "1.4",
     border: "1px solid rgba(100, 120, 155, 0.08)",
+    // Emergence: start slightly translated + dimmed, settle to rest.
+    // The CSS transition runs on the next frame via requestAnimationFrame
+    // below. Matches the droplet-settling feel of the plane itself —
+    // rows don't pop, they surface.
+    opacity: "0",
+    transform: "translateY(-6px)",
+    transition: "opacity 0.28s ease, transform 0.28s ease, background 0.16s ease",
+  });
+  requestAnimationFrame(() => {
+    row.style.opacity = "1";
+    row.style.transform = "translateY(0)";
   });
 
   const durationMs = Math.max(0, receipt.completed_at - receipt.started_at);
@@ -496,7 +507,7 @@ function render(
     browserUrl: HTMLSpanElement;
     browserFrame: HTMLIFrameElement;
   },
-  cache: { lastPageInvocationId: string | null },
+  cache: { lastPageInvocationId: string | null; renderedIds: Set<string> },
 ): void {
   refs.headerCount.textContent =
     state.receiptCount > 0
@@ -525,14 +536,33 @@ function render(
     // Hide the empty card when the browser pane is showing a page —
     // "No tool calls yet" under a live page would be misleading.
     refs.empty.style.display = state.currentPage ? "none" : "block";
+    cache.renderedIds.clear();
+    while (refs.list.firstChild) refs.list.removeChild(refs.list.firstChild);
     return;
   }
   refs.list.style.display = "block";
   refs.empty.style.display = "none";
-  refs.list.innerHTML = "";
-  // Newest on top reads better for a live stream — UI inverts order.
-  for (let i = state.history.length - 1; i >= 0; i--) {
-    refs.list.appendChild(buildReceiptRow(state.history[i]!));
+
+  // Incremental render: only NEW receipts get the emergence animation;
+  // existing rows stay put. Newest on top — we prepend fresh rows.
+  // Also prune rows for receipts that dropped out of history (FIFO
+  // eviction at maxHistory).
+  const currentIds = new Set(state.history.map((r) => r.invocation_id));
+  for (const id of cache.renderedIds) {
+    if (!currentIds.has(id)) {
+      const stale = refs.list.querySelector<HTMLDivElement>(`[data-invocation-id="${id}"]`);
+      stale?.remove();
+      cache.renderedIds.delete(id);
+    }
+  }
+  // Walk history oldest→newest; any receipt not yet rendered is new
+  // (prepend so it lands at the top of the visible list).
+  for (const receipt of state.history) {
+    if (cache.renderedIds.has(receipt.invocation_id)) continue;
+    const row = buildReceiptRow(receipt);
+    row.dataset.invocationId = receipt.invocation_id;
+    refs.list.insertBefore(row, refs.list.firstChild);
+    cache.renderedIds.add(receipt.invocation_id);
   }
 }
 
@@ -601,8 +631,14 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     controller = createWorkstationController(adapter);
 
     const renderRefs = { list, empty, headerCount, browserPane, browserUrl, browserFrame };
-    // Scroll-preservation cache for the iframe — see render() comment.
-    const renderCache = { lastPageInvocationId: null as string | null };
+    // Scroll-preservation + incremental-render cache. lastPageInvocationId
+    // keeps the iframe from re-loading on every receipt arrival; renderedIds
+    // tracks which rows are already in the DOM so only new ones get the
+    // emergence animation.
+    const renderCache = {
+      lastPageInvocationId: null as string | null,
+      renderedIds: new Set<string>(),
+    };
 
     controller.subscribe((state) => {
       render(state, renderRefs, renderCache);

@@ -95,6 +95,14 @@ export class WorkstationPlane {
   private soulTint: [number, number, number] = [0.95, 0.97, 1.0];
   private soulGlow: [number, number, number] = [0.55, 0.78, 1.0];
   private activeWarmth = 0;
+  /**
+   * Transient warmth spike when a tool is in-flight. Set via
+   * `pulseActivity()` and decays on its own. Adds to the baseline
+   * warmth so the plane briefly brightens when the motebit is
+   * working — the visible signal that something is happening right
+   * now, without text or a spinner.
+   */
+  private activityPulse = 0;
 
   constructor(creatureGroup: THREE.Group, container: HTMLElement) {
     this.group = new THREE.Group();
@@ -249,6 +257,18 @@ export class WorkstationPlane {
   }
 
   /**
+   * Spike the plane's warmth to signal that a tool is in-flight.
+   * Call on tool-start / activity arrival; the pulse decays on its
+   * own over ~1.2s so a burst of tool calls lights the plane
+   * continuously but a single call settles back to baseline quickly.
+   * The visible signal that something is happening right now,
+   * without a spinner or text.
+   */
+  pulseActivity(): void {
+    this.activityPulse = 1.0;
+  }
+
+  /**
    * Per-frame update — driven by the same render loop that ticks the
    * creature. `t` is total animation time in seconds; `deltaTime` is
    * frame delta in seconds.
@@ -262,13 +282,17 @@ export class WorkstationPlane {
       return;
     }
 
-    // User-visible. Warmth target is 1 — the plane always shows soul
-    // tint when open. Future work can modulate warmth on activity
-    // (spike on a tool call, ease back during idle) once the
-    // workstation controller exposes a "busy" signal.
-    const warmthTarget = 1;
+    // User-visible. Baseline warmth is 0.7 (the plane always shows
+    // soul tint when open); a tool call pulses to 1.0, then decays.
+    // activeWarmth is the eased value that drives the material; the
+    // pulse adds on top and bleeds down on its own.
+    const warmthTarget = 0.7 + this.activityPulse * 0.3;
     this.planeVisibility = smoothToward(this.planeVisibility, this.visibilityTarget, deltaTime, 4);
-    this.activeWarmth = smoothToward(this.activeWarmth, warmthTarget, deltaTime, 2.5);
+    this.activeWarmth = smoothToward(this.activeWarmth, warmthTarget, deltaTime, 3.5);
+    // Pulse half-life ~0.8s — one call flashes then fades; rapid-
+    // fire calls keep it lit. Rate 0.85 gives visible brightening
+    // without dominating the surface.
+    this.activityPulse = Math.max(0, this.activityPulse - deltaTime * 0.85);
 
     // Sympathetic breathing — ~0.3 Hz, locked to the creature's time
     // base so phases stay synchronized without inter-object signaling.

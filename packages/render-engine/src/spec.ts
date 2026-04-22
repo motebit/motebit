@@ -140,6 +140,14 @@ export interface RenderAdapter {
    * fades out and its DOM stops capturing pointer events.
    */
   setWorkstationVisible?(visible: boolean): void;
+  /**
+   * Signal that a tool is in-flight — briefly brightens the plane
+   * with soul-color warmth so the user sees the motebit is working
+   * right now. The pulse decays on its own; callers just fire it
+   * when activity arrives. Multiple calls in quick succession keep
+   * the plane lit.
+   */
+  pulseWorkstationActivity?(): void;
 }
 
 // === Frame-Independent Delta Smoothing ===

@@ -356,8 +356,10 @@ export class WebApp {
         },
         // Parallel activity bus — raw args/result for the live
         // browser-pane renderer. Same fan-out + isolation as the
-        // receipt bus.
+        // receipt bus. Also pulses the workstation plane's warmth
+        // so the user sees the motebit is working in real time.
         onToolActivity: (event) => {
+          this.renderer.pulseWorkstationActivity?.();
           for (const listener of this._toolActivityListeners) {
             try {
               listener(event);
