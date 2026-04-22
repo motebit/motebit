@@ -460,10 +460,13 @@ function parseStructuredText(source: string): string {
 
 function inlineMarkdown(s: string): string {
   const escaped = escapeHtml(s);
-  return escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, href) => {
-    if (!/^https?:\/\//i.test(href)) return match;
-    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
-  });
+  return escaped.replace(
+    /\[([^\]]+)\]\(([^)]+)\)/g,
+    (match: string, text: string, href: string) => {
+      if (!/^https?:\/\//i.test(href)) return match;
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+    },
+  );
 }
 
 // --- Receipt row ---
