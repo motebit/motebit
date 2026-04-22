@@ -145,6 +145,16 @@ export class WebApp {
     smile_curvature: 0,
     speaking_activity: 0,
   };
+  // Workstation receipt bus. The runtime's `onToolInvocation` config
+  // fires into this set; `subscribeToolInvocations` adds late-binding
+  // listeners (e.g. the workstation panel adapter). A Set rather than
+  // a single callback so multiple panels / devtools / telemetry sinks
+  // can observe the same stream without stomping each other. Errors
+  // in individual listeners are isolated — one subscriber's fault
+  // must not starve the others.
+  private _toolInvocationListeners = new Set<
+    (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void
+  >();
 
   async init(canvas: HTMLCanvasElement): Promise<void> {
     try {
@@ -319,6 +329,21 @@ export class WebApp {
         proactiveQuietWindowMs: 90_000,
         proactiveAction: proactive.enabled ? "consolidate" : "none",
         proactiveAnchor,
+        // Workstation panel substrate: the runtime signs a
+        // ToolInvocationReceipt per tool call; we fan it out to every
+        // subscriber on the web app's bus. The panel's adapter joins
+        // the bus via `subscribeToolInvocations` after bootstrap.
+        onToolInvocation: (receipt) => {
+          for (const listener of this._toolInvocationListeners) {
+            try {
+              listener(receipt);
+            } catch {
+              // Subscriber faults are isolated — a broken panel
+              // listener must not poison the bus for the others.
+              // Callers log at their layer.
+            }
+          }
+        },
       },
       { storage, renderer: this.renderer, ai: undefined, keyring },
     );
@@ -666,6 +691,28 @@ export class WebApp {
     } finally {
       this._isProcessing = false;
     }
+  }
+
+  // === Workstation receipt bus ===
+
+  /**
+   * Subscribe to signed `ToolInvocationReceipt`s as the runtime emits
+   * them. Returns an unsubscribe thunk. Consumers: the workstation
+   * panel's adapter in the primary path; devtools / telemetry / future
+   * audit UIs can join the same stream without stepping on each other.
+   *
+   * Fires once per matched tool_call calling→done pair, after the
+   * runtime has composed and signed the receipt. Listener faults are
+   * isolated at the runtime wire-up site — a thrown exception from one
+   * subscriber does not prevent others from receiving the same receipt.
+   */
+  subscribeToolInvocations(
+    listener: (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void,
+  ): () => void {
+    this._toolInvocationListeners.add(listener);
+    return () => {
+      this._toolInvocationListeners.delete(listener);
+    };
   }
 
   // === Approval Flow ===

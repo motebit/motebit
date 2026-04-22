@@ -45,6 +45,7 @@ import {
 import { loadVoiceConfig, getTTSKey } from "./storage";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
+import { initWorkstationPanel } from "./ui/workstation-panel";
 import { initTheme } from "./ui/theme";
 import { initSlashCommands } from "./ui/slash-commands";
 import { initKeyboard, openShortcutDialog } from "./ui/keyboard";
@@ -193,6 +194,7 @@ initKeyboard({
 
 const gatedPanels = initGatedPanels(ctx);
 const sovereignPanels = initSovereignPanels(ctx);
+const workstationPanel = initWorkstationPanel(ctx);
 
 // === Theme ===
 
@@ -211,7 +213,9 @@ const sovereignPanel = document.getElementById("sovereign-panel") as HTMLDivElem
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (sovereignPanel.classList.contains("open")) {
+    if (workstationPanel.isOpen()) {
+      workstationPanel.close();
+    } else if (sovereignPanel.classList.contains("open")) {
       sovereignPanels.close();
     } else if (memoryPanel.classList.contains("open") || goalsPanel.classList.contains("open")) {
       gatedPanels.closeAll();
@@ -220,6 +224,13 @@ document.addEventListener("keydown", (e) => {
     } else if (settingsModal.classList.contains("open")) {
       settings.close();
     }
+  }
+  // Workstation toggle: Option+W (Alt+W) — a low-traffic binding that
+  // doesn't collide with browser-level shortcuts. Menu bar surfaces
+  // can bind the same capability later.
+  if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "w" || e.key === "W")) {
+    e.preventDefault();
+    workstationPanel.toggle();
   }
 });
 

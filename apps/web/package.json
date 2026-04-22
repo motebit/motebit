@@ -21,6 +21,7 @@
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/browser-persistence": "workspace:*",
     "@motebit/core-identity": "workspace:*",
+    "@motebit/crypto": "workspace:*",
     "@motebit/encryption": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
