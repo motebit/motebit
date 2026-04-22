@@ -84,7 +84,8 @@ export const computerDefinition: ToolDefinition = {
     properties: {
       session_id: {
         type: "string",
-        description: "Open computer-use session identifier.",
+        description:
+          "Open computer-use session identifier. Optional — if omitted, the runtime's default session for this motebit is used.",
       },
       action: {
         description: "Action to perform. Must be a discriminated variant with a `kind` field.",
@@ -198,7 +199,7 @@ export const computerDefinition: ToolDefinition = {
         ],
       },
     },
-    required: ["session_id", "action"],
+    required: ["action"],
   },
 };
 

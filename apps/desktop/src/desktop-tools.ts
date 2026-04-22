@@ -40,13 +40,15 @@ import {
   tauriShellExecDefinition,
   createTauriShellExecHandler,
 } from "./tauri-tools.js";
+import { registerComputerTool, type ComputerToolRegistration } from "./computer-tool.js";
 import type { InvokeFn } from "./tauri-storage.js";
 
 export function registerDesktopTools(
   registry: SimpleToolRegistry,
   runtime: MotebitRuntime,
   invoke?: InvokeFn,
-): void {
+): { computer: ComputerToolRegistration | null } {
+  let computer: ComputerToolRegistration | null = null;
   // Search provider chain: Brave (if API key configured) → DuckDuckGo fallback
   const braveKey = import.meta.env.VITE_BRAVE_SEARCH_API_KEY as string | undefined;
   let searchProvider: SearchProvider | undefined;
@@ -90,5 +92,17 @@ export function registerDesktopTools(
     registry.register(tauriReadFileDefinition, createTauriReadFileHandler(invoke));
     registry.register(tauriWriteFileDefinition, createTauriWriteFileHandler(invoke));
     registry.register(tauriShellExecDefinition, createTauriShellExecHandler(invoke));
+
+    // Computer-use — full-fidelity viewport on desktop per
+    // docs/doctrine/workstation-viewport.md. Currently backed by a
+    // Rust stub returning `not_supported`; the real screen-capture +
+    // input-injection implementation lands without touching this TS
+    // wiring (the dispatcher boundary is stable).
+    computer = registerComputerTool(registry, {
+      invoke,
+      motebitId: runtime.motebitId,
+    });
   }
+
+  return { computer };
 }

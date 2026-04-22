@@ -61,6 +61,37 @@ describe("registerDesktopTools", () => {
     expect(names).toContain("read_file");
     expect(names).toContain("write_file");
     expect(names).toContain("shell_exec");
+    expect(names).toContain("computer");
+  });
+
+  it("computer tool is NOT registered without invoke (sandboxed tests)", () => {
+    const registry = new SimpleToolRegistry();
+    const runtime = makeRuntime();
+    const result = registerDesktopTools(registry, runtime);
+    expect(registry.list().map((t) => t.name)).not.toContain("computer");
+    expect(result.computer).toBeNull();
+  });
+
+  it("computer tool, when invoked, proxies through the Tauri bridge and surfaces not_supported", async () => {
+    const registry = new SimpleToolRegistry();
+    const runtime = makeRuntime();
+    // Rust stub returns Err({ reason: "not_supported", message }).
+    // Mock invoke to mimic that rejection shape so the bridge's
+    // FailureEnvelope unwrapping path runs.
+    const invoke = vi.fn(async (_cmd: string) => {
+      throw { reason: "not_supported", message: "stub" };
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { computer } = registerDesktopTools(registry, runtime, invoke as any);
+    expect(computer).not.toBeNull();
+    const result = await registry.execute("computer", {
+      action: { kind: "screenshot" },
+    });
+    expect(result.ok).toBe(false);
+    // Error message includes the structured reason the session manager
+    // normalized from the dispatcher throw.
+    expect(result.error).toContain("not_supported");
+    await computer?.dispose();
   });
 
   it("recall_memories handler calls runtime.memory.recallRelevant", async () => {

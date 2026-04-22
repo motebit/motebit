@@ -13,9 +13,13 @@ import {
 } from "../builtins/computer.js";
 
 describe("computerDefinition", () => {
-  it("declares the computer tool name and top-level required fields", () => {
+  it("declares the computer tool name; only `action` is required at the AI boundary", () => {
     expect(computerDefinition.name).toBe("computer");
-    expect(computerDefinition.inputSchema.required).toEqual(["session_id", "action"]);
+    // session_id is optional at the AI surface — the handler fills it
+    // from the runtime's default session. Wire-format
+    // ComputerActionRequest still requires session_id on the signed
+    // receipt.
+    expect(computerDefinition.inputSchema.required).toEqual(["action"]);
   });
 
   it("exposes action as a discriminated oneOf, one branch per kind", () => {

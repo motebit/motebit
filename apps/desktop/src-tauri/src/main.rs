@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod computer_use;
+
+use computer_use::{computer_execute, computer_query_display};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde_json::Value as JsonValue;
 use std::sync::Mutex;
@@ -855,6 +858,8 @@ fn main() {
             goals_delete,
             goals_outcomes,
             tts_openai_speech,
+            computer_query_display,
+            computer_execute,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
