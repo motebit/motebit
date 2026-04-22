@@ -7,11 +7,13 @@
   "properties": {
     "session_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Newly allocated computer-use session identifier."
     },
     "motebit_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Motebit identity binding for this session."
     },
     "display_width": {
       "type": "integer",
@@ -20,7 +22,8 @@
     },
     "display_height": {
       "type": "integer",
-      "exclusiveMinimum": 0
+      "exclusiveMinimum": 0,
+      "description": "Primary display logical height in pixels."
     },
     "scaling_factor": {
       "type": "number",
@@ -29,7 +32,8 @@
     },
     "opened_at": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Unix ms when the session opened."
     }
   },
   "required": [
@@ -47,11 +51,13 @@
       "properties": {
         "session_id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Newly allocated computer-use session identifier."
         },
         "motebit_id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Motebit identity binding for this session."
         },
         "display_width": {
           "type": "integer",
@@ -60,7 +66,8 @@
         },
         "display_height": {
           "type": "integer",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "description": "Primary display logical height in pixels."
         },
         "scaling_factor": {
           "type": "number",
@@ -69,7 +76,8 @@
         },
         "opened_at": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Unix ms when the session opened."
         }
       },
       "required": [

@@ -275,12 +275,16 @@ export const COMPUTER_SESSION_OPENED_SCHEMA_ID = `${SCHEMA_BASE}/computer-sessio
 
 export const ComputerSessionOpenedSchema = z
   .object({
-    session_id: z.string().min(1),
-    motebit_id: z.string().min(1),
+    session_id: z.string().min(1).describe("Newly allocated computer-use session identifier."),
+    motebit_id: z.string().min(1).describe("Motebit identity binding for this session."),
     display_width: z.number().int().positive().describe("Primary display logical width in pixels."),
-    display_height: z.number().int().positive(),
+    display_height: z
+      .number()
+      .int()
+      .positive()
+      .describe("Primary display logical height in pixels."),
     scaling_factor: z.number().positive().describe("Logical-to-physical ratio. Retina = 2.0."),
-    opened_at: z.number().int().nonnegative(),
+    opened_at: z.number().int().nonnegative().describe("Unix ms when the session opened."),
   })
   .passthrough();
 
@@ -315,9 +319,14 @@ export const COMPUTER_SESSION_CLOSED_SCHEMA_ID = `${SCHEMA_BASE}/computer-sessio
 
 export const ComputerSessionClosedSchema = z
   .object({
-    session_id: z.string().min(1),
-    closed_at: z.number().int().nonnegative(),
-    reason: z.string().optional(),
+    session_id: z.string().min(1).describe("Computer-use session identifier being closed."),
+    closed_at: z.number().int().nonnegative().describe("Unix ms when the session closed."),
+    reason: z
+      .string()
+      .optional()
+      .describe(
+        "Free-text close reason. Examples: 'user_closed', 'timeout', 'error', 'manager_disposed'.",
+      ),
   })
   .passthrough();
 

@@ -143,6 +143,16 @@ import {
   buildPlanCompletedPayloadJsonSchema,
   buildPlanFailedPayloadJsonSchema,
 } from "../plan-lifecycle.js";
+import {
+  COMPUTER_ACTION_REQUEST_SCHEMA_ID,
+  COMPUTER_OBSERVATION_RESULT_SCHEMA_ID,
+  COMPUTER_SESSION_OPENED_SCHEMA_ID,
+  COMPUTER_SESSION_CLOSED_SCHEMA_ID,
+  buildComputerActionRequestJsonSchema,
+  buildComputerObservationResultJsonSchema,
+  buildComputerSessionOpenedJsonSchema,
+  buildComputerSessionClosedJsonSchema,
+} from "../computer-use.js";
 
 interface SchemaCase {
   name: string;
@@ -445,6 +455,30 @@ const CASES: SchemaCase[] = [
     expectedId: PLAN_FAILED_PAYLOAD_SCHEMA_ID,
     build: buildPlanFailedPayloadJsonSchema,
   },
+  {
+    name: "computer-action-request-v1",
+    filename: "computer-action-request-v1.json",
+    expectedId: COMPUTER_ACTION_REQUEST_SCHEMA_ID,
+    build: buildComputerActionRequestJsonSchema,
+  },
+  {
+    name: "computer-observation-result-v1",
+    filename: "computer-observation-result-v1.json",
+    expectedId: COMPUTER_OBSERVATION_RESULT_SCHEMA_ID,
+    build: buildComputerObservationResultJsonSchema,
+  },
+  {
+    name: "computer-session-opened-v1",
+    filename: "computer-session-opened-v1.json",
+    expectedId: COMPUTER_SESSION_OPENED_SCHEMA_ID,
+    build: buildComputerSessionOpenedJsonSchema,
+  },
+  {
+    name: "computer-session-closed-v1",
+    filename: "computer-session-closed-v1.json",
+    expectedId: COMPUTER_SESSION_CLOSED_SCHEMA_ID,
+    build: buildComputerSessionClosedJsonSchema,
+  },
 ];
 
 describe("wire-schemas drift (invariant #22)", () => {
@@ -473,11 +507,47 @@ describe("wire-schemas drift (invariant #22)", () => {
 
       it("every top-level property carries a description", () => {
         const live = c.build();
-        const props = live.properties as Record<string, { description?: string }>;
         const undocumented: string[] = [];
-        for (const [key, value] of Object.entries(props)) {
-          if (value.description == null || value.description === "") {
-            undocumented.push(key);
+
+        /**
+         * Walks top-level property bags. For object schemas, that's
+         * `live.properties`. For discriminated-union schemas (the
+         * computer-observation-result variant), top-level is `oneOf`
+         * with per-branch `properties` — we walk each branch and label
+         * any missing descriptions with `<kind>.` to keep failures
+         * actionable.
+         */
+        const oneOf = (live as { oneOf?: unknown }).oneOf;
+        if (Array.isArray(oneOf)) {
+          for (const branch of oneOf) {
+            const b = branch as {
+              properties?: Record<string, { description?: string }>;
+              required?: string[];
+            };
+            const kind =
+              b.properties && "kind" in b.properties
+                ? ((b.properties.kind as { const?: string; enum?: string[] }).enum?.[0] ??
+                  (b.properties.kind as { const?: string }).const ??
+                  "unknown")
+                : "unknown";
+            for (const [key, value] of Object.entries(b.properties ?? {})) {
+              if (value.description == null || value.description === "") {
+                // `kind` has an enum / const that's self-describing; don't
+                // require a redundant description on the discriminator.
+                if (key === "kind") continue;
+                undocumented.push(`${kind}.${key}`);
+              }
+            }
+          }
+        } else {
+          const props = (live as { properties?: Record<string, { description?: string }> })
+            .properties;
+          if (props) {
+            for (const [key, value] of Object.entries(props)) {
+              if (value.description == null || value.description === "") {
+                undocumented.push(key);
+              }
+            }
           }
         }
         expect(

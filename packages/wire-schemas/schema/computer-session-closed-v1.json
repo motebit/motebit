@@ -7,14 +7,17 @@
   "properties": {
     "session_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Computer-use session identifier being closed."
     },
     "closed_at": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Unix ms when the session closed."
     },
     "reason": {
-      "type": "string"
+      "type": "string",
+      "description": "Free-text close reason. Examples: 'user_closed', 'timeout', 'error', 'manager_disposed'."
     }
   },
   "required": ["session_id", "closed_at"],
@@ -25,14 +28,17 @@
       "properties": {
         "session_id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Computer-use session identifier being closed."
         },
         "closed_at": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Unix ms when the session closed."
         },
         "reason": {
-          "type": "string"
+          "type": "string",
+          "description": "Free-text close reason. Examples: 'user_closed', 'timeout', 'error', 'manager_disposed'."
         }
       },
       "required": ["session_id", "closed_at"],
