@@ -557,15 +557,41 @@ describe("runTurnStreaming (agentic loop)", () => {
     // Should have tool_status chunks
     const toolCallingChunk = chunks.find(
       (c) => c.type === "tool_status" && (c as { status: string }).status === "calling",
-    ) as { type: "tool_status"; name: string; status: string } | undefined;
+    ) as
+      | {
+          type: "tool_status";
+          name: string;
+          status: string;
+          tool_call_id?: string;
+          args?: Record<string, unknown>;
+          started_at?: number;
+        }
+      | undefined;
     expect(toolCallingChunk).toBeDefined();
     expect(toolCallingChunk!.name).toBe("get_weather");
+    // The workstation receipt signer (see @motebit/crypto
+    // signToolInvocationReceipt) needs tool_call_id + args + started_at
+    // present on "calling" so it can hash + sign per-invocation.
+    expect(toolCallingChunk!.tool_call_id).toBe("tc_1");
+    expect(toolCallingChunk!.args).toEqual({ location: "San Francisco" });
+    expect(typeof toolCallingChunk!.started_at).toBe("number");
 
     const toolDoneChunk = chunks.find(
       (c) => c.type === "tool_status" && (c as { status: string }).status === "done",
-    ) as { type: "tool_status"; name: string; status: string; result?: unknown } | undefined;
+    ) as
+      | {
+          type: "tool_status";
+          name: string;
+          status: string;
+          result?: unknown;
+          tool_call_id?: string;
+        }
+      | undefined;
     expect(toolDoneChunk).toBeDefined();
     expect(toolDoneChunk!.result).toEqual({ temp: 72, condition: "sunny" });
+    // "done" carries tool_call_id so a consumer can pair it with the
+    // matching "calling" chunk and compose a complete receipt.
+    expect(toolDoneChunk!.tool_call_id).toBe("tc_1");
 
     // Final result should contain the follow-up text
     const resultChunk = chunks.find((c) => c.type === "result") as {

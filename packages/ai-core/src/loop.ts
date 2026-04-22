@@ -215,6 +215,31 @@ export type AgenticChunk =
       status: "calling" | "done";
       result?: unknown;
       context?: string;
+      /**
+       * Stable identifier for this tool call — assigned by the model and
+       * carried on both the "calling" and "done" chunks for the same
+       * invocation. Lets downstream consumers (e.g. the runtime streaming
+       * manager) match a completion chunk to the call that started it,
+       * which the per-tool-call `ToolInvocationReceipt` signer needs in
+       * order to commit to a stable invocation identity. Optional on the
+       * type to keep legacy emitters source-compatible; new emission
+       * sites set it unconditionally.
+       */
+      tool_call_id?: string;
+      /**
+       * Arguments the tool was dispatched with. Emitted on the "calling"
+       * chunk so a downstream signer can hash them for `args_hash` on
+       * the receipt without having to refetch from anywhere. Omitted on
+       * "done" chunks (the caller already has them from "calling").
+       */
+      args?: Record<string, unknown>;
+      /**
+       * Unix ms when the tool was dispatched. Emitted on "calling" so
+       * consumers can pair with `completed_at` (derived at "done" arrival
+       * time) to produce a timing window without round-tripping through
+       * a separate event. Omitted on "done".
+       */
+      started_at?: number;
     }
   | {
       type: "approval_request";
@@ -495,6 +520,7 @@ export async function* runTurnStreaming(
             name: toolCall.name,
             status: "done",
             result: decision.reason,
+            tool_call_id: toolCall.id,
           };
           conversationHistory.push({
             role: "tool",
@@ -530,6 +556,9 @@ export async function* runTurnStreaming(
           name: toolCall.name,
           status: "calling",
           context: toolContext(toolCall.name, toolCall.args),
+          tool_call_id: toolCall.id,
+          args: toolCall.args,
+          started_at: Date.now(),
         };
 
         let result: ToolResult;
@@ -538,7 +567,13 @@ export async function* runTurnStreaming(
         } catch (err: unknown) {
           toolCallsFailed++;
           const msg = err instanceof Error ? err.message : String(err);
-          yield { type: "tool_status", name: toolCall.name, status: "done", result: msg };
+          yield {
+            type: "tool_status",
+            name: toolCall.name,
+            status: "done",
+            result: msg,
+            tool_call_id: toolCall.id,
+          };
           conversationHistory.push({
             role: "tool",
             tool_call_id: toolCall.id,
@@ -586,7 +621,13 @@ export async function* runTurnStreaming(
             if (highConfidence) {
               toolCallsBlocked++;
               const reason = `Injection detected — tool result blocked (${[...check.injectionPatterns, ...(check.structuralFlags ?? [])].join(", ")})`;
-              yield { type: "tool_status", name: toolCall.name, status: "done", result: reason };
+              yield {
+                type: "tool_status",
+                name: toolCall.name,
+                status: "done",
+                result: reason,
+                tool_call_id: toolCall.id,
+              };
               conversationHistory.push({
                 role: "tool",
                 tool_call_id: toolCall.id,
@@ -606,6 +647,7 @@ export async function* runTurnStreaming(
           name: toolCall.name,
           status: "done",
           result: sanitized.data ?? sanitized.error,
+          tool_call_id: toolCall.id,
         };
 
         conversationHistory.push({
@@ -625,6 +667,7 @@ export async function* runTurnStreaming(
           name: toolCall.name,
           status: "done",
           result: "Tool not available",
+          tool_call_id: toolCall.id,
         };
         conversationHistory.push({
           role: "tool",
@@ -657,6 +700,9 @@ export async function* runTurnStreaming(
         name: toolCall.name,
         status: "calling",
         context: toolContext(toolCall.name, toolCall.args),
+        tool_call_id: toolCall.id,
+        args: toolCall.args,
+        started_at: Date.now(),
       };
       let result: ToolResult;
       try {
@@ -664,7 +710,13 @@ export async function* runTurnStreaming(
       } catch (err: unknown) {
         toolCallsFailed++;
         const msg = err instanceof Error ? err.message : String(err);
-        yield { type: "tool_status", name: toolCall.name, status: "done", result: msg };
+        yield {
+          type: "tool_status",
+          name: toolCall.name,
+          status: "done",
+          result: msg,
+          tool_call_id: toolCall.id,
+        };
         conversationHistory.push({
           role: "tool",
           tool_call_id: toolCall.id,
@@ -678,6 +730,7 @@ export async function* runTurnStreaming(
         name: toolCall.name,
         status: "done",
         result: result.data ?? result.error,
+        tool_call_id: toolCall.id,
       };
 
       // Fallback path: no PolicyGate — wrap in boundaries AND detect injection
