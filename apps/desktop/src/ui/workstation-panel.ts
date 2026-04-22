@@ -89,6 +89,7 @@ function buildScaffold(): {
   browserPane: HTMLDivElement;
   browserUrl: HTMLSpanElement;
   browserFrame: HTMLIFrameElement;
+  browserBackBtn: HTMLButtonElement;
   urlBar: HTMLInputElement;
   urlStatus: HTMLSpanElement;
   scheduledSection: HTMLDivElement;
@@ -468,6 +469,22 @@ function buildScaffold(): {
     color: "rgba(80, 100, 140, 0.72)",
   });
 
+  const browserBackBtn = document.createElement("button");
+  browserBackBtn.type = "button";
+  browserBackBtn.textContent = "‹";
+  browserBackBtn.title = "Back";
+  browserBackBtn.disabled = true;
+  Object.assign(browserBackBtn.style, {
+    background: "transparent",
+    border: "none",
+    color: "rgba(60, 80, 120, 0.72)",
+    cursor: "pointer",
+    fontSize: "16px",
+    lineHeight: "1",
+    padding: "0 4px",
+    fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+  });
+
   const browserLabel = document.createElement("span");
   browserLabel.textContent = "reading";
   Object.assign(browserLabel.style, {
@@ -489,6 +506,7 @@ function buildScaffold(): {
     whiteSpace: "nowrap",
   });
 
+  browserStrip.appendChild(browserBackBtn);
   browserStrip.appendChild(browserLabel);
   browserStrip.appendChild(browserUrl);
   browserPane.appendChild(browserStrip);
@@ -544,6 +562,7 @@ function buildScaffold(): {
     browserPane,
     browserUrl,
     browserFrame,
+    browserBackBtn,
     urlBar,
     urlStatus,
     scheduledSection,
@@ -1128,6 +1147,7 @@ export function initWorkstationPanel(ctx: DesktopContext): WorkstationPanelAPI {
       browserPane,
       browserUrl,
       browserFrame,
+      browserBackBtn,
       urlBar,
       urlStatus,
       scheduledList,
@@ -1250,25 +1270,75 @@ export function initWorkstationPanel(ctx: DesktopContext): WorkstationPanelAPI {
       scaffold.scheduledSection.style.display = "none";
     }
 
-    // URL bar — user types, presses enter, the motebit's read_url
-    // tool runs with user-tap origin. Same pipeline as the AI loop's
-    // reads; the page lands in the browser pane below.
-    let urlFetchSeq = 0;
+    // Navigable browser pane — "window to the internet" Phase 1.
+    //
+    // The user and the motebit share one gaze: both drive the same
+    // `read_url` tool through the same display surface. User types in
+    // the URL bar OR clicks a link in the rendered page; either path
+    // fires a signed `ToolInvocationReceipt` and the new page lands in
+    // the iframe via the existing controller → currentPage pipeline.
+
+    const navHistory: string[] = [];
+    let navIndex = -1;
+    let navFetchSeq = 0;
+
+    function updateBackButton(): void {
+      browserBackBtn.disabled = navIndex <= 0;
+      browserBackBtn.style.opacity = navIndex <= 0 ? "0.3" : "1";
+      browserBackBtn.style.cursor = navIndex <= 0 ? "default" : "pointer";
+    }
+
+    async function loadUrl(url: string): Promise<boolean> {
+      urlStatus.textContent = "fetching…";
+      const seq = ++navFetchSeq;
+      const result = await ctx.app.invokeLocalTool("read_url", { url });
+      if (seq !== navFetchSeq) return false;
+      urlStatus.textContent = result.ok ? "" : "failed";
+      return result.ok;
+    }
+
+    async function navigateTo(url: string): Promise<void> {
+      const ok = await loadUrl(url);
+      if (!ok) return;
+      navHistory.splice(navIndex + 1);
+      navHistory.push(url);
+      navIndex = navHistory.length - 1;
+      urlBar.value = url;
+      updateBackButton();
+    }
+
+    async function goBack(): Promise<void> {
+      if (navIndex <= 0) return;
+      navIndex--;
+      const url = navHistory[navIndex]!;
+      await loadUrl(url);
+      urlBar.value = url;
+      updateBackButton();
+    }
+
     urlBar.addEventListener("keydown", (ev) => {
       if (ev.key !== "Enter") return;
       ev.preventDefault();
       const url = normalizeUrlInput(urlBar.value);
       if (!url) return;
       urlBar.value = url;
-      urlStatus.textContent = "fetching…";
-      const seq = ++urlFetchSeq;
-      void ctx.app.invokeLocalTool("read_url", { url }).then((result) => {
-        if (seq !== urlFetchSeq) return;
-        if (result.ok) {
-          urlStatus.textContent = "";
-        } else {
-          urlStatus.textContent = "failed";
-        }
+      void navigateTo(url);
+    });
+
+    browserBackBtn.addEventListener("click", () => {
+      void goBack();
+    });
+
+    browserFrame.addEventListener("load", () => {
+      const doc = browserFrame.contentDocument;
+      if (!doc) return;
+      doc.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
+        const href = anchor.getAttribute("href") ?? "";
+        if (!/^https?:\/\//i.test(href)) return;
+        anchor.addEventListener("click", (ev: MouseEvent) => {
+          ev.preventDefault();
+          void navigateTo(href);
+        });
       });
     });
 
