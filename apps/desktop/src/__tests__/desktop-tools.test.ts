@@ -79,6 +79,10 @@ describe("registerDesktopTools", () => {
     // Mock invoke to mimic that rejection shape so the bridge's
     // FailureEnvelope unwrapping path runs.
     const invoke = vi.fn(async (_cmd: string) => {
+      // Mimic Tauri's invoke() rejection with a plain object matching
+      // Rust's FailureEnvelope shape. eslint wants Error instances;
+      // we're testing the non-Error path the bridge must tolerate.
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- testing FailureEnvelope rejection
       throw { reason: "not_supported", message: "stub" };
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
