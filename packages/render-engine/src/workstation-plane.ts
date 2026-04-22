@@ -170,6 +170,9 @@ export class WorkstationPlane {
     this.stageAnchor.position.set(0, 0, 0.002);
     const pixelScale = PLANE_WIDTH / STAGE_PIXEL_WIDTH;
     this.stageAnchor.scale.set(pixelScale, pixelScale, pixelScale);
+    // Hidden until the launcher reveals us. CSS3DRenderer reads this
+    // each frame and sets the element's style.display accordingly.
+    this.stageAnchor.visible = false;
     this.group.add(this.stageAnchor);
 
     // A dedicated CSS3DRenderer keeps z-ordering + pointer-events
@@ -226,13 +229,16 @@ export class WorkstationPlane {
    */
   setUserVisible(visible: boolean): void {
     this.userVisible = visible;
+    // CSS3DRenderer writes `element.style.display` on every frame
+    // based on the CSS3DObject's `.visible` property — so toggling
+    // DOM style.display here would get clobbered instantly. Flip the
+    // Three.js-side visibility instead; the renderer propagates
+    // display:none down to the DOM on the next tick.
+    this.stageAnchor.visible = visible;
     if (this.stageEl.style) {
-      // Display flex when visible so the workstation panel's column
-      // layout (header / browser / list) fills the stage edge-to-edge
-      // instead of collapsing to content-height. `display:none` hides
-      // the stage and releases pointer events.
-      this.stageEl.style.display = visible ? "flex" : "none";
-      this.stageEl.style.flexDirection = "column";
+      // Pointer events are ours to manage — CSS3DRenderer doesn't
+      // touch them. Releasing on hide prevents the hidden panel's
+      // DOM from swallowing clicks meant for the creature.
       this.stageEl.style.pointerEvents = visible ? "auto" : "none";
     }
     if (visible && this.planeVisibility < 0.5) {
@@ -316,10 +322,13 @@ function createStageElement(): HTMLDivElement {
   // The element fills the plane edge-to-edge in 3D space; clipping
   // content to rounded corners gives the glass a menisicus-edge feel
   // without needing separate geometry.
+  //
+  // Display is NOT set here — CSS3DRenderer writes it every frame from
+  // the parent CSS3DObject's `.visible` property. Setting it inline
+  // would be clobbered immediately.
   el.style.width = `${STAGE_PIXEL_WIDTH}px`;
   el.style.height = `${STAGE_PIXEL_HEIGHT}px`;
   el.style.boxSizing = "border-box";
-  el.style.display = "none";
   el.style.overflow = "hidden";
   el.style.borderRadius = "18px";
   el.style.pointerEvents = "none";
