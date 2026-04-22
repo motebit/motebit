@@ -241,6 +241,143 @@ export async function verifyExecutionReceiptDetailed(
   };
 }
 
+// === Tool Invocation Receipts ===
+
+/**
+ * Shape of a tool-invocation receipt for signing/verification.
+ * Structurally compatible with `@motebit/protocol` ToolInvocationReceipt.
+ *
+ * A per-tool-call signed artifact: one receipt per invocation of a tool
+ * during an agent turn. The workstation surface emits these live as tool
+ * calls complete. Binding to the enclosing task is by `task_id`; a
+ * verifier can gather all invocations for a task by matching it.
+ *
+ * Commits to structural facts only — tool name, canonical-JSON SHA-256
+ * hashes of args and result, timestamps, identities. The raw args and
+ * raw result bytes are *not* part of the receipt; a verifier who holds
+ * them can recompute the hash and check against the signature.
+ */
+export interface SignableToolInvocationReceipt {
+  invocation_id: string;
+  task_id: string;
+  motebit_id: string;
+  /** Signer's Ed25519 public key (hex). Enables verification without relay lookup. */
+  public_key?: string;
+  device_id: string;
+  tool_name: string;
+  started_at: number;
+  completed_at: number;
+  status: "completed" | "failed" | "denied";
+  args_hash: string;
+  result_hash: string;
+  /** Optional surface-determinism discriminator; signature-bound when present. */
+  invocation_origin?: "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` for
+   * this artifact today — same verification recipe as `ExecutionReceipt`.
+   * Narrowed to the single suite today so widening requires intentional
+   * registry + type change.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  signature: string;
+}
+
+/** The one suite ToolInvocationReceipts sign under today. */
+export const TOOL_INVOCATION_RECEIPT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Compute the `args_hash` / `result_hash` for a tool-invocation receipt.
+ * JCS-canonicalizes the value, then SHA-256s the UTF-8 bytes. Returns
+ * hex. Use on both sides of the wire: the producer computes the hash at
+ * sign time; a verifier with the raw value recomputes and matches.
+ *
+ * For `string` values (e.g., a plain result string), the canonicalization
+ * is the value itself wrapped with JSON escaping rules; `canonicalJson`
+ * handles both scalar and object inputs uniformly.
+ */
+export async function hashToolPayload(value: unknown): Promise<string> {
+  return canonicalSha256(value);
+}
+
+/**
+ * Sign a tool-invocation receipt. Mirrors `signExecutionReceipt`:
+ * stamps the cryptosuite into the body, canonicalizes with JCS,
+ * dispatches through `signBySuite`, and encodes as base64url.
+ *
+ * Callers pass a receipt *without* `signature` or `suite`; the signer
+ * owns both. Also embeds the public key (hex) so the receipt is
+ * independently verifiable with no relay lookup.
+ */
+export async function signToolInvocationReceipt<
+  T extends Omit<SignableToolInvocationReceipt, "signature" | "suite">,
+>(
+  receipt: T,
+  privateKey: Uint8Array,
+  publicKey?: Uint8Array,
+): Promise<T & { suite: typeof TOOL_INVOCATION_RECEIPT_SUITE; signature: string }> {
+  const withKey = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
+  const body = { ...withKey, suite: TOOL_INVOCATION_RECEIPT_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(TOOL_INVOCATION_RECEIPT_SUITE, message, privateKey);
+  const signed = { ...body, signature: toBase64Url(sig) } as T & {
+    suite: typeof TOOL_INVOCATION_RECEIPT_SUITE;
+    signature: string;
+  };
+
+  if (isReceiptDebugEnabled()) {
+    const sha = await canonicalSha256(body);
+    // eslint-disable-next-line no-console -- opt-in diagnostic, off by default
+    console.debug(
+      `[motebit/crypto] signToolInvocationReceipt canonical_sha256=${sha} tool=${
+        (body as Record<string, unknown>).tool_name as string
+      } bytes=${canonical.length}`,
+    );
+  }
+
+  return Object.freeze(signed);
+}
+
+/**
+ * Verify a tool-invocation receipt. Fails closed on unknown suite, bad
+ * base64, or signature mismatch — same rules as `verifyExecutionReceipt`.
+ */
+export async function verifyToolInvocationReceipt(
+  receipt: SignableToolInvocationReceipt,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  if (receipt.suite !== TOOL_INVOCATION_RECEIPT_SUITE) {
+    if (isReceiptDebugEnabled()) {
+      // eslint-disable-next-line no-console -- opt-in diagnostic
+      console.debug(
+        `[motebit/crypto] verifyToolInvocationReceipt EARLY_RETURN suite_mismatch actual=${JSON.stringify(receipt.suite)} expected=${JSON.stringify(TOOL_INVOCATION_RECEIPT_SUITE)}`,
+      );
+    }
+    return false;
+  }
+  const { signature, ...body } = receipt;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+
+  let valid = false;
+  try {
+    const sig = fromBase64Url(signature);
+    valid = await verifyBySuite(receipt.suite, message, sig, publicKey);
+  } catch {
+    valid = false;
+  }
+
+  if (isReceiptDebugEnabled()) {
+    const sha = await canonicalSha256(body);
+    // eslint-disable-next-line no-console -- opt-in diagnostic, off by default
+    console.debug(
+      `[motebit/crypto] verifyToolInvocationReceipt canonical_sha256=${sha} valid=${valid} bytes=${canonical.length}`,
+    );
+  }
+
+  return valid;
+}
+
 // === Sovereign Payment Receipts ===
 
 /**

@@ -701,6 +701,84 @@ export interface ExecutionReceipt {
 }
 
 /**
+ * Signed per-tool-call proof: one receipt per invocation of a tool during
+ * an agent turn. Complements `ExecutionReceipt` (which commits to the
+ * task as a whole) by committing to each individual tool call inside
+ * the task — the finer-grained audit granularity the agent-workstation
+ * surface needs to show the user exactly which tool ran, what it was
+ * given, and what it returned, with a signature per call.
+ *
+ * Why this exists as its own artifact instead of an inner field on
+ * `ExecutionReceipt`:
+ *
+ *   - Third-party implementers verifying a single tool's output do not
+ *     need the enclosing task's receipt — the per-call receipt is
+ *     independently self-verifiable with just the signer's public key.
+ *   - The workstation surface emits these live as tool calls complete,
+ *     before the enclosing task finishes; nesting inside `ExecutionReceipt`
+ *     would force the UI to wait for the outer receipt.
+ *   - Delegation is recursive at the task level (`delegation_receipts`);
+ *     keeping tool-invocation receipts separate avoids tangling two
+ *     different recursion shapes in one artifact.
+ *
+ * Commits only to structural facts: tool name, canonical SHA-256 hashes
+ * of the args and the result, the result status, the motebit + device
+ * identities, and timestamps. The receipt does *not* carry the raw args
+ * or raw result bytes — those may contain sensitive content. A verifier
+ * who holds the raw bytes can recompute the hash and check against the
+ * signature; one who holds only the receipt can still prove the tool
+ * ran with *some* input at *some* time.
+ *
+ * Binding to the enclosing task is via `task_id` — the same task_id
+ * carried on the parent `ExecutionReceipt`. A verifier can gather all
+ * tool-invocation receipts for a task by matching task_id and verify
+ * them in parallel.
+ */
+export interface ToolInvocationReceipt {
+  /** Stable identifier for this invocation — UUID assigned when the tool is dispatched. */
+  invocation_id: string;
+  /** Task this invocation belongs to. Matches `ExecutionReceipt.task_id` when nested in a task. */
+  task_id: string;
+  motebit_id: MotebitId;
+  /** Signer's Ed25519 public key (hex). Enables verification without relay lookup. */
+  public_key?: string;
+  device_id: DeviceId;
+  /** Tool name as registered in the runtime's tool registry (e.g., "read_url", "web_search"). */
+  tool_name: string;
+  /** Unix ms when the tool was dispatched. */
+  started_at: number;
+  /** Unix ms when the tool reached terminal state. Equal to `started_at` for instantaneous tools. */
+  completed_at: number;
+  /** Terminal state of the tool invocation. */
+  status: "completed" | "failed" | "denied";
+  /**
+   * SHA-256 hex digest of the canonical JSON of the tool's arguments.
+   * A verifier with the raw args recomputes and matches; absence of raw
+   * args does not weaken the receipt's self-verifiability.
+   */
+  args_hash: string;
+  /**
+   * SHA-256 hex digest of the canonical JSON of the tool's result (or of
+   * the error message string, when status is `failed` or `denied`).
+   */
+  result_hash: string;
+  /**
+   * How this invocation was authorized. `user-tap` for explicit affordance
+   * invocations (surface-determinism); `ai-loop` for model-mediated calls
+   * inside a turn. Propagates the enclosing task's origin so per-call
+   * receipts can be audited independently of the task receipt.
+   */
+  invocation_origin?: IntentOrigin;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` today.
+   * Widening requires a registry change in `SuiteId` + a new dispatch
+   * arm in `@motebit/crypto`, not a wire-format break.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  signature: string;
+}
+
+/**
  * Signed proof that the motebit performed a consolidation cycle. The
  * receipt commits to structural facts only — counts of memories merged,
  * promoted, pruned, and the cycle's identity / timestamps — never to

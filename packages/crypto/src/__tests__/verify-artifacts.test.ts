@@ -11,6 +11,9 @@ import {
   verifySignedToken,
   signExecutionReceipt,
   verifyExecutionReceipt,
+  signToolInvocationReceipt,
+  verifyToolInvocationReceipt,
+  hashToolPayload,
   signSettlement,
   verifySettlement,
   signBalanceWaiver,
@@ -44,6 +47,7 @@ import {
   hash,
   type SignedTokenPayload,
   type SignableReceipt,
+  type SignableToolInvocationReceipt,
   type KnownKeys,
 } from "../index.js";
 
@@ -329,6 +333,133 @@ describe("signExecutionReceipt / verifyExecutionReceipt", () => {
     expect(signed.delegation_receipts).toBeUndefined();
     const valid = await verifyExecutionReceipt(signed, kp.publicKey);
     expect(valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signToolInvocationReceipt / verifyToolInvocationReceipt
+// ---------------------------------------------------------------------------
+
+describe("signToolInvocationReceipt / verifyToolInvocationReceipt", () => {
+  function makeInvocation(): Omit<SignableToolInvocationReceipt, "signature" | "suite"> {
+    return {
+      invocation_id: "inv-001",
+      task_id: "task-001",
+      motebit_id: "mote-123",
+      device_id: "device-456",
+      tool_name: "read_url",
+      started_at: 1700000000000,
+      completed_at: 1700000001500,
+      status: "completed",
+      args_hash: "a".repeat(64),
+      result_hash: "b".repeat(64),
+    };
+  }
+
+  it("round-trips (sign -> verify = true)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signToolInvocationReceipt(makeInvocation(), kp.privateKey);
+
+    expect(signed.signature).toBeTruthy();
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(signed.tool_name).toBe("read_url");
+
+    const valid = await verifyToolInvocationReceipt(signed, kp.publicKey);
+    expect(valid).toBe(true);
+  });
+
+  it("detects tampering on tool_name", async () => {
+    const kp = await generateKeypair();
+    const signed = await signToolInvocationReceipt(makeInvocation(), kp.privateKey);
+
+    const tampered: SignableToolInvocationReceipt = { ...signed, tool_name: "shell_exec" };
+    const valid = await verifyToolInvocationReceipt(tampered, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("detects tampering on result_hash", async () => {
+    const kp = await generateKeypair();
+    const signed = await signToolInvocationReceipt(makeInvocation(), kp.privateKey);
+
+    const tampered: SignableToolInvocationReceipt = { ...signed, result_hash: "c".repeat(64) };
+    const valid = await verifyToolInvocationReceipt(tampered, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("detects tampering on invocation_origin", async () => {
+    const kp = await generateKeypair();
+    const signed = await signToolInvocationReceipt(
+      { ...makeInvocation(), invocation_origin: "user-tap" },
+      kp.privateKey,
+    );
+
+    const tampered: SignableToolInvocationReceipt = { ...signed, invocation_origin: "ai-loop" };
+    const valid = await verifyToolInvocationReceipt(tampered, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("rejects wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signToolInvocationReceipt(makeInvocation(), kpA.privateKey);
+
+    const valid = await verifyToolInvocationReceipt(signed, kpB.publicKey);
+    expect(valid).toBe(false);
+  });
+
+  it("is deterministic (same inputs -> same signature)", async () => {
+    const kp = await generateKeypair();
+    const a = await signToolInvocationReceipt(makeInvocation(), kp.privateKey);
+    const b = await signToolInvocationReceipt(makeInvocation(), kp.privateKey);
+    expect(a.signature).toBe(b.signature);
+  });
+
+  it("embeds the public key (hex) when provided", async () => {
+    const kp = await generateKeypair();
+    const signed = await signToolInvocationReceipt(makeInvocation(), kp.privateKey, kp.publicKey);
+
+    expect(signed.public_key).toBeTruthy();
+    expect(signed.public_key).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("fails closed on unknown suite", async () => {
+    const kp = await generateKeypair();
+    const signed = await signToolInvocationReceipt(makeInvocation(), kp.privateKey);
+
+    const bogus = {
+      ...signed,
+      suite: "bogus-suite-v0",
+    } as unknown as SignableToolInvocationReceipt;
+    const valid = await verifyToolInvocationReceipt(bogus, kp.publicKey);
+    expect(valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hashToolPayload — canonical SHA-256 of an args/result payload
+// ---------------------------------------------------------------------------
+
+describe("hashToolPayload", () => {
+  it("returns a 64-char hex string for object inputs", async () => {
+    const h = await hashToolPayload({ url: "https://motebit.com" });
+    expect(h).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("is stable across key ordering (JCS canonicalization)", async () => {
+    const a = await hashToolPayload({ url: "https://motebit.com", method: "GET" });
+    const b = await hashToolPayload({ method: "GET", url: "https://motebit.com" });
+    expect(a).toBe(b);
+  });
+
+  it("differs when payload content differs", async () => {
+    const a = await hashToolPayload({ url: "https://motebit.com" });
+    const b = await hashToolPayload({ url: "https://example.com" });
+    expect(a).not.toBe(b);
+  });
+
+  it("handles scalar string payloads", async () => {
+    const h = await hashToolPayload("plain result text");
+    expect(h).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
