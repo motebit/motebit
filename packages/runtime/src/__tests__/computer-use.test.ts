@@ -267,7 +267,8 @@ describe("ComputerSessionManager — dispatcher error taxonomy", () => {
     const manager = createComputerSessionManager({
       dispatcher: makeDispatcher({
         async execute() {
-          throw "something went wrong"; // eslint-disable-line no-throw-literal
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- testing non-Error throw path
+          throw "something went wrong";
         },
       }),
       generateSessionId: () => "cs_1",

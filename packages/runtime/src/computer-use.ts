@@ -208,8 +208,8 @@ function defaultGenerateSessionId(): string {
 }
 
 const ALLOW_ALL: ComputerGovernanceClassifier = {
-  async classify() {
-    return "allow";
+  classify() {
+    return Promise.resolve("allow");
   },
 };
 
