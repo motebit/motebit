@@ -15,8 +15,13 @@
  *   - A `THREE.Group` containing a plane mesh with liquid-glass
  *     material, mounted as a child of the creature's scene group so
  *     it inherits the creature's world transform (drift, sag, bob).
- *   - A single CSS2DObject stage anchored to the plane center, hosting
- *     one caller-owned HTML element at a time (the workstation panel).
+ *   - A single CSS3DObject stage that inherits the plane's full 3D
+ *     transform, hosting one caller-owned HTML element at a time
+ *     (the workstation panel). Content sits ON the plane and tilts
+ *     with it — CSS2D wouldn't apply the plane's rotation to the DOM,
+ *     so when the camera orbited the content would visibly detach
+ *     from the glass. CSS3D binds the DOM to the plane's matrix so
+ *     they move as one object.
  *   - Sympathetic breathing (~0.3 Hz, 30% creature amplitude), soul-
  *     color tint coupling on the plane's attenuation + emissive.
  *   - A user-visibility toggle for the launcher button / hotkey path.
@@ -31,7 +36,7 @@
  */
 
 import * as THREE from "three";
-import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import { CSS3DObject, CSS3DRenderer } from "three/addons/renderers/CSS3DRenderer.js";
 import { CANONICAL_MATERIAL } from "./spec.js";
 import type { InteriorColor } from "./spec.js";
 
@@ -57,6 +62,16 @@ const PLANE_TILT_Y = -0.09;
 const PLANE_WIDTH = 0.54;
 const PLANE_HEIGHT = 0.34;
 
+/**
+ * Pixel dimensions of the DOM stage. Scaled by `PLANE_WIDTH /
+ * STAGE_PIXEL_WIDTH` to fit the plane. Higher pixel budget = crisper
+ * text at distance; the scale factor keeps the on-plane size constant
+ * regardless of pixel count. 1000×625 preserves 16:10 aspect and
+ * gives readable 12–14px text at the default camera distance.
+ */
+const STAGE_PIXEL_WIDTH = 1000;
+const STAGE_PIXEL_HEIGHT = 625;
+
 /** Breathing amplitude factor vs creature's amplitude. */
 const BREATHE_AMPLITUDE_FACTOR = 0.3;
 
@@ -66,9 +81,9 @@ export class WorkstationPlane {
   private readonly group: THREE.Group;
   private readonly planeMesh: THREE.Mesh;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
-  private readonly stageAnchor: CSS2DObject;
+  private readonly stageAnchor: CSS3DObject;
   private readonly stageEl: HTMLDivElement;
-  private readonly css2dRenderer: CSS2DRenderer;
+  private readonly css3dRenderer: CSS3DRenderer;
 
   /** Current visibility target: 0 = hidden, 1 = fully visible. */
   private visibilityTarget = 0.85;
@@ -94,19 +109,21 @@ export class WorkstationPlane {
     const planeGeo = new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 16, 16);
 
     this.planeMaterial = new THREE.MeshPhysicalMaterial({
-      // Borosilicate glass IOR — same chemistry as the creature. The
-      // plane and the creature read as one body, differentiated by
-      // geometry (droplet vs sheet), not material.
+      // Borosilicate glass IOR — same chemistry as the creature.
+      // The content sits inside the glass the way the creature's
+      // eyes sit inside its droplet body: transparent enough to see
+      // through cleanly, thick enough to refract and tint, clearcoat
+      // at the edges for the meniscus specular.
       ior: CANONICAL_MATERIAL.ior,
-      // Pulled back from "near-clear" so the plane reads as a frosted
-      // display that the environment lenses through, not a ghost.
-      // Roughness breaks perfect mirror into a soft frosted glow;
-      // clearcoat restores the specular meniscus edge.
-      roughness: 0.12,
-      transmission: 0.55,
-      thickness: 0.04,
-      clearcoat: 0.6,
-      clearcoatRoughness: 0.05,
+      // Low roughness so the surface reads as smooth glass, not
+      // frosted — frosting hides the content inside. Most of the
+      // visible "glass-ness" comes from transmission + clearcoat +
+      // attenuation tint, not surface roughness.
+      roughness: 0.04,
+      transmission: 0.88,
+      thickness: 0.05,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.04,
       color: new THREE.Color(0.98, 0.985, 1.0),
       // Attenuation color lerps toward the soul color on warmth — the
       // plane takes the creature's interior tint when active, falls
@@ -129,25 +146,44 @@ export class WorkstationPlane {
     this.planeMesh.visible = false;
     this.group.add(this.planeMesh);
 
-    // CSS2D stage — one anchor at plane center, one stage element the
-    // caller swaps content into via `setStageChild`. The workstation
-    // panel mounts its DOM (header, browser pane, receipt list) as
-    // the stage child and then drives it directly.
+    // CSS3D stage — the DOM child inherits the plane's full 3D
+    // transform (position + rotation + scale). So the content sits
+    // ON the plane surface and tilts with it; no more "plane rotates
+    // but flat HTML stays upright" divergence that CSS2D caused.
+    //
+    // Pixel-to-world mapping: DOM sized in pixels (1000×625, fitting
+    // the plane's 16:10 aspect), scaled by PIXEL_SCALE so the DOM
+    // covers the 0.54m × 0.34m plane at that pixel budget. Scale
+    // factor = PLANE_WIDTH / pixelWidth; a smaller factor yields
+    // higher logical resolution (crisper text at distance) at the
+    // cost of needing larger pixel dimensions in the DOM.
     this.stageEl = createStageElement();
-    this.stageAnchor = new CSS2DObject(this.stageEl);
-    this.stageAnchor.position.set(0, 0, 0.001);
+    this.stageAnchor = new CSS3DObject(this.stageEl);
+    // Content sits on the plane's front surface at a tiny forward
+    // offset — enough to avoid z-fighting with the glass mesh,
+    // close enough that they read as one surface. The glass's
+    // clearcoat specular and edge sheen render via WebGL in front;
+    // the content renders via CSS3D at the same world position,
+    // tilting with the plane because CSS3D inherits the parent
+    // group's 3D transform. The net read: content inside the glass
+    // body, tilting as the body tilts.
+    this.stageAnchor.position.set(0, 0, 0.002);
+    const pixelScale = PLANE_WIDTH / STAGE_PIXEL_WIDTH;
+    this.stageAnchor.scale.set(pixelScale, pixelScale, pixelScale);
     this.group.add(this.stageAnchor);
 
-    // A dedicated CSS2DRenderer keeps z-ordering + pointer-events
-    // independent from the ArtifactManager's own renderer.
-    this.css2dRenderer = new CSS2DRenderer();
-    this.css2dRenderer.setSize(container.clientWidth, container.clientHeight);
-    this.css2dRenderer.domElement.style.position = "absolute";
-    this.css2dRenderer.domElement.style.top = "0";
-    this.css2dRenderer.domElement.style.left = "0";
-    this.css2dRenderer.domElement.style.zIndex = "2";
-    this.css2dRenderer.domElement.style.pointerEvents = "none";
-    container.appendChild(this.css2dRenderer.domElement);
+    // A dedicated CSS3DRenderer keeps z-ordering + pointer-events
+    // independent from the ArtifactManager's own (CSS2D) renderer.
+    this.css3dRenderer = new CSS3DRenderer();
+    this.css3dRenderer.setSize(container.clientWidth, container.clientHeight);
+    this.css3dRenderer.domElement.style.position = "absolute";
+    this.css3dRenderer.domElement.style.top = "0";
+    this.css3dRenderer.domElement.style.left = "0";
+    this.css3dRenderer.domElement.style.zIndex = "2";
+    // CSS3D renderer's root layer doesn't take pointer events;
+    // children (the stage element) opt in via their own CSS.
+    this.css3dRenderer.domElement.style.pointerEvents = "none";
+    container.appendChild(this.css3dRenderer.domElement);
   }
 
   /** Expose the THREE group for callers that want to position externally. */
@@ -191,7 +227,12 @@ export class WorkstationPlane {
   setUserVisible(visible: boolean): void {
     this.userVisible = visible;
     if (this.stageEl.style) {
-      this.stageEl.style.display = visible ? "block" : "none";
+      // Display flex when visible so the workstation panel's column
+      // layout (header / browser / list) fills the stage edge-to-edge
+      // instead of collapsing to content-height. `display:none` hides
+      // the stage and releases pointer events.
+      this.stageEl.style.display = visible ? "flex" : "none";
+      this.stageEl.style.flexDirection = "column";
       this.stageEl.style.pointerEvents = visible ? "auto" : "none";
     }
     if (visible && this.planeVisibility < 0.5) {
@@ -246,15 +287,15 @@ export class WorkstationPlane {
 
   /** Called after the WebGL render each frame — syncs the CSS overlay. */
   render(scene: THREE.Scene, camera: THREE.Camera): void {
-    this.css2dRenderer.render(scene, camera);
+    this.css3dRenderer.render(scene, camera);
   }
 
   resize(width: number, height: number): void {
-    this.css2dRenderer.setSize(width, height);
+    this.css3dRenderer.setSize(width, height);
   }
 
   dispose(): void {
-    this.css2dRenderer.domElement.remove();
+    this.css3dRenderer.domElement.remove();
     this.planeMesh.geometry.dispose();
     this.planeMaterial.dispose();
   }
@@ -264,21 +305,23 @@ export class WorkstationPlane {
 
 function createStageElement(): HTMLDivElement {
   // SSR / headless guard — tests and server-render paths import this
-  // module transitively; constructing a CSS2DObject without a valid
+  // module transitively; constructing a CSS3DObject without a valid
   // DOM element is an error.
   if (typeof document === "undefined") {
     return { style: {} } as unknown as HTMLDivElement;
   }
   const el = document.createElement("div");
   el.className = "workstation-plane-stage";
-  // Size the stage to fit within the plane's visible projection at
-  // the default camera. Slightly smaller than the full plane so the
-  // meniscus edge stays visible on all sides.
-  el.style.width = "580px";
-  el.style.height = "360px";
+  // Size matches the pixel budget the scale factor maps to PLANE_WIDTH.
+  // The element fills the plane edge-to-edge in 3D space; clipping
+  // content to rounded corners gives the glass a menisicus-edge feel
+  // without needing separate geometry.
+  el.style.width = `${STAGE_PIXEL_WIDTH}px`;
+  el.style.height = `${STAGE_PIXEL_HEIGHT}px`;
   el.style.boxSizing = "border-box";
   el.style.display = "none";
   el.style.overflow = "hidden";
+  el.style.borderRadius = "18px";
   el.style.pointerEvents = "none";
   return el;
 }
