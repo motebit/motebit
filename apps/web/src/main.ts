@@ -227,8 +227,11 @@ document.addEventListener("keydown", (e) => {
   }
   // Workstation toggle: Option+W (Alt+W) — a low-traffic binding that
   // doesn't collide with browser-level shortcuts. Menu bar surfaces
-  // can bind the same capability later.
-  if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "w" || e.key === "W")) {
+  // can bind the same capability later. Uses `e.code` (physical key)
+  // because on macOS Option+W produces `e.key === "∑"`, not `"w"` —
+  // the diacritical remap would silently break the shortcut if we
+  // matched on `e.key`.
+  if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyW") {
     e.preventDefault();
     workstationPanel.toggle();
   }
