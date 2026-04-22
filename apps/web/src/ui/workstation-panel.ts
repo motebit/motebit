@@ -25,6 +25,12 @@ import {
   type WorkstationFetchAdapter,
   type WorkstationState,
 } from "@motebit/panels";
+import {
+  formatCountdownUntil,
+  type ScheduledAgent,
+  type ScheduledAgentCadence,
+  type ScheduledAgentsRunner,
+} from "../scheduled-agents";
 
 export interface WorkstationPanelAPI {
   open(): void;
@@ -77,6 +83,15 @@ function buildScaffold(): {
   browserFrame: HTMLIFrameElement;
   urlBar: HTMLInputElement;
   urlStatus: HTMLSpanElement;
+  scheduledSection: HTMLDivElement;
+  scheduledList: HTMLDivElement;
+  scheduledEmpty: HTMLDivElement;
+  scheduledAddBtn: HTMLButtonElement;
+  scheduledCompose: HTMLDivElement;
+  scheduledPromptInput: HTMLInputElement;
+  scheduledCadenceSelect: HTMLSelectElement;
+  scheduledCreateBtn: HTMLButtonElement;
+  scheduledCancelBtn: HTMLButtonElement;
 } {
   // The panel mounts INSIDE the liquid-glass workstation plane via
   // the renderer's CSS2DObject stage — not as a fixed overlay. Sizing
@@ -234,6 +249,160 @@ function buildScaffold(): {
   urlRow.appendChild(urlStatus);
   panel.appendChild(urlRow);
 
+  // === Scheduled section ===
+  // Recurring tasks the motebit fires on cadence. The endgame is
+  // relay-side scheduling so runs fire while the tab is closed;
+  // today's scope is tab-local. The UI + data shape match the
+  // endgame so the transition is swap-the-runner, not rewrite.
+  const scheduledSection = document.createElement("div");
+  Object.assign(scheduledSection.style, {
+    display: "flex",
+    flexDirection: "column",
+    flex: "0 0 auto",
+    borderBottom: "1px solid rgba(60, 75, 105, 0.10)",
+    padding: "8px 14px 10px",
+    gap: "4px",
+  });
+
+  const scheduledHeader = document.createElement("div");
+  Object.assign(scheduledHeader.style, {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  });
+  const scheduledLabel = document.createElement("span");
+  scheduledLabel.textContent = "scheduled";
+  Object.assign(scheduledLabel.style, {
+    fontSize: "9.5px",
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "rgba(100, 120, 155, 0.62)",
+    flex: "1 1 auto",
+  });
+  const scheduledAddBtn = document.createElement("button");
+  scheduledAddBtn.type = "button";
+  scheduledAddBtn.textContent = "+";
+  scheduledAddBtn.title = "Add a scheduled task";
+  Object.assign(scheduledAddBtn.style, {
+    background: "transparent",
+    border: "none",
+    color: "rgba(60, 80, 120, 0.78)",
+    cursor: "pointer",
+    fontSize: "14px",
+    lineHeight: "1",
+    padding: "0 6px",
+    fontWeight: "600",
+  });
+  scheduledHeader.appendChild(scheduledLabel);
+  scheduledHeader.appendChild(scheduledAddBtn);
+  scheduledSection.appendChild(scheduledHeader);
+
+  const scheduledList = document.createElement("div");
+  Object.assign(scheduledList.style, {
+    display: "none",
+    flexDirection: "column",
+    gap: "3px",
+    marginTop: "2px",
+  });
+  scheduledSection.appendChild(scheduledList);
+
+  const scheduledEmpty = document.createElement("div");
+  scheduledEmpty.textContent = "No recurring tasks yet. Add one — the motebit runs it on cadence.";
+  Object.assign(scheduledEmpty.style, {
+    fontSize: "10.5px",
+    fontStyle: "italic",
+    color: "rgba(100, 120, 155, 0.58)",
+    padding: "2px 0",
+  });
+  scheduledSection.appendChild(scheduledEmpty);
+
+  // Compose inline (opens when + is clicked)
+  const scheduledCompose = document.createElement("div");
+  Object.assign(scheduledCompose.style, {
+    display: "none",
+    flexDirection: "column",
+    gap: "6px",
+    marginTop: "6px",
+    padding: "8px",
+    background: "rgba(255, 255, 255, 0.32)",
+    borderRadius: "6px",
+    border: "1px solid rgba(100, 120, 155, 0.12)",
+  });
+
+  const scheduledPromptInput = document.createElement("input");
+  scheduledPromptInput.type = "text";
+  scheduledPromptInput.spellcheck = false;
+  scheduledPromptInput.placeholder =
+    "what should the motebit do on cadence?  e.g. brief me on AI news";
+  Object.assign(scheduledPromptInput.style, {
+    border: "none",
+    outline: "none",
+    background: "transparent",
+    fontSize: "11.5px",
+    color: "rgba(20, 30, 50, 0.92)",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    padding: "2px 0",
+  });
+
+  const scheduledRow2 = document.createElement("div");
+  Object.assign(scheduledRow2.style, {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  });
+  const scheduledCadenceSelect = document.createElement("select");
+  for (const c of ["hourly", "daily", "weekly"] as const) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    scheduledCadenceSelect.appendChild(opt);
+  }
+  scheduledCadenceSelect.value = "daily";
+  Object.assign(scheduledCadenceSelect.style, {
+    fontSize: "10.5px",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    padding: "2px 6px",
+    border: "1px solid rgba(100, 120, 155, 0.18)",
+    borderRadius: "3px",
+    background: "rgba(255, 255, 255, 0.62)",
+    color: "rgba(40, 60, 100, 0.92)",
+  });
+  const scheduledCreateBtn = document.createElement("button");
+  scheduledCreateBtn.type = "button";
+  scheduledCreateBtn.textContent = "schedule";
+  Object.assign(scheduledCreateBtn.style, {
+    fontSize: "10.5px",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    padding: "3px 10px",
+    border: "none",
+    borderRadius: "3px",
+    background: "rgba(80, 110, 165, 0.72)",
+    color: "rgba(255, 255, 255, 0.96)",
+    cursor: "pointer",
+    letterSpacing: "0.02em",
+  });
+  const scheduledCancelBtn = document.createElement("button");
+  scheduledCancelBtn.type = "button";
+  scheduledCancelBtn.textContent = "cancel";
+  Object.assign(scheduledCancelBtn.style, {
+    fontSize: "10.5px",
+    padding: "3px 6px",
+    border: "none",
+    background: "transparent",
+    color: "rgba(100, 120, 155, 0.72)",
+    cursor: "pointer",
+    marginLeft: "auto",
+  });
+  scheduledRow2.appendChild(scheduledCadenceSelect);
+  scheduledRow2.appendChild(scheduledCreateBtn);
+  scheduledRow2.appendChild(scheduledCancelBtn);
+
+  scheduledCompose.appendChild(scheduledPromptInput);
+  scheduledCompose.appendChild(scheduledRow2);
+  scheduledSection.appendChild(scheduledCompose);
+
+  panel.appendChild(scheduledSection);
+
   // === Browser pane (virtual_browser mode) ===
   // Renders the motebit's currently-read page as a sandboxed iframe
   // sitting directly on the glass. Hidden until the first read_url /
@@ -340,7 +509,128 @@ function buildScaffold(): {
     browserFrame,
     urlBar,
     urlStatus,
+    scheduledSection,
+    scheduledList,
+    scheduledEmpty,
+    scheduledAddBtn,
+    scheduledCompose,
+    scheduledPromptInput,
+    scheduledCadenceSelect,
+    scheduledCreateBtn,
+    scheduledCancelBtn,
   };
+}
+
+/**
+ * Build a row for one scheduled agent. Shows prompt + cadence badge +
+ * countdown to next fire + quick actions (toggle enabled, run now,
+ * delete). Recurring-task rows are rendered incrementally so adding a
+ * new one doesn't re-render siblings.
+ */
+function buildScheduledRow(
+  agent: ScheduledAgent,
+  runner: ScheduledAgentsRunner,
+  nowMs: number,
+): HTMLDivElement {
+  const row = document.createElement("div");
+  row.dataset.agentId = agent.id;
+  Object.assign(row.style, {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "6px 8px",
+    background: agent.enabled ? "rgba(255, 255, 255, 0.28)" : "rgba(255, 255, 255, 0.12)",
+    borderRadius: "5px",
+    border: "1px solid rgba(100, 120, 155, 0.08)",
+    fontSize: "11px",
+    opacity: agent.enabled ? "1" : "0.64",
+  });
+
+  const cadenceBadge = document.createElement("span");
+  cadenceBadge.textContent = agent.cadence;
+  Object.assign(cadenceBadge.style, {
+    fontSize: "9px",
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "rgba(80, 110, 165, 0.82)",
+    background: "rgba(80, 110, 165, 0.14)",
+    padding: "1px 5px",
+    borderRadius: "3px",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    flex: "0 0 auto",
+  });
+
+  const promptEl = document.createElement("span");
+  promptEl.textContent = agent.prompt;
+  Object.assign(promptEl.style, {
+    flex: "1 1 auto",
+    color: "rgba(20, 30, 50, 0.9)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  });
+
+  const next = document.createElement("span");
+  next.textContent = agent.enabled ? formatCountdownUntil(agent.next_run_at, nowMs) : "paused";
+  Object.assign(next.style, {
+    fontSize: "10px",
+    color: "rgba(90, 110, 150, 0.72)",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    flex: "0 0 auto",
+  });
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.textContent = agent.enabled ? "⏸" : "▶";
+  toggleBtn.title = agent.enabled ? "Pause" : "Resume";
+  Object.assign(toggleBtn.style, {
+    background: "transparent",
+    border: "none",
+    color: "rgba(60, 80, 120, 0.72)",
+    cursor: "pointer",
+    fontSize: "11px",
+    padding: "0 4px",
+  });
+  toggleBtn.addEventListener("click", () => runner.setEnabled(agent.id, !agent.enabled));
+
+  const runBtn = document.createElement("button");
+  runBtn.type = "button";
+  runBtn.textContent = "run";
+  runBtn.title = "Run now (bypasses cadence)";
+  Object.assign(runBtn.style, {
+    background: "transparent",
+    border: "none",
+    color: "rgba(80, 110, 165, 0.82)",
+    cursor: "pointer",
+    fontSize: "10px",
+    padding: "0 4px",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+  });
+  runBtn.addEventListener("click", () => runner.runNow(agent.id));
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.textContent = "×";
+  delBtn.title = "Remove";
+  Object.assign(delBtn.style, {
+    background: "transparent",
+    border: "none",
+    color: "rgba(170, 80, 100, 0.72)",
+    cursor: "pointer",
+    fontSize: "13px",
+    lineHeight: "1",
+    padding: "0 4px",
+  });
+  delBtn.addEventListener("click", () => runner.remove(agent.id));
+
+  row.appendChild(cadenceBadge);
+  row.appendChild(promptEl);
+  row.appendChild(next);
+  row.appendChild(toggleBtn);
+  row.appendChild(runBtn);
+  row.appendChild(delBtn);
+
+  return row;
 }
 
 /**
@@ -712,6 +1002,14 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
       browserFrame,
       urlBar,
       urlStatus,
+      scheduledList,
+      scheduledEmpty,
+      scheduledAddBtn,
+      scheduledCompose,
+      scheduledPromptInput,
+      scheduledCadenceSelect,
+      scheduledCreateBtn,
+      scheduledCancelBtn,
     } = scaffold;
 
     const adapter: WorkstationFetchAdapter = {
@@ -737,6 +1035,71 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
 
     closeBtn.addEventListener("click", close);
     clearBtn.addEventListener("click", () => controller?.clearHistory());
+
+    // Scheduled agents — list + add-compose inline. The runner lives
+    // on `WebApp`; this panel is the UI seam.
+    const scheduledRunner = ctx.app.getScheduledAgents?.() ?? null;
+    if (scheduledRunner) {
+      const runner = scheduledRunner; // narrow the capture for closures
+      const renderScheduled = (agents: ScheduledAgent[]): void => {
+        const now = Date.now();
+        if (agents.length === 0) {
+          scheduledList.style.display = "none";
+          scheduledEmpty.style.display = "block";
+        } else {
+          scheduledList.style.display = "flex";
+          scheduledEmpty.style.display = "none";
+          // Rebuild — the list is small (< 10 typical) so full
+          // re-render is fine; avoids diff bookkeeping for minimal
+          // churn gain.
+          while (scheduledList.firstChild) {
+            scheduledList.removeChild(scheduledList.firstChild);
+          }
+          for (const a of agents) {
+            scheduledList.appendChild(buildScheduledRow(a, runner, now));
+          }
+        }
+      };
+      renderScheduled(scheduledRunner.list());
+      scheduledRunner.subscribe(renderScheduled);
+      // Refresh countdown labels every 30s — the rest of the row
+      // doesn't change unless the runner fires an event, so a light
+      // label-only repaint is sufficient.
+      setInterval(() => {
+        if (scheduledRunner.list().length > 0) renderScheduled(scheduledRunner.list());
+      }, 30_000);
+
+      scheduledAddBtn.addEventListener("click", () => {
+        scheduledCompose.style.display =
+          scheduledCompose.style.display === "none" ? "flex" : "none";
+        if (scheduledCompose.style.display === "flex") scheduledPromptInput.focus();
+      });
+      scheduledCancelBtn.addEventListener("click", () => {
+        scheduledCompose.style.display = "none";
+        scheduledPromptInput.value = "";
+      });
+      const submitNewAgent = (): void => {
+        const prompt = scheduledPromptInput.value.trim();
+        if (!prompt) return;
+        scheduledRunner.add({
+          prompt,
+          cadence: scheduledCadenceSelect.value as ScheduledAgentCadence,
+        });
+        scheduledPromptInput.value = "";
+        scheduledCompose.style.display = "none";
+      };
+      scheduledCreateBtn.addEventListener("click", submitNewAgent);
+      scheduledPromptInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          submitNewAgent();
+        }
+      });
+    } else {
+      // Runner not wired (bootstrap incomplete / headless). Hide the
+      // section entirely rather than show an empty shell.
+      scaffold.scheduledSection.style.display = "none";
+    }
 
     // URL bar — user types, presses enter, the motebit's read_url
     // tool runs with user-tap origin. Same pipeline as the AI loop's

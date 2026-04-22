@@ -87,6 +87,7 @@ import {
 } from "./storage";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
+import { createScheduledAgentsRunner, type ScheduledAgentsRunner } from "./scheduled-agents";
 
 // Re-export shared presets for color-picker and settings modules
 import { COLOR_PRESETS } from "@motebit/sdk";
@@ -165,6 +166,11 @@ export class WebApp {
   private _toolActivityListeners = new Set<
     (event: import("@motebit/runtime").ToolActivityEvent) => void
   >();
+  // Scheduled agents runner — recurring tasks the motebit fires on
+  // cadence. Started in bootstrap() after the runtime is ready;
+  // disposed on teardown. Each fire drives the normal chat pipeline
+  // so runs produce signed ExecutionReceipts via the existing seam.
+  private _scheduledAgents: ScheduledAgentsRunner | null = null;
 
   async init(canvas: HTMLCanvasElement): Promise<void> {
     try {
@@ -418,6 +424,29 @@ export class WebApp {
 
     // Reconnect saved MCP servers
     void this.reconnectMcpServers();
+
+    // Start the scheduled-agents runner. Fires tab-local; each run
+    // drives `sendMessageStreaming` to completion so the normal
+    // pipeline emits signed ExecutionReceipts — the audit trail of
+    // every scheduled run is verifiable the same way user-typed
+    // runs are.
+    this._scheduledAgents = createScheduledAgentsRunner({
+      fire: async (prompt) => {
+        // Drain the stream so housekeeping (memory formation,
+        // state updates) runs to completion. The runner doesn't
+        // care about intermediate chunks.
+        if (this._isProcessing) {
+          // Never preempt a user's in-flight turn with a scheduled
+          // fire — defer until the next tick. The scheduler
+          // advances next_run_at regardless, so a missed fire
+          // shifts to the next cadence slot instead of stacking.
+          return;
+        }
+        for await (const _chunk of this.sendMessageStreaming(prompt)) {
+          void _chunk;
+        }
+      },
+    });
   }
 
   /**
@@ -767,6 +796,15 @@ export class WebApp {
    */
   getRenderer(): ThreeJSAdapter {
     return this.renderer;
+  }
+
+  /**
+   * Access to the scheduled-agents runner — the workstation panel's
+   * scheduled section reads / mutates via this. Null if bootstrap
+   * hasn't finished yet.
+   */
+  getScheduledAgents(): ScheduledAgentsRunner | null {
+    return this._scheduledAgents;
   }
 
   /**
