@@ -439,6 +439,25 @@ export class DesktopApp {
   });
   private _proxySession: ProxySession | null = null;
   private _proxyConfig: ProxyProviderConfig | null = null;
+  // Workstation receipt bus. Same shape as WebApp's — the runtime's
+  // onToolInvocation config fires into this set; the workstation
+  // panel's adapter subscribes. A Set so multiple observers can share
+  // the stream without stomping each other.
+  private _toolInvocationListeners = new Set<
+    (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void
+  >();
+  // Parallel activity bus — raw args/result for the virtual-browser
+  // pane. Subscribers must not retain the payload (per the runtime's
+  // onToolActivity contract).
+  private _toolActivityListeners = new Set<
+    (event: import("@motebit/runtime").ToolActivityEvent) => void
+  >();
+  // Scheduled-agents runner. Desktop gets the same tab-local (window-
+  // local) scheduler the web uses. Desktop's additional value: the
+  // Tauri window is typically long-lived (quit-to-tray keeps it
+  // running), so scheduled agents fire through more of the day than
+  // they would in a browser tab.
+  private _scheduledAgents: import("./scheduled-agents").ScheduledAgentsRunner | null = null;
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -540,6 +559,52 @@ export class DesktopApp {
 
   getRuntime(): MotebitRuntime | null {
     return this.runtime;
+  }
+
+  /** Expose the render adapter so UI modules can drive scene primitives
+   *  directly (workstation plane, artifact manager). */
+  getRenderer(): ThreeJSAdapter {
+    return this.renderer;
+  }
+
+  /** Workstation receipt-stream subscribe. Same shape as WebApp. */
+  subscribeToolInvocations(
+    listener: (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void,
+  ): () => void {
+    this._toolInvocationListeners.add(listener);
+    return () => {
+      this._toolInvocationListeners.delete(listener);
+    };
+  }
+
+  /** Workstation activity-stream subscribe — raw args/result for the
+   *  live browser-pane renderer. Subscribers must not persist the
+   *  payload (per the runtime's onToolActivity contract). */
+  subscribeToolActivity(
+    listener: (event: import("@motebit/runtime").ToolActivityEvent) => void,
+  ): () => void {
+    this._toolActivityListeners.add(listener);
+    return () => {
+      this._toolActivityListeners.delete(listener);
+    };
+  }
+
+  /** Deterministic local-tool path for surface affordances (the
+   *  workstation URL bar routes through here). Same contract as the
+   *  WebApp equivalent. */
+  async invokeLocalTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<import("@motebit/sdk").ToolResult> {
+    if (!this.runtime) {
+      return { ok: false, error: "runtime not initialized" };
+    }
+    return this.runtime.invokeLocalTool(name, args);
+  }
+
+  /** Access the scheduled-agents runner (null until initAI completes). */
+  getScheduledAgents(): import("./scheduled-agents").ScheduledAgentsRunner | null {
+    return this._scheduledAgents;
   }
 
   get currentModel(): string | null {
@@ -839,6 +904,7 @@ export class DesktopApp {
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
+        deviceId: this.deviceId,
         tickRateHz: 2,
         policy: mergedPolicy,
         memoryGovernance: {
@@ -848,6 +914,26 @@ export class DesktopApp {
         },
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
+        // Workstation receipt bus — same fan-out pattern as WebApp.
+        onToolInvocation: (receipt) => {
+          for (const listener of this._toolInvocationListeners) {
+            try {
+              listener(receipt);
+            } catch {
+              // Subscriber faults are isolated.
+            }
+          }
+        },
+        onToolActivity: (event) => {
+          this.renderer.pulseWorkstationActivity?.();
+          for (const listener of this._toolActivityListeners) {
+            try {
+              listener(event);
+            } catch {
+              // Same isolation.
+            }
+          }
+        },
         solana: signingKeys ? { rpcUrl: solanaRpcUrl } : undefined,
         // Deferred memory formation — desktop is the first opt-in
         // surface. The user's turn returns as soon as the response
@@ -877,6 +963,35 @@ export class DesktopApp {
       DeviceCapability.Keyring,
       DeviceCapability.Background,
     ]);
+
+    // Scheduled-agents runner — window-local on desktop, but the
+    // Tauri window is typically long-lived (quit-to-tray keeps it
+    // running), so scheduled agents fire through more of the day
+    // than a browser tab can manage. Same shape + contract as the
+    // web runner so the workstation panel works identically on
+    // both surfaces.
+    const { createScheduledAgentsRunner } = await import("./scheduled-agents.js");
+    const runtime = this.runtime;
+    this._scheduledAgents = createScheduledAgentsRunner({
+      fire: async (prompt) => {
+        // Yield to in-flight user turns. The runner honors "skipped"
+        // by not advancing next_run_at; next 30s tick retries.
+        if (runtime.isProcessing) return { status: "skipped" };
+        let accumulated = "";
+        try {
+          for await (const chunk of runtime.sendMessageStreaming(prompt, undefined, {
+            suppressHistory: true,
+          })) {
+            if (chunk.type === "text") accumulated += chunk.text;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { status: "error", error: msg };
+        }
+        const responsePreview = accumulated.trim().slice(0, 160) || null;
+        return { status: "fired", responsePreview };
+      },
+    });
 
     // Create PlanEngine for multi-step goal execution
     if (config.isTauri && config.invoke) {
