@@ -284,9 +284,29 @@ export class MotebitRuntime {
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
+  /**
+   * Device ID used on any artifact this runtime signs — ExecutionReceipt,
+   * ToolInvocationReceipt, sovereign payment receipt. Defaults to
+   * `"runtime-default"` when unset, matching the legacy behavior of the
+   * explicit `opts.deviceId` fallback on the agent-task handler.
+   */
+  private _deviceId: string;
+  /**
+   * Optional sink for signed per-tool-call receipts. When set, the
+   * streaming manager fires this once per matched calling→done pair
+   * after composing + signing the receipt. Wired through from
+   * `RuntimeConfig.onToolInvocation` at construction time; the
+   * workstation surface subscribes here to populate the per-call
+   * audit trail the user sees while the motebit works.
+   */
+  private _onToolInvocation:
+    | ((receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void)
+    | null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
+    this._deviceId = config.deviceId ?? "runtime-default";
+    this._onToolInvocation = config.onToolInvocation ?? null;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
@@ -647,6 +667,12 @@ export class MotebitRuntime {
       },
       approvalTimeoutMs: config.approvalTimeoutMs ?? 600_000,
       motebitId: this.motebitId,
+      getDeviceId: () => this._deviceId,
+      getSigningPrivateKey: () => this._signingKeys?.privateKey ?? null,
+      getSigningPublicKey: () => this._signingKeys?.publicKey ?? null,
+      onToolInvocation: this._onToolInvocation
+        ? (receipt) => this._onToolInvocation?.(receipt)
+        : undefined,
     });
 
     this.wireLoopDeps();

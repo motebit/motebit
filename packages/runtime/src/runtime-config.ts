@@ -88,6 +88,28 @@ export interface PlatformAdapters {
 
 export interface RuntimeConfig {
   motebitId: string;
+  /**
+   * Device identifier stamped on every artifact this runtime signs —
+   * `ExecutionReceipt`, `ToolInvocationReceipt`, sovereign payment
+   * receipts. Defaults to `"runtime-default"` when unset. Set this
+   * explicitly when a motebit has multiple devices (per
+   * `device-self-registration-v1`) so per-call receipts can be
+   * audited per-device, not just per-motebit.
+   */
+  deviceId?: string;
+  /**
+   * Optional sink for signed `ToolInvocationReceipt`s emitted by the
+   * streaming manager. Called once per matched tool-call calling→done
+   * pair, after the receipt has been composed and signed via
+   * `signToolInvocationReceipt`. The workstation surface subscribes
+   * here.
+   *
+   * Fail-closed: if this is undefined, no signing or sink delivery
+   * happens — no background signing cost for consumers that don't
+   * want the artifact. If signing keys aren't unlocked, the streaming
+   * manager drops the receipt silently rather than emit unsigned.
+   */
+  onToolInvocation?: (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void;
   tickRateHz?: number;
   maxConversationHistory?: number;
   /** Compact events when count exceeds this threshold (0 = disabled, default 1000) */

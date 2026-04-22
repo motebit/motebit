@@ -17,6 +17,8 @@ import type { BehaviorCues } from "@motebit/sdk";
 import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
 import { extractStateTags, runTurnStreaming } from "@motebit/ai-core";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import type { SignableToolInvocationReceipt } from "@motebit/crypto";
+import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
 import type { StreamChunk } from "./runtime-config.js";
 
 // Re-import the helper — it's file-local in index.ts, so we duplicate it here.
@@ -96,6 +98,45 @@ export interface StreamingDeps {
   redactText(text: string): string;
   /** Motebit ID. */
   motebitId: string;
+  /**
+   * Device ID this runtime is signing with. Embedded on every
+   * `ToolInvocationReceipt` the streaming manager emits so per-call
+   * receipts are auditable per-device, not just per-motebit. Optional
+   * on the type for source-compatibility with legacy deps; absent
+   * deps skip receipt emission fail-closed (no unsigned artifact
+   * leaves the runtime — the workstation surface just gets no stream
+   * from this runtime, and that's the honest signal).
+   */
+  getDeviceId?: () => string | null;
+  /**
+   * Ed25519 private key bytes for the active signing identity. Returns
+   * `null` when the runtime hasn't unlocked the key (pre-login, sealed).
+   * The streaming manager calls this lazily on every receipt emission so
+   * a late-arriving unlock starts producing receipts without a restart;
+   * a sealed-again transition returns the motebit to fail-closed silence
+   * on the same cycle.
+   */
+  getSigningPrivateKey?: () => Uint8Array | null;
+  /**
+   * Matching Ed25519 public key (32 bytes). When present, the signer
+   * embeds its hex encoding on every emitted receipt so a third-party
+   * verifier can validate without a relay lookup — the
+   * relay-optional-settlement property extended from task receipts to
+   * per-call receipts.
+   */
+  getSigningPublicKey?: () => Uint8Array | null;
+  /**
+   * Sink for signed `ToolInvocationReceipt`s. Called exactly once per
+   * matched `tool_status.calling` + `tool_status.done` pair, after the
+   * receipt has been composed + signed via `signToolInvocationReceipt`.
+   *
+   * The workstation surface subscribes to this: it's the event stream
+   * that populates the per-call audit trail the user sees while the
+   * motebit works. Subscribers MUST NOT mutate the receipt (frozen by
+   * `signToolInvocationReceipt`) or block the generator — they get
+   * fire-and-forget delivery and any exception is logged and dropped.
+   */
+  onToolInvocation?: (receipt: SignableToolInvocationReceipt) => void;
 }
 
 interface PendingApproval {
@@ -164,6 +205,18 @@ export class StreamingManager {
 
     const motebitToolServers = this.deps.getMotebitToolServers();
 
+    // Per-turn tool-invocation bookkeeping. Maps tool_call_id (from
+    // ai-core's AgenticChunk.tool_status) to the "calling" snapshot so
+    // the matching "done" can compose a ToolInvocationReceipt. Scoped
+    // to this processStream invocation — cleared implicitly when the
+    // generator returns. A tool call that never produces a "done" (e.g.
+    // the turn aborts) leaves the entry in the map, which is harmless:
+    // the map is discarded with the generator.
+    const pendingToolCalls = new Map<
+      string,
+      { toolName: string; args: Record<string, unknown>; startedAt: number }
+    >();
+
     for await (let chunk of stream) {
       // Deferred memory-formation chunks are an internal runtime
       // protocol handled by `MotebitRuntime._catchDeferredFormationChunks`
@@ -186,6 +239,20 @@ export class StreamingManager {
         const motebitServer = motebitToolServers.get(chunk.name);
         if (chunk.status === "calling") {
           this.deps.pushStateUpdate({ processing: 0.95 });
+          // Snapshot for the ToolInvocationReceipt signer (matched when
+          // the corresponding "done" arrives). Skip silently if ai-core
+          // omitted the fields — old emitters or hand-built streams.
+          if (
+            typeof chunk.tool_call_id === "string" &&
+            chunk.args !== undefined &&
+            typeof chunk.started_at === "number"
+          ) {
+            pendingToolCalls.set(chunk.tool_call_id, {
+              toolName: chunk.name,
+              args: chunk.args,
+              startedAt: chunk.started_at,
+            });
+          }
           // Emit delegation_start for motebit MCP tools
           if (motebitServer) {
             this.deps.setDelegating(true);
@@ -206,6 +273,25 @@ export class StreamingManager {
           }
           this.deps.pushStateUpdate({ processing: 0.6 });
           this.deps.logToolUsed(chunk.name, chunk.result);
+          // Per-tool-call signed receipt: match with the earlier
+          // "calling" snapshot by tool_call_id, compose, sign, fire
+          // the workstation sink. Fail-closed at every branch — no
+          // unsigned or half-composed artifact leaves the runtime.
+          if (typeof chunk.tool_call_id === "string") {
+            const pending = pendingToolCalls.get(chunk.tool_call_id);
+            if (pending) {
+              pendingToolCalls.delete(chunk.tool_call_id);
+              await this.emitToolInvocationReceipt({
+                invocation_id: chunk.tool_call_id,
+                task_id: runId,
+                tool_name: chunk.name,
+                args: pending.args,
+                result: chunk.result,
+                started_at: pending.startedAt,
+                completed_at: Date.now(),
+              });
+            }
+          }
           // Emit delegation_complete for motebit MCP tools
           if (motebitServer) {
             // Extract receipt summary if this was a motebit_task call with a receipt result.
@@ -483,6 +569,77 @@ export class StreamingManager {
     if (this.approvalTimer) {
       clearTimeout(this.approvalTimer);
       this.approvalTimer = null;
+    }
+  }
+
+  /**
+   * Compose and sign a `ToolInvocationReceipt` for one matched
+   * calling→done pair, then deliver it to the workstation sink.
+   *
+   * Fail-closed at every dependency boundary:
+   *   - no `onToolInvocation` sink → drop silently (consumer opted out)
+   *   - no device_id, private key, or motebit_id → drop silently (key
+   *     not yet unlocked, or this deps shape predates the hook)
+   *   - signing throws → log a warning and drop (never leak partial)
+   *   - sink throws → log and swallow (receipt is delivered; the
+   *     consumer's handler fault is theirs)
+   *
+   * Hashing is via `hashToolPayload` (JCS canonical + SHA-256) on the
+   * args and on the result bytes that will actually ship to the UI —
+   * i.e. post-redaction. A verifier holding the same bytes recomputes
+   * and matches; a verifier holding the pre-redaction bytes will not
+   * match, which is the honest signal that redaction happened.
+   */
+  private async emitToolInvocationReceipt(params: {
+    invocation_id: string;
+    task_id: string | undefined;
+    tool_name: string;
+    args: Record<string, unknown>;
+    result: unknown;
+    started_at: number;
+    completed_at: number;
+  }): Promise<void> {
+    const sink = this.deps.onToolInvocation;
+    if (!sink) return;
+    const deviceId = this.deps.getDeviceId?.() ?? null;
+    const privateKey = this.deps.getSigningPrivateKey?.() ?? null;
+    const publicKey = this.deps.getSigningPublicKey?.() ?? null;
+    if (!deviceId || !privateKey || !this.deps.motebitId) return;
+
+    try {
+      const argsHash = await hashToolPayload(params.args);
+      const resultHash = await hashToolPayload(params.result === undefined ? null : params.result);
+      const unsigned: Omit<SignableToolInvocationReceipt, "signature" | "suite"> = {
+        invocation_id: params.invocation_id,
+        task_id: params.task_id ?? params.invocation_id,
+        motebit_id: this.deps.motebitId,
+        device_id: deviceId,
+        tool_name: params.tool_name,
+        started_at: params.started_at,
+        completed_at: params.completed_at,
+        // status is "completed" for any tool that yielded a "done" chunk;
+        // finer-grained discrimination (failed / denied) lands when
+        // ai-core threads an explicit status through the chunk shape.
+        status: "completed",
+        args_hash: argsHash,
+        result_hash: resultHash,
+        invocation_origin: "ai-loop",
+      };
+      const signed = await signToolInvocationReceipt(unsigned, privateKey, publicKey ?? undefined);
+      try {
+        sink(signed);
+      } catch (err) {
+        // The sink is a consumer's handler; its failure must not
+        // poison the streaming generator. Log and move on.
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- diagnostic on consumer fault
+        console.warn(`[streaming] onToolInvocation sink threw: ${msg}`);
+      }
+    } catch (err) {
+      // Signing failure: no partial artifact leaks. Log and drop.
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console -- diagnostic on sign fault
+      console.warn(`[streaming] tool-invocation-receipt sign failed: ${msg}`);
     }
   }
 }

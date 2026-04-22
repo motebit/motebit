@@ -994,6 +994,311 @@ describe("logToolUsed (via tool_status done)", () => {
   });
 });
 
+// === ToolInvocationReceipt emission ===
+
+describe("onToolInvocation — signed per-tool-call receipts", () => {
+  async function makeKeyedRuntime(
+    onToolInvocation?: (receipt: unknown) => void,
+  ): Promise<MotebitRuntime> {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    return new MotebitRuntime(
+      {
+        motebitId: "tir-test",
+        tickRateHz: 0,
+        deviceId: "device-abc",
+        signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
+        ...(onToolInvocation ? { onToolInvocation } : {}),
+      },
+      createAdapters(createMockProvider()),
+    );
+  }
+
+  it("fires the sink with a signed receipt for each matched calling→done pair", async () => {
+    vi.clearAllMocks();
+    const received: unknown[] = [];
+    const runtime = await makeKeyedRuntime((r) => received.push(r));
+
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_1",
+          args: { url: "https://motebit.com" },
+          started_at: 1700000000000,
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "ok",
+          tool_call_id: "tc_1",
+        },
+        { type: "result", result },
+      ),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("read motebit.com"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received.length).toBe(1);
+    const r = received[0] as {
+      invocation_id: string;
+      tool_name: string;
+      motebit_id: string;
+      device_id: string;
+      args_hash: string;
+      result_hash: string;
+      signature: string;
+      suite: string;
+      public_key?: string;
+      invocation_origin?: string;
+    };
+    expect(r.invocation_id).toBe("tc_1");
+    expect(r.tool_name).toBe("read_url");
+    expect(r.motebit_id).toBe("tir-test");
+    expect(r.device_id).toBe("device-abc");
+    expect(r.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(r.signature).toBeTruthy();
+    expect(r.args_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(r.result_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(r.public_key).toMatch(/^[0-9a-f]{64}$/);
+    expect(r.invocation_origin).toBe("ai-loop");
+  });
+
+  it("produces a receipt that verifies end-to-end against the runtime's public key", async () => {
+    const { generateKeypair, verifyToolInvocationReceipt, hexToBytes } =
+      await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    let captured: unknown = null;
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "tir-verify",
+        tickRateHz: 0,
+        deviceId: "device-verify",
+        signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
+        onToolInvocation: (r) => {
+          captured = r;
+        },
+      },
+      createAdapters(createMockProvider()),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "calling",
+          tool_call_id: "tc_9",
+          args: { q: "motebit" },
+          started_at: Date.now(),
+        },
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "done",
+          result: { hits: 3 },
+          tool_call_id: "tc_9",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("search motebit"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(captured).not.toBeNull();
+    const valid = await verifyToolInvocationReceipt(
+      captured as Parameters<typeof verifyToolInvocationReceipt>[0],
+      kp.publicKey,
+    );
+    expect(valid).toBe(true);
+    // The embedded public_key hex on the receipt should match the
+    // runtime's signing public key byte-for-byte.
+    const r = captured as { public_key: string };
+    expect(hexToBytes(r.public_key)).toEqual(kp.publicKey);
+  });
+
+  it("drops silently (fail-closed) when signing keys aren't configured", async () => {
+    vi.clearAllMocks();
+    const received: unknown[] = [];
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "tir-nokey",
+        tickRateHz: 0,
+        onToolInvocation: (r) => received.push(r),
+        // Intentionally no signingKeys.
+      },
+      createAdapters(createMockProvider()),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_2",
+          args: { url: "https://example.com" },
+          started_at: Date.now(),
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "ok",
+          tool_call_id: "tc_2",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("read example.com"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received.length).toBe(0);
+  });
+
+  it("does not sign when onToolInvocation is not wired", async () => {
+    vi.clearAllMocks();
+    // No sink passed — every branch short-circuits before hashing.
+    const runtime = await makeKeyedRuntime(undefined);
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_3",
+          args: { url: "https://motebit.com" },
+          started_at: Date.now(),
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "ok",
+          tool_call_id: "tc_3",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    // Just exercise the path — nothing to assert beyond "no throw."
+    await collectChunks(runtime.sendMessageStreaming("read motebit"));
+  });
+
+  it("skips emission when tool_status chunks omit the new fields (legacy stream)", async () => {
+    vi.clearAllMocks();
+    const received: unknown[] = [];
+    const runtime = await makeKeyedRuntime((r) => received.push(r));
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "legacy_tool", status: "calling" },
+        { type: "tool_status", name: "legacy_tool", status: "done", result: "ok" },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("legacy call"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received.length).toBe(0);
+  });
+
+  it("emits one receipt per tool call when a turn has multiple tool calls", async () => {
+    vi.clearAllMocks();
+    const received: Array<{ invocation_id: string; tool_name: string }> = [];
+    const runtime = await makeKeyedRuntime((r) =>
+      received.push(r as { invocation_id: string; tool_name: string }),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_a",
+          args: { url: "a" },
+          started_at: 1,
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "ok_a",
+          tool_call_id: "tc_a",
+        },
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "calling",
+          tool_call_id: "tc_b",
+          args: { q: "x" },
+          started_at: 2,
+        },
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "done",
+          result: "ok_b",
+          tool_call_id: "tc_b",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("multi"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received.length).toBe(2);
+    expect(received[0]!.invocation_id).toBe("tc_a");
+    expect(received[0]!.tool_name).toBe("read_url");
+    expect(received[1]!.invocation_id).toBe("tc_b");
+    expect(received[1]!.tool_name).toBe("web_search");
+  });
+
+  it("swallows sink exceptions without breaking the stream", async () => {
+    vi.clearAllMocks();
+    const runtime = await makeKeyedRuntime(() => {
+      throw new Error("sink on fire");
+    });
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_err",
+          args: { url: "x" },
+          started_at: 1,
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "ok",
+          tool_call_id: "tc_err",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    // Must not throw — sink fault is isolated.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(collectChunks(runtime.sendMessageStreaming("test"))).resolves.toBeDefined();
+    warnSpy.mockRestore();
+  });
+});
+
 // === pendingApprovalInfo ===
 
 describe("pendingApprovalInfo", () => {
