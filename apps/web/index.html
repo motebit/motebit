@@ -2153,6 +2153,23 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .goal-cadence-badge {
+        font-size: 9px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent);
+        background: var(--accent-bg);
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        flex-shrink: 0;
+      }
+      .goal-countdown {
+        font-size: 10px;
+        color: var(--text-muted);
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        flex-shrink: 0;
+      }
       .goal-actions {
         display: flex;
         gap: 4px;
@@ -5696,6 +5713,26 @@
             font-family: inherit;
           "
         ></textarea>
+        <select
+          id="goal-cadence"
+          style="
+            margin-top: 4px;
+            width: 100%;
+            font-size: 12px;
+            padding: 5px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--border-input);
+            background: var(--bg-input);
+            color: var(--text-input);
+            outline: none;
+            font-family: inherit;
+          "
+        >
+          <option value="once">Run once</option>
+          <option value="hourly">Hourly</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+        </select>
         <button
           id="goal-add-btn"
           style="

@@ -231,15 +231,16 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   memoryBackdrop.addEventListener("click", closeMemory);
 
   // === Goals Panel (functional) ===
-  // Reads from the shared GoalsRunner in @motebit/panels, filtered to
-  // one-shot goals (mode: "once"). Recurring goals render in the
-  // Workstation plane. Plan chunks stream inline via the runner's
-  // onChunk callback so the panel shows step-by-step progress.
+  // Reads from the shared GoalsRunner in @motebit/panels — shows ALL
+  // user-declared goals regardless of mode. One-shot goals show an
+  // Execute button and stream plan chunks inline; recurring goals show
+  // a cadence badge, countdown, and pause/run-now controls.
   const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
   const goalsBackdrop = document.getElementById("goals-backdrop") as HTMLDivElement;
   const goalList = document.getElementById("goal-list") as HTMLDivElement;
   const goalEmpty = document.getElementById("goal-empty") as HTMLDivElement;
   const goalPromptInput = document.getElementById("goal-prompt") as HTMLTextAreaElement;
+  const goalCadenceSelect = document.getElementById("goal-cadence") as HTMLSelectElement;
   const goalAddBtn = document.getElementById("goal-add-btn") as HTMLButtonElement;
 
   let goalsSubscribed = false;
@@ -277,6 +278,34 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     container.appendChild(el);
   }
 
+  function cadenceLabel(goal: ScheduledGoal): string {
+    switch (goal.interval_ms) {
+      case 3_600_000:
+        return "hourly";
+      case 86_400_000:
+        return "daily";
+      case 604_800_000:
+        return "weekly";
+      default:
+        return "custom";
+    }
+  }
+
+  function formatCountdown(targetMs: number, nowMs: number): string {
+    const diff = targetMs - nowMs;
+    if (diff <= 0) return "any moment";
+    const s = Math.round(diff / 1000);
+    if (s < 60) return `in ${s}s`;
+    const m = Math.round(s / 60);
+    if (m < 60) return `in ${m}m`;
+    const h = Math.floor(m / 60);
+    const mm = m % 60;
+    if (h < 24) return mm === 0 ? `in ${h}h` : `in ${h}h ${mm}m`;
+    const d = Math.floor(h / 24);
+    const hh = h % 24;
+    return hh === 0 ? `in ${d}d` : `in ${d}d ${hh}h`;
+  }
+
   function renderGoals(): void {
     const runner = ctx.app.getGoalsRunner?.();
     if (!runner) {
@@ -286,7 +315,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
     const state = runner.getState();
     const panelGoals = state.goals
-      .filter((g) => g.mode === "once")
+      .slice()
       .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
 
     goalList.innerHTML = "";
@@ -295,6 +324,8 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       return;
     }
     goalEmpty.style.display = "none";
+
+    const now = Date.now();
 
     for (const goal of panelGoals) {
       const status = panelStatus(goal, state.runs);
@@ -309,20 +340,50 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       dot.className = `goal-status-dot ${status}`;
       header.appendChild(dot);
 
+      if (goal.mode === "recurring") {
+        const badge = document.createElement("span");
+        badge.className = "goal-cadence-badge";
+        badge.textContent = cadenceLabel(goal);
+        header.appendChild(badge);
+      }
+
       const text = document.createElement("span");
       text.className = "goal-prompt-text";
       text.textContent = goal.prompt;
       text.title = goal.prompt;
       header.appendChild(text);
 
+      if (goal.mode === "recurring" && typeof goal.next_run_at === "number") {
+        const countdown = document.createElement("span");
+        countdown.className = "goal-countdown";
+        countdown.textContent =
+          goal.status === "paused" ? "paused" : formatCountdown(goal.next_run_at, now);
+        header.appendChild(countdown);
+      }
+
       const actions = document.createElement("div");
       actions.className = "goal-actions";
 
-      if (status === "pending") {
+      if (goal.mode === "once" && status === "pending") {
         const execBtn = document.createElement("button");
         execBtn.textContent = "Execute";
         execBtn.addEventListener("click", () => void executeGoal(goal.goal_id));
         actions.appendChild(execBtn);
+      }
+
+      if (goal.mode === "recurring" && goal.status !== "completed" && goal.status !== "failed") {
+        const paused = goal.status === "paused";
+        const toggleBtn = document.createElement("button");
+        toggleBtn.textContent = paused ? "Resume" : "Pause";
+        toggleBtn.addEventListener("click", () => runner.setPaused(goal.goal_id, !paused));
+        actions.appendChild(toggleBtn);
+
+        if (!paused) {
+          const runBtn = document.createElement("button");
+          runBtn.textContent = "Run now";
+          runBtn.addEventListener("click", () => void runner.runNow(goal.goal_id));
+          actions.appendChild(runBtn);
+        }
       }
 
       const deleteBtn = document.createElement("button");
@@ -386,7 +447,12 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     if (!runner) return;
     const prompt = goalPromptInput.value.trim();
     if (!prompt) return;
-    runner.addGoal({ prompt, mode: "once" });
+    const cadence = goalCadenceSelect.value as "once" | "hourly" | "daily" | "weekly";
+    if (cadence === "once") {
+      runner.addGoal({ prompt, mode: "once" });
+    } else {
+      runner.addGoal({ prompt, mode: "recurring", cadence });
+    }
     goalPromptInput.value = "";
   });
 
@@ -395,10 +461,15 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     // Lazy-attach the runner subscription on first open — the runner is
     // constructed during `app.bootstrap()`, which runs AFTER
     // `initGatedPanels`, so an init-time subscription would see null.
+    // Also starts a 30s countdown refresh so recurring-goal "in 12m"
+    // labels tick down without waiting for a fire event.
     if (!goalsSubscribed) {
       const runner = ctx.app.getGoalsRunner?.();
       if (runner) {
         runner.subscribe(() => renderGoals());
+        setInterval(() => {
+          if (goalsPanel.classList.contains("open")) renderGoals();
+        }, 30_000);
         goalsSubscribed = true;
       }
     }
