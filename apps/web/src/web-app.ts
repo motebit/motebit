@@ -769,6 +769,26 @@ export class WebApp {
     return this.renderer;
   }
 
+  /**
+   * Deterministic path for surface affordances to fire a local tool.
+   * The Workstation URL bar uses this: user types a URL, presses
+   * enter, the motebit's own `read_url` tool runs with
+   * `invocation_origin: "user-tap"` so the signed audit trail
+   * discriminates user-driven from model-driven calls. The activity
+   * bus + receipt bus fan out as usual, so the Workstation pane's
+   * browser + receipt log update from the same pipeline the AI
+   * loop's tool calls use.
+   */
+  async invokeLocalTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<import("@motebit/sdk").ToolResult> {
+    if (!this.runtime) {
+      return { ok: false, error: "runtime not initialized" };
+    }
+    return this.runtime.invokeLocalTool(name, args);
+  }
+
   // === Approval Flow ===
 
   get hasPendingApproval(): boolean {

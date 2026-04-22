@@ -14,6 +14,7 @@ import type {
   BehaviorCues,
   ConversationMessage,
   ToolRegistry,
+  ToolResult,
   AgentTask,
   ExecutionReceipt,
   AgentTrustRecord,
@@ -21,7 +22,9 @@ import type {
   AgentServiceListing,
   PrecisionWeights,
   KeyringAdapter,
+  IntentOrigin,
 } from "@motebit/sdk";
+import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
 import { EventType, AgentTrustLevel } from "@motebit/sdk";
 import { EventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
@@ -801,6 +804,106 @@ export class MotebitRuntime {
   /** Access the tool registry to register additional tools at runtime. */
   getToolRegistry(): SimpleToolRegistry {
     return this.toolRegistry;
+  }
+
+  /**
+   * Execute a local tool directly — the deterministic, LLM-free path
+   * for surface affordances that must invoke a specific tool (e.g. the
+   * Workstation URL bar firing `read_url` when the user types + enters
+   * a URL). Mirrors the same activity + signed-receipt hooks the AI
+   * loop fires, but with `invocation_origin` defaulting to `"user-tap"`
+   * so the audit trail discriminates user-driven invocations from
+   * model-mediated ones.
+   *
+   * Per the surface-determinism doctrine, explicit UI affordances
+   * MUST route through a typed capability path, never through a
+   * constructed prompt. This method is that path for *local* tools;
+   * `invokeCapability` remains the path for relay-delegated capabilities.
+   *
+   * Returns the tool's `ToolResult` so the caller can react inline
+   * (e.g. show a toast on failure). The signed receipt + activity
+   * events fire as side effects through the configured sinks.
+   */
+  async invokeLocalTool(
+    name: string,
+    args: Record<string, unknown>,
+    options: { invocationOrigin?: IntentOrigin } = {},
+  ): Promise<ToolResult> {
+    const invocationId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `inv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const startedAt = Date.now();
+
+    let result: ToolResult;
+    try {
+      result = await this.toolRegistry.execute(name, args);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { ok: false, error: msg };
+    }
+
+    const completedAt = Date.now();
+    const visibleResult = result.ok ? (result.data ?? null) : (result.error ?? null);
+
+    // Fire the live activity channel first — the workstation pane
+    // renders immediately; receipt lands right after.
+    if (this._onToolActivity) {
+      try {
+        this._onToolActivity({
+          invocation_id: invocationId,
+          task_id: invocationId,
+          tool_name: name,
+          args,
+          result: visibleResult,
+          started_at: startedAt,
+          completed_at: completedAt,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this._logger.warn(`[runtime] onToolActivity sink threw: ${msg}`);
+      }
+    }
+
+    // Sign + fire the receipt. Fail-closed: no signing key → no
+    // receipt (consistent with the StreamingManager path).
+    if (this._onToolInvocation && this._signingKeys) {
+      try {
+        const argsHash = await hashToolPayload(args);
+        const resultHash = await hashToolPayload(visibleResult);
+        const signed = await signToolInvocationReceipt(
+          {
+            invocation_id: invocationId,
+            // Standalone invocation — no enclosing task_id. Use the
+            // invocation_id as the task_id so the receipt is still a
+            // valid signed artifact.
+            task_id: invocationId,
+            motebit_id: this.motebitId,
+            device_id: this._deviceId,
+            tool_name: name,
+            started_at: startedAt,
+            completed_at: completedAt,
+            status: result.ok ? "completed" : "failed",
+            args_hash: argsHash,
+            result_hash: resultHash,
+            invocation_origin: options.invocationOrigin ?? "user-tap",
+          },
+          this._signingKeys.privateKey,
+          this._signingKeys.publicKey,
+        );
+        try {
+          this._onToolInvocation(signed);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this._logger.warn(`[runtime] onToolInvocation sink threw: ${msg}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this._logger.warn(`[runtime] tool-invocation-receipt sign failed: ${msg}`);
+      }
+    }
+
+    return result;
   }
 
   /** Access the loop dependencies for direct use by PlanEngine. */

@@ -75,6 +75,8 @@ function buildScaffold(): {
   browserPane: HTMLDivElement;
   browserUrl: HTMLSpanElement;
   browserFrame: HTMLIFrameElement;
+  urlBar: HTMLInputElement;
+  urlStatus: HTMLSpanElement;
 } {
   // The panel mounts INSIDE the liquid-glass workstation plane via
   // the renderer's CSS2DObject stage — not as a fixed overlay. Sizing
@@ -174,6 +176,63 @@ function buildScaffold(): {
   header.appendChild(clearBtn);
   header.appendChild(closeBtn);
   panel.appendChild(header);
+
+  // === URL bar (shared gaze) ===
+  // User types a URL here; pressing enter fires the motebit's
+  // `read_url` tool via `invokeLocalTool`. The page lands in the
+  // browser pane below the same way it does when the motebit
+  // navigates on its own — both you and the motebit are looking at
+  // the same source. The signed receipt records `user-tap` origin,
+  // so the audit trail discriminates who drove the call.
+  const urlRow = document.createElement("div");
+  Object.assign(urlRow.style, {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "8px 14px",
+    borderBottom: "1px solid rgba(60, 75, 105, 0.10)",
+    flex: "0 0 auto",
+  });
+
+  const urlPrefix = document.createElement("span");
+  urlPrefix.textContent = "→";
+  Object.assign(urlPrefix.style, {
+    color: "rgba(90, 110, 150, 0.62)",
+    fontSize: "12px",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+  });
+
+  const urlBar = document.createElement("input");
+  urlBar.type = "text";
+  urlBar.spellcheck = false;
+  urlBar.autocomplete = "off";
+  urlBar.autocapitalize = "off";
+  urlBar.placeholder = "type a URL — you and the motebit see the same page";
+  Object.assign(urlBar.style, {
+    flex: "1 1 auto",
+    minWidth: "0",
+    border: "none",
+    outline: "none",
+    background: "transparent",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    fontSize: "11.5px",
+    color: "rgba(20, 30, 50, 0.92)",
+    letterSpacing: "0.01em",
+  });
+
+  const urlStatus = document.createElement("span");
+  Object.assign(urlStatus.style, {
+    fontSize: "10px",
+    color: "rgba(90, 110, 150, 0.72)",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    letterSpacing: "0.04em",
+    flex: "0 0 auto",
+  });
+
+  urlRow.appendChild(urlPrefix);
+  urlRow.appendChild(urlBar);
+  urlRow.appendChild(urlStatus);
+  panel.appendChild(urlRow);
 
   // === Browser pane (virtual_browser mode) ===
   // Renders the motebit's currently-read page as a sandboxed iframe
@@ -279,7 +338,25 @@ function buildScaffold(): {
     browserPane,
     browserUrl,
     browserFrame,
+    urlBar,
+    urlStatus,
   };
+}
+
+/**
+ * Normalize user-typed URL input. Bare hostnames get `https://`
+ * prefixed; space-containing or dot-less strings route through
+ * DuckDuckGo so the input reads as "URL or search" without needing
+ * a separate search affordance.
+ */
+function normalizeUrlInput(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/\s/.test(trimmed) || !/\./.test(trimmed)) {
+    return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
+  }
+  return `https://${trimmed}`;
 }
 
 // Reader-mode HTML for rendering the motebit's currently-fetched page
@@ -621,8 +698,18 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     if (scaffold) return scaffold;
 
     scaffold = buildScaffold();
-    const { list, empty, closeBtn, headerCount, clearBtn, browserPane, browserUrl, browserFrame } =
-      scaffold;
+    const {
+      list,
+      empty,
+      closeBtn,
+      headerCount,
+      clearBtn,
+      browserPane,
+      browserUrl,
+      browserFrame,
+      urlBar,
+      urlStatus,
+    } = scaffold;
 
     const adapter: WorkstationFetchAdapter = {
       subscribeToolInvocations: (listener) => ctx.app.subscribeToolInvocations(listener),
@@ -647,6 +734,28 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
 
     closeBtn.addEventListener("click", close);
     clearBtn.addEventListener("click", () => controller?.clearHistory());
+
+    // URL bar — user types, presses enter, the motebit's read_url
+    // tool runs with user-tap origin. Same pipeline as the AI loop's
+    // reads; the page lands in the browser pane below.
+    let urlFetchSeq = 0;
+    urlBar.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      ev.preventDefault();
+      const url = normalizeUrlInput(urlBar.value);
+      if (!url) return;
+      urlBar.value = url;
+      urlStatus.textContent = "fetching…";
+      const seq = ++urlFetchSeq;
+      void ctx.app.invokeLocalTool("read_url", { url }).then((result) => {
+        if (seq !== urlFetchSeq) return;
+        if (result.ok) {
+          urlStatus.textContent = "";
+        } else {
+          urlStatus.textContent = "failed";
+        }
+      });
+    });
 
     return scaffold;
   }
