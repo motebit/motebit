@@ -97,6 +97,19 @@ export {
 export { AgentGraphManager } from "./agent-graph.js";
 export { createGoalsEmitter } from "./goals.js";
 export type { GoalsEmitter, GoalsEmitterDeps, GoalLifecycleStatus } from "./goals.js";
+
+export { createComputerSessionManager, ComputerDispatcherError } from "./computer-use.js";
+export type {
+  ComputerSessionManager,
+  ComputerSessionManagerDeps,
+  ComputerSessionHandle,
+  ComputerActionOutcome,
+  ComputerDisplayInfo,
+  ComputerPlatformDispatcher,
+  ComputerGovernanceClassifier,
+  ComputerApprovalFlow,
+} from "./computer-use.js";
+
 export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";
 
