@@ -76,6 +76,7 @@ function buildScaffold(): {
   browserUrl: HTMLSpanElement;
   browserFrame: HTMLIFrameElement;
   browserBackBtn: HTMLButtonElement;
+  browserForwardBtn: HTMLButtonElement;
   urlBar: HTMLInputElement;
   urlStatus: HTMLSpanElement;
 } {
@@ -284,6 +285,22 @@ function buildScaffold(): {
     fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
   });
 
+  const browserForwardBtn = document.createElement("button");
+  browserForwardBtn.type = "button";
+  browserForwardBtn.textContent = "›";
+  browserForwardBtn.title = "Forward";
+  browserForwardBtn.disabled = true;
+  Object.assign(browserForwardBtn.style, {
+    background: "transparent",
+    border: "none",
+    color: "rgba(60, 80, 120, 0.72)",
+    cursor: "pointer",
+    fontSize: "16px",
+    lineHeight: "1",
+    padding: "0 4px",
+    fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+  });
+
   const browserLabel = document.createElement("span");
   browserLabel.textContent = "reading";
   Object.assign(browserLabel.style, {
@@ -306,6 +323,7 @@ function buildScaffold(): {
   });
 
   browserStrip.appendChild(browserBackBtn);
+  browserStrip.appendChild(browserForwardBtn);
   browserStrip.appendChild(browserLabel);
   browserStrip.appendChild(browserUrl);
   browserPane.appendChild(browserStrip);
@@ -362,6 +380,7 @@ function buildScaffold(): {
     browserUrl,
     browserFrame,
     browserBackBtn,
+    browserForwardBtn,
     urlBar,
     urlStatus,
   };
@@ -735,6 +754,7 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
       browserUrl,
       browserFrame,
       browserBackBtn,
+      browserForwardBtn,
       urlBar,
       urlStatus,
     } = scaffold;
@@ -771,6 +791,11 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     // fires a signed `ToolInvocationReceipt` and the new page lands in
     // the iframe via the existing controller → currentPage pipeline.
     //
+    // History is the full navigation stack, indexed by current position;
+    // Back/Forward step through it. Each visited page caches its reader-
+    // mode content so Back/Forward render instantly without re-fetching
+    // (matches standard browser behavior — back doesn't re-GET).
+    //
     // Foundation is reader-mode (`read_url` fetch + HTML strip). Phase
     // 2 swaps the backend for a real embedded WebView on desktop /
     // relay-hosted cloud browser on web without changing this UX.
@@ -779,30 +804,55 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     let navIndex = -1;
     let navFetchSeq = 0;
 
-    function updateBackButton(): void {
-      browserBackBtn.disabled = navIndex <= 0;
-      browserBackBtn.style.opacity = navIndex <= 0 ? "0.3" : "1";
-      browserBackBtn.style.cursor = navIndex <= 0 ? "default" : "pointer";
+    interface NavCacheEntry {
+      content: string;
+      sourceUrl: string;
+    }
+    const pageCache = new Map<string, NavCacheEntry>();
+
+    function updateNavButtons(): void {
+      const canBack = navIndex > 0;
+      const canForward = navIndex < navHistory.length - 1;
+      browserBackBtn.disabled = !canBack;
+      browserBackBtn.style.opacity = canBack ? "1" : "0.3";
+      browserBackBtn.style.cursor = canBack ? "pointer" : "default";
+      browserForwardBtn.disabled = !canForward;
+      browserForwardBtn.style.opacity = canForward ? "1" : "0.3";
+      browserForwardBtn.style.cursor = canForward ? "pointer" : "default";
     }
 
+    /**
+     * Load a URL into the browser pane. Cache-first — if we've visited
+     * this URL in this session, render from cache without firing
+     * `read_url` (Back/Forward get instant; the signed receipt for the
+     * original visit is already in the audit trail).
+     */
     async function loadUrl(url: string): Promise<boolean> {
+      const cached = pageCache.get(url);
+      if (cached) {
+        browserFrame.srcdoc = buildReaderSrcdoc(cached.content, cached.sourceUrl);
+        browserUrl.textContent = cached.sourceUrl;
+        urlStatus.textContent = "";
+        return true;
+      }
       urlStatus.textContent = "fetching…";
       const seq = ++navFetchSeq;
       const result = await ctx.app.invokeLocalTool("read_url", { url });
       if (seq !== navFetchSeq) return false;
       urlStatus.textContent = result.ok ? "" : "failed";
+      // Cache population happens via the controller subscribe below when
+      // state.currentPage updates — one code path, no double-cache.
       return result.ok;
     }
 
     async function navigateTo(url: string): Promise<void> {
       const ok = await loadUrl(url);
       if (!ok) return;
-      // Truncate any forward history, append this navigation.
       navHistory.splice(navIndex + 1);
       navHistory.push(url);
       navIndex = navHistory.length - 1;
       urlBar.value = url;
-      updateBackButton();
+      updateNavButtons();
     }
 
     async function goBack(): Promise<void> {
@@ -811,10 +861,30 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
       const url = navHistory[navIndex]!;
       await loadUrl(url);
       urlBar.value = url;
-      updateBackButton();
+      updateNavButtons();
     }
 
-    // URL-bar Enter → navigateTo (push history).
+    async function goForward(): Promise<void> {
+      if (navIndex >= navHistory.length - 1) return;
+      navIndex++;
+      const url = navHistory[navIndex]!;
+      await loadUrl(url);
+      urlBar.value = url;
+      updateNavButtons();
+    }
+
+    // Cache pages keyed by url when the controller emits a new currentPage.
+    // Covers motebit-initiated reads AND user-driven ones (both flow
+    // through the same `read_url` receipt stream).
+    controller.subscribe((state) => {
+      if (state.currentPage) {
+        pageCache.set(state.currentPage.url, {
+          content: state.currentPage.content,
+          sourceUrl: state.currentPage.url,
+        });
+      }
+    });
+
     urlBar.addEventListener("keydown", (ev) => {
       if (ev.key !== "Enter") return;
       ev.preventDefault();
@@ -827,20 +897,33 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     browserBackBtn.addEventListener("click", () => {
       void goBack();
     });
+    browserForwardBtn.addEventListener("click", () => {
+      void goForward();
+    });
 
     // Click-through on iframe links — same-origin sandbox lets the
     // parent reach into contentDocument and rewire anchor clicks to
-    // route through navigateTo. Attached on each srcdoc load because
-    // the iframe's DOM is rebuilt per navigation.
+    // route through navigateTo. Relative hrefs resolve against the
+    // current page so `/path` and `../other` work. Attached on each
+    // srcdoc load because the iframe's DOM is rebuilt per navigation.
     browserFrame.addEventListener("load", () => {
       const doc = browserFrame.contentDocument;
       if (!doc) return;
       doc.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
         const href = anchor.getAttribute("href") ?? "";
-        if (!/^https?:\/\//i.test(href)) return;
+        if (!href) return;
         anchor.addEventListener("click", (ev: MouseEvent) => {
           ev.preventDefault();
-          void navigateTo(href);
+          const currentUrl = navIndex >= 0 ? (navHistory[navIndex] ?? undefined) : undefined;
+          let resolved: string;
+          try {
+            resolved = currentUrl ? new URL(href, currentUrl).toString() : href;
+          } catch {
+            return; // invalid URL — ignore
+          }
+          // Skip mailto:, javascript:, data:, etc. Keep http(s) only.
+          if (!/^https?:\/\//i.test(resolved)) return;
+          void navigateTo(resolved);
         });
       });
     });
