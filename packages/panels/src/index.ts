@@ -56,3 +56,12 @@ export {
   type GoalStatus,
   type NewGoalInput,
 } from "./goals/controller";
+
+export {
+  createWorkstationController,
+  type WorkstationController,
+  type WorkstationControllerOptions,
+  type WorkstationFetchAdapter,
+  type WorkstationState,
+  type ToolInvocationReceiptLike,
+} from "./workstation/controller";
