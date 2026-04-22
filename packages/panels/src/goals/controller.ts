@@ -1,11 +1,9 @@
-// Surface-agnostic state controller for the scheduled-goals panel.
+// Surface-agnostic CRUD controller for daemon-backed goals.
 //
-// Scope note: this controller covers desktop + mobile only. Web's "goals"
-// panel is a different feature (one-shot execute-on-demand via streaming
-// plan chunks, backed by localStorage) and stays outside the extraction.
-// Per the diagnostic that led to this controller, forcing all three into
-// one state layer would either break web's one-shot semantics or force
-// desktop/mobile to lose the scheduled-daemon model.
+// This controller reads goal state through an adapter — the adapter
+// implementation decides whether that's a Rust daemon (desktop), SQLite +
+// expo store (mobile), or relay fetch. Surfaces that ARE the daemon (web)
+// use the sibling `createGoalsRunner` instead, which owns fire + run state.
 //
 // Shared state lifted here:
 //   - goal list (fetched via adapter)
@@ -15,41 +13,15 @@
 // Surface-specific state that stays inline:
 //   - desktop plan progress card + recent outcomes + plan history + tool audit
 //   - mobile add-form input state (prompt, interval, mode)
+//
+// See `docs/doctrine/goals-vs-tasks.md` for the goal/task distinction and
+// `packages/panels/src/goals/types.ts` for the canonical shape.
 
-// ── Shape ─────────────────────────────────────────────────────────────
+import type { GoalMode, GoalStatus, ScheduledGoal } from "./types.js";
 
-export type GoalMode = "recurring" | "once";
+export type { GoalMode, GoalStatus, ScheduledGoal };
 
-/**
- * Goal lifecycle states. Desktop uses "active" | "paused" | "suspended"
- * (the suspended state = retry-backoff, not user-paused). Mobile adds
- * "completed" and "failed" for one-shot goals. A string fallback keeps the
- * renderer forgiving to relay/daemon additions.
- */
-export type GoalStatus = "active" | "paused" | "suspended" | "completed" | "failed";
-
-/**
- * The unified shape the two surfaces agree on. Mobile has the richer model
- * (tracked retries, last_run_at, enabled flag separate from status); desktop
- * implements a subset and leaves the extras undefined.
- */
-export interface ScheduledGoal {
-  goal_id: string;
-  prompt: string;
-  interval_ms: number;
-  mode: GoalMode;
-  // `(string & {})` opens the literal union to forward-compat values
-  // without collapsing autocomplete — idiomatic TS pattern.
-  status: GoalStatus | (string & {});
-  /** Mobile-only today. Desktop infers enabled from status !== "paused". */
-  enabled?: boolean;
-  last_run_at?: number | null;
-  consecutive_failures?: number;
-  max_retries?: number;
-  created_at?: number;
-}
-
-// ── Adapter ──────────────────────────────────────────────────────────
+// ── Adapter ──────────────────────────────────────────────────────────────
 
 /**
  * Input for a new goal. Same shape both surfaces need. The controller
@@ -75,7 +47,7 @@ export interface GoalsFetchAdapter {
   removeGoal(goalId: string): Promise<void>;
 }
 
-// ── State ────────────────────────────────────────────────────────────
+// ── State ────────────────────────────────────────────────────────────────
 
 export interface GoalsState {
   goals: ScheduledGoal[];
@@ -91,7 +63,7 @@ function initialState(): GoalsState {
   };
 }
 
-// ── Controller ────────────────────────────────────────────────────────
+// ── Controller ───────────────────────────────────────────────────────────
 
 export interface GoalsController {
   getState(): GoalsState;

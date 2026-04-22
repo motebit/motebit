@@ -51,11 +51,25 @@ export {
   type GoalsController,
   type GoalsFetchAdapter,
   type GoalsState,
+  type NewGoalInput,
+} from "./goals/controller";
+
+export {
   type ScheduledGoal,
   type GoalMode,
   type GoalStatus,
-  type NewGoalInput,
-} from "./goals/controller";
+  type GoalRunRecord,
+  type GoalFireResult,
+} from "./goals/types";
+
+export {
+  createGoalsRunner,
+  type GoalsRunner,
+  type GoalsRunnerAdapter,
+  type GoalsRunnerState,
+  type GoalsRunnerDeps,
+  type NewGoalRunnerInput,
+} from "./goals/runner";
 
 export {
   createWorkstationController,

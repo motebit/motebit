@@ -19,9 +19,9 @@ Families shipped: **Sovereign**, **Agents**, **Memory**.
 
 Same pattern, but one of the three surfaces is a genuinely different feature (not a render-divergent copy) and stays outside the controller.
 
-Family shipped: **Goals** — desktop + mobile share the "scheduled daemon-run goal" model; web's "goals" panel is one-shot `executeGoal(id, prompt)` streaming a `PlanChunk` generator backed by localStorage. Forcing web in would have broken its semantics; leaving it out is honest, not drift.
+No family currently fits this shape. **Goals** was the shipped example until 2026-04-22: desktop + mobile shared the daemon-backed CRUD model (`GoalsController`) and web ran parallel `ScheduledAgent` (recurring simple) + `WebGoal` (one-shot plan) types. The unification pass added `createGoalsRunner` — the daemon-role sibling of `GoalsController` for surfaces that ARE the daemon (web) — folding web's two types onto the shared `ScheduledGoal` shape. The "two surfaces + different feature" framing was retrospectively a diagnosis of drift rather than a legitimate shape.
 
-Rule: when the scope compresses, name the excluded surface in the controller file's header comment and in the `check-panel-controllers` signature list so future contributors see why the gate is silent on it.
+Rule: before accepting this shape for a new family, verify the "different feature" claim by asking whether the surface is answering a different _user question_. If it's answering the same question through a different mechanism (daemon vs. browser tab), unify instead — the mechanism divergence is surface-level, not domain-level.
 
 ### 3. Rendering primitive — in the domain package, not `@motebit/panels`
 
@@ -41,13 +41,13 @@ Rule: when the LOC is dominated by form fields and platform I/O, extract the typ
 
 ## What's shipped
 
-| Family         | Surfaces                                     | Home              | Gate                                       |
-| -------------- | -------------------------------------------- | ----------------- | ------------------------------------------ |
-| Sovereign      | desktop, web, mobile                         | `@motebit/panels` | `check-panel-controllers`                  |
-| Agents         | desktop, web, mobile                         | `@motebit/panels` | `check-panel-controllers`                  |
-| Memory         | desktop, web, mobile                         | `@motebit/panels` | `check-panel-controllers`                  |
-| Goals          | desktop, mobile (web is a different feature) | `@motebit/panels` | `check-panel-controllers`                  |
-| Voice waveform | desktop, web                                 | `@motebit/voice`  | — (rendering primitive, not a state drift) |
+| Family         | Surfaces                                   | Home              | Gate                                       |
+| -------------- | ------------------------------------------ | ----------------- | ------------------------------------------ |
+| Sovereign      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+| Agents         | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+| Memory         | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+| Goals          | desktop, mobile, web (controller + runner) | `@motebit/panels` | `check-panel-controllers`                  |
+| Voice waveform | desktop, web                               | `@motebit/voice`  | — (rendering primitive, not a state drift) |
 
 ## Evaluated but not extracted
 
