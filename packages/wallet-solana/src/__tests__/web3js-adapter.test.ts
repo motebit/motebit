@@ -32,7 +32,7 @@ vi.mock("@solana/spl-token", async (importOriginal) => {
 
 import { TokenAccountNotFoundError } from "@solana/spl-token";
 
-import { Web3JsRpcAdapter } from "../web3js-adapter.js";
+import { Web3JsRpcAdapter, deriveSolanaAddress } from "../web3js-adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -638,6 +638,105 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
       expect(r.ok).toBe(false);
       expect(r.reason).toContain("Invalid Solana address");
     }
+  });
+
+  // Batch recipient has no ATA yet — the batch path must add a
+  // createAssociatedTokenAccountInstruction before the transfer.
+  // Covers web3js-adapter.ts lines 270-279 (the if-!destExists branch
+  // inside the batch loop, distinct from the single-item sendUsdc path).
+  // Uses 2 items so sendUsdcBatch doesn't shortcut to sendUsdc.
+  it("adds a create-ATA instruction when a batch recipient has no ATA yet", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    // 1st getAccount = own balance; 2nd = dest A (exists); 3rd = dest B (missing).
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n })
+      .mockImplementationOnce(() => {
+        throw new TokenAccountNotFoundError();
+      });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 1,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigCreateAta");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 7 },
+      value: { err: null },
+    });
+
+    const results = await adapter.sendUsdcBatch([
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { toAddress: validBase58Address(), microAmount: 2n },
+    ]);
+    expect(results).toHaveLength(2);
+    expect(results[0]!.ok).toBe(true);
+    expect(results[1]!.ok).toBe(true);
+    // Both items share the chunk signature — the tx that was built
+    // includes the create-ATA instruction for the second recipient.
+    expect(results[0]!.signature).toBe("sigCreateAta");
+    expect(results[1]!.signature).toBe("sigCreateAta");
+  });
+
+  // A non-TokenAccountNotFoundError from getAccount during the batch
+  // path (e.g. a legitimate RPC error) must rethrow rather than assume
+  // the ATA is missing. Covers web3js-adapter.ts lines 268-269 inside
+  // the batch loop. Uses 2 items so sendUsdcBatch doesn't shortcut to
+  // sendUsdc (whose analogous code path lives at lines 168-170).
+  it("rethrows non-TokenAccountNotFoundError from getAccount during batch ATA check", async () => {
+    const adapter = makeAdapterForTx();
+    // 1st getAccount = own balance; 2nd = first recipient ATA (fine);
+    // 3rd = second recipient ATA — an unrelated RPC failure that the
+    // batch's outer chunk catch turns into a failure for the whole chunk.
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n })
+      .mockImplementationOnce(() => {
+        throw new Error("RPC down");
+      });
+    vi.spyOn(adapter.getConnection(), "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 1,
+    });
+
+    const results = await adapter.sendUsdcBatch([
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { toAddress: validBase58Address(), microAmount: 2n },
+    ]);
+    expect(results).toHaveLength(2);
+    for (const r of results) {
+      expect(r.ok).toBe(false);
+      expect(r.reason).toContain("RPC down");
+    }
+  });
+});
+
+// ── deriveSolanaAddress ──────────────────────────────────────────────────
+
+describe("deriveSolanaAddress", () => {
+  it("returns a base58 address for a valid 32-byte Ed25519 public key", () => {
+    const kp = Keypair.generate();
+    const address = deriveSolanaAddress(kp.publicKey.toBytes());
+    expect(address).toBe(kp.publicKey.toBase58());
+  });
+
+  it("is deterministic for a given public key", () => {
+    const kp = Keypair.generate();
+    const a = deriveSolanaAddress(kp.publicKey.toBytes());
+    const b = deriveSolanaAddress(kp.publicKey.toBytes());
+    expect(a).toBe(b);
+  });
+
+  it("throws a labeled error when the public key is not 32 bytes", () => {
+    expect(() => deriveSolanaAddress(new Uint8Array(16))).toThrow(
+      /expects a 32-byte Ed25519 public key, got 16 bytes/,
+    );
+    expect(() => deriveSolanaAddress(new Uint8Array(64))).toThrow(
+      /expects a 32-byte Ed25519 public key, got 64 bytes/,
+    );
+    expect(() => deriveSolanaAddress(new Uint8Array(0))).toThrow(
+      /expects a 32-byte Ed25519 public key, got 0 bytes/,
+    );
   });
 });
 
