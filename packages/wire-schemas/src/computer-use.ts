@@ -1,13 +1,19 @@
 /**
  * Computer-use payload schemas — wire artifacts for `computer-use-v1.md`.
  *
- * Four payload types cover the full computer-use surface: action requests,
- * observation results, session-opened events, session-closed events. Every
- * schema has a `.passthrough()` envelope (v2 emitters adding fields don't
- * break v1 validators), a `_TYPE_PARITY` compile-time assertion against the
- * `@motebit/protocol` type, and a `buildXxxJsonSchema()` emitter called by
- * `scripts/build-schemas.ts` to refresh the committed JSON Schema artifact.
- * See `spec/computer-use-v1.md` §5 for the normative field list.
+ * Four top-level payload types:
+ *   - ComputerActionRequest       — the tool call, action as nested variant
+ *   - ComputerObservationResult   — screenshot | cursor_position
+ *   - ComputerSessionOpened       — signed session-start event
+ *   - ComputerSessionClosed       — signed session-end event
+ *
+ * Every schema has a `.passthrough()` envelope (v2 emitters adding fields
+ * don't break v1 validators), a `_TYPE_PARITY` compile-time assertion
+ * against the `@motebit/protocol` type, and a `buildXxxJsonSchema()`
+ * emitter registered in `scripts/build-schemas.ts`.
+ *
+ * Actions are a **discriminated union** via zod's `discriminatedUnion` so
+ * JSON Schema emits clean `oneOf` branches per variant.
  */
 
 import { z } from "zod";
@@ -25,6 +31,120 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 const SCHEMA_BASE =
   "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema";
 
+// ── Primitives ───────────────────────────────────────────────────────
+
+const ComputerPointSchema = z.object({
+  x: z.number().int().describe("Logical pixel X coordinate."),
+  y: z.number().int().describe("Logical pixel Y coordinate."),
+});
+
+const ComputerTargetHintSchema = z.object({
+  role: z.string().optional().describe("Accessibility role. Examples: 'button', 'link'."),
+  label: z.string().optional().describe("Accessible label or visible text."),
+  source: z
+    .string()
+    .describe("Source of the hint: 'accessibility', 'dom', 'vision', 'user_annotation'."),
+});
+
+const ModifiersSchema = z
+  .array(z.string())
+  .optional()
+  .describe('Modifier keys held during the action. Subset of `["cmd", "ctrl", "alt", "shift"]`.');
+
+// ── Action variants ──────────────────────────────────────────────────
+
+const ScreenshotActionSchema = z
+  .object({
+    kind: z.literal("screenshot"),
+  })
+  .passthrough();
+
+const CursorPositionActionSchema = z
+  .object({
+    kind: z.literal("cursor_position"),
+  })
+  .passthrough();
+
+const ClickActionSchema = z
+  .object({
+    kind: z.literal("click"),
+    target: ComputerPointSchema,
+    button: z.string().optional().describe('"left" | "right" | "middle". Defaults to "left".'),
+    modifiers: ModifiersSchema,
+    target_hint: ComputerTargetHintSchema.optional(),
+  })
+  .passthrough();
+
+const DoubleClickActionSchema = z
+  .object({
+    kind: z.literal("double_click"),
+    target: ComputerPointSchema,
+    button: z.string().optional(),
+    modifiers: ModifiersSchema,
+    target_hint: ComputerTargetHintSchema.optional(),
+  })
+  .passthrough();
+
+const MouseMoveActionSchema = z
+  .object({
+    kind: z.literal("mouse_move"),
+    target: ComputerPointSchema,
+    target_hint: ComputerTargetHintSchema.optional(),
+  })
+  .passthrough();
+
+const DragActionSchema = z
+  .object({
+    kind: z.literal("drag"),
+    from: ComputerPointSchema,
+    to: ComputerPointSchema,
+    button: z.string().optional(),
+    modifiers: ModifiersSchema,
+    duration_ms: z.number().int().nonnegative().optional(),
+    target_hint: ComputerTargetHintSchema.optional(),
+  })
+  .passthrough();
+
+const TypeActionSchema = z
+  .object({
+    kind: z.literal("type"),
+    text: z.string().describe("Text to type."),
+    per_char_delay_ms: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
+
+const KeyActionSchema = z
+  .object({
+    kind: z.literal("key"),
+    key: z.string().describe("Key combination. Example: 'cmd+c', 'escape'."),
+  })
+  .passthrough();
+
+const ScrollActionSchema = z
+  .object({
+    kind: z.literal("scroll"),
+    target: ComputerPointSchema,
+    dx: z.number().int().describe("Scroll wheel delta X."),
+    dy: z.number().int().describe("Scroll wheel delta Y."),
+  })
+  .passthrough();
+
+/**
+ * Discriminated union of all action variants. Exported so consumers can
+ * validate an action value directly without wrapping in a request.
+ */
+export const ComputerActionSchema = z.discriminatedUnion("kind", [
+  ScreenshotActionSchema,
+  CursorPositionActionSchema,
+  ClickActionSchema,
+  DoubleClickActionSchema,
+  MouseMoveActionSchema,
+  DragActionSchema,
+  TypeActionSchema,
+  KeyActionSchema,
+  ScrollActionSchema,
+]);
+
 // ── 5.1 ComputerActionRequest ────────────────────────────────────────
 
 export const COMPUTER_ACTION_REQUEST_SCHEMA_ID = `${SCHEMA_BASE}/computer-action-request-v1.json`;
@@ -32,27 +152,9 @@ export const COMPUTER_ACTION_REQUEST_SCHEMA_ID = `${SCHEMA_BASE}/computer-action
 export const ComputerActionRequestSchema = z
   .object({
     session_id: z.string().min(1).describe("Open session the action belongs to."),
-    action: z
-      .string()
-      .describe(
-        "Discriminator. One of: screenshot, cursor_position, click, double_click, mouse_move, drag, type, key, scroll.",
-      ),
-    x: z.number().int().optional().describe("Target X pixel coordinate."),
-    y: z.number().int().optional().describe("Target Y pixel coordinate."),
-    x1: z.number().int().optional().describe("Drag-end X. Required when action === 'drag'."),
-    y1: z.number().int().optional().describe("Drag-end Y. Required when action === 'drag'."),
-    button: z.string().optional().describe('Mouse button. Defaults to "left".'),
-    modifiers: z
-      .array(z.string())
-      .optional()
-      .describe('Modifier keys held. Subset of `["cmd", "ctrl", "alt", "shift"]`.'),
-    text: z.string().optional().describe("Keyboard text. Required when action === 'type'."),
-    key: z
-      .string()
-      .optional()
-      .describe("Key combination. Required when action === 'key'. Example: 'cmd+c'."),
-    dx: z.number().int().optional().describe("Scroll wheel delta X."),
-    dy: z.number().int().optional().describe("Scroll wheel delta Y."),
+    action: ComputerActionSchema.describe(
+      "Discriminated action variant. The `kind` field selects the branch.",
+    ),
   })
   .passthrough();
 
@@ -77,7 +179,7 @@ export function buildComputerActionRequestJsonSchema(): Record<string, unknown> 
     $id: COMPUTER_ACTION_REQUEST_SCHEMA_ID,
     title: "ComputerActionRequest (v1)",
     description:
-      "One invocation of the `computer` tool — observation or input action. Discriminated by `action`. See spec/computer-use-v1.md §5.1.",
+      "One invocation of the `computer` tool. Action is a nested discriminated variant. See spec/computer-use-v1.md §5.1.",
   });
 }
 
@@ -85,24 +187,62 @@ export function buildComputerActionRequestJsonSchema(): Record<string, unknown> 
 
 export const COMPUTER_OBSERVATION_RESULT_SCHEMA_ID = `${SCHEMA_BASE}/computer-observation-result-v1.json`;
 
-export const ComputerObservationResultSchema = z
+const ComputerRedactionSchema = z.object({
+  applied: z.boolean().describe("True iff one or more regions were masked."),
+  projection_kind: z
+    .string()
+    .describe("'raw' | 'masked' | 'blurred' | 'cropped'. Describes the shape of bytes the AI saw."),
+  policy_version: z.string().optional().describe("Version of the classification policy that ran."),
+  classified_regions_count: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("Number of sensitive regions classified in the raw frame."),
+  classified_regions_digest: z
+    .string()
+    .optional()
+    .describe(
+      "SHA-256 of a canonical JSON array of classified regions. Lets a verifier replay what was masked.",
+    ),
+});
+
+const ScreenshotObservationSchema = z
   .object({
-    session_id: z.string().min(1).describe("Session the observation belongs to."),
-    kind: z.string().describe("Discriminator. 'screenshot' or 'cursor_position'."),
-    image_format: z.string().optional().describe("Screenshot only. 'png' or 'jpeg'."),
-    image_base64: z.string().optional().describe("Screenshot only. Base64-encoded image bytes."),
-    width: z.number().int().nonnegative().optional().describe("Screenshot image width (px)."),
-    height: z.number().int().nonnegative().optional().describe("Screenshot image height (px)."),
-    x: z.number().int().optional().describe("Cursor-position only. Cursor X."),
-    y: z.number().int().optional().describe("Cursor-position only. Cursor Y."),
-    captured_at: z.number().int().nonnegative().describe("Unix ms of the capture."),
-    redaction_applied: z
-      .boolean()
-      .describe(
-        "True iff the sensitivity classification layer masked one or more regions before these bytes left the OS-access boundary.",
-      ),
+    kind: z.literal("screenshot"),
+    session_id: z.string().min(1),
+    artifact_id: z.string().min(1).describe("Artifact ID of the raw capture."),
+    artifact_sha256: z.string().min(1).describe("SHA-256 of the raw capture bytes."),
+    image_format: z.string().describe('"png" | "jpeg".'),
+    width: z.number().int().positive().describe("Image width in logical pixels."),
+    height: z.number().int().positive().describe("Image height in logical pixels."),
+    captured_at: z.number().int().nonnegative().describe("Unix ms."),
+    redaction: ComputerRedactionSchema,
+    projection_artifact_id: z
+      .string()
+      .optional()
+      .describe("Artifact ID of the redacted projection when it differs from the raw capture."),
+    projection_artifact_sha256: z
+      .string()
+      .optional()
+      .describe("SHA-256 of the projection bytes. Paired with projection_artifact_id."),
   })
   .passthrough();
+
+const CursorPositionObservationSchema = z
+  .object({
+    kind: z.literal("cursor_position"),
+    session_id: z.string().min(1),
+    x: z.number().int(),
+    y: z.number().int(),
+    captured_at: z.number().int().nonnegative(),
+  })
+  .passthrough();
+
+export const ComputerObservationResultSchema = z.discriminatedUnion("kind", [
+  ScreenshotObservationSchema,
+  CursorPositionObservationSchema,
+]);
 
 type InferredObservation = z.infer<typeof ComputerObservationResultSchema>;
 type _ObservationForward = ComputerObservationResult extends InferredObservation ? true : never;
@@ -125,7 +265,7 @@ export function buildComputerObservationResultJsonSchema(): Record<string, unkno
     $id: COMPUTER_OBSERVATION_RESULT_SCHEMA_ID,
     title: "ComputerObservationResult (v1)",
     description:
-      "Result payload of a computer-use observation action (screenshot or cursor_position). See spec/computer-use-v1.md §5.2.",
+      "Result payload of a computer-use observation action. Screenshot bytes live in the artifact store; this payload binds to them by hash. See spec/computer-use-v1.md §5.2.",
   });
 }
 
@@ -135,19 +275,12 @@ export const COMPUTER_SESSION_OPENED_SCHEMA_ID = `${SCHEMA_BASE}/computer-sessio
 
 export const ComputerSessionOpenedSchema = z
   .object({
-    session_id: z.string().min(1).describe("Newly allocated session identifier."),
-    motebit_id: z.string().min(1).describe("Identity binding."),
+    session_id: z.string().min(1),
+    motebit_id: z.string().min(1),
     display_width: z.number().int().positive().describe("Primary display logical width in pixels."),
-    display_height: z
-      .number()
-      .int()
-      .positive()
-      .describe("Primary display logical height in pixels."),
-    scaling_factor: z
-      .number()
-      .positive()
-      .describe("Display scaling factor. Retina = 2.0, HiDPI variable."),
-    opened_at: z.number().int().nonnegative().describe("Unix ms."),
+    display_height: z.number().int().positive(),
+    scaling_factor: z.number().positive().describe("Logical-to-physical ratio. Retina = 2.0."),
+    opened_at: z.number().int().nonnegative(),
   })
   .passthrough();
 
@@ -183,11 +316,8 @@ export const COMPUTER_SESSION_CLOSED_SCHEMA_ID = `${SCHEMA_BASE}/computer-sessio
 export const ComputerSessionClosedSchema = z
   .object({
     session_id: z.string().min(1),
-    closed_at: z.number().int().nonnegative().describe("Unix ms."),
-    reason: z
-      .string()
-      .optional()
-      .describe("Free-text code. Examples: 'user_closed', 'timeout', 'error'."),
+    closed_at: z.number().int().nonnegative(),
+    reason: z.string().optional(),
   })
   .passthrough();
 

@@ -1,36 +1,79 @@
 /**
  * `computer` — the motebit's primitive for observing and acting on the
  * user's operating system. Screen capture, cursor read, mouse/keyboard
- * injection, scroll. One tool with a discriminated `action` field per the
- * `spec/computer-use-v1.md` wire format.
+ * injection, scroll. One tool; the `action` argument is a nested
+ * discriminated variant per the `spec/computer-use-v1.md` wire format.
  *
  * Today this handler is a structured stub: every call returns a typed
- * "not_supported" error until the desktop Tauri bridge (Rust screen-capture
- * + input injection + OS accessibility APIs) lands. The tool definition
- * and wire-format parity are finalized so the Rust backend can drop in
- * behind a stable contract without touching any of the signed-receipt,
+ * failure reason until the desktop Tauri bridge (Rust screen-capture +
+ * input injection + OS accessibility APIs) lands. The tool definition and
+ * wire-format parity are finalized so the Rust backend can drop in behind
+ * a stable contract without touching any of the signed-receipt,
  * governance, or UI wiring.
  *
- * Surface support (per `docs/doctrine/workstation-viewport.md` §Per-surface
- * map): only the desktop surface registers this tool. Web / mobile /
- * spatial sandboxes cannot reach the OS and omit `computer` from their
- * tool registry entirely — the AI model's advertised tool list on those
- * surfaces does not include it.
+ * Surface support (`docs/doctrine/workstation-viewport.md` §Per-surface
+ * map): only the desktop surface registers this tool with a real
+ * dispatcher. Web / mobile / spatial sandboxes cannot reach the OS; they
+ * should NOT include `computer` in the AI model's advertised tool list at
+ * all, and the handler here is a defense-in-depth fallback.
  */
 
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 /**
- * Structured error reason returned when the tool is invoked on a surface
- * that cannot fulfill it, or when a specific action precondition fails.
- * String union for wire stability; extend via v2 spec revision.
+ * Structured failure reasons returned when the tool cannot execute an
+ * action. Every implementation MUST emit one of these values so the
+ * motebit's reasoning loop and the governance audit can discriminate cases
+ * deterministically. Mirrors `ComputerFailureReason` in @motebit/protocol.
  */
-export type ComputerUnsupportedReason =
-  | "not_supported"
+export type ComputerFailureReason =
+  | "policy_denied"
+  | "approval_required"
+  | "approval_expired"
   | "permission_denied"
   | "session_closed"
-  | "policy_denied"
-  | "not_implemented";
+  | "target_not_found"
+  | "target_obscured"
+  | "user_preempted"
+  | "platform_blocked"
+  | "not_supported";
+
+// ── JSON Schema for the tool args ────────────────────────────────────
+//
+// Nested discriminated union via oneOf. Modern AI models (Claude 4.x,
+// GPT-5.x) generate structured tool calls against oneOf schemas reliably.
+// Exhaustive per-variant fields mean the model can't produce impossible
+// combinations (e.g. `drag` without `to`, `type` without `text`).
+
+const POINT_SCHEMA = {
+  type: "object",
+  properties: {
+    x: { type: "integer", description: "Logical pixel X." },
+    y: { type: "integer", description: "Logical pixel Y." },
+  },
+  required: ["x", "y"],
+  additionalProperties: false,
+};
+
+const TARGET_HINT_SCHEMA = {
+  type: "object",
+  properties: {
+    role: { type: "string", description: "Accessibility role. Examples: 'button', 'link'." },
+    label: { type: "string", description: "Accessible label or visible text." },
+    source: {
+      type: "string",
+      description: "Source: 'accessibility', 'dom', 'vision', 'user_annotation'.",
+    },
+  },
+  required: ["source"],
+  additionalProperties: true,
+};
+
+const MODIFIERS_SCHEMA = {
+  type: "array",
+  items: { type: "string", enum: ["cmd", "ctrl", "alt", "shift"] },
+  description: "Modifier keys held during the action.",
+};
 
 export const computerDefinition: ToolDefinition = {
   name: "computer",
@@ -44,42 +87,116 @@ export const computerDefinition: ToolDefinition = {
         description: "Open computer-use session identifier.",
       },
       action: {
-        type: "string",
-        enum: [
-          "screenshot",
-          "cursor_position",
-          "click",
-          "double_click",
-          "mouse_move",
-          "drag",
-          "type",
-          "key",
-          "scroll",
+        description: "Action to perform. Must be a discriminated variant with a `kind` field.",
+        oneOf: [
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["screenshot"] },
+            },
+            required: ["kind"],
+            additionalProperties: false,
+            description: "Capture the primary display's current frame.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["cursor_position"] },
+            },
+            required: ["kind"],
+            additionalProperties: false,
+            description: "Read the current cursor coordinates.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["click"] },
+              target: POINT_SCHEMA,
+              button: { type: "string", enum: ["left", "right", "middle"] },
+              modifiers: MODIFIERS_SCHEMA,
+              target_hint: TARGET_HINT_SCHEMA,
+            },
+            required: ["kind", "target"],
+            additionalProperties: false,
+            description: "Single mouse click at `target`.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["double_click"] },
+              target: POINT_SCHEMA,
+              button: { type: "string", enum: ["left", "right", "middle"] },
+              modifiers: MODIFIERS_SCHEMA,
+              target_hint: TARGET_HINT_SCHEMA,
+            },
+            required: ["kind", "target"],
+            additionalProperties: false,
+            description: "Double click at `target`.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["mouse_move"] },
+              target: POINT_SCHEMA,
+              target_hint: TARGET_HINT_SCHEMA,
+            },
+            required: ["kind", "target"],
+            additionalProperties: false,
+            description: "Move cursor to `target` without clicking.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["drag"] },
+              from: POINT_SCHEMA,
+              to: POINT_SCHEMA,
+              button: { type: "string", enum: ["left", "right", "middle"] },
+              modifiers: MODIFIERS_SCHEMA,
+              duration_ms: { type: "integer", minimum: 0 },
+              target_hint: TARGET_HINT_SCHEMA,
+            },
+            required: ["kind", "from", "to"],
+            additionalProperties: false,
+            description: "Press at `from`, move to `to`, release.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["type"] },
+              text: { type: "string", description: "Text to type." },
+              per_char_delay_ms: { type: "integer", minimum: 0 },
+            },
+            required: ["kind", "text"],
+            additionalProperties: false,
+            description: "Keyboard text input.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["key"] },
+              key: {
+                type: "string",
+                description: "Key combination. Example: 'cmd+c', 'escape'.",
+              },
+            },
+            required: ["kind", "key"],
+            additionalProperties: false,
+            description: "Keyboard combination.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["scroll"] },
+              target: POINT_SCHEMA,
+              dx: { type: "integer", description: "Scroll wheel delta X." },
+              dy: { type: "integer", description: "Scroll wheel delta Y." },
+            },
+            required: ["kind", "target", "dx", "dy"],
+            additionalProperties: false,
+            description: "Scroll at `target` by `(dx, dy)` wheel deltas.",
+          },
         ],
-        description:
-          "Discriminator. Observation: screenshot, cursor_position. Input: click, double_click, mouse_move, drag, type, key, scroll.",
       },
-      x: { type: "number", description: "Target X pixel (primary display coords)." },
-      y: { type: "number", description: "Target Y pixel." },
-      x1: { type: "number", description: "Drag-end X. Required when action === 'drag'." },
-      y1: { type: "number", description: "Drag-end Y." },
-      button: {
-        type: "string",
-        enum: ["left", "right", "middle"],
-        description: "Mouse button. Defaults to 'left'.",
-      },
-      modifiers: {
-        type: "array",
-        items: { type: "string", enum: ["cmd", "ctrl", "alt", "shift"] },
-        description: "Modifier keys held during the action.",
-      },
-      text: { type: "string", description: "Keyboard text. Required when action === 'type'." },
-      key: {
-        type: "string",
-        description: "Key combination. Example: 'cmd+c', 'escape'. Required when action === 'key'.",
-      },
-      dx: { type: "number", description: "Scroll wheel delta X." },
-      dy: { type: "number", description: "Scroll wheel delta Y." },
     },
     required: ["session_id", "action"],
   },
@@ -88,12 +205,10 @@ export const computerDefinition: ToolDefinition = {
 /**
  * Dispatcher invoked by the tool runtime to actually execute an action on
  * the OS. Implemented by the desktop surface's Tauri bridge; absent on
- * sandboxed surfaces. The return value parallels the `data` field of a
+ * sandboxed surfaces. Return value parallels the `data` field of a
  * successful `ToolResult` — observation actions return
  * `ComputerObservationResult`-shaped payloads, input actions return
- * `{ ok: true }` on success. The handler produced by
- * `createComputerHandler` wraps the dispatcher with argument parsing and
- * error normalization.
+ * `{ ok: true }` on success.
  */
 export interface ComputerDispatcher {
   execute(request: unknown): Promise<unknown>;
@@ -101,24 +216,18 @@ export interface ComputerDispatcher {
 
 export interface ComputerHandlerOptions {
   /**
-   * When omitted, the handler returns `{ ok: false, error: "not_supported" }`
-   * on every call — the correct behavior on surfaces that do not implement
-   * computer use. The desktop surface supplies a dispatcher backed by the
-   * Tauri Rust bridge.
+   * When omitted, the handler returns `{ ok: false, error, reason:
+   * "not_supported" }` on every call — the correct behavior on surfaces
+   * that do not implement computer use. The desktop surface supplies a
+   * dispatcher backed by the Tauri Rust bridge.
    */
   dispatcher?: ComputerDispatcher;
 }
 
 /**
  * Build the `computer` tool handler. Surfaces that cannot reach the OS
- * should NOT register this tool at all (per the doctrine — AI model's
- * advertised tool list reflects capability). Surfaces that CAN reach the
- * OS pass a `dispatcher` backed by their platform bridge.
- *
- * When `dispatcher` is absent, the handler responds with a structured
- * `not_supported` error so an accidentally-registered call on the wrong
- * surface fails loud instead of producing garbage — useful for
- * development-time assertions.
+ * should NOT register this tool at all (per the doctrine). Surfaces that
+ * CAN reach the OS pass a `dispatcher` backed by their platform bridge.
  */
 export function createComputerHandler(opts?: ComputerHandlerOptions): ToolHandler {
   const dispatcher = opts?.dispatcher;

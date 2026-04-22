@@ -2126,8 +2126,26 @@ export type {
 
 // ── Computer-use payloads (spec/computer-use-v1.md) ──────────────
 export type {
+  ComputerPoint,
+  ComputerTargetHint,
+  ScreenshotAction,
+  CursorPositionAction,
+  ClickAction,
+  DoubleClickAction,
+  MouseMoveAction,
+  DragAction,
+  TypeAction,
+  KeyAction,
+  ScrollAction,
+  ComputerAction,
+  ComputerActionKind,
   ComputerActionRequest,
   ComputerObservationResult,
+  ComputerRedaction,
+  ScreenshotObservation,
+  CursorPositionObservation,
   ComputerSessionOpened,
   ComputerSessionClosed,
+  ComputerFailureReason,
 } from "./computer-use.js";
+export { COMPUTER_ACTION_KINDS, COMPUTER_FAILURE_REASONS } from "./computer-use.js";

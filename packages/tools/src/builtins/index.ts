@@ -40,7 +40,7 @@ export {
   createComputerHandler,
   type ComputerDispatcher,
   type ComputerHandlerOptions,
-  type ComputerUnsupportedReason,
+  type ComputerFailureReason,
 } from "./computer.js";
 
 import { webSearchDefinition, createWebSearchHandler } from "./web-search.js";

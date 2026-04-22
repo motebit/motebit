@@ -7,13 +7,11 @@
   "properties": {
     "session_id": {
       "type": "string",
-      "minLength": 1,
-      "description": "Newly allocated session identifier."
+      "minLength": 1
     },
     "motebit_id": {
       "type": "string",
-      "minLength": 1,
-      "description": "Identity binding."
+      "minLength": 1
     },
     "display_width": {
       "type": "integer",
@@ -22,18 +20,16 @@
     },
     "display_height": {
       "type": "integer",
-      "exclusiveMinimum": 0,
-      "description": "Primary display logical height in pixels."
+      "exclusiveMinimum": 0
     },
     "scaling_factor": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "description": "Display scaling factor. Retina = 2.0, HiDPI variable."
+      "description": "Logical-to-physical ratio. Retina = 2.0."
     },
     "opened_at": {
       "type": "integer",
-      "minimum": 0,
-      "description": "Unix ms."
+      "minimum": 0
     }
   },
   "required": [
@@ -51,13 +47,11 @@
       "properties": {
         "session_id": {
           "type": "string",
-          "minLength": 1,
-          "description": "Newly allocated session identifier."
+          "minLength": 1
         },
         "motebit_id": {
           "type": "string",
-          "minLength": 1,
-          "description": "Identity binding."
+          "minLength": 1
         },
         "display_width": {
           "type": "integer",
@@ -66,18 +60,16 @@
         },
         "display_height": {
           "type": "integer",
-          "exclusiveMinimum": 0,
-          "description": "Primary display logical height in pixels."
+          "exclusiveMinimum": 0
         },
         "scaling_factor": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "Display scaling factor. Retina = 2.0, HiDPI variable."
+          "description": "Logical-to-physical ratio. Retina = 2.0."
         },
         "opened_at": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Unix ms."
+          "minimum": 0
         }
       },
       "required": [

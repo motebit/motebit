@@ -11,12 +11,10 @@
     },
     "closed_at": {
       "type": "integer",
-      "minimum": 0,
-      "description": "Unix ms."
+      "minimum": 0
     },
     "reason": {
-      "type": "string",
-      "description": "Free-text code. Examples: 'user_closed', 'timeout', 'error'."
+      "type": "string"
     }
   },
   "required": ["session_id", "closed_at"],
@@ -31,12 +29,10 @@
         },
         "closed_at": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Unix ms."
+          "minimum": 0
         },
         "reason": {
-          "type": "string",
-          "description": "Free-text code. Examples: 'user_closed', 'timeout', 'error'."
+          "type": "string"
         }
       },
       "required": ["session_id", "closed_at"],
