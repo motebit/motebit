@@ -426,25 +426,32 @@ export class WebApp {
     void this.reconnectMcpServers();
 
     // Start the scheduled-agents runner. Fires tab-local; each run
-    // drives `sendMessageStreaming` to completion so the normal
-    // pipeline emits signed ExecutionReceipts — the audit trail of
-    // every scheduled run is verifiable the same way user-typed
-    // runs are.
+    // drives `sendMessageStreaming` with suppressHistory so the
+    // response doesn't land in the user's chat transcript (scheduled
+    // runs have their own surface in the workstation panel). The
+    // pipeline emits signed ExecutionReceipts regardless — audit
+    // trail verifiable the same way user-typed runs are.
     this._scheduledAgents = createScheduledAgentsRunner({
       fire: async (prompt) => {
-        // Drain the stream so housekeeping (memory formation,
-        // state updates) runs to completion. The runner doesn't
-        // care about intermediate chunks.
-        if (this._isProcessing) {
-          // Never preempt a user's in-flight turn with a scheduled
-          // fire — defer until the next tick. The scheduler
-          // advances next_run_at regardless, so a missed fire
-          // shifts to the next cadence slot instead of stacking.
-          return;
+        // Never preempt a user's in-flight turn. Signal `skipped`
+        // so the runner doesn't advance next_run_at — retry on the
+        // next 30s tick rather than waiting a full cadence.
+        if (this._isProcessing) return { status: "skipped" };
+        let accumulated = "";
+        try {
+          for await (const chunk of this.sendMessageStreaming(prompt, undefined, {
+            suppressHistory: true,
+          })) {
+            if (chunk.type === "text") accumulated += chunk.text;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { status: "error", error: msg };
         }
-        for await (const _chunk of this.sendMessageStreaming(prompt)) {
-          void _chunk;
-        }
+        // Preview to a single row; full response lives on the signed
+        // receipts the workstation's audit log already captures.
+        const responsePreview = accumulated.trim().slice(0, 160) || null;
+        return { status: "fired", responsePreview };
       },
     });
   }
@@ -708,14 +715,18 @@ export class WebApp {
 
   // === Streaming Chat ===
 
-  async *sendMessageStreaming(text: string): AsyncGenerator<StreamChunk> {
+  async *sendMessageStreaming(
+    text: string,
+    runId?: string,
+    options?: { delegationScope?: string; suppressHistory?: boolean },
+  ): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("Runtime not initialized");
     if (!this.runtime.isAIReady) throw new Error("No provider connected");
     if (this._isProcessing) throw new Error("Already processing");
 
     this._isProcessing = true;
     try {
-      yield* this.runtime.sendMessageStreaming(text);
+      yield* this.runtime.sendMessageStreaming(text, runId, options);
     } finally {
       this._isProcessing = false;
     }

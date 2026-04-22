@@ -232,7 +232,7 @@ export class StreamingManager {
     stream: AsyncGenerator<AgenticChunk>,
     userMessage: string,
     runId?: string,
-    options?: { activationOnly?: boolean },
+    options?: { activationOnly?: boolean; suppressHistory?: boolean },
   ): AsyncGenerator<StreamChunk> {
     let result: TurnResult | null = null;
     let accumulated = "";
@@ -442,7 +442,14 @@ export class StreamingManager {
     }
 
     if (result) {
-      if (options?.activationOnly) {
+      // Scheduled runs (suppressHistory) don't appear in the chat
+      // conversation at all — they have their own surface in the
+      // workstation panel's scheduled-runs view. Skipping the push
+      // keeps recurring background tasks from polluting the dialogue
+      // the user is having with the motebit.
+      if (options?.suppressHistory) {
+        // no history push — scheduled/background run
+      } else if (options?.activationOnly) {
         this.deps.pushActivation(result.response);
       } else {
         this.deps.pushExchange(userMessage, result.response);

@@ -44,17 +44,53 @@ export interface ScheduledAgent {
 }
 
 /**
+ * One invocation of a scheduled agent — the recurring task's audit
+ * row inside the workstation. Receipts emitted by the underlying
+ * chat pipeline are the cryptographic truth; this record is the
+ * light-weight projection the UI renders without having to join
+ * against the receipt log.
+ */
+export interface ScheduledRunRecord {
+  run_id: string;
+  agent_id: string;
+  prompt: string;
+  started_at: number;
+  completed_at: number | null;
+  /**
+   * `running` — fire in flight.
+   * `fired`   — completed; response captured.
+   * `skipped` — deferred (e.g. user turn was in flight). No response.
+   * `error`   — fire path threw. Errored before reaching the pipeline.
+   */
+  status: "running" | "fired" | "skipped" | "error";
+  /** Truncated response preview; full response is on the signed receipt. */
+  responsePreview: string | null;
+  errorMessage: string | null;
+}
+
+/** Result the caller's `fire` returns — tells the runner how to
+ *  advance scheduling state. */
+export type ScheduledFireResult =
+  | { status: "fired"; responsePreview?: string | null }
+  | { status: "skipped" }
+  | { status: "error"; error: string };
+
+/**
  * Runtime API returned by `createScheduledAgentsRunner`. The workstation
  * panel consumes these actions; the runner owns scheduling + firing.
  */
 export interface ScheduledAgentsRunner {
   list(): ScheduledAgent[];
-  /** Subscribe to state changes. Returns unsubscribe thunk. */
+  /** Subscribe to agent-list changes. Returns unsubscribe thunk. */
   subscribe(listener: (agents: ScheduledAgent[]) => void): () => void;
+  /** Recent runs (most-recent-first, bounded to the last N). */
+  listRuns(): ScheduledRunRecord[];
+  /** Subscribe to run-history changes. Returns unsubscribe thunk. */
+  subscribeRuns(listener: (runs: ScheduledRunRecord[]) => void): () => void;
   add(input: { prompt: string; cadence: ScheduledAgentCadence }): ScheduledAgent;
   setEnabled(id: string, enabled: boolean): void;
   remove(id: string): void;
-  /** Manually fire an agent now (bypasses cadence; next_run_at resets). */
+  /** Manually fire an agent now (bypasses cadence; next_run_at resets on success). */
   runNow(id: string): void;
   /** Stop the scheduler and release listeners. */
   dispose(): void;
@@ -110,17 +146,38 @@ function isScheduledAgent(v: unknown): v is ScheduledAgent {
 export interface ScheduledAgentsDeps {
   /**
    * Fire a scheduled prompt through the motebit's chat pipeline. The
-   * implementation typically drives `sendMessageStreaming` to
-   * completion and swallows the stream — the runner doesn't care
-   * about intermediate chunks, only that the invocation produces a
-   * signed `ExecutionReceipt` via the existing pipeline.
+   * implementation typically drives `sendMessageStreaming` (with
+   * suppressHistory so the response doesn't pollute the user's chat)
+   * and returns a result that tells the runner how to advance
+   * scheduling state:
+   *
+   *   - `"fired"` with optional responsePreview → advance next_run_at,
+   *     record completed run.
+   *   - `"skipped"` → DO NOT advance. Next 30s tick retries. Used
+   *     when the user's turn is in flight so a missed fire waits
+   *     30s, not a full cadence.
+   *   - `"error"` with message → advance (one backoff) + record error
+   *     row. Prevents a failing fire from looping every 30s.
    */
-  fire(prompt: string): Promise<void>;
+  fire(prompt: string): Promise<ScheduledFireResult>;
 }
+
+/** Max retained run records. Enough for a visible history without
+ *  unbounded localStorage churn if we persist this later. */
+const MAX_RUN_RECORDS = 50;
 
 export function createScheduledAgentsRunner(deps: ScheduledAgentsDeps): ScheduledAgentsRunner {
   let agents = loadAgents();
+  let runs: ScheduledRunRecord[] = [];
   const listeners = new Set<(agents: ScheduledAgent[]) => void>();
+  const runListeners = new Set<(runs: ScheduledRunRecord[]) => void>();
+  /**
+   * Agent IDs with an in-flight `fireAgent`. Prevents a second tick
+   * from starting a fresh fire on an agent whose previous call is
+   * still running (e.g. a slow LLM response overlapping the next
+   * 30s tick).
+   */
+  const inFlight = new Set<string>();
   let disposed = false;
 
   function emit(): void {
@@ -135,14 +192,46 @@ export function createScheduledAgentsRunner(deps: ScheduledAgentsDeps): Schedule
     }
   }
 
+  function emitRuns(): void {
+    const snapshot = runs.map((r) => ({ ...r }));
+    for (const l of runListeners) {
+      try {
+        l(snapshot);
+      } catch {
+        // Subscriber faults are isolated.
+      }
+    }
+  }
+
+  function upsertRun(record: ScheduledRunRecord): void {
+    const idx = runs.findIndex((r) => r.run_id === record.run_id);
+    if (idx === -1) {
+      runs = [record, ...runs].slice(0, MAX_RUN_RECORDS);
+    } else {
+      runs = runs.map((r) => (r.run_id === record.run_id ? record : r));
+    }
+    emitRuns();
+  }
+
   function list(): ScheduledAgent[] {
     return agents.map((a) => ({ ...a }));
+  }
+
+  function listRuns(): ScheduledRunRecord[] {
+    return runs.map((r) => ({ ...r }));
   }
 
   function subscribe(listener: (agents: ScheduledAgent[]) => void): () => void {
     listeners.add(listener);
     return () => {
       listeners.delete(listener);
+    };
+  }
+
+  function subscribeRuns(listener: (runs: ScheduledRunRecord[]) => void): () => void {
+    runListeners.add(listener);
+    return () => {
+      runListeners.delete(listener);
     };
   }
 
@@ -184,28 +273,64 @@ export function createScheduledAgentsRunner(deps: ScheduledAgentsDeps): Schedule
   }
 
   async function fireAgent(agent: ScheduledAgent): Promise<void> {
+    if (inFlight.has(agent.id)) return;
+    inFlight.add(agent.id);
+    const runId = newId();
     const startedAt = Date.now();
+    // Record the run in-flight so the workstation shows "running…"
+    // state immediately, before the response arrives.
+    upsertRun({
+      run_id: runId,
+      agent_id: agent.id,
+      prompt: agent.prompt,
+      started_at: startedAt,
+      completed_at: null,
+      status: "running",
+      responsePreview: null,
+      errorMessage: null,
+    });
+
+    let result: ScheduledFireResult;
     try {
-      await deps.fire(agent.prompt);
-    } catch {
-      // Fires are best-effort. A failed run updates `last_run_at` +
-      // schedules the next one; the audit trail (or absence of one)
-      // is what tells the user something went wrong.
+      result = await deps.fire(agent.prompt);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { status: "error", error: msg };
     }
-    // Advance the schedule regardless of success — prevents a failing
-    // agent from re-firing continuously as soon as the next tick sees
-    // `next_run_at <= now`.
-    const now = Date.now();
-    agents = agents.map((a) =>
-      a.id === agent.id ? { ...a, last_run_at: startedAt, next_run_at: now + a.interval_ms } : a,
-    );
-    emit();
+    const completedAt = Date.now();
+    inFlight.delete(agent.id);
+
+    // Record the terminal state for the UI.
+    upsertRun({
+      run_id: runId,
+      agent_id: agent.id,
+      prompt: agent.prompt,
+      started_at: startedAt,
+      completed_at: completedAt,
+      status: result.status,
+      responsePreview: result.status === "fired" ? (result.responsePreview ?? null) : null,
+      errorMessage: result.status === "error" ? result.error : null,
+    });
+
+    // Scheduling advancement:
+    //   - `fired` / `error` → advance next_run_at (prevents error loops).
+    //   - `skipped` → leave next_run_at alone so the next 30s tick retries.
+    //     This is how a missed fire during a user turn waits ~30s rather
+    //     than a full cadence interval.
+    if (result.status === "fired" || result.status === "error") {
+      agents = agents.map((a) =>
+        a.id === agent.id
+          ? { ...a, last_run_at: startedAt, next_run_at: completedAt + a.interval_ms }
+          : a,
+      );
+      emit();
+    }
   }
 
   function tick(): void {
     if (disposed) return;
     const now = Date.now();
-    const due = agents.filter((a) => a.enabled && a.next_run_at <= now);
+    const due = agents.filter((a) => a.enabled && a.next_run_at <= now && !inFlight.has(a.id));
     for (const a of due) {
       void fireAgent(a);
     }
@@ -230,6 +355,8 @@ export function createScheduledAgentsRunner(deps: ScheduledAgentsDeps): Schedule
   return {
     list,
     subscribe,
+    listRuns,
+    subscribeRuns,
     add,
     setEnabled,
     remove,

@@ -30,6 +30,7 @@ import {
   type ScheduledAgent,
   type ScheduledAgentCadence,
   type ScheduledAgentsRunner,
+  type ScheduledRunRecord,
 } from "../scheduled-agents";
 
 export interface WorkstationPanelAPI {
@@ -92,6 +93,8 @@ function buildScaffold(): {
   scheduledCadenceSelect: HTMLSelectElement;
   scheduledCreateBtn: HTMLButtonElement;
   scheduledCancelBtn: HTMLButtonElement;
+  runsHeader: HTMLDivElement;
+  runsList: HTMLDivElement;
 } {
   // The panel mounts INSIDE the liquid-glass workstation plane via
   // the renderer's CSS2DObject stage — not as a fixed overlay. Sizing
@@ -401,6 +404,33 @@ function buildScaffold(): {
   scheduledCompose.appendChild(scheduledRow2);
   scheduledSection.appendChild(scheduledCompose);
 
+  // Recent runs — last N fires of scheduled agents, most-recent first.
+  // Populated by the runner; stays empty on first load. Separate from
+  // the main receipt log below so scheduled runs don't pollute the
+  // user ↔ motebit chat transcript or the general receipt audit.
+  const runsHeader = document.createElement("div");
+  runsHeader.textContent = "recent runs";
+  Object.assign(runsHeader.style, {
+    fontSize: "9.5px",
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "rgba(100, 120, 155, 0.62)",
+    marginTop: "10px",
+    marginBottom: "4px",
+    display: "none",
+  });
+  scheduledSection.appendChild(runsHeader);
+
+  const runsList = document.createElement("div");
+  Object.assign(runsList.style, {
+    display: "none",
+    flexDirection: "column",
+    gap: "3px",
+    maxHeight: "160px",
+    overflowY: "auto",
+  });
+  scheduledSection.appendChild(runsList);
+
   panel.appendChild(scheduledSection);
 
   // === Browser pane (virtual_browser mode) ===
@@ -518,7 +548,98 @@ function buildScaffold(): {
     scheduledCadenceSelect,
     scheduledCreateBtn,
     scheduledCancelBtn,
+    runsHeader,
+    runsList,
   };
+}
+
+function formatRelativePast(ts: number, now: number = Date.now()): string {
+  const diff = now - ts;
+  if (diff < 60_000) return "just now";
+  const m = Math.round(diff / 60_000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+function statusMark(status: ScheduledRunRecord["status"]): string {
+  switch (status) {
+    case "fired":
+      return "✓";
+    case "running":
+      return "…";
+    case "skipped":
+      return "⏸";
+    case "error":
+      return "✗";
+  }
+}
+
+function statusColor(status: ScheduledRunRecord["status"]): string {
+  switch (status) {
+    case "fired":
+      return "rgba(80, 140, 100, 0.85)";
+    case "running":
+      return "rgba(80, 110, 165, 0.85)";
+    case "skipped":
+      return "rgba(150, 120, 60, 0.82)";
+    case "error":
+      return "rgba(170, 80, 100, 0.85)";
+  }
+}
+
+function buildRunRow(run: ScheduledRunRecord): HTMLDivElement {
+  const row = document.createElement("div");
+  row.dataset.runId = run.run_id;
+  Object.assign(row.style, {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "8px",
+    padding: "4px 8px",
+    background: "rgba(255, 255, 255, 0.22)",
+    borderRadius: "4px",
+    border: "1px solid rgba(100, 120, 155, 0.08)",
+    fontSize: "10.5px",
+    lineHeight: "1.4",
+  });
+
+  const mark = document.createElement("span");
+  mark.textContent = statusMark(run.status);
+  Object.assign(mark.style, {
+    color: statusColor(run.status),
+    fontSize: "11px",
+    width: "12px",
+    textAlign: "center",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    flex: "0 0 auto",
+  });
+
+  const time = document.createElement("span");
+  time.textContent = formatRelativePast(run.started_at);
+  Object.assign(time.style, {
+    color: "rgba(90, 110, 150, 0.72)",
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    fontSize: "9.5px",
+    flex: "0 0 auto",
+  });
+
+  const preview = document.createElement("span");
+  preview.textContent =
+    run.status === "error" ? (run.errorMessage ?? "error") : (run.responsePreview ?? run.prompt);
+  Object.assign(preview.style, {
+    color: run.status === "error" ? statusColor("error") : "rgba(30, 50, 90, 0.86)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    flex: "1 1 auto",
+  });
+
+  row.appendChild(mark);
+  row.appendChild(time);
+  row.appendChild(preview);
+  return row;
 }
 
 /**
@@ -1010,6 +1131,8 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
       scheduledCadenceSelect,
       scheduledCreateBtn,
       scheduledCancelBtn,
+      runsHeader,
+      runsList,
     } = scaffold;
 
     const adapter: WorkstationFetchAdapter = {
@@ -1068,6 +1191,25 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
       setInterval(() => {
         if (scheduledRunner.list().length > 0) renderScheduled(scheduledRunner.list());
       }, 30_000);
+
+      // Recent runs view — most-recent-first, bounded to 10 rendered.
+      const renderRuns = (incoming: ScheduledRunRecord[]): void => {
+        if (incoming.length === 0) {
+          runsHeader.style.display = "none";
+          runsList.style.display = "none";
+          while (runsList.firstChild) runsList.removeChild(runsList.firstChild);
+          return;
+        }
+        runsHeader.style.display = "block";
+        runsList.style.display = "flex";
+        // Simple re-render — history is bounded and changes infrequently.
+        while (runsList.firstChild) runsList.removeChild(runsList.firstChild);
+        for (const r of incoming.slice(0, 10)) {
+          runsList.appendChild(buildRunRow(r));
+        }
+      };
+      renderRuns(scheduledRunner.listRuns());
+      scheduledRunner.subscribeRuns(renderRuns);
 
       scheduledAddBtn.addEventListener("click", () => {
         scheduledCompose.style.display =

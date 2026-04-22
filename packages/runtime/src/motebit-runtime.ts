@@ -1189,7 +1189,7 @@ export class MotebitRuntime {
   async *sendMessageStreaming(
     text: string,
     runId?: string,
-    options?: { delegationScope?: string },
+    options?: { delegationScope?: string; suppressHistory?: boolean },
   ): AsyncGenerator<StreamChunk> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
@@ -1250,7 +1250,9 @@ export class MotebitRuntime {
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
-      yield* this.streaming.processStream(this._catchDeferredFormationChunks(stream), text, runId);
+      yield* this.streaming.processStream(this._catchDeferredFormationChunks(stream), text, runId, {
+        suppressHistory: options?.suppressHistory === true,
+      });
       // First-conversation guidance fades after a few exchanges
       if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
         this._isFirstConversation = false;
