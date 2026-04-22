@@ -177,6 +177,7 @@ export type { RuntimeConfig } from "./runtime-config.js";
 // === Stream Chunk ===
 
 export type { StreamChunk } from "./runtime-config.js";
+export type { ToolActivityEvent } from "./streaming.js";
 
 // === Operator Mode ===
 // Canonical implementation in ./operator.ts. Re-exported here.

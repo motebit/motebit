@@ -110,6 +110,20 @@ export interface RuntimeConfig {
    * manager drops the receipt silently rather than emit unsigned.
    */
   onToolInvocation?: (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void;
+  /**
+   * Optional live-activity sink for tool calls — delivers the raw args
+   * + result bytes alongside the structured event at the same moment
+   * the receipt is signed. Intended for surfaces that render *what the
+   * motebit is doing right now* (the Workstation panel's browser pane
+   * reads the URL from `event.args.url` and the fetched content from
+   * `event.result`). See `ToolActivityEvent` for the shape.
+   *
+   * The audit trail lives on `onToolInvocation`. Activity is
+   * ephemeral — subscribers must not retain the payload beyond the
+   * call, since args and result may contain sensitive content that
+   * is deliberately not part of the signed receipt.
+   */
+  onToolActivity?: (event: import("./streaming.js").ToolActivityEvent) => void;
   tickRateHz?: number;
   maxConversationHistory?: number;
   /** Compact events when count exceeds this threshold (0 = disabled, default 1000) */

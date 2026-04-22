@@ -137,6 +137,47 @@ export interface StreamingDeps {
    * fire-and-forget delivery and any exception is logged and dropped.
    */
   onToolInvocation?: (receipt: SignableToolInvocationReceipt) => void;
+  /**
+   * Sink for live tool-invocation activity — the raw args + result
+   * bytes the receipt's `args_hash` / `result_hash` commit to. Fires
+   * at the same point as `onToolInvocation`, with a payload shaped
+   * for rendering (the workstation's browser pane reads `args.url`
+   * and the fetched content from `result`).
+   *
+   * Separate channel from `onToolInvocation` on purpose: the receipt
+   * is a signed audit artifact that commits to hashes only, so the
+   * signed wire stays thin and sensitive content never sits in a
+   * persisted receipt. Activity is ephemeral UX context — the panel
+   * consumes it to render what the motebit is currently doing, then
+   * the next activity event supersedes it. Callers that only want
+   * audit use `onToolInvocation`; callers that only want live UX use
+   * `onToolActivity`; the workstation surface uses both.
+   *
+   * Subscribers MUST NOT retain the payload beyond the call — the
+   * args and result are not part of the audit trail and may contain
+   * sensitive content that is deliberately not signed.
+   */
+  onToolActivity?: (event: ToolActivityEvent) => void;
+}
+
+/**
+ * Payload shape for the `onToolActivity` sink. Carries the raw bytes
+ * the receipt's hashes commit to, so the workstation surface can
+ * render live content (e.g. the fetched page of a `read_url` call)
+ * without waiting for the signed receipt to be composed.
+ *
+ * The `invocation_id` matches `ToolInvocationReceipt.invocation_id`
+ * for the same call, letting consumers correlate activity rows to
+ * audit rows without a separate key.
+ */
+export interface ToolActivityEvent {
+  invocation_id: string;
+  task_id: string | undefined;
+  tool_name: string;
+  args: Record<string, unknown>;
+  result: unknown;
+  started_at: number;
+  completed_at: number;
 }
 
 interface PendingApproval {
@@ -281,6 +322,20 @@ export class StreamingManager {
             const pending = pendingToolCalls.get(chunk.tool_call_id);
             if (pending) {
               pendingToolCalls.delete(chunk.tool_call_id);
+              const completedAt = Date.now();
+              // Fire the ephemeral activity channel FIRST — the
+              // workstation panel's browser pane responds to this
+              // immediately; the signed receipt follows microseconds
+              // later. Each sink is independent and fail-closed.
+              this.fireToolActivity({
+                invocation_id: chunk.tool_call_id,
+                task_id: runId,
+                tool_name: chunk.name,
+                args: pending.args,
+                result: chunk.result,
+                started_at: pending.startedAt,
+                completed_at: completedAt,
+              });
               await this.emitToolInvocationReceipt({
                 invocation_id: chunk.tool_call_id,
                 task_id: runId,
@@ -288,7 +343,7 @@ export class StreamingManager {
                 args: pending.args,
                 result: chunk.result,
                 started_at: pending.startedAt,
-                completed_at: Date.now(),
+                completed_at: completedAt,
               });
             }
           }
@@ -569,6 +624,25 @@ export class StreamingManager {
     if (this.approvalTimer) {
       clearTimeout(this.approvalTimer);
       this.approvalTimer = null;
+    }
+  }
+
+  /**
+   * Fire the raw activity event to the live UX channel (if wired).
+   * No signing, no hashing — this is the ephemeral "what the motebit
+   * is doing right now" stream the workstation's browser pane
+   * consumes. Subscribers that throw are isolated from each other
+   * and from the signed-receipt path.
+   */
+  private fireToolActivity(event: ToolActivityEvent): void {
+    const sink = this.deps.onToolActivity;
+    if (!sink) return;
+    try {
+      sink(event);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console -- diagnostic on consumer fault
+      console.warn(`[streaming] onToolActivity sink threw: ${msg}`);
     }
   }
 

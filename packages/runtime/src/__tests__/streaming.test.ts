@@ -1299,6 +1299,182 @@ describe("onToolInvocation — signed per-tool-call receipts", () => {
   });
 });
 
+// === ToolActivityEvent (live browser-pane stream) ===
+
+describe("onToolActivity — ephemeral tool-activity stream", () => {
+  it("fires alongside the signed receipt, carrying raw args + result", async () => {
+    vi.clearAllMocks();
+    const receipts: unknown[] = [];
+    const activities: Array<{
+      invocation_id: string;
+      tool_name: string;
+      args: Record<string, unknown>;
+      result: unknown;
+      started_at: number;
+      completed_at: number;
+    }> = [];
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "activity-test",
+        tickRateHz: 0,
+        onToolInvocation: (r) => receipts.push(r),
+        onToolActivity: (e) => activities.push(e as (typeof activities)[number]),
+      },
+      createAdapters(createMockProvider()),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_a",
+          args: { url: "https://example.com" },
+          started_at: 1_700_000_000_000,
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "page content",
+          tool_call_id: "tc_a",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("read example"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Activity channel carries raw args + result bytes.
+    expect(activities.length).toBe(1);
+    const e = activities[0]!;
+    expect(e.invocation_id).toBe("tc_a");
+    expect(e.tool_name).toBe("read_url");
+    expect(e.args).toEqual({ url: "https://example.com" });
+    expect(e.result).toBe("page content");
+    expect(e.started_at).toBe(1_700_000_000_000);
+    expect(typeof e.completed_at).toBe("number");
+
+    // Receipt channel also fires — they're correlated by invocation_id.
+    // (Receipt only lands when signing keys are wired; this runtime has
+    // none, so the receipts bucket stays empty here. The correlation is
+    // verified in the dedicated onToolInvocation suite.)
+    expect(receipts.length).toBe(0);
+  });
+
+  it("does not fire onToolActivity when not configured", async () => {
+    vi.clearAllMocks();
+    // Key-only runtime — no activity sink.
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const receipts: unknown[] = [];
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "activity-off",
+        tickRateHz: 0,
+        deviceId: "device-off",
+        signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
+        onToolInvocation: (r) => receipts.push(r),
+      },
+      createAdapters(createMockProvider()),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_b",
+          args: { url: "https://x" },
+          started_at: Date.now(),
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "ok",
+          tool_call_id: "tc_b",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("x"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Receipt still produced (keys are configured); activity silent.
+    expect(receipts.length).toBe(1);
+  });
+
+  it("isolates activity-sink exceptions from the streaming generator", async () => {
+    vi.clearAllMocks();
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "activity-throw",
+        tickRateHz: 0,
+        onToolActivity: () => {
+          throw new Error("activity on fire");
+        },
+      },
+      createAdapters(createMockProvider()),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_c",
+          args: { url: "https://x" },
+          started_at: 1,
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "ok",
+          tool_call_id: "tc_c",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(collectChunks(runtime.sendMessageStreaming("x"))).resolves.toBeDefined();
+    warnSpy.mockRestore();
+  });
+
+  it("skips activity emission for legacy tool_status chunks lacking the new fields", async () => {
+    vi.clearAllMocks();
+    const activities: unknown[] = [];
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "activity-legacy",
+        tickRateHz: 0,
+        onToolActivity: (e) => activities.push(e),
+      },
+      createAdapters(createMockProvider()),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "legacy_tool", status: "calling" },
+        { type: "tool_status", name: "legacy_tool", status: "done", result: "ok" },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("legacy"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(activities.length).toBe(0);
+  });
+});
+
 // === pendingApprovalInfo ===
 
 describe("pendingApprovalInfo", () => {

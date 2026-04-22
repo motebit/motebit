@@ -73,6 +73,9 @@ function buildScaffold(): {
   closeBtn: HTMLButtonElement;
   headerCount: HTMLSpanElement;
   clearBtn: HTMLButtonElement;
+  browserPane: HTMLDivElement;
+  browserUrl: HTMLSpanElement;
+  browserFrame: HTMLIFrameElement;
 } {
   const backdrop = document.createElement("div");
   backdrop.id = "workstation-backdrop";
@@ -96,8 +99,8 @@ function buildScaffold(): {
     top: "50%",
     right: "24px",
     transform: "translate(calc(100% + 40px), -50%)",
-    width: "min(440px, calc(100vw - 48px))",
-    maxHeight: "min(720px, calc(100vh - 48px))",
+    width: "min(680px, calc(100vw - 48px))",
+    maxHeight: "min(820px, calc(100vh - 48px))",
     background: "rgba(18, 22, 34, 0.92)",
     color: "rgba(230, 235, 245, 0.94)",
     borderRadius: "14px",
@@ -182,6 +185,78 @@ function buildScaffold(): {
   header.appendChild(closeBtn);
   panel.appendChild(header);
 
+  // === Browser pane (virtual_browser mode) ===
+  // When the motebit fetches a page (read_url / virtual_browser /
+  // browse_page), the fetched content renders here as a sandboxed
+  // iframe. Hidden until the first fetch arrives; the URL strip
+  // shows what the motebit is currently reading.
+  const browserPane = document.createElement("div");
+  browserPane.id = "workstation-browser";
+  Object.assign(browserPane.style, {
+    display: "none",
+    flexDirection: "column",
+    flex: "1 1 auto",
+    minHeight: "0",
+    borderBottom: "1px solid rgba(120, 140, 180, 0.14)",
+    background: "rgba(10, 14, 22, 0.55)",
+  });
+
+  const browserStrip = document.createElement("div");
+  Object.assign(browserStrip.style, {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "8px 14px",
+    borderBottom: "1px solid rgba(120, 140, 180, 0.08)",
+    flex: "0 0 auto",
+    fontSize: "11px",
+    letterSpacing: "0.02em",
+    color: "rgba(170, 180, 200, 0.72)",
+  });
+
+  const browserLabel = document.createElement("span");
+  browserLabel.textContent = "reading";
+  Object.assign(browserLabel.style, {
+    color: "rgba(150, 160, 180, 0.62)",
+    fontSize: "10.5px",
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+  });
+
+  const browserUrl = document.createElement("span");
+  browserUrl.id = "workstation-browser-url";
+  Object.assign(browserUrl.style, {
+    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    fontSize: "11px",
+    color: "rgba(200, 210, 225, 0.88)",
+    flex: "1 1 auto",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  });
+
+  browserStrip.appendChild(browserLabel);
+  browserStrip.appendChild(browserUrl);
+  browserPane.appendChild(browserStrip);
+
+  const browserFrame = document.createElement("iframe");
+  browserFrame.id = "workstation-browser-frame";
+  browserFrame.setAttribute("sandbox", "allow-same-origin");
+  browserFrame.setAttribute("referrerpolicy", "no-referrer");
+  browserFrame.title = "Workstation browser pane";
+  Object.assign(browserFrame.style, {
+    border: "none",
+    width: "100%",
+    flex: "1 1 auto",
+    minHeight: "280px",
+    maxHeight: "420px",
+    background: "transparent",
+    colorScheme: "light",
+  });
+  browserPane.appendChild(browserFrame);
+
+  panel.appendChild(browserPane);
+
   // List container
   const list = document.createElement("div");
   list.id = "workstation-list";
@@ -206,7 +281,125 @@ function buildScaffold(): {
   });
   panel.appendChild(empty);
 
-  return { backdrop, panel, list, empty, closeBtn, headerCount, clearBtn };
+  return {
+    backdrop,
+    panel,
+    list,
+    empty,
+    closeBtn,
+    headerCount,
+    clearBtn,
+    browserPane,
+    browserUrl,
+    browserFrame,
+  };
+}
+
+// Reader-mode HTML for rendering the motebit's currently-fetched page
+// inside the sandboxed iframe. Same typography + structure treatment
+// as the reader view used elsewhere so the two modalities (motebit-
+// initiated vs user-initiated page read) look consistent.
+function buildReaderSrcdoc(content: string, sourceUrl: string): string {
+  const body = parseStructuredText(content);
+  const hostAttr = (() => {
+    try {
+      return escapeHtml(new URL(sourceUrl).href);
+    } catch {
+      return "";
+    }
+  })();
+  return `<!doctype html><html><head><meta charset="utf-8">${hostAttr ? `<base href="${hostAttr}">` : ""}<style>
+    html, body { margin: 0; padding: 0; background: transparent; color-scheme: dark; }
+    body {
+      font-family: ui-serif, "New York", "Iowan Old Style", Charter,
+        "Palatino Linotype", Palatino, Georgia, serif;
+      font-size: 14.5px;
+      line-height: 1.7;
+      color: rgba(230, 235, 245, 0.94);
+      padding: 20px 26px 26px;
+      max-width: 620px;
+      word-wrap: break-word;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+      color: rgba(245, 248, 254, 0.98);
+      line-height: 1.25;
+      margin: 24px 0 10px;
+      letter-spacing: -0.02em;
+    }
+    h1 { font-size: 22px; font-weight: 700; margin-top: 0; }
+    h2 { font-size: 18px; font-weight: 600; }
+    h3 { font-size: 15px; font-weight: 600; }
+    p { margin: 0 0 14px 0; }
+    ul { padding-left: 22px; margin: 0 0 14px 0; }
+    li { margin-bottom: 5px; }
+    a {
+      color: rgba(140, 180, 230, 0.92);
+      text-decoration: underline;
+      text-decoration-thickness: 0.5px;
+      text-underline-offset: 3px;
+    }
+    ::selection { background: rgba(100, 140, 200, 0.35); }
+    ::-webkit-scrollbar { width: 7px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(140, 160, 200, 0.25); border-radius: 4px; }
+  </style></head><body><article>${body}</article></body></html>`;
+}
+
+function parseStructuredText(source: string): string {
+  const lines = source.split(/\n/);
+  const out: string[] = [];
+  let inList = false;
+  let paragraphBuffer: string[] = [];
+  const flushParagraph = (): void => {
+    if (paragraphBuffer.length === 0) return;
+    out.push(`<p>${paragraphBuffer.join("<br>")}</p>`);
+    paragraphBuffer = [];
+  };
+  const closeList = (): void => {
+    if (inList) {
+      out.push("</ul>");
+      inList = false;
+    }
+  };
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line === "") {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      flushParagraph();
+      closeList();
+      const level = headingMatch[1]!.length;
+      out.push(`<h${level}>${inlineMarkdown(headingMatch[2]!)}</h${level}>`);
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      flushParagraph();
+      if (!inList) {
+        out.push("<ul>");
+        inList = true;
+      }
+      out.push(`<li>${inlineMarkdown(line.slice(2))}</li>`);
+      continue;
+    }
+    closeList();
+    paragraphBuffer.push(inlineMarkdown(line));
+  }
+  flushParagraph();
+  closeList();
+  return out.join("\n");
+}
+
+function inlineMarkdown(s: string): string {
+  const escaped = escapeHtml(s);
+  return escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, href) => {
+    if (!/^https?:\/\//i.test(href)) return match;
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+  });
 }
 
 // --- Receipt row ---
@@ -304,25 +497,51 @@ function buildReceiptRow(receipt: ToolInvocationReceiptLike): HTMLDivElement {
 
 function render(
   state: WorkstationState,
-  list: HTMLDivElement,
-  empty: HTMLDivElement,
-  headerCount: HTMLSpanElement,
+  refs: {
+    list: HTMLDivElement;
+    empty: HTMLDivElement;
+    headerCount: HTMLSpanElement;
+    browserPane: HTMLDivElement;
+    browserUrl: HTMLSpanElement;
+    browserFrame: HTMLIFrameElement;
+  },
+  cache: { lastPageInvocationId: string | null },
 ): void {
-  headerCount.textContent =
+  refs.headerCount.textContent =
     state.receiptCount > 0
       ? `${state.receiptCount} call${state.receiptCount === 1 ? "" : "s"}`
       : "";
+
+  // Browser pane — live. Only rebuild the iframe srcdoc when the
+  // page actually changes (by invocation_id); re-rendering on every
+  // receipt would reset scroll position on every row arrival.
+  if (state.currentPage) {
+    refs.browserPane.style.display = "flex";
+    refs.browserUrl.textContent = state.currentPage.url;
+    if (cache.lastPageInvocationId !== state.currentPage.invocation_id) {
+      refs.browserFrame.srcdoc = buildReaderSrcdoc(
+        state.currentPage.content,
+        state.currentPage.url,
+      );
+      cache.lastPageInvocationId = state.currentPage.invocation_id;
+    }
+  } else {
+    refs.browserPane.style.display = "none";
+  }
+
   if (state.history.length === 0) {
-    list.style.display = "none";
-    empty.style.display = "block";
+    refs.list.style.display = "none";
+    // Hide the empty card when the browser pane is showing a page —
+    // "No tool calls yet" under a live page would be misleading.
+    refs.empty.style.display = state.currentPage ? "none" : "block";
     return;
   }
-  list.style.display = "block";
-  empty.style.display = "none";
-  list.innerHTML = "";
+  refs.list.style.display = "block";
+  refs.empty.style.display = "none";
+  refs.list.innerHTML = "";
   // Newest on top reads better for a live stream — UI inverts order.
   for (let i = state.history.length - 1; i >= 0; i--) {
-    list.appendChild(buildReceiptRow(state.history[i]!));
+    refs.list.appendChild(buildReceiptRow(state.history[i]!));
   }
 }
 
@@ -369,19 +588,35 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     if (scaffold) return scaffold;
 
     scaffold = buildScaffold();
-    const { backdrop, panel, list, empty, closeBtn, headerCount, clearBtn } = scaffold;
+    const {
+      backdrop,
+      panel,
+      list,
+      empty,
+      closeBtn,
+      headerCount,
+      clearBtn,
+      browserPane,
+      browserUrl,
+      browserFrame,
+    } = scaffold;
     document.body.appendChild(backdrop);
     document.body.appendChild(panel);
 
     const adapter: WorkstationFetchAdapter = {
       subscribeToolInvocations: (listener) => ctx.app.subscribeToolInvocations(listener),
+      subscribeToolActivity: (listener) => ctx.app.subscribeToolActivity(listener),
     };
     controller = createWorkstationController(adapter);
 
+    const renderRefs = { list, empty, headerCount, browserPane, browserUrl, browserFrame };
+    // Scroll-preservation cache for the iframe — see render() comment.
+    const renderCache = { lastPageInvocationId: null as string | null };
+
     controller.subscribe((state) => {
-      render(state, list, empty, headerCount);
+      render(state, renderRefs, renderCache);
     });
-    render(controller.getState(), list, empty, headerCount);
+    render(controller.getState(), renderRefs, renderCache);
 
     closeBtn.addEventListener("click", close);
     backdrop.addEventListener("click", close);

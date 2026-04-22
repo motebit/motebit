@@ -302,11 +302,19 @@ export class MotebitRuntime {
   private _onToolInvocation:
     | ((receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void)
     | null;
+  /**
+   * Live activity sink for the Workstation panel's browser pane and
+   * any other surface that needs the raw args/result alongside the
+   * signed audit trail. Ephemeral by contract — consumers must not
+   * persist the payload beyond the call.
+   */
+  private _onToolActivity: ((event: import("./streaming.js").ToolActivityEvent) => void) | null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     this.motebitId = config.motebitId;
     this._deviceId = config.deviceId ?? "runtime-default";
     this._onToolInvocation = config.onToolInvocation ?? null;
+    this._onToolActivity = config.onToolActivity ?? null;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
@@ -673,6 +681,7 @@ export class MotebitRuntime {
       onToolInvocation: this._onToolInvocation
         ? (receipt) => this._onToolInvocation?.(receipt)
         : undefined,
+      onToolActivity: this._onToolActivity ? (event) => this._onToolActivity?.(event) : undefined,
     });
 
     this.wireLoopDeps();

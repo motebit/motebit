@@ -155,6 +155,16 @@ export class WebApp {
   private _toolInvocationListeners = new Set<
     (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void
   >();
+  // Parallel activity bus — delivers the ephemeral raw args/result
+  // alongside the signed receipt. The workstation's virtual-browser
+  // pane reads `args.url` + the fetched content from `event.result`
+  // to render pages live. Subscribers must not retain the payload
+  // (per the runtime's `onToolActivity` contract — args/result may
+  // contain sensitive content that's intentionally not in the signed
+  // receipt).
+  private _toolActivityListeners = new Set<
+    (event: import("@motebit/runtime").ToolActivityEvent) => void
+  >();
 
   async init(canvas: HTMLCanvasElement): Promise<void> {
     try {
@@ -341,6 +351,18 @@ export class WebApp {
               // Subscriber faults are isolated — a broken panel
               // listener must not poison the bus for the others.
               // Callers log at their layer.
+            }
+          }
+        },
+        // Parallel activity bus — raw args/result for the live
+        // browser-pane renderer. Same fan-out + isolation as the
+        // receipt bus.
+        onToolActivity: (event) => {
+          for (const listener of this._toolActivityListeners) {
+            try {
+              listener(event);
+            } catch {
+              // Same isolation rationale as the receipt bus.
             }
           }
         },
@@ -712,6 +734,26 @@ export class WebApp {
     this._toolInvocationListeners.add(listener);
     return () => {
       this._toolInvocationListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to the ephemeral tool-activity stream — the raw args +
+   * result bytes the receipt's hashes commit to. Fires at the same
+   * moment as `subscribeToolInvocations`, so consumers that need both
+   * (the workstation's browser pane reads `event.args.url` to render
+   * the page the motebit is reading) receive them in lockstep.
+   *
+   * Contract: subscribers must not retain the payload across calls.
+   * Activity is for live rendering, not persistence — the signed
+   * receipt is the audit artifact.
+   */
+  subscribeToolActivity(
+    listener: (event: import("@motebit/runtime").ToolActivityEvent) => void,
+  ): () => void {
+    this._toolActivityListeners.add(listener);
+    return () => {
+      this._toolActivityListeners.delete(listener);
     };
   }
 

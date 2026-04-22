@@ -63,5 +63,7 @@ export {
   type WorkstationControllerOptions,
   type WorkstationFetchAdapter,
   type WorkstationState,
+  type WorkstationCurrentPage,
   type ToolInvocationReceiptLike,
+  type ToolActivityEvent,
 } from "./workstation/controller";
