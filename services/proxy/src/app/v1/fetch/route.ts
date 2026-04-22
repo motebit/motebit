@@ -20,6 +20,14 @@ async function checkRateLimit(
   key: string,
   dailyLimit: number,
 ): Promise<{ allowed: boolean; remaining: number }> {
+  // Local dev: when Vercel KV credentials aren't configured, skip the
+  // rate-limit rather than fail-closed. Production deploys always have
+  // KV_REST_API_URL set; its absence is a reliable signal that we're
+  // running `next dev` against localhost. The origin allowlist still
+  // gates who can call this route.
+  if (!process.env.KV_REST_API_URL) {
+    return { allowed: true, remaining: dailyLimit };
+  }
   try {
     const { kv } = await import("@vercel/kv");
     const count = await kv.incr(key);
@@ -31,7 +39,7 @@ async function checkRateLimit(
       remaining: Math.max(0, dailyLimit - count),
     };
   } catch {
-    // KV unavailable — fail closed, deny the request
+    // KV configured but unavailable — fail closed, deny the request.
     return { allowed: false, remaining: 0 };
   }
 }

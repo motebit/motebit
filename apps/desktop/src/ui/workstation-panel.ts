@@ -1290,17 +1290,19 @@ export function initWorkstationPanel(ctx: DesktopContext): WorkstationPanelAPI {
       scaffold.scheduledSection.style.display = "none";
     }
 
-    // Navigable browser pane — "window to the internet" Phase 1.
+    // Reader pane — what the motebit read, not what the user browses.
     //
-    // The user and the motebit share one gaze: both drive the same
-    // `read_url` tool through the same display surface. User types in
-    // the URL bar OR clicks a link in the rendered page; either path
-    // fires a signed `ToolInvocationReceipt` and the new page lands in
-    // the iframe via the existing controller → currentPage pipeline.
+    // `read_url` is the motebit's text-extractor tool: server-side
+    // fetch + HTML strip, output goes into the AI reasoning loop. This
+    // pane renders that text on the glass so the user can see what the
+    // motebit is reading. It is NOT a browser — see
+    // `docs/doctrine/workstation-viewport.md` for the per-surface map.
     //
-    // History is the full navigation stack, indexed by current position;
-    // Back/Forward step through it. Each visited page caches its reader-
-    // mode content so Back/Forward render instantly without re-fetching.
+    // The desktop Workstation viewport endgame is full computer use
+    // (screen capture + OS input via Tauri + macOS Accessibility /
+    // Windows UI Automation). That replaces the "window to the
+    // internet / to your machine" role the Reader temporarily
+    // occupies; `read_url` stays as the AI's reading tool regardless.
 
     const navHistory: string[] = [];
     let navIndex = -1;

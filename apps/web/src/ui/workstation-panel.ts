@@ -179,13 +179,17 @@ function buildScaffold(): {
   header.appendChild(closeBtn);
   panel.appendChild(header);
 
-  // === URL bar (shared gaze) ===
-  // User types a URL here; pressing enter fires the motebit's
-  // `read_url` tool via `invokeLocalTool`. The page lands in the
-  // browser pane below the same way it does when the motebit
-  // navigates on its own — both you and the motebit are looking at
-  // the same source. The signed receipt records `user-tap` origin,
+  // === URL bar (shared reading) ===
+  // User types a URL; pressing enter fires the motebit's `read_url`
+  // tool via `invokeLocalTool`. The extracted text lands in the
+  // Reader pane below — same pipeline the motebit uses when it reads
+  // pages for its own reasoning. Both the user and the motebit see
+  // the same extraction. Signed receipt records `user-tap` origin
   // so the audit trail discriminates who drove the call.
+  //
+  // Not a browser — a reader. The real browser viewport (cloud
+  // browser on web, computer use on desktop) is a separate track.
+  // See `docs/doctrine/workstation-viewport.md`.
   const urlRow = document.createElement("div");
   Object.assign(urlRow.style, {
     display: "flex",
@@ -239,12 +243,15 @@ function buildScaffold(): {
   // Recurring goals + run history used to render here; they moved to
   // the Goals panel as part of the Goals unification (both modes in
   // one list). The Workstation stays purely about live motebit
-  // activity — URL bar + signed tool-call receipts + browser pane.
+  // activity — URL bar + signed tool-call receipts + Reader pane.
 
-  // === Browser pane (virtual_browser mode) ===
-  // Renders the motebit's currently-read page as a sandboxed iframe
-  // sitting directly on the glass. Hidden until the first read_url /
-  // virtual_browser / browse_page call arrives.
+  // === Reader pane ===
+  // Renders the motebit's currently-read page (from `read_url`) as a
+  // sandboxed iframe sitting directly on the glass. Hidden until the
+  // first read_url call arrives. The real Workstation viewport (cloud
+  // browser on web, computer use on desktop) is the endgame; this pane
+  // is the Reader projection in the meantime. See
+  // docs/doctrine/workstation-viewport.md.
   const browserPane = document.createElement("div");
   browserPane.id = "workstation-browser";
   Object.assign(browserPane.style, {
@@ -783,22 +790,24 @@ export function initWorkstationPanel(ctx: WebContext): WorkstationPanelAPI {
     closeBtn.addEventListener("click", close);
     clearBtn.addEventListener("click", () => controller?.clearHistory());
 
-    // Navigable browser pane — "window to the internet" Phase 1.
+    // Reader pane — what the motebit read, not what the user browses.
     //
-    // The user and the motebit share one gaze: both drive the same
-    // `read_url` tool through the same display surface. User types in
-    // the URL bar OR clicks a link in the rendered page; either path
-    // fires a signed `ToolInvocationReceipt` and the new page lands in
-    // the iframe via the existing controller → currentPage pipeline.
+    // `read_url` is the motebit's text-extractor tool: server-side
+    // fetch + HTML strip, output goes into the AI reasoning loop. This
+    // pane renders that text on the glass so the user can see what the
+    // motebit is reading. It is NOT a browser, and should not be framed
+    // as one — see `docs/doctrine/workstation-viewport.md`.
     //
-    // History is the full navigation stack, indexed by current position;
-    // Back/Forward step through it. Each visited page caches its reader-
-    // mode content so Back/Forward render instantly without re-fetching
-    // (matches standard browser behavior — back doesn't re-GET).
+    // The URL bar + link click-through + back/forward + cache below
+    // make the Reader navigable (a convenience for the user when the
+    // motebit has read pages the user wants to follow up on). Every
+    // navigation still goes through the signed `read_url` pipeline.
     //
-    // Foundation is reader-mode (`read_url` fetch + HTML strip). Phase
-    // 2 swaps the backend for a real embedded WebView on desktop /
-    // relay-hosted cloud browser on web without changing this UX.
+    // The real Workstation viewport on web will be a cloud-hosted
+    // browser (frame stream + input forward); on desktop it will be
+    // full computer use (screen capture + OS input). Those replace the
+    // "window to the internet" role the Reader temporarily occupies;
+    // `read_url` stays as the AI's reading tool regardless.
 
     const navHistory: string[] = [];
     let navIndex = -1;
