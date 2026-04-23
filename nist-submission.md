@@ -1,3 +1,18 @@
+> **Document snapshot.** This is the comment as submitted to NIST's NCCoE AI-Identity review on **April 2, 2026**. The body below is preserved as-sent; only this header has been added. The working system has evolved meaningfully since submission — numbers, package names, and scope claims below describe the system at that moment, not today. For current state see [`README.md`](README.md), [`LICENSING.md`](LICENSING.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx), [`CHANGELOG.md`](CHANGELOG.md), and the [`spec/`](spec/) tree.
+>
+> **Notable changes since April 2, 2026** (non-exhaustive):
+>
+> - **License posture** — the permissive floor flipped from MIT to **Apache-2.0** with explicit patent grant and litigation-termination clause on 2026-04-23. BSL runtime unchanged; both converge to Apache-2.0 at each version's Change Date. The body below states the as-submitted posture.
+> - **Package rename** — on 2026-04-09 the names `@motebit/verify` (library) and `@motebit/crypto` (encryption) were swapped so each name matches what it does. Where the body below names `@motebit/verify` as the verification library on npm, the equivalent current package is `@motebit/crypto` (Apache-2.0). The current `@motebit/verify` is a separate CLI package (`motebit-verify`).
+> - **Cryptosuite agility** (2026-04-13) — a `SuiteId` registry in `@motebit/protocol` makes post-quantum migration (ML-DSA, SLH-DSA) a registry addition rather than a wire-format break. Every signed artifact declares its suite; every verifier dispatches through `suite-dispatch.ts`.
+> - **Hardware-rooted identity** (late April 2026) — four platform-attestation verifier packages shipped (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn). Hardware-attestation claims raise the AAL story in §3 beyond "hardware-backed key storage" to cryptographic attestation that the identity private key resides in a specific hardware root. All four are Apache-2.0 permissive-floor packages.
+> - **Onchain credential anchoring + revocation** (2026-04-10 / 2026-04-11) — credentials anchored via Merkle batches (`spec/credential-anchor-v1.md`); key revocations anchored individually via Solana Memo. The chain is the registry. This closes the SP 800-63 revocation gap without requiring a CA, CRL, or OCSP.
+> - **Protocol expansion** — the as-submitted Availability section named 5 stable specs. The current stable set is 12, adding `credential-anchor@1.0`, `settlement@1.0`, `auth-token@1.0`, `delegation@1.0`, `discovery@1.0`, `migration@1.0`, and `dispute@1.0`.
+> - **Operator transparency** (2026-04-18) — relay publishes a signed `/.well-known/motebit-transparency.json` declaring every third-party processor and data-retention policy. Committed `PRIVACY.md` and runtime are drift-checked siblings.
+> - **Package count** — 45 → 46. **Spec count** — 5 → 12 stable. **Test count** — 4,600+ → higher (current figure lives in CI logs, not here).
+
+---
+
 # NIST NCCoE Comment — Software and AI Agent Identity and Authorization
 
 **To:** AI-Identity@nist.gov
@@ -13,7 +28,7 @@ Agent identity must be persistent, cryptographic, and portable across trust doma
 
 Motebit implements this missing layer. Agents carry persistent Ed25519 identities (`did:key` URIs), accumulate verifiable trust through signed execution receipts, and enforce zero-trust policy at every tool boundary. Receipts embed the signer's public key — self-verifiable offline, without contacting any authority. Key rotation uses dual-signed succession chains verifiable end-to-end from genesis key to current key. Cross-agent delegation produces nested receipts with cryptographic chain-of-custody. These are generalizable primitives — they do not require Motebit software to verify.
 
-This is a working implementation (45 packages, ~200,000 lines of TypeScript including tests, 4,600+ test cases, five open specifications), not a proposal. The permissive floor is Apache-2.0 licensed with explicit patent grant, zero dependencies (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/verifier`, four `@motebit/crypto-*` hardware-attestation leaves, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1 and converges to Apache-2.0 at the Change Date. The identity, receipt, and credential formats are designed to be adopted independently of the Motebit runtime — any system can implement them from the open specifications.
+This is a working implementation (45 packages, ~200,000 lines of TypeScript including tests, 4,600+ test cases, five open specifications), not a proposal. The protocol layer is MIT licensed with zero dependencies (`@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The identity, receipt, and credential formats are designed to be adopted independently of the Motebit runtime — any system can implement them from the open specifications.
 
 The implementation includes an agent economy (budget-gated delegation, per-hop settlement, integer micro-unit arithmetic) that exercises these identity primitives under real economic constraints — delegation receipts, trust routing, and credential verification are not theoretical; they settle money.
 
@@ -86,7 +101,7 @@ As of March 2026, no widely adopted agent framework — commercial or open sourc
 
 Each Motebit agent has a persistent cryptographic identity: an Ed25519 keypair generating a `did:key` URI (W3C DID-Core) and a unique agent ID (UUID v7, time-ordered). Identity is declared in a human-readable, cryptographically signed file (`motebit.md`) that any system can verify without the Motebit runtime.
 
-The identity specification (`motebit/identity@1.0`) is an open standard (Apache-2.0 licensed, with explicit patent grant). A zero-dependency verification library (`@motebit/crypto`) is published on npm. A scaffolder (`npm create motebit`) generates a signed identity in seconds.
+The identity specification (`motebit/identity@1.0`) is an open standard (MIT licensed). A zero-dependency verification library (`@motebit/verify`) is published on npm. A scaffolder (`npm create motebit`) generates a signed identity in seconds.
 
 **What metadata is essential for an AI agent's identity?**
 
@@ -106,8 +121,8 @@ Motebit supports multi-device registration. Each device has its own Ed25519 keyp
 
 **Relevant artifacts:**
 
-- Specification: `spec/identity-v1.md` (Apache-2.0 licensed, stable)
-- Verification library: `@motebit/crypto` (npm, Apache-2.0, zero dependencies) — verifies identity files, execution receipts, verifiable credentials, and presentations with a single function call
+- Specification: `spec/identity-v1.md` (MIT licensed, stable)
+- Verification library: `@motebit/verify` (npm, MIT, zero dependencies) — verifies identity files, execution receipts, verifiable credentials, and presentations with a single function call
 - Identity scaffolder: `npm create motebit`
 - DID interoperability: Section 10 of `spec/identity-v1.md`
 
@@ -135,7 +150,7 @@ This is analogous to mutual TLS but at the agent identity layer rather than the 
 
 **Enterprise CRL compatibility:** Motebit does not require a central revocation authority, but the architecture is explicitly compatible with enterprise revocation infrastructure. Credential verification accepts `checkRevoked` callbacks (`packages/market/src/credential-weight.ts`), and the relay's credential routes support revocation lists. Organizations can layer OCSP, CRL, or custom revocation policies on top of the agent identity layer without conflict.
 
-**Verification:** Specified in `identity-v1.md` §3.3 and §3.8.3. Implemented in `packages/crypto/src/index.ts` (`signGuardianRecoverySuccession`, `verifyKeySuccession`), `packages/crypto/src/index.ts` (succession chain verification handles recovery records), and `services/api/src/key-rotation.ts` (relay accepts guardian recovery). Covered by 19 tests across crypto, verify, and identity-file packages.
+**Verification:** Specified in `identity-v1.md` §3.3 and §3.8.3. Implemented in `packages/crypto/src/index.ts` (`signGuardianRecoverySuccession`, `verifyKeySuccession`), `packages/verify/src/index.ts` (succession chain verification handles recovery records), and `services/api/src/key-rotation.ts` (relay accepts guardian recovery). Covered by 19 tests across crypto, verify, and identity-file packages.
 
 **Relationship to OAuth 2.0 / OIDC:** Motebit's Ed25519 signed tokens serve a similar role to OAuth 2.0 access tokens but are self-verifiable without a token introspection endpoint. The MCP server's HTTP bearer auth is compatible with OAuth flows — an enterprise could layer OIDC on top for user-to-agent identity binding while the agent-to-agent layer uses Ed25519 signatures directly.
 
@@ -334,7 +349,7 @@ All tests run in CI on every commit. The test suite is designed to be runnable b
 
 ## Standards Alignment
 
-The current standards landscape addresses infrastructure identity (SPIFFE for workloads), user identity (OIDC), and tool interoperability (MCP) — but none define persistent agent-level identity, cryptographic delegation chains, or verifiable trust accumulation. This is not a gap that can be closed by adapting existing standards; it requires a new layer between MCP and infrastructure identity. Motebit's open specifications (`motebit/identity@1.0`, `motebit/execution-ledger@1.0`, `motebit/credential@1.0`) are an implementation of that layer, Apache-2.0 licensed (with explicit patent grant from every contributor) and designed for independent adoption.
+The current standards landscape addresses infrastructure identity (SPIFFE for workloads), user identity (OIDC), and tool interoperability (MCP) — but none define persistent agent-level identity, cryptographic delegation chains, or verifiable trust accumulation. This is not a gap that can be closed by adapting existing standards; it requires a new layer between MCP and infrastructure identity. Motebit's open specifications (`motebit/identity@1.0`, `motebit/execution-ledger@1.0`, `motebit/credential@1.0`) are an implementation of that layer, MIT licensed and designed for independent adoption.
 
 Motebit's architecture engages with the standards referenced in the concept paper:
 
@@ -374,9 +389,9 @@ The NCCoE's future iterations addressing external agents may find this architect
 ## Availability
 
 - **Source code:** [github.com/motebit/motebit](https://github.com/motebit/motebit) (source-available, BSL 1.1)
-- **Permissive floor:** Apache-2.0 licensed (with explicit patent grant) — protocol types (`@motebit/protocol`), full SDK (`@motebit/sdk`), verification library (`@motebit/crypto`), verifier helpers (`@motebit/verifier`), four hardware-attestation leaves (`@motebit/crypto-appattest`, `@motebit/crypto-play-integrity`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn`), scaffolder (`create-motebit`), GitHub Action
+- **Type layer:** MIT licensed — protocol types (`@motebit/protocol`), full SDK (`@motebit/sdk`), verification library (`@motebit/verify`), scaffolder (`create-motebit`)
 - **Specifications:** `motebit/identity@1.0` (stable), `motebit/execution-ledger@1.0` (stable), `motebit/relay-federation@1.0` (stable), `motebit/market@1.0` (stable), `motebit/credential@1.0` (stable)
-- **npm packages:** `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `create-motebit`, `motebit`
+- **npm packages:** `@motebit/protocol`, `@motebit/sdk`, `@motebit/verify`, `create-motebit`, `motebit`
 - **Live demo:** [motebit.com](https://motebit.com)
 - **Remote command API:** `POST /api/v1/agents/:motebitId/command` — relay-mediated agent introspection
 - **Settlement anchoring:** Inter-relay settlements can be batched into Merkle trees and anchored on-chain (Base L2) for non-repudiability. The Merkle construction and anchoring code are implemented and tested; the on-chain contract is not yet deployed. Anchoring is additive — verification works without the chain anchor (`relay-federation-v1.md` §7.6, `packages/crypto/src/merkle.ts`).
