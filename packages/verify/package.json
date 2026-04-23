@@ -1,6 +1,6 @@
 {
   "name": "@motebit/verify",
-  "version": "1.0.0",
+  "version": "0.8.0",
   "description": "The canonical motebit artifact verifier — CLI `motebit-verify` with every hardware-attestation platform bundled (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn). One install, offline, self-attesting. Replaces the deprecated @motebit/verify@0.x zero-dep library: library primitives now live in @motebit/crypto; helper utilities in @motebit/verifier; this package is the tool.",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,6 +20,7 @@
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
     "LICENSE",
+    "NOTICE",
     "README.md",
     "CLAUDE.md"
   ],

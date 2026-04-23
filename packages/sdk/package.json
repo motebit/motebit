@@ -17,6 +17,7 @@
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
     "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "sideEffects": false,

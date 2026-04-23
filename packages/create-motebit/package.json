@@ -9,6 +9,7 @@
   "files": [
     "dist/index.js",
     "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "license": "Apache-2.0",
