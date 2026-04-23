@@ -3896,33 +3896,11 @@
           transform: rotate(360deg);
         }
       }
-      /* Sync tooltip */
-      #sync-tooltip {
-        position: fixed;
-        z-index: 21;
-        padding: 8px 12px;
-        border-radius: 10px;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        color: rgba(255, 255, 255, 0.9);
-        font-size: 11px;
-        line-height: 1.5;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        pointer-events: none;
-        opacity: 0;
-        transform: translateY(4px);
-        transition:
-          opacity 0.2s ease,
-          transform 0.2s ease;
-        white-space: nowrap;
-        max-width: 240px;
-      }
-      #sync-tooltip.visible {
-        opacity: 1;
-        transform: translateY(0);
-        pointer-events: auto;
-      }
+      /* Sync tooltip retired 2026-04-23 — the cloud icon now relies on the
+       * native browser `title="..."` tooltip the same way every other
+       * top-bar button does. Having both a custom #sync-tooltip div AND
+       * the native title attribute produced two tooltips on hover while
+       * sibling buttons produced one. */
       /* Sync detail popup */
       #sync-popup {
         position: fixed;
@@ -5398,7 +5376,6 @@
         </g>
       </svg>
     </div>
-    <div id="sync-tooltip"></div>
     <div id="sync-popup">
       <div class="sync-popup-header">Relay</div>
       <div class="sync-popup-subtitle">Sync devices, delegate tasks, share credentials.</div>

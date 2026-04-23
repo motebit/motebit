@@ -839,7 +839,6 @@ function normalizeRelayUrl(input: string): string {
 
 function initSyncStatusIndicator(ctx: DesktopContext): void {
   const indicator = document.getElementById("sync-status") as HTMLDivElement;
-  const tooltip = document.getElementById("sync-tooltip") as HTMLDivElement;
   const popup = document.getElementById("sync-popup") as HTMLDivElement;
   const popupStatus = document.getElementById("sync-popup-status") as HTMLSpanElement;
   const popupLastSync = document.getElementById("sync-popup-last-sync") as HTMLSpanElement;
@@ -859,7 +858,6 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
 
   let lastEvent: SyncStatusEvent | null = null;
   let popupOpen = false;
-  let tooltipTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Persist `sync_url` into `~/.motebit/config.json` via the Tauri bridge.
@@ -1004,37 +1002,16 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
     popup.style.transform = "translateX(-50%)";
   }
 
-  // Tooltip on hover
-  indicator.addEventListener("mouseenter", () => {
-    if (popupOpen) return;
-    tooltipTimer = setTimeout(() => {
-      const rect = indicator.getBoundingClientRect();
-      tooltip.textContent = indicator.title;
-      tooltip.style.top = `${rect.bottom + 6}px`;
-      tooltip.style.right = `${window.innerWidth - rect.right}px`;
-      tooltip.classList.add("visible");
-    }, 400);
-  });
-
-  indicator.addEventListener("mouseleave", () => {
-    if (tooltipTimer) {
-      clearTimeout(tooltipTimer);
-      tooltipTimer = null;
-    }
-    tooltip.classList.remove("visible");
-  });
+  // Hover behavior: the native browser tooltip (from the `title="..."`
+  // attribute on the indicator) is the only hover surface. Every other
+  // top-bar button uses the same native-tooltip pattern — sync behaves
+  // the same way for visual consistency.
 
   // Click handler — ALWAYS open the popup, never dead-end on a toast. The
   // popup is the one place where every relay action lives (enter URL,
   // Connect, view stats, Disconnect). Mirrors apps/web/src/ui/gated-panels.ts
   // — no branch on current status, no toast escape-hatch for "unconfigured".
   indicator.addEventListener("click", () => {
-    tooltip.classList.remove("visible");
-    if (tooltipTimer) {
-      clearTimeout(tooltipTimer);
-      tooltipTimer = null;
-    }
-
     if (popupOpen) {
       popup.classList.remove("open");
       popupOpen = false;
