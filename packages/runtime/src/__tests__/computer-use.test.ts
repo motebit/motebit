@@ -409,8 +409,15 @@ describe("ComputerSessionManager — observation classifier", () => {
     }
   });
 
-  it("fail-closes when classifier throws — stamps redacted_on_error", async () => {
-    const observation = { kind: "screenshot", width: 100, height: 100, sensitive: "bytes" };
+  it("fail-closes when classifier throws — stamps redacted_on_error + strips bytes", async () => {
+    const observation = {
+      kind: "screenshot",
+      width: 100,
+      height: 100,
+      bytes_base64: "SENSITIVE",
+      ocr_tokens: [{ text: "anything", x: 0, y: 0, w: 1, h: 1 }],
+      other: "kept",
+    };
     const classifier: ComputerGovernanceClassifier = {
       async classify() {
         return "allow";
@@ -432,13 +439,103 @@ describe("ComputerSessionManager — observation classifier", () => {
     const result = await manager.executeAction("cs_1", SCREENSHOT_ACTION);
     expect(result.outcome).toBe("success");
     if (result.outcome === "success") {
-      const d = result.data as {
-        sensitive: string;
-        redaction: { applied: boolean; projection_kind: string };
-      };
-      expect(d.sensitive).toBe("bytes");
-      expect(d.redaction.applied).toBe(true);
-      expect(d.redaction.projection_kind).toBe("redacted_on_error");
+      const d = result.data as Record<string, unknown>;
+      const redaction = d.redaction as { applied: boolean; projection_kind: string };
+      expect(redaction.applied).toBe(true);
+      expect(redaction.projection_kind).toBe("redacted_on_error");
+      // Fail-closed: bytes stripped, non-sensitive metadata retained.
+      expect(d.bytes_base64).toBeUndefined();
+      expect(d.ocr_tokens).toBeUndefined();
+      expect(d.other).toBe("kept");
+    }
+  });
+
+  it("strip_bytes=true → bytes_base64 and ocr_tokens removed before AI sees them", async () => {
+    const observation = {
+      kind: "screenshot",
+      width: 100,
+      height: 100,
+      bytes_base64: "should-not-reach-AI",
+      ocr_tokens: [{ text: "card 4111-1111-1111-1111", x: 0, y: 0, w: 0.5, h: 0.05 }],
+      artifact_id: "sha256:abc123",
+      captured_at: 1_000_000,
+    };
+    const classifier: ComputerGovernanceClassifier = {
+      async classify() {
+        return "allow";
+      },
+      async classifyObservation() {
+        return {
+          applied: true,
+          projection_kind: "blocked",
+          policy_version: "v1.0.0",
+          classified_regions_count: 1,
+          strip_bytes: true,
+        };
+      },
+    };
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return observation;
+        },
+      }),
+      governance: classifier,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    expect(result.outcome).toBe("success");
+    if (result.outcome === "success") {
+      const d = result.data as Record<string, unknown>;
+      // Strip fail-closed: the big sensitive payloads are gone…
+      expect(d.bytes_base64).toBeUndefined();
+      expect(d.ocr_tokens).toBeUndefined();
+      // …but audit-binding metadata survives so a verifier with post-facto
+      // access to the artifact store can still reconstruct the chain.
+      expect(d.artifact_id).toBe("sha256:abc123");
+      expect(d.captured_at).toBe(1_000_000);
+      const redaction = d.redaction as { projection_kind: string; strip_bytes: boolean };
+      expect(redaction.projection_kind).toBe("blocked");
+      expect(redaction.strip_bytes).toBe(true);
+    }
+  });
+
+  it("strip_bytes undefined (falsy) leaves bytes in place", async () => {
+    const observation = {
+      kind: "screenshot",
+      width: 100,
+      height: 100,
+      bytes_base64: "ok-to-see",
+    };
+    const classifier: ComputerGovernanceClassifier = {
+      async classify() {
+        return "allow";
+      },
+      async classifyObservation() {
+        // `personal_flagged` redaction — logged but non-blocking.
+        return {
+          applied: true,
+          projection_kind: "personal_flagged",
+          classified_regions_count: 1,
+        };
+      },
+    };
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return observation;
+        },
+      }),
+      governance: classifier,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    expect(result.outcome).toBe("success");
+    if (result.outcome === "success") {
+      const d = result.data as Record<string, unknown>;
+      expect(d.bytes_base64).toBe("ok-to-see");
     }
   });
 

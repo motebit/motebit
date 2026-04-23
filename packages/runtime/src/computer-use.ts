@@ -142,7 +142,24 @@ export interface ObservationRedaction {
   readonly policy_version?: string;
   readonly classified_regions_count?: number;
   readonly classified_regions_digest?: string;
+  /**
+   * When `true`, the session manager strips bulky raw-bytes fields
+   * (`bytes_base64`, `ocr_tokens`) from the observation before the AI
+   * loop sees it. Fail-closed enforcement for the foundation-law rule
+   * "medical/financial/secret never reach external AI." The artifact
+   * metadata (`artifact_id`, `artifact_sha256`, dimensions, timestamp)
+   * is retained so the audit trail still binds to the blocked capture.
+   */
+  readonly strip_bytes?: boolean;
 }
+
+/**
+ * Fields stripped from an observation when redaction says
+ * `strip_bytes: true`. Kept as a frozen list so the set is auditable
+ * and drift-gate-able if a future observation shape adds a new large
+ * field that should also be withheld.
+ */
+const STRIPPED_FIELDS: ReadonlyArray<string> = ["bytes_base64", "ocr_tokens"];
 
 /**
  * Invoked when governance returns `require_approval`. Return `true`
@@ -395,28 +412,34 @@ export function createComputerSessionManager(
    * Run the classifier's optional `classifyObservation` over the
    * dispatcher's returned data. If the classifier produces a redaction
    * and the data is an object, shallow-overwrite the `redaction` field
-   * before returning. Non-objects pass through; a classifier throw is
-   * fail-closed — we surface a minimal `applied: true, projection_kind:
-   * "redacted_on_error"` envelope so the AI cannot silently receive raw
-   * bytes when the classifier malfunctioned.
+   * before returning. When `redaction.strip_bytes` is set the session
+   * manager additionally removes `bytes_base64` / `ocr_tokens` — this
+   * is the fail-closed path for "medical/financial/secret never reach
+   * external AI." Non-objects pass through; a classifier throw is
+   * itself fail-closed — we surface a minimal `applied: true,
+   * projection_kind: "redacted_on_error", strip_bytes: true` envelope
+   * so the AI cannot silently receive raw bytes when the classifier
+   * malfunctioned.
    */
   async function applyObservationClassifier(data: unknown): Promise<unknown> {
     if (!governance.classifyObservation) return data;
     if (data === null || typeof data !== "object") return data;
+    let redaction: ObservationRedaction | undefined;
     try {
-      const redaction = await governance.classifyObservation(data);
-      if (!redaction) return data;
-      return { ...(data as Record<string, unknown>), redaction };
+      redaction = await governance.classifyObservation(data);
     } catch {
-      // Fail-closed: never let raw bytes flow past a failed classifier.
-      return {
-        ...(data as Record<string, unknown>),
-        redaction: {
-          applied: true,
-          projection_kind: "redacted_on_error",
-        },
+      redaction = {
+        applied: true,
+        projection_kind: "redacted_on_error",
+        strip_bytes: true,
       };
     }
+    if (!redaction) return data;
+    const next: Record<string, unknown> = { ...(data as Record<string, unknown>), redaction };
+    if (redaction.strip_bytes) {
+      for (const field of STRIPPED_FIELDS) delete next[field];
+    }
+    return next;
   }
 
   function dispose(): void {

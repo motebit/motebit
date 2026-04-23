@@ -17,5 +17,24 @@ enigo = "0.6"
 image = "0.25"
 sha2 = "0.10"
 
+# macOS Vision framework — native, offline, state-of-the-art OCR used by
+# `do_screenshot` to extract text + bounding boxes so the TS sensitivity
+# classifier can fail-close on screen captures containing secrets / cards /
+# medical data. Vision is only available on macOS; other platforms skip the
+# OCR step and return an empty token list (honest degradation — the
+# classifier then emits a "raw" redaction, matching web / mobile behaviour
+# until those surfaces get their own OCR path).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-vision = { version = "0.3", features = [
+  "VNRequest",
+  "VNRequestHandler",
+  "VNRecognizeTextRequest",
+  "VNObservation",
+  "VNGeometry",
+] }
+objc2-core-graphics = "0.3"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

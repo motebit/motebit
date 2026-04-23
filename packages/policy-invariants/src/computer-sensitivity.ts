@@ -98,6 +98,54 @@ export interface RedactionMetadata {
   readonly projection_kind: string;
   readonly policy_version: string;
   readonly classified_regions_count: number;
+  /**
+   * When `true`, the session manager MUST strip the raw bytes
+   * (`bytes_base64`) from the observation before handing it to the
+   * AI loop. Fail-closed enforcement of "medical/financial/secret
+   * never reach external AI" — the AI still sees the observation
+   * metadata (session id, artifact hash, dimensions, timestamp) but
+   * the pixels are withheld. The `artifact_id` remains so the audit
+   * trail binds to the original capture; a verifier with
+   * post-facto access to the artifact store can reconstruct.
+   */
+  readonly strip_bytes?: boolean;
+}
+
+/**
+ * One OCR-extracted text token with its bounding box in **normalized**
+ * image coordinates (0.0–1.0 on each axis). The Rust dispatcher emits
+ * these in absolute pixel coordinates; the desktop bridge normalizes
+ * before passing to the classifier so the classifier stays
+ * image-size-agnostic.
+ */
+export interface OcrToken {
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+/** A classified OCR region — text match paired with its bounding box. */
+export interface ClassifiedRegion {
+  readonly match: SensitivityMatch;
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+/**
+ * Full result of OCR-based screenshot classification. Paired with
+ * `RedactionMetadata` so callers get both the spec-wire field (for the
+ * observation's `redaction` block) and the region list (for future
+ * masking projections and audit receipts).
+ */
+export interface ObservationClassificationResult {
+  readonly redaction: RedactionMetadata;
+  readonly regions: readonly ClassifiedRegion[];
+  /** Highest-severity level seen across all regions. */
+  readonly level: SensitivityLevel;
 }
 
 // ── Text patterns ────────────────────────────────────────────────────
@@ -337,6 +385,63 @@ export function classifyScreenshotObservation(_input: {
   };
 }
 
+/**
+ * OCR-aware screenshot classification — the v2 path. Accepts the
+ * dispatcher's OCR output and runs the same `scanText` rules the
+ * `type`-action classifier uses, so there's exactly one regex engine
+ * in the repo; a new secret pattern added for text typing protects
+ * screenshot observations automatically.
+ *
+ * Fail-closed semantics — the `redaction.strip_bytes` flag fires
+ * (and the session manager strips `bytes_base64` upstream) when any
+ * match rises to `secret` / `financial` / `medical`. `personal`
+ * matches are recorded but do NOT strip bytes: SSN / email in a
+ * normal web page is expected content, blocking every screenshot
+ * that contained one would make the tool unusable.
+ *
+ * Projection kinds:
+ *   - `"raw"`              — no matches; bytes flow through
+ *   - `"personal_flagged"` — personal matches logged; bytes still flow
+ *   - `"blocked"`          — secret/financial/medical found; bytes stripped
+ */
+export function classifyScreenshotWithOcr(input: {
+  readonly ocrTokens: readonly OcrToken[];
+  readonly width?: number;
+  readonly height?: number;
+}): ObservationClassificationResult {
+  const regions: ClassifiedRegion[] = [];
+  let dominant: SensitivityLevel = "none";
+
+  for (const token of input.ocrTokens) {
+    const report = scanText(token.text);
+    if (report.level === "none") continue;
+    dominant = higherLevel(dominant, report.level);
+    for (const match of report.matches) {
+      regions.push({ match, x: token.x, y: token.y, w: token.w, h: token.h });
+    }
+  }
+
+  const blocking = dominant === "secret" || dominant === "financial" || dominant === "medical";
+
+  const projectionKind: string = blocking
+    ? "blocked"
+    : dominant === "personal"
+      ? "personal_flagged"
+      : "raw";
+
+  return {
+    level: dominant,
+    regions,
+    redaction: {
+      applied: dominant !== "none",
+      projection_kind: projectionKind,
+      policy_version: COMPUTER_SENSITIVITY_POLICY_VERSION,
+      classified_regions_count: regions.length,
+      ...(blocking && { strip_bytes: true }),
+    },
+  };
+}
+
 // ── Governance classifier factory ────────────────────────────────────
 
 /**
@@ -361,6 +466,23 @@ export function createDefaultComputerGovernance(): ComputerGovernanceClassifierL
     },
     classifyObservation(data) {
       if (!isScreenshotObservationLike(data)) return Promise.resolve(undefined);
+      // OCR-aware path: the Rust dispatcher extracts text + bounding
+      // boxes via macOS Vision framework and threads them through as
+      // `ocr_tokens`. When present, run the v2 classifier which
+      // reuses `scanText` over each token's text — one regex engine
+      // for both `type` actions and screenshot observations.
+      const tokens = extractOcrTokens(data);
+      if (tokens !== null) {
+        return Promise.resolve(
+          classifyScreenshotWithOcr({
+            ocrTokens: tokens,
+            width: data.width,
+            height: data.height,
+          }).redaction,
+        );
+      }
+      // No OCR available — v1 stub path. Non-breaking for surfaces
+      // whose dispatcher hasn't wired OCR yet (web / mobile).
       return Promise.resolve(classifyScreenshotObservation(data));
     },
   };
@@ -372,4 +494,33 @@ function isScreenshotObservationLike(
   if (v === null || typeof v !== "object") return false;
   const r = v as Record<string, unknown>;
   return r.kind === "screenshot" && typeof r.width === "number" && typeof r.height === "number";
+}
+
+/**
+ * Pull OCR tokens out of an observation payload. Returns `null` when the
+ * field is absent or malformed so the caller falls back to the v1 stub.
+ * Each token's `x / y / w / h` is expected in **normalized** 0.0–1.0
+ * coordinates — the desktop bridge converts from Rust's absolute-pixel
+ * output before the classifier sees it.
+ */
+function extractOcrTokens(data: unknown): OcrToken[] | null {
+  if (data === null || typeof data !== "object") return null;
+  const raw = (data as Record<string, unknown>).ocr_tokens;
+  if (!Array.isArray(raw)) return null;
+  const out: OcrToken[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== "object") return null;
+    const r = item as Record<string, unknown>;
+    if (
+      typeof r.text !== "string" ||
+      typeof r.x !== "number" ||
+      typeof r.y !== "number" ||
+      typeof r.w !== "number" ||
+      typeof r.h !== "number"
+    ) {
+      return null;
+    }
+    out.push({ text: r.text, x: r.x, y: r.y, w: r.w, h: r.h });
+  }
+  return out;
 }

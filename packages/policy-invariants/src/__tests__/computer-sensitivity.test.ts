@@ -18,6 +18,7 @@ import {
   COMPUTER_SENSITIVITY_POLICY_VERSION,
   classifyComputerAction,
   classifyScreenshotObservation,
+  classifyScreenshotWithOcr,
   createDefaultComputerGovernance,
   isValidLuhn,
   scanText,
@@ -298,5 +299,117 @@ describe("createDefaultComputerGovernance", () => {
     expect(
       await g.classifyObservation!({ kind: "screenshot", width: 10 /* missing height */ }),
     ).toBeUndefined();
+  });
+
+  it("classifyObservation routes to OCR path when ocr_tokens is present", async () => {
+    const g = createDefaultComputerGovernance();
+    const r = await g.classifyObservation!({
+      kind: "screenshot",
+      width: 1920,
+      height: 1080,
+      ocr_tokens: [{ text: `card ${VISA_TEST}`, x: 0.1, y: 0.2, w: 0.3, h: 0.05 }],
+    });
+    expect(r?.applied).toBe(true);
+    expect(r?.projection_kind).toBe("blocked");
+    expect(r?.strip_bytes).toBe(true);
+  });
+
+  it("classifyObservation falls back to v1 stub when ocr_tokens is absent", async () => {
+    const g = createDefaultComputerGovernance();
+    const r = await g.classifyObservation!({
+      kind: "screenshot",
+      width: 100,
+      height: 100,
+    });
+    expect(r?.projection_kind).toBe("raw");
+    expect(r?.strip_bytes).toBeUndefined();
+  });
+
+  it("classifyObservation falls back to v1 stub when ocr_tokens is malformed", async () => {
+    const g = createDefaultComputerGovernance();
+    const r = await g.classifyObservation!({
+      kind: "screenshot",
+      width: 100,
+      height: 100,
+      ocr_tokens: [{ text: "oops", x: "not-a-number" }],
+    });
+    expect(r?.projection_kind).toBe("raw");
+  });
+});
+
+describe("classifyScreenshotWithOcr", () => {
+  it("no tokens → raw projection, no regions", () => {
+    const r = classifyScreenshotWithOcr({ ocrTokens: [] });
+    expect(r.level).toBe("none");
+    expect(r.regions).toEqual([]);
+    expect(r.redaction.applied).toBe(false);
+    expect(r.redaction.projection_kind).toBe("raw");
+    expect(r.redaction.strip_bytes).toBeUndefined();
+  });
+
+  it("clean tokens → raw projection", () => {
+    const r = classifyScreenshotWithOcr({
+      ocrTokens: [
+        { text: "Hello world", x: 0, y: 0, w: 0.5, h: 0.1 },
+        { text: "Welcome to the docs", x: 0, y: 0.2, w: 0.8, h: 0.1 },
+      ],
+    });
+    expect(r.level).toBe("none");
+    expect(r.redaction.projection_kind).toBe("raw");
+  });
+
+  it("secret match → blocked projection + strip_bytes=true", () => {
+    const r = classifyScreenshotWithOcr({
+      ocrTokens: [{ text: `api sk-${"X".repeat(40)}`, x: 0.1, y: 0.1, w: 0.7, h: 0.05 }],
+    });
+    expect(r.level).toBe("secret");
+    expect(r.redaction.projection_kind).toBe("blocked");
+    expect(r.redaction.strip_bytes).toBe(true);
+    expect(r.redaction.classified_regions_count).toBe(1);
+    expect(r.regions[0]!.match.rule).toBe("secret.openai_key");
+    expect(r.regions[0]!.x).toBe(0.1);
+  });
+
+  it("financial match (Luhn-valid card) → blocked + strip_bytes=true", () => {
+    const r = classifyScreenshotWithOcr({
+      ocrTokens: [{ text: `card ${VISA_TEST}`, x: 0.2, y: 0.3, w: 0.5, h: 0.04 }],
+    });
+    expect(r.level).toBe("financial");
+    expect(r.redaction.projection_kind).toBe("blocked");
+    expect(r.redaction.strip_bytes).toBe(true);
+  });
+
+  it("personal match (SSN) → personal_flagged projection, NO strip_bytes", () => {
+    const r = classifyScreenshotWithOcr({
+      ocrTokens: [{ text: "ssn 123-45-6789", x: 0.1, y: 0.1, w: 0.3, h: 0.04 }],
+    });
+    expect(r.level).toBe("personal");
+    expect(r.redaction.applied).toBe(true);
+    expect(r.redaction.projection_kind).toBe("personal_flagged");
+    expect(r.redaction.strip_bytes).toBeUndefined();
+  });
+
+  it("mixed severity → dominant wins, bytes stripped", () => {
+    const r = classifyScreenshotWithOcr({
+      ocrTokens: [
+        { text: "ssn 123-45-6789", x: 0, y: 0, w: 0.3, h: 0.04 },
+        { text: `key sk-${"A".repeat(40)}`, x: 0, y: 0.1, w: 0.5, h: 0.04 },
+      ],
+    });
+    expect(r.level).toBe("secret");
+    expect(r.redaction.strip_bytes).toBe(true);
+    expect(r.regions.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("each token scanned independently — regions map 1:1 to matches", () => {
+    const r = classifyScreenshotWithOcr({
+      ocrTokens: [
+        { text: "first card 4111-1111-1111-1111", x: 0, y: 0, w: 0.5, h: 0.04 },
+        { text: "second card 5500000000000004", x: 0, y: 0.1, w: 0.5, h: 0.04 },
+      ],
+    });
+    expect(r.regions).toHaveLength(2);
+    expect(r.regions[0]!.y).toBe(0);
+    expect(r.regions[1]!.y).toBe(0.1);
   });
 });

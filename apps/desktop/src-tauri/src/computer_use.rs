@@ -166,6 +166,96 @@ fn to_capture_error(msg: String) -> FailureEnvelope {
     }
 }
 
+// ── OCR (macOS Vision framework) ─────────────────────────────────────
+
+/// One OCR-extracted text token with its bounding box in **normalized**
+/// image coordinates (0.0–1.0). Matches the TS `OcrToken` shape in
+/// `@motebit/policy-invariants` so the classifier can consume the
+/// tokens directly. Y is top-down (0 = top of image) — Vision returns
+/// bottom-up origin internally; we flip before emitting so the JS side
+/// doesn't have to know about CoreGraphics conventions.
+#[derive(serde::Serialize)]
+struct OcrToken {
+    text: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+/// Recognize text in the screenshot via native macOS Vision
+/// (VNRecognizeTextRequest). Runs synchronously; typical 1568px-edge
+/// capture takes ~80–200ms on Apple Silicon. Returns an empty vec on
+/// failure or on non-macOS platforms — honest degradation keeps the
+/// classifier in its "no tokens → raw projection" path rather than
+/// fail-closing on a platform that doesn't have OCR available.
+#[cfg(target_os = "macos")]
+fn ocr_png(png_bytes: &[u8]) -> Vec<OcrToken> {
+    use objc2::rc::Retained;
+    use objc2::AllocAnyThread;
+    use objc2_foundation::{NSArray, NSData, NSDictionary};
+    use objc2_vision::{VNImageRequestHandler, VNRecognizeTextRequest, VNRequest};
+
+    unsafe {
+        let data: Retained<NSData> = NSData::with_bytes(png_bytes);
+        // VNImageRequestHandler wants `NSDictionary<VNImageOption, AnyObject>`.
+        // The options namespace is irrelevant for an empty dict, so we
+        // construct the typed empty dictionary directly — turbofish picks
+        // the right generic params without heroic coercions.
+        let options: Retained<
+            NSDictionary<objc2_vision::VNImageOption, objc2::runtime::AnyObject>,
+        > = NSDictionary::new();
+
+        let handler: Retained<VNImageRequestHandler> =
+            VNImageRequestHandler::initWithData_options(
+                VNImageRequestHandler::alloc(),
+                &data,
+                &options,
+            );
+
+        let request: Retained<VNRecognizeTextRequest> = VNRecognizeTextRequest::new();
+        let req_any: &VNRequest = request.as_ref();
+        let requests: Retained<NSArray<VNRequest>> = NSArray::from_slice(&[req_any]);
+
+        if handler.performRequests_error(&requests).is_err() {
+            return vec![];
+        }
+
+        let Some(results) = request.results() else {
+            return vec![];
+        };
+
+        let mut tokens: Vec<OcrToken> = Vec::with_capacity(results.len());
+        for observation in results.iter() {
+            let candidates = observation.topCandidates(1);
+            let Some(top) = candidates.firstObject() else {
+                continue;
+            };
+            let text = top.string().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            // boundingBox is in normalized bottom-origin coords (Vision
+            // convention). Flip y to top-origin so JS doesn't have to
+            // know about CoreGraphics.
+            let r = observation.boundingBox();
+            tokens.push(OcrToken {
+                text,
+                x: r.origin.x,
+                y: 1.0 - r.origin.y - r.size.height,
+                w: r.size.width,
+                h: r.size.height,
+            });
+        }
+        tokens
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ocr_png(_png_bytes: &[u8]) -> Vec<OcrToken> {
+    Vec::new()
+}
+
 // ── Observation actions ──────────────────────────────────────────────
 
 /// Max pixel dimension of the longest screenshot edge. A full-res
@@ -218,6 +308,15 @@ fn do_screenshot() -> Result<JsonValue, FailureEnvelope> {
     let bytes_base64 = B64.encode(&buf);
     let captured_at = now_ms();
 
+    // OCR the capture on-device via macOS Vision (empty on other
+    // platforms). The TS sensitivity classifier consumes `ocr_tokens`
+    // and fail-closes on secret / financial / medical matches by
+    // stripping `bytes_base64` before the AI sees it. OCR is never
+    // load-bearing for the capture to succeed — on an OCR failure we
+    // return an empty token list and the classifier falls back to the
+    // v1 "raw projection" path.
+    let ocr_tokens = ocr_png(&buf);
+
     // `width` / `height` are the image's actual returned pixels. The
     // coordinate space subsequent actions operate in is the
     // `ComputerSessionOpened` event's `display_width / display_height`,
@@ -237,6 +336,7 @@ fn do_screenshot() -> Result<JsonValue, FailureEnvelope> {
         "artifact_id": artifact_id,
         "artifact_sha256": sha_hex,
         "bytes_base64": bytes_base64,
+        "ocr_tokens": ocr_tokens,
         "redaction": {
             "applied": false,
             "projection_kind": "raw",

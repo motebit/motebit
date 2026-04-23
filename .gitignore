@@ -70,3 +70,6 @@ PATENT-BLUEPRINT.md
 # Service runtime artifacts (identity keys, local SQLite). Generated on
 # first `pnpm dev` boot per service. Contains private keys — never commit.
 services/*/data/
+
+# Turborepo
+.turbo
