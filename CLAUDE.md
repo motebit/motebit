@@ -59,6 +59,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/proactive-interior.md`](docs/doctrine/proactive-interior.md) — presence mode + 4-phase consolidation cycle + fail-closed proactive tool scope; `runtime.consolidationCycle()` is the only loop
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out
 - [`docs/doctrine/migration-cleanup.md`](docs/doctrine/migration-cleanup.md) — state-holder analysis for migrations + legacy-compat paths; pre-GA is when you reduce holder counts, not when you slogan-strip
+- [`docs/doctrine/deprecation-lifecycle.md`](docs/doctrine/deprecation-lifecycle.md) — partner to migration-cleanup; three signals (major / deprecate+sunset / forbidden-silent-compat), four-field `@deprecated` contract (`since`, `removed in`, replacement, reason), minimum windows adapted from Kubernetes
 - [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory (34 today)
 
 ## Principles
