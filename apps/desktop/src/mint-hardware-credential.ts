@@ -31,24 +31,13 @@
  */
 
 import {
-  publicKeyToDidKey,
-  signVerifiableCredential,
+  composeHardwareAttestationCredential,
+  type HardwareAttestationCredentialSubject,
   type VerifiableCredential,
 } from "@motebit/encryption";
-import type { HardwareAttestationClaim } from "@motebit/sdk";
 
 import { mintAttestationClaim } from "./secure-enclave-attest.js";
 import type { InvokeFn } from "./tauri-storage.js";
-
-/** Minimal subject shape — same as the CLI's. Self-attested. */
-export interface HardwareCredentialSubject {
-  readonly id: string;
-  /** Ed25519 identity public key, lowercase hex (64 chars). */
-  readonly identity_public_key: string;
-  readonly hardware_attestation: HardwareAttestationClaim;
-  /** Unix ms at which the claim was minted. */
-  readonly attested_at: number;
-}
 
 export interface MintHardwareCredentialOptions {
   /** Tauri invoke — routes to the Rust SE bridge. */
@@ -68,15 +57,15 @@ export interface MintHardwareCredentialOptions {
 /**
  * Mint a hardware-attested self-signed `AgentTrustCredential`.
  *
- * Runs two I/O calls — both via the injected `invoke`:
- *   1. `mintAttestationClaim` → `HardwareAttestationClaim` (SE or software)
- *   2. Local: `signVerifiableCredential` over the composed unsigned VC
- *
- * Returns the signed credential ready for JSON-serialization + verify.
+ * Desktop-surface wrapper: routes through the Rust Secure Enclave
+ * bridge to produce a `platform: "secure_enclave"` claim (or a truthful
+ * `platform: "software"` fallback), then delegates the VC envelope +
+ * eddsa-jcs-2022 signing to `composeHardwareAttestationCredential` —
+ * the single source of truth shared with the CLI's `motebit attest`.
  */
 export async function mintHardwareCredential(
   opts: MintHardwareCredentialOptions,
-): Promise<VerifiableCredential<HardwareCredentialSubject>> {
+): Promise<VerifiableCredential<HardwareAttestationCredentialSubject>> {
   const attestation = await mintAttestationClaim(opts.invoke, {
     identityPublicKeyHex: opts.identityPublicKeyHex,
     motebitId: opts.motebitId,
@@ -85,25 +74,11 @@ export async function mintHardwareCredential(
   });
 
   const now = (opts.now ?? Date.now)();
-  const issuerDid = publicKeyToDidKey(opts.publicKey);
-  const subject: HardwareCredentialSubject = {
-    id: issuerDid,
-    identity_public_key: opts.identityPublicKeyHex.toLowerCase(),
-    hardware_attestation: attestation,
-    attested_at: now,
-  };
-
-  const unsigned: Omit<VerifiableCredential<HardwareCredentialSubject>, "proof"> = {
-    "@context": ["https://www.w3.org/ns/credentials/v2", "https://motebit.com/ns/credentials/v1"],
-    type: ["VerifiableCredential", "AgentTrustCredential"],
-    issuer: issuerDid,
-    validFrom: new Date(now).toISOString(),
-    credentialSubject: subject,
-  };
-
-  return signVerifiableCredential<HardwareCredentialSubject>(
-    unsigned,
-    opts.privateKey,
-    opts.publicKey,
-  );
+  return composeHardwareAttestationCredential({
+    publicKey: opts.publicKey,
+    publicKeyHex: opts.identityPublicKeyHex,
+    privateKey: opts.privateKey,
+    hardwareAttestation: attestation,
+    now,
+  });
 }

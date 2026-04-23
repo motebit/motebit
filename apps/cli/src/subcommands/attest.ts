@@ -30,10 +30,11 @@ import * as readline from "node:readline";
 // `@motebit/crypto` primitives apps are allowed to consume — per the
 // `check-app-primitives` drift gate, apps bind to the product
 // vocabulary (Layer ≥1 BSL) rather than the MIT Layer-0 protocol
-// primitives directly.
+// primitives directly. The composer is the single source of truth
+// shared with the desktop surface (`mintHardwareCredential`).
 import {
-  signVerifiableCredential,
-  publicKeyToDidKey,
+  composeHardwareAttestationCredential,
+  type HardwareAttestationCredentialSubject,
   type VerifiableCredential,
 } from "@motebit/encryption";
 import { openMotebitDatabase } from "@motebit/persistence";
@@ -49,26 +50,6 @@ import {
 } from "../identity.js";
 import { getDbPath } from "../runtime-factory.js";
 
-/**
- * Shape of the `AgentTrustCredential` subject used for attestation.
- * `TrustCredentialSubject` in `@motebit/crypto/credentials.ts` requires
- * several performance fields (interaction_count, success/fail counts,
- * etc.) that don't apply to a self-attestation. Defining a minimal
- * local type keeps the subject honest — we assert only what we can
- * prove.
- */
-export interface AttestationCredentialSubject {
-  readonly id: string;
-  /** Ed25519 identity public key, lowercase hex (64 chars). */
-  readonly identity_public_key: string;
-  readonly hardware_attestation: {
-    readonly platform: "software";
-    readonly key_exported: false;
-  };
-  /** Unix ms at which the claim was minted. */
-  readonly attested_at: number;
-}
-
 export interface BuildAttestationCredentialInput {
   readonly privateKey: Uint8Array;
   readonly publicKey: Uint8Array;
@@ -77,37 +58,26 @@ export interface BuildAttestationCredentialInput {
 }
 
 /**
- * Pure factory — given Ed25519 key material + the caller's clock,
- * produce a signed `VerifiableCredential` carrying a software-custody
- * `HardwareAttestationClaim`. No I/O, no config, no passphrase — lets
- * tests exercise the credential shape + signing round-trip without
- * touching the CLI's bootstrap machinery.
+ * CLI-surface wrapper around the canonical composer — hardcodes
+ * `platform: "software"` because the CLI process can't reach the
+ * Secure Enclave. Desktop calls the composer directly via
+ * `mintHardwareCredential` with an SE-signed claim. Keeping this
+ * thin wrapper preserves the CLI-local test surface while all shape
+ * decisions live in `@motebit/encryption`.
  */
 export async function buildAttestationCredential(
   input: BuildAttestationCredentialInput,
-): Promise<VerifiableCredential<AttestationCredentialSubject>> {
-  const issuerDid = publicKeyToDidKey(input.publicKey);
-  const subject: AttestationCredentialSubject = {
-    id: issuerDid, // self-attestation: issuer === subject
-    identity_public_key: input.publicKeyHex.toLowerCase(),
-    hardware_attestation: {
+): Promise<VerifiableCredential<HardwareAttestationCredentialSubject>> {
+  return composeHardwareAttestationCredential({
+    publicKey: input.publicKey,
+    publicKeyHex: input.publicKeyHex,
+    privateKey: input.privateKey,
+    hardwareAttestation: {
       platform: "software",
       key_exported: false,
     },
-    attested_at: input.now,
-  };
-  const unsigned: Omit<VerifiableCredential<AttestationCredentialSubject>, "proof"> = {
-    "@context": ["https://www.w3.org/ns/credentials/v2", "https://motebit.com/ns/credentials/v1"],
-    type: ["VerifiableCredential", "AgentTrustCredential"],
-    issuer: issuerDid,
-    validFrom: new Date(input.now).toISOString(),
-    credentialSubject: subject,
-  };
-  return signVerifiableCredential<AttestationCredentialSubject>(
-    unsigned,
-    input.privateKey,
-    input.publicKey,
-  );
+    now: input.now,
+  });
 }
 
 export async function handleAttest(config: CliConfig): Promise<void> {

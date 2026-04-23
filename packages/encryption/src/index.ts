@@ -315,6 +315,19 @@ export type { MerkleTree, MerkleProof } from "./merkle.js";
 export { verifyConsolidationAnchor } from "./consolidation-anchor.js";
 export type { ConsolidationAnchorVerifyResult } from "./consolidation-anchor.js";
 
+// ── Hardware-attestation credential composer ────────────────────────
+// Canonical builder for `AgentTrustCredential`s that carry a
+// `hardware_attestation` claim. Single source of truth — both the CLI
+// (`motebit attest`) and the desktop surface
+// (`mintHardwareCredential`) delegate here. Keeps the VC envelope +
+// subject shape byte-identical across every surface that issues a
+// self-attested motebit identity.
+export {
+  composeHardwareAttestationCredential,
+  type HardwareAttestationCredentialSubject,
+  type ComposeHardwareAttestationCredentialInput,
+} from "./hardware-attestation-credential.js";
+
 // ── X25519 Key Transfer (multi-device pairing) ─────────────────────
 
 export {
