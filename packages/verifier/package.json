@@ -22,6 +22,7 @@
     "LICENSE",
     "README.md"
   ],
+  "sideEffects": false,
   "license": "MIT",
   "keywords": [
     "motebit",
@@ -47,13 +48,21 @@
   "publishConfig": {
     "access": "public"
   },
+  "motebit": {
+    "implements": [
+      "spec/identity-v1.md",
+      "spec/credential-v1.md"
+    ]
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint --parser-options=project:tsconfig.eslint.json src/",
-    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+    "lint:pack": "publint --strict && attw --pack --profile esm-only",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@motebit/crypto": "workspace:*"
