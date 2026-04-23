@@ -1605,6 +1605,9 @@ importers:
       '@motebit/policy':
         specifier: workspace:*
         version: link:../policy
+      '@motebit/policy-invariants':
+        specifier: workspace:*
+        version: link:../policy-invariants
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../privacy-layer

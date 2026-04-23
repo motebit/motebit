@@ -34,6 +34,7 @@
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/core-identity": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
+    "@motebit/policy-invariants": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/render-engine": "workspace:*",
     "@motebit/encryption": "workspace:*",

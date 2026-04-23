@@ -40,6 +40,9 @@
       "path": "../policy"
     },
     {
+      "path": "../policy-invariants"
+    },
+    {
       "path": "../privacy-layer"
     },
     {

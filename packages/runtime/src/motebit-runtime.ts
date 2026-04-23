@@ -44,6 +44,7 @@ import { BehaviorEngine } from "@motebit/behavior-engine";
 import { IdentityManager } from "@motebit/core-identity";
 import { PrivacyLayer } from "@motebit/privacy-layer";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
+import { assertSpeciesIntegrity } from "@motebit/policy-invariants";
 import { SyncEngine } from "@motebit/sync-engine";
 import type { RenderAdapter } from "@motebit/render-engine/spec";
 import {
@@ -314,6 +315,15 @@ export class MotebitRuntime {
   private _onToolActivity: ((event: import("./streaming.js").ToolActivityEvent) => void) | null;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
+    // Defense-in-depth: trip the species-constraint tamper detection as
+    // early as possible, before any runtime state is constructed. Throws
+    // loudly if @motebit/sdk's SPECIES_CONSTRAINTS have been tampered
+    // with (runtime mutation, dependency substitution, accidental
+    // regression). Companion to the four CI-time tamper tests in
+    // @motebit/policy-invariants. See docs/doctrine/security-boundaries.md
+    // for the broader tamper-detection pattern.
+    assertSpeciesIntegrity();
+
     this.motebitId = config.motebitId;
     this._deviceId = config.deviceId ?? "runtime-default";
     this._onToolInvocation = config.onToolInvocation ?? null;
