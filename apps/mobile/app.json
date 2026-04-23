@@ -9,7 +9,10 @@
     "platforms": ["ios", "android"],
     "newArchEnabled": false,
     "ios": {
-      "bundleIdentifier": "com.motebit.mobile"
+      "bundleIdentifier": "com.motebit.mobile",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "plugins": [
       "expo-sqlite",
@@ -22,7 +25,14 @@
       "expo-asset",
       "expo-font",
       "expo-router",
-      "expo-secure-store"
-    ]
+      "expo-secure-store",
+      "expo-audio"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "648172a3-4e9d-46d7-a4bd-fc7e4d975bfc"
+      }
+    }
   }
 }

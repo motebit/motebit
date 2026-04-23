@@ -4,29 +4,38 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mocks
 // ---------------------------------------------------------------------------
 
-let mockRecording: {
-  stopAndUnloadAsync: ReturnType<typeof vi.fn>;
-  getURI: ReturnType<typeof vi.fn>;
+let mockRecorder: {
+  prepareToRecordAsync: ReturnType<typeof vi.fn>;
+  record: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+  uri: string | null;
 };
 
 const mockRequestPermissions = vi.fn();
 const mockSetAudioMode = vi.fn();
-const mockCreateRecording = vi.fn();
+const mockRecorderCtor = vi.fn();
 const mockGetInfoAsync = vi.fn();
 const mockUploadAsync = vi.fn();
 
-vi.mock("expo-av", () => ({
-  Audio: {
-    requestPermissionsAsync: (...args: unknown[]) => mockRequestPermissions(...args),
-    setAudioModeAsync: (...args: unknown[]) => mockSetAudioMode(...args),
-    Recording: {
-      createAsync: (...args: unknown[]) => mockCreateRecording(...args),
-    },
-    RecordingOptionsPresets: {
+vi.mock("expo-audio", () => {
+  class MockAudioRecorder {
+    constructor(opts: unknown) {
+      mockRecorderCtor(opts);
+      // eslint-disable-next-line no-constructor-return
+      return mockRecorder as unknown as object;
+    }
+  }
+  return {
+    AudioModule: { AudioRecorder: MockAudioRecorder },
+    AudioRecorder: MockAudioRecorder,
+    RecordingPresets: {
       HIGH_QUALITY: {},
+      LOW_QUALITY: {},
     },
-  },
-}));
+    requestRecordingPermissionsAsync: (...args: unknown[]) => mockRequestPermissions(...args),
+    setAudioModeAsync: (...args: unknown[]) => mockSetAudioMode(...args),
+  };
+});
 
 vi.mock("expo-file-system/legacy", () => ({
   getInfoAsync: (...args: unknown[]) => mockGetInfoAsync(...args),
@@ -36,14 +45,14 @@ vi.mock("expo-file-system/legacy", () => ({
   },
 }));
 
-import { ExpoAVSTTProvider } from "../adapters/expo-av-stt.js";
+import { ExpoAudioSTTProvider } from "../adapters/expo-audio-stt.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function makeProvider(overrides?: { apiKey?: string; model?: string; language?: string }) {
-  return new ExpoAVSTTProvider({
+  return new ExpoAudioSTTProvider({
     apiKey: overrides?.apiKey ?? "test-api-key",
     model: overrides?.model,
     language: overrides?.language,
@@ -51,20 +60,21 @@ function makeProvider(overrides?: { apiKey?: string; model?: string; language?: 
 }
 
 function setupSuccessfulRecording(uri = "file:///mock/audio.m4a") {
-  mockRecording = {
-    stopAndUnloadAsync: vi.fn(async () => {}),
-    getURI: vi.fn(() => uri),
+  mockRecorder = {
+    prepareToRecordAsync: vi.fn(async () => {}),
+    record: vi.fn(),
+    stop: vi.fn(async () => {}),
+    uri,
   };
   mockRequestPermissions.mockResolvedValue({ granted: true, status: "granted" });
   mockSetAudioMode.mockResolvedValue(undefined);
-  mockCreateRecording.mockResolvedValue({ recording: mockRecording });
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("ExpoAVSTTProvider", () => {
+describe("ExpoAudioSTTProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -104,10 +114,10 @@ describe("ExpoAVSTTProvider", () => {
 
       expect(mockRequestPermissions).toHaveBeenCalled();
       expect(mockSetAudioMode).toHaveBeenCalledWith({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
-      expect(mockCreateRecording).toHaveBeenCalled();
+      expect(mockRecorderCtor).toHaveBeenCalled();
     });
 
     it("fires onError when permission denied", async () => {
@@ -126,9 +136,8 @@ describe("ExpoAVSTTProvider", () => {
     });
 
     it("fires onError when recording creation fails", async () => {
-      mockRequestPermissions.mockResolvedValue({ granted: true, status: "granted" });
-      mockSetAudioMode.mockResolvedValue(undefined);
-      mockCreateRecording.mockRejectedValue(new Error("Audio hardware busy"));
+      setupSuccessfulRecording();
+      mockRecorder.prepareToRecordAsync.mockRejectedValue(new Error("Audio hardware busy"));
 
       const provider = makeProvider();
       const onError = vi.fn();
@@ -148,7 +157,7 @@ describe("ExpoAVSTTProvider", () => {
       await vi.waitFor(() => expect(provider.listening).toBe(true));
 
       provider.start(); // second call — should be ignored
-      expect(mockCreateRecording).toHaveBeenCalledTimes(1);
+      expect(mockRecorderCtor).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -176,7 +185,7 @@ describe("ExpoAVSTTProvider", () => {
       provider.stop();
       await vi.waitFor(() => expect(onEnd).toHaveBeenCalled());
 
-      expect(mockRecording.stopAndUnloadAsync).toHaveBeenCalled();
+      expect(mockRecorder.stop).toHaveBeenCalled();
       expect(onResult).toHaveBeenCalledWith("hello world", true);
       expect(provider.listening).toBe(false);
     });
@@ -265,7 +274,7 @@ describe("ExpoAVSTTProvider", () => {
       await vi.waitFor(() => expect(provider.listening).toBe(true));
 
       // Simulate no URI
-      mockRecording.getURI.mockReturnValue(null);
+      mockRecorder.uri = null;
 
       provider.stop();
       await vi.waitFor(() => expect(onEnd).toHaveBeenCalled());
@@ -328,9 +337,9 @@ describe("ExpoAVSTTProvider", () => {
   // -------------------------------------------------------------------------
 
   describe("error handling", () => {
-    it("fires onError on stopAndUnloadAsync failure", async () => {
+    it("fires onError on stop() failure", async () => {
       setupSuccessfulRecording();
-      mockRecording.stopAndUnloadAsync.mockRejectedValue(new Error("Unload failed"));
+      mockRecorder.stop.mockRejectedValue(new Error("Unload failed"));
 
       const provider = makeProvider();
       const onError = vi.fn();

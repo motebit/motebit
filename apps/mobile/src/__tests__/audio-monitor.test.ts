@@ -4,21 +4,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Mocks
 // ---------------------------------------------------------------------------
 
-// Track created recordings so tests can control their status
-let mockRecordingInstance: MockRecording;
+// Track created recorders so tests can control their status
+let mockRecorderInstance: MockRecorder;
 
-class MockRecording {
+class MockRecorder {
   private _status = {
     isRecording: true,
     metering: -30, // ~0.032 linear — near SPEECH_THRESHOLD
+    canRecord: true,
+    durationMillis: 0,
+    mediaServicesDidReset: false,
   };
-  private _uri: string | null = "file:///mock/recording.wav";
+  uri: string | null = "file:///mock/recording.wav";
 
-  stopAndUnloadAsync = vi.fn(async () => {
+  prepareToRecordAsync = vi.fn(async () => {});
+  record = vi.fn();
+  stop = vi.fn(async () => {
     this._status.isRecording = false;
   });
-  getStatusAsync = vi.fn(async () => this._status);
-  getURI = vi.fn(() => this._uri);
+  getStatus = vi.fn(() => this._status);
 
   // Test helpers
   setMetering(db: number) {
@@ -33,31 +37,32 @@ class MockRecording {
   }
 }
 
-vi.mock("expo-av", () => ({
-  Audio: {
-    requestPermissionsAsync: vi.fn(async () => ({ granted: true })),
-    setAudioModeAsync: vi.fn(async () => {}),
-    Recording: {
-      createAsync: vi.fn(async () => {
-        mockRecordingInstance = new MockRecording();
-        return { recording: mockRecordingInstance };
-      }),
-    },
-    RecordingOptionsPresets: {
+vi.mock("expo-audio", () => {
+  class MockAudioRecorder {
+    constructor(_opts: unknown) {
+      mockRecorderInstance = new MockRecorder();
+      // Return the mock instance so the adapter sees its fields directly.
+      // eslint-disable-next-line no-constructor-return
+      return mockRecorderInstance as unknown as object;
+    }
+  }
+  return {
+    AudioModule: { AudioRecorder: MockAudioRecorder },
+    AudioRecorder: MockAudioRecorder,
+    RecordingPresets: {
       LOW_QUALITY: { isMeteringEnabled: true },
+      HIGH_QUALITY: { isMeteringEnabled: true },
     },
-    Sound: {
-      createAsync: vi.fn(async () => ({
-        sound: {
-          playAsync: vi.fn(),
-          stopAsync: vi.fn(),
-          unloadAsync: vi.fn(),
-          setOnPlaybackStatusUpdate: vi.fn(),
-        },
-      })),
-    },
-  },
-}));
+    requestRecordingPermissionsAsync: vi.fn(async () => ({ granted: true })),
+    setAudioModeAsync: vi.fn(async () => {}),
+    createAudioPlayer: vi.fn(() => ({
+      play: vi.fn(),
+      pause: vi.fn(),
+      remove: vi.fn(),
+      addListener: vi.fn(() => ({ remove: vi.fn() })),
+    })),
+  };
+});
 
 vi.mock("react-native", () => ({
   Platform: { OS: "android" },
@@ -100,7 +105,7 @@ function getTick(monitor: AudioMonitor): () => Promise<void> {
  */
 async function simulateTicks(monitor: AudioMonitor, count: number, db: number): Promise<void> {
   const tick = getTick(monitor);
-  mockRecordingInstance.setMetering(db);
+  mockRecorderInstance.setMetering(db);
   for (let i = 0; i < count; i++) {
     await tick();
   }
@@ -222,7 +227,7 @@ describe("AudioMonitor", () => {
       monitor.onAudio = onAudio;
       await monitor.start();
 
-      mockRecordingInstance.setNotRecording();
+      mockRecorderInstance.setNotRecording();
       await getTick(monitor)();
 
       expect(onAudio).not.toHaveBeenCalled();
@@ -233,7 +238,7 @@ describe("AudioMonitor", () => {
       monitor.onAudio = onAudio;
       await monitor.start();
 
-      mockRecordingInstance.setMeteringUndefined();
+      mockRecorderInstance.setMeteringUndefined();
       await getTick(monitor)();
 
       expect(onAudio).not.toHaveBeenCalled();

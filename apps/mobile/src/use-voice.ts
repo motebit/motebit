@@ -47,7 +47,7 @@ import { FallbackTTSProvider, StreamingTTSQueue } from "@motebit/voice";
 import { ExpoSpeechTTSProvider } from "./adapters/expo-speech-tts";
 import { OpenAITTSProvider } from "./adapters/openai-tts";
 import { ElevenLabsTTSProvider } from "./adapters/elevenlabs-tts";
-import { ExpoAVSTTProvider } from "./adapters/expo-av-stt";
+import { ExpoAudioSTTProvider } from "./adapters/expo-audio-stt";
 import { AudioMonitor } from "./adapters/audio-monitor";
 import { SECURE_STORE_KEYS } from "./storage-keys";
 import type { MobileApp } from "./mobile-app";
@@ -132,7 +132,7 @@ export function useVoice(deps: UseVoiceDeps): UseVoiceResult {
       // STT needs an OpenAI API key for Whisper. Always re-create on
       // initVoice so the settings-save path picks up a fresh key.
       if (openaiKey != null && openaiKey !== "") {
-        sttRef.current = new ExpoAVSTTProvider({ apiKey: openaiKey });
+        sttRef.current = new ExpoAudioSTTProvider({ apiKey: openaiKey });
       } else {
         sttRef.current = null;
       }

@@ -1,16 +1,16 @@
 // ---------------------------------------------------------------------------
-// ElevenLabsTTSProvider — ElevenLabs TTS API for React Native (expo-av playback)
+// ElevenLabsTTSProvider — ElevenLabs TTS API for React Native (expo-audio playback)
 // ---------------------------------------------------------------------------
 //
 // NOTE: A platform-agnostic version of this adapter exists in
 // @motebit/voice (packages/voice/src/elevenlabs-tts.ts) which uses the
-// Web Audio API for playback. This mobile-specific version uses expo-av
-// and expo-file-system because React Native does not support AudioContext.
-// If the API call logic changes, update both adapters — they share a wire
-// format contract with the ElevenLabs REST API.
+// Web Audio API for playback. This mobile-specific version uses
+// expo-audio and expo-file-system because React Native does not support
+// AudioContext. If the API call logic changes, update both adapters —
+// they share a wire format contract with the ElevenLabs REST API.
 // ---------------------------------------------------------------------------
 
-import { Audio } from "expo-av";
+import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import type { TTSProvider, TTSOptions } from "@motebit/voice";
 
@@ -44,7 +44,7 @@ export type ElevenLabsVoiceName = keyof typeof ELEVENLABS_VOICES;
 export class ElevenLabsTTSProvider implements TTSProvider {
   private _speaking = false;
   private _cancelled = false;
-  private _sound: Audio.Sound | null = null;
+  private _player: AudioPlayer | null = null;
   private readonly apiKey: string;
   private readonly voiceId: string;
   private readonly model: string;
@@ -89,9 +89,9 @@ export class ElevenLabsTTSProvider implements TTSProvider {
 
     try {
       // Ensure audio mode allows playback
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
       });
 
       // Call ElevenLabs TTS API
@@ -144,26 +144,31 @@ export class ElevenLabsTTSProvider implements TTSProvider {
         return;
       }
 
-      // Play via expo-av
-      const { sound } = await Audio.Sound.createAsync({ uri: tempPath });
-      this._sound = sound;
+      // Play via expo-audio
+      const player = createAudioPlayer({ uri: tempPath });
+      this._player = player;
 
       await new Promise<void>((resolve, reject) => {
-        sound.setOnPlaybackStatusUpdate((status) => {
-          if ("didJustFinish" in status && status.didJustFinish) {
+        const sub = player.addListener("playbackStatusUpdate", (status) => {
+          if (status.didJustFinish) {
+            sub.remove();
             this._cleanup(tempPath);
             resolve();
           }
         });
         if (this._cancelled) {
+          sub.remove();
           this._cleanup(tempPath);
           resolve();
           return;
         }
-        sound.playAsync().catch((err: unknown) => {
+        try {
+          player.play();
+        } catch (err: unknown) {
+          sub.remove();
           this._cleanup(tempPath);
           reject(err instanceof Error ? err : new Error(String(err)));
-        });
+        }
       });
     } catch (err) {
       this._speaking = false;
@@ -173,17 +178,25 @@ export class ElevenLabsTTSProvider implements TTSProvider {
 
   cancel(): void {
     this._cancelled = true;
-    if (this._sound) {
-      void this._sound.stopAsync().catch(() => {});
+    if (this._player) {
+      try {
+        this._player.pause();
+      } catch {
+        // player may already be unloaded
+      }
     }
     this._cleanup();
   }
 
   private _cleanup(tempPath?: string): void {
     this._speaking = false;
-    if (this._sound) {
-      void this._sound.unloadAsync().catch(() => {});
-      this._sound = null;
+    if (this._player) {
+      try {
+        this._player.remove();
+      } catch {
+        // double-remove is harmless
+      }
+      this._player = null;
     }
     if (tempPath != null && tempPath !== "") {
       void FileSystem.deleteAsync(tempPath, { idempotent: true }).catch(() => {});

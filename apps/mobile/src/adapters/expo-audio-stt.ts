@@ -1,15 +1,21 @@
 // ---------------------------------------------------------------------------
-// ExpoAVSTTProvider — expo-av recording + Whisper API transcription
+// ExpoAudioSTTProvider — expo-audio recording + Whisper API transcription
 // ---------------------------------------------------------------------------
 
-import { Audio } from "expo-av";
+import {
+  AudioModule,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  type AudioRecorder,
+} from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import type { STTProvider, STTOptions } from "@motebit/voice";
 
 /**
- * Configuration for the Expo AV STT provider.
+ * Configuration for the Expo Audio STT provider.
  */
-export interface ExpoAVSTTConfig {
+export interface ExpoAudioSTTConfig {
   /** OpenAI API key for Whisper transcription. */
   apiKey: string;
   /** Whisper model, default "whisper-1". */
@@ -19,7 +25,7 @@ export interface ExpoAVSTTConfig {
 }
 
 /**
- * STTProvider that records audio via expo-av and transcribes via OpenAI
+ * STTProvider that records audio via expo-audio and transcribes via OpenAI
  * Whisper API.
  *
  * Flow: start() -> records audio -> stop() -> uploads to Whisper -> fires
@@ -29,16 +35,16 @@ export interface ExpoAVSTTConfig {
  * provider only emits a single final result after stop() is called,
  * because Whisper is a batch API.
  */
-export class ExpoAVSTTProvider implements STTProvider {
+export class ExpoAudioSTTProvider implements STTProvider {
   private _listening = false;
-  private _recording: Audio.Recording | null = null;
-  private readonly config: ExpoAVSTTConfig;
+  private _recorder: AudioRecorder | null = null;
+  private readonly config: ExpoAudioSTTConfig;
 
   onResult: ((transcript: string, isFinal: boolean) => void) | null = null;
   onError: ((error: string) => void) | null = null;
   onEnd: (() => void) | null = null;
 
-  constructor(config: ExpoAVSTTConfig) {
+  constructor(config: ExpoAudioSTTConfig) {
     this.config = config;
   }
 
@@ -64,21 +70,21 @@ export class ExpoAVSTTProvider implements STTProvider {
 
   private async _startRecording(): Promise<void> {
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
+      const { granted } = await requestRecordingPermissionsAsync();
       if (!granted) {
         this.onError?.("Microphone permission denied");
         return;
       }
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      this._recording = recording;
+      const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      this._recorder = recorder;
       this._listening = true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -87,16 +93,16 @@ export class ExpoAVSTTProvider implements STTProvider {
   }
 
   private async _stopAndTranscribe(): Promise<void> {
-    if (!this._recording) {
+    if (!this._recorder) {
       this._listening = false;
       this.onEnd?.();
       return;
     }
 
     try {
-      await this._recording.stopAndUnloadAsync();
-      const uri = this._recording.getURI();
-      this._recording = null;
+      await this._recorder.stop();
+      const uri = this._recorder.uri;
+      this._recorder = null;
       this._listening = false;
 
       if (uri == null || uri === "") {
@@ -104,7 +110,7 @@ export class ExpoAVSTTProvider implements STTProvider {
         return;
       }
 
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      await setAudioModeAsync({ allowsRecording: false });
 
       const transcript = await this._transcribe(uri);
       if (transcript !== "") {

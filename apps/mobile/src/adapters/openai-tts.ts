@@ -1,15 +1,16 @@
 // ---------------------------------------------------------------------------
-// OpenAITTSProvider — OpenAI TTS API for React Native (expo-av playback)
+// OpenAITTSProvider — OpenAI TTS API for React Native (expo-audio playback)
 // ---------------------------------------------------------------------------
 //
 // NOTE: A platform-agnostic version of this adapter exists in
 // @motebit/voice (packages/voice/src/openai-tts.ts) which uses the
-// Web Audio API for playback. This mobile-specific version uses expo-av
-// and expo-file-system because React Native does not support AudioContext.
-// If the API call logic changes, update both adapters.
+// Web Audio API for playback. This mobile-specific version uses
+// expo-audio and expo-file-system because React Native does not
+// support AudioContext. If the API call logic changes, update both
+// adapters.
 // ---------------------------------------------------------------------------
 
-import { Audio } from "expo-av";
+import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import type { TTSProvider, TTSOptions } from "@motebit/voice";
 
@@ -19,15 +20,15 @@ export { TTS_VOICES };
 
 /**
  * TTSProvider that calls the OpenAI TTS REST endpoint directly and plays
- * the returned MP3 via expo-av. The API key is passed at construction —
+ * the returned MP3 via expo-audio. The API key is passed at construction —
  * it should come from expo-secure-store (never hardcoded).
  *
- * Flow: speak() → POST /v1/audio/speech → save MP3 to cache → Audio.Sound.play()
+ * Flow: speak() → POST /v1/audio/speech → save MP3 to cache → AudioPlayer.play()
  */
 export class OpenAITTSProvider implements TTSProvider {
   private _speaking = false;
   private _cancelled = false;
-  private _sound: Audio.Sound | null = null;
+  private _player: AudioPlayer | null = null;
   private readonly apiKey: string;
   private readonly voice: string;
   private readonly model: string;
@@ -48,9 +49,9 @@ export class OpenAITTSProvider implements TTSProvider {
 
     try {
       // Ensure audio mode allows playback
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
       });
 
       // Call OpenAI TTS API
@@ -97,26 +98,31 @@ export class OpenAITTSProvider implements TTSProvider {
         return;
       }
 
-      // Play via expo-av
-      const { sound } = await Audio.Sound.createAsync({ uri: tempPath });
-      this._sound = sound;
+      // Play via expo-audio
+      const player = createAudioPlayer({ uri: tempPath });
+      this._player = player;
 
       await new Promise<void>((resolve, reject) => {
-        sound.setOnPlaybackStatusUpdate((status) => {
-          if ("didJustFinish" in status && status.didJustFinish) {
+        const sub = player.addListener("playbackStatusUpdate", (status) => {
+          if (status.didJustFinish) {
+            sub.remove();
             this._cleanup(tempPath);
             resolve();
           }
         });
         if (this._cancelled) {
+          sub.remove();
           this._cleanup(tempPath);
           resolve();
           return;
         }
-        sound.playAsync().catch((err: unknown) => {
+        try {
+          player.play();
+        } catch (err: unknown) {
+          sub.remove();
           this._cleanup(tempPath);
           reject(err instanceof Error ? err : new Error(String(err)));
-        });
+        }
       });
     } catch (err) {
       this._speaking = false;
@@ -126,17 +132,25 @@ export class OpenAITTSProvider implements TTSProvider {
 
   cancel(): void {
     this._cancelled = true;
-    if (this._sound) {
-      void this._sound.stopAsync().catch(() => {});
+    if (this._player) {
+      try {
+        this._player.pause();
+      } catch {
+        // player may already be unloaded
+      }
     }
     this._cleanup();
   }
 
   private _cleanup(tempPath?: string): void {
     this._speaking = false;
-    if (this._sound) {
-      void this._sound.unloadAsync().catch(() => {});
-      this._sound = null;
+    if (this._player) {
+      try {
+        this._player.remove();
+      } catch {
+        // double-remove is harmless
+      }
+      this._player = null;
     }
     if (tempPath != null && tempPath !== "") {
       void FileSystem.deleteAsync(tempPath, { idempotent: true }).catch(() => {});

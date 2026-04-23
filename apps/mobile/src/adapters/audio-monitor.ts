@@ -1,10 +1,10 @@
 /**
  * Ambient audio monitor for mobile creature reactivity.
  *
- * Uses expo-av Recording with metering enabled to capture microphone levels.
- * Since expo-av only provides a single dB metering value (no FFT/frequency bands),
- * we synthesize band-like variation using different EMA smoothing constants
- * and phase-shifted derivatives of the metering signal.
+ * Uses expo-audio's AudioRecorder with metering enabled to capture microphone
+ * levels. Since only a single dB metering value is available (no FFT/frequency
+ * bands), we synthesize band-like variation using different EMA smoothing
+ * constants and phase-shifted derivatives of the metering signal.
  *
  * The result is an AudioReactivity object { rms, low, mid, high } that feeds
  * into ExpoGLAdapter.setAudioReactivity() for visual modulation:
@@ -20,7 +20,14 @@
  * before re-arming (prevents rapid re-triggers).
  */
 
-import { Audio } from "expo-av";
+import {
+  AudioModule,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  type AudioRecorder,
+  type RecordingOptions,
+} from "expo-audio";
 import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import type { AudioReactivity } from "@motebit/render-engine";
@@ -28,7 +35,7 @@ import { SileroVAD, POSITIVE_THRESHOLD } from "./silero-vad";
 
 /** Convert dB metering value (-160..0) to linear amplitude (0..1). */
 function dbToLinear(db: number): number {
-  // expo-av reports -160 for silence, 0 for max
+  // expo-audio reports dB (typically -160 for silence, 0 for max)
   const clamped = Math.max(-60, Math.min(0, db));
   return Math.pow(10, clamped / 20);
 }
@@ -46,23 +53,23 @@ const SILERO_COOLDOWN_MS = 2000;
  * Recording options for Silero VAD confirmation (iOS only).
  * WAV format, 16kHz mono 16-bit LE — Silero's expected input format.
  */
-const SILERO_RECORDING_OPTIONS: Audio.RecordingOptions = {
+const SILERO_RECORDING_OPTIONS: RecordingOptions = {
   isMeteringEnabled: true,
+  extension: ".wav",
+  sampleRate: 16000,
+  numberOfChannels: 1,
+  bitRate: 256000,
   android: {
     extension: ".3gp",
-    outputFormat: 2, // THREE_GPP
-    audioEncoder: 1, // AMR_NB
+    outputFormat: "3gp",
+    audioEncoder: "amr_nb",
     sampleRate: 44100,
-    numberOfChannels: 1,
-    bitRate: 128000,
   },
   ios: {
     extension: ".wav",
     outputFormat: "lpcm",
     audioQuality: 32, // LOW
     sampleRate: 16000,
-    numberOfChannels: 1,
-    bitRate: 256000,
     linearPCMBitDepth: 16,
     linearPCMIsBigEndian: false,
     linearPCMIsFloat: false,
@@ -132,7 +139,7 @@ function parseWavPcm(base64: string): Float32Array {
 }
 
 export class AudioMonitor {
-  private recording: Audio.Recording | null = null;
+  private recorder: AudioRecorder | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private _running = false;
 
@@ -175,26 +182,24 @@ export class AudioMonitor {
   async start(): Promise<void> {
     if (this._running) return;
 
-    const { granted } = await Audio.requestPermissionsAsync();
+    const { granted } = await requestRecordingPermissionsAsync();
     if (!granted) return;
 
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
+    await setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
     });
 
     // Use WAV recording when neural VAD is enabled on iOS (Silero needs PCM)
     const useNeuralVad = this.neuralVadEnabled && Platform.OS === "ios";
-    const recordingOptions = useNeuralVad
+    const recordingOptions: Partial<RecordingOptions> = useNeuralVad
       ? SILERO_RECORDING_OPTIONS
-      : Audio.RecordingOptionsPresets.LOW_QUALITY;
+      : { ...RecordingPresets.LOW_QUALITY, isMeteringEnabled: true };
 
-    const { recording } = await Audio.Recording.createAsync(
-      recordingOptions,
-      null,
-      100, // status update interval (ms) — not used, we poll manually
-    );
-    this.recording = recording;
+    const recorder = new AudioModule.AudioRecorder(recordingOptions);
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+    this.recorder = recorder;
     this._running = true;
 
     // Lazily init Silero on first start
@@ -236,19 +241,19 @@ export class AudioMonitor {
       this.timer = null;
     }
 
-    if (this.recording) {
+    if (this.recorder) {
       try {
-        await this.recording.stopAndUnloadAsync();
+        await this.recorder.stop();
       } catch {
         // May already be stopped
       }
-      this.recording = null;
+      this.recorder = null;
     }
 
     // Reset audio mode
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
+      await setAudioModeAsync({
+        allowsRecording: false,
       });
     } catch {
       // Non-fatal
@@ -272,10 +277,10 @@ export class AudioMonitor {
   }
 
   private async tick(): Promise<void> {
-    if (!this.recording || !this._running) return;
+    if (!this.recorder || !this._running) return;
 
     try {
-      const status = await this.recording.getStatusAsync();
+      const status = this.recorder.getStatus();
       if (!status.isRecording || status.metering === undefined) return;
 
       const linear = dbToLinear(status.metering);
@@ -360,15 +365,15 @@ export class AudioMonitor {
    */
   private async confirmWithSilero(): Promise<void> {
     try {
-      if (!this.recording || !this.sileroVad) {
+      if (!this.recorder || !this.sileroVad) {
         this.confirming = false;
         return;
       }
 
       // 1. Stop recording and get the WAV file URI
-      await this.recording.stopAndUnloadAsync();
-      const uri = this.recording.getURI();
-      this.recording = null;
+      await this.recorder.stop();
+      const uri = this.recorder.uri;
+      this.recorder = null;
 
       if (uri == null || uri === "") {
         this.confirming = false;
@@ -425,18 +430,20 @@ export class AudioMonitor {
     if (!this._running) return;
 
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
 
       const useNeuralVad = this.neuralVadEnabled && Platform.OS === "ios";
-      const recordingOptions = useNeuralVad
+      const recordingOptions: Partial<RecordingOptions> = useNeuralVad
         ? SILERO_RECORDING_OPTIONS
-        : Audio.RecordingOptionsPresets.LOW_QUALITY;
+        : { ...RecordingPresets.LOW_QUALITY, isMeteringEnabled: true };
 
-      const { recording } = await Audio.Recording.createAsync(recordingOptions, null, 100);
-      this.recording = recording;
+      const recorder = new AudioModule.AudioRecorder(recordingOptions);
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      this.recorder = recorder;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console

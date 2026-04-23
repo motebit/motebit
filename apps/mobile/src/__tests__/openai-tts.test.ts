@@ -5,19 +5,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 const mockSetAudioMode = vi.fn();
-const mockSoundStop = vi.fn();
-const mockSoundUnload = vi.fn();
-const mockCreateSound = vi.fn();
+const mockPlayerPause = vi.fn();
+const mockPlayerRemove = vi.fn();
+const mockCreatePlayer = vi.fn();
 const mockWriteString = vi.fn();
 const mockDeleteAsync = vi.fn();
 
-vi.mock("expo-av", () => ({
-  Audio: {
-    setAudioModeAsync: (...args: unknown[]) => mockSetAudioMode(...args),
-    Sound: {
-      createAsync: (...args: unknown[]) => mockCreateSound(...args),
-    },
-  },
+vi.mock("expo-audio", () => ({
+  setAudioModeAsync: (...args: unknown[]) => mockSetAudioMode(...args),
+  createAudioPlayer: (...args: unknown[]) => mockCreatePlayer(...args),
 }));
 
 vi.mock("expo-file-system/legacy", () => ({
@@ -74,26 +70,27 @@ function mockFetchError(status = 500) {
 }
 
 /**
- * Set up Sound mock that immediately finishes playback
+ * Set up AudioPlayer mock that immediately finishes playback
  * when play is called.
  */
 function setupSoundAutoFinish() {
-  let playbackCallback: ((status: unknown) => void) | null = null;
+  let playbackCallback: ((status: { didJustFinish: boolean }) => void) | null = null;
 
-  const sound = {
-    playAsync: vi.fn(async () => {
-      // Trigger didJustFinish immediately
-      playbackCallback?.({ didJustFinish: true });
+  const player = {
+    play: vi.fn(() => {
+      // Trigger didJustFinish on next microtask
+      queueMicrotask(() => playbackCallback?.({ didJustFinish: true }));
     }),
-    stopAsync: mockSoundStop.mockResolvedValue(undefined),
-    unloadAsync: mockSoundUnload.mockResolvedValue(undefined),
-    setOnPlaybackStatusUpdate: vi.fn((cb: (status: unknown) => void) => {
+    pause: mockPlayerPause,
+    remove: mockPlayerRemove,
+    addListener: vi.fn((_ev: string, cb: (status: { didJustFinish: boolean }) => void) => {
       playbackCallback = cb;
+      return { remove: vi.fn() };
     }),
   };
 
-  mockCreateSound.mockResolvedValue({ sound });
-  return sound;
+  mockCreatePlayer.mockReturnValue(player);
+  return player;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,8 +182,8 @@ describe("OpenAITTSProvider", () => {
 
       // Audio mode set for playback
       expect(mockSetAudioMode).toHaveBeenCalledWith({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
+        allowsRecording: false,
+        playsInSilentMode: true,
       });
 
       // Fetch called with correct URL and headers
@@ -214,7 +211,7 @@ describe("OpenAITTSProvider", () => {
       );
 
       // Sound created and played
-      expect(mockCreateSound).toHaveBeenCalled();
+      expect(mockCreatePlayer).toHaveBeenCalled();
     });
 
     it("speaking is false after speak() resolves", async () => {
@@ -295,7 +292,7 @@ describe("OpenAITTSProvider", () => {
       await provider.speak("test");
 
       // Should not have created a sound because _cancelled was set
-      expect(mockCreateSound).not.toHaveBeenCalled();
+      expect(mockCreatePlayer).not.toHaveBeenCalled();
       expect(provider.speaking).toBe(false);
     });
   });
@@ -318,39 +315,39 @@ describe("OpenAITTSProvider", () => {
       expect(() => provider.cancel()).not.toThrow();
     });
 
-    it("stops and unloads sound when active", () => {
-      const sound = {
-        playAsync: vi.fn(async () => {}),
-        stopAsync: vi.fn(async () => {}),
-        unloadAsync: vi.fn(async () => {}),
-        setOnPlaybackStatusUpdate: vi.fn(),
+    it("stops and unloads player when active", () => {
+      const player = {
+        play: vi.fn(),
+        pause: vi.fn(),
+        remove: vi.fn(),
+        addListener: vi.fn(() => ({ remove: vi.fn() })),
       };
 
       const provider = makeProvider();
-      // Set internal _sound to simulate active playback
-      (provider as unknown as { _sound: unknown })._sound = sound;
+      // Set internal _player to simulate active playback
+      (provider as unknown as { _player: unknown })._player = player;
 
       provider.cancel();
 
-      expect(sound.stopAsync).toHaveBeenCalled();
-      expect(sound.unloadAsync).toHaveBeenCalled();
+      expect(player.pause).toHaveBeenCalled();
+      expect(player.remove).toHaveBeenCalled();
       expect(provider.speaking).toBe(false);
     });
 
-    it("nulls the sound reference after cancel", () => {
-      const sound = {
-        playAsync: vi.fn(async () => {}),
-        stopAsync: vi.fn(async () => {}),
-        unloadAsync: vi.fn(async () => {}),
-        setOnPlaybackStatusUpdate: vi.fn(),
+    it("nulls the player reference after cancel", () => {
+      const player = {
+        play: vi.fn(),
+        pause: vi.fn(),
+        remove: vi.fn(),
+        addListener: vi.fn(() => ({ remove: vi.fn() })),
       };
 
       const provider = makeProvider();
-      (provider as unknown as { _sound: unknown })._sound = sound;
+      (provider as unknown as { _player: unknown })._player = player;
 
       provider.cancel();
 
-      expect((provider as unknown as { _sound: unknown })._sound).toBeNull();
+      expect((provider as unknown as { _player: unknown })._player).toBeNull();
     });
   });
 
@@ -372,14 +369,14 @@ describe("OpenAITTSProvider", () => {
       );
     });
 
-    it("unloads sound after playback", async () => {
+    it("removes player after playback", async () => {
       mockFetchSuccess();
-      const sound = setupSoundAutoFinish();
+      const player = setupSoundAutoFinish();
 
       const provider = makeProvider();
       await provider.speak("test");
 
-      expect(sound.unloadAsync).toHaveBeenCalled();
+      expect(player.remove).toHaveBeenCalled();
     });
   });
 });

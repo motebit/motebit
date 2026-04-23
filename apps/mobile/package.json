@@ -51,7 +51,7 @@
     "events": "^3.3.0",
     "expo": "~55.0.17",
     "expo-asset": "^55.0.16",
-    "expo-av": "~16.0.8",
+    "expo-audio": "~55.0.14",
     "expo-constants": "^55.0.15",
     "expo-dev-client": "^55.0.28",
     "expo-file-system": "~55.0.17",
