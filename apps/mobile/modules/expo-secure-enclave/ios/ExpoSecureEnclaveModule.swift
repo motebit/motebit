@@ -74,6 +74,8 @@ public class ExpoSecureEnclaveModule: Module {
 /// Mirror of the TS call shape. ExpoModulesCore synthesizes the
 /// JS-to-Swift conversion via the `Record` protocol.
 public struct SeMintArgs: Record {
+  public init() {}
+
   @Field
   var motebitId: String = ""
 
