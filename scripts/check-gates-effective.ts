@@ -586,6 +586,21 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
         `import { clusterBySimilarity } from "@motebit/memory-graph";\nimport type { MemoryNode } from "@motebit/sdk";\nexport async function rogueConsolidate(\n  nodes: MemoryNode[],\n  memory: { formMemory: (...a: unknown[]) => Promise<unknown>; deleteMemory: (id: string) => Promise<void> },\n): Promise<void> {\n  const clusters = clusterBySimilarity(nodes, 0.6);\n  for (const cluster of clusters) {\n    if (cluster.length < 2) continue;\n    // pretend to summarize via an LLM here\n    const summary = "summarize: " + cluster.map((n) => n.content).join(" / ");\n    await memory.formMemory({ content: summary }, [], 0);\n    for (const n of cluster) await memory.deleteMemory(n.node_id);\n  }\n}\n`,
       ),
   },
+  {
+    script: "check-tool-modes",
+    proves:
+      "flags a ToolDefinition literal in packages/tools/src/builtins that lacks the `mode:` field — writing a fixture file with a complete definition minus the mode tag must trip the gate",
+    perturb: () =>
+      // Fixture: a ToolDefinition literal without a `mode` field. This
+      // is the exact shape the gate exists to prevent — a new builtin
+      // shipping without a cost-tier tag, which would sort to the
+      // bottom of the registry and silently nullify the hybrid-engine
+      // preference.
+      writeFixture(
+        `packages/tools/src/builtins/${PROBE_PREFIX}untagged_tool.ts`,
+        `import type { ToolDefinition } from "@motebit/sdk";\nexport const untaggedProbeDefinition: ToolDefinition = {\n  name: "untagged_probe",\n  description: "Probe fixture — intentionally missing mode tag.",\n  inputSchema: { type: "object", properties: {} },\n};\n`,
+      ),
+  },
 ];
 
 /**
