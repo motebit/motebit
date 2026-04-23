@@ -43,7 +43,22 @@ export interface FullConfig {
   motebit_id?: string;
   device_id?: string;
   device_public_key?: string;
-  /** @deprecated Plaintext key — migrated to cli_encrypted_key on next launch. */
+  /**
+   * @deprecated since 1.0.0, removed in 2.0.0. Use `cli_encrypted_key` instead.
+   *
+   * Reason: pre-encryption legacy shape. Storing a private key as hex
+   * plaintext on disk was a security downgrade; the encrypted replacement
+   * derives a key from a user passphrase via scrypt and AES-GCM-encrypts
+   * the private bytes.
+   *
+   * This field is a state-shape migrator slot, not an API surface —
+   * readers exist only to consume legacy configs once per machine, then
+   * rewrite as `cli_encrypted_key` and delete this field (see
+   * `apps/cli/src/index.ts` bootstrap and `subcommands/attest.ts`). Per
+   * `docs/doctrine/migration-cleanup.md`: rewrite-on-read shrinks the
+   * holder count each launch. At 2.0.0 the migrator is removed; configs
+   * that still carry this field will hard-error with a reset instruction.
+   */
   cli_private_key?: string;
   cli_encrypted_key?: {
     ciphertext: string; // hex

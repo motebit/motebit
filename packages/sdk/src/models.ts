@@ -50,9 +50,12 @@ export const LOCAL_SERVER_SUGGESTED_MODELS = [
 ] as const;
 
 /**
- * @deprecated Use `LOCAL_SERVER_SUGGESTED_MODELS`. The old name implied the
- * list was Ollama-specific; in fact every entry runs on every supported
- * local inference server. Historical alias retained for one release cycle.
+ * @deprecated since 1.0.0, removed in 2.0.0. Use {@link LOCAL_SERVER_SUGGESTED_MODELS} instead.
+ *
+ * Reason: the old name implied the list was Ollama-specific, but every
+ * entry runs on every supported local inference server (Ollama, LM Studio,
+ * llama.cpp, vLLM). Vendor-neutral naming matches the runtime's
+ * `"local-server"` provider discriminator.
  */
 export const OLLAMA_SUGGESTED_MODELS = LOCAL_SERVER_SUGGESTED_MODELS;
 
@@ -102,6 +105,11 @@ export type AnthropicModel = (typeof ANTHROPIC_MODELS)[number];
 export type OpenAIModel = (typeof OPENAI_MODELS)[number];
 export type GoogleModel = (typeof GOOGLE_MODELS)[number];
 export type LocalServerSuggestedModel = (typeof LOCAL_SERVER_SUGGESTED_MODELS)[number];
-/** @deprecated Use `LocalServerSuggestedModel`. */
+/**
+ * @deprecated since 1.0.0, removed in 2.0.0. Use {@link LocalServerSuggestedModel} instead.
+ *
+ * Reason: paired with {@link OLLAMA_SUGGESTED_MODELS}. Vendor-neutral
+ * naming for the same underlying model set.
+ */
 export type OllamaSuggestedModel = LocalServerSuggestedModel;
 export type ProxyModel = (typeof PROXY_MODELS)[number];
