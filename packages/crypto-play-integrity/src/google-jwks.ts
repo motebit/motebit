@@ -1,28 +1,44 @@
 /**
- * Pinned Google Play Integrity JWKS.
+ * Pinned Google Play Integrity JWKS — design scope note.
  *
- * This constant is the root of trust for every `platform: "play_integrity"`
- * hardware-attestation claim. Pinning is the self-attesting contract — a
- * verifier that dynamically fetched Google's JWKS would have no sovereign
- * story, because a third party auditing our output could never reproduce
- * the decision without trusting our fetch path. By committing the exact
- * keys we accept, anyone can audit this file, pin the same keys in their
- * own verifier, and reach the same yes/no answer.
+ * **State of v1:** the acceptance set is empty. The verifier is fail-closed
+ * by default — every real token is rejected until an operator has made the
+ * design decisions described below and pinned real bytes.
  *
- * Upstream fetch URL (for operators reviewing or advancing the pinned
- * set): https://www.gstatic.com/play-integrity/jwks
+ * **Design gap to close before real traffic:** Google Play Integrity
+ * tokens are NOT plain JWS signed by a publicly-discoverable JWKS. The
+ * modern protocol (2023+) returns JWE (encrypted) tokens; the receiver
+ * either
+ *   (a) sends the encrypted token to Google's Play Integrity API for
+ *       server-side decryption + verification — a network-bound
+ *       verification path, and
+ *   (b) decrypts locally using a decryption key the developer downloads
+ *       from their Play Console (per-app, private, not committable), then
+ *       verifies the inner signature with Google's signing key rotated on
+ *       Google's schedule.
  *
- * Rotation caveats: Google rotates signing keys on a published cadence
- * (kid values change, new JWKs added, old JWKs retired). When a rotation
- * lands upstream, the operator pass is:
- *   1. Fetch the new JWKS from the gstatic URL above.
- *   2. Diff against `GOOGLE_PLAY_INTEGRITY_JWKS` here.
- *   3. Land the additive entries as a named commit (preserving the old
- *      entries during the rotation window so in-flight receipts still
- *      verify).
- *   4. Once upstream retires the old kid, land the subtractive commit.
- * This is a judgment call — it belongs in BSL with the rest of the
- * chain-validation policy.
+ * Neither path maps onto the pinned-public-JWKS model this file was
+ * scaffolded under. The verifier's other steps (nonce re-derivation,
+ * package binding, device-integrity floor, structured fail-closed result
+ * shape) are sound and reusable once the key-acquisition path is
+ * redesigned. The operator pass is:
+ *   1. Decide between (a) Google-side decryption or (b) local decryption
+ *      + public-key verification. Motebit's sovereignty posture favors
+ *      (b), which requires committing the signing-key JWKS (public,
+ *      rotation-published) AND wiring the private decryption key via a
+ *      secret-management path (keyring, not this file).
+ *   2. If (b): capture Google's Play Integrity signing keys from the
+ *      Android developer documentation (the URL moves and is versioned
+ *      per console; there is no single stable `gstatic` endpoint) and
+ *      land them in `GOOGLE_PLAY_INTEGRITY_JWKS` below.
+ *   3. Wire the operator decryption key through a secret source before
+ *      `verifyPlayIntegrityToken` runs — the current function assumes
+ *      it's already handed a decrypted JWT.
+ *
+ * **Test path works today.** Tests inject a fabricated JWKS via the
+ * `pinnedJwks` override, and every verify branch is exercised end-to-end
+ * against that injected set. The verifier's structure is stable; only the
+ * production key-acquisition layer is missing.
  *
  * Shape matches IETF RFC 7517 JSON Web Key Set. The verifier consumes
  * `kty`, `crv`, `alg`, `kid`, `x`, `y` for ES256 keys and `kty`, `alg`,
@@ -56,19 +72,10 @@ export interface GoogleJwks {
 }
 
 /**
- * Pinned acceptance set. Empty array at landing — the first real pin
- * lands the moment a human operator runs the rotation procedure above
- * against production receipts. Tests fabricate their own JWKS (via the
- * `pinnedJwks` override on `verifyPlayIntegrityToken`) so every verify
- * branch is exercised without a real Google-signed fixture.
- *
- * Leaving the production pin empty keeps the verifier fail-closed by
- * default — a caller that forgets to pass a `pinnedJwks` override lands
- * with zero accepted keys, and every real token is rejected with a
- * descriptive `kid not found in pinned JWKS` error. That is the right
- * default: no silent acceptance of a key the operator has never audited.
+ * Pinned acceptance set. Empty array at landing — see the file header
+ * for why this is fail-closed until an operator closes the
+ * encrypted-token design gap. Tests fabricate their own JWKS via the
+ * `pinnedJwks` override so every verify branch exercises end-to-end
+ * without a real Google-signed fixture.
  */
 export const GOOGLE_PLAY_INTEGRITY_JWKS: GoogleJwks = { keys: [] };
-
-/** Wire format identifier for the Play Integrity JWT acceptance set. */
-export const GOOGLE_PLAY_INTEGRITY_JWKS_URL = "https://www.gstatic.com/play-integrity/jwks";

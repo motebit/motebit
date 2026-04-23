@@ -2,9 +2,20 @@
 
 Google Play Integrity JWT verifier. BSL-1.1, Layer 2. Sibling of `@motebit/crypto-appattest` — the Android metabolic leaf that `@motebit/crypto`'s `HardwareAttestationClaim` dispatcher calls when a claim declares `platform: "play_integrity"`.
 
+## Scope note — v1 is not-yet-production
+
+Google's real Play Integrity tokens are **JWE (encrypted) + JWS (signed)**, not plain JWS. Two verification paths exist — neither matches the pinned-public-JWKS model this package was scaffolded under:
+
+- **Google-side decryption.** The app POSTs the encrypted token to Google's Play Integrity API; Google returns the decoded claims. Network-bound, not self-verifying.
+- **Local decryption.** The app decrypts with a per-app key downloaded from Play Console (private, never committable), then verifies the inner signature against Google's rotated signing keys.
+
+The verifier in `src/verify.ts` is structurally sound (JWT parse → pinned-JWK sig-verify → cryptographic nonce-rebinding via `SHA256(canonical body)` → package binding → device-integrity floor → fail-closed result shape), and the full test suite exercises every branch against fabricated JWKS. But the production-key-acquisition layer is not wired. `GOOGLE_PLAY_INTEGRITY_JWKS` ships empty (fail-closed by default); no real-token verification happens until an operator picks a path and lands the keys.
+
+See `src/google-jwks.ts` for the operator-pass checklist.
+
 ## Why this package exists
 
-Google's Play Integrity API emits a **JWT** (not CBOR, not a raw X.509 chain). Verifying it means:
+Google's Play Integrity API emits an encrypted, signed attestation token. Verifying it means:
 
 1. Parsing the three-segment JWT (`header.payload.signature`).
 2. Asserting `header.alg` ∈ `{ ES256, RS256 }` and `header.kid` selects a key from the **pinned Google JWKS**. Pinning the JWKS bytes is the self-attesting contract — a verifier that dynamically fetches Google's keys has no sovereign story, and a third party auditing our output could never reproduce the decision without trusting our fetch path.

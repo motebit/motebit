@@ -32,12 +32,7 @@ import type { GoogleJwks } from "./google-jwks.js";
 import type { PlayIntegrityVerifyOptions, PlayIntegrityVerifyResult } from "./verify.js";
 import { verifyPlayIntegrityToken } from "./verify.js";
 
-export {
-  GOOGLE_PLAY_INTEGRITY_JWKS,
-  GOOGLE_PLAY_INTEGRITY_JWKS_URL,
-  type GoogleJwk,
-  type GoogleJwks,
-} from "./google-jwks.js";
+export { GOOGLE_PLAY_INTEGRITY_JWKS, type GoogleJwk, type GoogleJwks } from "./google-jwks.js";
 export { decodeJwt, verifyJwtSignature } from "./jwt.js";
 export type { DecodedJwt, JwtHeader, PlayIntegrityPayload } from "./jwt.js";
 export { verifyPlayIntegrityToken } from "./verify.js";
