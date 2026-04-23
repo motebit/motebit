@@ -464,11 +464,14 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       // immediately through executeGoalOnce; next_run_at shifts on the
       // adapter's post-run refresh.
       if (goal.mode === "recurring" && status === "active" && goalsCtrl.runNow) {
-        const runNowFn = goalsCtrl.runNow;
         const runNowBtn = document.createElement("button");
         runNowBtn.textContent = "Run now";
+        // Call through `goalsCtrl.runNow` inside the listener rather
+        // than an extracted local — the `@typescript-eslint/unbound-
+        // method` rule flags extraction, and optional chaining
+        // preserves the narrowing shape without extraction.
         runNowBtn.addEventListener("click", () => {
-          void runNowFn(goalId);
+          void goalsCtrl.runNow?.(goalId);
         });
         actions.appendChild(runNowBtn);
       }
