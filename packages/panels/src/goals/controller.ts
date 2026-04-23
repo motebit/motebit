@@ -165,10 +165,12 @@ export function createGoalsController(adapter: GoalsFetchAdapter): GoalsControll
   }
 
   async function runNowImpl(goalId: string): Promise<void> {
-    const runNow = adapter.runNow;
-    if (!runNow) return;
+    // Call through the object reference (not an extracted local) so
+    // adapters that rely on `this` continue to work — the lint rule
+    // `@typescript-eslint/unbound-method` gates the extraction pattern.
+    if (!adapter.runNow) return;
     try {
-      await runNow(goalId);
+      await adapter.runNow(goalId);
       if (disposed) return;
       // Refresh so the new `last_run_at` propagates to subscribers.
       // The goal stays in the list regardless of outcome (fired / skipped
