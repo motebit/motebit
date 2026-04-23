@@ -991,9 +991,17 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   }
 
   function positionPopup(): void {
+    // Center the popup horizontally under the cloud icon. Mirrors apps/web's
+    // positioning (gated-panels.ts toggleSync) — `translateX(-50%)` anchors
+    // the popup's center to `rect.left + rect.width / 2`. Previously the
+    // popup anchored its right edge to the icon's right edge, which sent
+    // the popup sprawling into the left wall once content width exceeded
+    // the icon-to-right-edge distance.
     const rect = indicator.getBoundingClientRect();
     popup.style.top = `${rect.bottom + 8}px`;
-    popup.style.right = `${window.innerWidth - rect.right}px`;
+    popup.style.left = `${rect.left + rect.width / 2}px`;
+    popup.style.right = "auto";
+    popup.style.transform = "translateX(-50%)";
   }
 
   // Tooltip on hover
