@@ -211,6 +211,16 @@ function scan(): Violation[] {
     // below the canonical verifier, not beside it, and is therefore
     // outside the drift surface this gate defends.
     "packages/crypto/src/suite-dispatch.ts",
+    // `@motebit/crypto-appattest` is the canonical App Attest verifier
+    // — the BSL leaf `@motebit/crypto` delegates to when a
+    // `HardwareAttestationClaim` declares `platform: "device_check"`.
+    // Each platform adapter (App Attest today; TPM, Play Integrity
+    // tomorrow) is the single canonical home for its platform's
+    // receipt-verification policy, by the same principle that exempts
+    // the Secure Enclave verifier in `@motebit/crypto/src/hardware-attestation.ts`.
+    "packages/crypto-appattest/src/verify.ts",
+    "packages/crypto-appattest/src/index.ts",
+    "packages/crypto-appattest/src/cbor.ts",
   ]);
 
   const scanRoots: string[] = [];

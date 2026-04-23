@@ -4,12 +4,33 @@
 
 ```ts
 
+import type { AdjudicatorVote } from '@motebit/protocol';
+import type { BalanceWaiver } from '@motebit/protocol';
+import type { ConsolidationReceipt } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
+import type { DisputeAppeal } from '@motebit/protocol';
+import type { DisputeEvidence } from '@motebit/protocol';
+import type { DisputeRequest } from '@motebit/protocol';
+import type { DisputeResolution } from '@motebit/protocol';
+import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
 
+// @public
+export const ADJUDICATOR_VOTE_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { AdjudicatorVote }
+
 // @public (undocumented)
 export type ArtifactType = VerifyResult["type"];
+
+// @public
+export type AttestationPlatform = HardwareAttestationClaim["platform"];
+
+// @public
+export const BALANCE_WAIVER_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { BalanceWaiver }
 
 // @public (undocumented)
 export function base58btcDecode(str: string): Uint8Array;
@@ -22,6 +43,15 @@ export function bytesToHex(bytes: Uint8Array): string;
 
 // @public
 export function canonicalJson(obj: unknown): string;
+
+// @public
+export function canonicalSecureEnclaveBodyForTest(body: {
+    readonly motebit_id: string;
+    readonly device_id: string;
+    readonly identity_public_key: string;
+    readonly se_public_key: string;
+    readonly attested_at: number;
+}): Uint8Array;
 
 // @public
 export function canonicalSha256(obj: unknown): Promise<string>;
@@ -40,6 +70,11 @@ export const COLLABORATIVE_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
 export function computeCredentialLeaf(credential: Record<string, unknown>): Promise<string>;
+
+// @public
+export const CONSOLIDATION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { ConsolidationReceipt }
 
 // @public (undocumented)
 export function createPresentation(credentials: VerifiableCredential[], privateKey: Uint8Array, publicKey: Uint8Array): Promise<VerifiablePresentation>;
@@ -104,6 +139,7 @@ export interface CredentialVerifyResult extends BaseResult {
     credential: VerifiableCredential | null;
     // (undocumented)
     expired?: boolean;
+    hardware_attestation?: HardwareAttestationVerifyResult;
     // (undocumented)
     issuer?: string;
     // (undocumented)
@@ -151,10 +187,33 @@ export type DeviceRegistrationVerifyResult = {
 export function didKeyToPublicKey(did: string): Uint8Array;
 
 // @public
+export const DISPUTE_APPEAL_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export const DISPUTE_EVIDENCE_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export const DISPUTE_REQUEST_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export const DISPUTE_RESOLUTION_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { DisputeAppeal }
+
+export { DisputeEvidence }
+
+export { DisputeRequest }
+
+export { DisputeResolution }
+
+// @public
 export function ed25519Sign(message: Uint8Array, privateKey: Uint8Array): Promise<Uint8Array>;
 
 // @public (undocumented)
 export function ed25519Verify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function encodeSecureEnclaveReceiptForTest(bodyBytes: Uint8Array, sigBytes: Uint8Array): string;
 
 // @public
 export const EXECUTION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -236,8 +295,49 @@ export interface GradientCredentialSubject {
 // @public
 export const GUARDIAN_REVOCATION_SUITE: "motebit-jcs-ed25519-hex-v1";
 
+// @public
+export interface HardwareAttestationError {
+    // (undocumented)
+    readonly message: string;
+}
+
+// @public
+export interface HardwareAttestationVerifiers {
+    // (undocumented)
+    readonly deviceCheck?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
+    // (undocumented)
+    readonly playIntegrity?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+    // (undocumented)
+    readonly tpm?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+}
+
+// @public
+export interface HardwareAttestationVerifyResult {
+    readonly attested_at?: number;
+    // (undocumented)
+    readonly errors: readonly HardwareAttestationError[];
+    // (undocumented)
+    readonly platform: AttestationPlatform | null;
+    readonly se_public_key?: string;
+    // (undocumented)
+    readonly valid: boolean;
+}
+
 // @public (undocumented)
 export function hash(data: Uint8Array): Promise<string>;
+
+// @public
+export function hashToolPayload(value: unknown): Promise<string>;
 
 // @public (undocumented)
 export function hexPublicKeyToDidKey(hexPublicKey: string): string;
@@ -611,10 +711,48 @@ export interface SignableReceipt {
 }
 
 // @public
+export interface SignableToolInvocationReceipt {
+    // (undocumented)
+    args_hash: string;
+    // (undocumented)
+    completed_at: number;
+    // (undocumented)
+    device_id: string;
+    // (undocumented)
+    invocation_id: string;
+    invocation_origin?: "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+    // (undocumented)
+    motebit_id: string;
+    public_key?: string;
+    // (undocumented)
+    result_hash: string;
+    // (undocumented)
+    signature: string;
+    // (undocumented)
+    started_at: number;
+    // (undocumented)
+    status: "completed" | "failed" | "denied";
+    suite: "motebit-jcs-ed25519-b64-v1";
+    // (undocumented)
+    task_id: string;
+    // (undocumented)
+    tool_name: string;
+}
+
+// @public
+export function signAdjudicatorVote(vote: Omit<AdjudicatorVote, "signature" | "suite">, peerPrivateKey: Uint8Array): Promise<AdjudicatorVote>;
+
+// @public
+export function signBalanceWaiver(waiver: Omit<BalanceWaiver, "signature" | "suite">, agentPrivateKey: Uint8Array): Promise<BalanceWaiver>;
+
+// @public
 export function signBySuite(suite: SuiteId, canonicalBytes: Uint8Array, privateKeyBytes: Uint8Array): Promise<Uint8Array>;
 
 // @public
 export function signCollaborativeReceipt(receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature" | "suite">, initiatorPrivateKey: Uint8Array): Promise<SignableCollaborativeReceipt>;
+
+// @public
+export function signConsolidationReceipt(receipt: Omit<ConsolidationReceipt, "signature" | "suite" | "public_key">, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<ConsolidationReceipt>;
 
 // @public
 export function signDelegation(delegation: Omit<DelegationToken, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<DelegationToken>;
@@ -624,6 +762,18 @@ export function signDeviceRegistration<T extends Omit<SignableDeviceRegistration
     suite: typeof DEVICE_REGISTRATION_SUITE;
     signature: string;
 }>;
+
+// @public
+export function signDisputeAppeal(appeal: Omit<DisputeAppeal, "signature" | "suite">, appealerPrivateKey: Uint8Array): Promise<DisputeAppeal>;
+
+// @public
+export function signDisputeEvidence(evidence: Omit<DisputeEvidence, "signature" | "suite">, submitterPrivateKey: Uint8Array): Promise<DisputeEvidence>;
+
+// @public
+export function signDisputeRequest(request: Omit<DisputeRequest, "signature" | "suite">, filerPrivateKey: Uint8Array): Promise<DisputeRequest>;
+
+// @public
+export function signDisputeResolution(resolution: Omit<DisputeResolution, "signature" | "suite">, adjudicatorPrivateKey: Uint8Array): Promise<DisputeResolution>;
 
 // @public
 export const SIGNED_TOKEN_SUITE: "motebit-jwt-ed25519-v1";
@@ -668,6 +818,12 @@ export function signSettlement(settlement: Omit<SettlementRecord, "signature" | 
 
 // @public
 export function signSovereignPaymentReceipt(input: SovereignPaymentReceiptInput, privateKey: Uint8Array, publicKey: Uint8Array): Promise<SignableReceipt>;
+
+// @public
+export function signToolInvocationReceipt<T extends Omit<SignableToolInvocationReceipt, "signature" | "suite">>(receipt: T, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
+    suite: typeof TOOL_INVOCATION_RECEIPT_SUITE;
+    signature: string;
+}>;
 
 // @public (undocumented)
 export function signVerifiableCredential<T = Record<string, unknown>>(unsignedVC: Omit<VerifiableCredential<T>, "proof">, privateKey: Uint8Array, publicKey: Uint8Array): Promise<VerifiableCredential<T>>;
@@ -731,6 +887,9 @@ export interface SuccessionRecord {
 
 // @public (undocumented)
 export function toBase64Url(data: Uint8Array): string;
+
+// @public
+export const TOOL_INVOCATION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public (undocumented)
 export interface TrustCredentialSubject {
@@ -801,6 +960,12 @@ export interface VerificationError {
 export function verify(artifact: unknown, options?: VerifyOptions): Promise<VerifyResult>;
 
 // @public
+export function verifyAdjudicatorVote(vote: AdjudicatorVote, peerPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyBalanceWaiver(waiver: BalanceWaiver, agentPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
 export function verifyBySuite(suite: SuiteId, canonicalBytes: Uint8Array, signatureBytes: Uint8Array, publicKeyBytes: Uint8Array): Promise<boolean>;
 
 // @public
@@ -808,6 +973,9 @@ export function verifyCollaborativeReceipt(receipt: SignableCollaborativeReceipt
     valid: boolean;
     error?: string;
 }>;
+
+// @public
+export function verifyConsolidationReceipt(receipt: ConsolidationReceipt, publicKey: Uint8Array): Promise<boolean>;
 
 // @public
 export function verifyCredentialAnchor(credential: Record<string, unknown>, anchorProof: CredentialAnchorProofFields, chainVerifier?: ChainAnchorVerifier): Promise<CredentialAnchorVerifyResult>;
@@ -828,6 +996,18 @@ export function verifyDelegationChain(chain: DelegationToken[]): Promise<{
 export function verifyDeviceRegistration(body: SignableDeviceRegistration, now?: number): Promise<DeviceRegistrationVerifyResult>;
 
 // @public
+export function verifyDisputeAppeal(appeal: DisputeAppeal, appealerPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyDisputeEvidence(evidence: DisputeEvidence, submitterPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyDisputeRequest(request: DisputeRequest, filerPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyDisputeResolution(resolution: DisputeResolution, adjudicatorPublicKey: Uint8Array, peerKeys?: Map<string, Uint8Array>): Promise<boolean>;
+
+// @public
 export function verifyExecutionReceipt(receipt: SignableReceipt, publicKey: Uint8Array): Promise<boolean>;
 
 // @public (undocumented)
@@ -840,6 +1020,9 @@ export function verifyGuardianRevocation(revocation: {
     timestamp: number;
 }, identityPublicKeyHex: string, guardianPublicKeyHex: string): Promise<boolean>;
 
+// @public
+export function verifyHardwareAttestationClaim(claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, verifiers?: HardwareAttestationVerifiers): HardwareAttestationVerifyResult | Promise<HardwareAttestationVerifyResult>;
+
 // @public @deprecated
 export function verifyIdentityFile(content: string): Promise<LegacyVerifyResult>;
 
@@ -851,6 +1034,7 @@ export interface VerifyOptions {
     clockSkewSeconds?: number;
     // (undocumented)
     expectedType?: ArtifactType;
+    hardwareAttestation?: HardwareAttestationVerifiers;
 }
 
 // @public
@@ -882,6 +1066,9 @@ export function verifySignedToken(token: string, publicKey: Uint8Array): Promise
 
 // @public
 export function verifySuccessionChain(chain: KeySuccessionRecord[], guardianPublicKeyHex?: string): Promise<SuccessionChainResult>;
+
+// @public
+export function verifyToolInvocationReceipt(receipt: SignableToolInvocationReceipt, publicKey: Uint8Array): Promise<boolean>;
 
 // @public (undocumented)
 export function verifyVerifiableCredential<T = Record<string, unknown>>(vc: VerifiableCredential<T>): Promise<boolean>;

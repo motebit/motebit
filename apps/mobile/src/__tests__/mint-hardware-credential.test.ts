@@ -31,15 +31,18 @@
 import { describe, expect, it, beforeAll, vi } from "vitest";
 
 // Mock `expo`'s `requireNativeModule` before the mint-hardware-credential
-// module evaluates — otherwise the Expo Secure Enclave shim's top-level
-// `requireNativeModule<ExpoSecureEnclaveModuleType>("ExpoSecureEnclave")`
-// would throw in Node. Each test injects its own fake native module,
-// so the global stub is a no-op whose methods are never actually called.
+// module evaluates — otherwise both the Secure Enclave shim's top-level
+// `requireNativeModule("ExpoSecureEnclave")` and the App Attest shim's
+// `requireNativeModule("ExpoAppAttest")` would throw in Node. Each
+// test injects its own fake native module, so the global stub is a
+// no-op whose methods are never actually called.
 vi.mock("expo", () => ({
-  requireNativeModule: () => ({
-    seAvailable: vi.fn(),
-    seMintAttestation: vi.fn(),
-  }),
+  requireNativeModule: (name: string) => {
+    if (name === "ExpoAppAttest") {
+      return { appAttestAvailable: vi.fn(), appAttestMint: vi.fn() };
+    }
+    return { seAvailable: vi.fn(), seMintAttestation: vi.fn() };
+  },
 }));
 
 import * as ed from "@noble/ed25519";
@@ -53,6 +56,8 @@ import { canonicalJson, toBase64Url } from "@motebit/crypto";
 import { mintHardwareCredential } from "../mint-hardware-credential.js";
 import type { NativeSecureEnclave } from "../../modules/expo-secure-enclave/src/ExpoSecureEnclaveModule";
 import type { SeMintResult } from "../../modules/expo-secure-enclave/src/ExpoSecureEnclave.types";
+import type { NativeAppAttest } from "../../modules/expo-app-attest/src/ExpoAppAttestModule";
+import type { AppAttestMintResult } from "../../modules/expo-app-attest/src/ExpoAppAttest.types";
 
 beforeAll(() => {
   if (!ed.hashes.sha512) {
@@ -148,6 +153,115 @@ function makeNative(opts: {
     },
   } as unknown as NativeSecureEnclave;
 }
+
+/** Build a `NativeAppAttest` fake with the given behaviours. */
+function makeNativeAppAttest(opts: {
+  available: boolean;
+  mint?: (args: {
+    motebitId: string;
+    deviceId: string;
+    identityPublicKeyHex: string;
+    attestedAt: number;
+  }) => AppAttestMintResult | Promise<AppAttestMintResult>;
+  mintThrows?: unknown;
+}): NativeAppAttest {
+  return {
+    appAttestAvailable: async () => opts.available,
+    appAttestMint: async (args: {
+      motebitId: string;
+      deviceId: string;
+      identityPublicKeyHex: string;
+      attestedAt: number;
+    }) => {
+      if (opts.mintThrows !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- simulating native-module rejection shape
+        throw opts.mintThrows;
+      }
+      if (!opts.mint) throw new Error("no mint impl provided");
+      return opts.mint(args);
+    },
+  } as unknown as NativeAppAttest;
+}
+
+/** A minimal App Attest shape — opaque bytes in each segment. */
+function fakeAppAttestMint(): AppAttestMintResult {
+  return {
+    attestation_object_base64: toBase64Url(new TextEncoder().encode("cbor-attestation-object")),
+    key_id_base64: toBase64Url(new TextEncoder().encode("fake-key-id")),
+    client_data_hash_base64: toBase64Url(new Uint8Array(32)),
+  };
+}
+
+// ── App Attest happy path ───────────────────────────────────────────
+
+describe("mintHardwareCredential — App Attest happy path", () => {
+  it("emits platform:'device_check' with a 3-segment receipt when App Attest is available", async () => {
+    const id = await makeIdentity();
+    const nativeAppAttest = makeNativeAppAttest({
+      available: true,
+      mint: fakeAppAttestMint,
+    });
+    // Explicitly pass an SE fake that claims unavailable so the test
+    // documents the routing intent — App Attest wins regardless.
+    const native = makeNative({ available: false });
+    const cred = await mintHardwareCredential({
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot",
+      deviceId: "dev",
+      now: () => 1_700_000_000_000,
+      native,
+      nativeAppAttest,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("device_check");
+    const receipt = cred.credentialSubject.hardware_attestation.attestation_receipt;
+    expect(receipt).toBeDefined();
+    expect(receipt!.split(".").length).toBe(3);
+  });
+
+  it("falls back to SE when App Attest mint throws", async () => {
+    const id = await makeIdentity();
+    const nativeAppAttest = makeNativeAppAttest({
+      available: true,
+      mintThrows: Object.assign(new Error("device check unavailable"), { code: "not_supported" }),
+    });
+    const native = makeNative({ available: true, mint: simulateSeMint });
+    const cred = await mintHardwareCredential({
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot",
+      deviceId: "dev",
+      now: () => 1_700_000_000_000,
+      native,
+      nativeAppAttest,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("secure_enclave");
+  });
+
+  it("delegates VC envelope composition even for App Attest receipts", async () => {
+    // The drift gate enforces that every surface uses
+    // composeHardwareAttestationCredential. The outer signature is
+    // eddsa-jcs-2022 regardless of the inner hardware platform.
+    const id = await makeIdentity();
+    const nativeAppAttest = makeNativeAppAttest({
+      available: true,
+      mint: fakeAppAttestMint,
+    });
+    const cred = await mintHardwareCredential({
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot",
+      deviceId: "dev",
+      nativeAppAttest,
+      native: makeNative({ available: false }),
+    });
+    expect(cred.proof.cryptosuite).toBe("eddsa-jcs-2022");
+    expect(cred.type).toEqual(["VerifiableCredential", "AgentTrustCredential"]);
+  });
+});
 
 // ── SE happy path ───────────────────────────────────────────────────
 

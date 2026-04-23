@@ -149,7 +149,8 @@ import type {
 } from "./credentials.js";
 
 // Hardware-attestation verification (secure_enclave today; additive
-// platform adapters for tpm / play_integrity / device_check later).
+// platform adapters for tpm / play_integrity / device_check later via
+// optional-verifier injection — see `HardwareAttestationVerifiers`).
 export {
   verifyHardwareAttestationClaim,
   canonicalSecureEnclaveBodyForTest,
@@ -159,9 +160,13 @@ export type {
   AttestationPlatform,
   HardwareAttestationError,
   HardwareAttestationVerifyResult,
+  HardwareAttestationVerifiers,
 } from "./hardware-attestation.js";
 import { verifyHardwareAttestationClaim } from "./hardware-attestation.js";
-import type { HardwareAttestationVerifyResult } from "./hardware-attestation.js";
+import type {
+  HardwareAttestationVerifiers,
+  HardwareAttestationVerifyResult,
+} from "./hardware-attestation.js";
 
 // ===========================================================================
 // Types — Verification Results (discriminated union)
@@ -233,6 +238,16 @@ export interface VerifyOptions {
   expectedType?: ArtifactType;
   /** Clock skew tolerance in seconds for credential expiry checks. Default: 60. */
   clockSkewSeconds?: number;
+  /**
+   * Optional injection of platform-specific hardware-attestation
+   * verifiers. Consumers that need `device_check` / `tpm` /
+   * `play_integrity` verification pass the corresponding leaf package's
+   * verifier function here (e.g. `deviceCheckVerifier(...)` from
+   * `@motebit/crypto-appattest`). Absence keeps the MIT `@motebit/crypto`
+   * path pure: unknown platforms fail-closed with a named-missing-adapter
+   * error. See `hardware-attestation.ts::HardwareAttestationVerifiers`.
+   */
+  hardwareAttestation?: HardwareAttestationVerifiers;
 }
 
 // ===========================================================================
@@ -1045,6 +1060,7 @@ const DEFAULT_CLOCK_SKEW_SECONDS = 60;
 async function verifyCredential(
   vc: VerifiableCredential,
   clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS,
+  hardwareAttestationVerifiers?: HardwareAttestationVerifiers,
 ): Promise<CredentialVerifyResult> {
   const errors: VerificationError[] = [];
 
@@ -1086,9 +1102,14 @@ async function verifyCredential(
     typeof subject.hardware_attestation === "object" &&
     typeof subject.identity_public_key === "string"
   ) {
-    hardwareAttestation = verifyHardwareAttestationClaim(
+    // The dispatcher may return a Promise when an injected adapter
+    // (e.g. @motebit/crypto-appattest for device_check) is wired in.
+    // Always `await` so the resulting shape is the canonical
+    // `HardwareAttestationVerifyResult`.
+    hardwareAttestation = await verifyHardwareAttestationClaim(
       subject.hardware_attestation as Parameters<typeof verifyHardwareAttestationClaim>[0],
       subject.identity_public_key,
+      hardwareAttestationVerifiers,
     );
   }
 
@@ -1111,6 +1132,7 @@ async function verifyCredential(
 async function verifyPresentation(
   vp: VerifiablePresentation,
   clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS,
+  hardwareAttestationVerifiers?: HardwareAttestationVerifiers,
 ): Promise<PresentationVerifyResult> {
   const errors: VerificationError[] = [];
 
@@ -1127,7 +1149,7 @@ async function verifyPresentation(
   const credentialResults: CredentialVerifyResult[] = [];
   for (let i = 0; i < vp.verifiableCredential.length; i++) {
     const vc = vp.verifiableCredential[i]!;
-    const vcResult = await verifyCredential(vc, clockSkewSeconds);
+    const vcResult = await verifyCredential(vc, clockSkewSeconds, hardwareAttestationVerifiers);
     credentialResults.push(vcResult);
     if (!vcResult.valid) {
       errors.push({
@@ -1232,9 +1254,17 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
     case "receipt":
       return verifyReceipt(resolved as ExecutionReceipt);
     case "credential":
-      return verifyCredential(resolved as VerifiableCredential, options?.clockSkewSeconds);
+      return verifyCredential(
+        resolved as VerifiableCredential,
+        options?.clockSkewSeconds,
+        options?.hardwareAttestation,
+      );
     case "presentation":
-      return verifyPresentation(resolved as VerifiablePresentation, options?.clockSkewSeconds);
+      return verifyPresentation(
+        resolved as VerifiablePresentation,
+        options?.clockSkewSeconds,
+        options?.hardwareAttestation,
+      );
   }
 }
 

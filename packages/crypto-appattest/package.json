@@ -1,0 +1,36 @@
+{
+  "name": "@motebit/crypto-appattest",
+  "version": "0.1.0",
+  "license": "BSL-1.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "motebit": {
+    "implements": [
+      "spec/credential-v1.md"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@motebit/protocol": "workspace:*",
+    "@motebit/crypto": "workspace:*",
+    "@peculiar/x509": "^1.12.0",
+    "cbor2": "^1.9.0"
+  },
+  "devDependencies": {
+    "@noble/curves": "~1.9.0",
+    "@noble/hashes": "~1.6.0",
+    "@peculiar/webcrypto": "^1.5.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

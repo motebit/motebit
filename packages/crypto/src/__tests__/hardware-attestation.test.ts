@@ -8,7 +8,7 @@
  * with our helpers, assemble the receipt, verify. This exercises the
  * full parse → signature-check → identity-binding path.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { p256 } from "@noble/curves/p256";
 import { sha256 } from "@noble/hashes/sha256";
@@ -75,14 +75,14 @@ const DEVICE_ID = "dev-1";
 // ── happy path ──────────────────────────────────────────────────────
 
 describe("verifyHardwareAttestationClaim — secure_enclave happy path", () => {
-  it("validates a well-formed receipt and returns the SE pubkey", () => {
+  it("validates a well-formed receipt and returns the SE pubkey", async () => {
     const { claim, sePublicKeyHex } = mintValidReceipt({
       motebit_id: MOTEBIT_ID,
       device_id: DEVICE_ID,
       identity_public_key_hex: IDENTITY_HEX,
       attested_at: 1_700_000_000_000,
     });
-    const result = verifyHardwareAttestationClaim(claim, IDENTITY_HEX);
+    const result = await verifyHardwareAttestationClaim(claim, IDENTITY_HEX);
     expect(result.valid).toBe(true);
     expect(result.platform).toBe("secure_enclave");
     expect(result.se_public_key).toBe(sePublicKeyHex);
@@ -90,18 +90,18 @@ describe("verifyHardwareAttestationClaim — secure_enclave happy path", () => {
     expect(result.errors).toEqual([]);
   });
 
-  it("accepts upper-case identity hex (case-insensitive binding check)", () => {
+  it("accepts upper-case identity hex (case-insensitive binding check)", async () => {
     const { claim } = mintValidReceipt({
       motebit_id: MOTEBIT_ID,
       device_id: DEVICE_ID,
       identity_public_key_hex: IDENTITY_HEX,
       attested_at: 1_700_000_000_000,
     });
-    const result = verifyHardwareAttestationClaim(claim, IDENTITY_HEX.toUpperCase());
+    const result = await verifyHardwareAttestationClaim(claim, IDENTITY_HEX.toUpperCase());
     expect(result.valid).toBe(true);
   });
 
-  it("still verifies signature when key_exported=true (but caller should score lower)", () => {
+  it("still verifies signature when key_exported=true (but caller should score lower)", async () => {
     const { claim } = mintValidReceipt({
       motebit_id: MOTEBIT_ID,
       device_id: DEVICE_ID,
@@ -109,7 +109,7 @@ describe("verifyHardwareAttestationClaim — secure_enclave happy path", () => {
       attested_at: 1_700_000_000_000,
     });
     const exported: HardwareAttestationClaim = { ...claim, key_exported: true };
-    const result = verifyHardwareAttestationClaim(exported, IDENTITY_HEX);
+    const result = await verifyHardwareAttestationClaim(exported, IDENTITY_HEX);
     expect(result.valid).toBe(true);
   });
 });
@@ -117,7 +117,7 @@ describe("verifyHardwareAttestationClaim — secure_enclave happy path", () => {
 // ── identity-binding rejection ──────────────────────────────────────
 
 describe("verifyHardwareAttestationClaim — identity binding", () => {
-  it("rejects when body's identity_public_key differs from expected", () => {
+  it("rejects when body's identity_public_key differs from expected", async () => {
     const { claim } = mintValidReceipt({
       motebit_id: MOTEBIT_ID,
       device_id: DEVICE_ID,
@@ -125,7 +125,7 @@ describe("verifyHardwareAttestationClaim — identity binding", () => {
       attested_at: 1_700_000_000_000,
     });
     const wrongExpected = "b".repeat(64);
-    const result = verifyHardwareAttestationClaim(claim, wrongExpected);
+    const result = await verifyHardwareAttestationClaim(claim, wrongExpected);
     expect(result.valid).toBe(false);
     expect(result.errors[0]!.message).toContain("identity_public_key mismatch");
   });
@@ -134,7 +134,7 @@ describe("verifyHardwareAttestationClaim — identity binding", () => {
 // ── tampering rejection ─────────────────────────────────────────────
 
 describe("verifyHardwareAttestationClaim — tampering", () => {
-  it("rejects when the signed body is tampered (sig no longer verifies)", () => {
+  it("rejects when the signed body is tampered (sig no longer verifies)", async () => {
     const { claim } = mintValidReceipt({
       motebit_id: MOTEBIT_ID,
       device_id: DEVICE_ID,
@@ -158,7 +158,7 @@ describe("verifyHardwareAttestationClaim — tampering", () => {
       ...claim,
       attestation_receipt: tamperedReceipt,
     };
-    const result = verifyHardwareAttestationClaim(tamperedClaim, IDENTITY_HEX);
+    const result = await verifyHardwareAttestationClaim(tamperedClaim, IDENTITY_HEX);
     expect(result.valid).toBe(false);
     // The body parses, but signature verification fails (OR the
     // se_public_key mismatch bubbles up first — both are correct
@@ -177,14 +177,17 @@ describe("verifyHardwareAttestationClaim — tampering", () => {
 // ── malformed receipt rejection ─────────────────────────────────────
 
 describe("verifyHardwareAttestationClaim — malformed receipts", () => {
-  it("rejects missing attestation_receipt", () => {
-    const result = verifyHardwareAttestationClaim({ platform: "secure_enclave" }, IDENTITY_HEX);
+  it("rejects missing attestation_receipt", async () => {
+    const result = await verifyHardwareAttestationClaim(
+      { platform: "secure_enclave" },
+      IDENTITY_HEX,
+    );
     expect(result.valid).toBe(false);
     expect(result.errors[0]!.message).toContain("missing");
   });
 
-  it("rejects receipt that isn't two parts", () => {
-    const result = verifyHardwareAttestationClaim(
+  it("rejects receipt that isn't two parts", async () => {
+    const result = await verifyHardwareAttestationClaim(
       { platform: "secure_enclave", attestation_receipt: "onepart" },
       IDENTITY_HEX,
     );
@@ -192,17 +195,17 @@ describe("verifyHardwareAttestationClaim — malformed receipts", () => {
     expect(result.errors[0]!.message).toContain("2 base64url parts");
   });
 
-  it("rejects receipt with invalid base64url", () => {
-    const result = verifyHardwareAttestationClaim(
+  it("rejects receipt with invalid base64url", async () => {
+    const result = await verifyHardwareAttestationClaim(
       { platform: "secure_enclave", attestation_receipt: "$$$.$$$" },
       IDENTITY_HEX,
     );
     expect(result.valid).toBe(false);
   });
 
-  it("rejects body with non-JSON content", () => {
+  it("rejects body with non-JSON content", async () => {
     const notJson = btoa("not json at all").replace(/=+$/, "");
-    const result = verifyHardwareAttestationClaim(
+    const result = await verifyHardwareAttestationClaim(
       { platform: "secure_enclave", attestation_receipt: `${notJson}.AAA` },
       IDENTITY_HEX,
     );
@@ -210,7 +213,7 @@ describe("verifyHardwareAttestationClaim — malformed receipts", () => {
     expect(result.errors[0]!.message).toContain("parse failed");
   });
 
-  it("rejects body missing required fields", () => {
+  it("rejects body missing required fields", async () => {
     const partialBody = new TextEncoder().encode(
       JSON.stringify({ version: "1", algorithm: "ecdsa-p256-sha256" }),
     );
@@ -218,7 +221,7 @@ describe("verifyHardwareAttestationClaim — malformed receipts", () => {
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
-    const result = verifyHardwareAttestationClaim(
+    const result = await verifyHardwareAttestationClaim(
       {
         platform: "secure_enclave",
         attestation_receipt: `${bodyB64}.AAA`,
@@ -229,7 +232,7 @@ describe("verifyHardwareAttestationClaim — malformed receipts", () => {
     expect(result.errors[0]!.message).toContain("missing required field");
   });
 
-  it("rejects body with unsupported version", () => {
+  it("rejects body with unsupported version", async () => {
     const { privateKey, publicKeyHex } = makeSeKeypair();
     const oddBody = new TextEncoder().encode(
       JSON.stringify({
@@ -244,7 +247,7 @@ describe("verifyHardwareAttestationClaim — malformed receipts", () => {
     );
     const sigBytes = signBody(oddBody, privateKey);
     const receipt = encodeSecureEnclaveReceiptForTest(oddBody, sigBytes);
-    const result = verifyHardwareAttestationClaim(
+    const result = await verifyHardwareAttestationClaim(
       { platform: "secure_enclave", attestation_receipt: receipt },
       IDENTITY_HEX,
     );
@@ -252,7 +255,7 @@ describe("verifyHardwareAttestationClaim — malformed receipts", () => {
     expect(result.errors[0]!.message).toContain("unsupported body version");
   });
 
-  it("rejects body with unsupported algorithm", () => {
+  it("rejects body with unsupported algorithm", async () => {
     const { privateKey, publicKeyHex } = makeSeKeypair();
     const weirdBody = new TextEncoder().encode(
       JSON.stringify({
@@ -267,7 +270,7 @@ describe("verifyHardwareAttestationClaim — malformed receipts", () => {
     );
     const sigBytes = signBody(weirdBody, privateKey);
     const receipt = encodeSecureEnclaveReceiptForTest(weirdBody, sigBytes);
-    const result = verifyHardwareAttestationClaim(
+    const result = await verifyHardwareAttestationClaim(
       { platform: "secure_enclave", attestation_receipt: receipt },
       IDENTITY_HEX,
     );
@@ -279,31 +282,50 @@ describe("verifyHardwareAttestationClaim — malformed receipts", () => {
 // ── non-SE platforms ────────────────────────────────────────────────
 
 describe("verifyHardwareAttestationClaim — non-SE platforms", () => {
-  it("returns valid:false for software sentinel (no hardware channel)", () => {
-    const result = verifyHardwareAttestationClaim({ platform: "software" }, IDENTITY_HEX);
+  it("returns valid:false for software sentinel (no hardware channel)", async () => {
+    const result = await verifyHardwareAttestationClaim({ platform: "software" }, IDENTITY_HEX);
     expect(result.valid).toBe(false);
     expect(result.platform).toBe("software");
     expect(result.errors[0]!.message).toContain("no-hardware sentinel");
   });
 
-  it("returns valid:false with 'adapter not shipped' for tpm", () => {
-    const result = verifyHardwareAttestationClaim({ platform: "tpm" }, IDENTITY_HEX);
+  it("returns valid:false with 'not wired' default for tpm (no injected adapter)", async () => {
+    const result = await verifyHardwareAttestationClaim({ platform: "tpm" }, IDENTITY_HEX);
     expect(result.valid).toBe(false);
-    expect(result.errors[0]!.message).toContain("not yet shipped");
+    expect(result.errors[0]!.message).toContain("not wired");
   });
 
-  it("returns valid:false for play_integrity", () => {
-    const result = verifyHardwareAttestationClaim({ platform: "play_integrity" }, IDENTITY_HEX);
-    expect(result.valid).toBe(false);
-  });
-
-  it("returns valid:false for device_check", () => {
-    const result = verifyHardwareAttestationClaim({ platform: "device_check" }, IDENTITY_HEX);
+  it("returns valid:false for play_integrity (no injected adapter)", async () => {
+    const result = await verifyHardwareAttestationClaim(
+      { platform: "play_integrity" },
+      IDENTITY_HEX,
+    );
     expect(result.valid).toBe(false);
   });
 
-  it("returns valid:false + platform:null for an off-enum platform", () => {
-    const result = verifyHardwareAttestationClaim(
+  it("returns valid:false for device_check (no injected adapter)", async () => {
+    const result = await verifyHardwareAttestationClaim({ platform: "device_check" }, IDENTITY_HEX);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]!.message).toContain("not wired");
+  });
+
+  it("delegates to the injected deviceCheck verifier when wired", async () => {
+    const fakeVerifier = vi.fn(async () => ({
+      valid: true,
+      errors: [],
+    }));
+    const result = await verifyHardwareAttestationClaim(
+      { platform: "device_check", attestation_receipt: "fake" },
+      IDENTITY_HEX,
+      { deviceCheck: fakeVerifier },
+    );
+    expect(fakeVerifier).toHaveBeenCalledOnce();
+    expect(result.valid).toBe(true);
+    expect(result.platform).toBe("device_check");
+  });
+
+  it("returns valid:false + platform:null for an off-enum platform", async () => {
+    const result = await verifyHardwareAttestationClaim(
       {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         platform: "mystery-platform" as any,

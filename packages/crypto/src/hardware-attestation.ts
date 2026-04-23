@@ -127,6 +127,42 @@ interface SecureEnclaveBody {
 }
 
 /**
+ * Optional platform-verifier dispatch injected at call site by the
+ * consumer. Each slot takes the claim + the expected Ed25519 identity
+ * key (lowercase hex) and returns a verification result matching the
+ * canonical shape.
+ *
+ * `@motebit/crypto` stays MIT-pure and dep-thin — it never imports a
+ * platform adapter. Consumers (CLI, mobile, desktop, relay) wire the
+ * leaf packages (`@motebit/crypto-appattest` for device_check;
+ * future `@motebit/crypto-tpm`, `@motebit/crypto-play-integrity`) into
+ * this object so that dispatch remains explicit, auditable, and
+ * tree-shakable: a verifier that doesn't care about App Attest ships
+ * zero App Attest code.
+ */
+export interface HardwareAttestationVerifiers {
+  readonly deviceCheck?: (
+    claim: HardwareAttestationClaim,
+    expectedIdentityPublicKeyHex: string,
+  ) =>
+    | HardwareAttestationVerifyResult
+    | PromiseLike<HardwareAttestationVerifyResult>
+    | { readonly valid: boolean; readonly errors: ReadonlyArray<{ readonly message: string }> }
+    | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{ readonly message: string }>;
+      }>;
+  readonly tpm?: (
+    claim: HardwareAttestationClaim,
+    expectedIdentityPublicKeyHex: string,
+  ) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+  readonly playIntegrity?: (
+    claim: HardwareAttestationClaim,
+    expectedIdentityPublicKeyHex: string,
+  ) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+}
+
+/**
  * Verify a hardware-attestation claim.
  *
  * - `claim` — the `HardwareAttestationClaim` taken from a credential's
@@ -134,15 +170,25 @@ interface SecureEnclaveBody {
  * - `expectedIdentityPublicKeyHex` — the Ed25519 public key (hex) the
  *   verifier believes owns the credential. Comes from the credential
  *   issuance path (typically the subject's DID pubkey).
+ * - `verifiers` — optional injection of platform-specific verifiers for
+ *   claims other than `secure_enclave`. Consumers pass
+ *   `{ deviceCheck: deviceCheckVerifier(...) }` from
+ *   `@motebit/crypto-appattest` to enable App Attest verification. When
+ *   a claim's platform has no verifier wired, the dispatcher returns a
+ *   stub `valid: false, errors: [{message:"adapter not yet shipped"}]`
+ *   so verification remains fail-closed by default.
  *
- * Pure, synchronous, no network. Zero throws — every failure lands as
- * `valid: false` with a structured reason so callers can render
- * consistent audit output.
+ * Zero throws — every failure lands as `valid: false` with a structured
+ * reason so callers can render consistent audit output. The
+ * secure_enclave path remains synchronous; device_check (and any other
+ * injected adapter) may return a Promise, so callers that dispatch
+ * through the `verify()` entrypoint get `await`ed results.
  */
 export function verifyHardwareAttestationClaim(
   claim: HardwareAttestationClaim,
   expectedIdentityPublicKeyHex: string,
-): HardwareAttestationVerifyResult {
+  verifiers?: HardwareAttestationVerifiers,
+): HardwareAttestationVerifyResult | Promise<HardwareAttestationVerifyResult> {
   const platform = claim.platform;
   const errors: HardwareAttestationError[] = [];
 
@@ -160,11 +206,34 @@ export function verifyHardwareAttestationClaim(
         message: "platform `software` is a no-hardware sentinel; no verification channel",
       });
       return { valid: false, platform: "software", errors };
-    case "tpm":
-    case "play_integrity":
     case "device_check":
+      if (verifiers?.deviceCheck) {
+        return dispatchInjected(
+          platform,
+          verifiers.deviceCheck(claim, expectedIdentityPublicKeyHex),
+        );
+      }
       errors.push({
-        message: `platform \`${platform}\` adapter not yet shipped — v1 ships macOS Secure Enclave only`,
+        message: `platform \`${platform}\` verifier not wired — pass { deviceCheck: deviceCheckVerifier(...) } from @motebit/crypto-appattest to enable`,
+      });
+      return { valid: false, platform, errors };
+    case "tpm":
+      if (verifiers?.tpm) {
+        return dispatchInjected(platform, verifiers.tpm(claim, expectedIdentityPublicKeyHex));
+      }
+      errors.push({
+        message: `platform \`${platform}\` verifier not wired — pass { tpm: ... } via the verifiers parameter to enable`,
+      });
+      return { valid: false, platform, errors };
+    case "play_integrity":
+      if (verifiers?.playIntegrity) {
+        return dispatchInjected(
+          platform,
+          verifiers.playIntegrity(claim, expectedIdentityPublicKeyHex),
+        );
+      }
+      errors.push({
+        message: `platform \`${platform}\` verifier not wired — pass { playIntegrity: ... } via the verifiers parameter to enable`,
       });
       return { valid: false, platform, errors };
     default:
@@ -173,6 +242,33 @@ export function verifyHardwareAttestationClaim(
       });
       return { valid: false, platform: null, errors };
   }
+}
+
+/**
+ * Normalize the injected verifier's return shape into the canonical
+ * `HardwareAttestationVerifyResult`. Injected leaves may return a
+ * richer shape (e.g. `@motebit/crypto-appattest`'s
+ * `DeviceCheckVerifyResult` carries `attestation_detail`); the
+ * canonical fields are lifted out here so the outer VC verify path
+ * always sees the same shape.
+ */
+async function dispatchInjected(
+  platform: AttestationPlatform,
+  result:
+    | HardwareAttestationVerifyResult
+    | PromiseLike<HardwareAttestationVerifyResult>
+    | { readonly valid: boolean; readonly errors: ReadonlyArray<{ readonly message: string }> }
+    | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{ readonly message: string }>;
+      }>,
+): Promise<HardwareAttestationVerifyResult> {
+  const awaited = await Promise.resolve(result);
+  return {
+    valid: awaited.valid,
+    platform,
+    errors: awaited.errors ?? [],
+  };
 }
 
 // ── Secure Enclave path ──────────────────────────────────────────────
