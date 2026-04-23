@@ -6,16 +6,28 @@
  *      Rust SE bridge, returns a `platform: "secure_enclave"`
  *      `HardwareAttestationClaim` when an Apple Secure Enclave is
  *      available; graceful `platform: "software"` fallback otherwise.
- *   2. `signVerifiableCredential` (`@motebit/encryption`) — W3C
+ *   2. `mintTpmAttestationClaim` (`./tpm-attest.ts`) — calls the Rust
+ *      TPM bridge on Windows / Linux hosts; returns a
+ *      `platform: "tpm"` claim when the TPM round-trip succeeds, or
+ *      `null` when the TPM is unavailable so the cascade falls through.
+ *   3. `signVerifiableCredential` (`@motebit/encryption`) — W3C
  *      `eddsa-jcs-2022` self-signed VC with the claim embedded in
  *      `credentialSubject.hardware_attestation`.
+ *
+ * Cascade order: SE (macOS) → TPM (Windows / Linux) → software
+ * sentinel. The SE probe returns `false` on non-macOS hosts, so the
+ * TPM probe takes over there. The TPM probe returns `false` on macOS
+ * and on hosts without `tss-esapi` linked, so the cascade falls
+ * through to the truthful `platform: "software"` claim. The order
+ * mirrors the platform-adapter layering in
+ * `docs/doctrine/hardware-attestation.md`.
  *
  * The output is compatible with `@motebit/verifier`'s `verify()`
  * pipeline — piping the JSON through `motebit-verify` produces
  * `hardware: secure_enclave ✓` on an Apple-Silicon host with an
- * operational Enclave, or `hardware: software ✗` (truthful, no
- * deception) when the host lacks an Enclave or the user declined the
- * biometric prompt.
+ * operational Enclave, `hardware: tpm ✓` on a TPM-equipped Windows /
+ * Linux host, or `hardware: software ✗` (truthful, no deception)
+ * when neither path is available.
  *
  * Why this isn't in `@motebit/encryption`. The helper is a small
  * composer (read identity → mint claim → sign VC) but it binds to
@@ -36,7 +48,10 @@ import {
   type VerifiableCredential,
 } from "@motebit/encryption";
 
+import type { HardwareAttestationClaim } from "@motebit/sdk";
+
 import { mintAttestationClaim } from "./secure-enclave-attest.js";
+import { mintTpmAttestationClaim } from "./tpm-attest.js";
 import type { InvokeFn } from "./tauri-storage.js";
 
 export interface MintHardwareCredentialOptions {
@@ -66,12 +81,30 @@ export interface MintHardwareCredentialOptions {
 export async function mintHardwareCredential(
   opts: MintHardwareCredentialOptions,
 ): Promise<VerifiableCredential<HardwareAttestationCredentialSubject>> {
-  const attestation = await mintAttestationClaim(opts.invoke, {
+  // Cascade: SE (macOS) → TPM (Windows / Linux) → software sentinel.
+  // Each strategy is silent on platforms where it doesn't apply; the
+  // first to produce a hardware-backed claim wins. `mintAttestationClaim`
+  // preserves its existing contract (always returns a claim, falling
+  // back to `software` internally); TPM sits between SE's macOS path
+  // and SE's software fallback by intercepting when the SE claim
+  // degrades to software AND a TPM is reachable.
+  const seClaim = await mintAttestationClaim(opts.invoke, {
     identityPublicKeyHex: opts.identityPublicKeyHex,
     motebitId: opts.motebitId,
     deviceId: opts.deviceId,
     ...(opts.now && { now: opts.now }),
   });
+
+  let attestation: HardwareAttestationClaim = seClaim;
+  if (seClaim.platform === "software") {
+    const tpmClaim = await mintTpmAttestationClaim(opts.invoke, {
+      identityPublicKeyHex: opts.identityPublicKeyHex,
+      motebitId: opts.motebitId,
+      deviceId: opts.deviceId,
+      ...(opts.now && { now: opts.now }),
+    });
+    if (tpmClaim) attestation = tpmClaim;
+  }
 
   const now = (opts.now ?? Date.now)();
   return composeHardwareAttestationCredential({
