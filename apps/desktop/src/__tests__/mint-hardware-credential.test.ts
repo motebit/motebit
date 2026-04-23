@@ -152,11 +152,12 @@ describe("mintHardwareCredential — SE happy path", () => {
 });
 
 describe("mintHardwareCredential — SE unavailable fallback", () => {
-  it("emits platform:'software' when seAvailable returns false", async () => {
+  it("emits platform:'software' when seAvailable AND tpm_available both return false", async () => {
     const id = await makeIdentity();
     const invoke = makeInvoke(async (cmd) => {
       if (cmd === "se_available") return false;
-      throw new Error(`unexpected call to ${cmd} — SE should be skipped`);
+      if (cmd === "tpm_available") return false;
+      throw new Error(`unexpected call to ${cmd} — cascade should stop at software sentinel`);
     });
     const cred = await mintHardwareCredential({
       invoke,
@@ -175,6 +176,7 @@ describe("mintHardwareCredential — SE unavailable fallback", () => {
     const id = await makeIdentity();
     const invoke = makeInvoke(async (cmd) => {
       if (cmd === "se_available") return false;
+      if (cmd === "tpm_available") return false;
       throw new Error(`unexpected call to ${cmd}`);
     });
     const cred = await mintHardwareCredential({
@@ -191,6 +193,105 @@ describe("mintHardwareCredential — SE unavailable fallback", () => {
     if (result.type !== "credential") throw new Error("expected credential");
     expect(result.hardware_attestation?.platform).toBe("software");
     expect(result.hardware_attestation?.valid).toBe(false); // software sentinel = no hw channel
+  });
+});
+
+describe("mintHardwareCredential — TPM cascade (Windows / Linux)", () => {
+  /**
+   * Simulate the Rust TPM bridge: when SE is unavailable but TPM is,
+   * the bridge returns a 4-part receipt. We mock the bridge's return
+   * shape; end-to-end verification of the TPM receipt against an
+   * injected vendor root lives in `@motebit/crypto-tpm`'s own test
+   * suite — here we assert the cascade order and the claim shape.
+   */
+  it("falls through SE=false → tpm_available=true, emits platform:'tpm'", async () => {
+    const id = await makeIdentity();
+    const invoke = makeInvoke(async (cmd) => {
+      if (cmd === "se_available") return false;
+      if (cmd === "tpm_available") return true;
+      if (cmd === "tpm_mint_quote") {
+        return {
+          tpms_attest_base64: "dGVzdC1hdHRlc3Q",
+          signature_base64: "dGVzdC1zaWc",
+          ak_cert_der_base64: "dGVzdC1jZXJ0",
+          intermediates_comma_joined_base64: "",
+        };
+      }
+      throw new Error(`unexpected: ${cmd}`);
+    });
+    const cred = await mintHardwareCredential({
+      invoke,
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot_tpm",
+      deviceId: "dev_tpm",
+      now: () => 1_700_000_000_000,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("tpm");
+    expect(cred.credentialSubject.hardware_attestation.key_exported).toBe(false);
+    expect(cred.credentialSubject.hardware_attestation.attestation_receipt).toMatch(/\./);
+    // 4-part JWS-shape: 3 dots separating 4 base64url segments
+    const parts = cred.credentialSubject.hardware_attestation.attestation_receipt!.split(".");
+    expect(parts).toHaveLength(4);
+  });
+
+  it("falls through to platform:'software' when the TPM bridge errors with not_supported", async () => {
+    const id = await makeIdentity();
+    const invoke = makeInvoke(async (cmd) => {
+      if (cmd === "se_available") return false;
+      if (cmd === "tpm_available") return true;
+      if (cmd === "tpm_mint_quote") {
+        // Bridge reports `not_supported` (e.g. tss-esapi unavailable at
+        // link time — today's ship shape). Cascade must step through
+        // to software sentinel, not throw.
+        throw { reason: "not_supported", message: "tss-esapi not linked" };
+      }
+      throw new Error(`unexpected: ${cmd}`);
+    });
+    const cred = await mintHardwareCredential({
+      invoke,
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot_tpm",
+      deviceId: "dev_tpm",
+      now: () => 1_700_000_000_000,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("software");
+  });
+
+  it("prefers SE over TPM when both report available (macOS-with-TPM-shim edge case)", async () => {
+    // Technically unlikely in production (macOS has SE, Windows / Linux
+    // have TPM), but the SE probe returning `true` must take priority
+    // unconditionally — SE is the macOS-native path. A misconfigured
+    // host that reports both should NOT emit a TPM claim.
+    const id = await makeIdentity();
+    const invoke = makeInvoke(async (cmd, args) => {
+      if (cmd === "se_available") return true;
+      if (cmd === "se_mint_attestation") {
+        return simulateSeMint({
+          motebitId: args!.motebitId as string,
+          deviceId: args!.deviceId as string,
+          identityPublicKeyHex: args!.identityPublicKeyHex as string,
+          attestedAt: args!.attestedAt as number,
+        });
+      }
+      if (cmd === "tpm_available" || cmd === "tpm_mint_quote") {
+        throw new Error("TPM path should not be reached when SE is available");
+      }
+      throw new Error(`unexpected: ${cmd}`);
+    });
+    const cred = await mintHardwareCredential({
+      invoke,
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot_se_wins",
+      deviceId: "dev_se_wins",
+      now: () => 1_700_000_000_000,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("secure_enclave");
   });
 });
 

@@ -232,6 +232,15 @@ function scan(): Violation[] {
     "packages/crypto-play-integrity/src/index.ts",
     "packages/crypto-play-integrity/src/jwt.ts",
     "packages/crypto-play-integrity/src/google-jwks.ts",
+    // `@motebit/crypto-tpm` is the canonical TPM 2.0 verifier — the
+    // BSL leaf `@motebit/crypto` delegates to when a
+    // `HardwareAttestationClaim` declares `platform: "tpm"`. Same
+    // principle as App Attest: each platform adapter is the single
+    // canonical home for its platform's receipt-verification policy,
+    // exempt from the drift-gate scan by path.
+    "packages/crypto-tpm/src/verify.ts",
+    "packages/crypto-tpm/src/index.ts",
+    "packages/crypto-tpm/src/tpm-parse.ts",
   ]);
 
   const scanRoots: string[] = [];

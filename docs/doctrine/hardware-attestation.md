@@ -59,7 +59,7 @@ The rank is algebra, not policy-by-switch. `packages/semiring/src/hardware-attes
 | `platform: "software"` (explicit no-hardware)                              | 0.1                                        |
 | Absent claim                                                               | 0.0 (semiring zero, annihilates under `⊗`) |
 
-Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Google Play Integrity (Android, Google-JWKS-signed JWT). TPM / StrongBox adapters land additively behind the same result shape.
+Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Google Play Integrity (Android, Google-JWKS-signed JWT), TPM 2.0 (Windows / Linux, endorsement-key chain against pinned vendor roots). Scoring is identical across every adapter — all collapse to the same `1.0 / 0.5 / 0.1 / 0.0` scalar under the bottleneck semiring. The scalar answers "hardware-backed?" yes/no; the platform identifier answers "which hardware?" for audit, not for rank.
 
 Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` lifts a market-local `productSemiring(TrustSemiring, HardwareAttestationSemiring)` over the routing graph — every edge carries a `(trust, hwScore)` tuple, `optimalPaths` bottlenecks HW scores across the whole path in one traversal, and the ranker folds the chain bottleneck into trust via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)` at the scoring boundary. Single-hop candidates recover the prior scalar-at-terminal score; multi-hop chains through a `software` or absent intermediate now score at the weakest link. Swap the encoder for a different policy without touching the algebra.
 
@@ -89,9 +89,11 @@ Every future change to this vertical clears all three:
 
 ## Non-goals in v1
 
-- **Windows / Linux TPM.** `tpm2-tss-rs` integration is a separate pass. Desktop-on-non-Apple-Silicon currently emits `platform: "software"`.
+- **Chain-of-trust verification for Secure Enclave.** The SE public key is the self-asserted root in v1. App Attest, Play Integrity, and TPM adapters already verify the platform's own attestation chain (Apple App Attest root CA; Google Play Integrity JWKS; Infineon, Nuvoton, STMicro, Intel PTT TPM vendor roots via `@motebit/crypto-tpm`'s `DEFAULT_PINNED_TPM_ROOTS`). The SE chain-of-trust landing is tracked alongside persistent-SE keys.
 
-- **Chain-of-trust verification.** The SE public key is the self-asserted root in v1. Future adapters verify the platform's own attestation chain (Apple root CA, Google verified-boot chain).
+- **TPM vendor-root byte-accuracy at landing.** `packages/crypto-tpm/src/tpm-roots.ts` ships with placeholder PEMs that exercise the chain-verification code path end-to-end; the real vendor bytes land as a mechanical operator pass (swap the PEM constants, no code change). Tests fabricate their own roots so they do not depend on the swap.
+
+- **TPM `tss-esapi` linking in the Rust build graph.** `apps/desktop/src-tauri/src/tpm.rs` ships a `not_supported`-on-every-platform stub until an operator wires the `tss-esapi` crate plus `libtss2-*` system dependencies into the desktop build. The TS cascade treats the `not_supported` reason as expected and falls through to the software sentinel, so the ship is non-regressive.
 
 - **Revocation channel.** Claims expire with their parent credential's `validFrom` + expiry. No separate revocation path.
 
@@ -109,13 +111,18 @@ Live consumers today:
 - `packages/encryption/src/hardware-attestation-credential.ts` — canonical VC composer; CLI + desktop + mobile all delegate.
 - `packages/crypto-appattest/` — Apple App Attest chain verifier (pinned Apple root).
 - `packages/crypto-play-integrity/` — Google Play Integrity JWT verifier (pinned Google JWKS, ES256 / RS256 dispatch).
+- `packages/crypto-tpm/src/verify.ts` — TPM 2.0 quote verifier; pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
+- `packages/crypto-tpm/src/tpm-parse.ts` — minimal `TPMS_ATTEST` marshaling; hand-rolled over dep explosion.
 - `apps/mobile/modules/expo-app-attest/` — iOS native App Attest bridge.
 - `apps/mobile/modules/expo-play-integrity/` — Android native Play Integrity bridge.
 - `apps/mobile/src/mint-hardware-credential.ts` — mobile surface; per-OS cascade (App Attest → SE on iOS; Play Integrity on Android; software sentinel everywhere).
 - `apps/desktop/src-tauri/src/secure_enclave.rs` — Rust SE bridge (macOS-gated).
+- `apps/desktop/src-tauri/src/tpm.rs` — Rust TPM bridge (Windows / Linux; `not_supported` pending `tss-esapi` link).
 - `apps/desktop/src/secure-enclave-bridge.ts` — typed TS wrapper with `SecureEnclaveError` taxonomy.
 - `apps/desktop/src/secure-enclave-attest.ts` — high-level `mintAttestationClaim` with software fallback.
-- `apps/desktop/src/mint-hardware-credential.ts` — `mintHardwareCredential` — desktop surface.
+- `apps/desktop/src/tpm-bridge.ts` — typed TS wrapper with `TpmError` taxonomy mirroring SE shape.
+- `apps/desktop/src/tpm-attest.ts` — high-level `mintTpmAttestationClaim`; returns `null` to defer to the cascade.
+- `apps/desktop/src/mint-hardware-credential.ts` — `mintHardwareCredential` — desktop surface; cascade SE → TPM → software.
 - `apps/cli/src/subcommands/attest.ts` — `motebit attest` — software-claim surface.
 - `apps/cli/src/subcommands/doctor.ts` — `detectSecureEnclaveAvailability()` diagnostic.
 - `packages/verifier/src/lib.ts` — `formatHuman` surfaces `hardware: <platform> ✓/✗`.

@@ -55,6 +55,7 @@ const LAYER: Record<string, number> = {
   // Layer 2 — Engines (depend on Layer 0–1)
   "@motebit/crypto-appattest": 2,
   "@motebit/crypto-play-integrity": 2,
+  "@motebit/crypto-tpm": 2,
   "@motebit/market": 2,
   "@motebit/behavior-engine": 2,
   "@motebit/state-vector": 2,

@@ -2,9 +2,11 @@
 
 mod computer_use;
 mod secure_enclave;
+mod tpm;
 
 use computer_use::{computer_execute, computer_query_display};
 use secure_enclave::{se_available, se_mint_attestation};
+use tpm::{tpm_available, tpm_mint_quote};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde_json::Value as JsonValue;
 use std::sync::Mutex;
@@ -864,6 +866,8 @@ fn main() {
             computer_execute,
             se_available,
             se_mint_attestation,
+            tpm_available,
+            tpm_mint_quote,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
