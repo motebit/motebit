@@ -467,7 +467,7 @@ describe("write_file", () => {
   });
 
   it("enforces allowedPaths sandbox", async () => {
-    const handler = createWriteFileHandler(["/allowed/dir"]);
+    const handler = createWriteFileHandler({ allowedPaths: ["/allowed/dir"] });
     const result = await handler({ path: "/tmp/test.txt", content: "nope" });
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Access denied");

@@ -117,8 +117,8 @@ import {
 import { StreamingManager } from "./streaming.js";
 import type { InteractiveDelegationConfig } from "./interactive-delegation.js";
 
-import { performReflection, runReflectionSafe } from "./reflection.js";
-import type { ReflectionDeps } from "./reflection.js";
+import { performReflection, runReflectionSafe } from "@motebit/reflection";
+import type { ReflectionDeps } from "@motebit/reflection";
 import { runHousekeeping } from "./housekeeping.js";
 import type { HousekeepingDeps } from "./housekeeping.js";
 import { PresenceController } from "./presence.js";

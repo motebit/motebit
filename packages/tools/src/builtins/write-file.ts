@@ -27,9 +27,8 @@ export const writeFileDefinition: ToolDefinition = {
   requiresApproval: true,
 };
 
-export function createWriteFileHandler(config?: WriteFileConfig | string[]): ToolHandler {
-  // Backward compat: accept string[] as allowedPaths
-  const cfg: WriteFileConfig = Array.isArray(config) ? { allowedPaths: config } : (config ?? {});
+export function createWriteFileHandler(config?: WriteFileConfig): ToolHandler {
+  const cfg: WriteFileConfig = config ?? {};
   const allowedPaths = cfg.allowedPaths;
   const enableBackup = cfg.enableBackup !== false;
   const backupDir =
