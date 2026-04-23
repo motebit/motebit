@@ -104,6 +104,18 @@ If you were on `@motebit/verify@^0.7.0`, migration depends on what you were usin
 | `verifyFile()` / `formatHuman()` / programmatic CLI wrappers | `import { ... } from "@motebit/verifier"`                                           |
 | Running `motebit-verify` on the command line                 | `npm install -g @motebit/verify` at `^1.0.0` — same command, full platform coverage |
 
-## Doctrine
+## Related
 
-See [`CLAUDE.md`](./CLAUDE.md) for the architectural reasoning — why the split is physical, why all three verification packages (`@motebit/verify` aggregator, `@motebit/verifier` library, `@motebit/crypto` primitives) sit on the Apache-2.0 permissive floor, and how the three-package lineage maps onto motebit's sovereignty invariant.
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — Apache-2.0 library underneath this CLI (`verifyFile`, `verifyArtifact`, `formatHuman`)
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — Apache-2.0 primitives (`verify`, `sign`, suite dispatch; zero monorepo deps)
+- [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest) — Apple App Attest adapter bundled into this CLI
+- [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) — Google Play Integrity adapter bundled into this CLI
+- [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — TPM 2.0 EK chain adapter bundled into this CLI
+- [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn) — WebAuthn packed-attestation adapter bundled into this CLI
+- [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
+
+## License
+
+Apache-2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
+
+"Motebit" is a trademark. The Apache License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.
