@@ -2,6 +2,7 @@
   "expo": {
     "name": "Motebit",
     "slug": "motebit",
+    "owner": "motebit",
     "version": "1.0.0",
     "scheme": "motebit",
     "icon": "./assets/icon.png",
