@@ -33,6 +33,7 @@ import {
 import { isSlashCommand, parseSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import type { ReplContext } from "./slash-commands.js";
 import {
+  handleAttest,
   handleDoctor,
   handleExport,
   handleVerify,
@@ -140,6 +141,11 @@ async function main(): Promise<void> {
       rpcUrl: config.solanaRpcUrl,
       addressOnly: config.walletAddressOnly,
     });
+    return;
+  }
+
+  if (subcommand === "attest") {
+    await handleAttest(config);
     return;
   }
 

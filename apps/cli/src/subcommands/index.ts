@@ -19,6 +19,7 @@ export {
   handleApprovalList,
   handleApprovalShow,
 } from "./approvals.js";
+export { handleAttest } from "./attest.js";
 export { handleCredentials } from "./credentials.js";
 export { handleDelegate } from "./delegate.js";
 export { handleDiscover } from "./discover.js";
