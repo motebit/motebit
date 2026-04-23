@@ -95,8 +95,8 @@ import { AudioMonitor } from "../adapters/audio-monitor.js";
  * Access the private `tick()` method for deterministic testing.
  * The real AudioMonitor uses setInterval at ~30fps; we call tick manually.
  */
-function getTick(monitor: AudioMonitor): () => Promise<void> {
-  return (monitor as unknown as { tick: () => Promise<void> }).tick.bind(monitor);
+function getTick(monitor: AudioMonitor): () => void {
+  return (monitor as unknown as { tick: () => void }).tick.bind(monitor);
 }
 
 /**
@@ -107,7 +107,7 @@ async function simulateTicks(monitor: AudioMonitor, count: number, db: number): 
   const tick = getTick(monitor);
   mockRecorderInstance.setMetering(db);
   for (let i = 0; i < count; i++) {
-    await tick();
+    tick();
   }
 }
 
@@ -228,7 +228,7 @@ describe("AudioMonitor", () => {
       await monitor.start();
 
       mockRecorderInstance.setNotRecording();
-      await getTick(monitor)();
+      getTick(monitor)();
 
       expect(onAudio).not.toHaveBeenCalled();
     });
@@ -239,7 +239,7 @@ describe("AudioMonitor", () => {
       await monitor.start();
 
       mockRecorderInstance.setMeteringUndefined();
-      await getTick(monitor)();
+      getTick(monitor)();
 
       expect(onAudio).not.toHaveBeenCalled();
     });

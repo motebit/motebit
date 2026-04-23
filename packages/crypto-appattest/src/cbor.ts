@@ -34,7 +34,7 @@ export interface AppAttestCbor {
  */
 export function parseAppAttestCbor(attestationObjectBytes: Uint8Array): AppAttestCbor {
   // cbor2's `decode` accepts ArrayBuffer-like; `Uint8Array` satisfies.
-  const decoded = cborDecode(attestationObjectBytes) as unknown;
+  const decoded: unknown = cborDecode(attestationObjectBytes);
 
   if (decoded === null || typeof decoded !== "object") {
     throw new Error("attestation object is not a CBOR map");

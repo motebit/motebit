@@ -276,7 +276,11 @@ export class AudioMonitor {
     this.onAudio?.(null as unknown as AudioReactivity);
   }
 
-  private async tick(): Promise<void> {
+  // Synchronous after the SDK-55 expo-audio migration — `recorder.getStatus()`
+  // replaced `recording.getStatusAsync()` and the VAD confirmation path fires
+  // `void this.confirmWithSilero()` without blocking. Tests call `tick()`
+  // directly; no await needed on the caller side.
+  private tick(): void {
     if (!this.recorder || !this._running) return;
 
     try {
