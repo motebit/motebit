@@ -135,6 +135,14 @@ const vc = await issueReputationCredential(
 
 All operations are **offline** — no network calls, no relay lookup, no runtime dependency. Everything needed for signing and verification is in the artifact itself.
 
+## Related
+
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — CLI + library that wraps `verify()` for third-party offline verification
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types for the artifacts this package signs and verifies
+- [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
+- [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
+- [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

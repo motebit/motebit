@@ -99,6 +99,14 @@ Once running with the `motebit` CLI, your scaffolded agent has access to:
 
 See the [delegation guide](https://docs.motebit.com/docs/developer/delegation) for the full flow.
 
+## Related
+
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (MIT, zero deps)
+- [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every Motebit artifact
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier CLI
+- [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

@@ -23,7 +23,7 @@ Motebit's moat is the **self-signing body**: every action the agent takes emits 
 
 ## What it verifies
 
-The unified `verify()` dispatcher in [`@motebit/crypto`](../crypto) auto-detects and verifies:
+The unified `verify()` dispatcher in [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) auto-detects and verifies:
 
 - **identity** — `motebit.md` (YAML frontmatter + content + Ed25519 signature)
 - **receipt** — `ExecutionReceipt` (task ID, tools used, prompt/result hashes, signature)
@@ -67,6 +67,16 @@ if (result.valid) console.log(`receipt signed by ${result.receipt?.signer}`);
 - **No dependencies beyond `@motebit/crypto`.** Every dependency is a trust attack surface we'd have to re-audit on every upgrade.
 - **Suite-agile.** New signature suites (post-quantum, future) are registry additions, not CLI changes — `@motebit/crypto`'s `verifyBySuite` dispatches for us.
 
+## Related
+
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — the verification primitives this package wraps (MIT, zero deps)
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — protocol types for the artifacts being verified (MIT, zero deps)
+- [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
+- [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
+- [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
+
 ## License
 
-MIT.
+MIT — see [LICENSE](./LICENSE).
+
+"Motebit" is a trademark. The MIT License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

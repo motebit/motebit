@@ -117,6 +117,16 @@ Run `motebit doctor` to diagnose issues after install.
 
 See [docs.motebit.com](https://docs.motebit.com) for full documentation.
 
+## Related
+
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (MIT, zero deps)
+- [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — signing and verification primitives (MIT, zero deps)
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier CLI (MIT)
+- [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
+
 ## License
 
 BSL-1.1 — see [LICENSE](./LICENSE).
+
+"Motebit" is a trademark. The BSL-1.1 License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.
