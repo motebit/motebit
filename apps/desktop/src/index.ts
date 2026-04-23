@@ -452,12 +452,6 @@ export class DesktopApp {
   private _toolActivityListeners = new Set<
     (event: import("@motebit/runtime").ToolActivityEvent) => void
   >();
-  // Scheduled-agents runner. Desktop gets the same tab-local (window-
-  // local) scheduler the web uses. Desktop's additional value: the
-  // Tauri window is typically long-lived (quit-to-tray keeps it
-  // running), so scheduled agents fire through more of the day than
-  // they would in a browser tab.
-  private _scheduledAgents: import("./scheduled-agents").ScheduledAgentsRunner | null = null;
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
@@ -600,11 +594,6 @@ export class DesktopApp {
       return { ok: false, error: "runtime not initialized" };
     }
     return this.runtime.invokeLocalTool(name, args);
-  }
-
-  /** Access the scheduled-agents runner (null until initAI completes). */
-  getScheduledAgents(): import("./scheduled-agents").ScheduledAgentsRunner | null {
-    return this._scheduledAgents;
   }
 
   get currentModel(): string | null {
@@ -963,35 +952,6 @@ export class DesktopApp {
       DeviceCapability.Keyring,
       DeviceCapability.Background,
     ]);
-
-    // Scheduled-agents runner — window-local on desktop, but the
-    // Tauri window is typically long-lived (quit-to-tray keeps it
-    // running), so scheduled agents fire through more of the day
-    // than a browser tab can manage. Same shape + contract as the
-    // web runner so the workstation panel works identically on
-    // both surfaces.
-    const { createScheduledAgentsRunner } = await import("./scheduled-agents.js");
-    const runtime = this.runtime;
-    this._scheduledAgents = createScheduledAgentsRunner({
-      fire: async (prompt) => {
-        // Yield to in-flight user turns. The runner honors "skipped"
-        // by not advancing next_run_at; next 30s tick retries.
-        if (runtime.isProcessing) return { status: "skipped" };
-        let accumulated = "";
-        try {
-          for await (const chunk of runtime.sendMessageStreaming(prompt, undefined, {
-            suppressHistory: true,
-          })) {
-            if (chunk.type === "text") accumulated += chunk.text;
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { status: "error", error: msg };
-        }
-        const responsePreview = accumulated.trim().slice(0, 160) || null;
-        return { status: "fired", responsePreview };
-      },
-    });
 
     // Create PlanEngine for multi-step goal execution
     if (config.isTauri && config.invoke) {
