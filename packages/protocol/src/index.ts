@@ -249,6 +249,11 @@ export enum EventType {
   ChainTrustComputed = "chain_trust_computed",
   TrustLevelChanged = "trust_level_changed",
   KeyRotated = "key_rotated",
+  // Computer-use session lifecycle — opened/closed by `createComputerSessionManager`
+  // on `openSession()` / `closeSession()`. Third parties replay the audit trail
+  // via the session_id → observation-action sequence binding.
+  ComputerSessionOpened = "computer_session_opened",
+  ComputerSessionClosed = "computer_session_closed",
 }
 
 export enum MemoryType {

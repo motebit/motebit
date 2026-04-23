@@ -183,3 +183,146 @@ describe("registerComputerTool — concurrent first calls", () => {
     expect(queryDisplayCalls).toBe(1);
   });
 });
+
+describe("registerComputerTool — session event emission", () => {
+  /**
+   * Minimal fake for the EventStoreAdapter surface the tool touches —
+   * `append` and optional `appendWithClock`. We capture the entries so
+   * assertions can check event_type and payload shape.
+   */
+  function makeEventSink(): {
+    entries: Array<{ type: string; payload: Record<string, unknown> }>;
+    adapter: {
+      append: (entry: { event_type: string; payload: Record<string, unknown> }) => Promise<void>;
+      appendWithClock?: (entry: {
+        event_type: string;
+        payload: Record<string, unknown>;
+      }) => Promise<number>;
+      query: () => Promise<never[]>;
+      getLatestClock: () => Promise<number>;
+      tombstone: () => Promise<void>;
+    };
+  } {
+    const entries: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const adapter = {
+      async append(entry: { event_type: string; payload: Record<string, unknown> }) {
+        entries.push({ type: entry.event_type, payload: entry.payload });
+      },
+      async appendWithClock(entry: { event_type: string; payload: Record<string, unknown> }) {
+        entries.push({ type: entry.event_type, payload: entry.payload });
+        return 1;
+      },
+      async query() {
+        return [];
+      },
+      async getLatestClock() {
+        return 0;
+      },
+      async tombstone() {},
+    };
+    return { entries, adapter };
+  }
+
+  it("emits computer_session_opened on the first tool call", async () => {
+    const reg = new SimpleToolRegistry();
+    const sink = makeEventSink();
+    registerComputerTool(reg, {
+      invoke: noopInvoke(),
+      motebitId: "mot_test",
+      dispatcher: makeDispatcher(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      events: sink.adapter as any,
+    });
+    await reg.execute("computer", { action: { kind: "screenshot" } });
+    const opened = sink.entries.find((e) => e.type === "computer_session_opened");
+    expect(opened).toBeDefined();
+    expect(opened!.payload.motebit_id).toBe("mot_test");
+    expect(opened!.payload.display_width).toBe(1920);
+    expect(opened!.payload.display_height).toBe(1080);
+  });
+
+  it("emits computer_session_closed on dispose", async () => {
+    const reg = new SimpleToolRegistry();
+    const sink = makeEventSink();
+    const { dispose } = registerComputerTool(reg, {
+      invoke: noopInvoke(),
+      motebitId: "mot_test",
+      dispatcher: makeDispatcher(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      events: sink.adapter as any,
+    });
+    await reg.execute("computer", { action: { kind: "screenshot" } });
+    await dispose();
+    const closed = sink.entries.find((e) => e.type === "computer_session_closed");
+    expect(closed).toBeDefined();
+    expect(closed!.payload.reason).toBe("desktop_dispose");
+  });
+
+  it("skips emission entirely when no events adapter is wired", async () => {
+    const reg = new SimpleToolRegistry();
+    // No events opt passed — register should still work and not crash.
+    registerComputerTool(reg, {
+      invoke: noopInvoke(),
+      motebitId: "mot_test",
+      dispatcher: makeDispatcher(),
+    });
+    const result = await reg.execute("computer", { action: { kind: "screenshot" } });
+    expect(result.ok).toBe(true);
+  });
+
+  it("isolates a throwing event sink — session open still succeeds", async () => {
+    const reg = new SimpleToolRegistry();
+    const throwingAdapter = {
+      async append() {
+        throw new Error("db down");
+      },
+      async appendWithClock() {
+        throw new Error("db down");
+      },
+      async query() {
+        return [];
+      },
+      async getLatestClock() {
+        return 0;
+      },
+      async tombstone() {},
+    };
+    registerComputerTool(reg, {
+      invoke: noopInvoke(),
+      motebitId: "mot_test",
+      dispatcher: makeDispatcher(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      events: throwingAdapter as any,
+    });
+    const result = await reg.execute("computer", { action: { kind: "screenshot" } });
+    // Tool call still returned ok:true; the event emission failed silently.
+    expect(result.ok).toBe(true);
+  });
+
+  it("falls back to append when appendWithClock is not present", async () => {
+    const reg = new SimpleToolRegistry();
+    const entries: Array<{ type: string }> = [];
+    const minimalAdapter = {
+      async append(entry: { event_type: string }) {
+        entries.push({ type: entry.event_type });
+      },
+      // no appendWithClock
+      async query() {
+        return [];
+      },
+      async getLatestClock() {
+        return 0;
+      },
+      async tombstone() {},
+    };
+    registerComputerTool(reg, {
+      invoke: noopInvoke(),
+      motebitId: "mot_test",
+      dispatcher: makeDispatcher(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      events: minimalAdapter as any,
+    });
+    await reg.execute("computer", { action: { kind: "screenshot" } });
+    expect(entries.find((e) => e.type === "computer_session_opened")).toBeDefined();
+  });
+});

@@ -36,7 +36,13 @@ import {
   type ComputerSessionManager,
 } from "@motebit/runtime";
 import { createDefaultComputerGovernance } from "@motebit/policy-invariants";
-import type { ComputerAction } from "@motebit/sdk";
+import type {
+  ComputerAction,
+  ComputerSessionOpened,
+  ComputerSessionClosed,
+  EventStoreAdapter,
+} from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
 
 import { createTauriComputerDispatcher } from "./computer-bridge.js";
 import type { InvokeFn } from "./tauri-storage.js";
@@ -67,6 +73,16 @@ export interface RegisterComputerToolOptions {
   governance?: ComputerGovernanceClassifier;
   /** Optional approval flow for require_approval classifications. */
   approvalFlow?: ComputerApprovalFlow;
+  /**
+   * Optional event sink. When provided, `ComputerSessionOpened` +
+   * `ComputerSessionClosed` events land in the signed event log so
+   * third parties replaying the audit trail can reconstruct the
+   * session_id → observation-action binding. Without this, session
+   * lifecycle is runtime-only and drops on the floor when the session
+   * ends — functional for the AI loop, but a gap for the third-party
+   * verifier story.
+   */
+  events?: EventStoreAdapter;
 }
 
 /**
@@ -97,11 +113,40 @@ export function registerComputerTool(
   let defaultSession: ComputerSessionHandle | null = null;
   let openingDefault: Promise<ComputerSessionHandle> | null = null;
 
+  /**
+   * Best-effort event-log append. Isolated from the caller's control flow
+   * — an event sink that throws must not break session open/close.
+   */
+  async function emit(
+    eventType: EventType,
+    payload: ComputerSessionOpened | ComputerSessionClosed,
+  ): Promise<void> {
+    if (!opts.events) return;
+    try {
+      const entry = {
+        event_id: crypto.randomUUID(),
+        motebit_id: opts.motebitId,
+        timestamp: Date.now(),
+        event_type: eventType,
+        payload: payload as unknown as Record<string, unknown>,
+        tombstoned: false,
+      };
+      if (opts.events.appendWithClock) {
+        await opts.events.appendWithClock(entry);
+      } else {
+        await opts.events.append({ ...entry, version_clock: 0 });
+      }
+    } catch {
+      // Event sink faults are non-fatal — the AI loop must keep working.
+    }
+  }
+
   async function ensureDefaultSession(): Promise<ComputerSessionHandle | null> {
     if (defaultSession) return defaultSession;
     if (openingDefault) return openingDefault.catch(() => null);
-    const pending = sessionManager.openSession(opts.motebitId).then(({ handle }) => {
+    const pending = sessionManager.openSession(opts.motebitId).then(async ({ handle, event }) => {
       defaultSession = handle;
+      await emit(EventType.ComputerSessionOpened, event);
       return handle;
     });
     openingDefault = pending;
@@ -164,7 +209,8 @@ export function registerComputerTool(
 
   async function dispose(): Promise<void> {
     if (defaultSession) {
-      await sessionManager.closeSession(defaultSession.session_id, "desktop_dispose");
+      const event = await sessionManager.closeSession(defaultSession.session_id, "desktop_dispose");
+      await emit(EventType.ComputerSessionClosed, event);
       defaultSession = null;
     }
     sessionManager.dispose();
