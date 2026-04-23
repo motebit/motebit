@@ -1,9 +1,10 @@
 import { defineMotebitTest } from "../../vitest.shared.js";
 
 // Floor thresholds anchored to the first measured baseline. protocol
-// is Layer 0 (MIT, zero deps) so coverage should stay high — the one
-// gap is a handful of unexercised discriminant branches in the
-// credential/settlement type guards. Raise as those get tested.
+// is Layer 0 (Apache-2.0 permissive floor, zero deps) so coverage
+// should stay high — the one gap is a handful of unexercised
+// discriminant branches in the credential/settlement type guards.
+// Raise as those get tested.
 export default defineMotebitTest({
   coverageExclude: [
     "src/credential-anchor.ts",

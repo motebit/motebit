@@ -357,16 +357,17 @@ export async function probeLeak(): Promise<boolean> {
     proves:
       "flags an architecture.mdx package whose [Ln] layer tag diverges from scripts/check-deps.ts LAYER map",
     perturb: () =>
-      // Mutate the `protocol` row's layer tag from [L0 · MIT] to [L3 · MIT].
-      // check-deps.ts pins @motebit/protocol at L0; the probe makes the tree
-      // lie about the layer. The gate should emit
-      // "protocol tagged L3 but check-deps.ts says L0" and exit 1. A layer
-      // swap beats a package rename here — no filesystem entries invented,
-      // no cross-section side effects, cleanup restores byte-identical.
+      // Mutate the `protocol` row's layer tag from [L0 · Apache-2.0] to
+      // [L3 · Apache-2.0]. check-deps.ts pins @motebit/protocol at L0;
+      // the probe makes the tree lie about the layer. The gate should
+      // emit "protocol tagged L3 but check-deps.ts says L0" and exit 1.
+      // A layer swap beats a package rename here — no filesystem
+      // entries invented, no cross-section side effects, cleanup
+      // restores byte-identical.
       mutateFile("apps/docs/content/docs/operator/architecture.mdx", (src) =>
         src.replace(
-          "├── protocol/              [L0 · MIT]",
-          "├── protocol/              [L3 · MIT]",
+          "├── protocol/              [L0 · Apache-2.0]",
+          "├── protocol/              [L3 · Apache-2.0]",
         ),
       ),
   },
