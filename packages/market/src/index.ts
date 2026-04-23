@@ -15,6 +15,7 @@ export type {
   RoutingPolicy,
   RoutingConfig,
   RoutingWeights,
+  PeerEdge,
 } from "./graph-routing.js";
 export type { CandidateProfile, TaskRequirements } from "./scoring.js";
 export { aggregateCredentialReputation, blendCredentialTrust } from "./credential-weight.js";

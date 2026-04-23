@@ -8,9 +8,14 @@
  * rankCandidates) is retained for reference but no longer exported from the package.
  */
 
-import type { MotebitId, RouteScore } from "@motebit/protocol";
-import { AgentTrustLevel } from "@motebit/protocol";
-import { trustLevelToScore, scoreAttestation } from "@motebit/semiring";
+import type { MotebitId, RouteScore, Semiring } from "@motebit/protocol";
+import { AgentTrustLevel, productSemiring } from "@motebit/protocol";
+import {
+  trustLevelToScore,
+  scoreAttestation,
+  HardwareAttestationSemiring,
+  HW_ATTESTATION_HARDWARE,
+} from "@motebit/semiring";
 import {
   WeightedDigraph,
   RouteWeightSemiring,
@@ -21,7 +26,7 @@ import {
   optimalPathTrace,
   transitiveClosure,
 } from "@motebit/semiring";
-import type { RouteWeight, Annotated } from "@motebit/semiring";
+import type { RouteWeight, Annotated, HardwareAttestationScore } from "@motebit/semiring";
 import type { CandidateProfile, TaskRequirements } from "./scoring.js";
 import { blendCredentialTrust } from "./credential-weight.js";
 
@@ -111,10 +116,34 @@ export interface RoutingPolicy {
   composite?: CompositeFunction;
 }
 
+/**
+ * A peer-to-peer delegation edge. Optionally carries the intermediate
+ * hop's hardware-attestation score so the chain's HW bottleneck reflects
+ * every link, not just the terminal's local claim.
+ *
+ * When `hw_attestation` is absent, the edge is treated as identity under
+ * `HardwareAttestationSemiring` (1.0, no degradation). Callers that know
+ * the intermediate's custody (e.g. reconstructed from a delegation
+ * receipt tree where each hop carries a signed `HardwareAttestationClaim`)
+ * should populate it. Absent = "no signal, no penalty", which keeps the
+ * field purely additive — existing peer-edge sources don't break.
+ */
+export interface PeerEdge {
+  from: string;
+  to: string;
+  weight: RouteWeight;
+  /**
+   * Hardware-attestation score for the intermediate hop this edge
+   * represents (0.0 = absent/unknown, 1.0 = hardware-backed, per
+   * `scoreAttestation` scalars). Undefined = identity (1.0, passthrough).
+   */
+  hw_attestation?: HardwareAttestationScore;
+}
+
 export interface RoutingConfig {
   weights?: RoutingWeights;
   compositeFunction?: CompositeFunction;
-  peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>;
+  peerEdges?: PeerEdge[];
   maxCandidates?: number;
   explorationWeight?: number;
   /** Caller's guardian public key (hex). Same guardian = organizational trust baseline. */
@@ -137,16 +166,42 @@ const ORGANIZATIONAL_TRUST_BASELINE = 0.35;
 
 /**
  * How strongly a positive hardware-attestation score boosts the
- * candidate's trust edge weight. A hardware-attested agent
- * (`scoreAttestation → 1.0`) gets trust × (1 + 0.2) = 20% bump,
- * capped at 1.0. A software sentinel (`0.1`) gets a ~2% bump; an
- * absent claim (`0.0`) leaves trust untouched. Conservative by
- * design — hardware attestation is an identity-root signal, not a
- * performance metric, so it supplements earned trust rather than
- * replacing it. Consumers needing stronger/softer weight adjust
- * this constant (PR + changeset) rather than wiring a per-call knob.
+ * candidate's trust. A hardware-attested chain
+ * (`HardwareAttestationSemiring` bottleneck → 1.0) gets trust ×
+ * (1 + 0.2) = 20% bump, capped at 1.0. A chain whose weakest link is
+ * software (`0.1`) gets a ~2% bump; a chain containing any absent
+ * claim annihilates to `0.0` under `⊗` and leaves trust untouched.
+ * Conservative by design — hardware attestation is an identity-root
+ * signal, not a performance metric, so it supplements earned trust
+ * rather than replacing it. Consumers needing stronger/softer weight
+ * adjust this constant (PR + changeset) rather than wiring a per-call
+ * knob. It's the ratio that maps HW-score into the trust-boost domain
+ * and is deliberately visible at the call site.
  */
 const HARDWARE_ATTESTATION_BOOST = 0.2;
+
+// ── Hardware-attestation product semiring (market-local) ──────────
+//
+// `productSemiring(TrustSemiring, HardwareAttestationSemiring)` lifts
+// TrustSemiring's multiplicative composition and HardwareAttestationSemiring's
+// bottleneck-min into a single 2-tuple algebra. Walking a graph under
+// this product in ONE traversal yields, per reachable node, both the
+// best trust chain AND the bottleneck HW score across the path — the
+// latter is the reason this composition exists. A chain whose weakest
+// link is `software` (0.1) terminates with chain-HW = 0.1; a chain
+// containing any absent claim terminates with chain-HW = 0.0 (the
+// semiring zero, annihilating under ⊗).
+//
+// Local to this module: the tuple wiring is a market concern (the
+// product of "routing trust" and "attestation strength") and doesn't
+// belong in the MIT primitive layer. Consumers of `@motebit/semiring`
+// compose their own dimensions analogously.
+type TrustAttestationScore = readonly [number, HardwareAttestationScore];
+
+const TrustAttestationSemiring: Semiring<TrustAttestationScore> = productSemiring(
+  TrustSemiring,
+  HardwareAttestationSemiring,
+);
 
 /**
  * Build a semiring computation graph from candidate profiles.
@@ -164,7 +219,7 @@ const HARDWARE_ATTESTATION_BOOST = 0.2;
 export function buildRoutingGraph(
   selfId: MotebitId,
   candidates: CandidateProfile[],
-  peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>,
+  peerEdges?: PeerEdge[],
   callerGuardianPublicKey?: string,
 ): WeightedDigraph<RouteWeight> {
   const graph = new WeightedDigraph(RouteWeightSemiring);
@@ -192,15 +247,16 @@ export function buildRoutingGraph(
 
     const blendedTrust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
 
-    // Hardware-attestation multiplicative boost. `scoreAttestation`
-    // maps the claim to [0, 1] via the `HardwareAttestationSemiring`
-    // axis (1.0 = hardware-attested, non-exported; 0.5 = hardware but
-    // exported; 0.1 = explicit software sentinel; 0.0 = absent). The
-    // boost formula `trust * (1 + score * boost)` leaves absent-claim
-    // agents at their earned trust and rewards hardware-rooted ones
-    // with up to +HARDWARE_ATTESTATION_BOOST × 1.0 multiplier.
-    const hwScore = scoreAttestation(candidate.hardware_attestation);
-    const trust = Math.min(1.0, blendedTrust * (1 + hwScore * HARDWARE_ATTESTATION_BOOST));
+    // Hardware-attestation composes via the product semiring at
+    // traversal time (see `applyHardwareAttestationBoost`). Each edge
+    // carries the candidate's LOCAL HW score; `optimalPaths` over
+    // `TrustAttestationSemiring` produces the chain's bottleneck HW
+    // score per reachable candidate, which is then folded into trust
+    // via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)`.
+    // Single-hop result is identical to the previous scalar-at-terminal
+    // composition; multi-hop now reflects the weakest-link custody of
+    // the entire path (the reason the semiring exists).
+    const trust = Math.min(1.0, blendedTrust);
 
     const cost = estimateCandidateCost(candidate);
     // Latency: prefer measured stats, fall back to SLA declaration, then default
@@ -230,6 +286,111 @@ export function buildRoutingGraph(
   return graph;
 }
 
+// ── Hardware-attestation chain composition ────────────────────────
+
+/**
+ * Build the parallel `TrustAttestationSemiring` graph — same nodes and
+ * edges as the plain routing graph, but every edge weight is a
+ * `(trust, hwScore)` tuple. Each self→candidate edge carries the
+ * candidate's local `scoreAttestation`. Each peer edge carries its
+ * intermediate hop's `hw_attestation` if supplied, else identity
+ * (`HW_ATTESTATION_HARDWARE` = 1.0 — passthrough under ⊗). Running
+ * `optimalPaths` on this graph yields, per reachable candidate, the
+ * bottleneck HW score across the entire path. That score feeds
+ * `applyHardwareAttestationBoost` at the ranking boundary.
+ *
+ * Why a second graph, not a second dimension inside `RouteWeight`:
+ * `RouteWeight` lives in `@motebit/semiring` and its shape is part of
+ * a multi-surface API. The attestation composition is a market-side
+ * product that doesn't need to propagate upstream. Building a small
+ * parallel graph here keeps the protocol-level type stable.
+ */
+function buildTrustAttestationGraph(
+  selfId: MotebitId,
+  candidates: CandidateProfile[],
+  peerEdges?: PeerEdge[],
+  callerGuardianPublicKey?: string,
+): WeightedDigraph<TrustAttestationScore> {
+  const graph = new WeightedDigraph(TrustAttestationSemiring);
+  graph.addNode(selfId);
+
+  for (const candidate of candidates) {
+    if (candidate.trust_record?.trust_level === AgentTrustLevel.Blocked) continue;
+    if (!candidate.is_online) continue;
+
+    let staticTrust =
+      candidate.chain_trust ??
+      (candidate.trust_record ? trustLevelToScore(candidate.trust_record.trust_level) : 0.1);
+
+    if (
+      callerGuardianPublicKey &&
+      candidate.guardian_public_key &&
+      callerGuardianPublicKey === candidate.guardian_public_key
+    ) {
+      staticTrust = Math.max(staticTrust, ORGANIZATIONAL_TRUST_BASELINE);
+    }
+
+    const blendedTrust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
+    const hwScore = scoreAttestation(candidate.hardware_attestation);
+    graph.setEdge(selfId, candidate.motebit_id, [blendedTrust, hwScore] as const);
+  }
+
+  if (peerEdges) {
+    for (const edge of peerEdges) {
+      const hw = edge.hw_attestation ?? HW_ATTESTATION_HARDWARE;
+      graph.setEdge(edge.from as MotebitId, edge.to as MotebitId, [edge.weight.trust, hw] as const);
+    }
+  }
+
+  return graph;
+}
+
+/**
+ * Walk the `TrustAttestationSemiring` graph to produce, per reachable
+ * candidate, the bottleneck HW score across the optimal-trust path.
+ * Maps node id → chain-HW score. Absent entries (unreachable in the
+ * product traversal) default to `HW_ATTESTATION_NONE` (zero) at lookup,
+ * which under the boost formula leaves trust untouched.
+ */
+function computeChainHwScores(
+  selfId: MotebitId,
+  candidates: CandidateProfile[],
+  peerEdges?: PeerEdge[],
+  callerGuardianPublicKey?: string,
+): Map<string, HardwareAttestationScore> {
+  const productGraph = buildTrustAttestationGraph(
+    selfId,
+    candidates,
+    peerEdges,
+    callerGuardianPublicKey,
+  );
+  const productPaths = optimalPaths(productGraph, selfId);
+  const out = new Map<string, HardwareAttestationScore>();
+  for (const [nodeId, [, hwScore]] of productPaths) {
+    if (nodeId === selfId) continue;
+    out.set(nodeId, hwScore);
+  }
+  return out;
+}
+
+/**
+ * Fold the chain-HW bottleneck into composed trust at ranking time.
+ *
+ * `trust * (1 + chainHw × HARDWARE_ATTESTATION_BOOST)` — same formula
+ * as the previous scalar-at-terminal application, but `chainHw` is now
+ * the bottleneck-min across the path rather than the terminal's local
+ * claim. Absent claim anywhere in the chain → chainHw = 0 → trust
+ * untouched (the semiring-zero annihilation property).
+ *
+ * Caps at 1.0 to preserve the [0, 1] trust domain.
+ */
+function applyHardwareAttestationBoost(
+  trust: number,
+  chainHwScore: HardwareAttestationScore,
+): number {
+  return Math.min(1.0, trust * (1 + chainHwScore * HARDWARE_ATTESTATION_BOOST));
+}
+
 // ── Shared Scoring Core ─────────────────────────────────────────────
 //
 // Single source of truth for route → RouteScore conversion.
@@ -252,15 +413,21 @@ function scoreRoute(
   requirements: TaskRequirements,
   weights: Required<RoutingWeights>,
   compositeFunction?: CompositeFunction,
+  chainHwScore: HardwareAttestationScore = 0,
 ): RouteScore | null {
   // Capability match is a hard gate
   const capabilityMatch = computeCapabilityMatch(candidate, requirements);
   if (capabilityMatch === 0 && requirements.required_capabilities.length > 0) return null;
 
   // Semiring values — used directly from the algebraic computation.
-  // trust ∈ [0,1]: composed multiplicatively along chains (TrustSemiring)
+  // trust ∈ [0,1]: composed multiplicatively along chains (TrustSemiring),
+  //   then boosted by the hardware-attestation CHAIN BOTTLENECK (not the
+  //   terminal's local claim) via `applyHardwareAttestationBoost`. The
+  //   boost reflects the weakest-link custody of the entire path: a
+  //   single `software` intermediate (0.1) caps the chain bonus at ~2%,
+  //   any absent claim collapses it to zero.
   // reliability ∈ [0,1]: composed multiplicatively along chains (ReliabilitySemiring)
-  const trust = route.trust;
+  const trust = applyHardwareAttestationBoost(route.trust, chainHwScore);
   const reliability = route.reliability;
 
   // Additive accumulators — need normalization to [0,1] (lower is better → invert)
@@ -372,6 +539,18 @@ export function graphRankCandidates(
   );
   const paths = optimalPaths(graph, selfId);
 
+  // Parallel traversal over `TrustAttestationSemiring` — one pass, one
+  // algebra, yields the chain-bottleneck HW score for every reachable
+  // candidate. See `applyHardwareAttestationBoost` at the ranking
+  // boundary; the boost formula is unchanged, the argument is now the
+  // chain-min instead of the terminal-local score.
+  const chainHw = computeChainHwScores(
+    selfId,
+    candidates,
+    config?.peerEdges,
+    config?.callerGuardianPublicKey,
+  );
+
   const candidateMap = new Map<string, CandidateProfile>();
   for (const c of candidates) candidateMap.set(c.motebit_id, c);
 
@@ -385,6 +564,7 @@ export function graphRankCandidates(
       requirements,
       weights,
       compositeFn,
+      chainHw.get(nodeId) ?? 0,
     );
     if (score) scores.push(score);
   }
@@ -405,7 +585,7 @@ export function graphRankCandidates(
 export function computeTrustClosure(
   selfId: MotebitId,
   candidates: CandidateProfile[],
-  peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>,
+  peerEdges?: PeerEdge[],
 ): Map<string, number> {
   const graph = buildRoutingGraph(selfId, candidates, peerEdges);
   const trustGraph = projectGraph(graph, TrustSemiring, (w: RouteWeight) => w.trust);
@@ -434,7 +614,7 @@ export function findTrustedRoute(
   selfId: MotebitId,
   targetId: MotebitId,
   candidates: CandidateProfile[],
-  peerEdges?: Array<{ from: string; to: string; weight: RouteWeight }>,
+  peerEdges?: PeerEdge[],
 ): { trust: number; path: string[] } | null {
   const graph = buildRoutingGraph(selfId, candidates, peerEdges);
   const trustGraph = projectGraph(graph, TrustSemiring, (w: RouteWeight) => w.trust);
@@ -504,6 +684,14 @@ export function explainedRankCandidates(
   // 3. Run optimalPaths over the annotated graph
   const annotatedPaths = optimalPaths(annotatedGraph, selfId);
 
+  // 3b. Parallel chain-HW bottleneck traversal (see `graphRankCandidates`).
+  const chainHw = computeChainHwScores(
+    selfId,
+    candidates,
+    config?.peerEdges,
+    config?.callerGuardianPublicKey,
+  );
+
   // 4. Score using the shared core, attach provenance
   const candidateMap = new Map<string, CandidateProfile>();
   for (const c of candidates) candidateMap.set(c.motebit_id, c);
@@ -519,6 +707,7 @@ export function explainedRankCandidates(
       requirements,
       weights,
       compositeFn,
+      chainHw.get(nodeId) ?? 0,
     );
     if (!score) continue;
 

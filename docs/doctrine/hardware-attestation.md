@@ -59,7 +59,7 @@ The rank is algebra, not policy-by-switch. `packages/semiring/src/hardware-attes
 | `platform: "software"` (explicit no-hardware)                              | 0.1                                        |
 | Absent claim                                                               | 0.0 (semiring zero, annihilates under `⊗`) |
 
-Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` composes this score into the trust edge via a `HARDWARE_ATTESTATION_BOOST = 0.2` multiplier; swap the encoder for a different policy without touching the algebra.
+Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` lifts a market-local `productSemiring(TrustSemiring, HardwareAttestationSemiring)` over the routing graph — every edge carries a `(trust, hwScore)` tuple, `optimalPaths` bottlenecks HW scores across the whole path in one traversal, and the ranker folds the chain bottleneck into trust via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)` at the scoring boundary. Single-hop candidates recover the prior scalar-at-terminal score; multi-hop chains through a `software` or absent intermediate now score at the weakest link. Swap the encoder for a different policy without touching the algebra.
 
 ## The metabolic split
 

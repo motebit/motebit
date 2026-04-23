@@ -1018,40 +1018,53 @@ describe("hardware attestation trust boost", () => {
     const graph = buildRoutingGraph(SELF_ID, [candidate]);
     const edge = graph.getEdge(SELF_ID, "agent-a")!;
     // FirstContact trust is 0.3; no credential reputation → 0.3.
+    // HW boost applied at ranking time (chain bottleneck), not at the edge.
     expect(edge.trust).toBeCloseTo(0.3, 5);
+    // And the ranked sub_scores.trust reflects no boost (chain-HW = 0 annihilates).
+    const [score] = graphRankCandidates(SELF_ID, [candidate], defaultReqs);
+    expect(score!.sub_scores.trust).toBeCloseTo(0.3, 5);
   });
 
-  it("software sentinel → tiny bump (0.1 × 0.2 = 2% multiplier)", () => {
+  it("software sentinel → tiny bump (0.1 × 0.2 = 2% multiplier) at ranking time", () => {
     const candidate: CandidateProfile = {
       ...baseline(),
       hardware_attestation: { platform: "software" },
     };
+    // Edge carries unboosted blendedTrust — the product-semiring chain
+    // traversal folds chain-HW into trust at `scoreRoute`, not at edge
+    // construction. See graph-routing.ts `applyHardwareAttestationBoost`.
     const graph = buildRoutingGraph(SELF_ID, [candidate]);
     const edge = graph.getEdge(SELF_ID, "agent-a")!;
-    // 0.3 × (1 + 0.1 × 0.2) = 0.306
-    expect(edge.trust).toBeCloseTo(0.306, 5);
+    expect(edge.trust).toBeCloseTo(0.3, 5);
+    // Ranked trust = 0.3 × (1 + 0.1 × 0.2) = 0.306.
+    const [score] = graphRankCandidates(SELF_ID, [candidate], defaultReqs);
+    expect(score!.sub_scores.trust).toBeCloseTo(0.306, 5);
   });
 
-  it("hardware-attested (non-exported) → full 20% boost", () => {
+  it("hardware-attested (non-exported) → full 20% boost at ranking time", () => {
     const candidate: CandidateProfile = {
       ...baseline(),
       hardware_attestation: { platform: "secure_enclave", key_exported: false },
     };
     const graph = buildRoutingGraph(SELF_ID, [candidate]);
     const edge = graph.getEdge(SELF_ID, "agent-a")!;
-    // 0.3 × (1 + 1.0 × 0.2) = 0.36
-    expect(edge.trust).toBeCloseTo(0.36, 5);
+    expect(edge.trust).toBeCloseTo(0.3, 5);
+    // Ranked trust = 0.3 × (1 + 1.0 × 0.2) = 0.36.
+    const [score] = graphRankCandidates(SELF_ID, [candidate], defaultReqs);
+    expect(score!.sub_scores.trust).toBeCloseTo(0.36, 5);
   });
 
-  it("hardware-exported → half boost (0.5 × 0.2 = 10% multiplier)", () => {
+  it("hardware-exported → half boost (0.5 × 0.2 = 10% multiplier) at ranking time", () => {
     const candidate: CandidateProfile = {
       ...baseline(),
       hardware_attestation: { platform: "secure_enclave", key_exported: true },
     };
     const graph = buildRoutingGraph(SELF_ID, [candidate]);
     const edge = graph.getEdge(SELF_ID, "agent-a")!;
-    // 0.3 × (1 + 0.5 × 0.2) = 0.33
-    expect(edge.trust).toBeCloseTo(0.33, 5);
+    expect(edge.trust).toBeCloseTo(0.3, 5);
+    // Ranked trust = 0.3 × (1 + 0.5 × 0.2) = 0.33.
+    const [score] = graphRankCandidates(SELF_ID, [candidate], defaultReqs);
+    expect(score!.sub_scores.trust).toBeCloseTo(0.33, 5);
   });
 
   it("boost caps trust at 1.0 — max possible composed trust never exceeds 1", () => {
@@ -1066,7 +1079,10 @@ describe("hardware attestation trust boost", () => {
     };
     const graph = buildRoutingGraph(SELF_ID, [candidate]);
     const edge = graph.getEdge(SELF_ID, "agent-a")!;
+    // Edge stays in [0, 1]; boost-capped final trust also stays bounded.
     expect(edge.trust).toBeLessThanOrEqual(1.0);
+    const [score] = graphRankCandidates(SELF_ID, [candidate], defaultReqs);
+    expect(score!.sub_scores.trust).toBeLessThanOrEqual(1.0);
   });
 
   it("HW-attested candidate ranks above software-only candidate with same baseline", () => {
@@ -1089,5 +1105,367 @@ describe("hardware attestation trust boost", () => {
     const hwScore = scores.find((s) => s.motebit_id === "hw-agent")!;
     const swScore = scores.find((s) => s.motebit_id === "sw-agent")!;
     expect(hwScore.composite).toBeGreaterThan(swScore.composite);
+  });
+});
+
+// ── Chain bottleneck: HardwareAttestationSemiring composition ──────
+//
+// The semiring's reason for existing is "a chain is only as strongly
+// attested as its weakest link." These tests pin the composition at
+// the routing boundary — a single `software` hop caps the entire
+// chain's HW bonus at ~2%, and an absent claim anywhere annihilates
+// the HW axis to zero (the semiring-zero property).
+
+describe("hardware attestation chain bottleneck (product semiring)", () => {
+  // Pin exact composite for a direct-match, single-hop candidate with
+  // `hardware_attestation: { platform: "secure_enclave" }`. This is the
+  // regression test the refactor must not move: before the refactor the
+  // HW boost baked into edge.trust at graph construction; after, it
+  // folds at ranking time via the chain-bottleneck. Single-hop paths
+  // have a one-edge chain, so bottleneck == local claim == identical
+  // composite to the pre-refactor behavior.
+  it("single-hop parity: direct-match candidate scores identically to pre-refactor", () => {
+    const candidate = makeCandidate({
+      motebit_id: asMotebitId("direct-agent"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("direct-agent"),
+        trust_level: AgentTrustLevel.FirstContact,
+      }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+    });
+    const scores = graphRankCandidates(SELF_ID, [candidate], defaultReqs);
+    const score = scores[0]!;
+    // blendedTrust = 0.3 (FirstContact); chainHw = 1.0 (single hop, local SE).
+    // trust = 0.3 × (1 + 1.0 × 0.2) = 0.36
+    expect(score.sub_scores.trust).toBeCloseTo(0.36, 10);
+    // Composite (default weights): 0.36*0.3 + costScore*0.2 + latencyNorm*0.15 + reliability*0.15 + riskScore*0.2
+    //   costScore = 1/(1+0.01) ≈ 0.99010... (cost=0.01 from default pricing)
+    //   latencyNorm = 1/(1+1000/1000) = 0.5 (avg_ms=1000)
+    //   reliability = 8/10 (8 successful / 2 failed) = 0.8 — exceeds SLA floor of 0.99? 0.99 wins per floor logic
+    // Recompute: trust_record.avg_quality unset (=1.0 default), quality_sample_count unset (=0) — SLA floor 0.99 applies.
+    //   riskScore = 1/(1+0) = 1.0 (no regulatory_risk)
+    //   composite = 0.36*0.3 + 0.99010*0.2 + 0.5*0.15 + 0.99*0.15 + 1.0*0.2
+    //             = 0.108 + 0.198020 + 0.075 + 0.1485 + 0.2 = 0.729520...
+    expect(score.composite).toBeCloseTo(
+      0.36 * 0.3 + (1 / 1.01) * 0.2 + 0.5 * 0.15 + 0.99 * 0.15 + 1.0 * 0.2,
+      10,
+    );
+  });
+
+  // Multi-hop bottleneck: the point of this change. A candidate reached
+  // ONLY via a software-attested intermediary gets the software-strength
+  // HW boost, while a candidate reached ONLY via a secure_enclave
+  // intermediary gets the full boost. The old scalar-at-terminal code
+  // scored these identically (terminal had same HW); the new code
+  // distinguishes them via the chain-min.
+  it("multi-hop bottleneck: chain through software intermediary scores less than all-SE chain", () => {
+    // Candidate B is only reachable via a peer edge from A. B has no
+    // direct self→B trust (null trust_record → default 0.1, but no
+    // capability match so gets skipped). Give B capabilities and
+    // is_online = true so it gets a direct edge with HW = 1.0 (SE).
+    // Then add a peer A→B with HW reflecting A's custody.
+    const targetB = asMotebitId("terminal-b");
+    const swViaA = makeCandidate({
+      motebit_id: asMotebitId("sw-intermediate"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("sw-intermediate"),
+        trust_level: AgentTrustLevel.Trusted,
+      }),
+      listing: makeListing({
+        motebit_id: asMotebitId("sw-intermediate"),
+        capabilities: [], // intermediate doesn't match the target capability
+      }),
+      hardware_attestation: { platform: "software" },
+    });
+    const seViaA = makeCandidate({
+      motebit_id: asMotebitId("se-intermediate"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("se-intermediate"),
+        trust_level: AgentTrustLevel.Trusted,
+      }),
+      listing: makeListing({
+        motebit_id: asMotebitId("se-intermediate"),
+        capabilities: [],
+      }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+    });
+    // Scenario 1: chain via software intermediary. Peer edge A→B carries
+    // A's software claim (HW 0.1); terminal B's direct edge has HW 1.0.
+    // Under product semiring, the self→A→B path has chain HW = min(0.1, 1.0) = 0.1;
+    // the self→B direct path has chain HW = 1.0. The ⊕ picks max per-dim:
+    // trust picks the max-trust path, HW picks max HW. But when there's NO
+    // direct self→B edge (B has no capability? no, B must match caps to
+    // score), we see only the peer-routed path.
+    //
+    // To isolate the chain bottleneck, remove B's capability-matched
+    // direct path by making it reachable only through peer edges:
+    // we can't do that directly (direct self→B edge always exists if
+    // is_online and not blocked), BUT we can use a much stronger peer
+    // trust so the ⊕ prefers that path in BOTH dimensions.
+    //
+    // Simpler test: just compare the two terminal candidates with
+    // identical direct edges but DIFFERENT peer chains feeding them.
+    // Terminal itself has no local HW claim — HW signal comes only
+    // from the peer chain.
+    const terminalNoLocalHw = makeCandidate({
+      motebit_id: targetB,
+      trust_record: null,
+      listing: makeListing({ motebit_id: targetB, capabilities: ["web_search"] }),
+      // no hardware_attestation — local score = 0
+    });
+
+    // peerHigh chosen so chain_trust * 1.2 stays under the 1.0 clamp
+    // (0.9 * peerHigh * 1.2 < 1.0 ⇒ peerHigh < 0.9259). 0.8 is safe.
+    const peerHigh = 0.8;
+    const peerEdgesSoft = [
+      {
+        from: "sw-intermediate",
+        to: targetB,
+        weight: {
+          trust: peerHigh,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        // no hw_attestation → identity (1.0), keeps chain min = intermediate's 0.1
+      },
+    ];
+    const peerEdgesSE = [
+      {
+        from: "se-intermediate",
+        to: targetB,
+        weight: {
+          trust: peerHigh,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+      },
+    ];
+
+    const scoresSoft = graphRankCandidates(SELF_ID, [swViaA, terminalNoLocalHw], defaultReqs, {
+      peerEdges: peerEdgesSoft,
+    });
+    const scoresSE = graphRankCandidates(SELF_ID, [seViaA, terminalNoLocalHw], defaultReqs, {
+      peerEdges: peerEdgesSE,
+    });
+
+    const tSoft = scoresSoft.find((s) => s.motebit_id === targetB)!;
+    const tSE = scoresSE.find((s) => s.motebit_id === targetB)!;
+    // Terminal routed through a software-attested intermediary must
+    // score STRICTLY less than the same terminal routed through an
+    // SE-attested intermediary. Before this refactor they were equal
+    // (terminal had no local HW; boost was 0 in both cases).
+    expect(tSoft.sub_scores.trust).toBeLessThan(tSE.sub_scores.trust);
+    // Quantified: chain trust via intermediate ~ trustLevelToScore(Trusted) * peerTrust = 0.9 * 0.99.
+    //   via-software chainHw = 0.1 (intermediate's), boost = 1 + 0.1*0.2 = 1.02
+    //   via-SE chainHw = 1.0, boost = 1 + 1.0*0.2 = 1.2
+    // Terminal's local-direct path has chainHw = 0 (no claim), so ⊕ for HW picks
+    // the peer-chain's HW (0.1 or 1.0).
+    const chainTrust = 0.9 * peerHigh;
+    expect(tSoft.sub_scores.trust).toBeCloseTo(chainTrust * 1.02, 5);
+    expect(tSE.sub_scores.trust).toBeCloseTo(chainTrust * 1.2, 5);
+  });
+
+  // Mixed-platform chain: pin the exact bottleneck-min score.
+  // Chain (secure_enclave, device_check, secure_enclave) → min(1.0, 1.0, 1.0) = 1.0.
+  // Rewrite to mix: (secure_enclave, software, secure_enclave) → min = 0.1.
+  // The test checks the specific numeric chain score comes through.
+  it("mixed-platform chain scores at the bottleneck value", () => {
+    const targetC = asMotebitId("terminal-c");
+    const a = makeCandidate({
+      motebit_id: asMotebitId("mid-a"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("mid-a"),
+        trust_level: AgentTrustLevel.Trusted,
+      }),
+      listing: makeListing({
+        motebit_id: asMotebitId("mid-a"),
+        capabilities: [],
+      }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+    });
+    const terminal = makeCandidate({
+      motebit_id: targetC,
+      trust_record: null,
+      listing: makeListing({ motebit_id: targetC, capabilities: ["web_search"] }),
+      // no local HW — chain HW comes entirely from the peer edges.
+    });
+
+    // Chain self → mid-a (SE=1.0) → middle-hop (device_check=1.0) → terminal-c (SE=1.0).
+    // Model middle-hop as a peer edge whose `hw_attestation` encodes
+    // device_check's score (1.0). Bottleneck across {1.0, 1.0, 1.0} = 1.0.
+    const allHardware = [
+      {
+        from: "mid-a",
+        to: "mid-b",
+        weight: {
+          trust: 0.95,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        hw_attestation: 1.0, // device_check, non-exported
+      },
+      {
+        from: "mid-b",
+        to: targetC,
+        weight: {
+          trust: 0.95,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        hw_attestation: 1.0, // secure_enclave
+      },
+    ];
+
+    const scoresAllHw = graphRankCandidates(SELF_ID, [a, terminal], defaultReqs, {
+      peerEdges: allHardware,
+    });
+    const termAllHw = scoresAllHw.find((s) => s.motebit_id === targetC)!;
+    // chainTrust = 0.9 * 0.95 * 0.95 = 0.81225; chainHw = min(1,1,1) = 1.0
+    // sub_scores.trust = 0.81225 * (1 + 1.0*0.2) = 0.9747
+    expect(termAllHw.sub_scores.trust).toBeCloseTo(0.9 * 0.95 * 0.95 * 1.2, 5);
+
+    // Same chain, but middle-hop is software (0.1). Bottleneck = min(1, 0.1, 1) = 0.1.
+    const mixed = [
+      {
+        from: "mid-a",
+        to: "mid-b",
+        weight: {
+          trust: 0.95,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        hw_attestation: 0.1, // software intermediate — the weakest link
+      },
+      {
+        from: "mid-b",
+        to: targetC,
+        weight: {
+          trust: 0.95,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        hw_attestation: 1.0,
+      },
+    ];
+    const scoresMixed = graphRankCandidates(SELF_ID, [a, terminal], defaultReqs, {
+      peerEdges: mixed,
+    });
+    const termMixed = scoresMixed.find((s) => s.motebit_id === targetC)!;
+    // chainTrust = 0.9 * 0.95 * 0.95; chainHw = min(1, 0.1, 1) = 0.1
+    // sub_scores.trust = chainTrust * (1 + 0.1*0.2) = chainTrust * 1.02
+    expect(termMixed.sub_scores.trust).toBeCloseTo(0.9 * 0.95 * 0.95 * 1.02, 5);
+    // And strictly less than the all-hardware chain.
+    expect(termMixed.sub_scores.trust).toBeLessThan(termAllHw.sub_scores.trust);
+  });
+
+  // Absent claim ⊗-annihilates: a chain with any `None` HW claim
+  // terminates with chainHw = 0 — the semiring zero, the reason the
+  // composition exists. The chain's trust gets NO HW boost.
+  it("absent claim anywhere in the chain annihilates the HW axis to zero", () => {
+    const targetD = asMotebitId("terminal-d");
+    const a = makeCandidate({
+      motebit_id: asMotebitId("anchor-a"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("anchor-a"),
+        trust_level: AgentTrustLevel.Trusted,
+      }),
+      listing: makeListing({
+        motebit_id: asMotebitId("anchor-a"),
+        capabilities: [],
+      }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+    });
+    const terminal = makeCandidate({
+      motebit_id: targetD,
+      trust_record: null,
+      listing: makeListing({ motebit_id: targetD, capabilities: ["web_search"] }),
+      // no local HW claim
+    });
+    // Peer edge from SE-anchor to terminal, middle hop with NO hw_attestation
+    // defaults to HW identity 1.0 under the composition — that's fine;
+    // the "absent" case we want is when a link EXPLICITLY has hw_attestation
+    // = 0 (semiring zero). Use an explicit intermediate edge with zero HW.
+    const chainWithZero = [
+      {
+        from: "anchor-a",
+        to: "mid-unknown",
+        weight: {
+          trust: 0.95,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        hw_attestation: 0, // absent claim — the zero of HardwareAttestationSemiring
+      },
+      {
+        from: "mid-unknown",
+        to: targetD,
+        weight: {
+          trust: 0.95,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        hw_attestation: 1.0,
+      },
+    ];
+    const scores = graphRankCandidates(SELF_ID, [a, terminal], defaultReqs, {
+      peerEdges: chainWithZero,
+    });
+    const term = scores.find((s) => s.motebit_id === targetD)!;
+    // chainHw = min(1.0, 0, 1.0) = 0 (absent-claim annihilation).
+    // sub_scores.trust = chainTrust * (1 + 0 * 0.2) = chainTrust, NO boost.
+    const chainTrust = 0.9 * 0.95 * 0.95;
+    expect(term.sub_scores.trust).toBeCloseTo(chainTrust, 5);
+    // Quantified difference: compare against the same chain with the
+    // zero replaced by a non-zero HW — the HW-axis zero is what we're
+    // pinning.
+    const chainAllHw = [
+      {
+        from: "anchor-a",
+        to: "mid-unknown",
+        weight: {
+          trust: 0.95,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        hw_attestation: 0.1, // software — smallest nonzero
+      },
+      {
+        from: "mid-unknown",
+        to: targetD,
+        weight: {
+          trust: 0.95,
+          cost: 0,
+          latency: 100,
+          reliability: 1.0,
+          regulatory_risk: 0,
+        } as RouteWeight,
+        hw_attestation: 1.0,
+      },
+    ];
+    const scoresAllHw = graphRankCandidates(SELF_ID, [a, terminal], defaultReqs, {
+      peerEdges: chainAllHw,
+    });
+    const termAllHw = scoresAllHw.find((s) => s.motebit_id === targetD)!;
+    // Chain with all-nonzero HW gets a small boost; chain with an
+    // absent link gets none. Any-nonzero must strictly exceed all-zero.
+    expect(termAllHw.sub_scores.trust).toBeGreaterThan(term.sub_scores.trust);
   });
 });
