@@ -16,7 +16,13 @@
 
 import { readFile } from "node:fs/promises";
 
-import { verify, type ArtifactType, type VerifyResult, type VerifyOptions } from "@motebit/crypto";
+import {
+  verify,
+  type ArtifactType,
+  type HardwareAttestationVerifiers,
+  type VerifyResult,
+  type VerifyOptions,
+} from "@motebit/crypto";
 
 export interface VerifyFileOptions {
   /**
@@ -33,6 +39,18 @@ export interface VerifyFileOptions {
    * default.
    */
   readonly clockSkewSeconds?: number;
+  /**
+   * Optional platform-specific hardware-attestation verifiers. Forwarded
+   * through to `@motebit/crypto::verify` so credentials carrying a
+   * `hardware_attestation` claim for `device_check` / `tpm` /
+   * `play_integrity` / `webauthn` can be verified end-to-end. Leaving
+   * this unset keeps the MIT path fail-closed — hardware-attested
+   * credentials still verify their Ed25519 proof, but the
+   * `hardware_attestation` channel reports `adapter not yet shipped`
+   * (the expected MIT-only behavior). The BSL companion CLI
+   * `@motebit/verifier-hardware` wires all four leaves automatically.
+   */
+  readonly hardwareAttestation?: HardwareAttestationVerifiers;
 }
 
 /**
@@ -53,11 +71,16 @@ export function verifyArtifact(
   opts?: VerifyFileOptions,
 ): Promise<VerifyResult> {
   const cryptoOpts: VerifyOptions | undefined =
-    opts?.expectedType !== undefined || opts?.clockSkewSeconds !== undefined
+    opts?.expectedType !== undefined ||
+    opts?.clockSkewSeconds !== undefined ||
+    opts?.hardwareAttestation !== undefined
       ? {
           ...(opts.expectedType !== undefined && { expectedType: opts.expectedType }),
           ...(opts.clockSkewSeconds !== undefined && {
             clockSkewSeconds: opts.clockSkewSeconds,
+          }),
+          ...(opts.hardwareAttestation !== undefined && {
+            hardwareAttestation: opts.hardwareAttestation,
           }),
         }
       : undefined;

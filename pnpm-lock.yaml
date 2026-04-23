@@ -1797,6 +1797,52 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
 
+  packages/verifier-hardware:
+    dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@motebit/crypto-appattest':
+        specifier: workspace:*
+        version: link:../crypto-appattest
+      '@motebit/crypto-play-integrity':
+        specifier: workspace:*
+        version: link:../crypto-play-integrity
+      '@motebit/crypto-tpm':
+        specifier: workspace:*
+        version: link:../crypto-tpm
+      '@motebit/crypto-webauthn':
+        specifier: workspace:*
+        version: link:../crypto-webauthn
+      '@motebit/verifier':
+        specifier: workspace:*
+        version: link:../verifier
+    devDependencies:
+      '@noble/curves':
+        specifier: ^1.9.0
+        version: 1.9.7
+      '@noble/ed25519':
+        specifier: ~3.0.1
+        version: 3.0.1
+      '@noble/hashes':
+        specifier: ~1.6.0
+        version: 1.6.1
+      '@peculiar/webcrypto':
+        specifier: ^1.5.0
+        version: 1.5.0
+      '@peculiar/x509':
+        specifier: ^1.12.0
+        version: 1.14.3
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
   packages/virtual-accounts:
     dependencies:
       '@motebit/crypto':

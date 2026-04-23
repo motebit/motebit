@@ -1,0 +1,72 @@
+{
+  "name": "@motebit/verifier-hardware",
+  "version": "0.1.0",
+  "description": "Hardware-attestation-aware CLI for motebit credentials — bundles the four BSL platform verifier leaves (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn) into a single offline `motebit-verify-hw` tool.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "motebit-verify-hw": "./dist/cli.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "LICENSE",
+    "README.md",
+    "CLAUDE.md"
+  ],
+  "sideEffects": false,
+  "license": "BSL-1.1",
+  "keywords": [
+    "motebit",
+    "verify",
+    "hardware-attestation",
+    "app-attest",
+    "tpm",
+    "webauthn"
+  ],
+  "homepage": "https://motebit.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit.git",
+    "directory": "packages/verifier-hardware"
+  },
+  "private": true,
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --parser-options=project:tsconfig.json src/",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@motebit/crypto": "workspace:*",
+    "@motebit/crypto-appattest": "workspace:*",
+    "@motebit/crypto-play-integrity": "workspace:*",
+    "@motebit/crypto-tpm": "workspace:*",
+    "@motebit/crypto-webauthn": "workspace:*",
+    "@motebit/verifier": "workspace:*"
+  },
+  "devDependencies": {
+    "@noble/curves": "^1.9.0",
+    "@noble/ed25519": "~3.0.1",
+    "@noble/hashes": "~1.6.0",
+    "@peculiar/webcrypto": "^1.5.0",
+    "@peculiar/x509": "^1.12.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
