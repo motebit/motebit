@@ -71,13 +71,14 @@ export interface TpmVerifierResult {
  * results — the verifier reports the missing channel explicitly
  * rather than silently passing.
  *
- * These are captured at factory time (via `TpmVerifierConfig.context`)
- * because the current `HardwareAttestationVerifiers.tpm` dispatcher
- * signature passes only `(claim, expectedIdentityHex)` — not the full
- * VC-subject context. Binding at wiring keeps identity verification
- * load-bearing without requiring a dispatcher signature change.
- * Consumers that route directly through `verifyTpmQuote` can thread
- * per-call fields via `TpmVerifyOptions` instead.
+ * The canonical path threads these per-credential through the
+ * `@motebit/crypto::verify` dispatcher: the dispatcher lifts them from
+ * `credentialSubject` and passes them as the third argument to the
+ * `tpm` verifier slot. Consumers wiring `tpmVerifier()` into
+ * `hardwareAttestation.tpm` get identity binding for free. An
+ * alternative path — baking a context into the factory via
+ * `TpmVerifierConfig.context` — is retained for direct callers and
+ * tests; the dispatcher-supplied context wins when both are present.
  */
 export interface TpmVerifierContext {
   readonly expectedMotebitId?: string;
@@ -91,12 +92,11 @@ export interface TpmVerifierConfig {
   /** Optional: inject a fixed clock for deterministic chain-validity checks. */
   readonly now?: () => number;
   /**
-   * Optional: VC-subject context captured at wiring time. See
-   * `TpmVerifierContext`. For end-to-end verification through
-   * `@motebit/crypto::verify`, the caller wires this once with the
-   * credential's motebit_id / device_id / attested_at — the
-   * dispatcher's two-arg calling convention is preserved, and identity
-   * binding lands at the cost of per-credential factory invocation.
+   * Optional: VC-subject context pre-baked at wiring time. See
+   * `TpmVerifierContext`. Useful for direct callers of the returned
+   * function that skip the `@motebit/crypto::verify` dispatcher. When
+   * the dispatcher passes a per-credential context, its fields take
+   * precedence over the pre-baked ones — per-credential always wins.
    */
   readonly context?: TpmVerifierContext;
 }
@@ -104,26 +104,31 @@ export interface TpmVerifierConfig {
 /**
  * Factory — build a `tpm` verifier bound to an optional test-root /
  * clock / context override. The returned function matches the
- * `HardwareAttestationVerifiers.tpm` two-arg signature the
- * `@motebit/crypto` dispatcher calls.
+ * `HardwareAttestationVerifiers.tpm` three-arg signature the
+ * `@motebit/crypto` dispatcher calls — `(claim, expectedIdentityHex,
+ * context?)`.
  */
 export function tpmVerifier(
   config?: TpmVerifierConfig,
-): (claim: HardwareAttestationClaim, expectedIdentityHex: string) => Promise<TpmVerifierResult> {
-  return async (claim, expectedIdentityHex) => {
+): (
+  claim: HardwareAttestationClaim,
+  expectedIdentityHex: string,
+  context?: TpmVerifierContext,
+) => Promise<TpmVerifierResult> {
+  return async (claim, expectedIdentityHex, context) => {
+    // Per-call context (from the dispatcher) wins over factory-time
+    // context. Either can be omitted; the verifier reports the missing
+    // fields in `errors` rather than passing silently.
+    const motebitId = context?.expectedMotebitId ?? config?.context?.expectedMotebitId;
+    const deviceId = context?.expectedDeviceId ?? config?.context?.expectedDeviceId;
+    const attestedAt = context?.expectedAttestedAt ?? config?.context?.expectedAttestedAt;
     const opts: TpmVerifyOptions = {
       expectedIdentityPublicKeyHex: expectedIdentityHex,
       ...(config?.rootPems !== undefined ? { rootPems: config.rootPems } : {}),
       ...(config?.now !== undefined ? { now: config.now } : {}),
-      ...(config?.context?.expectedMotebitId !== undefined
-        ? { expectedMotebitId: config.context.expectedMotebitId }
-        : {}),
-      ...(config?.context?.expectedDeviceId !== undefined
-        ? { expectedDeviceId: config.context.expectedDeviceId }
-        : {}),
-      ...(config?.context?.expectedAttestedAt !== undefined
-        ? { expectedAttestedAt: config.context.expectedAttestedAt }
-        : {}),
+      ...(motebitId !== undefined ? { expectedMotebitId: motebitId } : {}),
+      ...(deviceId !== undefined ? { expectedDeviceId: deviceId } : {}),
+      ...(attestedAt !== undefined ? { expectedAttestedAt: attestedAt } : {}),
     };
     const detail = await verifyTpmQuote(claim, opts);
     return {

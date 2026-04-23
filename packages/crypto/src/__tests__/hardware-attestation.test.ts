@@ -374,6 +374,66 @@ describe("verifyHardwareAttestationClaim — non-SE platforms", () => {
     expect(result.platform).toBe("webauthn");
   });
 
+  it("delegates to the injected tpm verifier when wired, threading context", async () => {
+    // Regression: an earlier revision dispatched `tpm` with only two args
+    // so the injected verifier never received the per-credential context.
+    // TPM's identity-binding step requires motebit_id / device_id /
+    // attested_at to re-derive the canonical body the Rust bridge hashed
+    // into `extraData`. If the third arg ever drops, TPM-attested
+    // credentials silently fail identity binding.
+    const fakeVerifier = vi.fn(async () => ({
+      valid: true,
+      errors: [],
+    }));
+    const ctx = {
+      expectedMotebitId: MOTEBIT_ID,
+      expectedDeviceId: DEVICE_ID,
+      expectedAttestedAt: 1_700_000_000_000,
+    };
+    const result = await verifyHardwareAttestationClaim(
+      { platform: "tpm", attestation_receipt: "fake" },
+      IDENTITY_HEX,
+      { tpm: fakeVerifier },
+      ctx,
+    );
+    expect(fakeVerifier).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: "tpm" }),
+      IDENTITY_HEX,
+      ctx,
+    );
+    expect(result.valid).toBe(true);
+    expect(result.platform).toBe("tpm");
+  });
+
+  it("delegates to the injected playIntegrity verifier when wired, threading context", async () => {
+    // Regression: same gap as `tpm`. Play Integrity binds the identity via
+    // `payload.nonce === base64url(SHA256(canonical body))` — without the
+    // threaded motebit_id / device_id / attested_at the verifier cannot
+    // reconstruct the body and identity_bound falls to false.
+    const fakeVerifier = vi.fn(async () => ({
+      valid: true,
+      errors: [],
+    }));
+    const ctx = {
+      expectedMotebitId: MOTEBIT_ID,
+      expectedDeviceId: DEVICE_ID,
+      expectedAttestedAt: 1_700_000_000_000,
+    };
+    const result = await verifyHardwareAttestationClaim(
+      { platform: "play_integrity", attestation_receipt: "fake" },
+      IDENTITY_HEX,
+      { playIntegrity: fakeVerifier },
+      ctx,
+    );
+    expect(fakeVerifier).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: "play_integrity" }),
+      IDENTITY_HEX,
+      ctx,
+    );
+    expect(result.valid).toBe(true);
+    expect(result.platform).toBe("play_integrity");
+  });
+
   it("returns valid:false + platform:null for an off-enum platform", async () => {
     const result = await verifyHardwareAttestationClaim(
       {

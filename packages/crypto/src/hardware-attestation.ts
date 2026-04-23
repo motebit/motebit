@@ -179,11 +179,27 @@ export interface HardwareAttestationVerifiers {
   readonly tpm?: (
     claim: HardwareAttestationClaim,
     expectedIdentityPublicKeyHex: string,
-  ) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+    context?: DeviceCheckVerifierContext,
+  ) =>
+    | HardwareAttestationVerifyResult
+    | PromiseLike<HardwareAttestationVerifyResult>
+    | { readonly valid: boolean; readonly errors: ReadonlyArray<{ readonly message: string }> }
+    | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{ readonly message: string }>;
+      }>;
   readonly playIntegrity?: (
     claim: HardwareAttestationClaim,
     expectedIdentityPublicKeyHex: string,
-  ) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+    context?: DeviceCheckVerifierContext,
+  ) =>
+    | HardwareAttestationVerifyResult
+    | PromiseLike<HardwareAttestationVerifyResult>
+    | { readonly valid: boolean; readonly errors: ReadonlyArray<{ readonly message: string }> }
+    | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{ readonly message: string }>;
+      }>;
   readonly webauthn?: (
     claim: HardwareAttestationClaim,
     expectedIdentityPublicKeyHex: string,
@@ -260,7 +276,10 @@ export function verifyHardwareAttestationClaim(
       return { valid: false, platform, errors };
     case "tpm":
       if (verifiers?.tpm) {
-        return dispatchInjected(platform, verifiers.tpm(claim, expectedIdentityPublicKeyHex));
+        return dispatchInjected(
+          platform,
+          verifiers.tpm(claim, expectedIdentityPublicKeyHex, deviceCheckContext),
+        );
       }
       errors.push({
         message: `platform \`${platform}\` verifier not wired — pass { tpm: ... } via the verifiers parameter to enable`,
@@ -270,7 +289,7 @@ export function verifyHardwareAttestationClaim(
       if (verifiers?.playIntegrity) {
         return dispatchInjected(
           platform,
-          verifiers.playIntegrity(claim, expectedIdentityPublicKeyHex),
+          verifiers.playIntegrity(claim, expectedIdentityPublicKeyHex, deviceCheckContext),
         );
       }
       errors.push({
