@@ -155,7 +155,7 @@ describe("web mintHardwareCredential — WebAuthn happy path", () => {
     );
     expect(createSpy).toHaveBeenCalledOnce();
     // Delegates the challenge as SHA256(canonical body) — 32 bytes.
-    const args = createSpy.mock.calls[0]![0] as { challenge: Uint8Array };
+    const args = (createSpy.mock.calls[0] as unknown as unknown[])[0] as { challenge: Uint8Array };
     expect(args.challenge.length).toBe(32);
   });
 
@@ -176,7 +176,7 @@ describe("web mintHardwareCredential — WebAuthn happy path", () => {
       rpName: "Motebit Test",
       native,
     });
-    const callArgs = createSpy.mock.calls[0]![0] as {
+    const callArgs = (createSpy.mock.calls[0] as unknown as unknown[])[0] as {
       rpId: string;
       rpName: string;
       userId: Uint8Array;
@@ -201,7 +201,7 @@ describe("web mintHardwareCredential — WebAuthn happy path", () => {
       rpId: "motebit.com",
       native,
     });
-    const callArgs = createSpy.mock.calls[0]![0] as { rpName: string };
+    const callArgs = (createSpy.mock.calls[0] as unknown as unknown[])[0] as { rpName: string };
     expect(callArgs.rpName).toBe("Motebit");
   });
 });

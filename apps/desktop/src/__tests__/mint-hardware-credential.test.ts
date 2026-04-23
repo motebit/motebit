@@ -244,7 +244,9 @@ describe("mintHardwareCredential — TPM cascade (Windows / Linux)", () => {
       if (cmd === "tpm_mint_quote") {
         // Bridge reports `not_supported` (e.g. tss-esapi unavailable at
         // link time — today's ship shape). Cascade must step through
-        // to software sentinel, not throw.
+        // to software sentinel, not throw. Tauri rejects with the raw
+        // FailureEnvelope object (non-Error) — we mirror that shape.
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- simulating Tauri's non-Error rejection
         throw { reason: "not_supported", message: "tss-esapi not linked" };
       }
       throw new Error(`unexpected: ${cmd}`);
