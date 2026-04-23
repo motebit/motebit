@@ -70,11 +70,11 @@ Users pinned to `"@motebit/verify": "^0.7.0"` stay on the deprecated 0.x line au
 
 The entire published protocol surface hits 1.0 together as the endgame-pattern milestone. The three-package lineage for verification tooling (verify / verifier / crypto) follows the shape long-lived tool families use — git / libgit2, cargo / tokio, npm / @npm/arborist. The coordinated major signals that this is the architecture intended to hold long-term.
 
-**Operator follow-up after this release lands:**
+**Operator follow-up — run immediately after `pnpm changeset publish` returns:**
 
 ```bash
 npm deprecate @motebit/verify@0.7.0 \
   "Superseded by @motebit/verify@1.x — the canonical CLI. For the library, see @motebit/crypto."
 ```
 
-Replaces the stale deprecation message on the 0.x line with a two-pointer migration guide.
+The current deprecation message on `0.7.0` dates from the 2026-04-09 package rename and still claims "Same MIT license" — factually correct then, stale the moment 1.0.0 ships (the permissive floor is now Apache-2.0). The replacement message points at both migration paths — the CLI (`@motebit/verify@1.x`) and the library (`@motebit/crypto`) — and makes no license claim that can age. Running it immediately after publish keeps the stale-message window down to minutes, not days.
