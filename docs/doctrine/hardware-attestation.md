@@ -59,6 +59,8 @@ The rank is algebra, not policy-by-switch. `packages/semiring/src/hardware-attes
 | `platform: "software"` (explicit no-hardware)                              | 0.1                                        |
 | Absent claim                                                               | 0.0 (semiring zero, annihilates under `⊗`) |
 
+Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Google Play Integrity (Android, Google-JWKS-signed JWT). TPM / StrongBox adapters land additively behind the same result shape.
+
 Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` lifts a market-local `productSemiring(TrustSemiring, HardwareAttestationSemiring)` over the routing graph — every edge carries a `(trust, hwScore)` tuple, `optimalPaths` bottlenecks HW scores across the whole path in one traversal, and the ranker folds the chain bottleneck into trust via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)` at the scoring boundary. Single-hop candidates recover the prior scalar-at-terminal score; multi-hop chains through a `software` or absent intermediate now score at the weakest link. Swap the encoder for a different policy without touching the algebra.
 
 ## The metabolic split
@@ -87,8 +89,6 @@ Every future change to this vertical clears all three:
 
 ## Non-goals in v1
 
-- **iOS / Android platform adapters.** DeviceCheck and Play Integrity land in subsequent passes, each behind the same result shape. Mobile surfaces today inherit `platform: "software"` claims from the CLI-shape path.
-
 - **Windows / Linux TPM.** `tpm2-tss-rs` integration is a separate pass. Desktop-on-non-Apple-Silicon currently emits `platform: "software"`.
 
 - **Chain-of-trust verification.** The SE public key is the self-asserted root in v1. Future adapters verify the platform's own attestation chain (Apple root CA, Google verified-boot chain).
@@ -106,7 +106,12 @@ Live consumers today:
 - `packages/semiring/src/hardware-attestation.ts` — `HardwareAttestationSemiring` + `scoreAttestation`.
 - `packages/market/src/graph-routing.ts` — `HARDWARE_ATTESTATION_BOOST` applied to the trust edge during agent ranking.
 - `packages/market/src/scoring.ts` — `CandidateProfile.hardware_attestation?` field.
-- `packages/encryption/src/hardware-attestation-credential.ts` — canonical VC composer; CLI + desktop both delegate.
+- `packages/encryption/src/hardware-attestation-credential.ts` — canonical VC composer; CLI + desktop + mobile all delegate.
+- `packages/crypto-appattest/` — Apple App Attest chain verifier (pinned Apple root).
+- `packages/crypto-play-integrity/` — Google Play Integrity JWT verifier (pinned Google JWKS, ES256 / RS256 dispatch).
+- `apps/mobile/modules/expo-app-attest/` — iOS native App Attest bridge.
+- `apps/mobile/modules/expo-play-integrity/` — Android native Play Integrity bridge.
+- `apps/mobile/src/mint-hardware-credential.ts` — mobile surface; per-OS cascade (App Attest → SE on iOS; Play Integrity on Android; software sentinel everywhere).
 - `apps/desktop/src-tauri/src/secure_enclave.rs` — Rust SE bridge (macOS-gated).
 - `apps/desktop/src/secure-enclave-bridge.ts` — typed TS wrapper with `SecureEnclaveError` taxonomy.
 - `apps/desktop/src/secure-enclave-attest.ts` — high-level `mintAttestationClaim` with software fallback.

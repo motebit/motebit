@@ -12,16 +12,24 @@
  * the single source of truth. Only the hardware_attestation claim
  * varies per surface.
  *
- * Mobile's cascade (strongest proof first):
- *   1. Apple App Attest (`platform: "device_check"`) — chain-verified
- *      against the pinned Apple root by `@motebit/crypto-appattest`.
- *      Strongest signal: the Apple CA attests the hardware keypair
- *      binding on top of the Secure Enclave's custody.
- *   2. Secure Enclave (`platform: "secure_enclave"`) — in-process
- *      ECDSA-P256 receipt verifiable by `@motebit/crypto`. Proves
- *      hardware custody but not Apple-signed provenance.
- *   3. Software (`platform: "software"`) — truthful "no hardware
- *      channel" sentinel. Safe to ship; scored lower by the semiring.
+ * Mobile's cascade (strongest proof first, per OS):
+ *   iOS:
+ *     1. Apple App Attest (`platform: "device_check"`) — chain-verified
+ *        against the pinned Apple root by `@motebit/crypto-appattest`.
+ *        Strongest signal: the Apple CA attests the hardware keypair
+ *        binding on top of the Secure Enclave's custody.
+ *     2. Secure Enclave (`platform: "secure_enclave"`) — in-process
+ *        ECDSA-P256 receipt verifiable by `@motebit/crypto`. Proves
+ *        hardware custody but not Apple-signed provenance.
+ *     3. Software (`platform: "software"`) — truthful "no hardware
+ *        channel" sentinel. Safe to ship; scored lower by the semiring.
+ *   Android:
+ *     1. Google Play Integrity (`platform: "play_integrity"`) — JWT
+ *        chain-verified against the pinned Google JWKS by
+ *        `@motebit/crypto-play-integrity`. The Android analogue of
+ *        App Attest — Google signs a verdict binding the motebit nonce
+ *        to the APK signing identity and device integrity level.
+ *     2. Software — same truthful sentinel.
  *
  * Each step's failure degrades to the next — errors are never
  * surfaced to the user, and a false hardware claim is never emitted.
@@ -40,11 +48,18 @@ import {
 // Enforced by `check-app-primitives`.
 import type { HardwareAttestationClaim } from "@motebit/sdk";
 
+import { Platform } from "react-native";
+
 import {
   appAttestAvailable,
   appAttestMint,
   type NativeAppAttest,
 } from "../modules/expo-app-attest/src/ExpoAppAttestModule";
+import {
+  playIntegrityAvailable,
+  playIntegrityMint,
+  type NativePlayIntegrity,
+} from "../modules/expo-play-integrity/src/ExpoPlayIntegrityModule";
 import {
   seAvailable,
   seMintAttestation,
@@ -78,6 +93,18 @@ export interface MintHardwareCredentialOptions {
    * uses the default-loaded Expo module.
    */
   readonly nativeAppAttest?: NativeAppAttest;
+  /**
+   * Injectable Play Integrity native module. Tests pass a fake
+   * implementing `{ playIntegrityAvailable, playIntegrityMint }`;
+   * production uses the default-loaded Expo module.
+   */
+  readonly nativePlayIntegrity?: NativePlayIntegrity;
+  /**
+   * Platform override (defaults to `Platform.OS`). Tests pin
+   * `"ios"` / `"android"` explicitly so the cascade branch under test
+   * is deterministic without spinning up a React Native runtime.
+   */
+  readonly platform?: "ios" | "android" | "web" | "windows" | "macos";
 }
 
 /**
@@ -112,7 +139,46 @@ export async function mintAttestationClaim(
   opts: MintHardwareCredentialOptions,
 ): Promise<HardwareAttestationClaim> {
   const attestedAt = (opts.now ?? Date.now)();
+  const platform = opts.platform ?? Platform.OS;
 
+  if (platform === "android") {
+    // Android path: Play Integrity first, then software. Neither App
+    // Attest nor Secure Enclave exists on Android (both are iOS-only);
+    // calling them would waste a round-trip and rely on the stub
+    // rejection path.
+    if (await playIntegrityAvailable(opts.nativePlayIntegrity)) {
+      try {
+        const result = await playIntegrityMint(
+          {
+            motebitId: opts.motebitId,
+            deviceId: opts.deviceId,
+            identityPublicKeyHex: opts.identityPublicKeyHex.toLowerCase(),
+            attestedAt,
+          },
+          opts.nativePlayIntegrity,
+        );
+        return {
+          platform: "play_integrity",
+          key_exported: false,
+          // Wire format: the Play Integrity JWT itself (3-segment
+          // `header.payload.signature`). `@motebit/crypto-play-integrity`
+          // splits on `.`, base64url-decodes, verifies against the
+          // pinned Google JWKS, then re-derives the motebit nonce from
+          // the caller's identity fields. The JWT already carries the
+          // platform discriminator inside its payload; the wire
+          // format here is the raw token.
+          attestation_receipt: result.jwt,
+        };
+      } catch {
+        // Every PlayIntegrityError reason degrades to software. Never
+        // surface an error; never emit a false hardware claim.
+      }
+    }
+    return softwareFallback();
+  }
+
+  // iOS (default) path — unchanged cascade: App Attest → Secure Enclave
+  // → software.
   // 1. App Attest — strongest available signal.
   if (await appAttestAvailable(opts.nativeAppAttest)) {
     try {

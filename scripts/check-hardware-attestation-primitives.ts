@@ -221,6 +221,17 @@ function scan(): Violation[] {
     "packages/crypto-appattest/src/verify.ts",
     "packages/crypto-appattest/src/index.ts",
     "packages/crypto-appattest/src/cbor.ts",
+    // `@motebit/crypto-play-integrity` is the canonical Play Integrity
+    // verifier — the BSL leaf `@motebit/crypto` delegates to when a
+    // `HardwareAttestationClaim` declares `platform: "play_integrity"`.
+    // `jwt.ts` carries the raw ES256 primitive call (p256.verify) that
+    // this gate would otherwise flag under Rule B; per the same
+    // per-platform-canonical-home principle, it is the single
+    // authorized caller for Play Integrity JWT verification.
+    "packages/crypto-play-integrity/src/verify.ts",
+    "packages/crypto-play-integrity/src/index.ts",
+    "packages/crypto-play-integrity/src/jwt.ts",
+    "packages/crypto-play-integrity/src/google-jwks.ts",
   ]);
 
   const scanRoots: string[] = [];

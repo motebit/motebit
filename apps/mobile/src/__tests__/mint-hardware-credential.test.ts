@@ -31,18 +31,28 @@
 import { describe, expect, it, beforeAll, vi } from "vitest";
 
 // Mock `expo`'s `requireNativeModule` before the mint-hardware-credential
-// module evaluates — otherwise both the Secure Enclave shim's top-level
-// `requireNativeModule("ExpoSecureEnclave")` and the App Attest shim's
-// `requireNativeModule("ExpoAppAttest")` would throw in Node. Each
-// test injects its own fake native module, so the global stub is a
-// no-op whose methods are never actually called.
+// module evaluates — otherwise each shim's top-level
+// `requireNativeModule("Expo*")` call would throw in Node. Each test
+// injects its own fake native module, so the global stub is a no-op
+// whose methods are never actually called.
 vi.mock("expo", () => ({
   requireNativeModule: (name: string) => {
     if (name === "ExpoAppAttest") {
       return { appAttestAvailable: vi.fn(), appAttestMint: vi.fn() };
     }
+    if (name === "ExpoPlayIntegrity") {
+      return { playIntegrityAvailable: vi.fn(), playIntegrityMint: vi.fn() };
+    }
     return { seAvailable: vi.fn(), seMintAttestation: vi.fn() };
   },
+}));
+
+// `react-native` ships a non-trivial runtime; all we need from it is
+// `Platform.OS` as a default for the cascade, and every test overrides
+// that via the `platform` option anyway. Stubbing keeps the unit tests
+// Node-portable without pulling in the RN module graph.
+vi.mock("react-native", () => ({
+  Platform: { OS: "ios" },
 }));
 
 import * as ed from "@noble/ed25519";
@@ -58,6 +68,8 @@ import type { NativeSecureEnclave } from "../../modules/expo-secure-enclave/src/
 import type { SeMintResult } from "../../modules/expo-secure-enclave/src/ExpoSecureEnclave.types";
 import type { NativeAppAttest } from "../../modules/expo-app-attest/src/ExpoAppAttestModule";
 import type { AppAttestMintResult } from "../../modules/expo-app-attest/src/ExpoAppAttest.types";
+import type { NativePlayIntegrity } from "../../modules/expo-play-integrity/src/ExpoPlayIntegrityModule";
+import type { PlayIntegrityMintResult } from "../../modules/expo-play-integrity/src/ExpoPlayIntegrity.types";
 
 beforeAll(() => {
   if (!ed.hashes.sha512) {
@@ -191,6 +203,136 @@ function fakeAppAttestMint(): AppAttestMintResult {
     client_data_hash_base64: toBase64Url(new Uint8Array(32)),
   };
 }
+
+/** Build a `NativePlayIntegrity` fake with the given behaviours. */
+function makeNativePlayIntegrity(opts: {
+  available: boolean;
+  mint?: (args: {
+    motebitId: string;
+    deviceId: string;
+    identityPublicKeyHex: string;
+    attestedAt: number;
+  }) => PlayIntegrityMintResult | Promise<PlayIntegrityMintResult>;
+  mintThrows?: unknown;
+}): NativePlayIntegrity {
+  return {
+    playIntegrityAvailable: async () => opts.available,
+    playIntegrityMint: async (args: {
+      motebitId: string;
+      deviceId: string;
+      identityPublicKeyHex: string;
+      attestedAt: number;
+    }) => {
+      if (opts.mintThrows !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- simulating native-module rejection shape
+        throw opts.mintThrows;
+      }
+      if (!opts.mint) throw new Error("no mint impl provided");
+      return opts.mint(args);
+    },
+  } as unknown as NativePlayIntegrity;
+}
+
+/** A minimal Play Integrity shape — an opaque JWT string + echoed nonce. */
+function fakePlayIntegrityMint(): PlayIntegrityMintResult {
+  const header = toBase64Url(
+    new TextEncoder().encode(JSON.stringify({ alg: "ES256", kid: "kid-fake" })),
+  );
+  const payload = toBase64Url(new TextEncoder().encode(JSON.stringify({ nonce: "fake" })));
+  const sig = toBase64Url(new Uint8Array(64));
+  return {
+    jwt: `${header}.${payload}.${sig}`,
+    nonce_base64url: "fake",
+  };
+}
+
+// ── Android Play Integrity happy path ───────────────────────────────
+
+describe("mintHardwareCredential — Play Integrity happy path (Android)", () => {
+  it("emits platform:'play_integrity' with the raw JWT as the receipt when PI is available", async () => {
+    const id = await makeIdentity();
+    const nativePlayIntegrity = makeNativePlayIntegrity({
+      available: true,
+      mint: fakePlayIntegrityMint,
+    });
+    const cred = await mintHardwareCredential({
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot",
+      deviceId: "android-dev-1",
+      now: () => 1_700_000_000_000,
+      platform: "android",
+      nativePlayIntegrity,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("play_integrity");
+    const receipt = cred.credentialSubject.hardware_attestation.attestation_receipt;
+    expect(receipt).toBeDefined();
+    // The Play Integrity wire format is the raw JWT — 3 segments by
+    // construction.
+    expect(receipt!.split(".").length).toBe(3);
+  });
+
+  it("falls back to software on Android when Play Integrity is unavailable", async () => {
+    const id = await makeIdentity();
+    const nativePlayIntegrity = makeNativePlayIntegrity({ available: false });
+    const cred = await mintHardwareCredential({
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot",
+      deviceId: "android-dev-1",
+      now: () => 1_700_000_000_000,
+      platform: "android",
+      nativePlayIntegrity,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("software");
+  });
+
+  it("falls back to software on Android when Play Integrity mint throws", async () => {
+    const id = await makeIdentity();
+    const nativePlayIntegrity = makeNativePlayIntegrity({
+      available: true,
+      mintThrows: Object.assign(new Error("google services unavailable"), {
+        code: "platform_blocked",
+      }),
+    });
+    const cred = await mintHardwareCredential({
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot",
+      deviceId: "android-dev-1",
+      now: () => 1_700_000_000_000,
+      platform: "android",
+      nativePlayIntegrity,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("software");
+  });
+
+  it("does not consult App Attest / SE on Android even if their fakes claim available", async () => {
+    // The cascade is OS-scoped: on Android the iOS adapters are never
+    // consulted, regardless of their stub behaviour. This test documents
+    // that routing intent.
+    const id = await makeIdentity();
+    const nativePlayIntegrity = makeNativePlayIntegrity({ available: false });
+    const nativeAppAttest = makeNativeAppAttest({ available: true, mint: fakeAppAttestMint });
+    const native = makeNative({ available: true, mint: simulateSeMint });
+    const cred = await mintHardwareCredential({
+      identityPublicKeyHex: id.publicKeyHex,
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      motebitId: "mot",
+      deviceId: "android-dev-1",
+      now: () => 1_700_000_000_000,
+      platform: "android",
+      nativePlayIntegrity,
+      nativeAppAttest,
+      native,
+    });
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("software");
+  });
+});
 
 // ── App Attest happy path ───────────────────────────────────────────
 
