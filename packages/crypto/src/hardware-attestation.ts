@@ -184,6 +184,18 @@ export interface HardwareAttestationVerifiers {
     claim: HardwareAttestationClaim,
     expectedIdentityPublicKeyHex: string,
   ) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+  readonly webauthn?: (
+    claim: HardwareAttestationClaim,
+    expectedIdentityPublicKeyHex: string,
+    context?: DeviceCheckVerifierContext,
+  ) =>
+    | HardwareAttestationVerifyResult
+    | PromiseLike<HardwareAttestationVerifyResult>
+    | { readonly valid: boolean; readonly errors: ReadonlyArray<{ readonly message: string }> }
+    | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{ readonly message: string }>;
+      }>;
 }
 
 /**
@@ -263,6 +275,17 @@ export function verifyHardwareAttestationClaim(
       }
       errors.push({
         message: `platform \`${platform}\` verifier not wired — pass { playIntegrity: ... } via the verifiers parameter to enable`,
+      });
+      return { valid: false, platform, errors };
+    case "webauthn":
+      if (verifiers?.webauthn) {
+        return dispatchInjected(
+          platform,
+          verifiers.webauthn(claim, expectedIdentityPublicKeyHex, deviceCheckContext),
+        );
+      }
+      errors.push({
+        message: `platform \`${platform}\` verifier not wired — pass { webauthn: webauthnVerifier(...) } from @motebit/crypto-webauthn to enable`,
       });
       return { valid: false, platform, errors };
     default:

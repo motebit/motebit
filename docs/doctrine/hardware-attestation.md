@@ -52,12 +52,12 @@ The rank is algebra, not policy-by-switch. `packages/semiring/src/hardware-attes
 
 `scoreAttestation(claim)` encodes the claim:
 
-| Claim                                                                      | Score                                      |
-| -------------------------------------------------------------------------- | ------------------------------------------ |
-| `secure_enclave` / `tpm` / `device_check` / `play_integrity`, not exported | 1.0                                        |
-| Any hardware platform, `key_exported: true`                                | 0.5                                        |
-| `platform: "software"` (explicit no-hardware)                              | 0.1                                        |
-| Absent claim                                                               | 0.0 (semiring zero, annihilates under `⊗`) |
+| Claim                                                                                   | Score                                      |
+| --------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `secure_enclave` / `tpm` / `device_check` / `play_integrity` / `webauthn`, not exported | 1.0                                        |
+| Any hardware platform, `key_exported: true`                                             | 0.5                                        |
+| `platform: "software"` (explicit no-hardware)                                           | 0.1                                        |
+| Absent claim                                                                            | 0.0 (semiring zero, annihilates under `⊗`) |
 
 Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` lifts a market-local `productSemiring(TrustSemiring, HardwareAttestationSemiring)` over the routing graph — every edge carries a `(trust, hwScore)` tuple, `optimalPaths` bottlenecks HW scores across the whole path in one traversal, and the ranker folds the chain bottleneck into trust via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)` at the scoring boundary. Single-hop candidates recover the prior scalar-at-terminal score; multi-hop chains through a `software` or absent intermediate now score at the weakest link. Swap the encoder for a different policy without touching the algebra.
 
@@ -107,6 +107,8 @@ Live consumers today:
 - `packages/market/src/graph-routing.ts` — `HARDWARE_ATTESTATION_BOOST` applied to the trust edge during agent ranking.
 - `packages/market/src/scoring.ts` — `CandidateProfile.hardware_attestation?` field.
 - `packages/encryption/src/hardware-attestation-credential.ts` — canonical VC composer; CLI + desktop both delegate.
+- `packages/crypto-webauthn/src/verify.ts` — browser-platform-authenticator packed-attestation verifier; pinned FIDO roots (Apple, Yubico, Microsoft) + self-attestation path.
+- `apps/web/src/mint-hardware-credential.ts` — Web surface; cascades WebAuthn → software via `navigator.credentials.create`.
 - `apps/desktop/src-tauri/src/secure_enclave.rs` — Rust SE bridge (macOS-gated).
 - `apps/desktop/src/secure-enclave-bridge.ts` — typed TS wrapper with `SecureEnclaveError` taxonomy.
 - `apps/desktop/src/secure-enclave-attest.ts` — high-level `mintAttestationClaim` with software fallback.

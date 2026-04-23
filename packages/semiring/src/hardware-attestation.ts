@@ -44,7 +44,7 @@
  * `scoreAttestation(claim)` maps the claim shape to a scalar in [0, 1]:
  *
  *   1.0  — hardware (`secure_enclave` / `tpm` / `device_check` /
- *          `play_integrity`), `key_exported` false/absent
+ *          `play_integrity` / `webauthn`), `key_exported` false/absent
  *   0.5  — hardware, `key_exported: true` (the key left the hardware,
  *          so the binding between "this key signs" and "this hardware
  *          held it" is broken; still better than a software-only key
@@ -141,6 +141,7 @@ export function scoreAttestation(claim: HardwareAttestationClaim | undefined): n
     case "tpm":
     case "device_check":
     case "play_integrity":
+    case "webauthn":
       return claim.key_exported === true
         ? HW_ATTESTATION_HARDWARE_EXPORTED
         : HW_ATTESTATION_HARDWARE;
