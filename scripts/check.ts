@@ -31,7 +31,8 @@
  * gap in the drift-defense system itself.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { availableParallelism } from "node:os";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -254,22 +255,76 @@ interface Result {
   gate: Gate;
   ok: boolean;
   durationMs: number;
+  stdout: string;
+  stderr: string;
 }
 
-function runGate(gate: Gate): Result {
-  const started = Date.now();
-  const cmdArgs = ["--silent", "run", gate.script];
-  if (gate.args && gate.args.length > 0) {
-    // pnpm forwards anything after `--` to the underlying script.
-    cmdArgs.push("--", ...gate.args);
-  }
-  const result = spawnSync("pnpm", cmdArgs, {
-    stdio: "inherit",
-    encoding: "utf-8",
+/**
+ * Run one gate as a child process and buffer its output. Buffering
+ * (instead of inheriting stdio) is what makes parallel execution
+ * readable: interleaved stdout from N gates would be chaos; instead we
+ * capture each gate's output and flush it atomically after the gate
+ * completes, preserving the sequential look of the single-gate era.
+ */
+function runGateAsync(gate: Gate): Promise<Result> {
+  return new Promise((resolvePromise) => {
+    const started = Date.now();
+    const cmdArgs = ["--silent", "run", gate.script];
+    if (gate.args && gate.args.length > 0) {
+      cmdArgs.push("--", ...gate.args);
+    }
+    const child = spawn("pnpm", cmdArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf-8");
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf-8");
+    });
+    child.on("close", (code) => {
+      const durationMs = Date.now() - started;
+      const ok = code === 0;
+      resolvePromise({ gate, ok, durationMs, stdout, stderr });
+    });
+    child.on("error", () => {
+      const durationMs = Date.now() - started;
+      resolvePromise({ gate, ok: false, durationMs, stdout, stderr });
+    });
   });
-  const durationMs = Date.now() - started;
-  const ok = result.status === 0;
-  return { gate, ok, durationMs };
+}
+
+/**
+ * Bounded-concurrency runner — caps parallel gate processes at `limit`
+ * so a 29-gate sweep on a 4-core CI runner doesn't thrash. Preserves the
+ * input order in the returned results so the summary reads predictably.
+ * Flushes each gate's captured output as it completes (not strictly in
+ * order — operators see "X gate just finished" feedback; the final
+ * summary is what's ordered).
+ */
+async function runGatesConcurrent(gates: ReadonlyArray<Gate>, limit: number): Promise<Result[]> {
+  const results: Result[] = new Array(gates.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= gates.length) return;
+      const gate = gates[i]!;
+      const result = await runGateAsync(gate);
+      results[i] = result;
+      // Flush the gate's output atomically so parallel gates don't
+      // interleave mid-line. Stderr-before-stdout matches the
+      // single-gate era's ordering (description printed first, then
+      // the check's ✓/✗ line).
+      if (result.stderr) process.stderr.write(result.stderr);
+      if (result.stdout) process.stdout.write(result.stdout);
+    }
+  }
+
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, gates.length)) }, worker);
+  await Promise.all(workers);
+  return results;
 }
 
 /**
@@ -302,18 +357,16 @@ function assertRegistryCompleteness(): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   assertRegistryCompleteness();
 
-  const results: Result[] = [];
-  let failed = false;
-
-  for (const gate of GATES) {
-    process.stderr.write(`\n▸ ${gate.name} — ${gate.defends}\n`);
-    const result = runGate(gate);
-    results.push(result);
-    if (!result.ok) failed = true;
-  }
+  // Concurrency ceiling — match the runner's reported parallelism but
+  // cap at 8 so a big-ci-box doesn't spawn 32 pnpm processes that
+  // contend for disk I/O. Each gate spawns its own pnpm + tsx, so real
+  // cost scales faster than core count.
+  const limit = Math.min(8, availableParallelism());
+  const results = await runGatesConcurrent(GATES, limit);
+  const failed = results.some((r) => !r.ok);
 
   // Summary
   process.stderr.write("\n─── Drift defense summary ───\n");
@@ -331,4 +384,8 @@ function main(): void {
   process.stderr.write(`\nAll ${GATES.length} drift defenses passed.\n`);
 }
 
-main();
+main().catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`\ncheck runner crashed: ${msg}\n`);
+  process.exit(2);
+});

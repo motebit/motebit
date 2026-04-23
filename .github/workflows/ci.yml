@@ -10,6 +10,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Turbo remote cache — restores build/typecheck/lint/lint:pack outputs for
+# packages whose inputs haven't changed since the last passing run. Each
+# job exports TURBO_TOKEN + TURBO_TEAM automatically via env inheritance.
+# Secrets live in repo settings (TURBO_TOKEN) and repo variables (TURBO_TEAM);
+# when absent the cache silently no-ops and CI falls back to local build,
+# so forks / first-boot runs degrade gracefully.
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+
 jobs:
   check:
     runs-on: ubuntu-latest

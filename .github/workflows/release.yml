@@ -7,6 +7,14 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
+# Turbo remote cache — restores build outputs for packages whose inputs
+# haven't changed since the last passing run. Silently no-ops when the
+# secrets aren't set.
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+
 jobs:
   release:
     runs-on: ubuntu-latest

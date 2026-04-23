@@ -12,6 +12,13 @@ on:
         default: false
         type: boolean
 
+# Turbo remote cache — restores build outputs from the shared cache. Silently
+# no-ops when the secrets aren't set.
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+
 jobs:
   publish:
     runs-on: ubuntu-latest
