@@ -5,7 +5,7 @@
  * Apple Foundation Models need no download manager — baked into iOS.
  * This is MLX-only.
  */
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export const DEFAULT_MLX_MODEL = "mlx-community/Llama-3.2-1B-Instruct-4bit";

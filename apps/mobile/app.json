@@ -17,7 +17,11 @@
         {
           "color": "#6366f1"
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-font",
+      "expo-router",
+      "expo-secure-store"
     ]
   }
 }

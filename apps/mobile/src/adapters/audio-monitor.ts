@@ -22,7 +22,7 @@
 
 import { Audio } from "expo-av";
 import { Platform } from "react-native";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import type { AudioReactivity } from "@motebit/render-engine";
 import { SileroVAD, POSITIVE_THRESHOLD } from "./silero-vad";
 

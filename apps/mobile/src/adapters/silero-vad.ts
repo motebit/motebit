@@ -15,7 +15,7 @@
  * back to energy-only VAD.
  */
 
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 
 // Dynamic import types — resolved at runtime only if onnxruntime is installed
 type OnnxInferenceSession = {

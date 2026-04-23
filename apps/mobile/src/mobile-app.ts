@@ -2073,7 +2073,8 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
 Notifications.setNotificationHandler({
   // eslint-disable-next-line @typescript-eslint/require-await -- Expo API requires async
   handleNotification: async () => ({
-    shouldShowAlert: false,
+    shouldShowBanner: false,
+    shouldShowList: false,
     shouldPlaySound: false,
     shouldSetBadge: false,
   }),

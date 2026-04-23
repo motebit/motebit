@@ -63,7 +63,7 @@ vi.mock("react-native", () => ({
   Platform: { OS: "android" },
 }));
 
-vi.mock("expo-file-system", () => ({
+vi.mock("expo-file-system/legacy", () => ({
   documentDirectory: "/mock/documents/",
   readAsStringAsync: vi.fn(async () => ""),
   EncodingType: { Base64: "base64" },

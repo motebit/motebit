@@ -35,7 +35,7 @@ import {
 } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import * as Sharing from "expo-sharing";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import { SECURE_STORE_KEYS } from "../storage-keys";
 import { APPROVAL_PRESET_CONFIGS } from "../mobile-app";

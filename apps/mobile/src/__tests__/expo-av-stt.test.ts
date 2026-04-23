@@ -28,7 +28,7 @@ vi.mock("expo-av", () => ({
   },
 }));
 
-vi.mock("expo-file-system", () => ({
+vi.mock("expo-file-system/legacy", () => ({
   getInfoAsync: (...args: unknown[]) => mockGetInfoAsync(...args),
   uploadAsync: (...args: unknown[]) => mockUploadAsync(...args),
   FileSystemUploadType: {

@@ -35,7 +35,7 @@ const hoisted = vi.hoisted(() => {
 });
 const createDownloadResumableSpy = hoisted.createDownloadResumableSpy;
 
-vi.mock("expo-file-system", () => ({
+vi.mock("expo-file-system/legacy", () => ({
   documentDirectory: "file:///var/docs/",
   makeDirectoryAsync: vi.fn(() => Promise.resolve()),
   deleteAsync: vi.fn(() => Promise.resolve()),

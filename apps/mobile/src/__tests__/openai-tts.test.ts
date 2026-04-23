@@ -20,7 +20,7 @@ vi.mock("expo-av", () => ({
   },
 }));
 
-vi.mock("expo-file-system", () => ({
+vi.mock("expo-file-system/legacy", () => ({
   cacheDirectory: "/mock/cache/",
   writeAsStringAsync: (...args: unknown[]) => mockWriteString(...args),
   deleteAsync: (...args: unknown[]) => mockDeleteAsync(...args),

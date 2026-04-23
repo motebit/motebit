@@ -10,6 +10,13 @@
         "simulator": true
       }
     },
+    "device-development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "simulator": false
+      }
+    },
     "preview": {
       "distribution": "internal",
       "ios": {
@@ -22,13 +29,7 @@
   },
   "submit": {
     "production": {
-      "ios": {
-        "appleId": "",
-        "ascAppId": "",
-        "appleTeamId": ""
-      },
       "android": {
-        "serviceAccountKeyPath": "",
         "track": "internal"
       }
     }

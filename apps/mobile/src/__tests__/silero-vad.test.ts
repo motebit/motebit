@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mockGetInfoAsync = vi.fn();
 const mockDownloadAsync = vi.fn();
 
-vi.mock("expo-file-system", () => ({
+vi.mock("expo-file-system/legacy", () => ({
   documentDirectory: "/mock/documents/",
   getInfoAsync: (...args: unknown[]) => mockGetInfoAsync(...args),
   downloadAsync: (...args: unknown[]) => mockDownloadAsync(...args),

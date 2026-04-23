@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { Audio } from "expo-av";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import type { TTSProvider, TTSOptions } from "@motebit/voice";
 
 /**

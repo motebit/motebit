@@ -38,6 +38,11 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 export default defineMotebitTest({
   testExclude: ["**/ios/**", "**/android/**"],
   coverageInclude: ["src/**/*.{ts,tsx}"],
+  // SDK 55's expo-modules-core source eagerly references the React
+  // Native `__DEV__` global. Vite runs in node; define the global
+  // here so transitive imports (when a mock gap lets a real module
+  // load) evaluate cleanly.
+  vite: { define: { __DEV__: "false" } },
   coverageExclude: [
     "src/App.tsx", // react-native view layer, not unit-testable in node
     "src/components/**", // react-native components, require RN test runner
