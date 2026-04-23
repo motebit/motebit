@@ -58,6 +58,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/coverage-graduation.md`](docs/doctrine/coverage-graduation.md) — money/identity packages below 80 carry a raise-by date; soft signal via `pnpm coverage-graduation`
 - [`docs/doctrine/proactive-interior.md`](docs/doctrine/proactive-interior.md) — presence mode + 4-phase consolidation cycle + fail-closed proactive tool scope; `runtime.consolidationCycle()` is the only loop
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out
+- [`docs/doctrine/migration-cleanup.md`](docs/doctrine/migration-cleanup.md) — state-holder analysis for migrations + legacy-compat paths; pre-GA is when you reduce holder counts, not when you slogan-strip
 - [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory (34 today)
 
 ## Principles
