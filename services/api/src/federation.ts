@@ -125,7 +125,15 @@ export interface VerifiedSettlement {
 
 // Re-export for test consumers that import from federation.ts
 export { bytesToHex, hexToBytes };
-/** @deprecated Use FixedWindowLimiter directly. Alias kept for test import compatibility. */
+/**
+ * @deprecated since 1.0.0, removed in 1.1.0. Use {@link FixedWindowLimiter} directly.
+ *
+ * Reason: the "PeerRateLimiter" name hardcoded a single consumer (per-peer
+ * federation rate limiting) when the underlying class is a general fixed-
+ * window limiter used by five rate-limit tiers in the relay. Alias kept
+ * for the two test imports that still reference the old name — migrated
+ * to the canonical name at the next minor.
+ */
 export { FixedWindowLimiter as PeerRateLimiter };
 
 // === Database ===

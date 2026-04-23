@@ -50,11 +50,27 @@ export interface AnchoringConfig {
   /** Chain anchor submitter. If unset, batches are signed but not submitted on-chain. */
   submitter?: ChainAnchorSubmitter;
   // --- Legacy EVM config (use submitter instead) ---
-  /** @deprecated Use submitter instead. On-chain RPC URL for EVM contract. */
+  /**
+   * @deprecated since 1.0.0, removed in 1.1.0. Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
+   *
+   * Reason: submitter-based anchoring generalizes across chains
+   * (Solana memo, EVM contract, future rails) and owns its own RPC wiring.
+   * The three flat `chain*` fields only ever made sense for the EVM path.
+   */
   chainRpcUrl?: string;
-  /** @deprecated Use submitter instead. On-chain contract address for EVM. */
+  /**
+   * @deprecated since 1.0.0, removed in 1.1.0. Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
+   *
+   * Reason: paired with {@link chainRpcUrl} — EVM-specific, superseded by
+   * the submitter interface.
+   */
   contractAddress?: string;
-  /** @deprecated Use submitter instead. CAIP-2 chain identifier. Default: "eip155:8453" (Base). */
+  /**
+   * @deprecated since 1.0.0, removed in 1.1.0. Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
+   *
+   * Reason: paired with {@link chainRpcUrl} — EVM-specific, superseded by
+   * the submitter interface. Default was `"eip155:8453"` (Base).
+   */
   chainNetwork?: string;
 }
 
@@ -276,9 +292,13 @@ export async function submitAnchorOnChain(
 /**
  * EVM contract submitter for SettlementAnchor.sol.
  *
- * @deprecated Prefer SolanaMemoSubmitter (identity key signs natively).
- * This submitter requires a separate secp256k1 key and a deployed contract.
- * Retained for operators who specifically want Base/EVM anchoring.
+ * @deprecated since 1.0.0, removed in 2.0.0. Use {@link SolanaMemoSubmitter} instead.
+ *
+ * Reason: the Solana submitter signs with the relay's native Ed25519
+ * identity key — no separate secp256k1 key management, no deployed
+ * contract address to track, no EVM gas economics. EVM anchoring added
+ * operational overhead motebit never needed. Retained through 2.0.0 for
+ * operators who specifically want Base/EVM anchoring continuity.
  *
  * Requires: chainRpcUrl with an unlocked account or signing proxy.
  */

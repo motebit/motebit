@@ -136,12 +136,14 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   // representation is always "local-server" so the rest of the system stays
   // vendor-agnostic.
   //
-  // @deprecated CLI flag alias only — schedule for removal on the next
-  // major version bump (when other breaking changes are communicated). The
-  // persisted-value migration in `extractPersonality` (config.ts) is a
-  // separate concern and stays permanently. The two have different
-  // lifecycles: this is muscle-memory accommodation and sunsets; the
-  // persisted migration must outlive every config.json file in the wild.
+  // @deprecated since 1.0.0, removed in 2.0.0. Use `--provider local-server` instead.
+  //
+  // Reason: muscle-memory accommodation for users coming from the pre-1.0
+  // Ollama-specific provider name. Vendor-neutral CLI flag aligns with
+  // the internal `local-server` representation. The persisted-value
+  // migration in `extractPersonality` (config.ts) has a separate
+  // lifecycle — it's @permanent and reads legacy `default_provider:
+  // "ollama"` entries from every config.json that ever shipped.
   const rawProvider = values.provider === "ollama" ? "local-server" : values.provider;
   const VALID_PROVIDERS: readonly CliProvider[] = [
     "anthropic",

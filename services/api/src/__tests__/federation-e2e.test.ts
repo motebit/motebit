@@ -1058,11 +1058,11 @@ describe("Federation E2E", () => {
   // --- Per-Peer Rate Limiting ---
 
   describe("Per-Peer Rate Limiting", () => {
-    it("PeerRateLimiter allows requests up to the limit then rejects", async () => {
-      // Unit test the PeerRateLimiter class directly to avoid interaction
+    it("FixedWindowLimiter allows requests up to the limit then rejects", async () => {
+      // Unit test the rate limiter class directly to avoid interaction
       // with the per-IP rate limiter in index.ts middleware.
-      const { PeerRateLimiter } = await import("../federation.js");
-      const limiter = new PeerRateLimiter(5, 60_000);
+      const { FixedWindowLimiter } = await import("../rate-limiter.js");
+      const limiter = new FixedWindowLimiter(5, 60_000);
 
       const peerA = "peer-a";
       const peerB = "peer-b";
@@ -1085,9 +1085,9 @@ describe("Federation E2E", () => {
       expect(peerBResult.remaining).toBe(4);
     });
 
-    it("PeerRateLimiter resets after window expires", async () => {
-      const { PeerRateLimiter } = await import("../federation.js");
-      const limiter = new PeerRateLimiter(2, 100); // 100ms window for test speed
+    it("FixedWindowLimiter resets after window expires", async () => {
+      const { FixedWindowLimiter } = await import("../rate-limiter.js");
+      const limiter = new FixedWindowLimiter(2, 100); // 100ms window for test speed
 
       const peerId = "peer-expiry-test";
 

@@ -98,7 +98,13 @@ function computeCapabilityMatch(
 /**
  * Pure: (candidate, requirements, config?) → RouteScore
  *
- * @deprecated Use `graphRankCandidates` from `./graph-routing.js` instead.
+ * @deprecated since 1.0.0, removed in 1.1.0. Use `graphRankCandidates` from `./graph-routing.js` instead.
+ *
+ * Reason: linear weighted sum that ignores multi-hop trust composition,
+ * regulatory risk, and provenance. The graph-routing replacement walks
+ * the trust digraph via the market semiring, yielding routes that the
+ * linear model cannot express. No longer exported from the package entry
+ * — reachable only through the direct file path for legacy-reference use.
  */
 export function scoreCandidate(
   candidate: CandidateProfile,
@@ -170,10 +176,13 @@ export function applyPrecisionToMarketConfig(
 /**
  * Pure: (candidates[], requirements, config?) → sorted RouteScore[] with top N selected
  *
- * @deprecated Use `graphRankCandidates` from `./graph-routing.js` instead.
- * This function uses a linear weighted sum that ignores multi-hop trust
- * composition, regulatory risk, and provenance. Retained for backward
- * compatibility; will be removed in a future version.
+ * @deprecated since 1.0.0, removed in 1.1.0. Use `graphRankCandidates` from `./graph-routing.js` instead.
+ *
+ * Reason: linear weighted sum that ignores multi-hop trust composition,
+ * regulatory risk, and provenance. The graph-routing replacement walks
+ * the trust digraph via the market semiring. No longer exported from the
+ * package entry — reachable only through the direct file path for
+ * legacy-reference use.
  */
 export function rankCandidates(
   candidates: CandidateProfile[],

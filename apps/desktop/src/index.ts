@@ -31,7 +31,7 @@ import {
   DEFAULT_OLLAMA_URL,
   type MotebitPersonalityConfig,
 } from "@motebit/ai-core";
-export type { LocalInferenceDetectionResult, OllamaDetectionResult } from "@motebit/ai-core";
+export type { LocalInferenceDetectionResult } from "@motebit/ai-core";
 import type { MemoryNode, MemoryEdge } from "@motebit/sdk";
 import {
   DeviceCapability,

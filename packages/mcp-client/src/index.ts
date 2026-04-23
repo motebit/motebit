@@ -386,8 +386,15 @@ export interface McpServerConfig {
   callerPrivateKey?: Uint8Array;
   /**
    * Static Bearer token for non-motebit MCP servers that require auth.
-   * @deprecated Use `credentialSource` instead. Kept for backwards compatibility —
-   * internally wrapped as StaticCredentialSource.
+   *
+   * @deprecated since 1.0.0, removed in 2.0.0. Use `credentialSource` (with `StaticCredentialSource` for static tokens) instead.
+   *
+   * Reason: the credential-source interface generalizes — it supports
+   * keyring, vault, OAuth refresh, and per-request resolution patterns
+   * that a static token can't. Existing callers still work: an
+   * `authToken` is transparently wrapped into a `StaticCredentialSource`
+   * at connect time. The wrapper is the documented migration bridge
+   * through the deprecation window.
    */
   authToken?: string;
   /** Dynamic credential source for non-motebit MCP servers. Takes precedence over authToken. */

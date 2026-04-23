@@ -1031,7 +1031,13 @@ export interface LocalInferenceDetectionResult {
   bestModel: string;
 }
 
-/** @deprecated use `LocalInferenceDetectionResult`. Retained for one release cycle. */
+/**
+ * @deprecated since 1.0.0, removed in 1.1.0. Use {@link LocalInferenceDetectionResult} instead.
+ *
+ * Reason: vendor-neutral rename. The detector probes any OpenAI-compat
+ * local server (Ollama, LM Studio, llama.cpp, vLLM) — the `Ollama`
+ * prefix in the type name was a category error.
+ */
 export type OllamaDetectionResult = LocalInferenceDetectionResult;
 
 /**
@@ -1067,7 +1073,12 @@ export async function detectLocalInference(
   return empty;
 }
 
-/** @deprecated use `detectLocalInference`. Retained for one release cycle. */
+/**
+ * @deprecated since 1.0.0, removed in 1.1.0. Use {@link detectLocalInference} instead.
+ *
+ * Reason: paired with {@link OllamaDetectionResult} — vendor-neutral rename
+ * to match the probe's actual scope (any OpenAI-compat local inference server).
+ */
 export const detectOllama = detectLocalInference;
 
 /** Append `/v1` if missing (mirrors sdk's `normalizeLocalServerEndpoint`). */
@@ -1121,10 +1132,17 @@ async function probeOneEndpoint(baseUrl: string): Promise<LocalInferenceDetectio
 // === Deprecated aliases ===
 
 /**
- * @deprecated Use `AnthropicProvider`. Historical name retained for one
- * release cycle. The "Cloud" prefix was a category error — this class
- * has only ever spoken the Anthropic wire protocol.
+ * @deprecated since 1.0.0, removed in 1.1.0. Use {@link AnthropicProvider} instead.
+ *
+ * Reason: the "Cloud" prefix was a category error. This class has only
+ * ever spoken the Anthropic wire protocol — OpenAI and Google live in
+ * sibling provider classes. Vendor-accurate naming.
  */
 export const CloudProvider = AnthropicProvider;
-/** @deprecated Use `AnthropicProviderConfig`. */
+
+/**
+ * @deprecated since 1.0.0, removed in 1.1.0. Use {@link AnthropicProviderConfig} instead.
+ *
+ * Reason: paired with {@link CloudProvider} — vendor-accurate rename.
+ */
 export type CloudProviderConfig = AnthropicProviderConfig;
