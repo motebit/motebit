@@ -13,12 +13,12 @@
 import { sign as ed25519Sign, bytesToHex, canonicalJson } from "@motebit/encryption";
 export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/encryption";
 import { RiskLevel } from "@motebit/sdk";
-import { parse, verify, verifyIdentityFile } from "@motebit/crypto";
+import { parse, verify } from "@motebit/crypto";
 import type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
 // Re-export parse/verify from @motebit/crypto
-export { parse, verify, verifyIdentityFile };
-export type { VerifyResult, LegacyVerifyResult } from "@motebit/crypto";
+export { parse, verify };
+export type { VerifyResult } from "@motebit/crypto";
 export type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
 // --- YAML Serialization (hand-rolled for the flat/predictable schema) ---

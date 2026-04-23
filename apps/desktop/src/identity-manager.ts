@@ -67,7 +67,7 @@ import type { KeyTransferPayload } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
-  verifyIdentityFile as verifyIdentity,
+  verify as verifyIdentity,
   rotate as rotateIdentityFile,
 } from "@motebit/identity-file";
 import type { BootstrapResult } from "./index.js";
@@ -362,8 +362,9 @@ export class IdentityManager {
 
   /** Verify a motebit.md identity file's Ed25519 signature. */
   async verifyIdentityFile(content: string): Promise<{ valid: boolean; error?: string }> {
-    const result = await verifyIdentity(content);
-    return { valid: result.valid, error: result.error };
+    const result = await verifyIdentity(content, { expectedType: "identity" });
+    const error = result.errors?.[0]?.message;
+    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
   }
 
   /**

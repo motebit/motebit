@@ -40,7 +40,7 @@ vi.mock("@motebit/event-log", () => ({
 
 vi.mock("@motebit/identity-file", () => ({
   generate: vi.fn(),
-  verifyIdentityFile: vi.fn(),
+  verify: vi.fn(),
   rotate: vi.fn(),
 }));
 

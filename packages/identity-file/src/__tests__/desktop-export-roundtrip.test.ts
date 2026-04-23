@@ -10,7 +10,23 @@ import { describe, it, expect } from "vitest";
 import { generateKeypair } from "@motebit/encryption";
 import { RiskLevel } from "@motebit/sdk";
 import { generate, parse, governanceToPolicyConfig, toHex } from "../index.js";
-import { verifyIdentityFile as verify } from "@motebit/crypto";
+import { verify as canonicalVerify } from "@motebit/crypto";
+
+// Reshape the canonical verify() output to the flat backward-compat shape
+// this test asserts against. Identity-type narrowing + legacy-style error
+// string — keeps the roundtrip assertions byte-identical to the pre-flip
+// behavior they were written against.
+async function verify(content: string) {
+  const r = await canonicalVerify(content, { expectedType: "identity" });
+  if (r.type !== "identity") {
+    return { valid: false, identity: null, error: "not an identity file" };
+  }
+  return {
+    valid: r.valid,
+    identity: r.identity,
+    ...(r.did !== undefined ? { did: r.did } : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Desktop preset mappings — mirrored from apps/desktop/src/index.ts

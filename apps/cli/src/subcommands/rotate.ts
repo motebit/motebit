@@ -13,7 +13,7 @@
 import * as readline from "node:readline";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { verifyIdentityFile, rotate as rotateIdentityFile } from "@motebit/identity-file";
+import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { rotateIdentityKeys } from "@motebit/core-identity";
 import {
   hexPublicKeyToDidKey,
@@ -74,10 +74,11 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  const verifyResult = await verifyIdentityFile(existingContent);
-  if (!verifyResult.valid || !verifyResult.identity) {
+  const verifyResult = await verify(existingContent, { expectedType: "identity" });
+  if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
     console.error("Error: identity file verification failed.");
-    if (verifyResult.error) console.error(`  ${verifyResult.error}`);
+    const msg = verifyResult.errors?.[0]?.message;
+    if (msg) console.error(`  ${msg}`);
     process.exit(1);
   }
   console.log("  Verified: signature valid");
@@ -135,10 +136,11 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     newPrivateKey: rotateResult.newPrivateKey,
     successionRecord: rotateResult.successionRecord,
   });
-  const rotatedVerify = await verifyIdentityFile(rotatedContent);
+  const rotatedVerify = await verify(rotatedContent, { expectedType: "identity" });
   if (!rotatedVerify.valid) {
     console.error("Error: rotated identity file failed self-verification. Aborting.");
-    if (rotatedVerify.error) console.error(`  ${rotatedVerify.error}`);
+    const msg = rotatedVerify.errors?.[0]?.message;
+    if (msg) console.error(`  ${msg}`);
     secureErase(oldPrivateKey);
     secureErase(rotateResult.newPrivateKey);
     rl.close();

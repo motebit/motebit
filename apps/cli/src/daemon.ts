@@ -36,7 +36,7 @@ import {
   signExecutionReceipt,
   hash as sha256,
 } from "@motebit/encryption";
-import { verifyIdentityFile, governanceToPolicyConfig } from "@motebit/identity-file";
+import { verify, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter } from "@motebit/mcp-server";
 import { MemoryClass } from "@motebit/policy";
 import type {
@@ -133,11 +133,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
   }
 
   // Verify signature
-  const verifyResult = await verifyIdentityFile(identityContent);
-  if (!verifyResult.valid || !verifyResult.identity) {
+  const verifyResult = await verify(identityContent, { expectedType: "identity" });
+  if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
     console.error(`Error: invalid identity file signature.`);
-    if (verifyResult.error != null && verifyResult.error !== "")
-      console.error(`  ${verifyResult.error}`);
+    const msg = verifyResult.errors?.[0]?.message;
+    if (msg) console.error(`  ${msg}`);
     process.exit(1);
   }
 
@@ -735,11 +735,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
       process.exit(1);
     }
 
-    const verifyResult = await verifyIdentityFile(identityContent);
-    if (!verifyResult.valid || !verifyResult.identity) {
+    const verifyResult = await verify(identityContent, { expectedType: "identity" });
+    if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
       console.error(`Error: invalid identity file signature.`);
-      if (verifyResult.error != null && verifyResult.error !== "")
-        console.error(`  ${verifyResult.error}`);
+      const msg = verifyResult.errors?.[0]?.message;
+      if (msg) console.error(`  ${msg}`);
       process.exit(1);
     }
 

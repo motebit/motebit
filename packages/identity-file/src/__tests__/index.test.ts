@@ -5,7 +5,7 @@ import {
   signGuardianRecoverySuccession,
   bytesToHex,
 } from "@motebit/encryption";
-import { verifyIdentityFile as standaloneVerify } from "@motebit/crypto";
+import { verify as canonicalVerify } from "@motebit/crypto";
 import {
   generate,
   parse,
@@ -13,13 +13,29 @@ import {
   rotate,
   toHex,
   verify as verifyFromIdentityFile,
-  verifyIdentityFile as verifyIdentityFileReexport,
   publicKeyToDidKey,
   hexPublicKeyToDidKey,
 } from "../index";
 
-// Use the legacy verifyIdentityFile for backward-compat result shape
-const verify = async (content: string) => standaloneVerify(content);
+// Reshape the canonical `verify()` output to the flat backward-compat
+// shape the existing test assertions in this file expect. Asserting the
+// legacy shape from outside @motebit/crypto keeps these tests decoupled
+// from internal-to-crypto refactors of the IdentityVerifyResult union.
+async function standaloneVerify(content: string) {
+  const r = await canonicalVerify(content, { expectedType: "identity" });
+  if (r.type !== "identity") {
+    return { valid: false, identity: null, error: "not an identity file" };
+  }
+  const error = r.errors?.[0]?.message;
+  return {
+    valid: r.valid,
+    identity: r.identity,
+    ...(r.did !== undefined ? { did: r.did } : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(r.succession !== undefined ? { succession: r.succession } : {}),
+  };
+}
+const verify = standaloneVerify;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -203,7 +219,12 @@ describe("missing or malformed signature", () => {
 
     const result = await verify(content);
     expect(result.valid).toBe(false);
-    expect(result.error).toBe("Missing frontmatter opening ---");
+    // Canonical `verify()` path: the dispatcher fails to recognize a
+    // string without `---` as any signed artifact type, returning the
+    // generic format error. Callers that want identity-specific error
+    // detail can fall back to `parse(content)` which still throws
+    // "Missing frontmatter opening ---".
+    expect(result.error).toBe("Unrecognized artifact format");
   });
 
   it("parse throws on missing closing ---", () => {
@@ -520,10 +541,6 @@ describe("re-exports", () => {
 
   it("re-exports verify from @motebit/crypto", () => {
     expect(typeof verifyFromIdentityFile).toBe("function");
-  });
-
-  it("re-exports verifyIdentityFile from @motebit/crypto", () => {
-    expect(typeof verifyIdentityFileReexport).toBe("function");
   });
 
   it("publicKeyToDidKey produces a did:key string", async () => {

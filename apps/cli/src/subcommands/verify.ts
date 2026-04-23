@@ -12,7 +12,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { verifyIdentityFile } from "@motebit/identity-file";
+import { verify } from "@motebit/identity-file";
 import { verifyVerifiableCredential, verifyVerifiablePresentation } from "@motebit/encryption";
 import type { VerifiableCredential, VerifiablePresentation } from "@motebit/encryption";
 
@@ -126,8 +126,8 @@ async function verifySingleIdentityFile(filePath: string): Promise<void> {
     process.exit(1);
   }
 
-  const result = await verifyIdentityFile(content);
-  if (result.valid && result.identity) {
+  const result = await verify(content, { expectedType: "identity" });
+  if (result.type === "identity" && result.valid && result.identity) {
     const pubKey = result.identity.identity.public_key;
     const fingerprint = pubKey.slice(0, 16) + "...";
     console.log(`Identity:    ${result.identity.motebit_id}`);
@@ -137,8 +137,9 @@ async function verifySingleIdentityFile(filePath: string): Promise<void> {
     process.exit(0);
   } else {
     console.error(`Signature:   invalid`);
-    if (result.error != null && result.error !== "") {
-      console.error(`Error:       ${result.error}`);
+    const msg = result.errors?.[0]?.message;
+    if (msg) {
+      console.error(`Error:       ${msg}`);
     }
     process.exit(1);
   }
@@ -234,16 +235,15 @@ async function verifyBundle(dirPath: string): Promise<void> {
       content = "";
     }
     if (content !== "") {
-      const result = await verifyIdentityFile(content);
-      if (result.valid && result.identity) {
+      const result = await verify(content, { expectedType: "identity" });
+      if (result.type === "identity" && result.valid && result.identity) {
         motebitId = result.identity.motebit_id;
         identityDid = result.did ?? null;
         const idShort = motebitId.length > 12 ? motebitId.slice(0, 12) + "..." : motebitId;
         console.log(`  Identity (motebit.md):     valid — motebit_id: ${idShort}`);
       } else {
-        console.log(
-          `  Identity (motebit.md):     INVALID — ${result.error ?? "signature verification failed"}`,
-        );
+        const msg = result.errors?.[0]?.message ?? "signature verification failed";
+        console.log(`  Identity (motebit.md):     INVALID — ${msg}`);
         passed = false;
       }
     }

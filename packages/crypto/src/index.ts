@@ -255,7 +255,15 @@ export interface VerifyOptions {
 // Legacy VerifyResult — backward compatible with pre-0.4.0
 // ===========================================================================
 
-/** @deprecated Use VerifyResult instead. Kept for backward compatibility. */
+/**
+ * @deprecated since 1.0.0, removed in 2.0.0. Use {@link VerifyResult} instead.
+ *
+ * Reason: pre-0.4.0 return shape with a flat `error: string` field and no
+ * type discriminator. The modern {@link VerifyResult} is a discriminated
+ * union (`type: "identity" | "receipt" | "credential" | "presentation"`)
+ * with a structured `errors: Array<{ message: string }>` — one shape covers
+ * every artifact type motebit verifies.
+ */
 export interface LegacyVerifyResult {
   valid: boolean;
   identity: MotebitIdentityFile | null;
@@ -1292,7 +1300,26 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
 /**
  * Verify a motebit.md identity file. Backward-compatible with pre-0.4.0.
  *
- * @deprecated Use `verify(content)` instead — it handles all artifact types.
+ * @deprecated since 1.0.0, removed in 2.0.0. Use `verify(content, { expectedType: "identity" })` instead.
+ *
+ * Reason: `verify()` is the unified dispatcher for every signed artifact
+ * type (identity, receipt, credential, presentation) and returns a typed
+ * {@link VerifyResult} discriminated union. `verifyIdentityFile` is the
+ * pre-0.4.0 identity-only wrapper kept alive for the deprecation window —
+ * it reshapes `verify()`'s output into the legacy flat-`error` format.
+ *
+ * Migration:
+ * ```ts
+ * // Before:
+ * const r = await verifyIdentityFile(content);
+ * if (r.valid) console.log(r.did);
+ * else console.log(r.error);
+ *
+ * // After:
+ * const r = await verify(content, { expectedType: "identity" });
+ * if (r.type === "identity" && r.valid) console.log(r.did);
+ * else console.log(r.errors?.[0]?.message);
+ * ```
  */
 export async function verifyIdentityFile(content: string): Promise<LegacyVerifyResult> {
   const result = await verifyIdentity(content);

@@ -12,7 +12,12 @@ const mockCtrl = vi.hoisted(() => ({
     isFirstLaunch: false,
   },
   generateIdentityFileShouldThrow: false,
-  verifyIdentityResult: { valid: true as boolean, error: undefined as string | undefined },
+  verifyIdentityResult: {
+    type: "identity" as const,
+    valid: true as boolean,
+    identity: null as unknown,
+    errors: undefined as Array<{ message: string }> | undefined,
+  },
   rotateResult: {
     newPublicKey: new Uint8Array(32),
     newPrivateKey: new Uint8Array(32),
@@ -74,7 +79,7 @@ vi.mock("@motebit/identity-file", () => ({
     return mockCtrl.identityFileContent;
   }),
   parse: vi.fn(() => mockCtrl.parseResult),
-  verifyIdentityFile: vi.fn(async () => mockCtrl.verifyIdentityResult),
+  verify: vi.fn(async () => mockCtrl.verifyIdentityResult),
   rotate: vi.fn(async () => mockCtrl.rotateFileContent),
 }));
 
@@ -139,7 +144,12 @@ function makeInvoke(config: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   mockCtrl.generateIdentityFileShouldThrow = false;
-  mockCtrl.verifyIdentityResult = { valid: true, error: undefined };
+  mockCtrl.verifyIdentityResult = {
+    type: "identity" as const,
+    valid: true,
+    identity: null,
+    errors: undefined,
+  };
   mockCtrl.decryptShouldThrow = false;
   mockCtrl.walletHasValue = false;
   mockCtrl.bootstrapResult = {
@@ -422,7 +432,12 @@ describe("IdentityManager.verifyIdentityFile", () => {
     const r1 = await mgr.verifyIdentityFile("valid");
     expect(r1.valid).toBe(true);
 
-    mockCtrl.verifyIdentityResult = { valid: false, error: "bad sig" };
+    mockCtrl.verifyIdentityResult = {
+      type: "identity" as const,
+      valid: false,
+      identity: null,
+      errors: [{ message: "bad sig" }],
+    };
     const r2 = await mgr.verifyIdentityFile("invalid");
     expect(r2.valid).toBe(false);
     expect(r2.error).toBe("bad sig");

@@ -7,7 +7,7 @@
  *   npx create-motebit verify [path] # Verify an existing motebit.md
  */
 
-import { verifyIdentityFile } from "@motebit/crypto";
+import { verify } from "@motebit/crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -766,8 +766,8 @@ async function guidedScaffold(
   console.log(`  Identity stored in ${dim(configPath())}`);
   console.log(`  Motebit ID: ${cyan(motebitId)}`);
   if (identityFileContent) {
-    const verifyResult = await verifyIdentityFile(identityFileContent);
-    if (verifyResult.did) {
+    const verifyResult = await verify(identityFileContent, { expectedType: "identity" });
+    if (verifyResult.type === "identity" && verifyResult.did) {
       console.log(`  DID:        ${dim(verifyResult.did)}`);
     }
   }
@@ -823,9 +823,9 @@ async function verifyCmd(filePath: string): Promise<void> {
     return; // unreachable — hints to TS that content is assigned above
   }
 
-  const result = await verifyIdentityFile(content);
+  const result = await verify(content, { expectedType: "identity" });
 
-  if (result.valid) {
+  if (result.type === "identity" && result.valid) {
     const id = result.identity!;
     console.log(`  ${green("+")} Signature ${green("valid")}`);
     console.log();
@@ -856,8 +856,9 @@ async function verifyCmd(filePath: string): Promise<void> {
   } else {
     console.log(`  ${red("!")} Signature ${red("invalid")}`);
 
-    if (result.error) {
-      console.log(`    ${dim(result.error)}`);
+    const errorMessage = result.errors?.[0]?.message;
+    if (errorMessage) {
+      console.log(`    ${dim(errorMessage)}`);
     }
 
     console.log();
@@ -887,9 +888,10 @@ async function rotateCmd(
     return;
   }
 
-  const verifyResult = await verifyIdentityFile(content);
+  const verifyResult = await verify(content, { expectedType: "identity" });
   if (!verifyResult.valid) {
-    console.log(`  ${red("!")} Identity file is invalid: ${verifyResult.error}`);
+    const errorMessage = verifyResult.errors?.[0]?.message ?? "unknown error";
+    console.log(`  ${red("!")} Identity file is invalid: ${errorMessage}`);
     console.log();
     process.exit(1);
     return;
@@ -985,9 +987,10 @@ async function rotateCmd(
   saveConfig(config);
 
   // 7. Verify the updated file
-  const reVerify = await verifyIdentityFile(result.identityFileContent);
+  const reVerify = await verify(result.identityFileContent, { expectedType: "identity" });
   if (!reVerify.valid) {
-    console.log(`  ${red("!")} Post-rotation verification failed: ${reVerify.error}`);
+    const errorMessage = reVerify.errors?.[0]?.message ?? "unknown error";
+    console.log(`  ${red("!")} Post-rotation verification failed: ${errorMessage}`);
     console.log(`    The identity file may be corrupted. Restore from: ${backupPath}`);
     console.log();
     process.exit(1);
