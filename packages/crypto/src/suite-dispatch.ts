@@ -36,6 +36,12 @@
 // and fails CI if they appear outside this file.
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha512";
+import { sha256 } from "@noble/hashes/sha256";
+// P-256 ECDSA for hardware-attestation receipts (Apple Secure Enclave
+// generates P-256 keys; this is the verifier side). Centralizing the
+// primitive call here keeps the same single-home-for-primitives
+// discipline the Ed25519 path follows.
+import { p256 } from "@noble/curves/p256";
 // Type-only — `SuiteId` is a pure string-literal union with no runtime
 // footprint, so the erased import preserves @motebit/crypto's Layer 0
 // "zero internal deps" invariant (enforced by check-deps).
@@ -170,4 +176,59 @@ export async function getPublicKeyBySuite(
     case "eddsa-jcs-2022":
       return ed.getPublicKeyAsync(privateKey);
   }
+}
+
+// ── P-256 ECDSA — hardware-attestation receipts ──────────────────────
+//
+// Apple Secure Enclave generates P-256 keys and produces ECDSA-SHA256
+// signatures over attestation-receipt bytes. The receipt is OPAQUE to
+// motebit's core suite system (it's a side-channel platform blob per
+// `HardwareAttestationClaim.attestation_receipt`'s schema doc) — the
+// verification primitive still lives here so the single-home-for-
+// primitives rule stays intact.
+//
+// Inputs are already-decoded bytes, matching the shape `verifyBySuite`
+// uses. The SE public key is P-256 compressed-point hex (33 bytes
+// decoded); the signature is ECDSA DER-encoded (as the SE emits).
+
+/**
+ * Verify a P-256 ECDSA-SHA256 signature.
+ *
+ * - `publicKeyCompressedHex` — P-256 public key in compressed-point
+ *   hex encoding (33 bytes, `02`/`03` prefix). Uncompressed keys
+ *   (65 bytes, `04` prefix) also accepted — noble handles both.
+ * - `messageBytes` — the bytes that were signed. noble internally
+ *   SHA-256 hashes before verification, so callers pass the
+ *   un-pre-hashed payload.
+ * - `signatureDerBytes` — DER-encoded ECDSA signature as emitted by
+ *   Apple SE / Security.framework.
+ *
+ * Returns `false` on any failure (bad key, bad DER, bad signature,
+ * mismatch). Never throws — matches the `verifyBySuite` contract so
+ * callers don't need a try/catch.
+ */
+export function verifyP256EcdsaSha256(
+  publicKeyCompressedHex: string,
+  messageBytes: Uint8Array,
+  signatureDerBytes: Uint8Array,
+): boolean {
+  try {
+    const digest = sha256(messageBytes);
+    const pubKeyBytes = hexToBytes(publicKeyCompressedHex);
+    return p256.verify(signatureDerBytes, digest, pubKeyBytes, { prehash: false });
+  } catch {
+    return false;
+  }
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (clean.length % 2 !== 0) throw new Error("hex length must be even");
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const byte = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(byte)) throw new Error(`invalid hex at position ${i * 2}`);
+    out[i] = byte;
+  }
+  return out;
 }

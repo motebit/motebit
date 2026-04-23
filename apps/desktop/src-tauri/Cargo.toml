@@ -35,6 +35,12 @@ objc2-vision = { version = "0.3", features = [
   "VNGeometry",
 ] }
 objc2-core-graphics = "0.3"
+# Apple Security framework — Secure Enclave key generation + signing
+# for hardware-attestation claims. Only the macOS path uses this; the
+# non-macOS `secure_enclave` stub returns `not_supported` without the
+# crate pulled in.
+security-framework = "3.7"
+core-foundation = "0.10"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

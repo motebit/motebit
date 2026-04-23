@@ -132,6 +132,17 @@ function summarizeValid(result: VerifyResult): ReadonlyArray<readonly [string, s
       if (result.expired !== undefined) {
         out.push(["expired:", result.expired ? "yes" : "no"]);
       }
+      // Hardware-attestation channel — shown only when the credential's
+      // subject declared a claim. Absent field = no line (no hardware
+      // claim was made, which is different from "fails"). Verifier CLI
+      // output is the user's only hook into this until a GUI surface
+      // grows one, so the line is terse but unambiguous.
+      if (result.hardware_attestation) {
+        const ha = result.hardware_attestation;
+        const status = ha.valid ? "✓" : "✗";
+        const platform = ha.platform ?? "unknown";
+        out.push(["hardware:", `${platform} ${status}`]);
+      }
       return out;
     }
     case "presentation": {

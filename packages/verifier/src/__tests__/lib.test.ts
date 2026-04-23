@@ -277,6 +277,73 @@ describe("formatHuman", () => {
     expect(out).toContain("no");
   });
 
+  it("renders 'hardware: secure_enclave ✓' when a valid hardware attestation is present", () => {
+    const synthetic = {
+      type: "credential" as const,
+      valid: true,
+      credential: {
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        type: ["VerifiableCredential"],
+        issuer: "did:motebit:issuer-1",
+        issuanceDate: "2026-01-01T00:00:00Z",
+        credentialSubject: { id: "did:motebit:subject-1" },
+      } as never,
+      issuer: "did:motebit:issuer-1",
+      subject: "did:motebit:subject-1",
+      expired: false,
+      hardware_attestation: {
+        valid: true,
+        platform: "secure_enclave" as const,
+        se_public_key: "abc123",
+        attested_at: 1_700_000_000_000,
+        errors: [],
+      },
+    };
+    const out = formatHuman(synthetic);
+    expect(out).toContain("hardware:");
+    expect(out).toContain("secure_enclave");
+    expect(out).toContain("✓");
+  });
+
+  it("renders 'hardware: secure_enclave ✗' when hardware attestation failed", () => {
+    const synthetic = {
+      type: "credential" as const,
+      valid: true,
+      credential: {
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        type: ["VerifiableCredential"],
+        issuer: "did:motebit:issuer-1",
+        issuanceDate: "2026-01-01T00:00:00Z",
+        credentialSubject: {},
+      } as never,
+      hardware_attestation: {
+        valid: false,
+        platform: "secure_enclave" as const,
+        errors: [{ message: "signature mismatch" }],
+      },
+    };
+    const out = formatHuman(synthetic);
+    expect(out).toContain("hardware:");
+    expect(out).toContain("✗");
+  });
+
+  it("omits the hardware line entirely when no attestation claim is present", () => {
+    const synthetic = {
+      type: "credential" as const,
+      valid: true,
+      credential: {
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        type: ["VerifiableCredential"],
+        issuer: "did:motebit:issuer-1",
+        issuanceDate: "2026-01-01T00:00:00Z",
+        credentialSubject: {},
+      } as never,
+      issuer: "did:motebit:issuer-1",
+    };
+    const out = formatHuman(synthetic);
+    expect(out).not.toContain("hardware:");
+  });
+
   it("renders credential expired:yes when expired", () => {
     const synthetic = {
       type: "credential" as const,

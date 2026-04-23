@@ -148,6 +148,21 @@ import type {
   VerifiablePresentation,
 } from "./credentials.js";
 
+// Hardware-attestation verification (secure_enclave today; additive
+// platform adapters for tpm / play_integrity / device_check later).
+export {
+  verifyHardwareAttestationClaim,
+  canonicalSecureEnclaveBodyForTest,
+  encodeSecureEnclaveReceiptForTest,
+} from "./hardware-attestation.js";
+export type {
+  AttestationPlatform,
+  HardwareAttestationError,
+  HardwareAttestationVerifyResult,
+} from "./hardware-attestation.js";
+import { verifyHardwareAttestationClaim } from "./hardware-attestation.js";
+import type { HardwareAttestationVerifyResult } from "./hardware-attestation.js";
+
 // ===========================================================================
 // Types — Verification Results (discriminated union)
 // ===========================================================================
@@ -189,6 +204,14 @@ export interface CredentialVerifyResult extends BaseResult {
   issuer?: string;
   subject?: string;
   expired?: boolean;
+  /**
+   * Hardware-attestation verification outcome. Present only when the
+   * credential's subject declared a `hardware_attestation` claim. Absent
+   * means "no claim" (not "fails closed" — the credential's own
+   * signature is independent of the attestation). Populated by the
+   * unified `verify()` dispatcher via `verifyHardwareAttestationClaim`.
+   */
+  hardware_attestation?: HardwareAttestationVerifyResult;
 }
 
 export interface PresentationVerifyResult extends BaseResult {
@@ -1046,6 +1069,29 @@ async function verifyCredential(
   const issuerDid = typeof vc.issuer === "string" ? vc.issuer : undefined;
   const subjectId = vc.credentialSubject?.id;
 
+  // Hardware-attestation verification (additive — absent claim = no
+  // field; present claim = one more verification channel, reported
+  // separately from the credential's own signature validity).
+  const subject = vc.credentialSubject as
+    | (Record<string, unknown> & {
+        readonly hardware_attestation?: unknown;
+        readonly identity_public_key?: unknown;
+      })
+    | undefined;
+  let hardwareAttestation: HardwareAttestationVerifyResult | undefined;
+  if (
+    subject !== undefined &&
+    subject.hardware_attestation !== undefined &&
+    subject.hardware_attestation !== null &&
+    typeof subject.hardware_attestation === "object" &&
+    typeof subject.identity_public_key === "string"
+  ) {
+    hardwareAttestation = verifyHardwareAttestationClaim(
+      subject.hardware_attestation as Parameters<typeof verifyHardwareAttestationClaim>[0],
+      subject.identity_public_key,
+    );
+  }
+
   return {
     type: "credential",
     valid: proofValid && !expired,
@@ -1053,6 +1099,7 @@ async function verifyCredential(
     issuer: issuerDid,
     subject: subjectId,
     expired,
+    ...(hardwareAttestation && { hardware_attestation: hardwareAttestation }),
     ...(errors.length > 0 ? { errors } : {}),
   };
 }

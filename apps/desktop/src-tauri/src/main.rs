@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod computer_use;
+mod secure_enclave;
 
 use computer_use::{computer_execute, computer_query_display};
+use secure_enclave::{se_available, se_mint_attestation};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde_json::Value as JsonValue;
 use std::sync::Mutex;
@@ -860,6 +862,8 @@ fn main() {
             tts_openai_speech,
             computer_query_display,
             computer_execute,
+            se_available,
+            se_mint_attestation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
