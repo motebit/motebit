@@ -1029,12 +1029,14 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   // status transition (Connecting → Connected) inline rather than having to
   // re-open it to check whether Connect worked.
   //
-  // Tauri detection: ground-truth via `window.__TAURI__` + dynamic-import of
-  // `invoke`, not via `ctx.getConfig()?.isTauri`. The cached config can be
-  // null during bootstrap or briefly out of sync with the actual webview
-  // environment; a race there previously produced a spurious
-  // "not available in dev mode" error inside the real Tauri window.
-  // `window.__TAURI__` is whatever the webview actually is, right now.
+  // No upfront Tauri detection: we just import `invoke` and call it. In
+  // the Tauri webview the @tauri-apps/api/core `invoke` routes through
+  // `window.__TAURI_INTERNALS__` regardless of whether `withGlobalTauri`
+  // is set. In a browser tab (localhost:5173 without Tauri) it throws a
+  // clear error that we surface in the status text. Trying to guess
+  // "am I in Tauri" via globals has been fragile across Tauri v1→v2
+  // (the legacy `window.__TAURI__` stopped being set by default) — the
+  // operation itself is the only ground-truth check.
   connectBtn.addEventListener("click", () => {
     const url = normalizeRelayUrl(urlInput.value);
     if (!url) {
@@ -1044,15 +1046,6 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
       return;
     }
     urlInput.value = url;
-
-    const inTauri = typeof window !== "undefined" && window.__TAURI__ != null;
-    if (!inTauri) {
-      statusText.textContent =
-        "Sync needs the desktop app — the relay auth token is signed by your device " +
-        "key, which only the Tauri binary can read from the OS keyring.";
-      statusText.classList.add("error");
-      return;
-    }
 
     statusText.textContent = "Connecting…";
     statusText.classList.remove("error");
@@ -1064,9 +1057,6 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
         const invokeFn = invoke as import("./tauri-storage").InvokeFn;
         await writeSyncUrlToConfig(invokeFn, url);
         // Refresh the in-memory config so downstream reads see the new url.
-        // If config wasn't loaded yet (unlikely but possible at extreme
-        // bootstrap races), seed a minimal record so later reads get
-        // something coherent.
         const prev = ctx.getConfig();
         ctx.setConfig({
           ...(prev ?? { provider: "anthropic", isTauri: true, invoke: invokeFn }),
@@ -1079,7 +1069,14 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
         statusText.classList.remove("error");
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        statusText.textContent = `Failed: ${msg}`;
+        // Translate the Tauri-not-available error into something a user
+        // can act on. The raw message is low-signal ("window.__TAURI_INTERNALS__
+        // is undefined"); the actionable version names what they should do.
+        const isTauriMissing =
+          /__TAURI|tauri/i.test(msg) && /undefined|not (defined|available)/i.test(msg);
+        statusText.textContent = isTauriMissing
+          ? "Sync needs the Tauri desktop app — relay auth uses the device key in the OS keyring."
+          : `Failed: ${msg}`;
         statusText.classList.add("error");
       } finally {
         connectBtn.disabled = false;
@@ -1096,13 +1093,15 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
     void (async (): Promise<void> => {
       try {
         ctx.app.stopSync();
-        const inTauri = typeof window !== "undefined" && window.__TAURI__ != null;
-        if (inTauri) {
+        try {
           const { invoke } = await import("@tauri-apps/api/core");
           const invokeFn = invoke as import("./tauri-storage").InvokeFn;
           await writeSyncUrlToConfig(invokeFn, null);
           const prev = ctx.getConfig();
           if (prev != null) ctx.setConfig({ ...prev, syncUrl: undefined });
+        } catch {
+          // Outside Tauri (browser tab). Nothing to persist; the stopSync
+          // above still ran, which is all the user can observe anyway.
         }
         statusText.textContent = "";
         statusText.classList.remove("error");
