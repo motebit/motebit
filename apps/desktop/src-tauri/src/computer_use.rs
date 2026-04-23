@@ -168,17 +168,48 @@ fn to_capture_error(msg: String) -> FailureEnvelope {
 
 // ── Observation actions ──────────────────────────────────────────────
 
+/// Max pixel dimension of the longest screenshot edge. A full-res
+/// 2560x1440 capture round-trips as ≈3–5 MB of base64 inside a tool
+/// result — ≈80k tokens — which blows the AI context on the first
+/// screenshot. 1568 matches the native resolution the leading vision
+/// models (Claude, GPT-4V) use internally, so downscaling beyond it
+/// throws away signal the model would have discarded anyway. Preserve
+/// aspect ratio; skip the resize entirely when the capture is already
+/// within budget.
+const SCREENSHOT_MAX_EDGE_PX: u32 = 1568;
+
 fn do_screenshot() -> Result<JsonValue, FailureEnvelope> {
     let monitor = primary_monitor()?;
-    let image = monitor
+    let raw = monitor
         .capture_image()
         .map_err(|e| to_capture_error(e.to_string()))?;
-    let width = image.width();
-    let height = image.height();
+    let raw_width = raw.width();
+    let raw_height = raw.height();
 
-    let mut buf = Vec::with_capacity((width as usize) * (height as usize) * 4);
+    // Resize to the max-edge budget. For UI captures (text-heavy),
+    // Lanczos3 preserves character legibility substantially better
+    // than Nearest/Triangle while staying cheap at this size.
+    let (scaled_width, scaled_height) = scale_to_max_edge(raw_width, raw_height);
+    let image_buffer = if scaled_width == raw_width && scaled_height == raw_height {
+        raw
+    } else {
+        image::imageops::resize(
+            &raw,
+            scaled_width,
+            scaled_height,
+            image::imageops::FilterType::Lanczos3,
+        )
+    };
+
+    let mut buf =
+        Vec::with_capacity((scaled_width as usize) * (scaled_height as usize) * 4);
     image::codecs::png::PngEncoder::new(Cursor::new(&mut buf))
-        .write_image(&image, width, height, image::ExtendedColorType::Rgba8)
+        .write_image(
+            &image_buffer,
+            scaled_width,
+            scaled_height,
+            image::ExtendedColorType::Rgba8,
+        )
         .map_err(|e| FailureEnvelope::platform_blocked(format!("png encode: {e}")))?;
 
     let sha = Sha256::digest(&buf);
@@ -187,11 +218,21 @@ fn do_screenshot() -> Result<JsonValue, FailureEnvelope> {
     let bytes_base64 = B64.encode(&buf);
     let captured_at = now_ms();
 
+    // `width` / `height` are the image's actual returned pixels. The
+    // coordinate space subsequent actions operate in is the
+    // `ComputerSessionOpened` event's `display_width / display_height`,
+    // which the session manager minted at open time from
+    // `computer_query_display` — those are the pre-downscale logical
+    // dimensions. A scaling client-side maps between the two spaces;
+    // the observation carries both via `display_width / display_height`
+    // so the AI need not infer.
     Ok(json!({
         "kind": "screenshot",
         "image_format": "png",
-        "width": width,
-        "height": height,
+        "width": scaled_width,
+        "height": scaled_height,
+        "display_width": raw_width,
+        "display_height": raw_height,
         "captured_at": captured_at,
         "artifact_id": artifact_id,
         "artifact_sha256": sha_hex,
@@ -201,6 +242,23 @@ fn do_screenshot() -> Result<JsonValue, FailureEnvelope> {
             "projection_kind": "raw",
         },
     }))
+}
+
+/// Return the (w, h) the screenshot should be resized to — at most
+/// SCREENSHOT_MAX_EDGE_PX on the longer edge, preserving aspect ratio,
+/// never upscaling. Degenerate zero-size input is returned unchanged.
+fn scale_to_max_edge(width: u32, height: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (width, height);
+    }
+    let max_edge = width.max(height);
+    if max_edge <= SCREENSHOT_MAX_EDGE_PX {
+        return (width, height);
+    }
+    let ratio = SCREENSHOT_MAX_EDGE_PX as f64 / max_edge as f64;
+    let new_w = ((width as f64) * ratio).round().max(1.0) as u32;
+    let new_h = ((height as f64) * ratio).round().max(1.0) as u32;
+    (new_w, new_h)
 }
 
 fn do_cursor_position() -> Result<JsonValue, FailureEnvelope> {
@@ -749,5 +807,53 @@ mod tests {
         let action = json!({ "kind": "key" });
         let err = computer_execute(action).unwrap_err();
         assert_eq!(err.reason, "platform_blocked");
+    }
+
+    #[test]
+    fn scale_to_max_edge_is_noop_when_under_budget() {
+        assert_eq!(scale_to_max_edge(800, 600), (800, 600));
+        assert_eq!(
+            scale_to_max_edge(SCREENSHOT_MAX_EDGE_PX, SCREENSHOT_MAX_EDGE_PX),
+            (SCREENSHOT_MAX_EDGE_PX, SCREENSHOT_MAX_EDGE_PX)
+        );
+    }
+
+    #[test]
+    fn scale_to_max_edge_preserves_landscape_aspect() {
+        // 2560x1440 → longest edge 2560. ratio = 1568/2560 = 0.6125.
+        let (w, h) = scale_to_max_edge(2560, 1440);
+        assert_eq!(w, 1568);
+        assert_eq!(h, 882); // 1440 * 0.6125 = 882
+    }
+
+    #[test]
+    fn scale_to_max_edge_preserves_portrait_aspect() {
+        // 1440x2560 → longest edge 2560. ratio = 1568/2560 = 0.6125.
+        let (w, h) = scale_to_max_edge(1440, 2560);
+        assert_eq!(w, 882);
+        assert_eq!(h, 1568);
+    }
+
+    #[test]
+    fn scale_to_max_edge_handles_square_over_budget() {
+        let (w, h) = scale_to_max_edge(4000, 4000);
+        assert_eq!(w, SCREENSHOT_MAX_EDGE_PX);
+        assert_eq!(h, SCREENSHOT_MAX_EDGE_PX);
+    }
+
+    #[test]
+    fn scale_to_max_edge_never_produces_zero_when_input_positive() {
+        // Ultra-wide 20000x10 → short edge might round to 0 without the
+        // .max(1.0) floor. Verify we preserve a 1px short edge.
+        let (w, h) = scale_to_max_edge(20_000, 10);
+        assert_eq!(w, SCREENSHOT_MAX_EDGE_PX);
+        assert!(h >= 1);
+    }
+
+    #[test]
+    fn scale_to_max_edge_degenerate_zero_input_is_passthrough() {
+        assert_eq!(scale_to_max_edge(0, 100), (0, 100));
+        assert_eq!(scale_to_max_edge(100, 0), (100, 0));
+        assert_eq!(scale_to_max_edge(0, 0), (0, 0));
     }
 }
