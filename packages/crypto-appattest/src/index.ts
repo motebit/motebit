@@ -4,9 +4,10 @@
  *
  * The metabolic leaf `@motebit/crypto` delegates to when a
  * `HardwareAttestationClaim` declares `platform: "device_check"`.
- * Dep-thin `@motebit/crypto` stays MIT-pure; this BSL package
- * metabolizes `@peculiar/x509` + `cbor2` to judge whether Apple's
- * published CA rooted the leaf that signed the caller's attestation.
+ * Dep-thin `@motebit/crypto` stays permissive-floor-pure; this package,
+ * also on the permissive floor (Apache-2.0), metabolizes `@peculiar/x509`
+ * + `cbor2` to judge whether Apple's published CA rooted the leaf that
+ * signed the caller's attestation.
  *
  * Wiring from a consumer:
  *

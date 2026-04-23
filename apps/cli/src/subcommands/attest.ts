@@ -29,7 +29,7 @@ import * as readline from "node:readline";
 // Product-level signing surface. `@motebit/encryption` re-exports the
 // `@motebit/crypto` primitives apps are allowed to consume — per the
 // `check-app-primitives` drift gate, apps bind to the product
-// vocabulary (Layer ≥1 BSL) rather than the MIT Layer-0 protocol
+// vocabulary (Layer ≥1 BSL) rather than the permissive-floor Layer-0 protocol
 // primitives directly. The composer is the single source of truth
 // shared with the desktop surface (`mintHardwareCredential`).
 import {

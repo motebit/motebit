@@ -1,7 +1,7 @@
 {
   "name": "create-motebit",
   "version": "0.8.0",
-  "description": "Scaffold a signed Motebit identity (motebit.md) or a runnable agent service — `npm create motebit`. MIT.",
+  "description": "Scaffold a signed Motebit identity (motebit.md) or a runnable agent service — `npm create motebit`. Apache-2.0.",
   "type": "module",
   "bin": {
     "create-motebit": "./dist/index.js"
@@ -11,7 +11,7 @@
     "LICENSE",
     "README.md"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "motebit",
     "agent",

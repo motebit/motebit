@@ -4,11 +4,11 @@
  *
  * The metabolic leaf `@motebit/crypto` delegates to when a
  * `HardwareAttestationClaim` declares `platform: "webauthn"`. Dep-thin
- * `@motebit/crypto` stays MIT-pure; this BSL package metabolizes
- * `@peculiar/x509` + `cbor2` to judge whether the browser's platform
- * authenticator rooted the leaf that signed the caller's attestation
- * (full attestation), or whether the credential's own key witnessed
- * the challenge (self attestation).
+ * `@motebit/crypto` stays permissive-floor-pure; this package, also on
+ * the permissive floor (Apache-2.0), metabolizes `@peculiar/x509` + `cbor2`
+ * to judge whether the browser's platform authenticator rooted the leaf
+ * that signed the caller's attestation (full attestation), or whether the
+ * credential's own key witnessed the challenge (self attestation).
  *
  * Wiring from a consumer:
  *

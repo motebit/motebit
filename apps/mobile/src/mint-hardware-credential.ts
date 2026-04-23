@@ -44,7 +44,7 @@ import {
   type VerifiableCredential,
 } from "@motebit/encryption";
 // @motebit/sdk re-exports every @motebit/protocol type; apps consume
-// the product vocabulary rather than reaching past it to Layer 0 MIT.
+// the product vocabulary rather than reaching past it to the Layer 0 permissive floor.
 // Enforced by `check-app-primitives`.
 import type { HardwareAttestationClaim } from "@motebit/sdk";
 

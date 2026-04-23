@@ -14,7 +14,7 @@ A settlement is the movement of value between motebits — or between a motebit 
 
 The motebit protocol separates **rails** (how value physically moves) from **receipts** (the cryptographically signed record of what moved, why, and between whom). Rails are plural; receipts are singular. Any rail is valid as long as the receipt it produces satisfies the foundation law in §3.
 
-This is the first motebit protocol spec where the operational test — _can a third party stand up a competing implementation today using only the published specs and the MIT type packages, without permission?_ — passes without any relay dependency.
+This is the first motebit protocol spec where the operational test — _can a third party stand up a competing implementation today using only the published specs and the permissive-floor type packages (Apache-2.0), without permission?_ — passes without any relay dependency.
 
 **Design principles:**
 

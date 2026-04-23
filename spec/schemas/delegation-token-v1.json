@@ -1,5 +1,5 @@
 {
-  "$comment": "SPDX-License-Identifier: MIT",
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-token-v1.json",
   "title": "DelegationToken (v1)",

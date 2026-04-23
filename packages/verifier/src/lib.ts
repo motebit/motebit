@@ -44,10 +44,10 @@ export interface VerifyFileOptions {
    * through to `@motebit/crypto::verify` so credentials carrying a
    * `hardware_attestation` claim for `device_check` / `tpm` /
    * `play_integrity` / `webauthn` can be verified end-to-end. Leaving
-   * this unset keeps the MIT path fail-closed — hardware-attested
-   * credentials still verify their Ed25519 proof, but the
+   * this unset keeps the permissive-floor path fail-closed —
+   * hardware-attested credentials still verify their Ed25519 proof, but the
    * `hardware_attestation` channel reports `adapter not yet shipped`
-   * (the expected MIT-only behavior). The BSL companion CLI
+   * (the expected permissive-floor-only behavior). The BSL companion CLI
    * `@motebit/verify` wires all four leaves automatically.
    */
   readonly hardwareAttestation?: HardwareAttestationVerifiers;

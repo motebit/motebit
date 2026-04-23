@@ -2,9 +2,9 @@
  * @motebit/encryption — Product security: encryption, key derivation, deletion.
  *
  * Protocol signing primitives (Ed25519, canonical JSON, receipts, delegations,
- * credentials, successions) live in MIT @motebit/crypto. This package
- * re-exports them for backward compatibility and adds product-level encryption,
- * PBKDF2 key derivation, sync encryption, and deletion certificates.
+ * credentials, successions) live in @motebit/crypto (Apache-2.0 permissive floor).
+ * This package re-exports them for backward compatibility and adds product-level
+ * encryption, PBKDF2 key derivation, sync encryption, and deletion certificates.
  *
  * Uses Web Crypto API for AES-256-GCM/PBKDF2.
  */

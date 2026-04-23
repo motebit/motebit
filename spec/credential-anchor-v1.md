@@ -156,7 +156,7 @@ The reference relay stores `merkle_root`, `leaf_count`, `first_issued_at`, `last
 
 ### 5.3 Reference Implementation
 
-The canonical implementation is `verifyCredentialAnchor` in `@motebit/crypto` (MIT). It takes a credential, a `CredentialAnchorProofFields` struct, and an optional `ChainAnchorVerifier` callback for step 4. Returns `CredentialAnchorVerifyResult` with per-step breakdown (`hash_valid`, `merkle_valid`, `relay_signature_valid`, `chain_verified`) and error messages.
+The canonical implementation is `verifyCredentialAnchor` in `@motebit/crypto` (Apache-2.0). It takes a credential, a `CredentialAnchorProofFields` struct, and an optional `ChainAnchorVerifier` callback for step 4. Returns `CredentialAnchorVerifyResult` with per-step breakdown (`hash_valid`, `merkle_valid`, `relay_signature_valid`, `chain_verified`) and error messages.
 
 ```ts
 import { verifyCredentialAnchor } from "@motebit/crypto";

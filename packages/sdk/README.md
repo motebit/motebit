@@ -1,12 +1,12 @@
 # @motebit/sdk
 
-The developer contract for building Motebit-powered agents, services, and integrations. MIT, zero runtime dependencies.
+The developer contract for building Motebit-powered agents, services, and integrations. Apache-2.0, zero runtime dependencies.
 
 ## Why this exists
 
-`@motebit/sdk` is the **MIT boundary** between the open protocol and your application. It re-exports everything in [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) (identity, receipts, credentials, settlement, trust algebra) and adds the product vocabulary the reference runtime consumes: state vectors, behavior cues, memory graph, rendering spec, AI provider interfaces. Binding to the SDK instead of the runtime keeps your code portable across surfaces (desktop, mobile, spatial, cloud) and across alternative runtimes.
+`@motebit/sdk` is the **permissive-floor boundary** between the open protocol and your application. It re-exports everything in [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) (identity, receipts, credentials, settlement, trust algebra) and adds the product vocabulary the reference runtime consumes: state vectors, behavior cues, memory graph, rendering spec, AI provider interfaces. Binding to the SDK instead of the runtime keeps your code portable across surfaces (desktop, mobile, spatial, cloud) and across alternative runtimes.
 
-If you only need the protocol core, depend on `@motebit/protocol` directly — both are MIT.
+If you only need the protocol core, depend on `@motebit/protocol` directly — both are Apache-2.0.
 
 ## Install
 
@@ -67,14 +67,14 @@ Everything from `@motebit/protocol` (re-exported), plus:
 
 ## Related
 
-- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — the protocol subset (MIT, zero deps)
-- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every Motebit artifact (MIT, zero deps)
-- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier CLI (MIT)
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — the protocol subset (Apache-2.0, zero deps)
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every Motebit artifact (Apache-2.0, zero deps)
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier library (Apache-2.0)
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
 - [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Apache-2.0 — see [LICENSE](./LICENSE).
 
-"Motebit" is a trademark. The MIT License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.
+"Motebit" is a trademark. The Apache License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

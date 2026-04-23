@@ -63,10 +63,11 @@
  *
  * ## Pure algebra, no I/O
  *
- * MIT purity sits one level up — `BottleneckSemiring` is MIT (generic
- * algebra, no policy). The per-claim encoding function here is BSL
- * because it makes a policy judgment ("software gets 0.1, exported
- * hardware gets 0.5") that a competing implementation may disagree with.
+ * Permissive-floor purity sits one level up — `BottleneckSemiring` is on
+ * the permissive floor (Apache-2.0, generic algebra, no policy). The
+ * per-claim encoding function here is BSL because it makes a policy
+ * judgment ("software gets 0.1, exported hardware gets 0.5") that a
+ * competing implementation may disagree with.
  * Consumers who want a different mapping swap `scoreAttestation` for
  * their own encoder and compose it with the same semiring.
  */

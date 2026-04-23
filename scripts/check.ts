@@ -5,7 +5,7 @@
  * small, focused check-* scripts (see CLAUDE.md § "Synchronization
  * invariants are the meta-principle"). Each one owns a specific invariant:
  *
- *   check-deps              — architectural layers, MIT purity, cycles
+ *   check-deps              — architectural layers, permissive-floor purity, cycles
  *   check-specs             — spec ↔ implementation references
  *   check-service-primitives — services must not inline protocol plumbing
  *   check-app-primitives    — apps must not bypass the product vocabulary
@@ -72,7 +72,7 @@ const EXCLUDED_CHECKS: Record<string, string> = {
 const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-deps",
-    defends: "architectural layers, MIT purity, cycles, tsconfig refs",
+    defends: "architectural layers, permissive-floor purity, cycles, tsconfig refs",
     script: "check-deps",
   },
   {
@@ -162,14 +162,14 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-docs-tree",
     defends:
-      "apps/docs/content/docs/operator/architecture.mdx directory tree mirrors the filesystem and scripts/check-deps.ts LAYER/MIT_PACKAGES (invariant #13, added 2026-04-14 after the architecture page was rewritten and 9 packages were previously misplaced across invented tiers)",
+      "apps/docs/content/docs/operator/architecture.mdx directory tree mirrors the filesystem and scripts/check-deps.ts LAYER/PERMISSIVE_PACKAGES (invariant #13, added 2026-04-14 after the architecture page was rewritten and 9 packages were previously misplaced across invented tiers)",
     script: "check-docs-tree",
   },
   {
-    name: "check-spec-mit-boundary",
+    name: "check-spec-permissive-boundary",
     defends:
-      "every backticked callable referenced in spec/*.md is exported from an MIT package (protocol/crypto/sdk) or explicitly waived with a reason (invariant #14, added 2026-04-14 after an external review asked whether protocol-only algorithms could leak into BSL; the probe caught deriveSyncEncryptionKey as a real leak and forced the spec to inline the HKDF recipe)",
-    script: "check-spec-mit-boundary",
+      "every backticked callable referenced in spec/*.md is exported from a permissive-floor package (protocol/crypto/sdk) or explicitly waived with a reason (invariant #14, added 2026-04-14 after an external review asked whether protocol-only algorithms could leak into BSL; the probe caught deriveSyncEncryptionKey as a real leak and forced the spec to inline the HKDF recipe; renamed from check-spec-mit-boundary on 2026-04-23 with the Apache-2.0 floor flip)",
+    script: "check-spec-permissive-boundary",
   },
   {
     name: "check-privacy-ring",

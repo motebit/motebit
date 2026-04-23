@@ -5,7 +5,7 @@
  * artifacts. A third party needs these to produce valid signed artifacts that
  * any verifier will accept.
  *
- * Moved from BSL @motebit/crypto to MIT @motebit/crypto.
+ * Moved from BSL @motebit/encryption to the permissive floor in @motebit/crypto (Apache-2.0).
  */
 
 import {

@@ -1,9 +1,9 @@
 /**
  * Migration types — motebit/migration@1.0.
  *
- * MIT: these types define the interoperable format for agent migration
- * between relays. Any implementation can produce and verify migration
- * artifacts using these types.
+ * Permissive floor (Apache-2.0): these types define the interoperable format
+ * for agent migration between relays. Any implementation can produce and
+ * verify migration artifacts using these types.
  */
 
 // === Migration Lifecycle (§3) ===

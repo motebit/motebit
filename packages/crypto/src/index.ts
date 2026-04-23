@@ -244,7 +244,7 @@ export interface VerifyOptions {
    * verifiers. Consumers that need `device_check` / `tpm` /
    * `play_integrity` verification pass the corresponding leaf package's
    * verifier function here (e.g. `deviceCheckVerifier(...)` from
-   * `@motebit/crypto-appattest`). Absence keeps the MIT `@motebit/crypto`
+   * `@motebit/crypto-appattest`). Absence keeps the permissive-floor `@motebit/crypto`
    * path pure: unknown platforms fail-closed with a named-missing-adapter
    * error. See `hardware-attestation.ts::HardwareAttestationVerifiers`.
    */

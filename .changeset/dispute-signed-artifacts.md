@@ -21,7 +21,7 @@ construction inputs at `services/api/src/disputes.ts`; without the
 signature binding the relay could not verify foundation law §4.4
 ("filing party must be a direct party to the task"). Third parties
 implementing motebit/dispute@1.0 now have the canonical sign + verify
-recipes available in MIT-licensed `@motebit/crypto` with zero monorepo
+recipes available in Apache-2.0-licensed `@motebit/crypto` with zero monorepo
 dependencies.
 
 ### Migration

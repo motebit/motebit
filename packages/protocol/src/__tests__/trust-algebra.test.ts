@@ -1,5 +1,5 @@
 /**
- * Trust algebra tests — MIT protocol functions only.
+ * Trust algebra tests — permissive-floor (Apache-2.0) protocol functions only.
  * BSL functions (composeDelegationTrust, evaluateTrustTransition) are tested in @motebit/semiring.
  */
 import { describe, it, expect } from "vitest";

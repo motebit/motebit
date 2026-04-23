@@ -237,7 +237,7 @@ describe("recordSemiring", () => {
 // ── Mapped Semiring ─────────────────────────────────────────────────
 
 describe("barrel re-export (index.ts)", () => {
-  it("exports all MIT protocol symbols", () => {
+  it("exports all permissive-floor protocol symbols", () => {
     expect(barrel.TrustSemiring).toBeDefined();
     expect(barrel.CostSemiring).toBeDefined();
     expect(barrel.WeightedDigraph).toBeDefined();

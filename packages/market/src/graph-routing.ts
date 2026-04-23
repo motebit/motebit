@@ -194,7 +194,7 @@ const HARDWARE_ATTESTATION_BOOST = 0.2;
 //
 // Local to this module: the tuple wiring is a market concern (the
 // product of "routing trust" and "attestation strength") and doesn't
-// belong in the MIT primitive layer. Consumers of `@motebit/semiring`
+// belong in the permissive-floor primitive layer. Consumers of `@motebit/semiring`
 // compose their own dimensions analogously.
 type TrustAttestationScore = readonly [number, HardwareAttestationScore];
 

@@ -69,14 +69,14 @@ if (result.valid) console.log(`receipt signed by ${result.receipt?.signer}`);
 
 ## Related
 
-- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — the verification primitives this package wraps (MIT, zero deps)
-- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — protocol types for the artifacts being verified (MIT, zero deps)
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — the verification primitives this package wraps (Apache-2.0, zero deps)
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — protocol types for the artifacts being verified (Apache-2.0, zero deps)
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
 - [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Apache-2.0 — see [LICENSE](./LICENSE).
 
-"Motebit" is a trademark. The MIT License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.
+"Motebit" is a trademark. The Apache License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

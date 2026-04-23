@@ -1,6 +1,6 @@
 # @motebit/sdk
 
-The stable developer-contract surface. MIT, Layer 0. The shape external integrators build against when they want to embed motebit in their own application, federate a relay, or ship a custom surface that stays compatible with every other motebit.
+The stable developer-contract surface. Apache-2.0 (permissive floor), Layer 0. The shape external integrators build against when they want to embed motebit in their own application, federate a relay, or ship a custom surface that stays compatible with every other motebit.
 
 ## Why this package exists as its own namespace
 
@@ -13,7 +13,7 @@ At first glance `@motebit/sdk`'s top-level `index.ts` looks like a re-export of 
 
 ## The split between `@motebit/protocol` and `@motebit/sdk`
 
-Both are MIT, both at Layer 0, both zero-monorepo-dep. The line is intentional:
+Both are on the permissive floor (Apache-2.0), both at Layer 0, both zero-monorepo-dep. The line is intentional:
 
 | `@motebit/protocol`                                                       | `@motebit/sdk`                                                                                      |
 | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -26,7 +26,7 @@ Separating them means the protocol can evolve internal shapes (rename a field, t
 
 ## Rules
 
-1. **MIT, zero monorepo deps.** Same discipline as `@motebit/protocol` and `@motebit/crypto`. A third party implementing motebit in another ecosystem can read the types here without pulling BSL code — all the provider-mode + preset logic is published under permissive terms so integrators reproduce motebit's behavior freely.
+1. **Apache-2.0, zero monorepo deps.** Same discipline as `@motebit/protocol` and `@motebit/crypto`. A third party implementing motebit in another ecosystem can read the types here without pulling BSL code — all the provider-mode + preset logic is published under the Apache permissive-floor terms (explicit patent grant) so integrators reproduce motebit's behavior freely.
 2. **Independent semver from the protocol.** `@motebit/sdk@1.x` is a stable developer promise. Internal protocol churn that renames a wire field lands in `@motebit/protocol@1.y` without bumping the sdk major, as long as the sdk re-exports surface stays compatible.
 3. **Re-exports are load-bearing, not decorative.** `export * from "@motebit/protocol"` at the top of `src/index.ts` is the commitment that every protocol type is accessible through `@motebit/sdk`. Integrators type a single import path; internal code in apps/services imports from `@motebit/sdk` (enforced by `check-app-primitives`), never reaching past it to `@motebit/protocol`.
 4. **Preset changes are public-API changes.** The color palettes, approval presets, and model registry are committed to semver like any other exported constant. A new preset is additive; renaming or removing a preset is a breaking change.

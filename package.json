@@ -50,7 +50,7 @@
     "check-api-surface": "npx tsx scripts/check-api-surface.ts",
     "check-changeset-discipline": "npx tsx scripts/check-changeset-discipline.ts",
     "check-docs-tree": "npx tsx scripts/check-docs-tree.ts",
-    "check-spec-mit-boundary": "npx tsx scripts/check-spec-mit-boundary.ts",
+    "check-spec-permissive-boundary": "npx tsx scripts/check-spec-permissive-boundary.ts",
     "check-privacy-ring": "npx tsx scripts/check-privacy-ring.ts",
     "check-readme": "npx tsx scripts/check-readme.ts",
     "check-claude-md": "npx tsx scripts/check-claude-md.ts",

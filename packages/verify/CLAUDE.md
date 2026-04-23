@@ -5,18 +5,18 @@ The canonical motebit artifact verifier. BSL-1.1, Layer 6 (Applications). Ships 
 ## The three-package lineage
 
 ```
-@motebit/verify     this package  BSL L6  CLI `motebit-verify` — the tool a human installs
-@motebit/verifier                 MIT L6  Library — file I/O, human formatting helpers
-@motebit/crypto                   MIT L0  Primitives — verify, sign, suite dispatch
+@motebit/verify     this package  BSL         L6  CLI `motebit-verify` — the tool a human installs
+@motebit/verifier                 Apache-2.0  L6  Library — file I/O, human formatting helpers
+@motebit/crypto                   Apache-2.0  L0  Primitives — verify, sign, suite dispatch
 ```
 
-Same shape as the lineages that survive for decades: `git` / `libgit2`, `cargo` / `tokio`, `npm` / `@npm/arborist`. The verb-named tool gets the short name and the BSL license because it carries motebit-canonical aggregation — the opinionated defaults (bundle IDs, RP ID, integrity floor) and CLI ergonomics that represent motebit's particular composition of the MIT leaves. The library underneath stays dep-thin MIT, and the four platform verifiers are themselves MIT (each answers "how is this artifact verified?" against a published public trust anchor — the MIT side of the protocol-model boundary test).
+Same shape as the lineages that survive for decades: `git` / `libgit2`, `cargo` / `tokio`, `npm` / `@npm/arborist`. The verb-named tool gets the short name and the BSL license because it carries motebit-canonical aggregation — the opinionated defaults (bundle IDs, RP ID, integrity floor) and CLI ergonomics that represent motebit's particular composition of the permissive-floor leaves. The library underneath stays dep-thin Apache-2.0, and the four platform verifiers are themselves Apache-2.0 (each answers "how is this artifact verified?" against a published public trust anchor — the permissive side of the protocol-model boundary test).
 
 ## Why this package exists as the aggregator
 
-`@motebit/verifier` (MIT, L6 library) stays dep-thin on purpose: file I/O, `formatHuman`, and the injection point for an optional hardware-attestation verifier. Pulling the four platform adapters into it would force every MIT-library consumer to accept the `cbor2` / `@peculiar/x509` dep surface and motebit's specific root-pin choices, even when the consumer just wants to verify software identity files.
+`@motebit/verifier` (Apache-2.0, L6 library) stays dep-thin on purpose: file I/O, `formatHuman`, and the injection point for an optional hardware-attestation verifier. Pulling the four platform adapters into it would force every permissive-floor-library consumer to accept the `cbor2` / `@peculiar/x509` dep surface and motebit's specific root-pin choices, even when the consumer just wants to verify software identity files.
 
-Splitting lets the library stay a deterministic primitive and lets this package carry the motebit-canonical wiring — default bundle IDs `com.motebit.mobile`, default RP ID `motebit.com`, default integrity floor `MEETS_DEVICE_INTEGRITY`, CLI argument shape. A third-party auditor who wants to reproduce motebit's verification decision in their own MIT-licensed code composes `@motebit/crypto` + `@motebit/verifier` + any subset of the four MIT `@motebit/crypto-*` leaves — and pins the roots they trust. A human running `motebit-verify cred.json` installs one BSL package and gets motebit's opinionated composition out of the box.
+Splitting lets the library stay a deterministic primitive and lets this package carry the motebit-canonical wiring — default bundle IDs `com.motebit.mobile`, default RP ID `motebit.com`, default integrity floor `MEETS_DEVICE_INTEGRITY`, CLI argument shape. A third-party auditor who wants to reproduce motebit's verification decision in their own Apache-2.0-licensed code composes `@motebit/crypto` + `@motebit/verifier` + any subset of the four Apache-2.0 `@motebit/crypto-*` leaves — and pins the roots they trust. A human running `motebit-verify cred.json` installs one BSL package and gets motebit's opinionated composition out of the box.
 
 ## Rules
 
@@ -30,7 +30,7 @@ Splitting lets the library stay a deterministic primitive and lets this package 
 
 The original `@motebit/verify@0.7.0` on npm was a zero-dep library with a single `verify()` function. It was deprecated and split:
 
-- The MIT `verify()` library primitive moved to `@motebit/crypto`.
+- The permissive-floor `verify()` library primitive moved to `@motebit/crypto` (Apache-2.0).
 - The CLI and adapter bundling that users wanted is now THIS package (`@motebit/verify@1.0.0`).
 
 Users running `npm install @motebit/verify` in 2026 want the CLI. The new 1.x line delivers that. The old 0.x line stays deprecated on npm with a pointer to both `@motebit/crypto` (library) and `@motebit/verify@1` (CLI).

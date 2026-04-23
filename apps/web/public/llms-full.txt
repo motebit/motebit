@@ -174,10 +174,13 @@ Trust accumulates via W3C VC 2.0 credentials issued after successful task comple
 
 ## Packages (npm)
 
-- `create-motebit` — CLI scaffolder: `npm create motebit`. Generates signed identity. MIT licensed
-- `@motebit/crypto` — Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum. MIT licensed
-- `@motebit/protocol` — Network protocol types. MIT licensed
-- `@motebit/sdk` — Full type vocabulary. MIT licensed
+- `create-motebit` — CLI scaffolder: `npm create motebit`. Generates signed identity. Apache-2.0 licensed
+- `@motebit/crypto` — Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum. Apache-2.0 licensed
+- `@motebit/protocol` — Network protocol types. Apache-2.0 licensed
+- `@motebit/sdk` — Full type vocabulary. Apache-2.0 licensed
+- `@motebit/verifier` — verifyFile / verifyArtifact / formatHuman library. Apache-2.0 licensed
+- `@motebit/crypto-appattest`, `@motebit/crypto-play-integrity`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn` — hardware-attestation platform verifiers. Apache-2.0 licensed
+- `@motebit/verify` — `motebit-verify` CLI (bundles the four platform leaves). BSL-1.1 licensed
 - `motebit` — Operator console CLI. BSL-1.1 licensed
 
 ## Apps

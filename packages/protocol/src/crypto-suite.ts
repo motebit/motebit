@@ -18,7 +18,7 @@
  * Post-quantum migration becomes a new registry entry + dispatch arm
  * in `@motebit/crypto/suite-dispatch.ts`, not a wire-format change.
  *
- * MIT, type-only, zero runtime deps.
+ * Permissive floor (Apache-2.0), type-only, zero runtime deps.
  */
 
 /**

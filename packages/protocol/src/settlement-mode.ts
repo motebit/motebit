@@ -1,8 +1,8 @@
 /**
  * Settlement mode types — relay-mediated vs peer-to-peer settlement.
  *
- * MIT: these types define the interoperable format for settlement mode
- * selection and payment proof verification.
+ * Permissive floor (Apache-2.0): these types define the interoperable format
+ * for settlement mode selection and payment proof verification.
  */
 
 // === Settlement Mode ===

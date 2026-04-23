@@ -13,7 +13,7 @@ Agent identity must be persistent, cryptographic, and portable across trust doma
 
 Motebit implements this missing layer. Agents carry persistent Ed25519 identities (`did:key` URIs), accumulate verifiable trust through signed execution receipts, and enforce zero-trust policy at every tool boundary. Receipts embed the signer's public key — self-verifiable offline, without contacting any authority. Key rotation uses dual-signed succession chains verifiable end-to-end from genesis key to current key. Cross-agent delegation produces nested receipts with cryptographic chain-of-custody. These are generalizable primitives — they do not require Motebit software to verify.
 
-This is a working implementation (45 packages, ~200,000 lines of TypeScript including tests, 4,600+ test cases, five open specifications), not a proposal. The protocol layer is MIT licensed with zero dependencies (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1. The identity, receipt, and credential formats are designed to be adopted independently of the Motebit runtime — any system can implement them from the open specifications.
+This is a working implementation (45 packages, ~200,000 lines of TypeScript including tests, 4,600+ test cases, five open specifications), not a proposal. The permissive floor is Apache-2.0 licensed with explicit patent grant, zero dependencies (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/verifier`, four `@motebit/crypto-*` hardware-attestation leaves, `create-motebit`); the CLI runtime (`motebit`) is source-available under BSL 1.1 and converges to Apache-2.0 at the Change Date. The identity, receipt, and credential formats are designed to be adopted independently of the Motebit runtime — any system can implement them from the open specifications.
 
 The implementation includes an agent economy (budget-gated delegation, per-hop settlement, integer micro-unit arithmetic) that exercises these identity primitives under real economic constraints — delegation receipts, trust routing, and credential verification are not theoretical; they settle money.
 
@@ -86,7 +86,7 @@ As of March 2026, no widely adopted agent framework — commercial or open sourc
 
 Each Motebit agent has a persistent cryptographic identity: an Ed25519 keypair generating a `did:key` URI (W3C DID-Core) and a unique agent ID (UUID v7, time-ordered). Identity is declared in a human-readable, cryptographically signed file (`motebit.md`) that any system can verify without the Motebit runtime.
 
-The identity specification (`motebit/identity@1.0`) is an open standard (MIT licensed). A zero-dependency verification library (`@motebit/crypto`) is published on npm. A scaffolder (`npm create motebit`) generates a signed identity in seconds.
+The identity specification (`motebit/identity@1.0`) is an open standard (Apache-2.0 licensed, with explicit patent grant). A zero-dependency verification library (`@motebit/crypto`) is published on npm. A scaffolder (`npm create motebit`) generates a signed identity in seconds.
 
 **What metadata is essential for an AI agent's identity?**
 
@@ -106,8 +106,8 @@ Motebit supports multi-device registration. Each device has its own Ed25519 keyp
 
 **Relevant artifacts:**
 
-- Specification: `spec/identity-v1.md` (MIT licensed, stable)
-- Verification library: `@motebit/crypto` (npm, MIT, zero dependencies) — verifies identity files, execution receipts, verifiable credentials, and presentations with a single function call
+- Specification: `spec/identity-v1.md` (Apache-2.0 licensed, stable)
+- Verification library: `@motebit/crypto` (npm, Apache-2.0, zero dependencies) — verifies identity files, execution receipts, verifiable credentials, and presentations with a single function call
 - Identity scaffolder: `npm create motebit`
 - DID interoperability: Section 10 of `spec/identity-v1.md`
 
@@ -334,7 +334,7 @@ All tests run in CI on every commit. The test suite is designed to be runnable b
 
 ## Standards Alignment
 
-The current standards landscape addresses infrastructure identity (SPIFFE for workloads), user identity (OIDC), and tool interoperability (MCP) — but none define persistent agent-level identity, cryptographic delegation chains, or verifiable trust accumulation. This is not a gap that can be closed by adapting existing standards; it requires a new layer between MCP and infrastructure identity. Motebit's open specifications (`motebit/identity@1.0`, `motebit/execution-ledger@1.0`, `motebit/credential@1.0`) are an implementation of that layer, MIT licensed and designed for independent adoption.
+The current standards landscape addresses infrastructure identity (SPIFFE for workloads), user identity (OIDC), and tool interoperability (MCP) — but none define persistent agent-level identity, cryptographic delegation chains, or verifiable trust accumulation. This is not a gap that can be closed by adapting existing standards; it requires a new layer between MCP and infrastructure identity. Motebit's open specifications (`motebit/identity@1.0`, `motebit/execution-ledger@1.0`, `motebit/credential@1.0`) are an implementation of that layer, Apache-2.0 licensed (with explicit patent grant from every contributor) and designed for independent adoption.
 
 Motebit's architecture engages with the standards referenced in the concept paper:
 
@@ -374,7 +374,7 @@ The NCCoE's future iterations addressing external agents may find this architect
 ## Availability
 
 - **Source code:** [github.com/motebit/motebit](https://github.com/motebit/motebit) (source-available, BSL 1.1)
-- **Type layer:** MIT licensed — protocol types (`@motebit/protocol`), full SDK (`@motebit/sdk`), verification library (`@motebit/crypto`), scaffolder (`create-motebit`)
+- **Permissive floor:** Apache-2.0 licensed (with explicit patent grant) — protocol types (`@motebit/protocol`), full SDK (`@motebit/sdk`), verification library (`@motebit/crypto`), verifier helpers (`@motebit/verifier`), four hardware-attestation leaves (`@motebit/crypto-appattest`, `@motebit/crypto-play-integrity`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn`), scaffolder (`create-motebit`), GitHub Action
 - **Specifications:** `motebit/identity@1.0` (stable), `motebit/execution-ledger@1.0` (stable), `motebit/relay-federation@1.0` (stable), `motebit/market@1.0` (stable), `motebit/credential@1.0` (stable)
 - **npm packages:** `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `create-motebit`, `motebit`
 - **Live demo:** [motebit.com](https://motebit.com)

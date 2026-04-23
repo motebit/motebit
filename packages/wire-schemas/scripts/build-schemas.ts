@@ -89,7 +89,7 @@ import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Schemas live in `spec/schemas/` alongside the Markdown protocol
-// docs — protocol artifacts under the `spec/` MIT license, separate
+// docs — protocol artifacts under the `spec/` Apache-2.0 license, separate
 // from this BSL package's TypeScript sources. Resolving from this
 // script's `__dirname` means walking up out of
 // `packages/wire-schemas/scripts/` into the repo root, then into

@@ -3,7 +3,7 @@
  * wire-format types, and the committed JSON Schema artifacts derived
  * from them.
  *
- * Why this package exists. `@motebit/protocol` is MIT and type-only by
+ * Why this package exists. `@motebit/protocol` is on the permissive floor (Apache-2.0) and type-only by
  * invariant (check-deps rule 10). That makes it the right home for
  * TypeScript declarations but the wrong home for runtime validators.
  * External implementers (Python, Go, Rust clients of the motebit

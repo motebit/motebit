@@ -1,6 +1,6 @@
 /**
- * @motebit/verifier — MIT library for verifying every signed Motebit
- * artifact.
+ * @motebit/verifier — Apache-2.0 permissive-floor library for verifying every
+ * signed Motebit artifact.
  *
  * The moat: anything a motebit signs (identity file, execution receipt,
  * credential, presentation) is third-party verifiable with only this
@@ -12,9 +12,10 @@
  * `@motebit/verify` package, which layers bundled hardware-attestation
  * adapters (Apple App Attest, TPM 2.0, Google Play Integrity, WebAuthn)
  * on top of this library. The split mirrors long-lived tool lineages
- * like `git` / `libgit2` or `cargo` / `tokio`: MIT library underneath,
- * BSL verb-named CLI on top. Third parties building MIT-only verifiers
- * compose this package and `@motebit/crypto` freely.
+ * like `git` / `libgit2` or `cargo` / `tokio`: permissive-floor library
+ * underneath, BSL verb-named CLI on top. Third parties building
+ * permissive-floor-only verifiers compose this package and
+ * `@motebit/crypto` freely — Apache-2.0 carries an explicit patent grant.
  *
  * Composition:
  *
@@ -27,8 +28,8 @@
  *     multi-line human-readable output a CLI would print.
  *   - `VerifyFileOptions.hardwareAttestation` — optional injection of
  *     platform-specific verifiers for `device_check` / `tpm` /
- *     `play_integrity` / `webauthn` claims. MIT consumers can supply
- *     their own; `@motebit/verify` wires the canonical bundle.
+ *     `play_integrity` / `webauthn` claims. Permissive-floor consumers can
+ *     supply their own; `@motebit/verify` wires the canonical bundle.
  */
 
 export { verifyFile, verifyArtifact, formatHuman } from "./lib.js";

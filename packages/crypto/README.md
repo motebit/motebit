@@ -2,7 +2,7 @@
 
 Protocol cryptography for Motebit — sign and verify all artifacts.
 
-Receipts, credentials, delegations, successions, presentations. Zero runtime dependencies. MIT licensed.
+Receipts, credentials, delegations, successions, presentations. Zero runtime dependencies. Apache-2.0 licensed (with explicit patent grant).
 
 ## Install
 
@@ -145,6 +145,6 @@ All operations are **offline** — no network calls, no relay lookup, no runtime
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Apache-2.0 — see [LICENSE](./LICENSE).
 
-"Motebit" is a trademark. The MIT License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.
+"Motebit" is a trademark. The Apache License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

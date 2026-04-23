@@ -14,7 +14,7 @@ Contributors do not gain commit access or decision-making authority by default. 
 
 ## Licensing decisions
 
-The dual-license structure (BSL 1.1 for the platform, MIT for the protocol layer) is a deliberate architectural decision. The protocol must be open for adoption. The platform implementation is protected to sustain development. Each BSL-licensed version converts to Apache 2.0 after 4 years.
+The dual-license structure (BSL 1.1 for the platform, Apache-2.0 for the permissive floor) is a deliberate architectural decision. The protocol must be open for adoption, and the Apache-2.0 patent grant matters because the floor verifies against patent-active platforms (Apple, Google, TPM vendors, FIDO). The platform implementation is protected to sustain development. Each BSL-licensed version converts to Apache-2.0 after 4 years — both license families converge to Apache-2.0 in the end state.
 
 Changes to the licensing structure are made solely by the maintainer.
 

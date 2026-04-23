@@ -12,7 +12,7 @@ Sibling of `@motebit/wallet-solana` (the sovereign-rail reference). Custody is s
 2. **Storage is not the rail's problem.** Every rail takes an optional `onProofAttached(settlementId, proof)` callback. The relay owns persistence; the rail records intent and emits the proof shape. No DB imports allowed.
 3. **Logger is injectable.** Every rail config accepts `logger?: RailLogger`. Default is a silent no-op. The consumer (services/api) injects a structured logger that carries `service: "relay"`, module name, and correlation id. No module-scoped loggers.
 4. **Registry accepts only `GuestRail`.** `SettlementRailRegistry.register(rail: GuestRail)` is the sovereignty doctrine as a type signature. Widening to `SettlementRail` would accept `SovereignRail`, which breaks the custody boundary — the `@ts-expect-error` in `custody-boundary.test.ts` guarantees this fails at compile time.
-5. **No runtime `@motebit/sdk` imports.** Every import from `@motebit/sdk` is `import type`. The package participates in the MIT type layer without binding to a BSL runtime surface.
+5. **No runtime `@motebit/sdk` imports.** Every import from `@motebit/sdk` is `import type`. The package participates in the permissive-floor (Apache-2.0) type layer without binding to a BSL runtime surface.
 
 ## What NOT to add
 

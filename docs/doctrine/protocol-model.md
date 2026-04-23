@@ -6,25 +6,25 @@ Motebit is a protocol, not a platform. This has concrete architectural consequen
 
 Every function the relay performs lives in exactly one of three layers, and each layer has a different shape of ownership:
 
-1. **Protocol** — the open spec anyone can implement. Published in [`spec/`](../../spec/). Consumed via the MIT type packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`). A third party reading only the specs and the MIT types can build an interoperating alternative without permission.
-2. **Reference implementation** — Motebit, Inc.'s code that implements the protocol. BSL-1.1: source-available, commercially restricted during the early phase, automatically converting to a permissive license after the conversion date. Same pattern as MariaDB, CockroachDB, Stripe, Confluent, and Ethereum's commercial clients.
+1. **Protocol** — the open spec anyone can implement. Published in [`spec/`](../../spec/). Consumed via the permissive-floor type packages (Apache-2.0 today: `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, and the platform-attestation leaves `@motebit/verifier`, `@motebit/crypto-appattest`, `@motebit/crypto-play-integrity`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn`). A third party reading only the specs and the permissive-floor types can build an interoperating alternative without permission. The architectural role is "permissive floor"; the specific license instance (Apache-2.0) is replaceable.
+2. **Reference implementation** — Motebit, Inc.'s code that implements the protocol. BSL-1.1: source-available, commercially restricted during the early phase, automatically converting to Apache-2.0 after the conversion date. Same pattern as MariaDB, CockroachDB, Stripe, Confluent, and Ethereum's commercial clients. Both license families converge to Apache-2.0 at the Change Date — one license in the end state.
 3. **Accumulated state** — trust history, federation graph, network effects, operational data. Never licensed; private to the canonical relay operator. The long-term moat that makes the reference implementation commercially defensible.
 
 A function is "protocol-shaped" only when its rules live in an open spec. A rule that exists only in BSL implementation code is not yet part of the protocol — it is part of the canonical implementation.
 
-## The MIT/BSL boundary test
+## The permissive / BSL boundary test
 
 For every package, module, or function, ask which question it answers:
 
-**MIT** if it answers: What is the artifact? How is it encoded? How is it signed? How is it verified? What deterministic math defines interoperability? What interface must another implementation satisfy?
+**Permissive floor** (Apache-2.0) if it answers: What is the artifact? How is it encoded? How is it signed? How is it verified? What deterministic math defines interoperability? What interface must another implementation satisfy?
 
 **BSL** if it answers: How does the system decide? How does the system adapt over time? How does the system monetize, route, prioritize, govern, or operationalize? How does the product behave in practice?
 
-MIT defines the interoperable protocol: artifacts, cryptography, deterministic algebra, abstract interfaces. BSL contains the stateful runtime, orchestration, governance, memory, routing, and product implementations that make Motebit commercially differentiated. Accumulated state is never licensed — it is the permanent moat.
+The permissive floor defines the interoperable protocol: artifacts, cryptography, deterministic algebra, abstract interfaces. BSL contains the stateful runtime, orchestration, governance, memory, routing, and product implementations that make Motebit commercially differentiated. Accumulated state is never licensed — it is the permanent moat.
 
 ## The operational test
 
-For any relay function, ask: _can a third party stand up a competing implementation today, using only the published specs and the MIT type packages, without permission?_ If yes, the function has crossed from platform into protocol. If no, it is still platform-shaped regardless of how the codebase is organized internally. This is the honest measure of "how protocol-shaped is motebit right now."
+For any relay function, ask: _can a third party stand up a competing implementation today, using only the published specs and the permissive-floor type packages, without permission?_ If yes, the function has crossed from platform into protocol. If no, it is still platform-shaped regardless of how the codebase is organized internally. This is the honest measure of "how protocol-shaped is motebit right now."
 
 ## Sync is the floor of legitimate centralization
 
@@ -62,11 +62,11 @@ Extends the settlement precedent to trust proof. Payment proof was already oncha
 
 ### Revocation anchoring (2026-04-11)
 
-Key revocation events (`agent_revoked`, `key_rotated`) are anchored onchain immediately via Solana Memo (`motebit:revocation:v1:{revoked_public_key_hex}:{timestamp}`). No batching — revocations are rare and urgent. Any party can verify via memo lookup without contacting a relay. Closes the NIST SP 800-63 revocation gap: no CA, no CRL, no OCSP — the chain is the registry. `verifyRevocationAnchor` in `@motebit/crypto` (MIT) does offline verification.
+Key revocation events (`agent_revoked`, `key_rotated`) are anchored onchain immediately via Solana Memo (`motebit:revocation:v1:{revoked_public_key_hex}:{timestamp}`). No batching — revocations are rare and urgent. Any party can verify via memo lookup without contacting a relay. Closes the NIST SP 800-63 revocation gap: no CA, no CRL, no OCSP — the chain is the registry. `verifyRevocationAnchor` in `@motebit/crypto` (permissive floor) does offline verification.
 
 ### Discovery, migration, dispute code-complete (2026-04-11)
 
-Discovery (`services/api/src/discovery.ts`): `GET /.well-known/motebit.json` signed relay metadata, `GET /api/v1/discover/:motebitId` with federation propagation, hop limits, loop prevention. Migration (`services/api/src/migration.ts`): MigrationToken, DepartureAttestation, CredentialBundle export, accept-migration with signature verification, cancel/depart lifecycle. Dispute (`services/api/src/disputes.ts`): allocation→disputed transition, evidence, signed operator resolution with refund/release/split, appeal (one per dispute), trust-layer disputes for p2p. CLI: `motebit discover`, `motebit migrate`. Protocol types (MIT) for all three in `@motebit/protocol`.
+Discovery (`services/api/src/discovery.ts`): `GET /.well-known/motebit.json` signed relay metadata, `GET /api/v1/discover/:motebitId` with federation propagation, hop limits, loop prevention. Migration (`services/api/src/migration.ts`): MigrationToken, DepartureAttestation, CredentialBundle export, accept-migration with signature verification, cancel/depart lifecycle. Dispute (`services/api/src/disputes.ts`): allocation→disputed transition, evidence, signed operator resolution with refund/release/split, appeal (one per dispute), trust-layer disputes for p2p. CLI: `motebit discover`, `motebit migrate`. Protocol types (Apache-2.0) for all three in `@motebit/protocol`.
 
 ## The relay is a convenience layer, not a trust root
 

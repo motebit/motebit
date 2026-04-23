@@ -498,7 +498,7 @@ describe("wire-schemas drift (invariant #22)", () => {
           c.filename,
         );
         const committed = JSON.parse(readFileSync(path, "utf-8"));
-        // Live comparison includes the SPDX MIT stamp that
+        // Live comparison includes the SPDX Apache-2.0 stamp that
         // `scripts/build-schemas.ts` prepends to every committed
         // artifact. Keeping the stamp in the comparison means a
         // stripped `$comment` field is detected as drift — the

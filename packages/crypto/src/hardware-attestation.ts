@@ -57,8 +57,8 @@
  *     verified-boot chain, etc.) as glucose per the metabolic
  *     principle.
  *
- * MIT, no I/O, deterministic. Safe to run in any environment that
- * can parse UTF-8 JSON.
+ * Permissive floor (Apache-2.0), no I/O, deterministic. Safe to run in any
+ * environment that can parse UTF-8 JSON.
  */
 
 import type { HardwareAttestationClaim } from "@motebit/protocol";
@@ -148,7 +148,7 @@ export interface DeviceCheckVerifierContext {
  * key (lowercase hex) and returns a verification result matching the
  * canonical shape.
  *
- * `@motebit/crypto` stays MIT-pure and dep-thin — it never imports a
+ * `@motebit/crypto` stays permissive-floor-pure and dep-thin — it never imports a
  * platform adapter. Consumers (CLI, mobile, desktop, relay) wire the
  * leaf packages (`@motebit/crypto-appattest` for device_check;
  * future `@motebit/crypto-tpm`, `@motebit/crypto-play-integrity`) into

@@ -2,8 +2,9 @@
  * Protocol signing primitives — Ed25519, encoding, canonical JSON, signed tokens.
  *
  * These are the cryptographic building blocks that any protocol participant
- * needs to produce valid Motebit artifacts. Moved from BSL @motebit/crypto
- * to MIT @motebit/crypto so the protocol's signing format is open.
+ * needs to produce valid Motebit artifacts. Moved from BSL @motebit/encryption
+ * to the permissive floor in @motebit/crypto (Apache-2.0) so the protocol's
+ * signing format is open.
  *
  * Zero monorepo dependencies — only @noble/ed25519 for cryptography.
  */

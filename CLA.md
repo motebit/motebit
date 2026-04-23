@@ -32,13 +32,13 @@ You are not expected to provide support for your contributions, except to the ex
 
 ## 6. Licensing of Contributions
 
-You understand and agree that your contributions will be licensed under the project's applicable license:
+This is an inbound = outbound CLA: your contributions are licensed to the project under the same license the project ships under in the directory you are contributing to.
 
-- Contributions to `spec/`, `packages/sdk/`, `packages/crypto/`, `packages/create-motebit/`, and `packages/github-action/` are licensed under the **MIT License**.
-- All other contributions are licensed under the **Business Source License 1.1**, which converts to the Apache License, Version 2.0 on the Change Date specified in the LICENSE file.
+- Contributions to the **permissive floor** — `spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/crypto-appattest/`, `packages/crypto-play-integrity/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, and `packages/github-action/` — are licensed under the **Apache License, Version 2.0**. Apache-2.0 carries an explicit, irrevocable patent grant from every contributor (§3) and a termination clause (§4.2) that strips the license of anyone who litigates patent claims against the project.
+- All other contributions are licensed under the **Business Source License 1.1**, which converts to the **Apache License, Version 2.0** on the Change Date specified in the LICENSE file. The two license families converge to a single Apache-2.0 posture after each version's Change Date.
 
 ## 7. Relicensing
 
-You understand and agree that Motebit may relicense the BSL-covered portions of the project under different terms in the future (e.g., for commercial licensing, or changing the Change License). The MIT-licensed components will remain MIT.
+You understand and agree that Motebit may relicense the BSL-covered portions of the project under different terms in the future (e.g., for commercial licensing, or adjusting the Change License). The Apache-2.0-licensed components of the permissive floor will remain Apache-2.0.
 
 This is a key provision. It allows Motebit to offer commercial licenses to enterprises without needing to contact every contributor. This is standard practice for BSL projects (HashiCorp, Sentry, MariaDB, CockroachDB).

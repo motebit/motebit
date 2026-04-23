@@ -4,10 +4,11 @@
  *
  * The metabolic leaf `@motebit/crypto` delegates to when a
  * `HardwareAttestationClaim` declares `platform: "play_integrity"`.
- * Dep-thin `@motebit/crypto` stays MIT-pure; this BSL package
- * metabolizes `@noble/curves` (ES256) + `node:crypto` (RS256) to judge
- * whether Google's Play Integrity JWT chain-verifies against the
- * pinned JWKS and binds the caller's Ed25519 identity.
+ * Dep-thin `@motebit/crypto` stays permissive-floor-pure; this package,
+ * also on the permissive floor (Apache-2.0), metabolizes `@noble/curves`
+ * (ES256) + `node:crypto` (RS256) to judge whether Google's Play Integrity
+ * JWT chain-verifies against the pinned JWKS and binds the caller's
+ * Ed25519 identity.
  *
  * Wiring from a consumer:
  *

@@ -1,8 +1,8 @@
 # @motebit/crypto-play-integrity
 
-Google Play Integrity JWT verifier. MIT, Layer 2. Sibling of `@motebit/crypto-appattest` — the Android metabolic leaf that `@motebit/crypto`'s `HardwareAttestationClaim` dispatcher calls when a claim declares `platform: "play_integrity"`.
+Google Play Integrity JWT verifier. Apache-2.0 (permissive floor), Layer 2. Sibling of `@motebit/crypto-appattest` — the Android metabolic leaf that `@motebit/crypto`'s `HardwareAttestationClaim` dispatcher calls when a claim declares `platform: "play_integrity"`.
 
-MIT because it answers "how is this artifact verified?" against Google's published Play Integrity JWKS. JWT parsing, algorithm dispatch (ES256 / RS256), nonce-rebinding, package binding, and the device-integrity floor are all deterministic from Google's published spec plus the pinned JWKS bytes. Motebit-canonical composition (default integrity floor, CLI shape) lives one layer up in `@motebit/verify` (BSL).
+Permissive-floor because it answers "how is this artifact verified?" against Google's published Play Integrity JWKS. JWT parsing, algorithm dispatch (ES256 / RS256), nonce-rebinding, package binding, and the device-integrity floor are all deterministic from Google's published spec plus the pinned JWKS bytes. Apache-2.0 specifically — the patent grant matters in Google's Play Integrity domain. Motebit-canonical composition (default integrity floor, CLI shape) lives one layer up in `@motebit/verify` (BSL).
 
 ## Scope note — v1 is not-yet-production
 
@@ -31,7 +31,7 @@ Google's Play Integrity API emits an encrypted, signed attestation token. Verify
 1. **The Google Play Integrity JWKS is pinned in `src/google-jwks.ts`.** Same invariant as the App Attest pinned root: pinning is deliberate, audit-friendly, and is the only way a third party can reproduce our verification decision. When Google rotates keys (they do, on their published schedule), landing a new JWKS entry is a named commit — never a dynamic fetch.
 2. **The verifier never reaches the network.** JWT parse, JWKS lookup, ES256/RS256 verify, nonce derivation, package-name check, and device-integrity gate are all synchronous (or purely-local-async for RS256's `node:crypto` path). Google's own attestation-refresh endpoint is out of scope for v1 — outer JWT signature + nonce binding + package binding + device-integrity level + motebit identity binding is enough for third-party self-verification.
 3. **Failures are structured `{ valid: false, errors: [...] }` — never thrown.** Matches `@motebit/crypto::HardwareAttestationVerifyResult` so callers pattern-match one shape across SE / App Attest / Play Integrity / future TPM adapters.
-4. **Dispatch is consumer-wired, not global.** Callers pass `playIntegrityVerifier(...)` into `@motebit/crypto::verify` as `{ hardwareAttestation: { playIntegrity } }`. The MIT package stays pure — no implicit side-effect registration, no global mutable state.
+4. **Dispatch is consumer-wired, not global.** Callers pass `playIntegrityVerifier(...)` into `@motebit/crypto::verify` as `{ hardwareAttestation: { playIntegrity } }`. The permissive-floor package stays pure — no implicit side-effect registration, no global mutable state.
 5. **Identity binding is cryptographic, not name-based.** The nonce MUST be `base64url(SHA256(canonicalJson({ attested_at, device_id, identity_public_key, motebit_id, platform: "play_integrity", version: "1" })))` — byte-identical to the canonical body the Kotlin mint path composes in `apps/mobile/modules/expo-play-integrity/`. A malicious native client that substitutes any other body fails the nonce comparison here.
 
 ## Consumers

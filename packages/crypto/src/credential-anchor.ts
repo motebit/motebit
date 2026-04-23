@@ -1,8 +1,9 @@
 /**
  * Credential anchor — leaf hashing and self-verification.
  *
- * MIT: these functions are part of the open protocol. Any implementation
- * can compute credential leaves and verify anchor proofs using this module.
+ * Permissive floor (Apache-2.0): these functions are part of the open protocol.
+ * Any implementation can compute credential leaves and verify anchor proofs
+ * using this module.
  *
  * motebit/credential-anchor@1.0 §3 (leaf hash) and §5.2 (verification).
  */

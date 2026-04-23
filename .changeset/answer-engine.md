@@ -32,12 +32,13 @@ open-web signal for a new product is near-zero.
   `site:motebit.com OR site:docs.motebit.com OR site:github.com/motebit`.
   Word-boundary matching prevents "Motobilt" from tripping the rule.
 - **`CitedAnswer` + `Citation` wire types** in `@motebit/protocol`
-  (MIT). Universal shape for grounded answers across tiers: interior
-  citations are self-attested (corpus locator, no receipt); web and
-  federation citations bind to a signed `ExecutionReceipt.task_id` in
-  the outer receipt's `delegation_receipts` chain. A new step in
-  `mit-client-only-e2e.test.ts` proves an auditor with only MIT surface
-  (`@motebit/protocol` + `@motebit/crypto`) can verify the chain.
+  (Apache-2.0 permissive floor). Universal shape for grounded answers
+  across tiers: interior citations are self-attested (corpus locator,
+  no receipt); web and federation citations bind to a signed
+  `ExecutionReceipt.task_id` in the outer receipt's `delegation_receipts`
+  chain. A new step in `permissive-client-only-e2e.test.ts` proves an
+  auditor with only the permissive-floor surface (`@motebit/protocol` +
+  `@motebit/crypto`) can verify the chain.
 - **`services/research` extended with the interior tier.** New
   `motebit_recall_self` tool runs locally inside the Claude tool-use
   loop (no MCP atom, no delegation receipt — interior is self-attested).
@@ -70,5 +71,5 @@ open-web signal for a new product is near-zero.
 `scripts/check-deps.ts` gains an `AUTO-GENERATED`/`@generated` banner
 exception to its license-in-source rule — the committed
 `packages/self-knowledge/src/corpus-data.ts` carries verbatim doc content
-that incidentally includes BSL/MIT license tokens (from README badges).
+that incidentally includes BSL/Apache license tokens (from README badges).
 Banner skip is the generic pattern; future generated modules benefit.

@@ -53,9 +53,9 @@ Self-attesting via code-is-public plus CI enforcement — verification is "clone
 
 - Drift defenses (`scripts/check-*.ts` plus `scripts/check.ts` runner)
 - Meta-probe (`scripts/check-gates-effective.ts` — attests every gate fires)
-- License enforcement (`scripts/check-deps.ts` plus root `LICENSE` / `LICENSE-MIT` / `LICENSING.md`)
+- License enforcement (`scripts/check-deps.ts` plus root `LICENSE` / `NOTICE` / `LICENSING.md` and per-package `LICENSE` files on the permissive floor)
 - Cryptosuite compliance (`check-suite-declared`, `check-suite-dispatch`)
-- Trust algorithm correctness (`@motebit/protocol` is MIT, deterministic; any implementation produces identical output from identical input)
+- Trust algorithm correctness (`@motebit/protocol` is Apache-2.0, deterministic; any implementation produces identical output from identical input)
 - Custody split at the type level (`services/api/src/__tests__/custody-boundary.test.ts` — `@ts-expect-error` assertion)
 - Spatial expression doctrine (`apps/spatial/src/__tests__/spatial-expression.neg.test.ts`)
 
@@ -77,7 +77,7 @@ Design decisions that tempt "trust us" framing almost always have a self-attesti
 ## Cross-references
 
 - `docs/doctrine/operator-transparency.md` — the most recent application, extending self-attestation to the operator's own posture.
-- `docs/doctrine/protocol-model.md` — the three-layer MIT / BSL / accumulated-state model; self-attestation rides the MIT primitive surface.
+- `docs/doctrine/protocol-model.md` — the three-layer permissive-floor / BSL / accumulated-state model; self-attestation rides the permissive-floor primitive surface.
 - `docs/doctrine/security-boundaries.md` — sensitivity gating and cryptographic primitives this pattern depends on.
 - `docs/drift-defenses.md` — code-is-public self-attestation is how every drift gate works.
 - `docs/doctrine/readme-as-glass.md` — related recursive-fold principle: the README's form mirrors the artifact's form.

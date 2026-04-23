@@ -1,9 +1,9 @@
 /**
  * Discovery types — motebit/discovery@1.0.
  *
- * MIT: these types define the interoperable format for relay discovery
- * and agent resolution. Any implementation can produce and verify
- * relay metadata and resolve agents using these types.
+ * Permissive floor (Apache-2.0): these types define the interoperable format
+ * for relay discovery and agent resolution. Any implementation can produce
+ * and verify relay metadata and resolve agents using these types.
  */
 
 // === Relay Metadata (§3) ===

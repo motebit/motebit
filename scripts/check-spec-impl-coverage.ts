@@ -6,12 +6,13 @@
  * ## Why this gate exists
  *
  * Motebit's thesis rests on the claim "any third party can stand up a
- * competing implementation using only the published specs and the MIT
- * type packages." Three gates already guard pieces of that claim:
+ * competing implementation using only the published specs and the
+ * permissive-floor type packages." Three gates already guard pieces of
+ * that claim:
  *
- *   - #9  `check-spec-coverage`       — Wire format types ↔ @motebit/protocol
- *   - #14 `check-spec-mit-boundary`   — Spec callables ↔ MIT exports
- *   - #23 `check-spec-wire-schemas`   — Spec wire types ↔ zod schemas
+ *   - #9  `check-spec-coverage`               — Wire format types ↔ @motebit/protocol
+ *   - #14 `check-spec-permissive-boundary`    — Spec callables ↔ permissive-floor exports
+ *   - #23 `check-spec-wire-schemas`           — Spec wire types ↔ zod schemas
  *
  * All three verify the TYPE surface of each spec. None verifies that
  * *runtime behavior* for the spec is actually implemented anywhere in

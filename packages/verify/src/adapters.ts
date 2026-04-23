@@ -1,11 +1,12 @@
 /**
  * Bundled-adapter wiring — the core reason this package exists.
  *
- * `@motebit/verifier` (MIT) accepts an optional
+ * `@motebit/verifier` (Apache-2.0) accepts an optional
  * `HardwareAttestationVerifiers` record but wires none of the four
- * leaves itself; that keeps it MIT-pure. This BSL companion imports
- * every leaf (`@motebit/crypto-appattest`, `@motebit/crypto-tpm`,
- * `@motebit/crypto-play-integrity`, `@motebit/crypto-webauthn`) and
+ * leaves itself; that keeps it dep-thin on the permissive floor. This
+ * BSL aggregator imports every leaf (`@motebit/crypto-appattest`,
+ * `@motebit/crypto-tpm`, `@motebit/crypto-play-integrity`,
+ * `@motebit/crypto-webauthn`) and
  * produces a single `HardwareAttestationVerifiers` object the CLI
  * hands to `verifyFile`. Any credential whose subject carries a
  * hardware-attestation claim for any of the four platforms now

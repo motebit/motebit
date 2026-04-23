@@ -64,7 +64,7 @@ Exit codes:
 The CLI is a thin wrapper — every capability is available programmatically:
 
 ```ts
-import { verifyFile } from "@motebit/verifier"; // MIT library (file I/O + formatting)
+import { verifyFile } from "@motebit/verifier"; // Apache-2.0 library (file I/O + formatting)
 import { buildHardwareVerifiers } from "@motebit/verify"; // BSL CLI (adapter bundle)
 
 const result = await verifyFile("cred.json", {
@@ -77,21 +77,21 @@ const result = await verifyFile("cred.json", {
 This package sits at the top of a deliberate three-layer split — the same shape long-lived tool lineages use (git / libgit2, cargo / tokio, npm / @npm/arborist):
 
 ```
-@motebit/verify     BSL  the CLI motebit-verify + bundled adapters  (the tool — this package)
-@motebit/verifier   MIT  library: verifyFile, verifyArtifact, formatHuman
-@motebit/crypto     MIT  primitives: verify, sign, suite dispatch
+@motebit/verify     BSL         the CLI motebit-verify + bundled adapters  (the tool — this package)
+@motebit/verifier   Apache-2.0  library: verifyFile, verifyArtifact, formatHuman
+@motebit/crypto     Apache-2.0  primitives: verify, sign, suite dispatch
 ```
 
 - Install **`@motebit/verify`** when you want the command-line tool with every platform bundled. One install, verify anything offline.
-- Install **`@motebit/verifier`** when you're writing MIT-only TypeScript code that needs to read + verify motebit artifacts programmatically without accepting the bundled adapters' BSL terms.
+- Install **`@motebit/verifier`** when you're writing permissive-floor-only TypeScript code (Apache-2.0 + explicit patent grant) that needs to read + verify motebit artifacts programmatically without accepting the bundled CLI's BSL terms.
 - Install **`@motebit/crypto`** when you want the primitives — the verify dispatcher, sign APIs, suite registry — to build your own verification tooling from scratch.
 
 ## Superseding the deprecated `@motebit/verify@0.x`
 
 The original `@motebit/verify@0.7.0` was a zero-dep MIT library with a single `verify()` function. It was deprecated and split:
 
-- **The `verify()` library primitive** moved to [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto). Same MIT license, same zero deps, same function shape, plus full sign / verify / cryptosuite support.
-- **The file-reading + human-formatting helpers** live at [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier). MIT, thin layer above `@motebit/crypto`.
+- **The `verify()` library primitive** moved to [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto). Now Apache-2.0 (upgraded from MIT — adds an explicit patent grant), same zero deps, same function shape, plus full sign / verify / cryptosuite support.
+- **The file-reading + human-formatting helpers** live at [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier). Apache-2.0, thin layer above `@motebit/crypto`.
 - **The `motebit-verify` CLI — the tool most users actually wanted when they typed `npm install @motebit/verify`** — is now this package, shipped at `1.0.0`. Runs offline. Verifies every motebit artifact. Bundles every hardware-attestation platform.
 
 If you were on `@motebit/verify@^0.7.0`, migration depends on what you were using:
@@ -104,4 +104,4 @@ If you were on `@motebit/verify@^0.7.0`, migration depends on what you were usin
 
 ## Doctrine
 
-See [`CLAUDE.md`](./CLAUDE.md) for the architectural reasoning — why the split is physical, why `@motebit/verify` is BSL while `@motebit/verifier` and `@motebit/crypto` stay MIT, and how the three-package lineage maps onto motebit's sovereignty invariant.
+See [`CLAUDE.md`](./CLAUDE.md) for the architectural reasoning — why the split is physical, why `@motebit/verify` is BSL while `@motebit/verifier` and `@motebit/crypto` stay on the Apache-2.0 permissive floor, and how the three-package lineage maps onto motebit's sovereignty invariant.

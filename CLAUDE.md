@@ -22,15 +22,15 @@ Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs
 
 Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enforced by `check-claude-md`):
 
-- [`packages/protocol/CLAUDE.md`](packages/protocol/CLAUDE.md) — MIT purity, types/algebra only
+- [`packages/protocol/CLAUDE.md`](packages/protocol/CLAUDE.md) — permissive-floor purity, types/algebra only
 - [`packages/sdk/CLAUDE.md`](packages/sdk/CLAUDE.md) — stable developer-contract surface; independent semver from the protocol
 - [`packages/crypto/CLAUDE.md`](packages/crypto/CLAUDE.md) — suite-dispatch is the only Ed25519 caller
-- [`packages/wire-schemas/CLAUDE.md`](packages/wire-schemas/CLAUDE.md) — BSL zod sources; generates committed JSON Schemas into the MIT `spec/schemas/` tree
+- [`packages/wire-schemas/CLAUDE.md`](packages/wire-schemas/CLAUDE.md) — BSL zod sources; generates committed JSON Schemas into the Apache-2.0 `spec/schemas/` tree
 - [`packages/crypto-appattest/CLAUDE.md`](packages/crypto-appattest/CLAUDE.md) — iOS App Attest chain verifier; pinned Apple root, injected at call site
 - [`packages/crypto-play-integrity/CLAUDE.md`](packages/crypto-play-integrity/CLAUDE.md) — Android Play Integrity JWT verifier; pinned Google JWKS, injected at call site
 - [`packages/crypto-tpm/CLAUDE.md`](packages/crypto-tpm/CLAUDE.md) — Windows / Linux TPM 2.0 EK chain verifier; pinned vendor roots, injected at call site
 - [`packages/crypto-webauthn/CLAUDE.md`](packages/crypto-webauthn/CLAUDE.md) — WebAuthn platform-authenticator packed-attestation verifier; pinned FIDO roots (Apple, Yubico, Microsoft)
-- [`packages/verify/CLAUDE.md`](packages/verify/CLAUDE.md) — canonical `motebit-verify` CLI; BSL aggregator that bundles the four MIT platform leaves with motebit-canonical defaults
+- [`packages/verify/CLAUDE.md`](packages/verify/CLAUDE.md) — canonical `motebit-verify` CLI; BSL aggregator that bundles the four Apache-2.0 platform leaves with motebit-canonical defaults
 - [`packages/circuit-breaker/CLAUDE.md`](packages/circuit-breaker/CLAUDE.md) — per-peer three-state engine, no I/O, injected clock
 - [`packages/evm-rpc/CLAUDE.md`](packages/evm-rpc/CLAUDE.md) — JSON-RPC behind a motebit-shaped interface; one error shape out
 - [`packages/deposit-detector/CLAUDE.md`](packages/deposit-detector/CLAUDE.md) — single `eth_getLogs` per cycle; dedup is the consumer's atomic write
@@ -45,7 +45,7 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 
 Cross-cutting doctrine (read on demand):
 
-- [`docs/doctrine/protocol-model.md`](docs/doctrine/protocol-model.md) — MIT/BSL/state, cryptosuite agility
+- [`docs/doctrine/protocol-model.md`](docs/doctrine/protocol-model.md) — permissive-floor / BSL / accumulated-state, cryptosuite agility
 - [`docs/doctrine/security-boundaries.md`](docs/doctrine/security-boundaries.md) — sybil, injection, token binding
 - [`docs/doctrine/settlement-rails.md`](docs/doctrine/settlement-rails.md) — custody split, rails, withdrawals
 - [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — declared posture vs proven posture
@@ -68,7 +68,7 @@ Architectural invariants. Violating them breaks CI, the product, or the thesis.
 - **Adapter pattern everywhere.** All I/O abstracted. In-memory for tests, SQLite/Tauri/Expo/IndexedDB in production. The interior must not bind to a provider.
 - **Fail-closed privacy.** Deny on error. Sensitivity levels (none/personal/medical/financial/secret) enforced at storage, retrieval, sync, and context boundaries. Medical/financial/secret never reach external AI. Retention enforced via deletion certificates.
 - **Proof composability.** Canonical JSON → SHA-256 → Ed25519 verify. Always. External anchoring is additive, never gatekeeping. `@motebit/crypto` works standalone with zero monorepo deps.
-- **Semiring algebra for routing.** Algebra in MIT `@motebit/protocol` (`Semiring<T>`, `WeightedDigraph<T>`, traversal). Judgment in BSL `@motebit/semiring` (agent graph, ranking, provenance). Swap the semiring to change what "best path" means — no new algorithm.
+- **Semiring algebra for routing.** Algebra in Apache-2.0 `@motebit/protocol` (`Semiring<T>`, `WeightedDigraph<T>`, traversal). Judgment in BSL `@motebit/semiring` (agent graph, ranking, provenance). Swap the semiring to change what "best path" means — no new algorithm.
 - **Economic loop.** Relay is the ledger. Rails are the membrane. Agents circulate inside via virtual accounts — allocate, execute, settle, earn. 5% fee at each settlement checkpoint. Rails are on/off ramps only; deposits and withdrawals are edge operations. Everything between is agent-to-agent.
 - **Adversarial onboarding.** Embed adversarial probes in the happy path. `--self-test` submits the self-delegation sybil vector through the live relay. If the security boundary breaks, onboarding breaks.
 - **Sibling boundary rule.** When you fix one boundary (auth, policy, validation, rendering), audit all siblings in the same pass. Docs are siblings of code.

@@ -8,7 +8,7 @@
  *
  *   - Services drift toward inline crypto / receipt signing (locked down by
  *     check-service-primitives). Apps rarely do this — they're UI surfaces.
- *   - Apps drift toward importing Layer-0 MIT types directly (@motebit/protocol,
+ *   - Apps drift toward importing Layer-0 permissive-floor types directly (@motebit/protocol,
  *     @motebit/crypto) when the product-shaped re-exports live in @motebit/sdk
  *     and @motebit/encryption.
  *
@@ -51,7 +51,7 @@ const FORBIDDEN_IMPORTS: Record<string, string> = {
   "@motebit/protocol":
     "use @motebit/sdk — it re-exports every protocol type via `export *`, plus product vocabulary (color presets, approval presets, governance config, etc.). Going direct to protocol skips the product-layer conventions.",
   "@motebit/crypto":
-    "use @motebit/encryption — product-level crypto (key wrapping, signed tokens, payload encryption). @motebit/crypto is Layer 0 MIT for protocol implementers; apps are consumers.",
+    "use @motebit/encryption — product-level crypto (key wrapping, signed tokens, payload encryption). @motebit/crypto is Layer 0 permissive-floor (Apache-2.0) for protocol implementers; apps are consumers.",
 };
 
 // ── Forbidden inline patterns ────────────────────────────────────────────
@@ -192,7 +192,7 @@ function main(): void {
     `\nDoctrine: apps consume the product vocabulary (@motebit/sdk, @motebit/encryption), not the protocol primitives (@motebit/protocol, @motebit/crypto).`,
   );
   console.error(
-    `Protocol primitives live in Layer 0 MIT packages for independent implementers — apps are top-layer consumers.`,
+    `Protocol primitives live in Layer 0 permissive-floor packages (Apache-2.0) for independent implementers — apps are top-layer consumers.`,
   );
   process.exit(1);
 }

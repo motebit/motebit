@@ -4,7 +4,7 @@
  * Signing and verification of W3C Verifiable Credentials and Presentations
  * using the protocol's canonical Ed25519 + JCS pipeline.
  *
- * Moved from BSL @motebit/crypto to MIT @motebit/crypto.
+ * Moved from BSL @motebit/encryption to the permissive floor in @motebit/crypto (Apache-2.0).
  */
 
 import {

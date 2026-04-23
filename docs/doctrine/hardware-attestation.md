@@ -103,7 +103,7 @@ Every future change to this vertical clears all three:
 
 Live consumers today:
 
-- `packages/crypto/src/hardware-attestation.ts` — verifier, pure MIT algebra.
+- `packages/crypto/src/hardware-attestation.ts` — verifier, pure permissive-floor (Apache-2.0) algebra.
 - `packages/crypto/src/index.ts` — `verify()` dispatcher lifts `hardware_attestation` onto `CredentialVerifyResult`.
 - `packages/semiring/src/hardware-attestation.ts` — `HardwareAttestationSemiring` + `scoreAttestation`.
 - `packages/market/src/graph-routing.ts` — `HARDWARE_ATTESTATION_BOOST` applied to the trust edge during agent ranking.
@@ -132,6 +132,6 @@ Live consumers today:
 ## Cross-references
 
 - [`self-attesting-system.md`](self-attesting-system.md) — the three-test check hardware attestation clears by construction.
-- [`protocol-model.md`](protocol-model.md) — MIT primitives (`HardwareAttestationClaim` type, `BottleneckSemiring`) vs BSL policy (`scoreAttestation` encoding).
+- [`protocol-model.md`](protocol-model.md) — permissive-floor primitives (`HardwareAttestationClaim` type, `BottleneckSemiring`) vs BSL policy (`scoreAttestation` encoding).
 - [`security-boundaries.md`](security-boundaries.md) — software-custody threat model the attestor key mitigates.
 - `spec/credential-v1.md §3.4` — wire-format contract.

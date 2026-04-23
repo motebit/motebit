@@ -17,7 +17,7 @@ When adding or editing a line in the root `README.md`, ask: **is this display, o
 - What the project is, in one paragraph.
 - Who it serves and how they start (the `Try it` ladder, the command invocations).
 - Concrete facts that change behavior for a first-time reader (package names, URLs, surface availability).
-- One-paragraph _theses_ that reframe a large chunk of the document. The algebra-vs-judgment paragraph qualifies because it turns the MIT/BSL package table from inventory into argument — one paragraph changes how the reader sees ten bullets.
+- One-paragraph _theses_ that reframe a large chunk of the document. The algebra-vs-judgment paragraph qualifies because it turns the permissive-floor / BSL package table from inventory into argument — one paragraph changes how the reader sees ten bullets.
 
 **Interior — link out, don't paste in:**
 
@@ -38,7 +38,7 @@ Under-explaining is the feature. A reader who wants to verify the claim will fol
 
 The README grows only when a **compressible claim** appears that cannot be linked to in a shorter form. Most candidate additions fail this test. The algebra-vs-judgment paragraph passed it because:
 
-1. It reframes a large block of the document (the MIT/BSL table) from inventory into argument.
+1. It reframes a large block of the document (the permissive-floor / BSL table) from inventory into argument.
 2. The claim compresses: _"algebra vs. judgment"_ is shorter than the derivation but lossless for the reader's mental model.
 3. No existing link satisfies it: `LICENSING.md` describes the license mechanics, `docs/doctrine/protocol-model.md` describes the three-layer model in detail, but neither captures _this particular compression_.
 

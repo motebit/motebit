@@ -76,5 +76,5 @@ policyOverrides), and the default-fallback branches. Coverage:
 (threshold 80).
 
 Docs tree (`apps/docs/content/docs/operator/architecture.mdx`) and
-root CLAUDE.md package count updated to 40 packages. No MIT package
-touched; no BSL→MIT import introduced.
+root CLAUDE.md package count updated to 40 packages. No permissive-floor package
+touched; no BSL→permissive-floor import introduced.

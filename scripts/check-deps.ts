@@ -10,9 +10,13 @@
  *   6. package.json field order — name, version, license, private for private packages
  *   7. tsconfig.json references — must match production @motebit/* dependencies
  *   8. No license text in source files — license lives in package.json, not headers
- *   9. MIT purity — MIT packages must not import from BSL packages
- *  10. MIT export surface — MIT packages must export only types, enums, branded
- *      casts, and constants (no algorithms)
+ *   9. Permissive purity — permissive-floor packages must not import from BSL packages
+ *  10. Permissive export surface — permissive-floor packages must export only types, enums,
+ *      branded casts, and constants (no algorithms)
+ *
+ * Identifiers track the architectural role (PERMISSIVE_*), not the specific license instance
+ * (Apache-2.0 today). The role is load-bearing; the instance is replaceable. Same pattern as
+ * cryptosuite agility — one SuiteId registry, multiple underlying suites.
  *
  * Exit code 1 on any violation. Designed to run in CI before typecheck.
  */
@@ -29,7 +33,7 @@ const ROOT = resolve(__dirname, "..");
 // Apps/services are Layer 5 and may depend on anything.
 
 const LAYER: Record<string, number> = {
-  // Layer 0 — Foundation (MIT, zero internal deps). The protocol-
+  // Layer 0 — Foundation (Apache-2.0, zero internal deps). The protocol-
   // reference surface: types, primitives, algebra. Anyone
   // implementing motebit in any language consumes this layer as the
   // open standard. Permissive license is load-bearing — a BSL
@@ -96,13 +100,14 @@ const LAYER: Record<string, number> = {
 
 const APP_LAYER = 6;
 
-// MIT-licensed packages — must not import from BSL packages, must export only types.
-// The four platform-attestation adapters are MIT because each one answers "how is
-// this artifact verified?" against a published public trust anchor (Apple root,
-// Google JWKS, vendor TPM roots, FIDO roots) — the MIT side of the protocol-model
-// boundary test. Motebit-canonical composition (bundle IDs, RP IDs, the CLI shape)
-// stays BSL in @motebit/verify, which aggregates these four leaves.
-const MIT_PACKAGES = new Set([
+// Permissive-floor packages (Apache-2.0 today) — must not import from BSL packages,
+// must export only types. The four platform-attestation adapters sit on the permissive
+// floor because each one answers "how is this artifact verified?" against a published
+// public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) — the
+// permissive side of the protocol-model boundary test. Motebit-canonical composition
+// (bundle IDs, RP IDs, the CLI shape) stays BSL in @motebit/verify, which aggregates
+// these four leaves.
+const PERMISSIVE_PACKAGES = new Set([
   "@motebit/protocol",
   "@motebit/sdk",
   "@motebit/crypto",
@@ -114,10 +119,11 @@ const MIT_PACKAGES = new Set([
   "@motebit/crypto-webauthn",
 ]);
 
-// MIT packages allowed to import from other MIT packages only (plus external deps).
-// create-motebit is bundled (tsup) so devDeps are inlined — but only MIT deps allowed.
-// @motebit/verifier ships unbundled and depends on @motebit/crypto at runtime.
-const MIT_IMPORT_ALLOWED = new Set([
+// Permissive-floor packages allowed to import from other permissive-floor packages only
+// (plus external deps). create-motebit is bundled (tsup) so devDeps are inlined — but
+// only permissive-floor deps allowed. @motebit/verifier ships unbundled and depends on
+// @motebit/crypto at runtime.
+const PERMISSIVE_IMPORT_ALLOWED = new Set([
   "@motebit/protocol",
   "@motebit/sdk",
   "@motebit/crypto",
@@ -129,10 +135,10 @@ const MIT_IMPORT_ALLOWED = new Set([
   "@motebit/crypto-webauthn",
 ]);
 
-// Allowlisted non-trivial exported functions in MIT packages.
+// Allowlisted non-trivial exported functions in permissive-floor packages.
 // These are reviewed and confirmed safe: branded casts, parse/verify utilities.
-// Any new function export in an MIT package requires explicit allowlisting here.
-const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
+// Any new function export in a permissive-floor package requires explicit allowlisting here.
+const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
   "@motebit/protocol": new Set([
     // Branded ID casts
     "asMotebitId",
@@ -661,7 +667,7 @@ function checkTsconfigReferences(packages: PkgInfo[]): void {
 
 // Check 8: No license text in source file headers
 function checkNoLicenseInSource(packages: PkgInfo[]): void {
-  const licensePattern = /\bBSL[-\s]1\.1\b|\bMIT\s+licens/i;
+  const licensePattern = /\bBSL[-\s]1\.1\b|\bMIT\s+licens|\bApache\s+Licens/i;
 
   for (const pkg of packages) {
     const srcDir = join(pkg.dir, "src");
@@ -684,10 +690,10 @@ function checkNoLicenseInSource(packages: PkgInfo[]): void {
   }
 }
 
-// Check 9: MIT purity — MIT packages must not import from BSL packages
-function checkMitPurity(packages: PkgInfo[]): void {
+// Check 9: Permissive purity — permissive-floor packages must not import from BSL packages
+function checkPermissivePurity(packages: PkgInfo[]): void {
   for (const pkg of packages) {
-    if (!MIT_PACKAGES.has(pkg.name)) continue;
+    if (!PERMISSIVE_PACKAGES.has(pkg.name)) continue;
 
     const srcDir = join(pkg.dir, "src");
     if (!existsSync(srcDir)) continue;
@@ -700,12 +706,12 @@ function checkMitPurity(packages: PkgInfo[]): void {
         if (depName === pkg.name) continue; // self-import
         if (imp.typeOnly) continue; // type-only imports are erased at compile time
 
-        if (!MIT_IMPORT_ALLOWED.has(depName)) {
+        if (!PERMISSIVE_IMPORT_ALLOWED.has(depName)) {
           const rel = relative(ROOT, file);
           fail(
-            "mit-purity",
-            `${rel}:${imp.line} — MIT package "${pkg.name}" imports BSL package "${depName}". ` +
-              `MIT packages must only import from other MIT packages (or use "import type").`,
+            "permissive-purity",
+            `${rel}:${imp.line} — permissive-floor package "${pkg.name}" imports BSL package "${depName}". ` +
+              `Permissive-floor packages must only import from other permissive-floor packages (or use "import type").`,
           );
         }
       }
@@ -713,20 +719,20 @@ function checkMitPurity(packages: PkgInfo[]): void {
   }
 }
 
-// Check 10: MIT export surface — MIT packages must not export unapproved functions
-function checkMitExportSurface(packages: PkgInfo[]): void {
+// Check 10: Permissive export surface — permissive-floor packages must not export unapproved functions
+function checkPermissiveExportSurface(packages: PkgInfo[]): void {
   // Check packages that publish typed exports. create-motebit is excluded (bin-only, no library API).
-  const CHECKED_MIT = ["@motebit/protocol", "@motebit/sdk", "@motebit/crypto"];
+  const CHECKED_PERMISSIVE = ["@motebit/protocol", "@motebit/sdk", "@motebit/crypto"];
 
   for (const pkg of packages) {
-    if (!CHECKED_MIT.includes(pkg.name)) continue;
+    if (!CHECKED_PERMISSIVE.includes(pkg.name)) continue;
 
     const indexPath = join(pkg.dir, "src", "index.ts");
     if (!existsSync(indexPath)) continue;
     const content = readFileSync(indexPath, "utf-8");
     const lines = content.split("\n");
 
-    const allowed = MIT_ALLOWED_FUNCTIONS[pkg.name] ?? new Set<string>();
+    const allowed = PERMISSIVE_ALLOWED_FUNCTIONS[pkg.name] ?? new Set<string>();
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!;
@@ -737,10 +743,10 @@ function checkMitExportSurface(packages: PkgInfo[]): void {
         const fnName = fnMatch[1]!;
         if (!allowed.has(fnName)) {
           fail(
-            "mit-export",
+            "permissive-export",
             `${pkg.name} src/index.ts:${i + 1} exports function "${fnName}" — ` +
-              `MIT packages must export only types, enums, and allowlisted utilities. ` +
-              `Move this function to a BSL package or add it to MIT_ALLOWED_FUNCTIONS in check-deps.ts.`,
+              `permissive-floor packages must export only types, enums, and allowlisted utilities. ` +
+              `Move this function to a BSL package or add it to PERMISSIVE_ALLOWED_FUNCTIONS in check-deps.ts.`,
           );
         }
       }
@@ -761,10 +767,10 @@ function checkMitExportSurface(packages: PkgInfo[]): void {
           if (!name || /^[A-Z]/.test(name)) continue; // Skip types/classes/enums (PascalCase)
           if (!allowed.has(name)) {
             fail(
-              "mit-export",
+              "permissive-export",
               `${pkg.name} src/index.ts:${i + 1} re-exports function "${name}" — ` +
-                `MIT packages must export only types, enums, and allowlisted utilities. ` +
-                `Add to MIT_ALLOWED_FUNCTIONS in check-deps.ts if intentional.`,
+                `permissive-floor packages must export only types, enums, and allowlisted utilities. ` +
+                `Add to PERMISSIVE_ALLOWED_FUNCTIONS in check-deps.ts if intentional.`,
             );
           }
         }
@@ -805,8 +811,8 @@ checkUndeclaredDeps(packages);
 checkPackageJsonOrder(packages);
 checkTsconfigReferences(packages);
 checkNoLicenseInSource(packages);
-checkMitPurity(packages);
-checkMitExportSurface(packages);
+checkPermissivePurity(packages);
+checkPermissiveExportSurface(packages);
 
 if (violations.length === 0) {
   console.log("\n  All architectural checks passed.\n");

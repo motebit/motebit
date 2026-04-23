@@ -4,8 +4,8 @@
  *
  * Each `spec/*.md` file may declare one or more "Wire format (foundation law)"
  * subsections. Anything named in such a subsection is binding vocabulary that
- * every conforming implementation must emit or accept, so the MIT type package
- * `@motebit/protocol` must export a matching name. If it does not, the spec is
+ * every conforming implementation must emit or accept, so the permissive-floor type package
+ * `@motebit/protocol` (Apache-2.0) must export a matching name. If it does not, the spec is
  * describing a type no implementation can reference — a drift the existing
  * `check-spec-references` probe cannot catch.
  *
@@ -178,7 +178,7 @@ function main(): void {
       "\n  Fix: either export the type from @motebit/protocol, or rename the spec heading",
     );
     console.log(
-      "  to match an existing exported type. Specs must stay aligned with the MIT vocabulary.",
+      "  to match an existing exported type. Specs must stay aligned with the permissive-floor vocabulary.",
     );
     process.exit(1);
   }

@@ -1,10 +1,10 @@
 # Licensing
 
-Motebit uses a dual-license model: an open protocol layer and a source-available runtime.
+Motebit uses a dual-license model: a permissive floor and a source-available runtime. Both converge to Apache-2.0 in the end state.
 
-## Protocol Layer — MIT License
+## Permissive Floor — Apache License, Version 2.0
 
-The protocol specification, type definitions, identity verification, scaffolding, and the hardware-attestation platform-leaf verifiers are MIT-licensed. Use them for any purpose, including commercial, without restriction.
+The protocol specification, type definitions, identity verification, scaffolding, and the hardware-attestation platform-leaf verifiers are licensed under the Apache License, Version 2.0. Use them for any purpose, including commercial, without restriction.
 
 | Package                           | npm                              | Purpose                                                  |
 | --------------------------------- | -------------------------------- | -------------------------------------------------------- |
@@ -20,7 +20,9 @@ The protocol specification, type definitions, identity verification, scaffolding
 | `packages/create-motebit/`        | `create-motebit`                 | Identity scaffolding CLI (0 deps)                        |
 | `packages/github-action/`         | —                                | GitHub Action for identity verification                  |
 
-These components have their own `LICENSE` files. They are **not** subject to the Business Source License. The four `crypto-*` platform leaves answer "how is this artifact verified?" against each platform's published public trust anchor — the MIT side of the protocol-model boundary test. Motebit-canonical aggregation (default bundle IDs, RP ID, CLI shape) lives in `@motebit/verify` (BSL) one layer up.
+These components have their own `LICENSE` files. They are **not** subject to the Business Source License. The four `crypto-*` platform leaves answer "how is this artifact verified?" against each platform's published public trust anchor — the permissive side of the protocol-model boundary test. Motebit-canonical aggregation (default bundle IDs, RP ID, CLI shape) lives in `@motebit/verify` (BSL) one layer up.
+
+The architectural role is "permissive floor"; the specific license instance is "Apache License, Version 2.0." The role is load-bearing, the instance is replaceable. `check-deps.ts` uses `PERMISSIVE_PACKAGES` and `check-spec-permissive-boundary.ts` uses the same vocabulary — the gate names describe the invariant (third-party-implementable without BSL license friction), not the specific permissive instance.
 
 ## Runtime Layer — Business Source License 1.1
 
@@ -57,27 +59,38 @@ Everything else is licensed under BSL-1.1. The source is fully visible — you c
 **Runtime:**
 `runtime`
 
+**Aggregator:**
+`verify` (the `motebit-verify` CLI that bundles the four permissive `crypto-*` platform leaves with motebit-canonical defaults)
+
 **Applications:**
 `cli` · `desktop` · `mobile` · `web` · `admin` · `spatial`
 
 **Services:**
 `api` · `research` · `code-review` · `web-search` · `read-url` · `summarize` · `embed` · `proxy`
 
-## Conversion
+## Convergence
 
-Every version of the BSL-licensed code converts to the **Apache License, Version 2.0** four years after its publication date. Once converted, the code is permanently Apache 2.0 — permissive, no restrictions, with an explicit patent grant from every contributor.
+Every version of the BSL-licensed code converts to the **Apache License, Version 2.0** four years after its publication date. Once converted, the code is permanently Apache-2.0 — permissive, no restrictions, with an explicit patent grant from every contributor.
 
-This applies to the entire runtime layer uniformly. There are no tiered conversion dates.
+This is load-bearing. The permissive floor is Apache-2.0 today; the BSL runtime becomes Apache-2.0 at each version's Change Date. The end state is a single-license codebase: one posture, one patent grant, one procurement decision. A monorepo whose meta-principle is "synchronization invariants — never let spec and code diverge" cannot carry a permanent two-license split built into the license choice itself.
 
-The conversion is automatic under the terms of BSL-1.1. It cannot be revoked.
+The conversion applies to the entire runtime layer uniformly. There are no tiered conversion dates. It is automatic under the terms of BSL-1.1 and cannot be revoked.
 
-## Why Apache 2.0 (not MIT)
+## Why Apache-2.0 for the permissive floor
 
-The protocol layer is MIT because protocols need maximum simplicity for adoption. The runtime layer converts to Apache 2.0 — not MIT — because motebit deals with agent identity, trust algebra, and delegation protocols. These are domains where patents exist.
+Three load-bearing arguments:
 
-Apache 2.0 includes an explicit, irrevocable patent grant from every contributor. If a company contributes to the codebase and later tries to patent claims against users, they automatically lose their license. This protects the entire ecosystem — every motebit operator, every agent in the network.
+### 1. Patent clarity matters across the entire permissive floor
 
-MIT is silent on patents. For type definitions and verification utilities, that's fine. For a sovereign identity runtime that enterprises will depend on, patent clarity matters.
+The permissive floor includes four platform-attestation verifiers — Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn — that operate against vendor chains in heavy patent territory (Apple, Google, Microsoft, Infineon, Nuvoton, Yubico, the FIDO Alliance). The VC/DID space the protocol builds on also carries patent filings. Every contributor who touches the permissive floor deserves to pass an explicit, irrevocable patent license to downstream consumers (Apache §3), and the project deserves protection from contributors who later assert patent claims (Apache §4.2 — "institute patent litigation … any patent licenses granted to You under this License for that Work shall terminate as of the date such litigation is filed"). MIT is silent on patents. Silence is a liability, not a simplification.
+
+### 2. Convergence eliminates a permanent two-license drift
+
+If the floor is MIT and the runtime converges to Apache-2.0, the end state is MIT floor + Apache runtime — two licenses forever. Built-in drift. If the floor is Apache-2.0, the end state is Apache everywhere — one license, one posture.
+
+### 3. Enterprise and standards-track posture
+
+Identity infrastructure that enterprises bet on ships Apache-2.0: Kubernetes, Kafka, Envoy, Istio, OpenTelemetry, SPIFFE, Keycloak. Reference implementations that reach IETF or W3C standards track ship Apache-2.0 (the DID WG, VC WG, OAuth WG norms). MIT is the license of npm utility libraries. Motebit is positioning as the former. The license is part of the signal.
 
 ## Why four years
 
@@ -88,8 +101,9 @@ After four years, the recipe is free. By then, the network of sovereign agents w
 ## Quick reference
 
 ```
-MIT (now, any use):          protocol · crypto · sdk · verifier · crypto-appattest · crypto-play-integrity ·
-                             crypto-tpm · crypto-webauthn · create-motebit · spec · github-action
+Apache-2.0 (now, any use):  protocol · sdk · crypto · verifier · crypto-appattest · crypto-play-integrity ·
+                            crypto-tpm · crypto-webauthn · create-motebit · spec · github-action
 BSL-1.1 (source-visible):   verify · runtime · engines · apps · services · everything else
-BSL → Apache 2.0 conversion: 4 years per version, automatic, irrevocable
+BSL → Apache-2.0 conversion: 4 years per version, automatic, irrevocable
+End state:                  Apache-2.0 everywhere
 ```

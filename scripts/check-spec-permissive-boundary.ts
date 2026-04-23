@@ -1,14 +1,14 @@
 #!/usr/bin/env tsx
 /**
- * check-spec-mit-boundary — protocol/implementation leak defense.
+ * check-spec-permissive-boundary — protocol/implementation leak defense.
  *
  * The operational test: *can a third party stand up a competing implementation
- * today, using only the published specs and the MIT type packages?* That test
- * passes today for the 12 specs, but only because protocol authors remember to
- * keep algorithmic references pointing at MIT-exported symbols. A spec that
- * says `scoreCandidate(a, b)` where `scoreCandidate` lives only in BSL
- * `@motebit/semiring` would silently break the promise — a reader of the spec
- * couldn't reproduce the behavior without reading BSL source.
+ * today, using only the published specs and the permissive-floor type packages?*
+ * That test passes today for the 12 specs, but only because protocol authors
+ * remember to keep algorithmic references pointing at permissive-floor-exported
+ * symbols. A spec that says `scoreCandidate(a, b)` where `scoreCandidate` lives
+ * only in BSL `@motebit/semiring` would silently break the promise — a reader
+ * of the spec couldn't reproduce the behavior without reading BSL source.
  *
  * `check-spec-coverage` already enforces a narrower version: **types** named
  * under `#### Wire format (foundation law)` subsections must be exported from
@@ -18,8 +18,14 @@
  * What this probe enforces: every backticked callable of the form
  *   `functionName(...)`
  * appearing in `spec/*.md` must resolve to an exported symbol in one of the
- * MIT packages — `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk` — or
- * appear in the explicit waiver list below with a one-line reason.
+ * permissive-floor packages (Apache-2.0 today: `@motebit/protocol`,
+ * `@motebit/crypto`, `@motebit/sdk`) — or appear in the explicit waiver list
+ * below with a one-line reason.
+ *
+ * The identifier track the architectural role (permissive-floor), not the
+ * specific license instance (Apache-2.0). The role is what makes the spec
+ * implementable by a third party without license friction; the instance is
+ * replaceable.
  *
  * The waiver list is the policy knob. Any new waiver requires an explanation
  * that would survive code review — "external stdlib", "adapter method name,
@@ -29,7 +35,7 @@
  * This is the fifteenth synchronization invariant defense.
  *
  * Usage:
- *   tsx scripts/check-spec-mit-boundary.ts        # exit 1 on unwaived BSL leak
+ *   tsx scripts/check-spec-permissive-boundary.ts  # exit 1 on unwaived BSL leak
  */
 
 import { readdirSync, readFileSync, existsSync } from "node:fs";
@@ -40,18 +46,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const SPEC_DIR = join(ROOT, "spec");
 
-const MIT_PACKAGES = ["packages/protocol/src", "packages/crypto/src", "packages/sdk/src"];
+const PERMISSIVE_PACKAGES = ["packages/protocol/src", "packages/crypto/src", "packages/sdk/src"];
 
 /**
  * Callable names that appear in spec prose but legitimately resolve outside
- * MIT package exports. Every entry requires a one-line justification so the
- * waiver list stays interrogatable.
+ * permissive-floor package exports. Every entry requires a one-line
+ * justification so the waiver list stays interrogatable.
  *
  * When adding an entry, ask: *would a third party reading the spec understand
  * this without reading BSL source?* If yes — mathematical notation, external
  * stdlib, universally-understood adapter interface name — waiver is correct.
  * If no, the spec is describing BSL-only behavior and the fix is either to
- * move the symbol to MIT or to rephrase the spec to not reference it.
+ * move the symbol to the permissive floor or to rephrase the spec to not
+ * reference it.
  */
 const WAIVED_CALLABLES: Record<string, string> = {
   // External / standard library identifiers
@@ -70,7 +77,7 @@ const WAIVED_CALLABLES: Record<string, string> = {
 
   // Adapter-interface method names (documented interfaces, not standalone exports)
   listBySubject:
-    "documented adapter method name (credential store); concrete adapter is BSL, interface shape is MIT",
+    "documented adapter method name (credential store); concrete adapter is BSL, interface shape is permissive-floor (Apache-2.0)",
 
   // BSL reference-implementation pointers explicitly marked as such in their spec
   registerDeviceWithRelay:
@@ -92,8 +99,8 @@ interface Finding {
   snippet: string;
 }
 
-/** Harvest top-level exports from each MIT package's src/ tree. */
-function collectMitExports(): Set<string> {
+/** Harvest top-level exports from each permissive-floor package's src/ tree. */
+function collectPermissiveExports(): Set<string> {
   const exports = new Set<string>();
 
   const exportRe =
@@ -139,7 +146,7 @@ function collectMitExports(): Set<string> {
     for (const sub of entries) walk(sub);
   }
 
-  for (const pkg of MIT_PACKAGES) {
+  for (const pkg of PERMISSIVE_PACKAGES) {
     const path = join(ROOT, pkg);
     if (existsSync(path)) walk(path);
   }
@@ -147,7 +154,7 @@ function collectMitExports(): Set<string> {
   return exports;
 }
 
-function scanSpecs(mitExports: Set<string>): Finding[] {
+function scanSpecs(permissiveExports: Set<string>): Finding[] {
   const findings: Finding[] = [];
   const specs = readdirSync(SPEC_DIR)
     .filter((f) => f.endsWith(".md"))
@@ -166,7 +173,7 @@ function scanSpecs(mitExports: Set<string>): Finding[] {
         const callable = m[1]!;
         // Skip all-lowercase/snake_case — SQL DDL and math notation, not repo symbols.
         if (!CAMEL_CASE.test(callable)) continue;
-        if (mitExports.has(callable)) continue;
+        if (permissiveExports.has(callable)) continue;
         if (callable in WAIVED_CALLABLES) continue;
         findings.push({
           spec,
@@ -182,18 +189,18 @@ function scanSpecs(mitExports: Set<string>): Finding[] {
 }
 
 function main(): void {
-  const mitExports = collectMitExports();
-  const findings = scanSpecs(mitExports);
+  const permissiveExports = collectPermissiveExports();
+  const findings = scanSpecs(permissiveExports);
 
   if (findings.length > 0) {
     process.stderr.write(
-      `check-spec-mit-boundary: ${findings.length} unwaived callable reference(s)\n\n`,
+      `check-spec-permissive-boundary: ${findings.length} unwaived callable reference(s)\n\n`,
     );
     for (const f of findings) {
       process.stderr.write(
         `  ${relative(ROOT, join(SPEC_DIR, f.spec))}:${f.line}\n` +
           `    ${f.snippet}\n` +
-          `    '${f.callable}' is not exported from an MIT package and not waived.\n`,
+          `    '${f.callable}' is not exported from a permissive-floor package and not waived.\n`,
       );
     }
     process.stderr.write(
@@ -202,18 +209,18 @@ function main(): void {
         `    (if it is part of the protocol a third party must implement), or\n` +
         `  - Rephrase the spec to not reference the symbol\n` +
         `    (if it is a BSL reference-implementation detail), or\n` +
-        `  - Add a waiver in scripts/check-spec-mit-boundary.ts with a one-line reason\n` +
+        `  - Add a waiver in scripts/check-spec-permissive-boundary.ts with a one-line reason\n` +
         `    (for math primitives, external stdlib, or documented adapter method names).\n` +
         `\n` +
         `The operational test: a third party must be able to stand up an interoperating\n` +
-        `implementation using only the specs + MIT packages. A spec referencing a BSL-only\n` +
-        `symbol breaks that promise silently.\n`,
+        `implementation using only the specs + permissive-floor packages. A spec referencing\n` +
+        `a BSL-only symbol breaks that promise silently.\n`,
     );
     process.exit(1);
   }
 
   process.stderr.write(
-    `check-spec-mit-boundary: OK (${mitExports.size} MIT exports, ${Object.keys(WAIVED_CALLABLES).length} waivers)\n`,
+    `check-spec-permissive-boundary: OK (${permissiveExports.size} permissive-floor exports, ${Object.keys(WAIVED_CALLABLES).length} waivers)\n`,
   );
 }
 

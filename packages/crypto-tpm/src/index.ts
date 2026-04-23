@@ -4,10 +4,11 @@
  *
  * The metabolic leaf `@motebit/crypto` delegates to when a
  * `HardwareAttestationClaim` declares `platform: "tpm"`. Dep-thin
- * `@motebit/crypto` stays MIT-pure; this BSL package metabolizes
- * `@peculiar/x509` plus a minimal hand-rolled TPM parser to judge
- * whether a vendor-published Endorsement-Key CA rooted the Attestation
- * Key that signed the caller's TPM2_Quote.
+ * `@motebit/crypto` stays permissive-floor-pure; this package, also on
+ * the permissive floor (Apache-2.0), metabolizes `@peculiar/x509` plus
+ * a minimal hand-rolled TPM parser to judge whether a vendor-published
+ * Endorsement-Key CA rooted the Attestation Key that signed the caller's
+ * TPM2_Quote.
  *
  * Wiring from a consumer:
  *

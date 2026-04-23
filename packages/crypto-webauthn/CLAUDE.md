@@ -1,8 +1,8 @@
 # @motebit/crypto-webauthn
 
-WebAuthn platform-authenticator attestation adapter. MIT, Layer 2. Sibling of `@motebit/crypto-appattest` — the metabolic leaf that `@motebit/crypto`'s dispatcher calls when a `HardwareAttestationClaim` declares `platform: "webauthn"`.
+WebAuthn platform-authenticator attestation adapter. Apache-2.0 (permissive floor), Layer 2. Sibling of `@motebit/crypto-appattest` — the metabolic leaf that `@motebit/crypto`'s dispatcher calls when a `HardwareAttestationClaim` declares `platform: "webauthn"`.
 
-MIT because it answers "how is this artifact verified?" against the W3C WebAuthn `packed` attestation format and the FIDO Alliance's published vendor roots (Apple Anonymous Attestation, Yubico, Microsoft). CBOR parsing, chain-walking, `fmt` routing, and `clientDataHash` identity-binding are deterministic from those public specs plus the pinned root set. Motebit-canonical composition (default RP ID, which `fmt` values to accept, CLI shape) lives one layer up in `@motebit/verify` (BSL).
+Permissive-floor because it answers "how is this artifact verified?" against the W3C WebAuthn `packed` attestation format and the FIDO Alliance's published vendor roots (Apple Anonymous Attestation, Yubico, Microsoft). CBOR parsing, chain-walking, `fmt` routing, and `clientDataHash` identity-binding are deterministic from those public specs plus the pinned root set. Apache-2.0 specifically — the patent grant matters across the FIDO vendor space. Motebit-canonical composition (default RP ID, which `fmt` values to accept, CLI shape) lives one layer up in `@motebit/verify` (BSL).
 
 ## Why this package exists
 
@@ -21,7 +21,7 @@ The pinned FIDO roots are each vendor's own published attestation root — Apple
 2. **The verifier never reaches the network.** Chain verification, clock checks, CBOR parsing are all synchronous and local. No MDS blob fetch; no FIDO Metadata endpoint contact. Full attestation (x5c present) requires one of the pinned roots; self attestation (no x5c) verifies the credential-public-key signature only.
 3. **`fmt: "packed"` only in v1.** `tpm` / `android-key` / `android-safetynet` / `fido-u2f` / `apple` / `none` return a structured `fmt-not-supported` error. Additional fmts are additive policy extensions — new arm in `verify.ts`, new test fixture.
 4. **Failures are structured `{ valid: false, errors: [...] }` — never thrown.** Matches the `@motebit/crypto::HardwareAttestationVerifyResult` contract so callers pattern-match one shape across all platform adapters.
-5. **Dispatch is consumer-wired, not global.** Callers pass `webauthnVerifier(opts)` into `@motebit/crypto::verify` as `{ hardwareAttestation: { webauthn } }`. The MIT package stays pure.
+5. **Dispatch is consumer-wired, not global.** Callers pass `webauthnVerifier(opts)` into `@motebit/crypto::verify` as `{ hardwareAttestation: { webauthn } }`. The permissive-floor package stays pure.
 
 ## Consumers
 

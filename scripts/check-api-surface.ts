@@ -1,8 +1,8 @@
 /**
- * Public-API-surface drift gate for the MIT-published packages.
+ * Public-API-surface drift gate for the permissive-floor packages.
  *
  * Motebit publishes `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk`
- * to npm as MIT types + primitives that third parties will build against. Once
+ * to npm as Apache-2.0 types + primitives that third parties will build against. Once
  * external developers depend on those packages, any silent breaking change —
  * a renamed export, a tightened signature, a removed type — burns them
  * without warning. Semver is the social contract; enforcement turns it from

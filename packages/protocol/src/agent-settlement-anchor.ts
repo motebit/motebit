@@ -1,9 +1,10 @@
 /**
  * Per-agent settlement anchor types — motebit/agent-settlement-anchor@1.0.
  *
- * MIT: these types define the interoperable format for per-agent settlement
- * anchoring (the "ceiling" alongside the SettlementRecord signing "floor"
- * in delegation-v1.md §6.4 and settlement-v1.md §3).
+ * Permissive floor (Apache-2.0): these types define the interoperable format
+ * for per-agent settlement anchoring (the "ceiling" alongside the
+ * SettlementRecord signing "floor" in delegation-v1.md §6.4 and
+ * settlement-v1.md §3).
  *
  * Audience-distinct from federation settlement anchoring (relay-federation-v1.md
  * §7.6, peer audit between relays) and credential anchoring (credential-anchor-v1.md,

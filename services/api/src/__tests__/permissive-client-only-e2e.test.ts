@@ -1,24 +1,26 @@
 /**
- * MIT-only client proof — the open-protocol claim made mechanical.
+ * Permissive-floor-only client proof — the open-protocol claim made mechanical.
  *
- * Motebit's thesis splits the world into MIT "protocol" packages
- * (`@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`,
- * `create-motebit`) and BSL "reference implementation" packages
- * (everything else). The claim in README.md, CLAUDE.md, and
- * LICENSING.md is that a competing relay or a third-party client can
- * interoperate with Motebit using only the MIT surface — no BSL code,
- * no proprietary bindings, no hidden invariants.
+ * Motebit's thesis splits the world into permissive-floor "protocol"
+ * packages (Apache-2.0: `@motebit/protocol`, `@motebit/crypto`,
+ * `@motebit/sdk`, `@motebit/verifier`, the four `@motebit/crypto-*`
+ * platform-attestation leaves, `create-motebit`, and the GitHub Action)
+ * and BSL "reference implementation" packages (everything else). The
+ * claim in README.md, CLAUDE.md, and LICENSING.md is that a competing
+ * relay or a third-party client can interoperate with Motebit using
+ * only the permissive-floor surface — no BSL code, no proprietary
+ * bindings, no hidden invariants.
  *
- * `check-spec-mit-boundary` enforces the claim at the spec level
- * (every backticked callable in `spec/*.md` resolves to an MIT-exported
- * symbol or an explicit waiver). `check-deps` enforces the claim at
- * the import graph (MIT packages must not import from BSL). This file
- * is the *runtime* proof: an end-to-end signed-receipt delegation
- * round trip where the client code — keygen, token minting, receipt
- * construction, signing, submission, and offline verification — imports
- * ONLY from `@motebit/crypto` and `@motebit/sdk`. No `@motebit/encryption`,
- * no `@motebit/mcp-client`, no `@motebit/runtime`, no BSL helpers of
- * any kind.
+ * `check-spec-permissive-boundary` enforces the claim at the spec level
+ * (every backticked callable in `spec/*.md` resolves to a permissive-
+ * floor-exported symbol or an explicit waiver). `check-deps` enforces
+ * the claim at the import graph (permissive-floor packages must not
+ * import from BSL). This file is the *runtime* proof: an end-to-end
+ * signed-receipt delegation round trip where the client code — keygen,
+ * token minting, receipt construction, signing, submission, and offline
+ * verification — imports ONLY from `@motebit/crypto` and `@motebit/sdk`.
+ * No `@motebit/encryption`, no `@motebit/mcp-client`, no `@motebit/runtime`,
+ * no BSL helpers of any kind.
  *
  * The server is Motebit's own BSL relay (`createTestRelay`) — a
  * third-party relay implementation would stand in for it at the same
@@ -26,14 +28,15 @@
  * the server side is the reference implementation by definition.
  *
  * If this test fails because a primitive is missing from `@motebit/crypto`
- * or `@motebit/sdk`, that is a real doctrine gap — the MIT surface has
- * silently diverged from the reference and must be closed.
+ * or `@motebit/sdk`, that is a real doctrine gap — the permissive-floor
+ * surface has silently diverged from the reference and must be closed.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 
-// ── MIT-only client imports ─────────────────────────────────────────
+// ── Permissive-floor-only client imports ───────────────────────────
 // Everything the test uses as an "external client" comes from these
-// two MIT packages. Adding a BSL import here would defeat the proof.
+// two permissive-floor (Apache-2.0) packages. Adding a BSL import
+// here would defeat the proof.
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import {
   generateKeypair,
@@ -60,7 +63,7 @@ import {
 } from "./test-helpers.js";
 import type { SyncRelay } from "../index.js";
 
-describe("MIT-only client — open-protocol proof", () => {
+describe("Permissive-floor-only client — open-protocol proof", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
@@ -69,8 +72,9 @@ describe("MIT-only client — open-protocol proof", () => {
 
   it("constructs, signs, submits, and verifies a full delegation receipt using only @motebit/crypto + @motebit/sdk", async () => {
     // ── Client step 1: generate a keypair ──────────────────────────
-    // `generateKeypair` is an MIT primitive. An external implementation
-    // using any standards-compliant Ed25519 library would be equivalent.
+    // `generateKeypair` is a permissive-floor primitive. An external
+    // implementation using any standards-compliant Ed25519 library would
+    // be equivalent.
     const kpDelegator = await generateKeypair();
     const kpWorker = await generateKeypair();
 
@@ -78,8 +82,8 @@ describe("MIT-only client — open-protocol proof", () => {
     const delegator = await createAgent(relay, bytesToHex(kpDelegator.publicKey));
     const worker = await createAgent(relay, bytesToHex(kpWorker.publicKey));
 
-    // Register the worker as a service provider. No MIT constraint here —
-    // this is the relay's admin API, which is outside the "external client"
+    // Register the worker as a service provider. No permissive-floor constraint
+    // here — this is the relay's admin API, which is outside the "external client"
     // boundary being proven. A competing relay would expose its own shape.
     await relay.app.request("/api/v1/agents/register", {
       method: "POST",
@@ -153,7 +157,7 @@ describe("MIT-only client — open-protocol proof", () => {
     );
 
     // Cryptosuite pin: every signed artifact must carry a SuiteId value.
-    // The MIT surface's `signExecutionReceipt` picks the canonical one.
+    // The permissive-floor surface's `signExecutionReceipt` picks the canonical one.
     expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
     expect(typeof signed.signature).toBe("string");
     expect(signed.public_key).toBe(bytesToHex(kpWorker.publicKey));
@@ -188,7 +192,7 @@ describe("MIT-only client — open-protocol proof", () => {
     // Parse the stored canonical JSON, load the signer's public key from
     // the receipt itself, verify the Ed25519 signature over the canonical
     // hash. An auditor in a different process, written by a different
-    // organization, using only the MIT surface, reproduces this check.
+    // organization, using only the permissive-floor surface, reproduces this check.
     const parsed = JSON.parse(servedBytes) as typeof signed;
     const pubKeyBytes = hexToBytes(parsed.public_key);
     const ok = await verifyExecutionReceipt(parsed, pubKeyBytes);
@@ -200,7 +204,7 @@ describe("MIT-only client — open-protocol proof", () => {
     expect(notOk).toBe(false);
   });
 
-  it("verifies a CitedAnswer using only MIT surface (protocol types + crypto)", async () => {
+  it("verifies a CitedAnswer using only permissive-floor surface (protocol types + crypto)", async () => {
     // The three-tier answer engine emits CitedAnswer. This test proves
     // that an auditor can reconstruct the verification using only
     // `@motebit/protocol` types and `@motebit/crypto` primitives — no BSL
@@ -277,7 +281,7 @@ describe("MIT-only client — open-protocol proof", () => {
       receipt: outerReceipt as unknown as ExecutionReceipt,
     };
 
-    // MIT-only verification path —
+    // Permissive-floor-only verification path —
     // 1. The outer receipt verifies against the research motebit's key.
     const outerOk = await verifyExecutionReceipt(answer.receipt, kpResearch.publicKey);
     expect(outerOk).toBe(true);
@@ -314,7 +318,7 @@ describe("MIT-only client — open-protocol proof", () => {
     expect(tamperedOk).toBe(false);
   });
 
-  it("mints a signed bearer token using only the MIT createSignedToken primitive", async () => {
+  it("mints a signed bearer token using only the permissive-floor createSignedToken primitive", async () => {
     // Signed bearer tokens (spec/auth-token-v1.md) are the relay's auth
     // primitive. An external client mints them with `createSignedToken`
     // — audience binding, suite tag, Ed25519 signature — no BSL required.

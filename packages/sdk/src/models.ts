@@ -1,7 +1,7 @@
 // === AI Model Constants ===
 //
 // Single source of truth for model identifiers across all surfaces.
-// SDK is Layer 0 (MIT, no deps beyond protocol) — only string constants here.
+// SDK is Layer 0 (Apache-2.0 permissive floor, no deps beyond protocol) — only string constants here.
 // Pricing, routing, and alias resolution live in their respective packages.
 //
 // 3 tiers per provider: strongest, default, fast.

@@ -203,7 +203,7 @@ function scan(): Violation[] {
     "packages/encryption/src/hardware-attestation-credential.ts",
     "packages/crypto/src/hardware-attestation.ts",
     "packages/crypto/src/index.ts",
-    // `suite-dispatch.ts` is the MIT primitive layer that defines
+    // `suite-dispatch.ts` is the permissive-floor primitive layer that defines
     // `verifyP256EcdsaSha256` and mentions `attestation_receipt` in a
     // doc comment referencing the receipt's algorithm. Per the
     // @motebit/crypto CLAUDE.md rule, this file is the ONLY place

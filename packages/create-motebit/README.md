@@ -101,14 +101,14 @@ See the [delegation guide](https://docs.motebit.com/docs/developer/delegation) f
 
 ## Related
 
-- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (MIT, zero deps)
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (Apache-2.0, zero deps)
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every Motebit artifact
-- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier CLI
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier library
 - [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Apache-2.0 — see [LICENSE](./LICENSE).
 
-"Motebit" is a trademark. The MIT License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.
+"Motebit" is a trademark. The Apache License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

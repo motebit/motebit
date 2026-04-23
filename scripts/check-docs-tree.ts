@@ -4,11 +4,12 @@
  *
  * `apps/docs/content/docs/operator/architecture.mdx` contains a directory-tree
  * code block that names every app, package, service, and spec in the monorepo,
- * tagging each package with its enforced layer (L0–L6) and MIT status. That
- * tree is a synchronization sibling of two sources of truth:
+ * tagging each package with its enforced layer (L0–L6) and permissive-floor
+ * status (`Apache-2.0` today). That tree is a synchronization sibling of two
+ * sources of truth:
  *
  *   - the filesystem under `apps/`, `packages/`, `services/`, `spec/`
- *   - the `LAYER` and `MIT_PACKAGES` declarations in `scripts/check-deps.ts`
+ *   - the `LAYER` and `PERMISSIVE_PACKAGES` declarations in `scripts/check-deps.ts`
  *
  * Without this probe, the page drifts silently: a package gets added, renamed,
  * or re-layered, but the docs keep advertising the old shape. The classic
@@ -22,7 +23,7 @@
  *      `spec/*.md` file appears as an entry in the tree.
  *   2. Every entry the tree names exists on disk.
  *   3. Every package's `[Ln]` tag equals its `LAYER` value in check-deps.ts.
- *   4. Every package's `MIT` tag matches `MIT_PACKAGES` in check-deps.ts.
+ *   4. Every package's `Apache-2.0` tag matches `PERMISSIVE_PACKAGES` in check-deps.ts.
  *   5. Packages outside the layer DAG (github-action) carry `[—]`.
  *
  * This is the fourteenth synchronization invariant defense.
@@ -50,7 +51,7 @@ type EntryKind = "app" | "package" | "service" | "spec";
 interface TreeEntry {
   kind: EntryKind;
   name: string;
-  tags: string[]; // e.g. ["L0", "MIT"] or ["surface"] or ["—"]
+  tags: string[]; // e.g. ["L0", "Apache-2.0"] or ["surface"] or ["—"]
   line: number;
 }
 
@@ -59,9 +60,9 @@ interface Finding {
   message: string;
 }
 
-// ── Parse LAYER and MIT_PACKAGES out of scripts/check-deps.ts ──────────
+// ── Parse LAYER and PERMISSIVE_PACKAGES out of scripts/check-deps.ts ───
 
-function parseCheckDeps(): { layer: Map<string, number>; mit: Set<string> } {
+function parseCheckDeps(): { layer: Map<string, number>; permissive: Set<string> } {
   const src = readFileSync(CHECK_DEPS_PATH, "utf-8");
 
   const layerBlock = src.match(/const LAYER[^{]*\{([\s\S]*?)\n\};/);
@@ -73,16 +74,16 @@ function parseCheckDeps(): { layer: Map<string, number>; mit: Set<string> } {
     layer.set(m[1], Number(m[2]));
   }
 
-  const mitBlock = src.match(/const MIT_PACKAGES\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
-  if (!mitBlock) throw new Error("could not locate MIT_PACKAGES in check-deps.ts");
-  const mit = new Set<string>();
-  const mitRe = /"([^"]+)"/g;
-  let mm: RegExpExecArray | null;
-  while ((mm = mitRe.exec(mitBlock[1])) !== null) {
-    mit.add(mm[1]);
+  const permissiveBlock = src.match(/const PERMISSIVE_PACKAGES\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
+  if (!permissiveBlock) throw new Error("could not locate PERMISSIVE_PACKAGES in check-deps.ts");
+  const permissive = new Set<string>();
+  const permissiveRe = /"([^"]+)"/g;
+  let pm: RegExpExecArray | null;
+  while ((pm = permissiveRe.exec(permissiveBlock[1])) !== null) {
+    permissive.add(pm[1]);
   }
 
-  return { layer, mit };
+  return { layer, permissive };
 }
 
 // ── Parse the tree block out of architecture.mdx ───────────────────────
@@ -190,7 +191,7 @@ function main(): void {
 
   const mdxSrc = readFileSync(MDX_PATH, "utf-8");
   const entries = parseTree(mdxSrc);
-  const { layer, mit } = parseCheckDeps();
+  const { layer, permissive } = parseCheckDeps();
 
   const fs = {
     apps: lsDirs(join(ROOT, "apps")),
@@ -289,17 +290,17 @@ function main(): void {
       });
     }
 
-    const hasMitTag = entry.tags.includes("MIT");
-    const isMit = mit.has(scoped);
-    if (hasMitTag && !isMit) {
+    const hasPermissiveTag = entry.tags.includes("Apache-2.0");
+    const isPermissive = permissive.has(scoped);
+    if (hasPermissiveTag && !isPermissive) {
       findings.push({
         loc,
-        message: `${entry.name} tagged MIT in the tree but not in check-deps.ts MIT_PACKAGES`,
+        message: `${entry.name} tagged Apache-2.0 in the tree but not in check-deps.ts PERMISSIVE_PACKAGES`,
       });
-    } else if (!hasMitTag && isMit) {
+    } else if (!hasPermissiveTag && isPermissive) {
       findings.push({
         loc,
-        message: `${entry.name} is in check-deps.ts MIT_PACKAGES but the tree is missing the MIT tag`,
+        message: `${entry.name} is in check-deps.ts PERMISSIVE_PACKAGES but the tree is missing the Apache-2.0 tag`,
       });
     }
   }

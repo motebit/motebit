@@ -9,7 +9,7 @@
   <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>
   <a href="https://www.npmjs.com/package/@motebit/sdk"><img src="https://img.shields.io/npm/v/@motebit/sdk?label=%40motebit%2Fsdk" alt="@motebit/sdk"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/protocol-MIT-green" alt="Protocol: MIT"></a>
+  <a href="LICENSING.md"><img src="https://img.shields.io/badge/protocol-Apache--2.0-green" alt="Protocol: Apache-2.0"></a>
 </p>
 
 **Motebit is an open protocol for sovereign AI agents — and a reference runtime you can run today.**
@@ -171,23 +171,27 @@ if (result.type === "receipt" && result.valid) {
 }
 ```
 
-Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). Five npm packages — four MIT (the open protocol), one BSL (the product):
+Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). Six npm packages ship the permissive floor — Apache-2.0 with an explicit patent grant — and two more ship the reference runtime and the aggregator CLI under BSL-1.1:
 
-| Package                                                                | Description                                                                                         | License |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------- |
-| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing  | MIT     |
-| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow  | MIT     |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | MIT     |
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | MIT     |
-| [`motebit`](https://www.npmjs.com/package/motebit)                     | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1 |
+| Package                                                                | Description                                                                                         | License    |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------- |
+| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing  | Apache-2.0 |
+| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow  | Apache-2.0 |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | Apache-2.0 |
+| [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) | `verifyFile` / `verifyArtifact` / `formatHuman` — dep-thin verification library                     | Apache-2.0 |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | Apache-2.0 |
+| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)     | `motebit-verify` CLI — bundles the four platform-attestation leaves with motebit-canonical defaults | BSL-1.1    |
+| [`motebit`](https://www.npmjs.com/package/motebit)                     | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1    |
+
+The four hardware-attestation platform leaves — `@motebit/crypto-appattest`, `@motebit/crypto-play-integrity`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn` — ship Apache-2.0 alongside the core three. They verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) with no motebit-specific judgment.
 
 ## Architecture
 
 **36 packages across 7 architectural layers · 5 surfaces + 3 supporting apps · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
 
-**The MIT/BSL split is algebra vs. judgment.** The MIT protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives in MIT. The `check-spec-mit-boundary` CI gate enforces this: every callable referenced in a spec must be exported from an MIT package or explicitly waived as reference-implementation convention.
+**The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.
 
-**Packages** ([`packages/`](packages/)) — 36 packages on a strict layer DAG. Layer 0 is the open protocol surface (MIT, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
+**Packages** ([`packages/`](packages/)) — 36 packages on a strict layer DAG. Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
 
 **Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and three supporting (`admin` dashboard, `identity` viewer, `docs` site).
 
@@ -205,7 +209,7 @@ Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`,
 ## Specification
 
 > [!NOTE]
-> **Motebit is a protocol first.** All [12 specs](spec/) (MIT) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the MIT type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
+> **Motebit is a protocol first.** All [12 specs](spec/) (Apache-2.0) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
 
 A `motebit.md` is YAML frontmatter signed with Ed25519:
 
@@ -241,16 +245,18 @@ pnpm run lint          # Lint all packages
 
 ## License
 
-The **protocol layer** is MIT licensed — use it freely, build on it, implement the spec in any language:
+The **permissive floor** is Apache-2.0 licensed — use it freely, build on it, implement the spec in any language, with an explicit patent grant from every contributor:
 
 - [`spec/`](spec/) — 12 open specs (full list in [Architecture](#architecture))
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, delegation, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
+- [`packages/verifier/`](packages/verifier/) — `verifyFile` / `verifyArtifact` / `formatHuman` helper library
+- [`packages/crypto-appattest/`](packages/crypto-appattest/), [`packages/crypto-play-integrity/`](packages/crypto-play-integrity/), [`packages/crypto-tpm/`](packages/crypto-tpm/), [`packages/crypto-webauthn/`](packages/crypto-webauthn/) — hardware-attestation platform verifiers (pinned public trust anchors)
 - [`packages/create-motebit/`](packages/create-motebit/) — scaffold a signed identity or runnable agent service
 - [`packages/github-action/`](packages/github-action/) — GitHub Action for verifying motebit identity files in CI
 
-The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache 2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. See [LICENSING.md](LICENSING.md) for details.
+The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache-2.0 four years after each version's release. This includes `@motebit/runtime`, the `@motebit/verify` aggregator CLI, all engines, all apps, and all services. Both license families converge to a single Apache-2.0 posture at the Change Date. See [LICENSING.md](LICENSING.md) for the full boundary test and convergence story.
 
 The **state a relay accumulates** — trust graph, federation routing, signed execution audit — belongs to whoever runs it. It is not licensed, mirrored, or visible to anyone else. The protocol is open so anyone can interoperate; the implementation is source-available so anyone can run it; the accumulated state is private.
 
@@ -260,7 +266,7 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specifications](spec/) — 12 open specs (MIT)
+- [Specifications](spec/) — 12 open specs (Apache-2.0)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know

@@ -74,7 +74,7 @@ Credential hashes anchored onchain via Merkle batches so agent reputation surviv
 
 Three-layer split:
 
-- **MIT `@motebit/crypto`** — `computeCredentialLeaf` (leaf hash), `verifyCredentialAnchor` (4-step self-verification).
+- **Apache-2.0 `@motebit/crypto`** — `computeCredentialLeaf` (leaf hash), `verifyCredentialAnchor` (4-step self-verification).
 - **BSL relay** — batch cutting (`cutCredentialBatch`, 50 creds or 1 hour), proof serving (`getCredentialAnchorProof`), anchor loop (`startCredentialAnchorLoop`).
 - **Chain submission** — via `ChainAnchorSubmitter` adapter in `@motebit/protocol`; reference implementation `SolanaMemoSubmitter` in `@motebit/wallet-solana` (Memo program v2, relay identity key = Solana signer).
 

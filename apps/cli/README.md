@@ -119,10 +119,10 @@ See [docs.motebit.com](https://docs.motebit.com) for full documentation.
 
 ## Related
 
-- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (MIT, zero deps)
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (Apache-2.0, zero deps)
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
-- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — signing and verification primitives (MIT, zero deps)
-- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier CLI (MIT)
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — signing and verification primitives (Apache-2.0, zero deps)
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier library (Apache-2.0)
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
 
 ## License

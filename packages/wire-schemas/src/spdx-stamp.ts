@@ -11,11 +11,14 @@
  *
  * See the package `LICENSE` + `CLAUDE.md` for the mixed-licensing
  * rationale — this module exists to keep the stamp a single source of
- * truth across the writer and the drift-test comparator.
+ * truth across the writer and the drift-test comparator. The stamped
+ * identifier tracks the specific license the output directory ships
+ * under (Apache-2.0 today; the `spec/` tree is the permissive-floor
+ * artifact surface).
  */
 
 /** SPDX identifier carried by every `schema/*.json` artifact. */
-export const SCHEMA_SPDX_IDENTIFIER = "SPDX-License-Identifier: MIT";
+export const SCHEMA_SPDX_IDENTIFIER = "SPDX-License-Identifier: Apache-2.0";
 
 /**
  * Stamp a raw zod-derived JSON Schema with the SPDX `$comment` as the

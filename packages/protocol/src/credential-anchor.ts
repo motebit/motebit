@@ -1,8 +1,9 @@
 /**
  * Credential anchor types — motebit/credential-anchor@1.0.
  *
- * MIT: these types define the interoperable format for credential anchoring.
- * Any implementation can produce and verify anchor proofs using these types.
+ * Permissive floor (Apache-2.0): these types define the interoperable format
+ * for credential anchoring. Any implementation can produce and verify anchor
+ * proofs using these types.
  */
 
 // === Credential Anchor Batch ===

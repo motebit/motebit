@@ -57,7 +57,7 @@ Per-peer forward tracking with automatic suspension at 50% failure rate over ≥
 
 ## Onchain revocation registry
 
-Key-level revocation events (`agent_revoked`, `key_rotated`) are anchored to Solana immediately via `SolanaMemoSubmitter.submitRevocation()`. Memo format: `motebit:revocation:v1:{revoked_public_key_hex}:{timestamp}`. No batching — revocations are rare and urgent. Fire-and-forget: chain submission failure does not block the revocation itself. Federation heartbeat is primary propagation; the chain is the permanent fallback. `setRevocationAnchorSubmitter()` in `federation.ts` wires it at relay startup. `verifyRevocationAnchor` in `@motebit/crypto` (MIT) does offline verification. Credential-level revocations are not individually anchored — credentials already have batch anchoring.
+Key-level revocation events (`agent_revoked`, `key_rotated`) are anchored to Solana immediately via `SolanaMemoSubmitter.submitRevocation()`. Memo format: `motebit:revocation:v1:{revoked_public_key_hex}:{timestamp}`. No batching — revocations are rare and urgent. Fire-and-forget: chain submission failure does not block the revocation itself. Federation heartbeat is primary propagation; the chain is the permanent fallback. `setRevocationAnchorSubmitter()` in `federation.ts` wires it at relay startup. `verifyRevocationAnchor` in `@motebit/crypto` (Apache-2.0) does offline verification. Credential-level revocations are not individually anchored — credentials already have batch anchoring.
 
 ## Credential source boundary
 
@@ -65,7 +65,7 @@ Third-party MCP server auth uses `CredentialSource` adapter (`getCredential(Cred
 
 Four built-in implementations: `StaticCredentialSource`, `KeyringCredentialSource`, `VaultCredentialSource`, `OAuthCredentialSource`. Fail-closed: thrown errors propagate per-request; null skips the auth header. Motebit-to-motebit auth (`createCallerToken`) uses static `requestInit` — highest precedence, unaffected.
 
-The interface lives in `@motebit/sdk` (MIT, Layer 0) so consumers across layers bind to the contract without pulling in BSL code. Implementations live in `@motebit/mcp-client` (BSL, Layer 2) and are re-exported. Vault implementations belong in higher-layer adapters. The MCP client does not persist, rotate, or cache credentials.
+The interface lives in `@motebit/sdk` (Apache-2.0, Layer 0) so consumers across layers bind to the contract without pulling in BSL code. Implementations live in `@motebit/mcp-client` (BSL, Layer 2) and are re-exported. Vault implementations belong in higher-layer adapters. The MCP client does not persist, rotate, or cache credentials.
 
 ## Server verification boundary
 
@@ -81,7 +81,7 @@ Cert lifecycle doctrine:
 4. Certificate rotation is an operational continuity event, not an identity reset — the server's accumulated trust survives rotation if the operator attests continuity.
 5. Policy must be explicit and auditable per integration — no global "trust all rotations" escape hatch.
 
-Proven end-to-end against GitHub's remote MCP server (`api.githubcopilot.com`). All 5 surface apps use `ServerVerifier` instead of manual `checkManifest()`. The interface lives in `@motebit/sdk` (MIT, Layer 0); implementations in `@motebit/mcp-client`.
+Proven end-to-end against GitHub's remote MCP server (`api.githubcopilot.com`). All 5 surface apps use `ServerVerifier` instead of manual `checkManifest()`. The interface lives in `@motebit/sdk` (Apache-2.0, Layer 0); implementations in `@motebit/mcp-client`.
 
 ## WebSocket post-connect auth
 

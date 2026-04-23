@@ -36,8 +36,8 @@
  * `cargo` / `tokio` separate the verb-tool from the library layer:
  *
  *   @motebit/verify   — this CLI (BSL, bundles all 4 adapters)
- *   @motebit/verifier — MIT library (file I/O, human formatting)
- *   @motebit/crypto   — MIT primitives (verify, sign, suite dispatch)
+ *   @motebit/verifier — Apache-2.0 library (file I/O, human formatting)
+ *   @motebit/crypto   — Apache-2.0 primitives (verify, sign, suite dispatch)
  */
 
 import { readFileSync } from "node:fs";

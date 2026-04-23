@@ -2,7 +2,7 @@
 
 Per-motebit ledger. Integer micro-units (1 USD = 1,000,000), credit/debit with transaction audit log, withdrawal lifecycle (request → link → complete | fail), dispute-window hold, Ed25519-signed withdrawal receipts.
 
-Layer 1. BSL-1.1. Depends only on `@motebit/crypto` (Layer 0 MIT — `canonicalJson`, `ed25519Sign`, `toBase64Url` for receipt signing). Persistence is inverted: the package defines an `AccountStore` interface and ships `InMemoryAccountStore` for tests. Consumers (services/api) provide their own `AccountStore` implementation — typically `SqliteAccountStore` over `@motebit/persistence`'s `DatabaseDriver`.
+Layer 1. BSL-1.1. Depends only on `@motebit/crypto` (Layer 0 Apache-2.0 permissive floor — `canonicalJson`, `ed25519Sign`, `toBase64Url` for receipt signing). Persistence is inverted: the package defines an `AccountStore` interface and ships `InMemoryAccountStore` for tests. Consumers (services/api) provide their own `AccountStore` implementation — typically `SqliteAccountStore` over `@motebit/persistence`'s `DatabaseDriver`.
 
 ## Rules
 

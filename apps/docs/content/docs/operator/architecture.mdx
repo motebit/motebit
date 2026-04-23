@@ -26,10 +26,10 @@ motebit/
 │
 ├── packages/
 │   │
-│   │   # Layer 0 — Foundation (MIT floor; zero internal deps)
-│   ├── protocol/              [L0 · MIT]    Types, semirings, routing primitives, crypto-suite registry.
-│   ├── sdk/                   [L0 · MIT]    Developer contract. Stable types, adapter interfaces.
-│   ├── crypto/                [L0 · MIT]    Sign/verify every motebit artifact. Suite dispatcher.
+│   │   # Layer 0 — Foundation (Apache-2.0 floor; zero internal deps)
+│   ├── protocol/              [L0 · Apache-2.0]    Types, semirings, routing primitives, crypto-suite registry.
+│   ├── sdk/                   [L0 · Apache-2.0]    Developer contract. Stable types, adapter interfaces.
+│   ├── crypto/                [L0 · Apache-2.0]    Sign/verify every motebit artifact. Suite dispatcher.
 │   │
 │   │   # Layer 1 — Primitives
 │   ├── voice/                 [L1]          VAD, STT, TTS adapters (provider-judgment; no protocol-level surface).
@@ -47,13 +47,13 @@ motebit/
 │   ├── virtual-accounts/      [L1]          Per-motebit ledger: atomic credit/debit, withdrawal lifecycle, signed receipts. AccountStore inversion.
 │   ├── deposit-detector/      [L1]          EVM Transfer-event scanner. Injected EvmRpcAdapter + DepositDetectorStore + onDeposit callback.
 │   ├── self-knowledge/        [L1]          Committed BM25 corpus over motebit's public docs. Interior tier of the answer engine.
-│   ├── wire-schemas/          [L1]          Zod schemas for wire-format types. Generates committed JSON Schema artifacts into `spec/schemas/` — the protocol-owned MIT tree third parties implement against.
+│   ├── wire-schemas/          [L1]          Zod schemas for wire-format types. Generates committed JSON Schema artifacts into `spec/schemas/` — the protocol-owned Apache-2.0 tree third parties implement against.
 │   │
 │   │   # Layer 2 — Engines
-│   ├── crypto-appattest/      [L2 · MIT]    Apple App Attest chain verifier — pinned Apple root, deterministic from Apple's public spec.
-│   ├── crypto-play-integrity/ [L2 · MIT]    Google Play Integrity JWT verifier — pinned JWKS, ES256/RS256 dispatch.
-│   ├── crypto-tpm/            [L2 · MIT]    Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
-│   ├── crypto-webauthn/       [L2 · MIT]    WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO root set (Apple, Yubico, Microsoft).
+│   ├── crypto-appattest/      [L2 · Apache-2.0]    Apple App Attest chain verifier — pinned Apple root, deterministic from Apple's public spec.
+│   ├── crypto-play-integrity/ [L2 · Apache-2.0]    Google Play Integrity JWT verifier — pinned JWKS, ES256/RS256 dispatch.
+│   ├── crypto-tpm/            [L2 · Apache-2.0]    Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
+│   ├── crypto-webauthn/       [L2 · Apache-2.0]    WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO root set (Apple, Yubico, Microsoft).
 │   ├── market/                [L2]          Budget, settlement, reputation, graph routing.
 │   ├── behavior-engine/       [L2]          state → BehaviorCues (deterministic, pure).
 │   ├── state-vector/          [L2]          Tick-based EMA smoothing, hysteresis, 60 FPS interp.
@@ -80,10 +80,10 @@ motebit/
 │   ├── panels/                [L5]          Surface-agnostic panel controllers (Sovereign today). State + actions; render per surface.
 │   │
 │   │   # Layer 6 — Applications
-│   ├── create-motebit/        [L6 · MIT]    Public scaffolder. npm create motebit.
+│   ├── create-motebit/        [L6 · Apache-2.0]    Public scaffolder. npm create motebit.
 │   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
-│   ├── verifier/              [L6 · MIT]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. MIT-pure; no bin.
-│   ├── verify/                [L6]          Canonical `motebit-verify` CLI — the BSL aggregator that bundles the four MIT platform leaves (App Attest, TPM, Play Integrity, WebAuthn) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification.
+│   ├── verifier/              [L6 · Apache-2.0]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. Permissive-floor-pure; no bin.
+│   ├── verify/                [L6]          Canonical `motebit-verify` CLI — the BSL aggregator that bundles the four Apache-2.0 platform leaves (App Attest, TPM, Play Integrity, WebAuthn) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification.
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.
@@ -132,9 +132,9 @@ motebit/
 
 Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencies. Apps and services live at L6 and may depend on any layer. The canonical source of truth is the `LAYER` map in `scripts/check-deps.ts`; the tree above mirrors it. `github-action` is a standalone build artifact for the GitHub Actions runtime and sits outside the DAG.
 
-## MIT / BSL boundary
+## Permissive / BSL boundary
 
-Nine packages are MIT (the open protocol). `check-deps.ts` enforces that MIT packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
+Nine packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
 | Package | Answers | Layer |
 |---------|---------|-------|
@@ -150,7 +150,9 @@ Nine packages are MIT (the open protocol). `check-deps.ts` enforces that MIT pac
 
 The four `crypto-*` platform leaves verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) — no motebit-specific judgment. Motebit-canonical aggregation (default bundle IDs, RP ID, CLI shape) lives in `@motebit/verify` (BSL) one layer up.
 
-The remaining 26 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. See `LICENSING.md` for the full boundary test and commercial terms.
+The remaining 26 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. Both license families converge to Apache-2.0 at each version's Change Date (four years after first public release), eliminating the two-license end state. See `LICENSING.md` for the full boundary test, convergence story, and commercial terms.
+
+The architectural role is "permissive floor"; the specific license instance (`Apache-2.0`) is replaceable. Identifiers in `scripts/check-deps.ts` (`PERMISSIVE_PACKAGES`, `PERMISSIVE_IMPORT_ALLOWED`, `PERMISSIVE_ALLOWED_FUNCTIONS`) and the sibling gate `check-spec-permissive-boundary` use the role name so a future license revision is a metadata change, not a rename cascade across the codebase.
 
 ## Apps
 
@@ -198,13 +200,13 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All thirteen specs (listed in the tree above) are MIT, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the MIT type packages — no permission required.
+All thirteen specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 
 ## Doctrines that shape the code
 
-**The three-layer model.** Every relay function lives in exactly one of three layers: (1) **protocol** — the open spec anyone can implement, published in `spec/*.md` and consumed via MIT types; (2) **reference implementation** — BSL-1.1 code that implements the protocol; (3) **accumulated state** — trust graph, federation data, operational history. Private to the operator, never licensed.
+**The three-layer model.** Every relay function lives in exactly one of three layers: (1) **protocol** — the open spec anyone can implement, published in `spec/*.md` and consumed via permissive-floor (Apache-2.0) types; (2) **reference implementation** — BSL-1.1 code that implements the protocol, converging to Apache-2.0 at the Change Date; (3) **accumulated state** — trust graph, federation data, operational history. Private to the operator, never licensed.
 
 **Cryptosuite agility.** Every signed wire-format artifact carries a `suite: SuiteId` field. `SuiteId` is a closed union in `@motebit/protocol/crypto-suite.ts` — five entries today (`motebit-jcs-ed25519-b64-v1`, `motebit-jcs-ed25519-hex-v1`, `motebit-jwt-ed25519-v1`, `motebit-concat-ed25519-hex-v1`, `eddsa-jcs-2022`). Verifiers dispatch through `verifyBySuite` in `packages/crypto/src/suite-dispatch.ts` — the one file permitted to call the Ed25519 primitive directly, enforced by `check-suite-dispatch`. Post-quantum migration (ML-DSA, SLH-DSA) is a new registry entry plus a new dispatch arm, not a wire-format break.
 
