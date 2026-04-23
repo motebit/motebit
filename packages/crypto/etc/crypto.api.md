@@ -176,6 +176,16 @@ export const DEVICE_REGISTRATION_MAX_AGE_MS: number;
 export const DEVICE_REGISTRATION_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
+export interface DeviceCheckVerifierContext {
+    // (undocumented)
+    readonly expectedAttestedAt?: number;
+    // (undocumented)
+    readonly expectedDeviceId?: string;
+    // (undocumented)
+    readonly expectedMotebitId?: string;
+}
+
+// @public
 export type DeviceRegistrationVerifyResult = {
     valid: true;
 } | {
@@ -304,7 +314,7 @@ export interface HardwareAttestationError {
 // @public
 export interface HardwareAttestationVerifiers {
     // (undocumented)
-    readonly deviceCheck?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+    readonly deviceCheck?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
         readonly valid: boolean;
         readonly errors: ReadonlyArray<{
             readonly message: string;
@@ -316,9 +326,41 @@ export interface HardwareAttestationVerifiers {
         }>;
     }>;
     // (undocumented)
-    readonly playIntegrity?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+    readonly playIntegrity?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
     // (undocumented)
-    readonly tpm?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult>;
+    readonly tpm?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
+    // (undocumented)
+    readonly webauthn?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
 }
 
 // @public
@@ -1021,7 +1063,7 @@ export function verifyGuardianRevocation(revocation: {
 }, identityPublicKeyHex: string, guardianPublicKeyHex: string): Promise<boolean>;
 
 // @public
-export function verifyHardwareAttestationClaim(claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, verifiers?: HardwareAttestationVerifiers): HardwareAttestationVerifyResult | Promise<HardwareAttestationVerifyResult>;
+export function verifyHardwareAttestationClaim(claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, verifiers?: HardwareAttestationVerifiers, deviceCheckContext?: DeviceCheckVerifierContext): HardwareAttestationVerifyResult | Promise<HardwareAttestationVerifyResult>;
 
 // @public @deprecated
 export function verifyIdentityFile(content: string): Promise<LegacyVerifyResult>;

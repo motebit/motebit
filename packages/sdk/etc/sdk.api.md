@@ -174,6 +174,7 @@ export interface ContextPack {
     current_state: MotebitState;
     firstConversation?: boolean;
     knownAgents?: AgentTrustRecord[];
+    memoryIndex?: string;
     precisionContext?: string;
     // (undocumented)
     recent_events: EventLogEntry[];
@@ -392,50 +393,6 @@ export interface InteriorColor {
 // @public
 export function isLocalServerUrl(url: string | undefined | null): boolean;
 
-// @public
-export interface LegacyProviderConfig {
-    // (undocumented)
-    api_key?: string;
-    // (undocumented)
-    apiKey?: string;
-    // (undocumented)
-    backend?: string;
-    // (undocumented)
-    base_url?: string;
-    // (undocumented)
-    baseUrl?: string;
-    // (undocumented)
-    default_model?: string;
-    // (undocumented)
-    default_provider?: string;
-    // (undocumented)
-    endpoint?: string;
-    // (undocumented)
-    localBackend?: string;
-    // (undocumented)
-    max_tokens?: number;
-    // (undocumented)
-    maxTokens?: number;
-    // (undocumented)
-    mode?: string;
-    // (undocumented)
-    model?: string;
-    // (undocumented)
-    ollamaEndpoint?: string;
-    // (undocumented)
-    provider?: string;
-    // (undocumented)
-    proxy_token?: string;
-    // (undocumented)
-    proxyToken?: string;
-    // (undocumented)
-    temperature?: number;
-    // (undocumented)
-    type?: string;
-    // (undocumented)
-    vendor?: string;
-}
-
 // @public (undocumented)
 export interface LightingSpec {
     // (undocumented)
@@ -549,9 +506,6 @@ export interface MemoryStorageAdapter {
 
 // @public
 export function migrateAppearanceConfig(raw: unknown): AppearanceConfig;
-
-// @public
-export function migrateLegacyProvider(legacy: LegacyProviderConfig | null | undefined): UnifiedProviderConfig | null;
 
 // @public
 export function migrateVoiceConfig(raw: unknown): VoiceConfig;

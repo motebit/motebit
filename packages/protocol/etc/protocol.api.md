@@ -72,6 +72,46 @@ export interface AgentServiceListing {
     updated_at: number;
 }
 
+// @public
+export interface AgentSettlementAnchorBatch {
+    anchor: AgentSettlementChainAnchor | null;
+    batch_id: string;
+    first_settled_at: number;
+    last_settled_at: number;
+    leaf_count: number;
+    merkle_root: string;
+    relay_id: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-hex-v1";
+}
+
+// @public
+export interface AgentSettlementAnchorProof {
+    anchor: AgentSettlementChainAnchor | null;
+    batch_id: string;
+    batch_signature: string;
+    first_settled_at: number;
+    last_settled_at: number;
+    layer_sizes: number[];
+    leaf_count: number;
+    leaf_index: number;
+    merkle_root: string;
+    relay_id: string;
+    relay_public_key: string;
+    settlement_hash: string;
+    settlement_id: string;
+    siblings: string[];
+    suite: "motebit-jcs-ed25519-hex-v1";
+}
+
+// @public
+export interface AgentSettlementChainAnchor {
+    anchored_at: number;
+    chain: string;
+    network: string;
+    tx_hash: string;
+}
+
 // @public (undocumented)
 export interface AgentTask {
     // (undocumented)
@@ -412,6 +452,18 @@ export interface CitedAnswer {
     receipt: ExecutionReceipt;
 }
 
+// @public
+export interface ClickAction {
+    readonly button?: string;
+    // (undocumented)
+    readonly kind: "click";
+    readonly modifiers?: readonly string[];
+    // (undocumented)
+    readonly target: ComputerPoint;
+    // (undocumented)
+    readonly target_hint?: ComputerTargetHint;
+}
+
 // @public (undocumented)
 export interface CollaborativePlanProposal {
     // (undocumented)
@@ -450,6 +502,80 @@ export interface CollaborativeReceipt {
 // @public
 export function composeTrustChain(scores: number[]): number;
 
+// @public
+export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll"];
+
+// @public
+export const COMPUTER_FAILURE_REASONS: readonly ["policy_denied", "approval_required", "approval_expired", "permission_denied", "session_closed", "target_not_found", "target_obscured", "user_preempted", "platform_blocked", "not_supported"];
+
+// @public
+export type ComputerAction = ScreenshotAction | CursorPositionAction | ClickAction | DoubleClickAction | MouseMoveAction | DragAction | TypeAction | KeyAction | ScrollAction;
+
+// @public (undocumented)
+export type ComputerActionKind = (typeof COMPUTER_ACTION_KINDS)[number];
+
+// @public
+export interface ComputerActionRequest {
+    // (undocumented)
+    readonly action: ComputerAction;
+    readonly session_id: string;
+}
+
+// @public (undocumented)
+export type ComputerFailureReason = (typeof COMPUTER_FAILURE_REASONS)[number];
+
+// @public
+export type ComputerObservationResult = ScreenshotObservation | CursorPositionObservation;
+
+// @public
+export interface ComputerPoint {
+    // (undocumented)
+    readonly x: number;
+    // (undocumented)
+    readonly y: number;
+}
+
+// @public
+export interface ComputerRedaction {
+    readonly applied: boolean;
+    readonly classified_regions_count?: number;
+    readonly classified_regions_digest?: string;
+    readonly policy_version?: string;
+    readonly projection_kind: string;
+}
+
+// @public
+export interface ComputerSessionClosed {
+    // (undocumented)
+    readonly closed_at: number;
+    readonly reason?: string;
+    // (undocumented)
+    readonly session_id: string;
+}
+
+// @public
+export interface ComputerSessionOpened {
+    // (undocumented)
+    readonly display_height: number;
+    // (undocumented)
+    readonly display_width: number;
+    // (undocumented)
+    readonly motebit_id: string;
+    // (undocumented)
+    readonly opened_at: number;
+    // (undocumented)
+    readonly scaling_factor: number;
+    // (undocumented)
+    readonly session_id: string;
+}
+
+// @public
+export interface ComputerTargetHint {
+    readonly label?: string;
+    readonly role?: string;
+    readonly source: string;
+}
+
 // @public (undocumented)
 export interface ConflictEdge {
     // (undocumented)
@@ -458,6 +584,43 @@ export interface ConflictEdge {
     remote_event: EventLogEntry;
     // (undocumented)
     resolution: "local_wins" | "remote_wins" | "merged" | "unresolved";
+}
+
+// @public
+export interface ConsolidationAnchor {
+    anchored_at: number;
+    batch_id: string;
+    leaf_count: number;
+    merkle_root: string;
+    motebit_id: MotebitId;
+    network?: string;
+    receipt_ids: ReadonlyArray<string>;
+    tx_hash?: string;
+}
+
+// @public
+export interface ConsolidationReceipt {
+    cycle_id: string;
+    // (undocumented)
+    finished_at: number;
+    motebit_id: MotebitId;
+    phases_run: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">;
+    phases_yielded: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">;
+    public_key?: string;
+    receipt_id: string;
+    // (undocumented)
+    signature: string;
+    started_at: number;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    summary: {
+        orient_nodes?: number;
+        gather_clusters?: number;
+        gather_notable?: number;
+        consolidate_merged?: number;
+        pruned_decay?: number;
+        pruned_notability?: number;
+        pruned_retention?: number;
+    };
 }
 
 // @public (undocumented)
@@ -584,6 +747,26 @@ export interface CredentialStoreAdapter {
     save(credential: StoredCredential): void;
 }
 
+// @public
+export interface CursorPositionAction {
+    // (undocumented)
+    readonly kind: "cursor_position";
+}
+
+// @public
+export interface CursorPositionObservation {
+    // (undocumented)
+    readonly captured_at: number;
+    // (undocumented)
+    readonly kind: "cursor_position";
+    // (undocumented)
+    readonly session_id: string;
+    // (undocumented)
+    readonly x: number;
+    // (undocumented)
+    readonly y: number;
+}
+
 // @public (undocumented)
 export enum DataClass {
     // (undocumented)
@@ -706,6 +889,7 @@ export enum DeviceCapability {
     // (undocumented)
     LocalLlm = "local_llm",
     PushWake = "push_wake",
+    SecureEnclave = "secure_enclave",
     // (undocumented)
     StdioMcp = "stdio_mcp"
 }
@@ -808,6 +992,37 @@ export interface DisputeResolution {
 // @public
 export type DisputeState = "opened" | "evidence" | "arbitration" | "resolved" | "appealed" | "final" | "expired";
 
+// @public
+export interface DoubleClickAction {
+    // (undocumented)
+    readonly button?: string;
+    // (undocumented)
+    readonly kind: "double_click";
+    // (undocumented)
+    readonly modifiers?: readonly string[];
+    // (undocumented)
+    readonly target: ComputerPoint;
+    // (undocumented)
+    readonly target_hint?: ComputerTargetHint;
+}
+
+// @public
+export interface DragAction {
+    // (undocumented)
+    readonly button?: string;
+    readonly duration_ms?: number;
+    // (undocumented)
+    readonly from: ComputerPoint;
+    // (undocumented)
+    readonly kind: "drag";
+    // (undocumented)
+    readonly modifiers?: readonly string[];
+    // (undocumented)
+    readonly target_hint?: ComputerTargetHint;
+    // (undocumented)
+    readonly to: ComputerPoint;
+}
+
 // @public (undocumented)
 export interface Edge<T> {
     // (undocumented)
@@ -894,6 +1109,16 @@ export enum EventType {
     // (undocumented)
     CollaborativeStepCompleted = "collaborative_step_completed",
     // (undocumented)
+    ComputerSessionClosed = "computer_session_closed",
+    // (undocumented)
+    ComputerSessionOpened = "computer_session_opened",
+    // (undocumented)
+    ConsolidationCycleRun = "consolidation_cycle_run",
+    // (undocumented)
+    ConsolidationReceiptsAnchored = "consolidation_receipts_anchored",
+    // (undocumented)
+    ConsolidationReceiptSigned = "consolidation_receipt_signed",
+    // (undocumented)
     CredentialRevoked = "credential_revoked",
     // (undocumented)
     DeleteRequested = "delete_requested",
@@ -916,6 +1141,8 @@ export enum EventType {
     // (undocumented)
     IdentityRevoked = "identity_revoked",
     // (undocumented)
+    IdleTickFired = "idle_tick_fired",
+    // (undocumented)
     KeyRotated = "key_rotated",
     // (undocumented)
     MemoryAccessed = "memory_accessed",
@@ -931,6 +1158,8 @@ export enum EventType {
     MemoryFormed = "memory_formed",
     // (undocumented)
     MemoryPinned = "memory_pinned",
+    // (undocumented)
+    MemoryPromoted = "memory_promoted",
     // (undocumented)
     PlanCompleted = "plan_completed",
     // (undocumented)
@@ -1062,6 +1291,37 @@ export function getSuiteEntry(id: SuiteId): SuiteEntry;
 // @public (undocumented)
 export function getSuiteEntry(id: string): SuiteEntry | undefined;
 
+// @public
+export interface GoalCompletedPayload {
+    // (undocumented)
+    readonly goal_id: string;
+    readonly reason?: string;
+}
+
+// @public
+export interface GoalCreatedPayload {
+    readonly goal_id: string;
+    readonly interval_ms?: number;
+    readonly mode?: string;
+    readonly project_id?: string;
+    readonly prompt?: string;
+    readonly routine_hash?: string;
+    readonly routine_id?: string;
+    readonly routine_source?: string;
+    readonly update?: true;
+    readonly wall_clock_ms?: number;
+}
+
+// @public
+export interface GoalExecutedPayload {
+    readonly error?: string;
+    // (undocumented)
+    readonly goal_id: string;
+    readonly memories?: number;
+    readonly summary?: string;
+    readonly tool_calls?: number;
+}
+
 // @public (undocumented)
 export interface GoalExecutionManifest {
     // (undocumented)
@@ -1092,6 +1352,21 @@ export interface GoalExecutionManifest {
 
 // @public (undocumented)
 export type GoalId = Brand<string, "GoalId">;
+
+// @public
+export interface GoalProgressPayload {
+    // (undocumented)
+    readonly goal_id: string;
+    readonly note: string;
+}
+
+// @public
+export interface GoalRemovedPayload {
+    // (undocumented)
+    readonly goal_id: string;
+    readonly reason?: string;
+    readonly routine_id?: string;
+}
 
 // @public (undocumented)
 export interface GradientCredentialSubject {
@@ -1130,6 +1405,13 @@ export interface GuestRail extends SettlementRail {
     readonly supportsDeposit: boolean;
     withdraw(motebitId: string, amount: number, currency: string, destination: string, idempotencyKey: string): Promise<WithdrawalResult>;
     withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
+}
+
+// @public
+export interface HardwareAttestationClaim {
+    attestation_receipt?: string;
+    key_exported?: boolean;
+    platform: "secure_enclave" | "tpm" | "play_integrity" | "device_check" | "webauthn" | "software";
 }
 
 // @public
@@ -1184,6 +1466,14 @@ export function isSuiteId(value: unknown): value is SuiteId;
 
 // @public
 export function joinParallelRoutes(scores: number[]): number;
+
+// @public
+export interface KeyAction {
+    // (undocumented)
+    readonly key: string;
+    // (undocumented)
+    readonly kind: "key";
+}
 
 // @public (undocumented)
 export interface KeyringAdapter {
@@ -1267,6 +1557,21 @@ export interface MarketConfig {
     weight_trust: number;
 }
 
+// @public
+export const MaxProductLogSemiring: Semiring<number>;
+
+// @public
+export interface MemoryAccessedPayload {
+    // (undocumented)
+    readonly node_id: string;
+}
+
+// @public
+export interface MemoryAuditPayload {
+    readonly missed_patterns: ReadonlyArray<string>;
+    readonly turn_message: string;
+}
+
 // @public (undocumented)
 export interface MemoryCandidate {
     // (undocumented)
@@ -1277,6 +1582,14 @@ export interface MemoryCandidate {
     memory_type?: MemoryType;
     // (undocumented)
     sensitivity: SensitivityLevel;
+}
+
+// @public
+export interface MemoryConsolidatedPayload {
+    readonly action: "merge" | "supersede" | "reject" | "accept";
+    readonly existing_node_id: string | null;
+    readonly new_node_id: string | null;
+    readonly reason: string;
 }
 
 // @public
@@ -1293,6 +1606,40 @@ export interface MemoryContent {
     valid_from?: number;
     // (undocumented)
     valid_until?: number | null;
+}
+
+// @public
+export type MemoryDecayedPayload = Record<string, never>;
+
+// @public
+export interface MemoryDeletedPayload {
+    // (undocumented)
+    readonly node_id: string;
+}
+
+// @public
+export interface MemoryFormedPayload {
+    readonly content: string;
+    readonly node_id: string;
+    readonly redacted?: true;
+    readonly redacted_sensitivity?: SensitivityLevel;
+    readonly sensitivity: SensitivityLevel;
+}
+
+// @public
+export interface MemoryPinnedPayload {
+    // (undocumented)
+    readonly node_id: string;
+    readonly pinned: boolean;
+}
+
+// @public
+export interface MemoryPromotedPayload {
+    readonly from_confidence: number;
+    readonly node_id: string;
+    readonly reason: string;
+    readonly reinforcement_count: number;
+    readonly to_confidence: number;
 }
 
 // @public (undocumented)
@@ -1364,6 +1711,16 @@ export enum MotebitType {
     Service = "service"
 }
 
+// @public
+export interface MouseMoveAction {
+    // (undocumented)
+    readonly kind: "mouse_move";
+    // (undocumented)
+    readonly target: ComputerPoint;
+    // (undocumented)
+    readonly target_hint?: ComputerTargetHint;
+}
+
 // @public (undocumented)
 export type NodeId = Brand<string, "NodeId">;
 
@@ -1425,6 +1782,31 @@ export interface Plan {
     updated_at: number;
 }
 
+// @public
+export interface PlanCompletedPayload {
+    // (undocumented)
+    readonly goal_id?: string;
+    // (undocumented)
+    readonly plan_id: string;
+}
+
+// @public
+export interface PlanCreatedPayload {
+    readonly goal_id?: string;
+    readonly plan_id: string;
+    readonly title: string;
+    readonly total_steps: number;
+}
+
+// @public
+export interface PlanFailedPayload {
+    // (undocumented)
+    readonly goal_id?: string;
+    // (undocumented)
+    readonly plan_id: string;
+    readonly reason: string;
+}
+
 // @public (undocumented)
 export type PlanId = Brand<string, "PlanId">;
 
@@ -1476,6 +1858,59 @@ export interface PlanStep {
     tool_calls_made: number;
     // (undocumented)
     updated_at: number;
+}
+
+// @public
+export interface PlanStepCompletedPayload {
+    // (undocumented)
+    readonly goal_id?: string;
+    // (undocumented)
+    readonly ordinal: number;
+    // (undocumented)
+    readonly plan_id: string;
+    // (undocumented)
+    readonly step_id: string;
+    readonly task_id?: string;
+    readonly tool_calls_made: number;
+}
+
+// @public
+export interface PlanStepDelegatedPayload {
+    // (undocumented)
+    readonly goal_id?: string;
+    // (undocumented)
+    readonly ordinal: number;
+    // (undocumented)
+    readonly plan_id: string;
+    readonly routing_choice?: Record<string, unknown>;
+    // (undocumented)
+    readonly step_id: string;
+    readonly task_id: string;
+}
+
+// @public
+export interface PlanStepFailedPayload {
+    readonly error: string;
+    // (undocumented)
+    readonly goal_id?: string;
+    // (undocumented)
+    readonly ordinal: number;
+    // (undocumented)
+    readonly plan_id: string;
+    // (undocumented)
+    readonly step_id: string;
+    readonly task_id?: string;
+}
+
+// @public
+export interface PlanStepStartedPayload {
+    readonly description: string;
+    // (undocumented)
+    readonly goal_id?: string;
+    readonly ordinal: number;
+    // (undocumented)
+    readonly plan_id: string;
+    readonly step_id: string;
 }
 
 // @public (undocumented)
@@ -1706,6 +2141,42 @@ export interface RouteScore {
         capability_match: number;
         availability: number;
     };
+}
+
+// @public
+export interface ScreenshotAction {
+    // (undocumented)
+    readonly kind: "screenshot";
+}
+
+// @public
+export interface ScreenshotObservation {
+    readonly artifact_id: string;
+    readonly artifact_sha256: string;
+    readonly captured_at: number;
+    readonly height: number;
+    readonly image_format: string;
+    // (undocumented)
+    readonly kind: "screenshot";
+    readonly projection_artifact_id?: string;
+    readonly projection_artifact_sha256?: string;
+    // (undocumented)
+    readonly redaction: ComputerRedaction;
+    // (undocumented)
+    readonly session_id: string;
+    readonly width: number;
+}
+
+// @public
+export interface ScrollAction {
+    // (undocumented)
+    readonly dx: number;
+    // (undocumented)
+    readonly dy: number;
+    // (undocumented)
+    readonly kind: "scroll";
+    // (undocumented)
+    readonly target: ComputerPoint;
 }
 
 // @public
@@ -2033,6 +2504,9 @@ export interface SyncPlanStep {
     updated_at: number;
 }
 
+// @public
+export const TOOL_MODES: readonly ["api", "ax", "pixels"];
+
 // @public (undocumented)
 export interface ToolAuditEntry {
     // (undocumented)
@@ -2066,6 +2540,7 @@ export interface ToolDefinition {
     description: string;
     // (undocumented)
     inputSchema: Record<string, unknown>;
+    mode?: ToolMode;
     // (undocumented)
     name: string;
     // (undocumented)
@@ -2079,6 +2554,33 @@ export interface ToolDefinition {
 
 // @public (undocumented)
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
+
+// @public
+export interface ToolInvocationReceipt {
+    args_hash: string;
+    completed_at: number;
+    // (undocumented)
+    device_id: DeviceId;
+    invocation_id: string;
+    invocation_origin?: IntentOrigin;
+    // (undocumented)
+    motebit_id: MotebitId;
+    public_key?: string;
+    result_hash: string;
+    // (undocumented)
+    signature: string;
+    started_at: number;
+    status: "completed" | "failed" | "denied";
+    suite: "motebit-jcs-ed25519-b64-v1";
+    task_id: string;
+    tool_name: string;
+}
+
+// @public
+export type ToolMode = "api" | "ax" | "pixels";
+
+// @public
+export function toolModePriority(mode: ToolMode | undefined): number;
 
 // @public (undocumented)
 export interface ToolRegistry {
@@ -2136,6 +2638,7 @@ export interface TrustCredentialSubject {
     failed_tasks: number;
     // (undocumented)
     first_seen_at: number;
+    hardware_attestation?: HardwareAttestationClaim;
     // (undocumented)
     id: string;
     // (undocumented)
@@ -2193,6 +2696,15 @@ export interface TurnContext {
     turnId: string;
     // (undocumented)
     turnStartMs: number;
+}
+
+// @public
+export interface TypeAction {
+    // (undocumented)
+    readonly kind: "type";
+    readonly per_char_delay_ms?: number;
+    // (undocumented)
+    readonly text: string;
 }
 
 // @public (undocumented)
