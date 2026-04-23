@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { resolve } from "node:path";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 
 /**
@@ -41,6 +42,36 @@ function manualChunks(id: string): string | undefined {
 }
 
 export default defineConfig({
+  // @solana/web3.js and @solana/spl-token (pulled in via
+  // @motebit/wallet-solana) reference Node's Buffer at module-eval
+  // time. Vite externalizes Node built-ins for browser compat, so
+  // without this block the spl-token import throws
+  // `ReferenceError: Can't find variable: Buffer` at load, kills the
+  // module graph, and desktop boots to a blank canvas. Mirrors
+  // apps/web/vite.config.ts — sibling-boundary rule: same fix, same
+  // shape, both surfaces.
+  define: {
+    global: "globalThis",
+  },
+  resolve: {
+    alias: {
+      // Point the Node "buffer" import at the npm buffer polyfill.
+      // Must resolve to the actual file path — a bare "buffer" string
+      // makes Rollup treat it as a Node built-in and externalize it.
+      buffer: resolve("node_modules/buffer/"),
+    },
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      // Make Buffer available globally during dev-time dependency
+      // pre-bundling (esbuild pass). Without this, @solana/spl-token
+      // crashes with "Buffer is not defined" during Vite's dev
+      // pre-bundle step.
+      define: {
+        global: "globalThis",
+      },
+    },
+  },
   plugins: [
     viteStaticCopy({
       targets: [

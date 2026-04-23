@@ -1,6 +1,15 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script type="module">
+      // Buffer polyfill for @solana/web3.js + @solana/spl-token (pulled in
+      // via @motebit/wallet-solana). These Solana libraries reference
+      // Node's Buffer as a global at module-eval time, which doesn't
+      // exist in browsers or Tauri's webview. Must run before any module
+      // import. Mirrors apps/web/index.html — sibling-boundary rule.
+      import { Buffer } from "buffer";
+      globalThis.Buffer = Buffer;
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Motebit</title>
@@ -6100,7 +6109,7 @@
         </p>
         <input
           type="text"
-          id="rotate-reason"
+          id="rotate-key-reason"
           placeholder="Reason (optional)"
           style="
             width: 100%;
@@ -6115,12 +6124,12 @@
             font-family: inherit;
           "
         />
-        <div id="rotate-error" style="color: #ff6b6b; font-size: 12px; display: none"></div>
-        <div id="rotate-result" style="color: var(--accent); font-size: 12px; display: none"></div>
+        <div id="rotate-key-error" style="color: #ff6b6b; font-size: 12px; display: none"></div>
+        <div id="rotate-key-result" style="color: var(--accent); font-size: 12px; display: none"></div>
         <div class="pin-actions">
-          <button id="rotate-cancel-btn">Cancel</button>
+          <button id="rotate-key-cancel">Cancel</button>
           <button
-            id="rotate-confirm-btn"
+            id="rotate-key-confirm"
             style="
               background: var(--status-warning, #f0a030);
               color: #fff;
