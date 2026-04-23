@@ -15,6 +15,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 export const currentTimeDefinition: ToolDefinition = {
   name: "current_time",
+  mode: "api",
   description:
     "Get the current date and time. Use when you need to know what time it is, today's date, or time in a specific timezone.",
   inputSchema: {

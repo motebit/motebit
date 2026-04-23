@@ -8,6 +8,7 @@
 // stays neutral on which subpath the consumer uses.
 
 import type { ToolRegistry, ToolDefinition, ToolResult, ToolHandler } from "@motebit/sdk";
+import { toolModePriority } from "@motebit/sdk";
 
 export class SimpleToolRegistry implements ToolRegistry {
   private tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
@@ -17,8 +18,21 @@ export class SimpleToolRegistry implements ToolRegistry {
     this.tools.set(tool.name, { definition: tool, handler });
   }
 
+  /**
+   * List registered tool definitions, sorted by cost tier:
+   *   api (0) → ax (1) → pixels (2) → undeclared (3)
+   * Within each tier, registration order is preserved (stable sort).
+   * Mirrors the sort in `@motebit/tools`'s `InMemoryToolRegistry` —
+   * runtime keeps its own implementation so it stays layer-neutral
+   * (see file header).
+   */
   list(): ToolDefinition[] {
-    return [...this.tools.values()].map((t) => t.definition);
+    const entries = [...this.tools.values()].map((t, i) => ({ def: t.definition, i }));
+    entries.sort((a, b) => {
+      const diff = toolModePriority(a.def.mode) - toolModePriority(b.def.mode);
+      return diff !== 0 ? diff : a.i - b.i;
+    });
+    return entries.map(({ def }) => def);
   }
   has(name: string): boolean {
     return this.tools.has(name);

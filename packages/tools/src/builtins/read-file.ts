@@ -5,6 +5,7 @@ import { isPathAllowed } from "./path-sandbox.js";
 
 export const readFileDefinition: ToolDefinition = {
   name: "read_file",
+  mode: "api",
   description: "Read the contents of a local file. Path is relative to the working directory.",
   inputSchema: {
     type: "object",

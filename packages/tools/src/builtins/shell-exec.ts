@@ -56,6 +56,7 @@ export interface ShellExecConfig {
 
 export const shellExecDefinition: ToolDefinition = {
   name: "shell_exec",
+  mode: "api",
   description:
     "Execute a shell command and return stdout/stderr. Requires user approval. Use for running scripts, checking system state, etc.",
   inputSchema: {

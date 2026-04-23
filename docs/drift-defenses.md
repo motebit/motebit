@@ -49,6 +49,7 @@ Thirty-five invariants are enforced today. Twenty-eight run as hard CI gates via
 | 33  | Panel state ↔ `@motebit/panels` controllers (sovereign, agents, memory, goals) | `check-panel-controllers.ts`                                   | 2026-04-19 |
 | 34  | Consolidation cycle ↔ `runtime.consolidationCycle()` / `runConsolidationCycle` | `check-consolidation-primitives.ts`                            | 2026-04-20 |
 | 35  | Inbound wire bodies at `services/api` ↔ `@motebit/wire-schemas` parsers        | `check-wire-schema-usage.ts`                                   | 2026-04-20 |
+| 36  | `ToolDefinition` literals ↔ `mode: "api" \| "ax" \| "pixels"` cost-tier tag    | `check-tool-modes.ts`                                          | 2026-04-22 |
 
 ## Incident histories
 

@@ -26,6 +26,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 export const rewriteMemoryDefinition: ToolDefinition = {
   name: "rewrite_memory",
+  mode: "api",
   description:
     "Correct a stale or incorrect memory by superseding it with new content. " +
     "Use when you discover a previously-formed memory is wrong — the user corrected " +

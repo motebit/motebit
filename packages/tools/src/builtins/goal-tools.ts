@@ -3,6 +3,7 @@ import { RiskLevel, DataClass, SideEffect } from "@motebit/sdk";
 
 export const createSubGoalDefinition: ToolDefinition = {
   name: "create_sub_goal",
+  mode: "api",
   description:
     "Create a child sub-goal under the current goal. Use to decompose complex goals into smaller, focused tasks.",
   inputSchema: {
@@ -38,6 +39,7 @@ export const createSubGoalDefinition: ToolDefinition = {
 
 export const completeGoalDefinition: ToolDefinition = {
   name: "complete_goal",
+  mode: "api",
   description:
     "Mark the current goal as completed. Use when the goal's objective has been fully achieved.",
   inputSchema: {
@@ -56,6 +58,7 @@ export const completeGoalDefinition: ToolDefinition = {
 
 export const reportProgressDefinition: ToolDefinition = {
   name: "report_progress",
+  mode: "api",
   description:
     "Log a progress observation for the current goal. Use to record intermediate findings or status.",
   inputSchema: {

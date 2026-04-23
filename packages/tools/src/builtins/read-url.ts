@@ -2,6 +2,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 export const readUrlDefinition: ToolDefinition = {
   name: "read_url",
+  mode: "api",
   description:
     "Fetch content from a URL and return its text. Useful for reading web pages, APIs, or documents.",
   inputSchema: {

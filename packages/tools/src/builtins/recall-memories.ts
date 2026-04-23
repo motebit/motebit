@@ -2,6 +2,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 export const recallMemoriesDefinition: ToolDefinition = {
   name: "recall_memories",
+  mode: "api",
   description:
     "Search your own memory graph for relevant information. Use when you need to remember something about the user or past conversations.",
   inputSchema: {

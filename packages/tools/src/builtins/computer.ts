@@ -77,6 +77,7 @@ const MODIFIERS_SCHEMA = {
 
 export const computerDefinition: ToolDefinition = {
   name: "computer",
+  mode: "pixels",
   description:
     "Observe or act on the user's computer — screenshot, click, type, scroll. Only available on the desktop surface; other surfaces do not expose this tool. Every observation and action emits a signed receipt and flows through the governance gate. See spec/computer-use-v1.md.",
   inputSchema: {

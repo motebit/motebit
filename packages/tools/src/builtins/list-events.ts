@@ -2,6 +2,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 export const listEventsDefinition: ToolDefinition = {
   name: "list_events",
+  mode: "api",
   description:
     "Query your event log for recent activity. Useful for understanding what happened recently.",
   inputSchema: {

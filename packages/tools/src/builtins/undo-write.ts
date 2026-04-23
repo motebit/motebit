@@ -5,6 +5,7 @@ import { isPathAllowed } from "./path-sandbox.js";
 
 export const undoWriteDefinition: ToolDefinition = {
   name: "undo_write",
+  mode: "api",
   description:
     "Undo the last write_file operation by restoring from backup. Requires user approval.",
   inputSchema: {

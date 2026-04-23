@@ -1,13 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { InMemoryToolRegistry } from "../index";
-import type { ToolDefinition } from "@motebit/sdk";
+import type { ToolDefinition, ToolMode } from "@motebit/sdk";
 
-function makeTool(name: string, requiresApproval = false): ToolDefinition {
+function makeTool(name: string, requiresApproval = false, mode?: ToolMode): ToolDefinition {
   return {
     name,
     description: `Test tool ${name}`,
     inputSchema: { type: "object", properties: { q: { type: "string" } } },
     requiresApproval,
+    ...(mode !== undefined && { mode }),
   };
 }
 
@@ -147,5 +148,42 @@ describe("InMemoryToolRegistry", () => {
     const reg = new InMemoryToolRegistry();
     const removed = reg.unregister("nonexistent");
     expect(removed).toBe(false);
+  });
+});
+
+describe("InMemoryToolRegistry — mode-tier sort", () => {
+  it("sorts api → ax → pixels → undeclared", () => {
+    const reg = new InMemoryToolRegistry();
+    // Register intentionally out of tier order so the sort is load-bearing.
+    reg.register(makeTool("p1", false, "pixels"), async () => ({ ok: true }));
+    reg.register(makeTool("u1", false), async () => ({ ok: true }));
+    reg.register(makeTool("a1", false, "ax"), async () => ({ ok: true }));
+    reg.register(makeTool("api1", false, "api"), async () => ({ ok: true }));
+    const names = reg.list().map((t) => t.name);
+    expect(names).toEqual(["api1", "a1", "p1", "u1"]);
+  });
+
+  it("preserves registration order within a tier (stable sort)", () => {
+    const reg = new InMemoryToolRegistry();
+    reg.register(makeTool("api_z", false, "api"), async () => ({ ok: true }));
+    reg.register(makeTool("api_a", false, "api"), async () => ({ ok: true }));
+    reg.register(makeTool("api_m", false, "api"), async () => ({ ok: true }));
+    expect(reg.list().map((t) => t.name)).toEqual(["api_z", "api_a", "api_m"]);
+  });
+
+  it("groups multiple tools per tier contiguously", () => {
+    const reg = new InMemoryToolRegistry();
+    reg.register(makeTool("pix_1", false, "pixels"), async () => ({ ok: true }));
+    reg.register(makeTool("api_1", false, "api"), async () => ({ ok: true }));
+    reg.register(makeTool("pix_2", false, "pixels"), async () => ({ ok: true }));
+    reg.register(makeTool("api_2", false, "api"), async () => ({ ok: true }));
+    expect(reg.list().map((t) => t.name)).toEqual(["api_1", "api_2", "pix_1", "pix_2"]);
+  });
+
+  it("places tools with no mode at the end", () => {
+    const reg = new InMemoryToolRegistry();
+    reg.register(makeTool("untagged"), async () => ({ ok: true }));
+    reg.register(makeTool("api_tool", false, "api"), async () => ({ ok: true }));
+    expect(reg.list().map((t) => t.name)).toEqual(["api_tool", "untagged"]);
   });
 });

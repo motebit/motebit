@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolResult, ToolHandler, ToolRegistry } from "@motebit/sdk";
+import { toolModePriority } from "@motebit/sdk";
 
 export class InMemoryToolRegistry implements ToolRegistry {
   private tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
@@ -20,8 +21,19 @@ export class InMemoryToolRegistry implements ToolRegistry {
     return this.tools.delete(name);
   }
 
+  /**
+   * List registered tool definitions, sorted by cost tier:
+   *   api (0) → ax (1) → pixels (2) → undeclared (3)
+   * Within each tier, registration order is preserved (stable sort).
+   * See `docs/drift-defenses.md` — tool-mode invariant.
+   */
   list(): ToolDefinition[] {
-    return [...this.tools.values()].map((t) => t.definition);
+    const entries = [...this.tools.values()].map((t, i) => ({ def: t.definition, i }));
+    entries.sort((a, b) => {
+      const diff = toolModePriority(a.def.mode) - toolModePriority(b.def.mode);
+      return diff !== 0 ? diff : a.i - b.i;
+    });
+    return entries.map(({ def }) => def);
   }
 
   has(name: string): boolean {

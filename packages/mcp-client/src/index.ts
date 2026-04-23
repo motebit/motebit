@@ -593,6 +593,12 @@ export class McpClientAdapter {
         type: "object",
         properties: {},
       }) as Record<string, unknown>,
+      // Every MCP-imported tool is a structured API call by construction
+      // — tool.call → JSON in → JSON out. Declaring `mode: "api"` here
+      // lands it in the top tier of the registry sort so the model
+      // prefers MCP-delegated work over the pixel fallback when both
+      // could answer.
+      mode: "api" as const,
       ...(this.config.trusted ? {} : { requiresApproval: true }),
     }));
   }

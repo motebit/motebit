@@ -15,6 +15,7 @@ import type { InvokeFn } from "./tauri-storage.js";
 
 export const tauriReadFileDefinition: ToolDefinition = {
   name: "read_file",
+  mode: "api",
   description: "Read the contents of a file on the local filesystem.",
   inputSchema: {
     type: "object",
@@ -50,6 +51,7 @@ export function createTauriReadFileHandler(invoke: InvokeFn): ToolHandler {
 
 export const tauriWriteFileDefinition: ToolDefinition = {
   name: "write_file",
+  mode: "api",
   description:
     "Write content to a file on the local filesystem. Creates parent directories if needed. Requires user approval.",
   inputSchema: {
@@ -96,6 +98,7 @@ interface ShellExecResult {
 
 export const tauriShellExecDefinition: ToolDefinition = {
   name: "shell_exec",
+  mode: "api",
   description:
     "Execute a shell command and return stdout, stderr, and exit code. Requires user approval. Use for running scripts, checking system state, etc.",
   inputSchema: {

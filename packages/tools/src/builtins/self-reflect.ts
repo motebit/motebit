@@ -2,6 +2,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 export const selfReflectDefinition: ToolDefinition = {
   name: "self_reflect",
+  mode: "api",
   description:
     "Reflect on your recent interactions. Produces a self-assessment, insights about your behavior, " +
     "plan adjustments, and recurring patterns. Use when you want to examine your own performance, " +

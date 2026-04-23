@@ -19,6 +19,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 export const searchConversationsDefinition: ToolDefinition = {
   name: "search_conversations",
+  mode: "api",
   description:
     "Search your conversation history (verbatim user + assistant messages) by keyword. " +
     "Use this when you want to cite something the user actually said, or when you " +

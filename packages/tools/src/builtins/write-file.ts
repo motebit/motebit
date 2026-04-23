@@ -13,6 +13,7 @@ export interface WriteFileConfig {
 
 export const writeFileDefinition: ToolDefinition = {
   name: "write_file",
+  mode: "api",
   description:
     "Write content to a local file. Creates directories if needed. Requires user approval.",
   inputSchema: {

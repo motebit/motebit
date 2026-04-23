@@ -17,6 +17,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 export const recallSelfDefinition: ToolDefinition = {
   name: "recall_self",
+  mode: "api",
   description:
     "Search your own committed knowledge about Motebit — who you are, how you work, the doctrine you live by. Use this BEFORE web_search when the user asks about Motebit, about yourself, or about any concept in your own documentation.",
   inputSchema: {

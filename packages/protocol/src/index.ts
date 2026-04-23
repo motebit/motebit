@@ -400,6 +400,13 @@ export interface ToolDefinition {
     dataClass?: DataClass;
     sideEffect?: SideEffect;
   };
+  /**
+   * Cost-tier declaration driving registry sort order. `api` (cheap,
+   * structured) ranks above `ax` (structured accessibility tree) above
+   * `pixels` (screen capture + synthetic input). Untagged tools sort
+   * last. See `@motebit/protocol/tool-mode`.
+   */
+  mode?: ToolMode;
 }
 
 export interface ToolResult {
@@ -2154,3 +2161,7 @@ export type {
   ComputerFailureReason,
 } from "./computer-use.js";
 export { COMPUTER_ACTION_KINDS, COMPUTER_FAILURE_REASONS } from "./computer-use.js";
+
+export type { ToolMode } from "./tool-mode.js";
+export { TOOL_MODES, toolModePriority } from "./tool-mode.js";
+import type { ToolMode } from "./tool-mode.js";

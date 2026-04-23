@@ -5,6 +5,7 @@ import { DuckDuckGoSearchProvider } from "../providers/duckduckgo.js";
 
 export const webSearchDefinition: ToolDefinition = {
   name: "web_search",
+  mode: "api",
   description: "Search the web for information. Returns summarized results.",
   inputSchema: {
     type: "object",

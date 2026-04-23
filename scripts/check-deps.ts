@@ -141,6 +141,8 @@ const MIT_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // Cryptosuite registry — pure type guard + lookup over a frozen record
     "isSuiteId",
     "getSuiteEntry",
+    // Tool-mode taxonomy — pure sort-priority lookup over a closed union
+    "toolModePriority",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)
