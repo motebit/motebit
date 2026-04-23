@@ -1,7 +1,7 @@
 {
   "name": "@motebit/verifier",
-  "version": "0.8.0",
-  "description": "Offline third-party verifier for any signed Motebit artifact — identity files, execution receipts, credentials, presentations. MIT, standalone.",
+  "version": "1.0.0",
+  "description": "MIT library for verifying signed Motebit artifacts (identity files, execution receipts, credentials, presentations) — file-reading and human-formatting helpers on top of @motebit/crypto. The canonical `motebit-verify` CLI now lives at @motebit/verify; this package is the MIT library it sits on.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,9 +10,6 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
-  },
-  "bin": {
-    "motebit-verify": "./dist/cli.js"
   },
   "files": [
     "dist/**/*.js",
@@ -27,12 +24,12 @@
   "keywords": [
     "motebit",
     "verify",
+    "library",
     "ed25519",
     "signature",
     "receipt",
     "credential",
     "identity",
-    "cli",
     "offline",
     "audit"
   ],

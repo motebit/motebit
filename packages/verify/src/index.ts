@@ -1,9 +1,9 @@
 /**
- * @motebit/verifier-hardware — hardware-attestation-aware companion to
+ * @motebit/verify — hardware-attestation-aware companion to
  * `@motebit/verifier`.
  *
  * Bundles the four BSL platform verifier leaves into a single
- * `HardwareAttestationVerifiers` record + a CLI `motebit-verify-hw`
+ * `HardwareAttestationVerifiers` record + a CLI `motebit-verify`
  * that hands them to `@motebit/verifier::verifyFile`. A credential
  * with `hardware_attestation: { platform: "device_check" | "tpm" |
  * "play_integrity" | "webauthn", ... }` verifies end-to-end through
@@ -14,14 +14,14 @@
  *
  * ```ts
  * import { verifyFile } from "@motebit/verifier";
- * import { buildHardwareVerifiers } from "@motebit/verifier-hardware";
+ * import { buildHardwareVerifiers } from "@motebit/verify";
  *
  * const result = await verifyFile("cred.json", {
  *   hardwareAttestation: buildHardwareVerifiers(),
  * });
  * ```
  *
- * CLI use: `motebit-verify-hw <file>` — same args as `motebit-verify`,
+ * CLI use: `motebit-verify <file>` — same args as `motebit-verify`,
  * plus hardware-attestation verification. See `cli.ts`.
  */
 

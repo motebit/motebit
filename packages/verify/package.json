@@ -1,7 +1,7 @@
 {
-  "name": "@motebit/verifier-hardware",
-  "version": "0.1.0",
-  "description": "Hardware-attestation-aware CLI for motebit credentials — bundles the four BSL platform verifier leaves (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn) into a single offline `motebit-verify-hw` tool.",
+  "name": "@motebit/verify",
+  "version": "1.0.0",
+  "description": "The canonical motebit artifact verifier — CLI `motebit-verify` with every hardware-attestation platform bundled (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn). One install, offline, self-attesting. Replaces the deprecated @motebit/verify@0.x zero-dep library: library primitives now live in @motebit/crypto; helper utilities in @motebit/verifier; this package is the tool.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,7 +12,7 @@
     }
   },
   "bin": {
-    "motebit-verify-hw": "./dist/cli.js"
+    "motebit-verify": "./dist/cli.js"
   },
   "files": [
     "dist/**/*.js",
@@ -28,16 +28,18 @@
   "keywords": [
     "motebit",
     "verify",
+    "cli",
     "hardware-attestation",
     "app-attest",
     "tpm",
-    "webauthn"
+    "webauthn",
+    "ed25519"
   ],
   "homepage": "https://motebit.com",
   "repository": {
     "type": "git",
     "url": "https://github.com/motebit/motebit.git",
-    "directory": "packages/verifier-hardware"
+    "directory": "packages/verify"
   },
   "private": true,
   "scripts": {

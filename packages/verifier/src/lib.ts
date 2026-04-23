@@ -48,7 +48,7 @@ export interface VerifyFileOptions {
    * credentials still verify their Ed25519 proof, but the
    * `hardware_attestation` channel reports `adapter not yet shipped`
    * (the expected MIT-only behavior). The BSL companion CLI
-   * `@motebit/verifier-hardware` wires all four leaves automatically.
+   * `@motebit/verify` wires all four leaves automatically.
    */
   readonly hardwareAttestation?: HardwareAttestationVerifiers;
 }

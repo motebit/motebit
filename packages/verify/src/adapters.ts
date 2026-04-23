@@ -87,7 +87,7 @@ const DEFAULT_WEBAUTHN_RP_ID = "motebit.com";
  *
  * ```ts
  * import { verifyFile } from "@motebit/verifier";
- * import { buildHardwareVerifiers } from "@motebit/verifier-hardware";
+ * import { buildHardwareVerifiers } from "@motebit/verify";
  *
  * const result = await verifyFile("cred.json", {
  *   hardwareAttestation: buildHardwareVerifiers(),

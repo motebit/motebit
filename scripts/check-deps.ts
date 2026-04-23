@@ -86,7 +86,7 @@ const LAYER: Record<string, number> = {
   "create-motebit": 6,
   "@motebit/molecule-runner": 6,
   "@motebit/verifier": 6,
-  "@motebit/verifier-hardware": 6,
+  "@motebit/verify": 6,
 };
 
 const APP_LAYER = 6;

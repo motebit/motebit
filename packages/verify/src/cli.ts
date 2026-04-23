@@ -1,23 +1,22 @@
 #!/usr/bin/env node
 /**
- * `motebit-verify-hw` CLI — hardware-attestation-aware companion to
- * `motebit-verify`.
+ * `motebit-verify` CLI — the canonical motebit artifact verifier.
  *
- * Same args as the MIT `motebit-verify`, plus bundled platform
- * verifiers wired in. Use this when the credential you're verifying
+ * Verifies identity files, execution receipts, credentials, and
+ * presentations against their embedded signatures. When a credential
  * carries a `hardware_attestation` claim for `device_check` / `tpm` /
- * `play_integrity` / `webauthn` and you want an end-to-end verdict
- * (chain + nonce + bundle + identity), not just the Ed25519 proof.
+ * `play_integrity` / `webauthn`, the bundled platform adapters verify
+ * the chain, nonce, bundle, and identity binding end-to-end.
  *
  * ```
- *   motebit-verify-hw <file>                 # auto-detect, print human
- *   motebit-verify-hw <file> --json          # structured output
- *   motebit-verify-hw <file> --expect credential
- *   motebit-verify-hw <file> --clock-skew 30
+ *   motebit-verify <file>                 # auto-detect, print human
+ *   motebit-verify <file> --json          # structured output
+ *   motebit-verify <file> --expect credential
+ *   motebit-verify <file> --clock-skew 30
  *
  *   # Platform-specific overrides (all optional; defaults match
  *   # motebit's canonical identifiers).
- *   motebit-verify-hw <file> \
+ *   motebit-verify <file> \
  *     --bundle-id com.example.app \
  *     --android-package com.example.app \
  *     --rp-id example.com
@@ -32,6 +31,13 @@
  * (Apple App Attest Root CA, FIDO roots, TPM vendor roots); Play
  * Integrity's JWKS is fail-closed by default until an operator lands
  * real bytes (see `@motebit/crypto-play-integrity`'s CLAUDE.md).
+ *
+ * Three-package lineage — mirrors how tools like `git` / `libgit2` or
+ * `cargo` / `tokio` separate the verb-tool from the library layer:
+ *
+ *   @motebit/verify   — this CLI (BSL, bundles all 4 adapters)
+ *   @motebit/verifier — MIT library (file I/O, human formatting)
+ *   @motebit/crypto   — MIT primitives (verify, sign, suite dispatch)
  */
 
 import { readFileSync } from "node:fs";
@@ -169,10 +175,10 @@ function usage(message: string): ParsedArgs {
 
 function renderHelp(): string {
   return [
-    "motebit-verify-hw — hardware-attestation-aware verifier for Motebit credentials",
+    "motebit-verify — hardware-attestation-aware verifier for Motebit credentials",
     "",
     "USAGE",
-    "  motebit-verify-hw <file> [options]",
+    "  motebit-verify <file> [options]",
     "",
     "OPTIONS",
     "  --json                    Print structured JSON instead of human-readable.",
@@ -224,7 +230,7 @@ async function main(): Promise<number> {
   if (args.mode === "help") {
     const help = renderHelp();
     if (args.usageError !== undefined) {
-      process.stderr.write(`motebit-verify-hw: ${args.usageError}\n\n${help}\n`);
+      process.stderr.write(`motebit-verify: ${args.usageError}\n\n${help}\n`);
       return 2;
     }
     process.stdout.write(`${help}\n`);
@@ -232,7 +238,7 @@ async function main(): Promise<number> {
   }
 
   if (args.file === undefined) {
-    process.stderr.write(`motebit-verify-hw: missing file argument\n\n${renderHelp()}\n`);
+    process.stderr.write(`motebit-verify: missing file argument\n\n${renderHelp()}\n`);
     return 2;
   }
 
@@ -251,7 +257,7 @@ async function main(): Promise<number> {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`motebit-verify-hw: cannot read ${args.file}: ${msg}\n`);
+    process.stderr.write(`motebit-verify: cannot read ${args.file}: ${msg}\n`);
     return 2;
   }
 
@@ -269,6 +275,6 @@ main()
   })
   .catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`motebit-verify-hw: ${msg}\n`);
+    process.stderr.write(`motebit-verify: ${msg}\n`);
     process.exit(2);
   });

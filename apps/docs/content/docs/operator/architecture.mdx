@@ -82,8 +82,8 @@ motebit/
 │   │   # Layer 6 — Applications
 │   ├── create-motebit/        [L6 · MIT]    Public scaffolder. npm create motebit.
 │   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
-│   ├── verifier/              [L6 · MIT]    Offline third-party verifier. `motebit-verify <file>` checks any signed artifact — identity, receipt, credential, presentation — with zero relay contact.
-│   ├── verifier-hardware/     [L6]          BSL companion CLI `motebit-verify-hw` that bundles the four platform leaves (App Attest, TPM, Play Integrity, WebAuthn) for end-to-end hardware-attestation verification.
+│   ├── verifier/              [L6 · MIT]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. MIT-pure; no bin.
+│   ├── verify/                [L6]          Canonical `motebit-verify` CLI — the BSL aggregator that bundles the four platform adapter leaves (App Attest, TPM, Play Integrity, WebAuthn) for one-install offline verification.
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.
