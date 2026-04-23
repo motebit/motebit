@@ -1028,6 +1028,13 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   // config.json, then start sync. The popup stays open so the user sees the
   // status transition (Connecting → Connected) inline rather than having to
   // re-open it to check whether Connect worked.
+  //
+  // Tauri detection: ground-truth via `window.__TAURI__` + dynamic-import of
+  // `invoke`, not via `ctx.getConfig()?.isTauri`. The cached config can be
+  // null during bootstrap or briefly out of sync with the actual webview
+  // environment; a race there previously produced a spurious
+  // "not available in dev mode" error inside the real Tauri window.
+  // `window.__TAURI__` is whatever the webview actually is, right now.
   connectBtn.addEventListener("click", () => {
     const url = normalizeRelayUrl(urlInput.value);
     if (!url) {
@@ -1038,13 +1045,14 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
     }
     urlInput.value = url;
 
-    const config = ctx.getConfig();
-    if (config?.isTauri !== true || config.invoke == null) {
-      statusText.textContent = "Sync requires the desktop app (not available in dev mode)";
+    const inTauri = typeof window !== "undefined" && window.__TAURI__ != null;
+    if (!inTauri) {
+      statusText.textContent =
+        "Sync needs the desktop app — the relay auth token is signed by your device " +
+        "key, which only the Tauri binary can read from the OS keyring.";
       statusText.classList.add("error");
       return;
     }
-    const invoke = config.invoke;
 
     statusText.textContent = "Connecting…";
     statusText.classList.remove("error");
@@ -1052,10 +1060,21 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
 
     void (async (): Promise<void> => {
       try {
-        await writeSyncUrlToConfig(invoke, url);
+        const { invoke } = await import("@tauri-apps/api/core");
+        const invokeFn = invoke as import("./tauri-storage").InvokeFn;
+        await writeSyncUrlToConfig(invokeFn, url);
         // Refresh the in-memory config so downstream reads see the new url.
-        ctx.setConfig({ ...config, syncUrl: url });
-        await ctx.app.startSync(invoke, url, config.syncMasterToken);
+        // If config wasn't loaded yet (unlikely but possible at extreme
+        // bootstrap races), seed a minimal record so later reads get
+        // something coherent.
+        const prev = ctx.getConfig();
+        ctx.setConfig({
+          ...(prev ?? { provider: "anthropic", isTauri: true, invoke: invokeFn }),
+          isTauri: true,
+          invoke: invokeFn,
+          syncUrl: url,
+        });
+        await ctx.app.startSync(invokeFn, url, prev?.syncMasterToken);
         statusText.textContent = "";
         statusText.classList.remove("error");
       } catch (err: unknown) {
@@ -1073,14 +1092,17 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   // the keyring is preserved; reconnecting to the same relay later will
   // re-use it without a fresh pairing.
   disconnectBtn.addEventListener("click", () => {
-    const config = ctx.getConfig();
     disconnectBtn.disabled = true;
     void (async (): Promise<void> => {
       try {
         ctx.app.stopSync();
-        if (config?.isTauri === true && config.invoke != null) {
-          await writeSyncUrlToConfig(config.invoke, null);
-          ctx.setConfig({ ...config, syncUrl: undefined });
+        const inTauri = typeof window !== "undefined" && window.__TAURI__ != null;
+        if (inTauri) {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const invokeFn = invoke as import("./tauri-storage").InvokeFn;
+          await writeSyncUrlToConfig(invokeFn, null);
+          const prev = ctx.getConfig();
+          if (prev != null) ctx.setConfig({ ...prev, syncUrl: undefined });
         }
         statusText.textContent = "";
         statusText.classList.remove("error");
