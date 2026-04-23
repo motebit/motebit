@@ -230,7 +230,7 @@ function loadSettings(): SpatialSettings {
             : { ...DEFAULT_APPEARANCE_CONFIG };
       return {
         ...DEFAULT_SPATIAL_SETTINGS,
-        ...(parsed as Partial<SpatialSettings>),
+        ...parsed,
         appearance,
         governance: parsed.governance ? { ...defaultGov, ...parsed.governance } : defaultGov,
       };

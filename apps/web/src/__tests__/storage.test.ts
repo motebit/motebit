@@ -110,20 +110,18 @@ describe("ProviderConfig persistence (UnifiedProviderConfig)", () => {
     expect(loadProviderConfig()).toEqual(config);
   });
 
-  it("migrates legacy web proxy config on load", () => {
+  // Legacy migration was stripped pre-1.0 per docs/doctrine/migration-cleanup.md
+  // (state-holder analysis: zero-holder cleanup window). Legacy-shape configs
+  // now fall through to null so the caller uses defaults.
+  it("returns null for legacy web proxy config (no in-place migration)", () => {
     localStorage.setItem(
       "motebit-provider",
       JSON.stringify({ type: "proxy", model: "claude-sonnet-4-6", proxyToken: "tok_abc" }),
     );
-    const loaded = loadProviderConfig();
-    expect(loaded?.mode).toBe("motebit-cloud");
-    if (loaded?.mode === "motebit-cloud") {
-      expect(loaded.model).toBe("claude-sonnet-4-6");
-      expect(loaded.proxyToken).toBe("tok_abc");
-    }
+    expect(loadProviderConfig()).toBeNull();
   });
 
-  it("migrates legacy ollama config to on-device/local-server", () => {
+  it("returns null for legacy ollama config (no in-place migration)", () => {
     localStorage.setItem(
       "motebit-provider",
       JSON.stringify({
@@ -132,25 +130,15 @@ describe("ProviderConfig persistence (UnifiedProviderConfig)", () => {
         baseUrl: "http://localhost:11434",
       }),
     );
-    const loaded = loadProviderConfig();
-    expect(loaded?.mode).toBe("on-device");
-    if (loaded?.mode === "on-device") {
-      expect(loaded.backend).toBe("local-server");
-      expect(loaded.endpoint).toBe("http://localhost:11434");
-    }
+    expect(loadProviderConfig()).toBeNull();
   });
 
-  it("migrates legacy anthropic BYOK config", () => {
+  it("returns null for legacy anthropic BYOK config (no in-place migration)", () => {
     localStorage.setItem(
       "motebit-provider",
       JSON.stringify({ type: "anthropic", apiKey: "sk-xxx", model: "claude-opus-4-6" }),
     );
-    const loaded = loadProviderConfig();
-    expect(loaded?.mode).toBe("byok");
-    if (loaded?.mode === "byok") {
-      expect(loaded.vendor).toBe("anthropic");
-      expect(loaded.apiKey).toBe("sk-xxx");
-    }
+    expect(loadProviderConfig()).toBeNull();
   });
 
   it("preserves optional fields (maxTokens, temperature, baseUrl)", () => {
