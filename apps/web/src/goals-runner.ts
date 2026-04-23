@@ -124,21 +124,7 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
   return createGoalsRunner(adapter);
 }
 
-/**
- * Human-readable countdown utility. Kept local to web — each surface
- * formats time differently.
- */
-export function formatCountdownUntil(targetMs: number, nowMs: number = Date.now()): string {
-  const diff = targetMs - nowMs;
-  if (diff <= 0) return "any moment";
-  const s = Math.round(diff / 1000);
-  if (s < 60) return `in ${s}s`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `in ${m}m`;
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  if (h < 24) return mm === 0 ? `in ${h}h` : `in ${h}h ${mm}m`;
-  const d = Math.floor(h / 24);
-  const hh = h % 24;
-  return hh === 0 ? `in ${d}d` : `in ${d}d ${hh}h`;
-}
+// `formatCountdownUntil` lives in `@motebit/panels/goals/format` now.
+// Re-exported here so existing web callers (and the test suite) keep
+// compiling during the transition; the canonical source is the package.
+export { formatCountdownUntil } from "@motebit/panels";

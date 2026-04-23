@@ -1486,6 +1486,15 @@ export class DesktopApp {
     this.goals.stop();
   }
 
+  /**
+   * Run a specific goal now, bypassing cadence. Invoked by the Goals
+   * panel's Run-now affordance. Silently no-ops if another goal or a
+   * user turn is in flight.
+   */
+  runGoalNow(invoke: InvokeFn, goalId: string): Promise<void> {
+    return this.goals.runNow(invoke, goalId);
+  }
+
   // === MCP via Tauri Commands ===
 
   /**

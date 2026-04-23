@@ -362,6 +362,134 @@ describe("GoalScheduler goalTick (single-turn)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// runNow — user-driven bypass-cadence fire (shares executeGoalOnce with
+// goalTick, so the important coverage is the precondition / dispatch
+// semantics that only this entry point has).
+// ---------------------------------------------------------------------------
+
+describe("GoalScheduler.runNow", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fires the goal through the same execute path regardless of interval", async () => {
+    const runtime = makeRuntime();
+    const completed = vi.fn();
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    s.onGoalComplete(completed);
+    // interval is 1h, last_run_at is now — goalTick would skip, runNow must not.
+    const invoke = makeInvoke({
+      goals: [
+        {
+          goal_id: "g1",
+          motebit_id: "motebit-1",
+          prompt: "run me",
+          interval_ms: 3_600_000,
+          last_run_at: Date.now(),
+          enabled: 1,
+          status: "active",
+          mode: "recurring",
+          parent_goal_id: null,
+          max_retries: 3,
+          consecutive_failures: 0,
+        },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await s.runNow(invoke as any, "g1");
+    expect(runtime.sendMessageStreaming).toHaveBeenCalled();
+    expect(completed).toHaveBeenCalled();
+    expect(completed.mock.calls[0]?.[0]?.status).toBe("completed");
+  });
+
+  it("silently no-ops when another goal is executing", async () => {
+    const runtime = makeRuntime();
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    // Force _goalExecuting = true
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any)._goalExecuting = true;
+    const invoke = makeInvoke({
+      goals: [
+        {
+          goal_id: "g1",
+          motebit_id: "motebit-1",
+          prompt: "blocked",
+          interval_ms: 1000,
+          last_run_at: 0,
+          enabled: 1,
+          status: "active",
+          mode: "recurring",
+          parent_goal_id: null,
+          max_retries: 3,
+          consecutive_failures: 0,
+        },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await s.runNow(invoke as any, "g1");
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  it("silently no-ops when runtime.isProcessing is true", async () => {
+    const runtime = makeRuntime({ isProcessing: true });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({
+      goals: [
+        {
+          goal_id: "g1",
+          motebit_id: "motebit-1",
+          prompt: "blocked",
+          interval_ms: 1000,
+          last_run_at: 0,
+          enabled: 1,
+          status: "active",
+          mode: "recurring",
+          parent_goal_id: null,
+          max_retries: 3,
+          consecutive_failures: 0,
+        },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await s.runNow(invoke as any, "g1");
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  it("throws when goal is not found", async () => {
+    const runtime = makeRuntime();
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({ goals: [] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(s.runNow(invoke as any, "missing")).rejects.toThrow(/not found/);
+  });
+
+  it("does not run paused / completed / failed goals (lifecycle guard)", async () => {
+    const runtime = makeRuntime();
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({
+      goals: [
+        {
+          goal_id: "g1",
+          motebit_id: "motebit-1",
+          prompt: "paused",
+          interval_ms: 1000,
+          last_run_at: 0,
+          enabled: 0,
+          status: "paused",
+          mode: "recurring",
+          parent_goal_id: null,
+          max_retries: 3,
+          consecutive_failures: 0,
+        },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await s.runNow(invoke as any, "g1");
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // resumeGoalAfterApproval
 // ---------------------------------------------------------------------------
 

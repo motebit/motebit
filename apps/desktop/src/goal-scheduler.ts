@@ -423,120 +423,172 @@ export class GoalScheduler {
         if (elapsed < goal.interval_ms) continue;
         if (runtime.isProcessing) break;
 
-        this._goalExecuting = true;
-        this._currentGoalId = goal.goal_id;
-        this._goalStatusCallback?.(true);
-
-        const runId = crypto.randomUUID();
-
-        try {
-          const outcomes = await invoke<OutcomeRow[]>("db_query", {
-            sql: "SELECT ran_at, status, summary, error_message FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 3",
-            params: [goal.goal_id],
-          });
-
-          // Wall-clock limit: 10 minutes per goal run
-          const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
-          const abortController = new AbortController();
-          const deadlineTimer = setTimeout(
-            () => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")),
-            GOAL_WALL_CLOCK_MS,
-          );
-          let result: Awaited<ReturnType<typeof this.executePlanGoal>>;
-          try {
-            result = await this.executePlanGoal(
-              goal,
-              outcomes ?? [],
-              invoke,
-              runId,
-              abortController.signal,
-            );
-          } finally {
-            clearTimeout(deadlineTimer);
-          }
-
-          if (result.suspended) {
-            // Approval requested — _goalExecuting stays true to block further ticks.
-            return;
-          }
-
-          await invoke<number>("db_execute", {
-            sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
-            params: [now, goal.goal_id],
-          });
-
-          await invoke<number>("db_execute", {
-            sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
-                  VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?)`,
-            params: [
-              runId,
-              goal.goal_id,
-              motebitId,
-              now,
-              result.responseText.slice(0, 500),
-              result.toolCallsMade,
-              result.tokensUsed ?? null,
-            ],
-          });
-
-          if (goal.mode === "once") {
-            await invoke<number>("db_execute", {
-              sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
-              params: [goal.goal_id],
-            });
-          }
-
-          this._goalCompleteCallback?.({
-            goalId: goal.goal_id,
-            prompt: goal.prompt,
-            status: "completed",
-            summary: result.responseText.slice(0, 200),
-            error: null,
-            planTitle: result.planTitle,
-            stepsCompleted: result.stepsCompleted,
-            totalSteps: result.totalSteps,
-          });
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-
-          await invoke<number>("db_execute", {
-            sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-                  VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
-            params: [runId, goal.goal_id, motebitId, now, msg],
-          }).catch(() => {});
-
-          await invoke<number>("db_execute", {
-            sql: "UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE goal_id = ?",
-            params: [goal.goal_id],
-          }).catch(() => {});
-
-          if (goal.consecutive_failures + 1 >= goal.max_retries) {
-            await invoke<number>("db_execute", {
-              sql: "UPDATE goals SET status = 'paused' WHERE goal_id = ?",
-              params: [goal.goal_id],
-            }).catch(() => {});
-          }
-
-          this._goalCompleteCallback?.({
-            goalId: goal.goal_id,
-            prompt: goal.prompt,
-            status: "failed",
-            summary: null,
-            error: msg,
-          });
-        } finally {
-          if (!this._pendingGoalApproval) {
-            this._goalExecuting = false;
-            this._currentGoalId = null;
-            this._goalStatusCallback?.(false);
-            this.deps.getRuntime()?.resetConversation();
-          }
-        }
+        const suspended = await this.executeGoalOnce(goal, invoke, motebitId, now);
+        if (suspended) return;
       }
     } catch {
       this._goalExecuting = false;
       this._currentGoalId = null;
       this._goalStatusCallback?.(false);
+    }
+  }
+
+  /**
+   * Immediately run a single active goal, bypassing cadence. Invoked by
+   * the Goals-panel "Run now" affordance. Silently skips if another
+   * goal is executing or the runtime is mid-turn (same semantics as the
+   * tick loop's `skipped` outcome — no throw, no outcome row). Throws
+   * only on adapter errors (missing goal, DB failure) so callers can
+   * surface them.
+   */
+  async runNow(invoke: InvokeFn, goalId: string): Promise<void> {
+    const runtime = this.deps.getRuntime();
+    if (!runtime) throw new Error("Runtime not initialized");
+    if (this._goalExecuting || runtime.isProcessing) return;
+
+    const motebitId = this.deps.getMotebitId();
+    const rows = await invoke<GoalRow[]>("db_query", {
+      sql: "SELECT * FROM goals WHERE goal_id = ? LIMIT 1",
+      params: [goalId],
+    });
+    const goal = rows[0];
+    if (!goal) throw new Error(`Goal not found: ${goalId}`);
+
+    // Run-now is a user-driven escape from cadence; it should respect
+    // the goal's lifecycle state (paused / completed / failed). UIs
+    // only render the button on active rows, but enforce here too.
+    if (goal.status !== "active") return;
+
+    await this.executeGoalOnce(goal, invoke, motebitId, Date.now());
+  }
+
+  /**
+   * Execute one goal through the plan flow, record its outcome, and
+   * manage the scheduler's execution state. Returns `true` if the run
+   * suspended for user approval — caller should not start another goal
+   * this pass. Shared by `goalTick` (cadence-driven) and `runNow`
+   * (user-driven). Preconditions: `_goalExecuting` is false and the
+   * runtime is not mid-turn — callers guard before calling.
+   */
+  private async executeGoalOnce(
+    goal: GoalRow,
+    invoke: InvokeFn,
+    motebitId: string,
+    now: number,
+  ): Promise<boolean> {
+    this._goalExecuting = true;
+    this._currentGoalId = goal.goal_id;
+    this._goalStatusCallback?.(true);
+
+    const runId = crypto.randomUUID();
+
+    try {
+      const outcomes = await invoke<OutcomeRow[]>("db_query", {
+        sql: "SELECT ran_at, status, summary, error_message FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 3",
+        params: [goal.goal_id],
+      });
+
+      // Wall-clock limit: 10 minutes per goal run
+      const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
+      const abortController = new AbortController();
+      const deadlineTimer = setTimeout(
+        () => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")),
+        GOAL_WALL_CLOCK_MS,
+      );
+      let result: Awaited<ReturnType<typeof this.executePlanGoal>>;
+      try {
+        result = await this.executePlanGoal(
+          goal,
+          outcomes ?? [],
+          invoke,
+          runId,
+          abortController.signal,
+        );
+      } finally {
+        clearTimeout(deadlineTimer);
+      }
+
+      if (result.suspended) {
+        // Approval requested — _goalExecuting stays true to block
+        // further ticks and run-now invocations.
+        return true;
+      }
+
+      await invoke<number>("db_execute", {
+        sql: "UPDATE goals SET last_run_at = ?, consecutive_failures = 0 WHERE goal_id = ?",
+        params: [now, goal.goal_id],
+      });
+
+      await invoke<number>("db_execute", {
+        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
+              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?)`,
+        params: [
+          runId,
+          goal.goal_id,
+          motebitId,
+          now,
+          result.responseText.slice(0, 500),
+          result.toolCallsMade,
+          result.tokensUsed ?? null,
+        ],
+      });
+
+      if (goal.mode === "once") {
+        await invoke<number>("db_execute", {
+          sql: "UPDATE goals SET status = 'completed' WHERE goal_id = ?",
+          params: [goal.goal_id],
+        });
+      }
+
+      this._goalCompleteCallback?.({
+        goalId: goal.goal_id,
+        prompt: goal.prompt,
+        status: "completed",
+        summary: result.responseText.slice(0, 200),
+        error: null,
+        planTitle: result.planTitle,
+        stepsCompleted: result.stepsCompleted,
+        totalSteps: result.totalSteps,
+      });
+
+      return false;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+
+      await invoke<number>("db_execute", {
+        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+              VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
+        params: [runId, goal.goal_id, motebitId, now, msg],
+      }).catch(() => {});
+
+      await invoke<number>("db_execute", {
+        sql: "UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE goal_id = ?",
+        params: [goal.goal_id],
+      }).catch(() => {});
+
+      if (goal.consecutive_failures + 1 >= goal.max_retries) {
+        await invoke<number>("db_execute", {
+          sql: "UPDATE goals SET status = 'paused' WHERE goal_id = ?",
+          params: [goal.goal_id],
+        }).catch(() => {});
+      }
+
+      this._goalCompleteCallback?.({
+        goalId: goal.goal_id,
+        prompt: goal.prompt,
+        status: "failed",
+        summary: null,
+        error: msg,
+      });
+
+      return false;
+    } finally {
+      if (!this._pendingGoalApproval) {
+        this._goalExecuting = false;
+        this._currentGoalId = null;
+        this._goalStatusCallback?.(false);
+        this.deps.getRuntime()?.resetConversation();
+      }
     }
   }
 

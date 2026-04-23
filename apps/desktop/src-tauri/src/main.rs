@@ -618,7 +618,7 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let mut stmt = db
         .prepare(
-            "SELECT goal_id, prompt, interval_ms, mode, status, consecutive_failures, created_at \
+            "SELECT goal_id, prompt, interval_ms, mode, status, consecutive_failures, created_at, last_run_at \
              FROM goals WHERE motebit_id = ? ORDER BY created_at DESC",
         )
         .map_err(|e| e.to_string())?;
@@ -636,6 +636,16 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
                 JsonValue::Number(row.get::<_, i64>(5)?.into()),
             );
             obj.insert("created_at".into(), JsonValue::Number(row.get::<_, i64>(6)?.into()));
+            // last_run_at is nullable — pre-first-run goals have no value.
+            // The UI derives next_run_at from (last_run_at ?? created_at) + interval_ms.
+            let last_run_at: Option<i64> = row.get(7)?;
+            obj.insert(
+                "last_run_at".into(),
+                match last_run_at {
+                    Some(v) => JsonValue::Number(v.into()),
+                    None => JsonValue::Null,
+                },
+            );
             Ok(JsonValue::Object(obj))
         })
         .map_err(|e| e.to_string())?;

@@ -202,6 +202,63 @@ describe("GoalsController — removeGoal()", () => {
   });
 });
 
+describe("GoalsController — runNow (optional adapter method)", () => {
+  it("surfaces ctrl.runNow only when the adapter implements runNow", () => {
+    // Adapter with no runNow
+    const { adapter: bareAdapter } = createAdapter({ goals: [] });
+    const bareCtrl = createGoalsController(bareAdapter);
+    expect(bareCtrl.runNow).toBeUndefined();
+
+    // Adapter with runNow
+    const withRunNow: GoalsFetchAdapter = {
+      listGoals: async () => [],
+      addGoal: async () => {},
+      setEnabled: async () => {},
+      removeGoal: async () => {},
+      runNow: async () => {},
+    };
+    const liveCtrl = createGoalsController(withRunNow);
+    expect(typeof liveCtrl.runNow).toBe("function");
+  });
+
+  it("invokes adapter.runNow then refreshes so last_run_at propagates", async () => {
+    const runNowCalls: string[] = [];
+    let listCalls = 0;
+    const adapter: GoalsFetchAdapter = {
+      listGoals: async () => {
+        listCalls++;
+        return [];
+      },
+      addGoal: async () => {},
+      setEnabled: async () => {},
+      removeGoal: async () => {},
+      runNow: async (goalId) => {
+        runNowCalls.push(goalId);
+      },
+    };
+    const ctrl = createGoalsController(adapter);
+    await ctrl.runNow!("abc");
+    expect(runNowCalls).toEqual(["abc"]);
+    // Refresh happens after adapter.runNow resolves.
+    expect(listCalls).toBe(1);
+  });
+
+  it("surfaces runNow errors as state.error without throwing", async () => {
+    const adapter: GoalsFetchAdapter = {
+      listGoals: async () => [],
+      addGoal: async () => {},
+      setEnabled: async () => {},
+      removeGoal: async () => {},
+      runNow: async () => {
+        throw new Error("another goal is running");
+      },
+    };
+    const ctrl = createGoalsController(adapter);
+    await ctrl.runNow!("abc");
+    expect(ctrl.getState().error).toBe("another goal is running");
+  });
+});
+
 describe("GoalsController — subscribe / dispose", () => {
   it("notifies subscribers on state change", async () => {
     const { adapter } = createAdapter({ goals: [makeGoal({ goal_id: "a" })] });

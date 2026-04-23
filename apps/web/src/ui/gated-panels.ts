@@ -22,6 +22,7 @@ import {
   classifyCertainty,
   type AgentRecord,
   type AgentsFetchAdapter,
+  formatCountdownUntil,
   type AgentsState,
   type DiscoveredAgent,
   type GoalRunRecord,
@@ -291,20 +292,10 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
   }
 
-  function formatCountdown(targetMs: number, nowMs: number): string {
-    const diff = targetMs - nowMs;
-    if (diff <= 0) return "any moment";
-    const s = Math.round(diff / 1000);
-    if (s < 60) return `in ${s}s`;
-    const m = Math.round(s / 60);
-    if (m < 60) return `in ${m}m`;
-    const h = Math.floor(m / 60);
-    const mm = m % 60;
-    if (h < 24) return mm === 0 ? `in ${h}h` : `in ${h}h ${mm}m`;
-    const d = Math.floor(h / 24);
-    const hh = h % 24;
-    return hh === 0 ? `in ${d}d` : `in ${d}d ${hh}h`;
-  }
+  // `formatCountdown` was the gated-panels local copy of the same
+  // formatter goals-runner.ts shipped. Both collapsed onto the single
+  // source in @motebit/panels when desktop grew a third consumer.
+  const formatCountdown = formatCountdownUntil;
 
   function renderGoals(): void {
     const runner = ctx.app.getGoalsRunner?.();

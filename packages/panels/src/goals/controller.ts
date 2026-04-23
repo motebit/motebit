@@ -45,6 +45,13 @@ export interface GoalsFetchAdapter {
    */
   setEnabled(goalId: string, enabled: boolean): Promise<void>;
   removeGoal(goalId: string): Promise<void>;
+  /**
+   * Trigger an immediate run of a recurring goal, bypassing cadence.
+   * Optional — surfaces whose daemon doesn't expose a direct-fire path
+   * may omit this. When absent, the controller does not surface
+   * `runNow`, letting UIs hide the affordance via `if (ctrl.runNow)`.
+   */
+  runNow?(goalId: string): Promise<void>;
 }
 
 // ── State ────────────────────────────────────────────────────────────────
@@ -72,6 +79,12 @@ export interface GoalsController {
   addGoal(input: NewGoalInput): Promise<void>;
   setEnabled(goalId: string, enabled: boolean): Promise<void>;
   removeGoal(goalId: string): Promise<void>;
+  /**
+   * Present when and only when the adapter exposes `runNow`. Triggers
+   * an immediate run of the goal, then refreshes state so the new
+   * `last_run_at` propagates. Errors surface as `state.error`.
+   */
+  runNow?(goalId: string): Promise<void>;
   dispose(): void;
 }
 
@@ -151,6 +164,23 @@ export function createGoalsController(adapter: GoalsFetchAdapter): GoalsControll
     }
   }
 
+  async function runNowImpl(goalId: string): Promise<void> {
+    const runNow = adapter.runNow;
+    if (!runNow) return;
+    try {
+      await runNow(goalId);
+      if (disposed) return;
+      // Refresh so the new `last_run_at` propagates to subscribers.
+      // The goal stays in the list regardless of outcome (fired / skipped
+      // / error) — runNow is invocation, not status mutation.
+      await refresh();
+    } catch (err) {
+      if (!disposed) {
+        patch({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
   function subscribe(listener: (state: GoalsState) => void): () => void {
     listeners.add(listener);
     return () => {
@@ -174,6 +204,8 @@ export function createGoalsController(adapter: GoalsFetchAdapter): GoalsControll
     addGoal,
     setEnabled,
     removeGoal,
+    // Surface runNow only if the adapter does. UIs check presence.
+    ...(adapter.runNow ? { runNow: runNowImpl } : {}),
     dispose,
   };
 }

@@ -71,6 +71,8 @@ export {
   type NewGoalRunnerInput,
 } from "./goals/runner";
 
+export { formatCountdownUntil } from "./goals/format";
+
 export {
   createWorkstationController,
   type WorkstationController,

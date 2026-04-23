@@ -5,6 +5,7 @@ import { parseJsonSafe, classifyDecision, ipcString } from "./audit-utils";
 import { addMessage } from "./chat";
 import {
   createGoalsController,
+  formatCountdownUntil,
   type GoalsFetchAdapter,
   type GoalsState,
   type ScheduledGoal,
@@ -58,15 +59,29 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       const motebitId = ctx.app.motebitId;
       if (!motebitId) return [];
       const rows = await config.invoke<Array<Record<string, unknown>>>("goals_list", { motebitId });
-      return rows.map(
-        (g): ScheduledGoal => ({
+      return rows.map((g): ScheduledGoal => {
+        const intervalMs = Number(g.interval_ms) || 0;
+        const mode = (ipcString(g.mode, "recurring") as "recurring" | "once") ?? "recurring";
+        const createdAt = Number(g.created_at) || 0;
+        const lastRunAt = g.last_run_at == null ? null : Number(g.last_run_at);
+        // next_run_at derivation: recurring goals fire at (last_run_at ?? created_at)
+        // + interval_ms. Once goals have no next run. Single source of truth for the
+        // formula — same arithmetic the tick loop uses.
+        const nextRunAt =
+          mode === "recurring" && intervalMs > 0
+            ? (lastRunAt ?? createdAt) + intervalMs
+            : undefined;
+        return {
           goal_id: String(g.goal_id),
           prompt: ipcString(g.prompt),
-          interval_ms: Number(g.interval_ms) || 0,
-          mode: (ipcString(g.mode, "recurring") as "recurring" | "once") ?? "recurring",
+          interval_ms: intervalMs,
+          mode,
           status: ipcString(g.status, "active"),
-        }),
-      );
+          last_run_at: lastRunAt,
+          ...(nextRunAt !== undefined ? { next_run_at: nextRunAt } : {}),
+          created_at: createdAt,
+        };
+      });
     },
     addGoal: async (input) => {
       const config = ctx.getConfig();
@@ -95,6 +110,11 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       if (config?.isTauri !== true || config.invoke == null) return;
       await config.invoke("goals_delete", { goalId });
     },
+    runNow: async (goalId) => {
+      const config = ctx.getConfig();
+      if (config?.isTauri !== true || config.invoke == null) return;
+      await ctx.app.runGoalNow(config.invoke, goalId);
+    },
   };
 
   const goalsCtrl = createGoalsController(goalsAdapter);
@@ -102,17 +122,33 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     renderGoalList(state);
   });
 
+  // Countdown labels on recurring rows drift every second but only need
+  // minute-granularity updates to stay honest. A 30s re-render while the
+  // panel is open is the same cadence web uses — tight enough that the
+  // "in 5m" → "in 4m" transition never surprises, cheap enough that a
+  // ≤10-row rebuild is invisible.
+  let countdownTimer: ReturnType<typeof setInterval> | null = null;
+
   function open(): void {
     goalsPanel.classList.add("open");
     goalsBackdrop.classList.add("open");
     void goalsCtrl.refresh();
     loadRecentOutcomes();
     loadPlanHistory();
+    if (countdownTimer == null) {
+      countdownTimer = setInterval(() => {
+        renderGoalList(goalsCtrl.getState());
+      }, 30_000);
+    }
   }
 
   function close(): void {
     goalsPanel.classList.remove("open");
     goalsBackdrop.classList.remove("open");
+    if (countdownTimer != null) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
   }
 
   // === Plan Execution Progress ===
@@ -389,6 +425,23 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       modeSpan.textContent = goal.mode;
       metaDiv.appendChild(modeSpan);
 
+      // Countdown label — recurring + active rows only. Paused rows
+      // show "paused" in place of the countdown (matching web's
+      // gated-panels.ts treatment). Once rows have no next run so the
+      // label is omitted. Refreshes every 30s via countdownTimer.
+      if (goal.mode === "recurring" && status !== "completed" && status !== "failed") {
+        const countdownSpan = document.createElement("span");
+        countdownSpan.className = "goal-countdown";
+        if (status === "paused") {
+          countdownSpan.textContent = "paused";
+        } else if (typeof goal.next_run_at === "number") {
+          countdownSpan.textContent = formatCountdownUntil(goal.next_run_at, Date.now());
+        }
+        if (countdownSpan.textContent !== "") {
+          metaDiv.appendChild(countdownSpan);
+        }
+      }
+
       item.appendChild(metaDiv);
 
       const actions = document.createElement("div");
@@ -403,6 +456,21 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           void goalsCtrl.setEnabled(goalId, status !== "active").then(() => goalsCtrl.refresh());
         });
         actions.appendChild(toggleBtn);
+      }
+
+      // Run-now button — recurring + active rows only, and only when
+      // the controller actually exposes runNow (desktop does; surfaces
+      // without a daemon-side fire path won't). Clicking fires the goal
+      // immediately through executeGoalOnce; next_run_at shifts on the
+      // adapter's post-run refresh.
+      if (goal.mode === "recurring" && status === "active" && goalsCtrl.runNow) {
+        const runNowFn = goalsCtrl.runNow;
+        const runNowBtn = document.createElement("button");
+        runNowBtn.textContent = "Run now";
+        runNowBtn.addEventListener("click", () => {
+          void runNowFn(goalId);
+        });
+        actions.appendChild(runNowBtn);
       }
 
       const historyBtn = document.createElement("button");
