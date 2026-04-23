@@ -171,7 +171,7 @@ if (result.type === "receipt" && result.valid) {
 }
 ```
 
-Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). Six npm packages ship the permissive floor — Apache-2.0 with an explicit patent grant — and two more ship the reference runtime and the aggregator CLI under BSL-1.1:
+Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). Seven npm packages ship the permissive floor — Apache-2.0 with an explicit patent grant — and one more ships the reference runtime under BSL-1.1:
 
 | Package                                                                | Description                                                                                         | License    |
 | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------- |
@@ -180,10 +180,10 @@ Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`,
 | [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | Apache-2.0 |
 | [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) | `verifyFile` / `verifyArtifact` / `formatHuman` — dep-thin verification library                     | Apache-2.0 |
 | [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | Apache-2.0 |
-| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)     | `motebit-verify` CLI — bundles the four platform-attestation leaves with motebit-canonical defaults | BSL-1.1    |
+| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)     | `motebit-verify` CLI — bundles the four platform-attestation leaves with motebit-canonical defaults | Apache-2.0 |
 | [`motebit`](https://www.npmjs.com/package/motebit)                     | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1    |
 
-The four hardware-attestation platform leaves — `@motebit/crypto-appattest`, `@motebit/crypto-play-integrity`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn` — ship Apache-2.0 alongside the core three. They verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) with no motebit-specific judgment.
+The four hardware-attestation platform leaves — `@motebit/crypto-appattest`, `@motebit/crypto-play-integrity`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn` — ship Apache-2.0 alongside the core three. They verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) with no motebit-specific judgment. The `@motebit/verify` CLI aggregates them with motebit-canonical defaults (bundle IDs, RP ID, integrity floor), but the defaults are overridable flags — not proprietary judgment — so the CLI stays on the permissive floor too. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring.
 
 ## Architecture
 
@@ -252,11 +252,12 @@ The **permissive floor** is Apache-2.0 licensed — use it freely, build on it, 
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
 - [`packages/verifier/`](packages/verifier/) — `verifyFile` / `verifyArtifact` / `formatHuman` helper library
+- [`packages/verify/`](packages/verify/) — `motebit-verify` CLI aggregating the four platform leaves with motebit-canonical defaults
 - [`packages/crypto-appattest/`](packages/crypto-appattest/), [`packages/crypto-play-integrity/`](packages/crypto-play-integrity/), [`packages/crypto-tpm/`](packages/crypto-tpm/), [`packages/crypto-webauthn/`](packages/crypto-webauthn/) — hardware-attestation platform verifiers (pinned public trust anchors)
 - [`packages/create-motebit/`](packages/create-motebit/) — scaffold a signed identity or runnable agent service
 - [`packages/github-action/`](packages/github-action/) — GitHub Action for verifying motebit identity files in CI
 
-The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache-2.0 four years after each version's release. This includes `@motebit/runtime`, the `@motebit/verify` aggregator CLI, all engines, all apps, and all services. Both license families converge to a single Apache-2.0 posture at the Change Date. See [LICENSING.md](LICENSING.md) for the full boundary test and convergence story.
+The **platform implementation** is [BSL 1.1](LICENSE) — free to use, source-available, converts to Apache-2.0 four years after each version's release. This includes `@motebit/runtime`, all engines, all apps, and all services. Both license families converge to a single Apache-2.0 posture at the Change Date. See [LICENSING.md](LICENSING.md) for the full boundary test and convergence story.
 
 The **state a relay accumulates** — trust graph, federation routing, signed execution audit — belongs to whoever runs it. It is not licensed, mirrored, or visible to anyone else. The protocol is open so anyone can interoperate; the implementation is source-available so anyone can run it; the accumulated state is private.
 

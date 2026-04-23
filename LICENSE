@@ -60,6 +60,7 @@ to the Business Source License:
   packages/sdk/                    @motebit/sdk — full type vocabulary
   packages/crypto/                 @motebit/crypto — signing and verification
   packages/verifier/               @motebit/verifier — verifyFile / verifyArtifact / formatHuman library
+  packages/verify/                 @motebit/verify — motebit-verify CLI (bundles the four platform leaves)
   packages/crypto-appattest/       @motebit/crypto-appattest — Apple App Attest chain verifier
   packages/crypto-play-integrity/  @motebit/crypto-play-integrity — Google Play Integrity JWT verifier
   packages/crypto-tpm/             @motebit/crypto-tpm — TPM 2.0 EK chain verifier

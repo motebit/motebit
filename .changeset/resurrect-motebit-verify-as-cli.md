@@ -12,7 +12,7 @@
 
 The entire published protocol surface bumps to 1.0.0 in a coordinated release. What changes at npm:
 
-- **`@motebit/verify@1.0.0`** — fresh lineage superseding the deprecated `0.7.0` zero-dep library. Ships the `motebit-verify` CLI binary with every hardware-attestation platform bundled (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn) and motebit-canonical defaults pre-wired (bundle IDs, RP ID, integrity floor). Network-free, self-attesting. License: BSL-1.1 — the opinionated motebit composition is what's restricted; the underlying leaves sit on the Apache-2.0 permissive floor. Runs `npm install -g @motebit/verify` to get the tool.
+- **`@motebit/verify@1.0.0`** — fresh lineage superseding the deprecated `0.7.0` zero-dep library. Ships the `motebit-verify` CLI binary with every hardware-attestation platform bundled (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn) and motebit-canonical defaults pre-wired (bundle IDs, RP ID, integrity floor). Network-free, self-attesting. License: Apache-2.0 — the aggregator encodes no motebit-proprietary judgment (defaults are overridable flags, not trust scoring or economics), so it sits on the permissive floor alongside the underlying leaves. Runs `npm install -g @motebit/verify` to get the tool, no license friction in CI pipelines or enterprise audit tooling.
 
 - **`@motebit/verifier@1.0.0`** — library-only. The `motebit-verify` CLI that used to live here has moved to `@motebit/verify` (above). This package now ships only the Apache-2.0 helpers (`verifyFile`, `verifyArtifact`, `formatHuman`, `VerifyFileOptions` with the optional `hardwareAttestation` injection point). Third parties writing Apache-2.0-only TypeScript verifiers compose this with `@motebit/crypto` — and optionally any subset of the four Apache-2.0 `@motebit/crypto-*` platform leaves — without pulling BSL code.
 
@@ -29,7 +29,7 @@ The entire published protocol surface bumps to 1.0.0 in a coordinated release. W
 The three-package lineage for verification tooling follows the pattern that survives decades — git / libgit2, cargo / tokio, npm / @npm/arborist:
 
 ```
-@motebit/verify                BSL         the CLI motebit-verify + motebit-canonical defaults over the bundled leaves
+@motebit/verify                Apache-2.0  the CLI motebit-verify + motebit-canonical defaults over the bundled leaves
 @motebit/verifier              Apache-2.0  library: verifyFile, verifyArtifact, formatHuman
 @motebit/crypto                Apache-2.0  primitives: verify, sign, suite dispatch
 @motebit/crypto-appattest      Apache-2.0  Apple App Attest chain verifier (pinned Apple root)
@@ -38,7 +38,7 @@ The three-package lineage for verification tooling follows the pattern that surv
 @motebit/crypto-webauthn       Apache-2.0  WebAuthn packed-attestation verifier (pinned FIDO roots)
 ```
 
-The four platform leaves and the three core permissive-floor packages are Apache-2.0 — each answers "how is this artifact verified?" against a published public trust anchor, the permissive side of the protocol-model boundary test. Motebit-canonical composition (default bundle IDs, RP ID, CLI shape) stays BSL one layer up in `@motebit/verify`. See the separate `permissive-floor-apache-2-0` changeset for the rationale behind the floor licensing.
+All seven packages in the verification lineage ship Apache-2.0 — the full verification surface lives on the permissive floor. Each answers "how is this artifact verified?" against a published public trust anchor, the permissive side of the protocol-model boundary test. The BSL line holds at `motebit` (the operator console) and everything below it, where the actual reference-implementation judgment lives (daemon, MCP server, delegation routing, market integration, federation wiring). See the separate `permissive-floor-apache-2-0` and `verify-cli-apache-2-0` changesets for the rationale behind the floor licensing.
 
 ## Migration
 

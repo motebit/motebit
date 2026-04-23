@@ -65,7 +65,7 @@ The CLI is a thin wrapper — every capability is available programmatically:
 
 ```ts
 import { verifyFile } from "@motebit/verifier"; // Apache-2.0 library (file I/O + formatting)
-import { buildHardwareVerifiers } from "@motebit/verify"; // BSL CLI (adapter bundle)
+import { buildHardwareVerifiers } from "@motebit/verify"; // Apache-2.0 CLI + programmatic adapter bundle
 
 const result = await verifyFile("cred.json", {
   hardwareAttestation: buildHardwareVerifiers(),
@@ -77,13 +77,15 @@ const result = await verifyFile("cred.json", {
 This package sits at the top of a deliberate three-layer split — the same shape long-lived tool lineages use (git / libgit2, cargo / tokio, npm / @npm/arborist):
 
 ```
-@motebit/verify     BSL         the CLI motebit-verify + bundled adapters  (the tool — this package)
+@motebit/verify     Apache-2.0  the CLI motebit-verify + bundled adapters  (the tool — this package)
 @motebit/verifier   Apache-2.0  library: verifyFile, verifyArtifact, formatHuman
 @motebit/crypto     Apache-2.0  primitives: verify, sign, suite dispatch
 ```
 
-- Install **`@motebit/verify`** when you want the command-line tool with every platform bundled. One install, verify anything offline.
-- Install **`@motebit/verifier`** when you're writing permissive-floor-only TypeScript code (Apache-2.0 + explicit patent grant) that needs to read + verify motebit artifacts programmatically without accepting the bundled CLI's BSL terms.
+All three are Apache-2.0 with explicit patent grant — the full verification surface ships under the permissive floor. The BSL line stays at `motebit` (the operator console) and everything below it, where the motebit-proprietary judgment actually lives.
+
+- Install **`@motebit/verify`** when you want the command-line tool with every platform bundled. One install, verify anything offline, no license friction in CI pipelines.
+- Install **`@motebit/verifier`** when you're writing TypeScript code that needs to read + verify motebit artifacts programmatically and want the dep-thin library without the four bundled platform adapters.
 - Install **`@motebit/crypto`** when you want the primitives — the verify dispatcher, sign APIs, suite registry — to build your own verification tooling from scratch.
 
 ## Superseding the deprecated `@motebit/verify@0.x`
@@ -104,4 +106,4 @@ If you were on `@motebit/verify@^0.7.0`, migration depends on what you were usin
 
 ## Doctrine
 
-See [`CLAUDE.md`](./CLAUDE.md) for the architectural reasoning — why the split is physical, why `@motebit/verify` is BSL while `@motebit/verifier` and `@motebit/crypto` stay on the Apache-2.0 permissive floor, and how the three-package lineage maps onto motebit's sovereignty invariant.
+See [`CLAUDE.md`](./CLAUDE.md) for the architectural reasoning — why the split is physical, why all three verification packages (`@motebit/verify` aggregator, `@motebit/verifier` library, `@motebit/crypto` primitives) sit on the Apache-2.0 permissive floor, and how the three-package lineage maps onto motebit's sovereignty invariant.

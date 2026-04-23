@@ -6,21 +6,22 @@ Motebit uses a dual-license model: a permissive floor and a source-available run
 
 The protocol specification, type definitions, identity verification, scaffolding, and the hardware-attestation platform-leaf verifiers are licensed under the Apache License, Version 2.0. Use them for any purpose, including commercial, without restriction.
 
-| Package                           | npm                              | Purpose                                                  |
-| --------------------------------- | -------------------------------- | -------------------------------------------------------- |
-| `spec/`                           | —                                | Identity, execution-ledger, federation, market specs     |
-| `packages/protocol/`              | `@motebit/protocol`              | Network protocol types (0 deps)                          |
-| `packages/sdk/`                   | `@motebit/sdk`                   | Full type vocabulary (re-exports protocol)               |
-| `packages/crypto/`                | `@motebit/crypto`                | Standalone signature verification (0 deps)               |
-| `packages/verifier/`              | `@motebit/verifier`              | Library: `verifyFile`, `verifyArtifact`, `formatHuman`   |
-| `packages/crypto-appattest/`      | `@motebit/crypto-appattest`      | Apple App Attest chain verifier (pinned Apple root)      |
-| `packages/crypto-play-integrity/` | `@motebit/crypto-play-integrity` | Google Play Integrity JWT verifier (pinned JWKS)         |
-| `packages/crypto-tpm/`            | `@motebit/crypto-tpm`            | TPM 2.0 EK chain verifier (pinned vendor roots)          |
-| `packages/crypto-webauthn/`       | `@motebit/crypto-webauthn`       | WebAuthn packed-attestation verifier (pinned FIDO roots) |
-| `packages/create-motebit/`        | `create-motebit`                 | Identity scaffolding CLI (0 deps)                        |
-| `packages/github-action/`         | —                                | GitHub Action for identity verification                  |
+| Package                           | npm                              | Purpose                                                                                 |
+| --------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------- |
+| `spec/`                           | —                                | Identity, execution-ledger, federation, market specs                                    |
+| `packages/protocol/`              | `@motebit/protocol`              | Network protocol types (0 deps)                                                         |
+| `packages/sdk/`                   | `@motebit/sdk`                   | Full type vocabulary (re-exports protocol)                                              |
+| `packages/crypto/`                | `@motebit/crypto`                | Standalone signature verification (0 deps)                                              |
+| `packages/verifier/`              | `@motebit/verifier`              | Library: `verifyFile`, `verifyArtifact`, `formatHuman`                                  |
+| `packages/verify/`                | `@motebit/verify`                | `motebit-verify` CLI (bundles the four platform leaves with motebit-canonical defaults) |
+| `packages/crypto-appattest/`      | `@motebit/crypto-appattest`      | Apple App Attest chain verifier (pinned Apple root)                                     |
+| `packages/crypto-play-integrity/` | `@motebit/crypto-play-integrity` | Google Play Integrity JWT verifier (pinned JWKS)                                        |
+| `packages/crypto-tpm/`            | `@motebit/crypto-tpm`            | TPM 2.0 EK chain verifier (pinned vendor roots)                                         |
+| `packages/crypto-webauthn/`       | `@motebit/crypto-webauthn`       | WebAuthn packed-attestation verifier (pinned FIDO roots)                                |
+| `packages/create-motebit/`        | `create-motebit`                 | Identity scaffolding CLI (0 deps)                                                       |
+| `packages/github-action/`         | —                                | GitHub Action for identity verification                                                 |
 
-These components have their own `LICENSE` files. They are **not** subject to the Business Source License. The four `crypto-*` platform leaves answer "how is this artifact verified?" against each platform's published public trust anchor — the permissive side of the protocol-model boundary test. Motebit-canonical aggregation (default bundle IDs, RP ID, CLI shape) lives in `@motebit/verify` (BSL) one layer up.
+These components have their own `LICENSE` files. They are **not** subject to the Business Source License. The four `crypto-*` platform leaves answer "how is this artifact verified?" against each platform's published public trust anchor — the permissive side of the protocol-model boundary test. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) into a one-install CLI; the aggregator is Apache-2.0 too because it encodes no motebit-proprietary judgment — the defaults are overridable flags, not trust scoring, economics, or federation routing. The BSL line stays at `motebit` (the operator console), which contains the actual reference-implementation judgment (daemon, MCP server, delegation routing, market integration).
 
 The architectural role is "permissive floor"; the specific license instance is "Apache License, Version 2.0." The role is load-bearing, the instance is replaceable. `check-deps.ts` uses `PERMISSIVE_PACKAGES` and `check-spec-permissive-boundary.ts` uses the same vocabulary — the gate names describe the invariant (third-party-implementable without BSL license friction), not the specific permissive instance.
 
@@ -58,9 +59,6 @@ Everything else is licensed under BSL-1.1. The source is fully visible — you c
 
 **Runtime:**
 `runtime`
-
-**Aggregator:**
-`verify` (the `motebit-verify` CLI that bundles the four permissive `crypto-*` platform leaves with motebit-canonical defaults)
 
 **Applications:**
 `cli` · `desktop` · `mobile` · `web` · `admin` · `spatial`
@@ -101,9 +99,10 @@ After four years, the recipe is free. By then, the network of sovereign agents w
 ## Quick reference
 
 ```
-Apache-2.0 (now, any use):  protocol · sdk · crypto · verifier · crypto-appattest · crypto-play-integrity ·
-                            crypto-tpm · crypto-webauthn · create-motebit · spec · github-action
-BSL-1.1 (source-visible):   verify · runtime · engines · apps · services · everything else
+Apache-2.0 (now, any use):  protocol · sdk · crypto · verifier · verify · crypto-appattest ·
+                            crypto-play-integrity · crypto-tpm · crypto-webauthn · create-motebit ·
+                            spec · github-action
+BSL-1.1 (source-visible):   runtime · engines · apps · services · everything else
 BSL → Apache-2.0 conversion: 4 years per version, automatic, irrevocable
 End state:                  Apache-2.0 everywhere
 ```

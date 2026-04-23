@@ -99,7 +99,7 @@ The CLA grants Motebit the rights needed to license contributions under our dual
 
 Inbound = outbound. Contributions are licensed under the same terms as the directory you are contributing to:
 
-- **Permissive floor** (`spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/crypto-appattest/`, `packages/crypto-play-integrity/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, `packages/github-action/`) -- **Apache-2.0** (explicit patent grant + litigation-termination clause)
+- **Permissive floor** (`spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/verify/`, `packages/crypto-appattest/`, `packages/crypto-play-integrity/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, `packages/github-action/`) -- **Apache-2.0** (explicit patent grant + litigation-termination clause)
 - **Everything else** -- [BSL 1.1](LICENSE), source-available, converts to Apache-2.0 per-version after 4 years
 
 Both license families converge to Apache-2.0 at the Change Date — one license, one patent posture, one procurement decision in the end state.

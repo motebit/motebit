@@ -34,7 +34,7 @@ Autonomy is a dial, not a switch. The user turns it. The surface tension — pol
 
 ## Open standard, proprietary product
 
-**Open** (Apache-2.0): `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/verifier`, the four `@motebit/crypto-*` platform-attestation leaves, `create-motebit`, the `motebit-verify` GitHub Action, and every spec under `motebit/*@1.0`. Anyone can create and verify agent identity files, attestation chains, and protocol artifacts. The standard is a public good with an explicit patent grant.
+**Open** (Apache-2.0): `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/verifier`, `@motebit/verify`, the four `@motebit/crypto-*` platform-attestation leaves, `create-motebit`, the `motebit-verify` GitHub Action, and every spec under `motebit/*@1.0`. Anyone can create and verify agent identity files, attestation chains, and protocol artifacts — including with a one-install CLI (`npm install -g @motebit/verify`). The standard is a public good with an explicit patent grant.
 
 **Source-available** (BSL 1.1): the runtime, the surfaces, the memory graph, the policy engine, the sync relay. Free to use, source-available, converts to Apache-2.0 per-version after 4 years. The product is protected to sustain development.
 

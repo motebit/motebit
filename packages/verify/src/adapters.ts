@@ -3,8 +3,8 @@
  *
  * `@motebit/verifier` (Apache-2.0) accepts an optional
  * `HardwareAttestationVerifiers` record but wires none of the four
- * leaves itself; that keeps it dep-thin on the permissive floor. This
- * BSL aggregator imports every leaf (`@motebit/crypto-appattest`,
+ * leaves itself; that keeps it dep-thin. This Apache-2.0 aggregator
+ * imports every leaf (`@motebit/crypto-appattest`,
  * `@motebit/crypto-tpm`, `@motebit/crypto-play-integrity`,
  * `@motebit/crypto-webauthn`) and
  * produces a single `HardwareAttestationVerifiers` object the CLI

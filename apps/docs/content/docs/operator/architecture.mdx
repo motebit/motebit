@@ -83,7 +83,7 @@ motebit/
 │   ├── create-motebit/        [L6 · Apache-2.0]    Public scaffolder. npm create motebit.
 │   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
 │   ├── verifier/              [L6 · Apache-2.0]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. Permissive-floor-pure; no bin.
-│   ├── verify/                [L6]          Canonical `motebit-verify` CLI — the BSL aggregator that bundles the four Apache-2.0 platform leaves (App Attest, TPM, Play Integrity, WebAuthn) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification.
+│   ├── verify/                [L6 · Apache-2.0]    Canonical `motebit-verify` CLI — aggregates the four Apache-2.0 platform leaves (App Attest, TPM, Play Integrity, WebAuthn) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification. The defaults are overridable flags, not proprietary judgment — the permissive-floor line stays here.
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.
@@ -134,7 +134,7 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 
 ## Permissive / BSL boundary
 
-Nine packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
+Ten packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
 | Package | Answers | Layer |
 |---------|---------|-------|
@@ -146,11 +146,12 @@ Nine packages sit on the permissive floor — Apache-2.0, with an explicit paten
 | `@motebit/crypto-tpm` | How is a TPM 2.0 quote verified? | L2 |
 | `@motebit/crypto-webauthn` | How is a WebAuthn packed attestation verified? | L2 |
 | `@motebit/verifier` | How does a third party compose offline verification? | L6 |
+| `@motebit/verify` | How does a one-install CLI verify any motebit artifact end-to-end? | L6 |
 | `create-motebit` | How does a third party scaffold against the protocol? | L6 |
 
-The four `crypto-*` platform leaves verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) — no motebit-specific judgment. Motebit-canonical aggregation (default bundle IDs, RP ID, CLI shape) lives in `@motebit/verify` (BSL) one layer up.
+The four `crypto-*` platform leaves verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) — no motebit-specific judgment. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
 
-The remaining 26 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. Both license families converge to Apache-2.0 at each version's Change Date (four years after first public release), eliminating the two-license end state. See `LICENSING.md` for the full boundary test, convergence story, and commercial terms.
+The remaining 25 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. Both license families converge to Apache-2.0 at each version's Change Date (four years after first public release), eliminating the two-license end state. See `LICENSING.md` for the full boundary test, convergence story, and commercial terms.
 
 The architectural role is "permissive floor"; the specific license instance (`Apache-2.0`) is replaceable. Identifiers in `scripts/check-deps.ts` (`PERMISSIVE_PACKAGES`, `PERMISSIVE_IMPORT_ALLOWED`, `PERMISSIVE_ALLOWED_FUNCTIONS`) and the sibling gate `check-spec-permissive-boundary` use the role name so a future license revision is a metadata change, not a rename cascade across the codebase.
 

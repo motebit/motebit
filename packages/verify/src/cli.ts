@@ -35,7 +35,7 @@
  * Three-package lineage — mirrors how tools like `git` / `libgit2` or
  * `cargo` / `tokio` separate the verb-tool from the library layer:
  *
- *   @motebit/verify   — this CLI (BSL, bundles all 4 adapters)
+ *   @motebit/verify   — this CLI (Apache-2.0, bundles all 4 adapters)
  *   @motebit/verifier — Apache-2.0 library (file I/O, human formatting)
  *   @motebit/crypto   — Apache-2.0 primitives (verify, sign, suite dispatch)
  */
