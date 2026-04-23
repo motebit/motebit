@@ -115,12 +115,33 @@ export class ComputerDispatcherError extends Error {
  *     `approval_required`.
  *   - `"deny"` — dispatcher never runs; outcome is `policy_denied`.
  *
+ * Optional `classifyObservation` lets the classifier rewrite the
+ * observation's `redaction` field before the data reaches the AI.
+ * Return `undefined` to preserve whatever the dispatcher emitted
+ * (e.g. for non-screenshot observations).
+ *
  * Default classifier (when not supplied) is allow-all — appropriate
  * for development; production desktop builds MUST wire a real
  * classifier backed by `@motebit/policy-invariants`.
  */
 export interface ComputerGovernanceClassifier {
   classify(action: ComputerAction): Promise<"allow" | "require_approval" | "deny">;
+  classifyObservation?(data: unknown): Promise<ObservationRedaction | undefined>;
+}
+
+/**
+ * Redaction metadata the classifier can attach to a screenshot
+ * observation. Shape matches `ComputerRedaction` in `@motebit/protocol`
+ * but declared here (not imported) so the runtime's inner loop stays
+ * free of wire-format imports — the field names are the stable
+ * contract.
+ */
+export interface ObservationRedaction {
+  readonly applied: boolean;
+  readonly projection_kind: string;
+  readonly policy_version?: string;
+  readonly classified_regions_count?: number;
+  readonly classified_regions_digest?: string;
 }
 
 /**
@@ -336,7 +357,8 @@ export function createComputerSessionManager(
 
     try {
       const data = await dispatcher.execute(action, onChunk);
-      return { outcome: "success", data };
+      const finalData = await applyObservationClassifier(data);
+      return { outcome: "success", data: finalData };
     } catch (err: unknown) {
       if (err instanceof ComputerDispatcherError) {
         return {
@@ -367,6 +389,34 @@ export function createComputerSessionManager(
 
   function activeSessionIds(): readonly string[] {
     return [...sessions.keys()];
+  }
+
+  /**
+   * Run the classifier's optional `classifyObservation` over the
+   * dispatcher's returned data. If the classifier produces a redaction
+   * and the data is an object, shallow-overwrite the `redaction` field
+   * before returning. Non-objects pass through; a classifier throw is
+   * fail-closed — we surface a minimal `applied: true, projection_kind:
+   * "redacted_on_error"` envelope so the AI cannot silently receive raw
+   * bytes when the classifier malfunctioned.
+   */
+  async function applyObservationClassifier(data: unknown): Promise<unknown> {
+    if (!governance.classifyObservation) return data;
+    if (data === null || typeof data !== "object") return data;
+    try {
+      const redaction = await governance.classifyObservation(data);
+      if (!redaction) return data;
+      return { ...(data as Record<string, unknown>), redaction };
+    } catch {
+      // Fail-closed: never let raw bytes flow past a failed classifier.
+      return {
+        ...(data as Record<string, unknown>),
+        redaction: {
+          applied: true,
+          projection_kind: "redacted_on_error",
+        },
+      };
+    }
   }
 
   function dispose(): void {

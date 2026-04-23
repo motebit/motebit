@@ -4,6 +4,23 @@ import { SPECIES_CONSTRAINTS } from "@motebit/sdk";
 // Re-export constraints for convenience
 export { SPECIES_CONSTRAINTS };
 
+// Computer-use sensitivity classifier — fail-closed privacy at the
+// `type` action and screenshot observation boundary.
+export {
+  COMPUTER_SENSITIVITY_POLICY_VERSION,
+  classifyComputerAction,
+  classifyScreenshotObservation,
+  createDefaultComputerGovernance,
+  isValidLuhn,
+  scanText,
+  type ActionClassification,
+  type ComputerGovernanceClassifierLike,
+  type RedactionMetadata,
+  type SensitivityLevel,
+  type SensitivityMatch,
+  type TextSensitivityReport,
+} from "./computer-sensitivity.js";
+
 /**
  * Clamp a value to [min, max].
  * Non-finite values (NaN, Infinity, -Infinity) fall back to `fallback`

@@ -339,3 +339,157 @@ describe("ComputerSessionManager — default session id generator", () => {
     expect(a.handle.session_id.startsWith("cs_")).toBe(true);
   });
 });
+
+describe("ComputerSessionManager — observation classifier", () => {
+  it("overwrites the redaction field when classifier returns a redaction", async () => {
+    const observation = {
+      kind: "screenshot",
+      width: 100,
+      height: 100,
+      redaction: { applied: false, projection_kind: "raw" },
+    };
+    const classifier: ComputerGovernanceClassifier = {
+      async classify() {
+        return "allow";
+      },
+      async classifyObservation(data) {
+        const d = data as { kind?: string };
+        if (d.kind !== "screenshot") return undefined;
+        return {
+          applied: true,
+          projection_kind: "masked",
+          policy_version: "v1.0.0",
+          classified_regions_count: 2,
+        };
+      },
+    };
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return observation;
+        },
+      }),
+      governance: classifier,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    expect(result.outcome).toBe("success");
+    if (result.outcome === "success") {
+      const d = result.data as { redaction: { applied: boolean; projection_kind: string } };
+      expect(d.redaction.applied).toBe(true);
+      expect(d.redaction.projection_kind).toBe("masked");
+    }
+  });
+
+  it("leaves the data untouched when classifier returns undefined", async () => {
+    const observation = { kind: "cursor_position", x: 10, y: 20 };
+    const classifier: ComputerGovernanceClassifier = {
+      async classify() {
+        return "allow";
+      },
+      async classifyObservation() {
+        return undefined;
+      },
+    };
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return observation;
+        },
+      }),
+      governance: classifier,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", { kind: "cursor_position" });
+    expect(result.outcome).toBe("success");
+    if (result.outcome === "success") {
+      expect(result.data).toEqual(observation);
+    }
+  });
+
+  it("fail-closes when classifier throws — stamps redacted_on_error", async () => {
+    const observation = { kind: "screenshot", width: 100, height: 100, sensitive: "bytes" };
+    const classifier: ComputerGovernanceClassifier = {
+      async classify() {
+        return "allow";
+      },
+      async classifyObservation() {
+        throw new Error("classifier exploded");
+      },
+    };
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return observation;
+        },
+      }),
+      governance: classifier,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    expect(result.outcome).toBe("success");
+    if (result.outcome === "success") {
+      const d = result.data as {
+        sensitive: string;
+        redaction: { applied: boolean; projection_kind: string };
+      };
+      expect(d.sensitive).toBe("bytes");
+      expect(d.redaction.applied).toBe(true);
+      expect(d.redaction.projection_kind).toBe("redacted_on_error");
+    }
+  });
+
+  it("passes through non-object data unchanged", async () => {
+    const classifier: ComputerGovernanceClassifier = {
+      async classify() {
+        return "allow";
+      },
+      async classifyObservation() {
+        return { applied: true, projection_kind: "masked" };
+      },
+    };
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return null;
+        },
+      }),
+      governance: classifier,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("success");
+    if (result.outcome === "success") {
+      expect(result.data).toBeNull();
+    }
+  });
+
+  it("no classifier means data flows through untouched", async () => {
+    const observation = { kind: "screenshot", width: 10, height: 10 };
+    const classifier: ComputerGovernanceClassifier = {
+      async classify() {
+        return "allow";
+      },
+      // classifyObservation omitted
+    };
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return observation;
+        },
+      }),
+      governance: classifier,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    expect(result.outcome).toBe("success");
+    if (result.outcome === "success") {
+      expect(result.data).toEqual(observation);
+    }
+  });
+});

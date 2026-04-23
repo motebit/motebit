@@ -35,6 +35,7 @@ import {
   type ComputerSessionHandle,
   type ComputerSessionManager,
 } from "@motebit/runtime";
+import { createDefaultComputerGovernance } from "@motebit/policy-invariants";
 import type { ComputerAction } from "@motebit/sdk";
 
 import { createTauriComputerDispatcher } from "./computer-bridge.js";
@@ -57,7 +58,12 @@ export interface RegisterComputerToolOptions {
   motebitId: string;
   /** Optional platform dispatcher override (for tests). Defaults to Tauri IPC. */
   dispatcher?: ComputerPlatformDispatcher;
-  /** Optional governance classifier. Defaults to allow-all (dev). */
+  /**
+   * Optional governance classifier. When omitted, desktop uses
+   * `createDefaultComputerGovernance()` from `@motebit/policy-invariants`
+   * — fail-closed sensitivity enforcement at the type-action and
+   * screenshot-observation boundary. Tests pass a mock to bypass.
+   */
   governance?: ComputerGovernanceClassifier;
   /** Optional approval flow for require_approval classifications. */
   approvalFlow?: ComputerApprovalFlow;
@@ -84,7 +90,7 @@ export function registerComputerTool(
   const dispatcher = opts.dispatcher ?? createTauriComputerDispatcher(opts.invoke);
   const sessionManager = createComputerSessionManager({
     dispatcher,
-    governance: opts.governance,
+    governance: opts.governance ?? createDefaultComputerGovernance(),
     approvalFlow: opts.approvalFlow,
   });
 
