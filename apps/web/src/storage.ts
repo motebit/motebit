@@ -27,14 +27,8 @@
 //   - "on-device"   (webllm, local-server, future apple-fm/mlx)
 //   - "motebit-cloud" (the product — proxy + subscription)
 //   - "byok"        (user's own API key for anthropic/openai/google)
-//
-// `loadProviderConfig` transparently migrates old flat-union configs.
 
-import {
-  migrateLegacyProvider,
-  type UnifiedProviderConfig,
-  type LegacyProviderConfig,
-} from "@motebit/sdk";
+import { type UnifiedProviderConfig } from "@motebit/sdk";
 
 export type ProviderConfig = UnifiedProviderConfig;
 
@@ -52,8 +46,12 @@ export function loadProviderConfig(): ProviderConfig | null {
   try {
     const raw = localStorage.getItem(PROVIDER_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as LegacyProviderConfig;
-    return migrateLegacyProvider(parsed);
+    const parsed = JSON.parse(raw) as UnifiedProviderConfig;
+    // Fall through to defaults if stored value isn't a current UnifiedProviderConfig
+    // (e.g. legacy pre-1.0 shape predating the three-mode architecture).
+    if (parsed.mode === "on-device" || parsed.mode === "motebit-cloud" || parsed.mode === "byok") {
+      return parsed;
+    }
   } catch {
     // localStorage unavailable or corrupt
   }

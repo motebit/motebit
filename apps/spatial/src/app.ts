@@ -14,7 +14,6 @@
 import { SpatialApp, COLOR_PRESETS, deriveInteriorColor } from "./spatial-app";
 import type { SpatialAIConfig } from "./spatial-app";
 import type { UnifiedProviderConfig, OnDeviceBackend } from "@motebit/sdk";
-import { migrateLegacyProvider } from "@motebit/sdk";
 import { DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import { SpatialVoicePipeline } from "./voice-pipeline";
@@ -151,7 +150,6 @@ import {
  *
  * Mirrors the mobile pattern: the form keeps a flat shape; we convert to
  * `UnifiedProviderConfig` in `tryInitAI` via `spatialSettingsToUnified`.
- * Legacy persisted shapes flow through `migrateLegacyProvider` from sdk.
  */
 type SpatialProviderMode = "on-device" | "motebit-cloud" | "byok";
 type SpatialOnDeviceBackend = Extract<OnDeviceBackend, "webllm" | "local-server">;
@@ -180,9 +178,7 @@ interface SpatialSettings {
   showNetwork: boolean;
   /**
    * Appearance settings — nested under the canonical `@motebit/sdk`
-   * `AppearanceConfig` shape. Historical flat fields (`colorPreset`,
-   * `customHue`, `customSaturation`) are accepted on load via
-   * `migrateLegacySpatialSettings` → `migrateAppearanceConfig`.
+   * `AppearanceConfig` shape.
    */
   appearance: AppearanceConfig;
   maxTokens: number;
@@ -209,63 +205,11 @@ const DEFAULT_SPATIAL_SETTINGS: SpatialSettings = {
   governance: { ...DEFAULT_GOVERNANCE_CONFIG },
 };
 
-/**
- * Reverse migration: collapse an old persisted spatial settings object onto
- * the current `SpatialSettings` shape. Pre-three-mode persisted state used a
- * flat `provider: "anthropic" | "local-server" | "openai" | "proxy"`
- * discriminator (and historically `"ollama"`). Run it through the sdk's
- * canonical migration so the surface inherits any future legacy renames for
- * free, then unpack the unified shape back onto the form's flat fields.
- */
-function migrateLegacySpatialSettings(
-  raw: Partial<SpatialSettings> & {
-    provider?: string;
-    apiKey?: string;
-    model?: string;
-    baseUrl?: string;
-  },
-): void {
-  if (raw.mode !== undefined) return; // already three-mode
-  if (raw.provider == null || raw.provider === "") return;
-
-  const unified = migrateLegacyProvider({
-    provider: raw.provider,
-    apiKey: raw.apiKey,
-    model: raw.model,
-    baseUrl: raw.baseUrl,
-  });
-  if (!unified) return;
-
-  raw.mode = unified.mode;
-  if (unified.mode === "byok") {
-    raw.byokVendor = unified.vendor;
-    raw.apiKey = unified.apiKey;
-    raw.model = unified.model ?? "";
-  } else if (unified.mode === "on-device") {
-    // sdk can return apple-fm/mlx for legacy `local`/`hybrid` shapes; spatial
-    // doesn't support those. Coerce to local-server (the closest analog the
-    // surface can actually run).
-    raw.onDeviceBackend = unified.backend === "webllm" ? "webllm" : "local-server";
-    raw.model = unified.model ?? "";
-    if (unified.endpoint != null && unified.endpoint !== "") {
-      raw.localServerEndpoint = unified.endpoint;
-    }
-  } else {
-    // motebit-cloud — nothing more to unpack
-    raw.model = unified.model ?? "";
-  }
-  delete raw.provider;
-}
-
 function loadSettings(): SpatialSettings {
   try {
     const raw = localStorage.getItem("motebit:spatial_settings");
     if (raw != null && raw !== "") {
-      const parsed = JSON.parse(raw) as Partial<SpatialSettings> & {
-        provider?: string;
-        baseUrl?: string;
-      };
-      migrateLegacySpatialSettings(parsed);
+      const parsed = JSON.parse(raw) as Partial<SpatialSettings>;
       const defaultGov: GovernanceConfig = { ...DEFAULT_GOVERNANCE_CONFIG };
       // Appearance: nest legacy flat fields if present, else deep-merge
       // any partial nested record on top of defaults.

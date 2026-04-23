@@ -148,9 +148,16 @@ export async function setOperatorMode(
     }
   }
 
-  // Support both legacy (plain hex) and salted (salt:key) formats
+  // Stored hash is always `${salt_hex}:${derived_hex}` — the output of
+  // hashPin() on setup. Any other shape is malformed (or legacy pre-salt
+  // from before 2026 when the salted format shipped; reset the PIN to
+  // recover).
   const parts = storedHash.split(":");
-  const inputHash = parts.length === 2 ? await hashPin(pin, parts[0]) : await hashPin(pin);
+  if (parts.length !== 2) {
+    await recordPinFailure(keyring, attemptState);
+    return { success: false, error: "Stored PIN hash is malformed — reset your PIN" };
+  }
+  const inputHash = await hashPin(pin, parts[0]);
   if (inputHash !== storedHash) {
     await recordPinFailure(keyring, attemptState);
     return { success: false, error: "Incorrect PIN" };

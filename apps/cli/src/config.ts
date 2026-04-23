@@ -10,11 +10,7 @@ import type {
   PersistedPersonalityProvider,
 } from "@motebit/ai-core";
 import type { connectMcpServers } from "@motebit/mcp-client";
-import {
-  migrateLegacyProvider,
-  type UnifiedProviderConfig,
-  type GovernanceConfig,
-} from "@motebit/sdk";
+import { type UnifiedProviderConfig, type GovernanceConfig } from "@motebit/sdk";
 
 declare const __PKG_VERSION__: string;
 export const VERSION: string =
@@ -98,16 +94,6 @@ export function loadFullConfig(): FullConfig {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
     const parsed = JSON.parse(raw) as FullConfig;
-    // Migration: if the unified `provider` shape is missing but the legacy
-    // `default_provider` is present, derive the unified shape from it.
-    // Keeps older config files readable without a manual edit.
-    if (!parsed.provider && parsed.default_provider) {
-      const migrated = migrateLegacyProvider({
-        default_provider: parsed.default_provider,
-        default_model: parsed.default_model,
-      });
-      if (migrated) parsed.provider = migrated;
-    }
     // Governance: validate the persisted blob. Drop invalid shapes — runtime
     // construction falls back to DEFAULT_GOVERNANCE_CONFIG when absent.
     if (parsed.governance !== undefined && !isValidGovernanceConfig(parsed.governance)) {

@@ -11,8 +11,7 @@ import { bold, dim, cyan, green, command } from "./colors.js";
  *   on-device     → "local-server"  (Ollama, LM Studio, llama.cpp, etc.)
  *
  * `--provider ollama` is accepted as an ergonomic alias for `local-server`
- * and silently normalized at parse time. The historical name persists in the
- * legacy migration path (`migrateLegacyProvider`) for old saved configs.
+ * and silently normalized at parse time.
  */
 export type CliProvider = "anthropic" | "openai" | "google" | "local-server" | "proxy";
 

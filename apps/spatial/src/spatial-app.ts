@@ -49,13 +49,7 @@ import type {
   ProviderSpec,
   ResolverEnv,
 } from "@motebit/sdk";
-import {
-  DeviceCapability,
-  resolveProviderSpec,
-  UnsupportedBackendError,
-  migrateLegacyProvider,
-  type LegacyProviderConfig,
-} from "@motebit/sdk";
+import { DeviceCapability, resolveProviderSpec, UnsupportedBackendError } from "@motebit/sdk";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { IdbConversationStore, IdbPlanStore, IdbGradientStore } from "@motebit/browser-persistence";
 import { OrbitalDynamics, estimateBodyAnchors, getAnchorForReference } from "./index";
@@ -94,9 +88,7 @@ export type SpatialGovernanceConfig = GovernanceConfig;
  *
  * `SpatialAIConfig` is a thin wrapper around `UnifiedProviderConfig` that
  * carries the spatial-specific surface concerns (`personalityConfig`,
- * `governance`, `maxTokens` override). The `provider` field replaces the
- * legacy flat discriminator. Old persisted shapes flow through
- * `migrateLegacyProvider` from sdk on load.
+ * `governance`, `maxTokens` override).
  */
 export interface SpatialAIConfig {
   provider: UnifiedProviderConfig;
@@ -552,15 +544,10 @@ export class SpatialApp {
     const temperature = resolvedPersonality?.temperature;
 
     // Migrate legacy persisted shapes (`{provider: "ollama" | "anthropic" | ...}`)
-    // through the sdk's canonical migration. Already-unified configs pass
-    // through unchanged. Spatial users have persisted state from before the
-    // three-mode refactor, so this path is required.
+    // Non-unified shapes in persisted config (if any ever existed) fall
+    // through to the motebit-cloud default.
     const unified: UnifiedProviderConfig =
-      "mode" in config.provider
-        ? config.provider
-        : (migrateLegacyProvider(config.provider as unknown as LegacyProviderConfig) ?? {
-            mode: "motebit-cloud",
-          });
+      "mode" in config.provider ? config.provider : { mode: "motebit-cloud" };
 
     // Layer in proxy session state, temperature, and the surface-level
     // maxTokens override before resolving. The proxy session (when present)
