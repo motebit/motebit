@@ -241,6 +241,15 @@ function scan(): Violation[] {
     "packages/crypto-tpm/src/verify.ts",
     "packages/crypto-tpm/src/index.ts",
     "packages/crypto-tpm/src/tpm-parse.ts",
+    // `@motebit/crypto-webauthn` is the canonical WebAuthn verifier
+    // — the BSL leaf `@motebit/crypto` delegates to when a
+    // `HardwareAttestationClaim` declares `platform: "webauthn"`.
+    // Same exemption basis as crypto-appattest: each platform adapter
+    // is the single canonical home for its platform's receipt-
+    // verification policy.
+    "packages/crypto-webauthn/src/verify.ts",
+    "packages/crypto-webauthn/src/index.ts",
+    "packages/crypto-webauthn/src/cbor.ts",
   ]);
 
   const scanRoots: string[] = [];

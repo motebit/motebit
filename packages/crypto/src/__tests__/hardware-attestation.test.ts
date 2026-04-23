@@ -338,6 +338,42 @@ describe("verifyHardwareAttestationClaim — non-SE platforms", () => {
     expect(result.platform).toBe("device_check");
   });
 
+  it("returns valid:false for webauthn (no injected adapter)", async () => {
+    const result = await verifyHardwareAttestationClaim({ platform: "webauthn" }, IDENTITY_HEX);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]!.message).toContain("not wired");
+  });
+
+  it("delegates to the injected webauthn verifier when wired, threading context", async () => {
+    const fakeVerifier = vi.fn(async () => ({
+      valid: true,
+      errors: [],
+    }));
+    const ctx = {
+      expectedMotebitId: MOTEBIT_ID,
+      expectedDeviceId: DEVICE_ID,
+      expectedAttestedAt: 1_700_000_000_000,
+    };
+    const result = await verifyHardwareAttestationClaim(
+      { platform: "webauthn", attestation_receipt: "fake" },
+      IDENTITY_HEX,
+      { webauthn: fakeVerifier },
+      ctx,
+    );
+    expect(fakeVerifier).toHaveBeenCalledOnce();
+    // Same contract as the deviceCheck dispatch: the body-reconstruction
+    // context (motebit_id / device_id / attested_at) must thread through
+    // so the WebAuthn verifier can re-derive the canonical body the
+    // browser signed over.
+    expect(fakeVerifier).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: "webauthn" }),
+      IDENTITY_HEX,
+      ctx,
+    );
+    expect(result.valid).toBe(true);
+    expect(result.platform).toBe("webauthn");
+  });
+
   it("returns valid:false + platform:null for an off-enum platform", async () => {
     const result = await verifyHardwareAttestationClaim(
       {

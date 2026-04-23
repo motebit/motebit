@@ -52,12 +52,12 @@ The rank is algebra, not policy-by-switch. `packages/semiring/src/hardware-attes
 
 `scoreAttestation(claim)` encodes the claim:
 
-| Claim                                                                      | Score                                      |
-| -------------------------------------------------------------------------- | ------------------------------------------ |
-| `secure_enclave` / `tpm` / `device_check` / `play_integrity`, not exported | 1.0                                        |
-| Any hardware platform, `key_exported: true`                                | 0.5                                        |
-| `platform: "software"` (explicit no-hardware)                              | 0.1                                        |
-| Absent claim                                                               | 0.0 (semiring zero, annihilates under `⊗`) |
+| Claim                                                                                   | Score                                      |
+| --------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `secure_enclave` / `tpm` / `device_check` / `play_integrity` / `webauthn`, not exported | 1.0                                        |
+| Any hardware platform, `key_exported: true`                                             | 0.5                                        |
+| `platform: "software"` (explicit no-hardware)                                           | 0.1                                        |
+| Absent claim                                                                            | 0.0 (semiring zero, annihilates under `⊗`) |
 
 Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Google Play Integrity (Android, Google-JWKS-signed JWT), TPM 2.0 (Windows / Linux, endorsement-key chain against pinned vendor roots). Scoring is identical across every adapter — all collapse to the same `1.0 / 0.5 / 0.1 / 0.0` scalar under the bottleneck semiring. The scalar answers "hardware-backed?" yes/no; the platform identifier answers "which hardware?" for audit, not for rank.
 
@@ -108,14 +108,16 @@ Live consumers today:
 - `packages/semiring/src/hardware-attestation.ts` — `HardwareAttestationSemiring` + `scoreAttestation`.
 - `packages/market/src/graph-routing.ts` — `HARDWARE_ATTESTATION_BOOST` applied to the trust edge during agent ranking.
 - `packages/market/src/scoring.ts` — `CandidateProfile.hardware_attestation?` field.
-- `packages/encryption/src/hardware-attestation-credential.ts` — canonical VC composer; CLI + desktop + mobile all delegate.
+- `packages/encryption/src/hardware-attestation-credential.ts` — canonical VC composer; CLI + desktop + mobile + web all delegate.
 - `packages/crypto-appattest/` — Apple App Attest chain verifier (pinned Apple root).
 - `packages/crypto-play-integrity/` — Google Play Integrity JWT verifier (pinned Google JWKS, ES256 / RS256 dispatch).
 - `packages/crypto-tpm/src/verify.ts` — TPM 2.0 quote verifier; pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
 - `packages/crypto-tpm/src/tpm-parse.ts` — minimal `TPMS_ATTEST` marshaling; hand-rolled over dep explosion.
+- `packages/crypto-webauthn/src/verify.ts` — browser-platform-authenticator packed-attestation verifier; pinned FIDO roots (Apple, Yubico, Microsoft) + self-attestation path.
 - `apps/mobile/modules/expo-app-attest/` — iOS native App Attest bridge.
 - `apps/mobile/modules/expo-play-integrity/` — Android native Play Integrity bridge.
 - `apps/mobile/src/mint-hardware-credential.ts` — mobile surface; per-OS cascade (App Attest → SE on iOS; Play Integrity on Android; software sentinel everywhere).
+- `apps/web/src/mint-hardware-credential.ts` — Web surface; cascades WebAuthn → software via `navigator.credentials.create`.
 - `apps/desktop/src-tauri/src/secure_enclave.rs` — Rust SE bridge (macOS-gated).
 - `apps/desktop/src-tauri/src/tpm.rs` — Rust TPM bridge (Windows / Linux; `not_supported` pending `tss-esapi` link).
 - `apps/desktop/src/secure-enclave-bridge.ts` — typed TS wrapper with `SecureEnclaveError` taxonomy.

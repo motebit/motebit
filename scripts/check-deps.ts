@@ -56,6 +56,7 @@ const LAYER: Record<string, number> = {
   "@motebit/crypto-appattest": 2,
   "@motebit/crypto-play-integrity": 2,
   "@motebit/crypto-tpm": 2,
+  "@motebit/crypto-webauthn": 2,
   "@motebit/market": 2,
   "@motebit/behavior-engine": 2,
   "@motebit/state-vector": 2,
