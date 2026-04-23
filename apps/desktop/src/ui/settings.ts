@@ -1824,7 +1824,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const apiKey = settingsApiKey.value.trim() || undefined;
     const whisperApiKey = settingsWhisperApiKey.value.trim() || undefined;
     const elevenLabsApiKey = settingsElevenLabsApiKey.value.trim() || undefined;
-    const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
+    // v2-compatible Tauri detection — see apps/desktop/src/ui/config.ts
+    const isTauri =
+      typeof window !== "undefined" &&
+      (window.__TAURI_INTERNALS__ != null || window.__TAURI__ != null);
 
     voice.setVoiceAutoSend(settingsVoiceAutoSend.checked);
     voice.setVoiceResponseEnabled(settingsVoiceResponse.checked);

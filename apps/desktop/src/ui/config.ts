@@ -91,7 +91,13 @@ function parseGovernanceFromConfig(parsed: Record<string, unknown>): GovernanceC
 }
 
 export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
-  const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
+  // Tauri v2 doesn't expose `window.__TAURI__` by default
+  // (withGlobalTauri defaults to false); `__TAURI_INTERNALS__` is the
+  // always-present v2 signal. Check both so detection works whether
+  // the Tauri config opts into the legacy global or not.
+  const isTauri =
+    typeof window !== "undefined" &&
+    (window.__TAURI_INTERNALS__ != null || window.__TAURI__ != null);
 
   if (isTauri) {
     const { invoke } = await import("@tauri-apps/api/core");

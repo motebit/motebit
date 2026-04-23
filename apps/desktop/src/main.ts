@@ -108,7 +108,11 @@ const settings = initSettings(ctx, {
 
 // === Theme ===
 
-const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
+// Detect Tauri v1 OR v2. v2 doesn't expose the legacy `__TAURI__` global
+// unless `withGlobalTauri` is true; `__TAURI_INTERNALS__` is the v2
+// canonical. Check both so the check is version-agnostic.
+const isTauri =
+  typeof window !== "undefined" && (window.__TAURI_INTERNALS__ != null || window.__TAURI__ != null);
 const theme = initTheme(isTauri);
 
 // === Keyboard Shortcuts ===
