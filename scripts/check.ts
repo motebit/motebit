@@ -255,6 +255,12 @@ const GATES: ReadonlyArray<Gate> = [
       'the canonical composer (`composeHardwareAttestationCredential` in @motebit/encryption) and verifier (`verifyHardwareAttestationClaim` in @motebit/crypto) are the only way to build or parse a HardwareAttestationClaim-carrying AgentTrustCredential — inline VC composers (type-tuple ["VerifiableCredential", "AgentTrustCredential"] + `hardware_attestation:` subject) and inline attestation_receipt parsers (.split(\'.\') / base64url decode / P-256 verify) are CI failures (invariant #37, added 2026-04-22 after the CLI+desktop consolidation and ahead of the iOS / Expo mobile surface landing — extends the protocol-primitive doctrine to hardware-attestation judgment, prevents the third inline copy of the VC envelope and the first inline copy of the receipt parser)',
     script: "check-hardware-attestation-primitives",
   },
+  {
+    name: "check-dom-id-references",
+    defends:
+      "every `document.getElementById(literal)` / `document.querySelector('#literal')` call in `apps/{desktop,web,admin}/src` resolves against an `id=\"literal\"` declared either in the same app's index.html or in its TS source (via `.id = \"literal\"`, `setAttribute('id', 'literal')`, or an inline `innerHTML`/template-string HTML fragment). Waivers live in `scripts/check-dom-id-references.allow.json` with a required reason string (invariant #38, added 2026-04-23 after a 37-day dormant `rotate-key-*` id mismatch — commit 6f682fcd (2026-03-17) shipped TS querying `rotate-key-cancel` against HTML ids `rotate-cancel-btn`/etc. The crash sat silent behind an earlier Buffer-polyfill drift that killed module init first; when the Buffer polyfill fix landed the rotate-key crash became reachable and took out the render bootstrap. This gate catches that shape on day one rather than day 37 — extends the sibling-boundary rule to the TS↔HTML pair in surface apps).",
+    script: "check-dom-id-references",
+  },
 ];
 
 interface Result {

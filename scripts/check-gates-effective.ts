@@ -634,6 +634,24 @@ export function rogueCompose(issuerDid: string, identityHex: string): unknown {
 `,
       ),
   },
+  {
+    script: "check-dom-id-references",
+    proves:
+      "flags a `document.getElementById(\"...\")` call in a surface app's src tree whose id argument is not declared in the same app's index.html or TS source — the exact shape the 2026-03-17 rotate-key drift had",
+    perturb: () =>
+      // Fixture: a TS file in apps/desktop/src querying an id that
+      // doesn't exist anywhere else in the repo. The random-ish suffix
+      // on the id ensures it can't accidentally coincide with a real
+      // declared id — the gate should flag it unambiguously.
+      writeFixture(
+        `apps/desktop/src/${PROBE_PREFIX}dom_id_drift.ts`,
+        `// Probe-only fixture — queries an id that isn't declared anywhere.
+export function rogueLookup(): HTMLElement | null {
+  return document.getElementById("__gate_probe__nonexistent_id_xqz7k");
+}
+`,
+      ),
+  },
 ];
 
 /**

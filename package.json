@@ -65,6 +65,7 @@
     "check-consolidation-primitives": "npx tsx scripts/check-consolidation-primitives.ts",
     "check-tool-modes": "npx tsx scripts/check-tool-modes.ts",
     "check-hardware-attestation-primitives": "npx tsx scripts/check-hardware-attestation-primitives.ts",
+    "check-dom-id-references": "npx tsx scripts/check-dom-id-references.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",

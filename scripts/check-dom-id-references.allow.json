@@ -1,0 +1,5 @@
+{
+  "apps/web": {
+    "max-tokens-select": "Element removed 2026-04-01 in 05ba088c ('Remove Response Length setting from all surfaces'). TS lookup kept with explicit `| null` type + null-guarded use per that commit's message: 'JS handles null element gracefully'. Intentional residual — deleting the TS would force a broader refactor for no behavioral gain."
+  }
+}
