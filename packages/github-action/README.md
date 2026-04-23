@@ -2,7 +2,7 @@
 
 Verify the Ed25519 signature of a `motebit.md` agent identity file in your CI pipeline. Fails the check if the signature is invalid or the file is missing.
 
-Uses [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) (Apache-2.0, zero dependencies) under the hood.
+Today the Action wraps [`create-motebit`](https://www.npmjs.com/package/create-motebit)'s `verify` subcommand (pinned to `0.8.0`), which calls [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) under the hood — both Apache-2.0, zero runtime dependencies. After [`@motebit/verify@1.0.0`](https://www.npmjs.com/package/@motebit/verify) publishes to npm, the Action migrates to invoking the canonical `motebit-verify` CLI directly (Apache-2.0, bundles the four hardware-attestation platform leaves). See the comment inline in [`action.yml`](./action.yml) for the one-line swap.
 
 ## Quick Start
 
@@ -72,14 +72,17 @@ A valid signature proves the file hasn't been tampered with since it was signed 
 
 ## How it works
 
-The action runs `create-motebit verify <path>`, which:
+The Action runs `npx --yes create-motebit@0.8.0 verify <path>` (pinned for CI reproducibility), which:
 
 - Parses YAML frontmatter between `---` delimiters
 - Extracts the Ed25519 signature from the `<!-- motebit:sig:... -->` comment
+- Dispatches by `SuiteId` (cryptosuite-agile — post-quantum migrations don't change this wire format)
 - Verifies the signature against the `identity.public_key` field
 - Validates key succession chains if present
 
 No network calls are made. All verification is offline and deterministic.
+
+**Post-1.0 migration.** Once `@motebit/verify@1.0.0` publishes to npm, the Action will switch to `npx --yes @motebit/verify@1.0.0 <path>` — the canonical verifier CLI with the four hardware-attestation platform leaves bundled in. Same behavior for identity files, plus full VC / VP / hardware-attestation-claim coverage. See the inline comment in `action.yml` for the exact swap.
 
 ## Troubleshooting
 

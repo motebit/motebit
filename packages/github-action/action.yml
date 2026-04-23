@@ -58,9 +58,20 @@ runs:
           exit 0
         fi
 
-        # Run verification using npx (pinned version for reproducibility)
+        # Run verification using npx (pinned version for reproducibility).
+        #
+        # Post-1.0 migration: when @motebit/verify@1.0.0 publishes, switch to
+        #   OUTPUT=$(npx --yes @motebit/verify@1.0.0 "$FILE" 2>&1)
+        # @motebit/verify is the canonical motebit-verify CLI (Apache-2.0,
+        # bundles the four hardware-attestation platform leaves). create-motebit
+        # is the scaffolder; its `verify` subcommand is a pre-1.0 convenience
+        # that retires once @motebit/verify ships to npm.
+        #
+        # The 0.8.0 pin covers cryptosuite agility (SuiteId registry landed
+        # 2026-04-13 in the 0.8.x line) — prior 0.6.x pins would reject any
+        # motebit.md signed under a post-0.6 suite.
         set +e
-        OUTPUT=$(npx --yes create-motebit@0.6.10 verify "$FILE" 2>&1)
+        OUTPUT=$(npx --yes create-motebit@0.8.0 verify "$FILE" 2>&1)
         EXIT_CODE=$?
         set -e
 
