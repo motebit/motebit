@@ -12,6 +12,7 @@
     "dist/index.js.map",
     "schema/motebit-yaml-v1.json",
     "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "license": "BSL-1.1",

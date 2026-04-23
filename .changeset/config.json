@@ -9,6 +9,10 @@
       "@motebit/crypto",
       "@motebit/verifier",
       "@motebit/verify",
+      "@motebit/crypto-appattest",
+      "@motebit/crypto-play-integrity",
+      "@motebit/crypto-tpm",
+      "@motebit/crypto-webauthn",
       "create-motebit",
       "motebit"
     ]

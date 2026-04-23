@@ -1,11 +1,50 @@
 {
   "name": "@motebit/crypto-webauthn",
   "version": "0.1.0",
-  "license": "Apache-2.0",
-  "private": true,
+  "description": "Apache-2.0 verifier for W3C WebAuthn packed-attestation hardware-attestation credentials — offline chain verification against pinned FIDO vendor roots (Apple, Yubico, Microsoft). Plugs into @motebit/crypto's HardwareAttestationVerifiers dispatcher to validate browser-attested motebit identities.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "license": "Apache-2.0",
+  "keywords": [
+    "motebit",
+    "webauthn",
+    "fido",
+    "attestation",
+    "platform-authenticator",
+    "hardware-attestation",
+    "cbor",
+    "x509",
+    "verify"
+  ],
+  "homepage": "https://github.com/motebit/motebit/tree/main/packages/crypto-webauthn#readme",
+  "bugs": {
+    "url": "https://github.com/motebit/motebit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit",
+    "directory": "packages/crypto-webauthn"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "motebit": {
     "implements": [
       "spec/credential-v1.md"
@@ -16,8 +55,10 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/",
-    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+    "lint": "eslint --parser-options=project:tsconfig.eslint.json src/",
+    "lint:pack": "publint --strict && attw --pack --profile esm-only",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@motebit/protocol": "workspace:*",
@@ -32,5 +73,8 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
