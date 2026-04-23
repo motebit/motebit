@@ -78,9 +78,10 @@ const LAYER: Record<string, number> = {
   "@motebit/browser-persistence": 5,
   "@motebit/panels": 5,
 
-  // Layer 6 — Applications (apps/*, services/*, create-motebit, molecule-runner)
+  // Layer 6 — Applications (apps/*, services/*, create-motebit, molecule-runner, verifier)
   "create-motebit": 6,
   "@motebit/molecule-runner": 6,
+  "@motebit/verifier": 6,
 };
 
 const APP_LAYER = 6;
@@ -91,15 +92,18 @@ const MIT_PACKAGES = new Set([
   "@motebit/sdk",
   "@motebit/crypto",
   "create-motebit",
+  "@motebit/verifier",
 ]);
 
 // MIT packages allowed to import from other MIT packages only (plus external deps).
 // create-motebit is bundled (tsup) so devDeps are inlined — but only MIT deps allowed.
+// @motebit/verifier ships unbundled and depends on @motebit/crypto at runtime.
 const MIT_IMPORT_ALLOWED = new Set([
   "@motebit/protocol",
   "@motebit/sdk",
   "@motebit/crypto",
   "create-motebit",
+  "@motebit/verifier",
 ]);
 
 // Allowlisted non-trivial exported functions in MIT packages.
