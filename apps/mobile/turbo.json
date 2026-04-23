@@ -3,7 +3,13 @@
   "extends": ["//"],
   "tasks": {
     "build": {
+      "dependsOn": ["^build", "build:creature-html"],
       "outputs": []
+    },
+    "build:creature-html": {
+      "dependsOn": ["@motebit/render-engine#build"],
+      "inputs": ["scripts/build-creature-html.mjs"],
+      "outputs": ["src/creature-webview-bundle.generated.ts"]
     }
   }
 }
