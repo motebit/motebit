@@ -244,7 +244,7 @@ jobs:
           # Count new changeset files (not README.md or config.json)
           CHANGESETS=$(git diff --name-only origin/main...HEAD -- '.changeset/*.md' | grep -v README.md | wc -l | tr -d ' ')
           if [ "$CHANGESETS" -eq "0" ]; then
-            echo "::warning::No changeset found. If this PR affects published packages (@motebit/sdk, @motebit/crypto, create-motebit, motebit), run 'pnpm changeset' and commit the result."
+            echo "::warning::No changeset found. If this PR affects published packages (@motebit/protocol, @motebit/sdk, @motebit/crypto, @motebit/verifier, create-motebit, motebit), run 'pnpm changeset' and commit the result."
           else
             echo "✓ Found $CHANGESETS changeset(s)"
           fi

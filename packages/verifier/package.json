@@ -1,6 +1,6 @@
 {
   "name": "@motebit/verifier",
-  "version": "0.1.0",
+  "version": "0.8.0",
   "description": "Offline third-party verifier for any signed Motebit artifact — identity files, execution receipts, credentials, presentations. MIT, standalone.",
   "type": "module",
   "main": "./dist/index.js",
