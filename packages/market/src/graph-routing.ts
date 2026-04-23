@@ -10,7 +10,7 @@
 
 import type { MotebitId, RouteScore } from "@motebit/protocol";
 import { AgentTrustLevel } from "@motebit/protocol";
-import { trustLevelToScore } from "@motebit/semiring";
+import { trustLevelToScore, scoreAttestation } from "@motebit/semiring";
 import {
   WeightedDigraph,
   RouteWeightSemiring,
@@ -136,6 +136,19 @@ export interface RoutingConfig {
 const ORGANIZATIONAL_TRUST_BASELINE = 0.35;
 
 /**
+ * How strongly a positive hardware-attestation score boosts the
+ * candidate's trust edge weight. A hardware-attested agent
+ * (`scoreAttestation → 1.0`) gets trust × (1 + 0.2) = 20% bump,
+ * capped at 1.0. A software sentinel (`0.1`) gets a ~2% bump; an
+ * absent claim (`0.0`) leaves trust untouched. Conservative by
+ * design — hardware attestation is an identity-root signal, not a
+ * performance metric, so it supplements earned trust rather than
+ * replacing it. Consumers needing stronger/softer weight adjust
+ * this constant (PR + changeset) rather than wiring a per-call knob.
+ */
+const HARDWARE_ATTESTATION_BOOST = 0.2;
+
+/**
  * Build a semiring computation graph from candidate profiles.
  *
  * Converts the flat CandidateProfile[] into a WeightedDigraph<RouteWeight>
@@ -177,7 +190,17 @@ export function buildRoutingGraph(
       staticTrust = Math.max(staticTrust, ORGANIZATIONAL_TRUST_BASELINE);
     }
 
-    const trust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
+    const blendedTrust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
+
+    // Hardware-attestation multiplicative boost. `scoreAttestation`
+    // maps the claim to [0, 1] via the `HardwareAttestationSemiring`
+    // axis (1.0 = hardware-attested, non-exported; 0.5 = hardware but
+    // exported; 0.1 = explicit software sentinel; 0.0 = absent). The
+    // boost formula `trust * (1 + score * boost)` leaves absent-claim
+    // agents at their earned trust and rewards hardware-rooted ones
+    // with up to +HARDWARE_ATTESTATION_BOOST × 1.0 multiplier.
+    const hwScore = scoreAttestation(candidate.hardware_attestation);
+    const trust = Math.min(1.0, blendedTrust * (1 + hwScore * HARDWARE_ATTESTATION_BOOST));
 
     const cost = estimateCandidateCost(candidate);
     // Latency: prefer measured stats, fall back to SLA declaration, then default

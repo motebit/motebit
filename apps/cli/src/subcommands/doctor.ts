@@ -83,6 +83,20 @@ export async function handleDoctor(): Promise<void> {
     checks.push({ name: "Identity", ok: true, detail: "not created yet (run motebit to create)" });
   }
 
+  // Secure Enclave availability (hardware-attestation channel).
+  // Platform heuristic — the CLI doesn't itself mint attestations (the
+  // desktop Tauri app does, via security-framework), so this check
+  // reports structural capability rather than a live round-trip. On
+  // Apple Silicon macOS the SE is always present; on Intel Macs
+  // pre-T2 or non-macOS hosts it's absent. The check never fails —
+  // hardware attestation is optional, software-custody is a truthful
+  // fallback (`HardwareAttestationSemiring` scores software at 0.1).
+  checks.push({
+    name: "Secure Enclave",
+    ok: true,
+    detail: detectSecureEnclaveAvailability(),
+  });
+
   // Print results
   console.log("\nmotebit doctor\n");
   let allOk = true;
@@ -159,4 +173,30 @@ function extractStageBucket(errMsg: string | null): string | null {
   const connMatch = errMsg.match(/connection timeout after \d+ms/);
   if (connMatch) return "connection_timeout";
   return null;
+}
+
+/**
+ * Best-effort Secure Enclave availability description. The CLI runs
+ * outside the Tauri app process and can't invoke the Rust
+ * `se_available()` command directly; this heuristic reads the host
+ * platform to report structural capability. A real round-trip probe
+ * lives in the desktop app's diagnostics surface.
+ *
+ *   - macOS + Apple Silicon (arm64) → "available on this host (Apple
+ *     Silicon)"
+ *   - macOS + x86_64 → "unknown — requires T2 chip (Mac 2018+) or
+ *     Apple Silicon"
+ *   - non-macOS → "not available (macOS-only)"
+ *
+ * Every branch returns `ok: true` — SE is optional; its absence is
+ * honest, not a failure.
+ */
+function detectSecureEnclaveAvailability(): string {
+  if (process.platform !== "darwin") {
+    return "not available (macOS-only; desktop-app feature)";
+  }
+  if (process.arch === "arm64") {
+    return "available on this host (Apple Silicon)";
+  }
+  return "unknown — requires T2 chip (Mac 2018+) or Apple Silicon";
 }

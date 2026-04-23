@@ -1002,3 +1002,92 @@ describe("SLA fields in routing", () => {
     expect(edge.reliability).toBeGreaterThan(0.95);
   });
 });
+
+describe("hardware attestation trust boost", () => {
+  function baseline(): CandidateProfile {
+    return makeCandidate({
+      motebit_id: asMotebitId("agent-a"),
+      trust_record: makeTrustRecord({
+        trust_level: AgentTrustLevel.FirstContact,
+      }),
+    });
+  }
+
+  it("absent hardware_attestation → trust unchanged (boost factor 1.0)", () => {
+    const candidate = baseline();
+    const graph = buildRoutingGraph(SELF_ID, [candidate]);
+    const edge = graph.getEdge(SELF_ID, "agent-a")!;
+    // FirstContact trust is 0.3; no credential reputation → 0.3.
+    expect(edge.trust).toBeCloseTo(0.3, 5);
+  });
+
+  it("software sentinel → tiny bump (0.1 × 0.2 = 2% multiplier)", () => {
+    const candidate: CandidateProfile = {
+      ...baseline(),
+      hardware_attestation: { platform: "software" },
+    };
+    const graph = buildRoutingGraph(SELF_ID, [candidate]);
+    const edge = graph.getEdge(SELF_ID, "agent-a")!;
+    // 0.3 × (1 + 0.1 × 0.2) = 0.306
+    expect(edge.trust).toBeCloseTo(0.306, 5);
+  });
+
+  it("hardware-attested (non-exported) → full 20% boost", () => {
+    const candidate: CandidateProfile = {
+      ...baseline(),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+    };
+    const graph = buildRoutingGraph(SELF_ID, [candidate]);
+    const edge = graph.getEdge(SELF_ID, "agent-a")!;
+    // 0.3 × (1 + 1.0 × 0.2) = 0.36
+    expect(edge.trust).toBeCloseTo(0.36, 5);
+  });
+
+  it("hardware-exported → half boost (0.5 × 0.2 = 10% multiplier)", () => {
+    const candidate: CandidateProfile = {
+      ...baseline(),
+      hardware_attestation: { platform: "secure_enclave", key_exported: true },
+    };
+    const graph = buildRoutingGraph(SELF_ID, [candidate]);
+    const edge = graph.getEdge(SELF_ID, "agent-a")!;
+    // 0.3 × (1 + 0.5 × 0.2) = 0.33
+    expect(edge.trust).toBeCloseTo(0.33, 5);
+  });
+
+  it("boost caps trust at 1.0 — max possible composed trust never exceeds 1", () => {
+    const candidate: CandidateProfile = {
+      ...makeCandidate({
+        motebit_id: asMotebitId("agent-a"),
+        trust_record: makeTrustRecord({
+          trust_level: AgentTrustLevel.Trusted, // already at the ceiling
+        }),
+      }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+    };
+    const graph = buildRoutingGraph(SELF_ID, [candidate]);
+    const edge = graph.getEdge(SELF_ID, "agent-a")!;
+    expect(edge.trust).toBeLessThanOrEqual(1.0);
+  });
+
+  it("HW-attested candidate ranks above software-only candidate with same baseline", () => {
+    const hardware = makeCandidate({
+      motebit_id: asMotebitId("hw-agent"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("hw-agent"),
+        trust_level: AgentTrustLevel.FirstContact,
+      }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+    });
+    const software = makeCandidate({
+      motebit_id: asMotebitId("sw-agent"),
+      trust_record: makeTrustRecord({
+        remote_motebit_id: asMotebitId("sw-agent"),
+        trust_level: AgentTrustLevel.FirstContact,
+      }),
+    });
+    const scores = graphRankCandidates(SELF_ID, [software, hardware], defaultReqs, {});
+    const hwScore = scores.find((s) => s.motebit_id === "hw-agent")!;
+    const swScore = scores.find((s) => s.motebit_id === "sw-agent")!;
+    expect(hwScore.composite).toBeGreaterThan(swScore.composite);
+  });
+});

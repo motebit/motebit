@@ -4,6 +4,7 @@ import type {
   MotebitId,
   MarketConfig,
   RouteScore,
+  HardwareAttestationClaim,
 } from "@motebit/protocol";
 import { AgentTrustLevel } from "@motebit/protocol";
 import { trustLevelToScore } from "@motebit/semiring";
@@ -22,6 +23,16 @@ export interface CandidateProfile {
   guardian_public_key?: string;
   /** Agent's MCP endpoint URL (from agent_registry). Used for sovereign delegation. */
   endpoint_url?: string;
+  /**
+   * Hardware attestation claim extracted from the candidate's most
+   * recent `TrustCredential`'s `credentialSubject.hardware_attestation`.
+   * Absent when the candidate hasn't published one; the routing path
+   * scores `HW_ATTESTATION_NONE` (0.0) and the trust edge is unaffected.
+   * Present with `platform: "secure_enclave"` or similar → the edge's
+   * trust score is multiplicatively boosted via
+   * `HardwareAttestationSemiring`'s scoring.
+   */
+  hardware_attestation?: HardwareAttestationClaim;
 }
 
 export interface TaskRequirements {
