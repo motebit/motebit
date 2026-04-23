@@ -24,11 +24,26 @@
  * `#### Wire format (foundation law)` block in `spec/computer-use-v1.md`,
  * so `check-spec-coverage` (invariant #9) keeps the spec and types in
  * lockstep.
+ *
+ * ── Release status ───────────────────────────────────────────────────
+ *
+ * Every export in this file carries `@alpha` — the wire format was revised
+ * on 2026-04-22 in response to external principal review (commit 54158b11,
+ * flat envelope → nested discriminated union) and has only soaked inside
+ * the monorepo since. `@alpha` carves these types out of `@motebit/protocol`'s
+ * SemVer contract for the 1.x series: the `check-api-surface` baseline still
+ * tracks their shape so unintended drift is caught, but a shape reshape does
+ * not force a major bump. Promote to `@beta` → `@public` once a second
+ * producer (cloud-browser surface, federation peer replaying an audit log)
+ * or a non-desktop-shim consumer exercises the format in anger.
  */
 
 // ── Primitives ───────────────────────────────────────────────────────
 
-/** A point in primary-display logical pixel coordinates. `(0, 0)` = top-left. */
+/**
+ * A point in primary-display logical pixel coordinates. `(0, 0)` = top-left.
+ * @alpha
+ */
 export interface ComputerPoint {
   readonly x: number;
   readonly y: number;
@@ -40,6 +55,7 @@ export interface ComputerPoint {
  * approval UX explain "motebit clicked the Send button" instead of only
  * "(512, 384)". Execution still happens at the pixel coordinates in
  * `target`; the hint is advisory.
+ * @alpha
  */
 export interface ComputerTargetHint {
   /** Role name. Examples: `"button"`, `"link"`, `"textbox"`, `"menuitem"`. */
@@ -56,17 +72,26 @@ export interface ComputerTargetHint {
 
 // ── Action variants ──────────────────────────────────────────────────
 
-/** Capture the primary display's current frame. */
+/**
+ * Capture the primary display's current frame.
+ * @alpha
+ */
 export interface ScreenshotAction {
   readonly kind: "screenshot";
 }
 
-/** Read the current cursor coordinates. */
+/**
+ * Read the current cursor coordinates.
+ * @alpha
+ */
 export interface CursorPositionAction {
   readonly kind: "cursor_position";
 }
 
-/** Single mouse click at `target`. */
+/**
+ * Single mouse click at `target`.
+ * @alpha
+ */
 export interface ClickAction {
   readonly kind: "click";
   readonly target: ComputerPoint;
@@ -77,7 +102,10 @@ export interface ClickAction {
   readonly target_hint?: ComputerTargetHint;
 }
 
-/** Two clicks in rapid succession at `target`. */
+/**
+ * Two clicks in rapid succession at `target`.
+ * @alpha
+ */
 export interface DoubleClickAction {
   readonly kind: "double_click";
   readonly target: ComputerPoint;
@@ -86,14 +114,20 @@ export interface DoubleClickAction {
   readonly target_hint?: ComputerTargetHint;
 }
 
-/** Move cursor to `target` without clicking. */
+/**
+ * Move cursor to `target` without clicking.
+ * @alpha
+ */
 export interface MouseMoveAction {
   readonly kind: "mouse_move";
   readonly target: ComputerPoint;
   readonly target_hint?: ComputerTargetHint;
 }
 
-/** Press at `from`, move to `to`, release. */
+/**
+ * Press at `from`, move to `to`, release.
+ * @alpha
+ */
 export interface DragAction {
   readonly kind: "drag";
   readonly from: ComputerPoint;
@@ -105,7 +139,10 @@ export interface DragAction {
   readonly target_hint?: ComputerTargetHint;
 }
 
-/** Keyboard text input. */
+/**
+ * Keyboard text input.
+ * @alpha
+ */
 export interface TypeAction {
   readonly kind: "type";
   readonly text: string;
@@ -116,13 +153,19 @@ export interface TypeAction {
   readonly per_char_delay_ms?: number;
 }
 
-/** Keyboard combination. Example: `"cmd+c"`, `"ctrl+shift+t"`, `"escape"`. */
+/**
+ * Keyboard combination. Example: `"cmd+c"`, `"ctrl+shift+t"`, `"escape"`.
+ * @alpha
+ */
 export interface KeyAction {
   readonly kind: "key";
   readonly key: string;
 }
 
-/** Scroll at `target` by `(dx, dy)` wheel deltas. */
+/**
+ * Scroll at `target` by `(dx, dy)` wheel deltas.
+ * @alpha
+ */
 export interface ScrollAction {
   readonly kind: "scroll";
   readonly target: ComputerPoint;
@@ -133,6 +176,7 @@ export interface ScrollAction {
 /**
  * Full action taxonomy. Every concrete action the motebit can request is
  * one of these. Exhaustive discriminated union on `kind`.
+ * @alpha
  */
 export type ComputerAction =
   | ScreenshotAction
@@ -145,7 +189,10 @@ export type ComputerAction =
   | KeyAction
   | ScrollAction;
 
-/** Discriminator values — useful for JSON Schema enum and runtime validation. */
+/**
+ * Discriminator values — useful for JSON Schema enum and runtime validation.
+ * @alpha
+ */
 export const COMPUTER_ACTION_KINDS = [
   "screenshot",
   "cursor_position",
@@ -158,6 +205,7 @@ export const COMPUTER_ACTION_KINDS = [
   "scroll",
 ] as const;
 
+/** @alpha */
 export type ComputerActionKind = (typeof COMPUTER_ACTION_KINDS)[number];
 
 // ── Request envelope ─────────────────────────────────────────────────
@@ -166,6 +214,7 @@ export type ComputerActionKind = (typeof COMPUTER_ACTION_KINDS)[number];
  * One invocation of the `computer` tool. The `action` field holds a nested
  * discriminated variant; all action-specific fields live inside that
  * object. Impossible states are structurally unrepresentable.
+ * @alpha
  */
 export interface ComputerActionRequest {
   /** Open session the action belongs to. */
@@ -178,6 +227,7 @@ export interface ComputerActionRequest {
 /**
  * Outcome of a successful observation action's execution. Returned as the
  * `data` field of a `ToolResult`. Discriminated by `kind`.
+ * @alpha
  */
 export type ComputerObservationResult = ScreenshotObservation | CursorPositionObservation;
 
@@ -185,6 +235,7 @@ export type ComputerObservationResult = ScreenshotObservation | CursorPositionOb
  * Structured redaction metadata. Replaces a bare boolean — a verifier can
  * now prove *what* was redacted, under *which* policy version, and whether
  * the bytes the AI saw are raw or a projection.
+ * @alpha
  */
 export interface ComputerRedaction {
   /** `true` iff any region was classified as sensitive and masked. */
@@ -215,6 +266,7 @@ export interface ComputerRedaction {
  * a distinct projection (e.g. masked image), both the raw and projection
  * artifact IDs are referenced so a verifier can fetch either depending on
  * authorization.
+ * @alpha
  */
 export interface ScreenshotObservation {
   readonly kind: "screenshot";
@@ -242,7 +294,10 @@ export interface ScreenshotObservation {
   readonly projection_artifact_sha256?: string;
 }
 
-/** Cursor-position observation — single coordinate pair. */
+/**
+ * Cursor-position observation — single coordinate pair.
+ * @alpha
+ */
 export interface CursorPositionObservation {
   readonly kind: "cursor_position";
   readonly session_id: string;
@@ -262,6 +317,7 @@ export interface CursorPositionObservation {
  * action coordinates live in). `scaling_factor` is the logical-to-physical
  * ratio (Retina = 2.0). Screenshot dimensions returned in observations
  * match the logical dimensions, not the physical raster.
+ * @alpha
  */
 export interface ComputerSessionOpened {
   readonly session_id: string;
@@ -272,7 +328,10 @@ export interface ComputerSessionOpened {
   readonly opened_at: number;
 }
 
-/** Signed event emitted when a computer-use session ends. */
+/**
+ * Signed event emitted when a computer-use session ends.
+ * @alpha
+ */
 export interface ComputerSessionClosed {
   readonly session_id: string;
   readonly closed_at: number;
@@ -298,6 +357,7 @@ export interface ComputerSessionClosed {
  *   user_preempted     — physical user input interrupted mid-dispatch
  *   platform_blocked   — OS blocked synthetic input (secure password field, elevation boundary)
  *   not_supported      — surface cannot execute computer use at all
+ * @alpha
  */
 export const COMPUTER_FAILURE_REASONS = [
   "policy_denied",
@@ -312,4 +372,5 @@ export const COMPUTER_FAILURE_REASONS = [
   "not_supported",
 ] as const;
 
+/** @alpha */
 export type ComputerFailureReason = (typeof COMPUTER_FAILURE_REASONS)[number];

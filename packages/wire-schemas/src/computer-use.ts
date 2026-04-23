@@ -1,6 +1,15 @@
 /**
  * Computer-use payload schemas — wire artifacts for `computer-use-v1.md`.
  *
+ * Release status: the corresponding types in `@motebit/protocol` are tagged
+ * `@alpha` for the 1.x series (wire format revised 2026-04-22 after external
+ * principal review; insufficient soak time for SemVer commitment). These
+ * zod schemas mirror the alpha surface — the committed JSON Schemas in
+ * `spec/schemas/computer-*.json` are similarly provisional. Shape changes
+ * will not force major version bumps until the types are promoted to
+ * `@beta` / `@public` in `@motebit/protocol`. See
+ * `packages/protocol/src/computer-use.ts` § "Release status".
+ *
  * Four top-level payload types:
  *   - ComputerActionRequest       — the tool call, action as nested variant
  *   - ComputerObservationResult   — screenshot | cursor_position

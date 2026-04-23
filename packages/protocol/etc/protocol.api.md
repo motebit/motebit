@@ -452,7 +452,7 @@ export interface CitedAnswer {
     receipt: ExecutionReceipt;
 }
 
-// @public
+// @alpha
 export interface ClickAction {
     readonly button?: string;
     // (undocumented)
@@ -502,32 +502,32 @@ export interface CollaborativeReceipt {
 // @public
 export function composeTrustChain(scores: number[]): number;
 
-// @public
+// @alpha
 export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll"];
 
-// @public
+// @alpha
 export const COMPUTER_FAILURE_REASONS: readonly ["policy_denied", "approval_required", "approval_expired", "permission_denied", "session_closed", "target_not_found", "target_obscured", "user_preempted", "platform_blocked", "not_supported"];
 
-// @public
+// @alpha
 export type ComputerAction = ScreenshotAction | CursorPositionAction | ClickAction | DoubleClickAction | MouseMoveAction | DragAction | TypeAction | KeyAction | ScrollAction;
 
-// @public (undocumented)
+// @alpha (undocumented)
 export type ComputerActionKind = (typeof COMPUTER_ACTION_KINDS)[number];
 
-// @public
+// @alpha
 export interface ComputerActionRequest {
     // (undocumented)
     readonly action: ComputerAction;
     readonly session_id: string;
 }
 
-// @public (undocumented)
+// @alpha (undocumented)
 export type ComputerFailureReason = (typeof COMPUTER_FAILURE_REASONS)[number];
 
-// @public
+// @alpha
 export type ComputerObservationResult = ScreenshotObservation | CursorPositionObservation;
 
-// @public
+// @alpha
 export interface ComputerPoint {
     // (undocumented)
     readonly x: number;
@@ -535,7 +535,7 @@ export interface ComputerPoint {
     readonly y: number;
 }
 
-// @public
+// @alpha
 export interface ComputerRedaction {
     readonly applied: boolean;
     readonly classified_regions_count?: number;
@@ -544,7 +544,7 @@ export interface ComputerRedaction {
     readonly projection_kind: string;
 }
 
-// @public
+// @alpha
 export interface ComputerSessionClosed {
     // (undocumented)
     readonly closed_at: number;
@@ -553,7 +553,7 @@ export interface ComputerSessionClosed {
     readonly session_id: string;
 }
 
-// @public
+// @alpha
 export interface ComputerSessionOpened {
     // (undocumented)
     readonly display_height: number;
@@ -569,7 +569,7 @@ export interface ComputerSessionOpened {
     readonly session_id: string;
 }
 
-// @public
+// @alpha
 export interface ComputerTargetHint {
     readonly label?: string;
     readonly role?: string;
@@ -747,13 +747,13 @@ export interface CredentialStoreAdapter {
     save(credential: StoredCredential): void;
 }
 
-// @public
+// @alpha
 export interface CursorPositionAction {
     // (undocumented)
     readonly kind: "cursor_position";
 }
 
-// @public
+// @alpha
 export interface CursorPositionObservation {
     // (undocumented)
     readonly captured_at: number;
@@ -992,7 +992,7 @@ export interface DisputeResolution {
 // @public
 export type DisputeState = "opened" | "evidence" | "arbitration" | "resolved" | "appealed" | "final" | "expired";
 
-// @public
+// @alpha
 export interface DoubleClickAction {
     // (undocumented)
     readonly button?: string;
@@ -1006,7 +1006,7 @@ export interface DoubleClickAction {
     readonly target_hint?: ComputerTargetHint;
 }
 
-// @public
+// @alpha
 export interface DragAction {
     // (undocumented)
     readonly button?: string;
@@ -1467,7 +1467,7 @@ export function isSuiteId(value: unknown): value is SuiteId;
 // @public
 export function joinParallelRoutes(scores: number[]): number;
 
-// @public
+// @alpha
 export interface KeyAction {
     // (undocumented)
     readonly key: string;
@@ -1711,7 +1711,7 @@ export enum MotebitType {
     Service = "service"
 }
 
-// @public
+// @alpha
 export interface MouseMoveAction {
     // (undocumented)
     readonly kind: "mouse_move";
@@ -2143,13 +2143,13 @@ export interface RouteScore {
     };
 }
 
-// @public
+// @alpha
 export interface ScreenshotAction {
     // (undocumented)
     readonly kind: "screenshot";
 }
 
-// @public
+// @alpha
 export interface ScreenshotObservation {
     readonly artifact_id: string;
     readonly artifact_sha256: string;
@@ -2167,7 +2167,7 @@ export interface ScreenshotObservation {
     readonly width: number;
 }
 
-// @public
+// @alpha
 export interface ScrollAction {
     // (undocumented)
     readonly dx: number;
@@ -2698,7 +2698,7 @@ export interface TurnContext {
     turnStartMs: number;
 }
 
-// @public
+// @alpha
 export interface TypeAction {
     // (undocumented)
     readonly kind: "type";
