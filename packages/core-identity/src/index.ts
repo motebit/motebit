@@ -332,6 +332,24 @@ export interface BootstrapConfigStore {
 
 export interface BootstrapKeyStore {
   storePrivateKey(privKeyHex: string): Promise<void>;
+  /**
+   * Probe whether the keystore currently holds an Ed25519 private key.
+   *
+   * Optional for backward compat — surfaces that implemented this interface
+   * before the method was added still work, but they lose the divergent-
+   * state recovery (see `bootstrapIdentity` below). New implementations
+   * should provide this.
+   *
+   * Returning `false` signals "no private key is stored" — the
+   * bootstrapIdentity() caller will treat the current config as stale and
+   * take the first-launch path, minting a fresh keypair and overwriting
+   * the config's `device_public_key`. Implementations must not throw on
+   * missing keys; return `false`.
+   *
+   * Typical implementations: check whether the OS keyring slot, the
+   * encrypted file, or the secure-store entry exists and is non-empty.
+   */
+  hasPrivateKey?(): Promise<boolean>;
 }
 
 export interface BootstrapResult {
@@ -369,7 +387,41 @@ export async function bootstrapIdentity(opts: {
 
   const existing = await configStore.read();
 
-  if (existing && existing.motebit_id) {
+  // Divergent-state guard: the config can claim an identity
+  // (motebit_id + device_public_key) while the keystore has no matching
+  // private key. This can happen when:
+  //   - a prior bootstrap crashed between keyStore.storePrivateKey() and
+  //     configStore.write() (or the other way around),
+  //   - the OS keyring entry was revoked / deleted outside the app,
+  //   - a sibling surface (CLI) populated config from its own encrypted
+  //     key store that this surface can't read,
+  //   - the user migrated machines and copied config but not the keyring.
+  // In every case, holding one half of the identity is dead state — the
+  // private key can't be recovered from the public key, and without the
+  // private key no relay auth, no signed receipts, no device identity at
+  // all. The only clean recovery is to treat this as a first launch: mint
+  // a fresh keypair, overwrite the config, and emit a new IdentityCreated
+  // event. The prior identity is orphaned (its public key remains visible
+  // on any relays it registered with, but this device can no longer
+  // operate under it).
+  //
+  // The probe is optional — older keyStore impls that predate hasPrivateKey
+  // keep the pre-2026-04-23 behavior (trust the config unconditionally).
+  const keyStoreIntact = existing && keyStore.hasPrivateKey ? await keyStore.hasPrivateKey() : true;
+
+  if (existing && existing.motebit_id && !keyStoreIntact) {
+    // Log once, at warning level — the operator needs to see this the
+    // first time it happens (divergent state is unusual), and any
+    // downstream support bug report should have it in the console.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[${surfaceName}] bootstrapIdentity: config claims identity ` +
+        `${existing.motebit_id} but the keystore has no matching private ` +
+        `key — treating as first launch. The prior identity is orphaned.`,
+    );
+  }
+
+  if (existing && existing.motebit_id && keyStoreIntact) {
     // Config has an identity — verify it exists in the DB
     const loaded = await identityManager.load(existing.motebit_id);
     if (loaded) {

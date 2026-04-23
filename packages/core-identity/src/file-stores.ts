@@ -101,6 +101,11 @@ export class FileSystemBootstrapKeyStore implements BootstrapKeyStore {
     chmodSync(this.keyPath, 0o600);
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- implements async interface
+  async hasPrivateKey(): Promise<boolean> {
+    return this.readPrivateKey() !== null;
+  }
+
   /** Read the persisted private key hex. Returns null if missing or empty. */
   readPrivateKey(): string | null {
     if (!existsSync(this.keyPath)) return null;

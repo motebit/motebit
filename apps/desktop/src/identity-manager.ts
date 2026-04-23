@@ -120,6 +120,18 @@ export class IdentityManager {
       async storePrivateKey(privKeyHex) {
         await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
       },
+      async hasPrivateKey() {
+        try {
+          const val = await invoke<string | null>("keyring_get", { key: "device_private_key" });
+          return val != null && val !== "";
+        } catch {
+          // Keyring access denied / unavailable → treat as absent. The
+          // first-launch recovery will try to write through the same
+          // keyring, which will surface any real permission issue with
+          // a clearer error.
+          return false;
+        }
+      },
     };
 
     const storage = createTauriStorage(invoke);

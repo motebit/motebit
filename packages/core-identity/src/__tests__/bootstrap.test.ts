@@ -32,6 +32,10 @@ class TestKeyStore implements BootstrapKeyStore {
     this.storedKey = privKeyHex;
     return Promise.resolve();
   }
+
+  hasPrivateKey() {
+    return Promise.resolve(this.storedKey != null && this.storedKey !== "");
+  }
 }
 
 describe("bootstrapIdentity", () => {
@@ -79,25 +83,41 @@ describe("bootstrapIdentity", () => {
   });
 
   it("second launch: reads config, returns isFirstLaunch=false, does not overwrite key", async () => {
+    // Use a counting key store so we can verify storePrivateKey isn't
+    // called again without clearing storedKey (clearing would simulate
+    // divergent state, which the new contract correctly recovers from
+    // by re-minting — see the divergent-state test below).
+    class CountingKeyStore implements BootstrapKeyStore {
+      storedKey: string | null = null;
+      storeCalls = 0;
+      storePrivateKey(privKeyHex: string) {
+        this.storeCalls++;
+        this.storedKey = privKeyHex;
+        return Promise.resolve();
+      }
+      hasPrivateKey() {
+        return Promise.resolve(this.storedKey != null && this.storedKey !== "");
+      }
+    }
+    const counting = new CountingKeyStore();
+
     // First launch
     const first = await bootstrapIdentity({
       surfaceName: "test",
       identityStorage,
       eventStoreAdapter,
       configStore,
-      keyStore,
+      keyStore: counting,
     });
+    expect(counting.storeCalls).toBe(1);
 
-    // Reset key store to verify it's not called again
-    keyStore.storedKey = null;
-
-    // Second launch — config already has identity
+    // Second launch — config AND keystore both have the identity
     const second = await bootstrapIdentity({
       surfaceName: "test",
       identityStorage,
       eventStoreAdapter,
       configStore,
-      keyStore,
+      keyStore: counting,
     });
 
     expect(second.isFirstLaunch).toBe(false);
@@ -105,8 +125,8 @@ describe("bootstrapIdentity", () => {
     expect(second.deviceId).toBe(first.deviceId);
     expect(second.publicKeyHex).toBe(first.publicKeyHex);
 
-    // Key store should NOT have been called
-    expect(keyStore.storedKey).toBeNull();
+    // storePrivateKey should NOT have been called again — returning user
+    expect(counting.storeCalls).toBe(1);
   });
 
   it("different surface names produce the same canonical identity shape", async () => {
@@ -167,14 +187,23 @@ describe("bootstrapIdentity", () => {
     expect(new Set(keys).size).toBe(surfaces.length);
   });
 
-  it("config exists but DB missing: re-creates in DB with SAME motebit_id, returns existing config", async () => {
-    // Simulate: config has identity data but DB is empty (e.g. create-motebit wrote
-    // config but not DB, or DB was wiped)
+  it("config exists but DB missing (keystore intact): re-creates in DB with SAME motebit_id, returns existing config", async () => {
+    // Simulate: config has identity data and keystore has the matching
+    // private key, but the identity DB is missing the row (e.g. the user
+    // copied config.json + keychain entry between machines but the DB
+    // file stayed behind, or the DB was wiped). Recovery path: restore
+    // the identity row in the DB under the EXISTING motebit_id — do NOT
+    // mint a new one.
     configStore.data = {
       motebit_id: "orphaned-id",
       device_id: "old-device",
       device_public_key: "aa".repeat(32),
     };
+    // Pre-populate keystore so the divergent-state guard doesn't fire —
+    // this is the "keypair exists, DB missing" scenario, NOT the
+    // "keypair missing, DB missing" scenario (that's the divergent case
+    // below, which re-mints).
+    keyStore.storedKey = "ab".repeat(32);
 
     const result = await bootstrapIdentity({
       surfaceName: "test",
@@ -185,7 +214,6 @@ describe("bootstrapIdentity", () => {
     });
 
     // Recovery path: re-create identity in DB, return existing config
-    // Not a first launch — keypair already exists in keystore
     expect(result.isFirstLaunch).toBe(false);
     expect(result.motebitId).toBe("orphaned-id");
     expect(result.deviceId).toBe("old-device");
@@ -198,13 +226,95 @@ describe("bootstrapIdentity", () => {
     expect(dbIdentity!.owner_id).toBe("test");
   });
 
-  it("config exists but DB missing and no public key: still restores identity", async () => {
-    // Edge case: config written by older version without device_public_key
+  it("divergent state: config has identity but keystore is empty → treats as first launch, mints fresh keypair, overwrites config", async () => {
+    // Simulate: config was populated by some prior step (e.g. CLI onboarding,
+    // or a previous bootstrap that crashed mid-write) but the keystore
+    // never got the private key. Holding only the public half is dead
+    // state — the private key can't be recovered. Fresh mint is the only
+    // clean path.
+    configStore.data = {
+      motebit_id: "orphaned-divergent-id",
+      device_id: "orphaned-device",
+      device_public_key: "bb".repeat(32),
+    };
+    expect(keyStore.storedKey).toBeNull();
+
+    const result = await bootstrapIdentity({
+      surfaceName: "test",
+      identityStorage,
+      eventStoreAdapter,
+      configStore,
+      keyStore,
+    });
+
+    // Fresh mint — NOT the orphaned identity
+    expect(result.isFirstLaunch).toBe(true);
+    expect(result.motebitId).not.toBe("orphaned-divergent-id");
+    expect(result.publicKeyHex).not.toBe("bb".repeat(32));
+    expect(result.publicKeyHex).toMatch(/^[0-9a-f]{64}$/);
+
+    // Keystore now holds the new private key
+    expect(keyStore.storedKey).toMatch(/^[0-9a-f]{64}$/);
+
+    // Config has been overwritten with the new identity's public key
+    expect(configStore.data!.motebit_id).toBe(result.motebitId);
+    expect(configStore.data!.device_public_key).toBe(result.publicKeyHex);
+    expect(configStore.data!.device_id).toBe(result.deviceId);
+
+    // The new identity exists in the DB (and the orphan does not)
+    const loaded = await identityStorage.load(result.motebitId);
+    expect(loaded).not.toBeNull();
+    const orphan = await identityStorage.load("orphaned-divergent-id");
+    expect(orphan).toBeNull();
+  });
+
+  it("legacy keystore without hasPrivateKey: pre-2026-04-23 behavior preserved (trusts config)", async () => {
+    // Older surfaces that implemented BootstrapKeyStore before hasPrivateKey
+    // was added: the method is undefined. bootstrapIdentity must keep
+    // treating config-present as "returning user" without the probe,
+    // matching the behavior those surfaces were tested against.
+    class LegacyKeyStore implements BootstrapKeyStore {
+      storedKey: string | null = null;
+      storePrivateKey(privKeyHex: string) {
+        this.storedKey = privKeyHex;
+        return Promise.resolve();
+      }
+      // No hasPrivateKey method
+    }
+    const legacyKeys = new LegacyKeyStore();
+
+    configStore.data = {
+      motebit_id: "pre-hasprivatekey-id",
+      device_id: "pre-device",
+      device_public_key: "cc".repeat(32),
+    };
+
+    const result = await bootstrapIdentity({
+      surfaceName: "test",
+      identityStorage,
+      eventStoreAdapter,
+      configStore,
+      keyStore: legacyKeys,
+    });
+
+    // Returning-user path, even though keystore is empty — the legacy
+    // contract had no way to check, so we trust the config.
+    expect(result.isFirstLaunch).toBe(false);
+    expect(result.motebitId).toBe("pre-hasprivatekey-id");
+    expect(result.publicKeyHex).toBe("cc".repeat(32));
+    expect(legacyKeys.storedKey).toBeNull();
+  });
+
+  it("config exists (keystore intact) but DB missing and no public key: still restores identity", async () => {
+    // Edge case: config written by older version without device_public_key,
+    // keystore still has the private key (so the divergent-state guard
+    // doesn't trip). The old-version restoration path should still work.
     configStore.data = {
       motebit_id: "orphaned-id-2",
       device_id: "old-device-2",
       device_public_key: "",
     };
+    keyStore.storedKey = "cd".repeat(32);
 
     const result = await bootstrapIdentity({
       surfaceName: "test",

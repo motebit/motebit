@@ -644,6 +644,14 @@ export class MobileApp {
       async storePrivateKey(hex: string) {
         await keyring.set("device_private_key", hex);
       },
+      async hasPrivateKey() {
+        try {
+          const val = await keyring.get("device_private_key");
+          return val != null && val !== "";
+        } catch {
+          return false;
+        }
+      },
     };
 
     const storage = createExpoStorage("motebit.db");
