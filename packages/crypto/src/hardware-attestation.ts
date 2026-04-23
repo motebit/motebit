@@ -127,6 +127,22 @@ interface SecureEnclaveBody {
 }
 
 /**
+ * Context fields the dispatcher lifts out of the VC subject and hands
+ * to the `deviceCheck` arm so it can re-derive the JCS body Apple
+ * signed over. motebit_id / device_id / attested_at participate in
+ * that body alongside identity_public_key; without them the verifier
+ * cannot bind the receipt to the caller's identity. Each field is
+ * optional at the type level so an older credential subject that
+ * doesn't carry them flows through with `identity_bound: false`
+ * rather than crashing the verifier.
+ */
+export interface DeviceCheckVerifierContext {
+  readonly expectedMotebitId?: string;
+  readonly expectedDeviceId?: string;
+  readonly expectedAttestedAt?: number;
+}
+
+/**
  * Optional platform-verifier dispatch injected at call site by the
  * consumer. Each slot takes the claim + the expected Ed25519 identity
  * key (lowercase hex) and returns a verification result matching the
@@ -139,11 +155,19 @@ interface SecureEnclaveBody {
  * this object so that dispatch remains explicit, auditable, and
  * tree-shakable: a verifier that doesn't care about App Attest ships
  * zero App Attest code.
+ *
+ * `deviceCheck` takes an optional third `context` argument carrying
+ * the VC-subject fields that participate in the JCS body the Swift
+ * mint path signs over (motebit_id / device_id / attested_at). The
+ * dispatcher populates this from the credential subject; direct
+ * callers threading their own context can too. Older injected
+ * verifiers that ignore the third argument still satisfy the type.
  */
 export interface HardwareAttestationVerifiers {
   readonly deviceCheck?: (
     claim: HardwareAttestationClaim,
     expectedIdentityPublicKeyHex: string,
+    context?: DeviceCheckVerifierContext,
   ) =>
     | HardwareAttestationVerifyResult
     | PromiseLike<HardwareAttestationVerifyResult>
@@ -177,6 +201,10 @@ export interface HardwareAttestationVerifiers {
  *   a claim's platform has no verifier wired, the dispatcher returns a
  *   stub `valid: false, errors: [{message:"adapter not yet shipped"}]`
  *   so verification remains fail-closed by default.
+ * - `deviceCheckContext` — VC-subject fields (motebit_id / device_id /
+ *   attested_at) lifted from the credential subject; threaded to the
+ *   injected `deviceCheck` verifier so it can re-derive the JCS body
+ *   Apple signed over. Ignored for every other platform.
  *
  * Zero throws — every failure lands as `valid: false` with a structured
  * reason so callers can render consistent audit output. The
@@ -188,6 +216,7 @@ export function verifyHardwareAttestationClaim(
   claim: HardwareAttestationClaim,
   expectedIdentityPublicKeyHex: string,
   verifiers?: HardwareAttestationVerifiers,
+  deviceCheckContext?: DeviceCheckVerifierContext,
 ): HardwareAttestationVerifyResult | Promise<HardwareAttestationVerifyResult> {
   const platform = claim.platform;
   const errors: HardwareAttestationError[] = [];
@@ -210,7 +239,7 @@ export function verifyHardwareAttestationClaim(
       if (verifiers?.deviceCheck) {
         return dispatchInjected(
           platform,
-          verifiers.deviceCheck(claim, expectedIdentityPublicKeyHex),
+          verifiers.deviceCheck(claim, expectedIdentityPublicKeyHex, deviceCheckContext),
         );
       }
       errors.push({

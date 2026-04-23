@@ -161,6 +161,7 @@ export type {
   HardwareAttestationError,
   HardwareAttestationVerifyResult,
   HardwareAttestationVerifiers,
+  DeviceCheckVerifierContext,
 } from "./hardware-attestation.js";
 import { verifyHardwareAttestationClaim } from "./hardware-attestation.js";
 import type {
@@ -1092,6 +1093,9 @@ async function verifyCredential(
     | (Record<string, unknown> & {
         readonly hardware_attestation?: unknown;
         readonly identity_public_key?: unknown;
+        readonly motebit_id?: unknown;
+        readonly device_id?: unknown;
+        readonly attested_at?: unknown;
       })
     | undefined;
   let hardwareAttestation: HardwareAttestationVerifyResult | undefined;
@@ -1102,6 +1106,22 @@ async function verifyCredential(
     typeof subject.hardware_attestation === "object" &&
     typeof subject.identity_public_key === "string"
   ) {
+    // Lift the subject fields that participate in the Swift-composed
+    // JCS body for App Attest. `attested_at` is always on the subject;
+    // `motebit_id` / `device_id` may appear on future credential
+    // variants. The injected deviceCheck verifier uses them to
+    // re-derive the body and byte-compare against the transmitted
+    // clientDataHash. Every field is optional at this layer —
+    // fail-closed behavior for a missing field lives inside the
+    // verifier itself so the outer dispatcher stays uniform across
+    // platforms.
+    const deviceCheckContext = {
+      ...(typeof subject.motebit_id === "string" ? { expectedMotebitId: subject.motebit_id } : {}),
+      ...(typeof subject.device_id === "string" ? { expectedDeviceId: subject.device_id } : {}),
+      ...(typeof subject.attested_at === "number"
+        ? { expectedAttestedAt: subject.attested_at }
+        : {}),
+    };
     // The dispatcher may return a Promise when an injected adapter
     // (e.g. @motebit/crypto-appattest for device_check) is wired in.
     // Always `await` so the resulting shape is the canonical
@@ -1110,6 +1130,7 @@ async function verifyCredential(
       subject.hardware_attestation as Parameters<typeof verifyHardwareAttestationClaim>[0],
       subject.identity_public_key,
       hardwareAttestationVerifiers,
+      deviceCheckContext,
     );
   }
 

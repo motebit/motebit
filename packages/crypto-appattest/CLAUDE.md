@@ -7,10 +7,10 @@ Apple App Attest chain-verification adapter. BSL-1.1, Layer 2. The second metabo
 Apple's App Attest attestation format is **X.509-shaped judgment**, not raw cryptography. Verifying it means:
 
 1. Parsing the CBOR attestation object Apple emits from `DCAppAttestService.attestKey`.
-2. Verifying the leaf + intermediate certificate chain against **the Apple App Attest root CA** (hard-pinned here — pinning the root is the self-attesting contract).
+2. Verifying the leaf + intermediate certificate chain against **the Apple App Attest root CA** (hard-pinned here — pinning the root is the self-attesting contract). The chain is built via `@peculiar/x509`'s `X509ChainBuilder`, every non-leaf is asserted to carry `basicConstraints.cA === true` (a misissued leaf presented as an intermediate is rejected even if its signature chains), every signature is verified, every cert is checked against its validity window, and the terminal cert's DER must equal the pinned root byte-for-byte.
 3. Extracting the receipt extension OID `1.2.840.113635.100.8.2` and asserting it binds `SHA256(authData || clientDataHash)`.
 4. Parsing the WebAuthn-shaped `authData` to assert `rpIdHash === SHA256(bundleId)`.
-5. Confirming the attested body names the caller's Ed25519 identity key.
+5. Confirming the attested body names the caller's Ed25519 identity key. Re-derived from `(motebit_id, device_id, identity_public_key, attested_at)` the caller threads in via `AppAttestVerifyOptions` / `DeviceCheckVerifierContext` — byte-identical to the Swift `CanonicalBody.encode` in `apps/mobile/modules/expo-app-attest/`. SHA-256 of the reconstructed body must equal the transmitted `clientDataHash`. A malicious native client that substitutes any other body fails here.
 
 Step 2 is the reason this lives in BSL, not MIT. **Which root to pin** is a policy judgment. **How to handle chain-path validation, revocation, and clock-skew** is a policy judgment. `@motebit/crypto` stays dep-thin and pure; this package metabolizes `@peculiar/x509` + `cbor2` to produce a yes/no answer the sovereign verifier consumes.
 

@@ -309,17 +309,31 @@ describe("verifyHardwareAttestationClaim — non-SE platforms", () => {
     expect(result.errors[0]!.message).toContain("not wired");
   });
 
-  it("delegates to the injected deviceCheck verifier when wired", async () => {
+  it("delegates to the injected deviceCheck verifier when wired, threading context", async () => {
     const fakeVerifier = vi.fn(async () => ({
       valid: true,
       errors: [],
     }));
+    const ctx = {
+      expectedMotebitId: MOTEBIT_ID,
+      expectedDeviceId: DEVICE_ID,
+      expectedAttestedAt: 1_700_000_000_000,
+    };
     const result = await verifyHardwareAttestationClaim(
       { platform: "device_check", attestation_receipt: "fake" },
       IDENTITY_HEX,
       { deviceCheck: fakeVerifier },
+      ctx,
     );
     expect(fakeVerifier).toHaveBeenCalledOnce();
+    // The dispatcher must thread the context through so the verifier
+    // can re-derive the JCS body Apple signed over. If the third arg
+    // ever drops, App Attest receipts silently lose identity binding.
+    expect(fakeVerifier).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: "device_check" }),
+      IDENTITY_HEX,
+      ctx,
+    );
     expect(result.valid).toBe(true);
     expect(result.platform).toBe("device_check");
   });

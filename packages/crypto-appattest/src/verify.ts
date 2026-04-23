@@ -6,30 +6,33 @@
  * plus the motebit-specific identity-key binding step):
  *
  *   1. Split the receipt into (attestationObjectBase64,
- *      keyIdBase64, bundleIdBase64).
+ *      keyIdBase64, clientDataHashBase64).
  *   2. CBOR-decode the attestation object to {fmt, attStmt:{x5c,
  *      receipt}, authData}. Assert fmt === "apple-appattest".
- *   3. Parse leaf + intermediate as X.509. Verify chain-to-root via
- *      the pinned Apple App Attest root CA.
+ *   3. Parse leaf + intermediate as X.509. Walk the chain from leaf to
+ *      a self-signed root and verify every signature, every CA bit,
+ *      every validity window. The terminal cert's DER must equal the
+ *      pinned Apple App Attest root.
  *   4. Extract OID `1.2.840.113635.100.8.2` from the leaf's
  *      extensions. Assert its payload equals SHA256(authData ||
- *      clientDataHash) where clientDataHash is a fresh SHA256 over
- *      the canonical body the motebit attestation caller would have
- *      signed. (In App Attest parlance: the "nonce" binding.)
+ *      clientDataHash) where clientDataHash is the transmitted hash.
+ *      (In App Attest parlance: the "nonce" binding.)
  *   5. Parse authData (WebAuthn format). First 32 bytes is
  *      `rpIdHash`; assert it equals SHA256(bundleId). (The "bundle"
  *      binding.)
- *   6. Assert the attested body's `identity_public_key` equals the
- *      Ed25519 key the caller expects. (The "motebit identity"
- *      binding — without this, every other step would prove only
- *      that *some* Apple-attested iOS device did something, not that
- *      the Ed25519 key the credential subject claims is actually on
- *      that device.)
+ *   6. Reconstruct the JCS-canonical attestation body from
+ *      (motebit_id, device_id, identity_public_key, attested_at) the
+ *      caller supplies, SHA-256 it, and byte-compare against the
+ *      transmitted `clientDataHash`. This is the cross-stack binding
+ *      — without it, every other step would prove only that *some*
+ *      Apple-attested iOS device did something, not that the Ed25519
+ *      key the credential subject claims is actually on that device.
  *
  * Apple's own inner `receipt` field is NOT verified here — that
  * requires Apple's server-side refresh endpoint and is out of scope
- * for v1. The outer chain + nonce binding + bundle binding is enough
- * for third-party self-verification of device-attested identity.
+ * for v1. The outer chain + nonce binding + bundle binding + motebit
+ * identity binding is enough for third-party self-verification of
+ * device-attested identity.
  */
 
 import * as x509 from "@peculiar/x509";
@@ -47,6 +50,23 @@ export interface AppAttestVerifyOptions {
    * attested body MUST name this key.
    */
   readonly expectedIdentityPublicKeyHex: string;
+  /**
+   * motebit_id from the credential subject. Part of the canonical
+   * attestation body the Swift mint path signs; re-derived here and
+   * byte-compared against the transmitted clientDataHash so a
+   * malicious native client cannot substitute a different body.
+   */
+  readonly expectedMotebitId?: string;
+  /**
+   * device_id from the credential subject. Same binding role as
+   * `expectedMotebitId`.
+   */
+  readonly expectedDeviceId?: string;
+  /**
+   * `attested_at` (unix ms) from the credential subject. Same binding
+   * role as `expectedMotebitId`.
+   */
+  readonly expectedAttestedAt?: number;
   /**
    * Override the pinned Apple root — tests fabricate their own root so
    * chain verification exercises the same code path without needing
@@ -82,6 +102,8 @@ export interface AppAttestVerifyResult {
 
 /** OID for Apple's nonce-binding extension inside the App Attest leaf. */
 const APPLE_NONCE_EXTENSION_OID = "1.2.840.113635.100.8.2";
+/** OID for X.509 basic-constraints extension — carries the CA bit. */
+const BASIC_CONSTRAINTS_OID = "2.5.29.19";
 
 /**
  * Apple App Attest attestation verifier.
@@ -154,6 +176,9 @@ export async function verifyAppAttestReceipt(
   }
 
   // ── Step 3: chain verify leaf → intermediate → pinned Apple root ──
+  // Walk the chain, enforce CA constraints on every non-leaf, verify
+  // every signature, and assert the terminal cert is self-signed and
+  // byte-equal to the pinned root's DER.
   let leafCert: x509.X509Certificate;
   let intermediateCert: x509.X509Certificate;
   let rootCert: x509.X509Certificate;
@@ -169,20 +194,19 @@ export async function verifyAppAttestReceipt(
   const nowDate = new Date(opts.now ? opts.now() : Date.now());
 
   try {
-    const leafOk = await leafCert.verify({ publicKey: intermediateCert.publicKey, date: nowDate });
-    const intermediateOk = await intermediateCert.verify({
-      publicKey: rootCert.publicKey,
-      date: nowDate,
+    const chainResult = await verifyCertChain({
+      leaf: leafCert,
+      intermediate: intermediateCert,
+      root: rootCert,
+      nowDate,
     });
-    const rootOk = await rootCert.verify({ publicKey: rootCert.publicKey, date: nowDate });
-    cert_chain_valid = leafOk && intermediateOk && rootOk;
+    cert_chain_valid = chainResult.valid;
+    if (!cert_chain_valid) {
+      errors.push({ message: chainResult.reason });
+    }
   } catch (err) {
     errors.push({ message: `chain verify crashed: ${messageOf(err)}` });
     return fail(errors, { cert_chain_valid, nonce_bound, bundle_bound, identity_bound });
-  }
-
-  if (!cert_chain_valid) {
-    errors.push({ message: "leaf/intermediate/root chain did not verify under pinned root" });
   }
 
   // ── Step 4: nonce binding ──
@@ -235,52 +259,57 @@ export async function verifyAppAttestReceipt(
   }
 
   // ── Step 6: motebit identity-key binding ──
-  // The motebit mint path uses clientDataHash = SHA256(canonicalJson(body))
-  // where body.identity_public_key names the caller's Ed25519 key.
-  // Unlike Apple's nonce (which is any caller-defined challenge), this
-  // is the cross-stack binding — without it, every other step proves
-  // only "some Apple-attested iOS device did something." The caller
-  // supplies its expected identity-pubkey and the body it believes was
-  // signed; the verifier re-computes the hash and asserts equality.
-  //
-  // v1 shape: the attester sends clientDataHash precomputed. The
-  // caller additionally supplies the body fields it expects so we can
-  // recompute and compare — out of scope for the receipt bytes alone.
-  // Moved here as an explicit binding step rather than a field-shape
-  // check so future expansion (e.g. cross-binding to a relay challenge)
-  // slots in cleanly.
-  if (
-    typeof opts.expectedIdentityPublicKeyHex === "string" &&
-    opts.expectedIdentityPublicKeyHex.length > 0
-  ) {
-    // The receipt alone cannot bind to the Ed25519 key unless the
-    // caller also passes the reconstructable body. v1 accepts the
-    // caller's assertion that `clientDataHash` was derived from a
-    // body naming `expectedIdentityPublicKeyHex`. The caller passes
-    // this attestation through the `body` channel of the credential
-    // envelope (see `apps/mobile/src/mint-hardware-credential.ts`),
-    // so by the time verification runs, the outer VC signature has
-    // already bound the subject pubkey to the credential — and *this*
-    // binding check asserts the clientDataHash itself cryptographically
-    // commits to that binding via SHA256.
-    //
-    // The practical verifier: motebit's VC verify pipeline checks the
-    // outer eddsa-jcs-2022 signature against the claimed identity
-    // pubkey, and this function is called from that pipeline. So we
-    // treat this field as a marker that the pipeline performed the
-    // identity-binding step at the VC envelope layer; the binding is
-    // valid when we reach the inner AppAttest verify iff the envelope
-    // verification succeeded. We mark `identity_bound = true` when
-    // the other three channels verified — the outer VC signature is
-    // the cryptographic commitment that the authData these bytes
-    // signed names this exact Ed25519 pubkey.
-    identity_bound = cert_chain_valid && nonce_bound && bundle_bound;
-    if (!identity_bound && errors.length === 0) {
+  // Reconstruct the JCS-canonical attestation body the Swift mint path
+  // signed (byte-identical to the string assembled in
+  // `apps/mobile/modules/expo-app-attest/ios/ExpoAppAttestModule.swift`
+  // `CanonicalBody.encode`), SHA-256 it, and byte-compare against
+  // `clientDataHashBytes`. A malicious native client that substitutes
+  // any other body — including one naming a different Ed25519 key,
+  // motebit_id, device_id, or timestamp — produces a different hash
+  // and fails here.
+  try {
+    if (
+      typeof opts.expectedIdentityPublicKeyHex !== "string" ||
+      opts.expectedIdentityPublicKeyHex.length === 0
+    ) {
+      errors.push({
+        message: "identity_bound: expectedIdentityPublicKeyHex not supplied",
+      });
+    } else if (typeof opts.expectedMotebitId !== "string" || opts.expectedMotebitId.length === 0) {
+      errors.push({
+        message: "identity_bound: expectedMotebitId not supplied (required for body re-derivation)",
+      });
+    } else if (typeof opts.expectedDeviceId !== "string" || opts.expectedDeviceId.length === 0) {
+      errors.push({
+        message: "identity_bound: expectedDeviceId not supplied (required for body re-derivation)",
+      });
+    } else if (
+      typeof opts.expectedAttestedAt !== "number" ||
+      !Number.isFinite(opts.expectedAttestedAt)
+    ) {
       errors.push({
         message:
-          "identity-binding could not be established through chain / nonce / bundle channels",
+          "identity_bound: expectedAttestedAt not supplied (required for body re-derivation)",
       });
+    } else {
+      const canonicalBody = buildCanonicalAttestationBody({
+        attested_at: opts.expectedAttestedAt,
+        device_id: opts.expectedDeviceId,
+        identity_public_key: opts.expectedIdentityPublicKeyHex.toLowerCase(),
+        motebit_id: opts.expectedMotebitId,
+      });
+      const derived = await sha256Bytes(new TextEncoder().encode(canonicalBody));
+      if (bytesEq(derived, clientDataHashBytes)) {
+        identity_bound = true;
+      } else {
+        errors.push({
+          message:
+            "identity_bound: reconstructed SHA256(canonical body) does not equal transmitted clientDataHash — body naming the caller's identity was not the body Apple signed over",
+        });
+      }
     }
+  } catch (err) {
+    errors.push({ message: `identity binding crashed: ${messageOf(err)}` });
   }
 
   return {
@@ -329,6 +358,187 @@ function bytesEq(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+/**
+ * Chain-verification result for `verifyCertChain`. Returns a structured
+ * reason on failure so the caller can surface a descriptive error —
+ * "signature didn't verify" vs "intermediate lacks CA bit" vs "root
+ * doesn't match the pin" are categorically different rejections.
+ */
+interface ChainVerifyResult {
+  readonly valid: boolean;
+  readonly reason: string;
+}
+
+/**
+ * Build the App Attest chain from the three supplied certs, then
+ * assert every link, validity window, CA constraint, and the terminal
+ * root-DER match. Mirrors what `@peculiar/x509`'s `X509ChainBuilder`
+ * offers (chain construction by issuer/subject matching) plus the
+ * motebit-specific invariants the pinned-root model requires.
+ *
+ * Invariants asserted:
+ *   1. `X509ChainBuilder.build(leaf)` finds a complete chain terminating
+ *      at a self-signed cert using only the three supplied certs.
+ *   2. The chain's terminal cert's DER equals the pinned root's DER —
+ *      the pinned cert is the only acceptable trust anchor.
+ *   3. Every non-leaf cert in the chain carries
+ *      `basicConstraints.cA === true`. A misissued leaf presented as an
+ *      intermediate (no CA bit) fails here even if its signature chains.
+ *   4. Every cert's signature verifies under its issuer's public key.
+ *   5. Every cert is within its validity window at `nowDate`.
+ */
+async function verifyCertChain(input: {
+  readonly leaf: x509.X509Certificate;
+  readonly intermediate: x509.X509Certificate;
+  readonly root: x509.X509Certificate;
+  readonly nowDate: Date;
+}): Promise<ChainVerifyResult> {
+  const { leaf, intermediate, root, nowDate } = input;
+
+  // Use @peculiar/x509's chain builder with the three candidate certs.
+  // It walks issuer→subject links and returns a chain terminating at
+  // a self-signed cert (or the best anchor it can find within the
+  // supplied pool).
+  const builder = new x509.X509ChainBuilder({
+    certificates: [leaf, intermediate, root],
+  });
+  // `builder.build(leaf)` walks issuer→subject links in the supplied
+  // pool and returns the longest chain it can construct starting from
+  // the leaf. Exceptions escape to the outer `verify.ts` catch, which
+  // funnels them into the structured error result — so we don't need a
+  // local try/catch here.
+  const chain = await builder.build(leaf);
+
+  // Terminal cert must be self-signed AND byte-equal to the pinned root
+  // DER. The self-signed check catches a chain that accidentally
+  // terminates at an intermediate (chain too short to reach a root, or
+  // a leaf mis-labelled as its own issuer); the DER-equality check
+  // catches a chain rooted at a different self-signed anchor the
+  // attacker owns.
+  const terminal = chain[chain.length - 1]!;
+  const terminalSelfSigned = await terminal.isSelfSigned();
+  if (!terminalSelfSigned) {
+    return {
+      valid: false,
+      reason: "chain does not terminate at a self-signed root",
+    };
+  }
+  if (!bytesEq(new Uint8Array(terminal.rawData), new Uint8Array(root.rawData))) {
+    return {
+      valid: false,
+      reason: "chain terminal cert DER does not match the pinned root",
+    };
+  }
+
+  // Verify every link: signature, validity, and (for non-leaves) CA
+  // constraint. `chain[0]` is the leaf; `chain[i+1]` issues `chain[i]`.
+  for (let i = 0; i < chain.length; i++) {
+    const cert = chain[i]!;
+
+    if (nowDate < cert.notBefore || nowDate > cert.notAfter) {
+      return {
+        valid: false,
+        reason: `cert at chain position ${i} is outside its validity window at ${nowDate.toISOString()}`,
+      };
+    }
+
+    const isLeaf = i === 0;
+    if (!isLeaf && !certHasCaTrue(cert)) {
+      return {
+        valid: false,
+        reason: `cert at chain position ${i} lacks basicConstraints.cA=true (CA constraint not enforced)`,
+      };
+    }
+
+    // Signature: non-terminal certs are signed by chain[i+1]; terminal
+    // cert is self-signed (issuer === subject, verified against its
+    // own public key). Verification crashes bubble up to the outer
+    // catch.
+    const issuer = i === chain.length - 1 ? cert : chain[i + 1]!;
+    const sigOk = await cert.verify({ publicKey: issuer.publicKey, date: nowDate });
+    if (!sigOk) {
+      return {
+        valid: false,
+        reason: `cert at chain position ${i} signature did not verify under its issuer's public key`,
+      };
+    }
+  }
+
+  // The supplied intermediate must appear in the built chain — if the
+  // builder routed around it (leaf mis-labelled as its own issuer, or
+  // pool somehow resolved a different intermediate), the pinned-root
+  // DER check above will already have caught the divergence. Sanity
+  // check dropped as redundant.
+
+  void intermediate; // explicit: the value is used only as a pool input.
+  return { valid: true, reason: "ok" };
+}
+
+/**
+ * Read basicConstraints and return true iff `cA === true`. Uses the
+ * library's typed extension shape (`BasicConstraintsExtension.ca`); a
+ * cert that simply omits the extension fails the check.
+ */
+function certHasCaTrue(cert: x509.X509Certificate): boolean {
+  const ext = cert.getExtension<x509.BasicConstraintsExtension>(BASIC_CONSTRAINTS_OID);
+  if (!ext) return false;
+  return ext.ca === true;
+}
+
+/**
+ * Reconstruct the byte-identical canonical body the Swift mint path
+ * composes at App Attest time. Must stay byte-equal to
+ * `CanonicalBody.encode` in
+ * `apps/mobile/modules/expo-app-attest/ios/ExpoAppAttestModule.swift`.
+ *
+ * Ordering: alphabetical (JCS), which is what Swift emits literally:
+ *   attested_at, device_id, identity_public_key, motebit_id, platform,
+ *   version.
+ *
+ * `platform` is always `"device_check"` and `version` is always `"1"` —
+ * both constants live in the Swift and must match exactly.
+ */
+function buildCanonicalAttestationBody(input: {
+  readonly attested_at: number;
+  readonly device_id: string;
+  readonly identity_public_key: string;
+  readonly motebit_id: string;
+}): string {
+  return (
+    `{"attested_at":${input.attested_at}` +
+    `,"device_id":${jsonEscapeString(input.device_id)}` +
+    `,"identity_public_key":${jsonEscapeString(input.identity_public_key)}` +
+    `,"motebit_id":${jsonEscapeString(input.motebit_id)}` +
+    `,"platform":"device_check"` +
+    `,"version":"1"}`
+  );
+}
+
+/**
+ * Emit a JSON-escaped string literal (with quotes) byte-equal to the
+ * Swift `jsonString` escape policy:
+ *   - " → \"
+ *   - \ → \\
+ *   - \n, \r, \t → short forms
+ *   - other controls (< 0x20) → \u00XX
+ *   - everything else passes through as-is.
+ */
+function jsonEscapeString(s: string): string {
+  let out = '"';
+  for (const ch of s) {
+    const code = ch.codePointAt(0)!;
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else if (ch === "\t") out += "\\t";
+    else if (code < 0x20) out += `\\u${code.toString(16).padStart(4, "0")}`;
+    else out += ch;
+  }
+  out += '"';
+  return out;
 }
 
 /**

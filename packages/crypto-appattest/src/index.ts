@@ -49,6 +49,24 @@ export interface DeviceCheckVerifyResult {
   readonly attestation_detail?: AppAttestVerifyResult;
 }
 
+/**
+ * Context fields the dispatcher lifts out of the credential subject and
+ * threads through to the verifier. All three participate in the JCS
+ * body the Swift mint path signs, so the verifier re-derives the body
+ * from them and byte-compares against the transmitted clientDataHash
+ * (see `verify.ts::buildCanonicalAttestationBody`).
+ *
+ * All fields optional: a caller that omits one loses the
+ * identity-binding channel but still gets chain / nonce / bundle
+ * binding results — the verifier reports the missing channel
+ * explicitly rather than silently passing.
+ */
+export interface DeviceCheckVerifierContext {
+  readonly expectedMotebitId?: string;
+  readonly expectedDeviceId?: string;
+  readonly expectedAttestedAt?: number;
+}
+
 export interface DeviceCheckVerifierConfig {
   /** iOS bundle identifier the receipt must bind to. */
   readonly expectedBundleId: string;
@@ -66,6 +84,15 @@ export interface DeviceCheckVerifierConfig {
  * matches the `HardwareAttestationVerifiers.deviceCheck` signature the
  * `@motebit/crypto` dispatcher expects.
  *
+ * Signature widened 2026-04-22: the third `context` parameter carries
+ * the motebit_id / device_id / attested_at fields the VC subject
+ * declares so the verifier can re-derive the JCS body Apple signed
+ * over and cryptographically bind it to the caller's Ed25519 identity
+ * (see `verify.ts` step 6). Pre-existing call sites that pass only
+ * `(claim, expectedIdentityHex)` still compile — the context is
+ * optional — but they lose the identity-binding channel and receive
+ * `identity_bound: false` in the result.
+ *
  * Kept as a factory rather than a free function so the consumer's
  * bundle ID is captured once at wiring time, not repeated at every
  * call site — every subsequent `verify()` call inherits the same
@@ -76,14 +103,24 @@ export function deviceCheckVerifier(
 ): (
   claim: HardwareAttestationClaim,
   expectedIdentityHex: string,
+  context?: DeviceCheckVerifierContext,
 ) => Promise<DeviceCheckVerifyResult> {
-  return async (claim, expectedIdentityHex) => {
+  return async (claim, expectedIdentityHex, context) => {
     const opts: AppAttestVerifyOptions = {
       expectedBundleId: config.expectedBundleId,
       expectedIdentityPublicKeyHex: expectedIdentityHex,
       ...(config.rootPem !== undefined ? { rootPem: config.rootPem } : {}),
       ...(config.now !== undefined ? { now: config.now } : {}),
       ...(config.expectedFmt !== undefined ? { expectedFmt: config.expectedFmt } : {}),
+      ...(context?.expectedMotebitId !== undefined
+        ? { expectedMotebitId: context.expectedMotebitId }
+        : {}),
+      ...(context?.expectedDeviceId !== undefined
+        ? { expectedDeviceId: context.expectedDeviceId }
+        : {}),
+      ...(context?.expectedAttestedAt !== undefined
+        ? { expectedAttestedAt: context.expectedAttestedAt }
+        : {}),
     };
     const detail = await verifyAppAttestReceipt(claim, opts);
     return {
