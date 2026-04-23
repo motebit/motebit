@@ -1,0 +1,489 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/migration-presentation-v1.json",
+  "title": "MigrationPresentation (v1)",
+  "description": "Agent-signed envelope for migration. Bundles MigrationToken + DepartureAttestation + CredentialBundle + identity file. Destination relays validate per spec §8.2; if accepted, the agent's motebit_id is preserved across the relay change. Foundation law §8.4: acceptance is a local admission decision; relays MAY decline. See spec/migration-v1.md §8.1.",
+  "type": "object",
+  "properties": {
+    "migration_token": {
+      "type": "object",
+      "properties": {
+        "token_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUIDv7 identifier for this specific authorization. Stable through expiry."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent's motebit identity (UUIDv7) authorized to migrate."
+        },
+        "source_relay_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Issuing relay's identity. The signer."
+        },
+        "source_relay_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Issuing relay's canonical URL. Lets destination relays reach back to verify chain-of-custody if needed."
+        },
+        "issued_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the source relay signed the token."
+        },
+        "expires_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the token becomes invalid. Default per spec: 72 hours from issuance. Source relay MUST NOT revoke before expiry except on agent-initiated cancellation (foundation law §4.3)."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the source relay (NOT the agent)."
+        }
+      },
+      "required": [
+        "token_id",
+        "motebit_id",
+        "source_relay_id",
+        "source_relay_url",
+        "issued_at",
+        "expires_at",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Source-relay-signed authorization to migrate. Verifier checks the source relay's signature on this token first — without authorization, the rest is irrelevant."
+    },
+    "departure_attestation": {
+      "type": "object",
+      "properties": {
+        "attestation_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUIDv7 identifier for this attestation."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent's motebit identity being attested for."
+        },
+        "source_relay_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Attesting relay's identity. The signer."
+        },
+        "source_relay_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Attesting relay's canonical URL."
+        },
+        "first_seen": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the agent first registered at this relay."
+        },
+        "last_active": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds of the agent's last task or interaction."
+        },
+        "trust_level": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent's trust level at departure. Free-form string per spec; conventional values include `untrusted`, `verified`, `trusted`, `revoked` — the destination relay applies its own trust mapping."
+        },
+        "successful_tasks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total completed tasks the agent executed as worker (≥ 0)."
+        },
+        "failed_tasks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total failed tasks the agent executed as worker (≥ 0)."
+        },
+        "credentials_issued": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total credentials this relay issued to the agent (≥ 0)."
+        },
+        "balance_at_departure": {
+          "type": "number",
+          "description": "Virtual account balance in micro-units (1 USD = 1,000,000) at attestation time. Lets destination relays understand the economic state the agent is bringing across."
+        },
+        "attested_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when this attestation was signed."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the source relay. Foundation law (§5.3): the relay MUST NOT fabricate or inflate attestation data."
+        }
+      },
+      "required": [
+        "attestation_id",
+        "motebit_id",
+        "source_relay_id",
+        "source_relay_url",
+        "first_seen",
+        "last_active",
+        "trust_level",
+        "successful_tasks",
+        "failed_tasks",
+        "credentials_issued",
+        "balance_at_departure",
+        "attested_at",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Source-relay-signed history snapshot. Verifier checks the source relay's signature; the trust level + task counts inform the destination's admission decision."
+    },
+    "credential_bundle": {
+      "type": "object",
+      "properties": {
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent's motebit identity (UUIDv7). The signer of the bundle. Destination relays verify the embedded signature against the public key bound to this identity at the source."
+        },
+        "exported_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the agent emitted the bundle. Lets destination relays detect stale exports (e.g. replayed migrations)."
+        },
+        "credentials": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Arbitrary JSON object — its shape is defined by a separate wire format (credential@1.0 for `credentials`, credential-anchor@1.0 for `anchor_proofs`, identity@1.0 for `key_succession`). The bundle's signature covers the bytes; validate inner shape against the dedicated schemas after bundle verification."
+          },
+          "description": "W3C Verifiable Credential 2.0 documents the agent has accumulated. Empty array is valid (a fresh agent with no issued credentials). Each entry validates against credential@1.0 (W3C VC 2.0 + motebit's eddsa-jcs-2022 cryptosuite profile)."
+        },
+        "anchor_proofs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MigrationPresentation/properties/credential_bundle/properties/credentials/items"
+          },
+          "description": "On-chain credential anchor proofs (Merkle inclusion + chain reference). Lets the destination relay verify which credentials were anchored to which chain transaction without reaching out to the chain. Each entry validates against credential-anchor@1.0."
+        },
+        "key_succession": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MigrationPresentation/properties/credential_bundle/properties/credentials/items"
+          },
+          "description": "Full key rotation history. Required so the destination relay can verify the agent's current public key chains back to the originally-anchored identity. Each entry validates against identity@1.0."
+        },
+        "bundle_hash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SHA-256 hex digest of the canonical JSON of all fields EXCEPT `bundle_hash` and `signature`. Lets consumers verify the bundle's content-addressing is consistent with the embedded signature without recomputing both."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for credential bundles today: JCS canonicalization (RFC 8785), Ed25519 signature, base64url-encoded signature, hex-encoded public key. Verifiers reject missing or unknown values fail-closed."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = this object minus `signature`. Verify with the agent's public key (resolved via `key_succession` for the timestamp `exported_at`)."
+        }
+      },
+      "required": [
+        "motebit_id",
+        "exported_at",
+        "credentials",
+        "anchor_proofs",
+        "key_succession",
+        "bundle_hash",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Agent-signed export of portable reputation. Verifier checks the agent's signature; per-entry credentials + anchor proofs validate against their dedicated schemas."
+    },
+    "identity_file": {
+      "type": "string",
+      "description": "Full motebit.md content as a string — the agent's identity@1.0 document. Lets the destination relay verify the agent's current public key chains back to the originally-anchored identity."
+    },
+    "presented_at": {
+      "type": "number",
+      "description": "Unix timestamp in milliseconds when the agent assembled and signed the presentation."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the agent. Binds the four nested artifacts together — tampering with any nested artifact breaks this outer signature."
+    }
+  },
+  "required": [
+    "migration_token",
+    "departure_attestation",
+    "credential_bundle",
+    "identity_file",
+    "presented_at",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "MigrationPresentation": {
+      "type": "object",
+      "properties": {
+        "migration_token": {
+          "type": "object",
+          "properties": {
+            "token_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "UUIDv7 identifier for this specific authorization. Stable through expiry."
+            },
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Agent's motebit identity (UUIDv7) authorized to migrate."
+            },
+            "source_relay_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Issuing relay's identity. The signer."
+            },
+            "source_relay_url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Issuing relay's canonical URL. Lets destination relays reach back to verify chain-of-custody if needed."
+            },
+            "issued_at": {
+              "type": "number",
+              "description": "Unix timestamp in milliseconds when the source relay signed the token."
+            },
+            "expires_at": {
+              "type": "number",
+              "description": "Unix timestamp in milliseconds when the token becomes invalid. Default per spec: 72 hours from issuance. Source relay MUST NOT revoke before expiry except on agent-initiated cancellation (foundation law §4.3)."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the source relay (NOT the agent)."
+            }
+          },
+          "required": [
+            "token_id",
+            "motebit_id",
+            "source_relay_id",
+            "source_relay_url",
+            "issued_at",
+            "expires_at",
+            "suite",
+            "signature"
+          ],
+          "additionalProperties": false,
+          "description": "Source-relay-signed authorization to migrate. Verifier checks the source relay's signature on this token first — without authorization, the rest is irrelevant."
+        },
+        "departure_attestation": {
+          "type": "object",
+          "properties": {
+            "attestation_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "UUIDv7 identifier for this attestation."
+            },
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Agent's motebit identity being attested for."
+            },
+            "source_relay_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Attesting relay's identity. The signer."
+            },
+            "source_relay_url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Attesting relay's canonical URL."
+            },
+            "first_seen": {
+              "type": "number",
+              "description": "Unix timestamp in milliseconds when the agent first registered at this relay."
+            },
+            "last_active": {
+              "type": "number",
+              "description": "Unix timestamp in milliseconds of the agent's last task or interaction."
+            },
+            "trust_level": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Agent's trust level at departure. Free-form string per spec; conventional values include `untrusted`, `verified`, `trusted`, `revoked` — the destination relay applies its own trust mapping."
+            },
+            "successful_tasks": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total completed tasks the agent executed as worker (≥ 0)."
+            },
+            "failed_tasks": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total failed tasks the agent executed as worker (≥ 0)."
+            },
+            "credentials_issued": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total credentials this relay issued to the agent (≥ 0)."
+            },
+            "balance_at_departure": {
+              "type": "number",
+              "description": "Virtual account balance in micro-units (1 USD = 1,000,000) at attestation time. Lets destination relays understand the economic state the agent is bringing across."
+            },
+            "attested_at": {
+              "type": "number",
+              "description": "Unix timestamp in milliseconds when this attestation was signed."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the source relay. Foundation law (§5.3): the relay MUST NOT fabricate or inflate attestation data."
+            }
+          },
+          "required": [
+            "attestation_id",
+            "motebit_id",
+            "source_relay_id",
+            "source_relay_url",
+            "first_seen",
+            "last_active",
+            "trust_level",
+            "successful_tasks",
+            "failed_tasks",
+            "credentials_issued",
+            "balance_at_departure",
+            "attested_at",
+            "suite",
+            "signature"
+          ],
+          "additionalProperties": false,
+          "description": "Source-relay-signed history snapshot. Verifier checks the source relay's signature; the trust level + task counts inform the destination's admission decision."
+        },
+        "credential_bundle": {
+          "type": "object",
+          "properties": {
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Agent's motebit identity (UUIDv7). The signer of the bundle. Destination relays verify the embedded signature against the public key bound to this identity at the source."
+            },
+            "exported_at": {
+              "type": "number",
+              "description": "Unix timestamp in milliseconds when the agent emitted the bundle. Lets destination relays detect stale exports (e.g. replayed migrations)."
+            },
+            "credentials": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {},
+                "description": "Arbitrary JSON object — its shape is defined by a separate wire format (credential@1.0 for `credentials`, credential-anchor@1.0 for `anchor_proofs`, identity@1.0 for `key_succession`). The bundle's signature covers the bytes; validate inner shape against the dedicated schemas after bundle verification."
+              },
+              "description": "W3C Verifiable Credential 2.0 documents the agent has accumulated. Empty array is valid (a fresh agent with no issued credentials). Each entry validates against credential@1.0 (W3C VC 2.0 + motebit's eddsa-jcs-2022 cryptosuite profile)."
+            },
+            "anchor_proofs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/MigrationPresentation/properties/credential_bundle/properties/credentials/items"
+              },
+              "description": "On-chain credential anchor proofs (Merkle inclusion + chain reference). Lets the destination relay verify which credentials were anchored to which chain transaction without reaching out to the chain. Each entry validates against credential-anchor@1.0."
+            },
+            "key_succession": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/MigrationPresentation/properties/credential_bundle/properties/credentials/items"
+              },
+              "description": "Full key rotation history. Required so the destination relay can verify the agent's current public key chains back to the originally-anchored identity. Each entry validates against identity@1.0."
+            },
+            "bundle_hash": {
+              "type": "string",
+              "minLength": 1,
+              "description": "SHA-256 hex digest of the canonical JSON of all fields EXCEPT `bundle_hash` and `signature`. Lets consumers verify the bundle's content-addressing is consistent with the embedded signature without recomputing both."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for credential bundles today: JCS canonicalization (RFC 8785), Ed25519 signature, base64url-encoded signature, hex-encoded public key. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = this object minus `signature`. Verify with the agent's public key (resolved via `key_succession` for the timestamp `exported_at`)."
+            }
+          },
+          "required": [
+            "motebit_id",
+            "exported_at",
+            "credentials",
+            "anchor_proofs",
+            "key_succession",
+            "bundle_hash",
+            "suite",
+            "signature"
+          ],
+          "additionalProperties": false,
+          "description": "Agent-signed export of portable reputation. Verifier checks the agent's signature; per-entry credentials + anchor proofs validate against their dedicated schemas."
+        },
+        "identity_file": {
+          "type": "string",
+          "description": "Full motebit.md content as a string — the agent's identity@1.0 document. Lets the destination relay verify the agent's current public key chains back to the originally-anchored identity."
+        },
+        "presented_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the agent assembled and signed the presentation."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the agent. Binds the four nested artifacts together — tampering with any nested artifact breaks this outer signature."
+        }
+      },
+      "required": [
+        "migration_token",
+        "departure_attestation",
+        "credential_bundle",
+        "identity_file",
+        "presented_at",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/goal-executed-payload-v1.json",
+  "title": "GoalExecutedPayload (v1)",
+  "description": "Payload of a `goal_executed` event — records one run's terminal outcome. Recurring goals emit this repeatedly. See spec/goal-lifecycle-v1.md §5.2.",
+  "type": "object",
+  "properties": {
+    "goal_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UUID of the executed goal."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Up to ~200 characters of the agent's response text for a successful run."
+    },
+    "tool_calls": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of tool calls performed during a successful run."
+    },
+    "memories": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of memory nodes formed during a successful run."
+    },
+    "error": {
+      "type": "string",
+      "description": "Error message; present iff the run terminated in failure. Consumers MUST NOT parse it semantically."
+    }
+  },
+  "required": ["goal_id"],
+  "additionalProperties": true,
+  "definitions": {
+    "GoalExecutedPayload": {
+      "type": "object",
+      "properties": {
+        "goal_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUID of the executed goal."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Up to ~200 characters of the agent's response text for a successful run."
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of tool calls performed during a successful run."
+        },
+        "memories": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of memory nodes formed during a successful run."
+        },
+        "error": {
+          "type": "string",
+          "description": "Error message; present iff the run terminated in failure. Consumers MUST NOT parse it semantically."
+        }
+      },
+      "required": ["goal_id"],
+      "additionalProperties": true
+    }
+  }
+}

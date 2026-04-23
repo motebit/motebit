@@ -13,7 +13,7 @@
  *   1. Parse and validate wire-format payloads at runtime (services,
  *      relay, third-party adapters).
  *   2. Emit JSON Schema via `zod-to-json-schema` for publication as a
- *      protocol artifact (`packages/wire-schemas/schema/*-v1.json`).
+ *      protocol artifact (`spec/schemas/*-v1.json`).
  *   3. Statically assert — via the `typeParityCheck` satisfies
  *      assertion at the bottom of each schema — that `z.infer<typeof
  *      Schema>` is structurally assignable to the matching

@@ -26,13 +26,13 @@ motebit/
 │
 ├── packages/
 │   │
-│   │   # Layer 0 — Foundation (zero internal deps)
+│   │   # Layer 0 — Foundation (MIT floor; zero internal deps)
 │   ├── protocol/              [L0 · MIT]    Types, semirings, routing primitives, crypto-suite registry.
 │   ├── sdk/                   [L0 · MIT]    Developer contract. Stable types, adapter interfaces.
 │   ├── crypto/                [L0 · MIT]    Sign/verify every motebit artifact. Suite dispatcher.
-│   ├── voice/                 [L0]          VAD, STT, TTS adapters.
 │   │
 │   │   # Layer 1 — Primitives
+│   ├── voice/                 [L1]          VAD, STT, TTS adapters (provider-judgment; no protocol-level surface).
 │   ├── encryption/            [L1]          AES-256-GCM, PBKDF2, sync keys, deletion certs.
 │   ├── gradient/              [L1]          "What am I?" — narrative from gradient snapshots.
 │   ├── event-log/             [L1]          Append-only event sourcing with version clocks.
@@ -47,7 +47,7 @@ motebit/
 │   ├── virtual-accounts/      [L1]          Per-motebit ledger: atomic credit/debit, withdrawal lifecycle, signed receipts. AccountStore inversion.
 │   ├── deposit-detector/      [L1]          EVM Transfer-event scanner. Injected EvmRpcAdapter + DepositDetectorStore + onDeposit callback.
 │   ├── self-knowledge/        [L1]          Committed BM25 corpus over motebit's public docs. Interior tier of the answer engine.
-│   ├── wire-schemas/          [L1]          Zod schemas for wire-format types + committed JSON Schema artifacts for third-party validators.
+│   ├── wire-schemas/          [L1]          Zod schemas for wire-format types. Generates committed JSON Schema artifacts into `spec/schemas/` — the protocol-owned MIT tree third parties implement against.
 │   │
 │   │   # Layer 2 — Engines
 │   ├── crypto-appattest/      [L2]          Apple App Attest chain verifier — pinned root, platform-specific judgment.

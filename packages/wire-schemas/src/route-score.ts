@@ -38,7 +38,7 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 
 /** Stable `$id` for the route-score v1 wire format. */
 export const ROUTE_SCORE_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/route-score-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/route-score-v1.json";
 
 const SubScoresSchema = z
   .object({

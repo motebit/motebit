@@ -29,13 +29,18 @@ const ROOT = resolve(__dirname, "..");
 // Apps/services are Layer 5 and may depend on anything.
 
 const LAYER: Record<string, number> = {
-  // Layer 0 — Foundation (zero internal deps)
+  // Layer 0 — Foundation (MIT, zero internal deps). The protocol-
+  // reference surface: types, primitives, algebra. Anyone
+  // implementing motebit in any language consumes this layer as the
+  // open standard. Permissive license is load-bearing — a BSL
+  // package at Layer 0 would break the sovereignty invariant
+  // ("anyone can implement"). See docs/doctrine/protocol-model.md.
   "@motebit/protocol": 0,
   "@motebit/sdk": 0,
   "@motebit/crypto": 0,
-  "@motebit/voice": 0,
 
   // Layer 1 — Primitives (depend only on Layer 0)
+  "@motebit/voice": 1,
   "@motebit/encryption": 1,
   "@motebit/gradient": 1,
   "@motebit/event-log": 1,

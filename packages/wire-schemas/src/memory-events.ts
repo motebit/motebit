@@ -38,8 +38,7 @@ import type {
 
 import { assembleJsonSchemaFor } from "./assemble.js";
 
-const SCHEMA_BASE =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema";
+const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
 
 // ── SensitivityLevel (closed enum) ───────────────────────────────────
 

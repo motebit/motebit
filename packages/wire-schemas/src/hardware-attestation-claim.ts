@@ -44,7 +44,7 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 // ---------------------------------------------------------------------------
 
 export const HARDWARE_ATTESTATION_CLAIM_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/hardware-attestation-claim-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/hardware-attestation-claim-v1.json";
 
 // ---------------------------------------------------------------------------
 // Zod schema

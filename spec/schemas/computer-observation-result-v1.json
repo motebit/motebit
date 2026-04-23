@@ -1,0 +1,245 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/computer-observation-result-v1.json",
+  "title": "ComputerObservationResult (v1)",
+  "description": "Result payload of a computer-use observation action. Screenshot bytes live in the artifact store; this payload binds to them by hash. See spec/computer-use-v1.md §5.2.",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "screenshot"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Artifact ID of the raw capture."
+        },
+        "artifact_sha256": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SHA-256 of the raw capture bytes."
+        },
+        "image_format": {
+          "type": "string",
+          "description": "\"png\" | \"jpeg\"."
+        },
+        "width": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Image width in logical pixels."
+        },
+        "height": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Image height in logical pixels."
+        },
+        "captured_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix ms."
+        },
+        "redaction": {
+          "type": "object",
+          "properties": {
+            "applied": {
+              "type": "boolean",
+              "description": "True iff one or more regions were masked."
+            },
+            "projection_kind": {
+              "type": "string",
+              "description": "'raw' | 'masked' | 'blurred' | 'cropped'. Describes the shape of bytes the AI saw."
+            },
+            "policy_version": {
+              "type": "string",
+              "description": "Version of the classification policy that ran."
+            },
+            "classified_regions_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of sensitive regions classified in the raw frame."
+            },
+            "classified_regions_digest": {
+              "type": "string",
+              "description": "SHA-256 of a canonical JSON array of classified regions. Lets a verifier replay what was masked."
+            }
+          },
+          "required": ["applied", "projection_kind"],
+          "additionalProperties": false
+        },
+        "projection_artifact_id": {
+          "type": "string",
+          "description": "Artifact ID of the redacted projection when it differs from the raw capture."
+        },
+        "projection_artifact_sha256": {
+          "type": "string",
+          "description": "SHA-256 of the projection bytes. Paired with projection_artifact_id."
+        }
+      },
+      "required": [
+        "kind",
+        "session_id",
+        "artifact_id",
+        "artifact_sha256",
+        "image_format",
+        "width",
+        "height",
+        "captured_at",
+        "redaction"
+      ],
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "cursor_position"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "captured_at": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["kind", "session_id", "x", "y", "captured_at"],
+      "additionalProperties": true
+    }
+  ],
+  "definitions": {
+    "ComputerObservationResult": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "screenshot"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifact_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Artifact ID of the raw capture."
+            },
+            "artifact_sha256": {
+              "type": "string",
+              "minLength": 1,
+              "description": "SHA-256 of the raw capture bytes."
+            },
+            "image_format": {
+              "type": "string",
+              "description": "\"png\" | \"jpeg\"."
+            },
+            "width": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Image width in logical pixels."
+            },
+            "height": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Image height in logical pixels."
+            },
+            "captured_at": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix ms."
+            },
+            "redaction": {
+              "type": "object",
+              "properties": {
+                "applied": {
+                  "type": "boolean",
+                  "description": "True iff one or more regions were masked."
+                },
+                "projection_kind": {
+                  "type": "string",
+                  "description": "'raw' | 'masked' | 'blurred' | 'cropped'. Describes the shape of bytes the AI saw."
+                },
+                "policy_version": {
+                  "type": "string",
+                  "description": "Version of the classification policy that ran."
+                },
+                "classified_regions_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Number of sensitive regions classified in the raw frame."
+                },
+                "classified_regions_digest": {
+                  "type": "string",
+                  "description": "SHA-256 of a canonical JSON array of classified regions. Lets a verifier replay what was masked."
+                }
+              },
+              "required": ["applied", "projection_kind"],
+              "additionalProperties": false
+            },
+            "projection_artifact_id": {
+              "type": "string",
+              "description": "Artifact ID of the redacted projection when it differs from the raw capture."
+            },
+            "projection_artifact_sha256": {
+              "type": "string",
+              "description": "SHA-256 of the projection bytes. Paired with projection_artifact_id."
+            }
+          },
+          "required": [
+            "kind",
+            "session_id",
+            "artifact_id",
+            "artifact_sha256",
+            "image_format",
+            "width",
+            "height",
+            "captured_at",
+            "redaction"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "cursor_position"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "x": {
+              "type": "integer"
+            },
+            "y": {
+              "type": "integer"
+            },
+            "captured_at": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": ["kind", "session_id", "x", "y", "captured_at"],
+          "additionalProperties": true
+        }
+      ]
+    }
+  }
+}

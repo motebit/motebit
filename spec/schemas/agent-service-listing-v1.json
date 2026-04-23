@@ -1,0 +1,197 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/agent-service-listing-v1.json",
+  "title": "AgentServiceListing (v1)",
+  "description": "Supply-side wire format — what an agent publishes to advertise capabilities, pricing, and SLA to the motebit marketplace. Consumed by discovery matchers; emitted by agents (motebit or otherwise) via the relay's listing endpoint.",
+  "type": "object",
+  "properties": {
+    "listing_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable listing identifier — UUIDv7 string. Unique per motebit; a motebit updating its listing reuses the same id (the relay treats PUT as upsert)."
+    },
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Motebit identity advertising this listing. Must match the authenticated publisher at the relay endpoint — listings cannot be published on behalf of other motebits."
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Capability identifiers this agent claims to provide. Free-form strings; marketplace convention is snake_case (`web_search`, `summarize`, `pr_review`)."
+    },
+    "pricing": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Capability identifier this price applies to (e.g. `web_search`, `summarize`, `*`). Must match a capability name listed in the parent listing's `capabilities` array, OR be `*` for a catch-all price."
+          },
+          "unit_cost": {
+            "type": "number",
+            "description": "Price in the declared currency, as a plain number. Interpretation depends on `per`: per-task flat fee, per-tool-call increment, or per-token metered price."
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Currency code. USD for fiat; 'USDC' / 'USDT' / chain-token codes for on-chain settlement. Lowercase ISO-like codes are conventional but free-form by protocol."
+          },
+          "per": {
+            "type": "string",
+            "enum": ["task", "tool_call", "token"],
+            "description": "Pricing unit. `task` = one flat fee per completed task. `tool_call` = price per tool invocation inside the task. `token` = metered per input+output token (LLM billing)."
+          }
+        },
+        "required": ["capability", "unit_cost", "currency", "per"],
+        "additionalProperties": false
+      },
+      "description": "Price schedule. Each entry pairs a capability with a per-unit cost. Entries whose `capability` does not appear in `capabilities` are ignored by matchers; `capability: '*'` sets a default price."
+    },
+    "sla": {
+      "type": "object",
+      "properties": {
+        "max_latency_ms": {
+          "type": "number",
+          "description": "Self-declared upper bound on task completion latency, in milliseconds. Matchers penalize listings whose declared latency exceeds the consumer's tolerance."
+        },
+        "availability_guarantee": {
+          "type": "number",
+          "description": "Self-declared availability as a fraction in [0, 1] (e.g. `0.99` = 99% uptime). Not SLO-enforced by the relay; consumed by matchers as a soft ranking signal."
+        }
+      },
+      "required": ["max_latency_ms", "availability_guarantee"],
+      "additionalProperties": false,
+      "description": "Service-level declaration. Self-reported — verification comes from reputation and signed receipts, not from this field directly."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable service description. Used in discovery UIs; not parsed by matchers. Empty string is allowed for minimal listings."
+    },
+    "pay_to_address": {
+      "type": "string",
+      "description": "On-chain payout address for x402 settlement (e.g. EVM `0x…`). Absent = relay-custody settlement only; the agent cannot receive direct on-chain payments for these services."
+    },
+    "regulatory_risk": {
+      "type": "number",
+      "description": "Self-declared regulatory risk score in [0, ∞). 0 = no risk. Accumulates along delegation chains via the RegulatoryRiskSemiring (min, +). Verified — when verified — by compliance credentials (VCs), not by this field alone."
+    },
+    "updated_at": {
+      "type": "number",
+      "description": "Unix timestamp in milliseconds of the last listing update. The relay stamps this on PUT; consumers treat it as a freshness signal (stale listings may indicate offline agents)."
+    }
+  },
+  "required": [
+    "listing_id",
+    "motebit_id",
+    "capabilities",
+    "pricing",
+    "sla",
+    "description",
+    "updated_at"
+  ],
+  "additionalProperties": true,
+  "definitions": {
+    "AgentServiceListing": {
+      "type": "object",
+      "properties": {
+        "listing_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable listing identifier — UUIDv7 string. Unique per motebit; a motebit updating its listing reuses the same id (the relay treats PUT as upsert)."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Motebit identity advertising this listing. Must match the authenticated publisher at the relay endpoint — listings cannot be published on behalf of other motebits."
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Capability identifiers this agent claims to provide. Free-form strings; marketplace convention is snake_case (`web_search`, `summarize`, `pr_review`)."
+        },
+        "pricing": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "capability": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Capability identifier this price applies to (e.g. `web_search`, `summarize`, `*`). Must match a capability name listed in the parent listing's `capabilities` array, OR be `*` for a catch-all price."
+              },
+              "unit_cost": {
+                "type": "number",
+                "description": "Price in the declared currency, as a plain number. Interpretation depends on `per`: per-task flat fee, per-tool-call increment, or per-token metered price."
+              },
+              "currency": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Currency code. USD for fiat; 'USDC' / 'USDT' / chain-token codes for on-chain settlement. Lowercase ISO-like codes are conventional but free-form by protocol."
+              },
+              "per": {
+                "type": "string",
+                "enum": ["task", "tool_call", "token"],
+                "description": "Pricing unit. `task` = one flat fee per completed task. `tool_call` = price per tool invocation inside the task. `token` = metered per input+output token (LLM billing)."
+              }
+            },
+            "required": ["capability", "unit_cost", "currency", "per"],
+            "additionalProperties": false
+          },
+          "description": "Price schedule. Each entry pairs a capability with a per-unit cost. Entries whose `capability` does not appear in `capabilities` are ignored by matchers; `capability: '*'` sets a default price."
+        },
+        "sla": {
+          "type": "object",
+          "properties": {
+            "max_latency_ms": {
+              "type": "number",
+              "description": "Self-declared upper bound on task completion latency, in milliseconds. Matchers penalize listings whose declared latency exceeds the consumer's tolerance."
+            },
+            "availability_guarantee": {
+              "type": "number",
+              "description": "Self-declared availability as a fraction in [0, 1] (e.g. `0.99` = 99% uptime). Not SLO-enforced by the relay; consumed by matchers as a soft ranking signal."
+            }
+          },
+          "required": ["max_latency_ms", "availability_guarantee"],
+          "additionalProperties": false,
+          "description": "Service-level declaration. Self-reported — verification comes from reputation and signed receipts, not from this field directly."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable service description. Used in discovery UIs; not parsed by matchers. Empty string is allowed for minimal listings."
+        },
+        "pay_to_address": {
+          "type": "string",
+          "description": "On-chain payout address for x402 settlement (e.g. EVM `0x…`). Absent = relay-custody settlement only; the agent cannot receive direct on-chain payments for these services."
+        },
+        "regulatory_risk": {
+          "type": "number",
+          "description": "Self-declared regulatory risk score in [0, ∞). 0 = no risk. Accumulates along delegation chains via the RegulatoryRiskSemiring (min, +). Verified — when verified — by compliance credentials (VCs), not by this field alone."
+        },
+        "updated_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds of the last listing update. The relay stamps this on PUT; consumers treat it as a freshness signal (stale listings may indicate offline agents)."
+        }
+      },
+      "required": [
+        "listing_id",
+        "motebit_id",
+        "capabilities",
+        "pricing",
+        "sla",
+        "description",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

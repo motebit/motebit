@@ -47,10 +47,10 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 // ---------------------------------------------------------------------------
 
 export const AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/agent-settlement-anchor-batch-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/agent-settlement-anchor-batch-v1.json";
 
 export const AGENT_SETTLEMENT_ANCHOR_PROOF_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/agent-settlement-anchor-proof-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/agent-settlement-anchor-proof-v1.json";
 
 // ---------------------------------------------------------------------------
 // Shared leaf factories

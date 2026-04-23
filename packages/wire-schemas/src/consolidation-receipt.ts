@@ -42,10 +42,10 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 // ---------------------------------------------------------------------------
 
 export const CONSOLIDATION_RECEIPT_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/consolidation-receipt-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/consolidation-receipt-v1.json";
 
 export const CONSOLIDATION_ANCHOR_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/consolidation-anchor-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/consolidation-anchor-v1.json";
 
 // ---------------------------------------------------------------------------
 // Shared leaf factories (description-preserving — factories not constants)

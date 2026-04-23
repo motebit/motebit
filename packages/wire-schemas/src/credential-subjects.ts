@@ -52,13 +52,13 @@ import { HardwareAttestationClaimSchema } from "./hardware-attestation-claim.js"
 // ---------------------------------------------------------------------------
 
 export const REPUTATION_CREDENTIAL_SUBJECT_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/reputation-credential-subject-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/reputation-credential-subject-v1.json";
 
 export const TRUST_CREDENTIAL_SUBJECT_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/trust-credential-subject-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/trust-credential-subject-v1.json";
 
 export const GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/gradient-credential-subject-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/gradient-credential-subject-v1.json";
 
 // ---------------------------------------------------------------------------
 // Shared leaf factory — `id` is the W3C VC subject identifier (typically

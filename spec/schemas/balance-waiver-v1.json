@@ -1,0 +1,67 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/balance-waiver-v1.json",
+  "title": "BalanceWaiver (v1)",
+  "description": "Agent-signed waiver of remaining virtual-account balance — an alternative to the standard withdrawal flow for advancing migration to `departed`. Per spec §7.3 the relay MUST process the waiver and MUST NOT withhold funds on migration grounds; the waiver is the agent's explicit decision to forgo recovery, not the relay's right to keep them. Shipped alongside the migration cluster (request/token/attestation/presentation) so the migration loop is end-to-end verifiable from published JSON Schemas alone. See spec/migration-v1.md §7.2.",
+  "type": "object",
+  "properties": {
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Agent's motebit identity (UUIDv7). The signer of this waiver."
+    },
+    "waived_amount": {
+      "type": "number",
+      "description": "Amount waived in micro-units (1 USD = 1,000,000). Per spec §7.3 the relay MUST process the waiver — migration is not grounds for withholding funds, and the waiver is the agent's explicit decision to forgo recovery."
+    },
+    "waived_at": {
+      "type": "number",
+      "description": "Unix timestamp in milliseconds when the agent signed the waiver."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the agent."
+    }
+  },
+  "required": ["motebit_id", "waived_amount", "waived_at", "suite", "signature"],
+  "additionalProperties": false,
+  "definitions": {
+    "BalanceWaiver": {
+      "type": "object",
+      "properties": {
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent's motebit identity (UUIDv7). The signer of this waiver."
+        },
+        "waived_amount": {
+          "type": "number",
+          "description": "Amount waived in micro-units (1 USD = 1,000,000). Per spec §7.3 the relay MUST process the waiver — migration is not grounds for withholding funds, and the waiver is the agent's explicit decision to forgo recovery."
+        },
+        "waived_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the agent signed the waiver."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the agent."
+        }
+      },
+      "required": ["motebit_id", "waived_amount", "waived_at", "suite", "signature"],
+      "additionalProperties": false
+    }
+  }
+}

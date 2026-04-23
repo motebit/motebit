@@ -31,7 +31,7 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 
 /** Stable `$id` for the agent-service-listing v1 wire format. */
 export const AGENT_SERVICE_LISTING_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/agent-service-listing-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/agent-service-listing-v1.json";
 
 const CapabilityPriceSchema = z
   .object({

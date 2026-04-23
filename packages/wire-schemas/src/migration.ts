@@ -48,19 +48,19 @@ import { CredentialBundleSchema } from "./credential-bundle.js";
 // ---------------------------------------------------------------------------
 
 export const MIGRATION_REQUEST_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/migration-request-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/migration-request-v1.json";
 
 export const MIGRATION_TOKEN_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/migration-token-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/migration-token-v1.json";
 
 export const DEPARTURE_ATTESTATION_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/departure-attestation-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/departure-attestation-v1.json";
 
 export const MIGRATION_PRESENTATION_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/migration-presentation-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/migration-presentation-v1.json";
 
 export const BALANCE_WAIVER_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/balance-waiver-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/balance-waiver-v1.json";
 
 // ---------------------------------------------------------------------------
 // Shared leaf factories

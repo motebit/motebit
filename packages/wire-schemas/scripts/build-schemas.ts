@@ -13,6 +13,7 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { stampSchema } from "../src/spdx-stamp.js";
 import { buildAgentResolutionResultJsonSchema } from "../src/agent-resolution-result.js";
 import { buildAgentServiceListingJsonSchema } from "../src/agent-service-listing.js";
 import { buildAgentTaskJsonSchema } from "../src/agent-task.js";
@@ -87,7 +88,13 @@ import { buildRouteScoreJsonSchema } from "../src/route-score.js";
 import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_DIR = join(__dirname, "..", "schema");
+// Schemas live in `spec/schemas/` alongside the Markdown protocol
+// docs — protocol artifacts under the `spec/` MIT license, separate
+// from this BSL package's TypeScript sources. Resolving from this
+// script's `__dirname` means walking up out of
+// `packages/wire-schemas/scripts/` into the repo root, then into
+// `spec/schemas/`.
+const SCHEMA_DIR = join(__dirname, "..", "..", "..", "spec", "schemas");
 
 const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }> = [
   { filename: "execution-receipt-v1.json", build: buildExecutionReceiptJsonSchema },
@@ -176,6 +183,6 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
 
 for (const { filename, build } of SCHEMAS) {
   const outPath = join(SCHEMA_DIR, filename);
-  writeFileSync(outPath, JSON.stringify(build(), null, 2) + "\n", "utf-8");
+  writeFileSync(outPath, JSON.stringify(stampSchema(build()), null, 2) + "\n", "utf-8");
   console.log(`wrote ${outPath}`);
 }

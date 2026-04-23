@@ -49,19 +49,19 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 // ---------------------------------------------------------------------------
 
 export const DISPUTE_REQUEST_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/dispute-request-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/dispute-request-v1.json";
 
 export const DISPUTE_EVIDENCE_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/dispute-evidence-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/dispute-evidence-v1.json";
 
 export const ADJUDICATOR_VOTE_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/adjudicator-vote-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/adjudicator-vote-v1.json";
 
 export const DISPUTE_RESOLUTION_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/dispute-resolution-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/dispute-resolution-v1.json";
 
 export const DISPUTE_APPEAL_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/dispute-appeal-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/dispute-appeal-v1.json";
 
 // ---------------------------------------------------------------------------
 // Shared leaf factories

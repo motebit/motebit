@@ -28,7 +28,7 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 
 /** Stable `$id` for the execution-receipt v1 wire format. External tools pin to this. */
 export const EXECUTION_RECEIPT_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/execution-receipt-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/execution-receipt-v1.json";
 
 // ---------------------------------------------------------------------------
 // Leaf schemas

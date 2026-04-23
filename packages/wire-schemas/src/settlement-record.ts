@@ -34,7 +34,7 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 
 /** Stable `$id` for the settlement-record v1 wire format. */
 export const SETTLEMENT_RECORD_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/settlement-record-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/settlement-record-v1.json";
 
 const SettlementStatusSchema = z
   .enum(["completed", "partial", "refunded"])

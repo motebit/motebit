@@ -1,0 +1,112 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/consolidation-anchor-v1.json",
+  "title": "ConsolidationAnchor (v1)",
+  "description": "Merkle-batched commitment over signed ConsolidationReceipts. Optionally published onchain as a Solana memo — `motebit:anchor:v1:{merkle_root}:{leaf_count}` — signed by the motebit's identity key (which IS the Solana address). Not separately signed: cryptographic load is carried by (a) the signatures on the receipts it groups and (b) the Solana transaction signature when `tx_hash` is populated. See spec/consolidation-receipt-v1.md §4.",
+  "type": "object",
+  "properties": {
+    "batch_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UUIDv4 — the anchor's own identity. Stable across event-log replays."
+    },
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The motebit whose receipts are batched. Also the signer of the Solana transaction when `tx_hash` is populated (identity key IS the Solana address by Ed25519 coincidence)."
+    },
+    "merkle_root": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Hex-encoded SHA-256 Merkle root over the receipts' canonical-body leaf hashes. Stable for a given ordered set of receipts. When `tx_hash` is populated, this value is also recorded in the Solana memo (`motebit:anchor:v1:{merkle_root}:{leaf_count}`)."
+    },
+    "receipt_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Receipt IDs included in this anchor, in the order their leaf hashes were inserted into the Merkle tree. Verifiers rebuilding the tree MUST preserve this order — the runtime sorts by (finished_at ASC, receipt_id ASC) before leaf construction (spec §4.2)."
+    },
+    "leaf_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of receipts in this anchor (= `receipt_ids.length`). Duplicated so JSON Schema validators that don't correlate arrays still catch size anomalies, and so memo-parser fast paths don't need to count."
+    },
+    "anchored_at": {
+      "type": "number",
+      "description": "Unix timestamp in milliseconds when the anchor record was produced. Not signed by the anchor itself (the anchor carries no batch-level signature) — verifiers that need timestamp attestation use the Solana tx at `tx_hash`."
+    },
+    "tx_hash": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Solana signature (base58) of the transaction that published the Merkle root as a memo. Absent when the anchor was constructed offline (local-only). Present when a `ChainAnchorSubmitter` submitted successfully. The tx signer's pubkey equals `motebit_id`'s identity key."
+    },
+    "network": {
+      "type": "string",
+      "minLength": 1,
+      "description": "CAIP-2 network identifier the anchor was submitted to (e.g., `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` for Solana mainnet). Paired with `tx_hash` — absent when `tx_hash` is absent."
+    }
+  },
+  "required": ["batch_id", "motebit_id", "merkle_root", "receipt_ids", "leaf_count", "anchored_at"],
+  "additionalProperties": true,
+  "definitions": {
+    "ConsolidationAnchor": {
+      "type": "object",
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUIDv4 — the anchor's own identity. Stable across event-log replays."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The motebit whose receipts are batched. Also the signer of the Solana transaction when `tx_hash` is populated (identity key IS the Solana address by Ed25519 coincidence)."
+        },
+        "merkle_root": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hex-encoded SHA-256 Merkle root over the receipts' canonical-body leaf hashes. Stable for a given ordered set of receipts. When `tx_hash` is populated, this value is also recorded in the Solana memo (`motebit:anchor:v1:{merkle_root}:{leaf_count}`)."
+        },
+        "receipt_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Receipt IDs included in this anchor, in the order their leaf hashes were inserted into the Merkle tree. Verifiers rebuilding the tree MUST preserve this order — the runtime sorts by (finished_at ASC, receipt_id ASC) before leaf construction (spec §4.2)."
+        },
+        "leaf_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of receipts in this anchor (= `receipt_ids.length`). Duplicated so JSON Schema validators that don't correlate arrays still catch size anomalies, and so memo-parser fast paths don't need to count."
+        },
+        "anchored_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the anchor record was produced. Not signed by the anchor itself (the anchor carries no batch-level signature) — verifiers that need timestamp attestation use the Solana tx at `tx_hash`."
+        },
+        "tx_hash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Solana signature (base58) of the transaction that published the Merkle root as a memo. Absent when the anchor was constructed offline (local-only). Present when a `ChainAnchorSubmitter` submitted successfully. The tx signer's pubkey equals `motebit_id`'s identity key."
+        },
+        "network": {
+          "type": "string",
+          "minLength": 1,
+          "description": "CAIP-2 network identifier the anchor was submitted to (e.g., `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` for Solana mainnet). Paired with `tx_hash` — absent when `tx_hash` is absent."
+        }
+      },
+      "required": [
+        "batch_id",
+        "motebit_id",
+        "merkle_root",
+        "receipt_ids",
+        "leaf_count",
+        "anchored_at"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

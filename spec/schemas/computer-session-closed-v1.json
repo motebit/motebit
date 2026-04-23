@@ -1,0 +1,49 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/computer-session-closed-v1.json",
+  "title": "ComputerSessionClosed (v1)",
+  "description": "Signed event emitted when a computer-use session ends. See spec/computer-use-v1.md §5.4.",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Computer-use session identifier being closed."
+    },
+    "closed_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix ms when the session closed."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Free-text close reason. Examples: 'user_closed', 'timeout', 'error', 'manager_disposed'."
+    }
+  },
+  "required": ["session_id", "closed_at"],
+  "additionalProperties": true,
+  "definitions": {
+    "ComputerSessionClosed": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Computer-use session identifier being closed."
+        },
+        "closed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix ms when the session closed."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Free-text close reason. Examples: 'user_closed', 'timeout', 'error', 'manager_disposed'."
+        }
+      },
+      "required": ["session_id", "closed_at"],
+      "additionalProperties": true
+    }
+  }
+}

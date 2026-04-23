@@ -1,5 +1,5 @@
 /**
- * Drift defense #22 — `packages/wire-schemas/schema/*-v1.json` files
+ * Drift defense #22 — `spec/schemas/*-v1.json` files
  * must match the live zod-derived JSON Schemas byte-for-byte
  * (structural equality).
  *
@@ -19,6 +19,8 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+
+import { stampSchema } from "../spdx-stamp.js";
 
 import {
   AGENT_RESOLUTION_RESULT_SCHEMA_ID,
@@ -485,9 +487,24 @@ describe("wire-schemas drift (invariant #22)", () => {
   for (const c of CASES) {
     describe(c.name, () => {
       it("committed schema matches the live zod-derived JSON Schema", () => {
-        const path = resolve(import.meta.dirname, "..", "..", "schema", c.filename);
+        const path = resolve(
+          import.meta.dirname,
+          "..",
+          "..",
+          "..",
+          "..",
+          "spec",
+          "schemas",
+          c.filename,
+        );
         const committed = JSON.parse(readFileSync(path, "utf-8"));
-        const live = c.build();
+        // Live comparison includes the SPDX MIT stamp that
+        // `scripts/build-schemas.ts` prepends to every committed
+        // artifact. Keeping the stamp in the comparison means a
+        // stripped `$comment` field is detected as drift — the
+        // permissive license on the wire-format contracts is part of
+        // the contract itself and can't silently disappear.
+        const live = stampSchema(c.build() as Record<string, unknown>);
         expect(
           committed,
           `Committed ${c.filename} drifted from zod source. Run \`pnpm --filter @motebit/wire-schemas build-schemas\` and commit the result.`,

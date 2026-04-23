@@ -40,7 +40,7 @@ import { assembleJsonSchemaFor } from "./assemble.js";
 
 /** Stable `$id` for the credential-bundle v1 wire format. */
 export const CREDENTIAL_BUNDLE_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/packages/wire-schemas/schema/credential-bundle-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/credential-bundle-v1.json";
 
 /**
  * Loose object shape for nested credentials / anchors / successions.

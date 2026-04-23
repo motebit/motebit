@@ -1,0 +1,47 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/goal-removed-payload-v1.json",
+  "title": "GoalRemovedPayload (v1)",
+  "description": "Payload of a `goal_removed` event — goal deleted via user command or yaml pruning. See spec/goal-lifecycle-v1.md §5.5.",
+  "type": "object",
+  "properties": {
+    "goal_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UUID of the removed goal."
+    },
+    "routine_id": {
+      "type": "string",
+      "description": "Source routine id when the removal was yaml-pruned."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Free-text rationale (e.g. `\"yaml_pruned\"` or a user reason)."
+    }
+  },
+  "required": ["goal_id"],
+  "additionalProperties": true,
+  "definitions": {
+    "GoalRemovedPayload": {
+      "type": "object",
+      "properties": {
+        "goal_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUID of the removed goal."
+        },
+        "routine_id": {
+          "type": "string",
+          "description": "Source routine id when the removal was yaml-pruned."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Free-text rationale (e.g. `\"yaml_pruned\"` or a user reason)."
+        }
+      },
+      "required": ["goal_id"],
+      "additionalProperties": true
+    }
+  }
+}

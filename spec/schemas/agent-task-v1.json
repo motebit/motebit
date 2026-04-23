@@ -1,0 +1,159 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/agent-task-v1.json",
+  "title": "AgentTask (v1)",
+  "description": "Task envelope dispatched from relay to executing agent. Carries the prompt, capability requirements, scope, and lifecycle status. The executor consumes this, runs the work, and returns an ExecutionReceipt referencing `task_id`. See spec/delegation-v1.md §3.1.",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Relay-assigned task identifier (UUID). Stable across retries and the entire lifecycle; the executor echoes this in the ExecutionReceipt's `task_id`."
+    },
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Motebit identity of the executing agent (UUIDv7). Set by the relay when the task is dispatched to a chosen executor."
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Natural-language task body. Required and non-empty — the relay rejects empty prompts at submission."
+    },
+    "submitted_at": {
+      "type": "number",
+      "description": "Unix timestamp in milliseconds when the relay accepted the submission."
+    },
+    "submitted_by": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Motebit identity of the delegator (the agent that submitted the task). Used for trust tracking and budget allocation. Absent for self-submitted tasks."
+    },
+    "wall_clock_ms": {
+      "type": "number",
+      "description": "Optional hard wall-clock timeout for this execution in milliseconds. The executor self-terminates and emits a `failed` receipt if this is exceeded. Default: implementation-defined."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "claimed", "running", "completed", "failed", "denied", "expired"],
+      "description": "Lifecycle state. `pending` → just submitted; `claimed` → an executor accepted; `running` → execution in flight; terminal: `completed` / `failed` / `denied` / `expired`. State transitions are forward-only."
+    },
+    "claimed_by": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Motebit identity of the executor that claimed this task, when `status` ≥ `claimed`. Absent for `pending` tasks."
+    },
+    "required_capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "stdio_mcp",
+          "http_mcp",
+          "file_system",
+          "keyring",
+          "background",
+          "local_llm",
+          "push_wake"
+        ],
+        "description": "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode). New capabilities are protocol additions, not free-form strings."
+      },
+      "description": "Optional capability filter for routing. The relay only dispatches to agents whose `AgentServiceListing.capabilities` (broader concept) implies these device-level capabilities."
+    },
+    "step_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional plan-step identifier when this task is part of a multi-step delegation plan. Lets a coordinating delegator correlate sub-task receipts."
+    },
+    "delegated_scope": {
+      "type": "string",
+      "description": "Scope from the DelegationToken that authorized this task (when relay-mediated and authorized via a token). Restricts which tools the executor may invoke. Echoed into the ExecutionReceipt's `delegated_scope`."
+    },
+    "invocation_origin": {
+      "type": "string",
+      "enum": ["user-tap", "ai-loop", "scheduled", "agent-to-agent"],
+      "description": "How this task was authorized for invocation. Propagated into the eventual ExecutionReceipt where it becomes signature-bound. See spec/execution-ledger-v1.md §IntentOrigin and docs/doctrine/surface-determinism.md."
+    }
+  },
+  "required": ["task_id", "motebit_id", "prompt", "submitted_at", "status"],
+  "additionalProperties": true,
+  "definitions": {
+    "AgentTask": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relay-assigned task identifier (UUID). Stable across retries and the entire lifecycle; the executor echoes this in the ExecutionReceipt's `task_id`."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Motebit identity of the executing agent (UUIDv7). Set by the relay when the task is dispatched to a chosen executor."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Natural-language task body. Required and non-empty — the relay rejects empty prompts at submission."
+        },
+        "submitted_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the relay accepted the submission."
+        },
+        "submitted_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Motebit identity of the delegator (the agent that submitted the task). Used for trust tracking and budget allocation. Absent for self-submitted tasks."
+        },
+        "wall_clock_ms": {
+          "type": "number",
+          "description": "Optional hard wall-clock timeout for this execution in milliseconds. The executor self-terminates and emits a `failed` receipt if this is exceeded. Default: implementation-defined."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "claimed", "running", "completed", "failed", "denied", "expired"],
+          "description": "Lifecycle state. `pending` → just submitted; `claimed` → an executor accepted; `running` → execution in flight; terminal: `completed` / `failed` / `denied` / `expired`. State transitions are forward-only."
+        },
+        "claimed_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Motebit identity of the executor that claimed this task, when `status` ≥ `claimed`. Absent for `pending` tasks."
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "stdio_mcp",
+              "http_mcp",
+              "file_system",
+              "keyring",
+              "background",
+              "local_llm",
+              "push_wake"
+            ],
+            "description": "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode). New capabilities are protocol additions, not free-form strings."
+          },
+          "description": "Optional capability filter for routing. The relay only dispatches to agents whose `AgentServiceListing.capabilities` (broader concept) implies these device-level capabilities."
+        },
+        "step_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional plan-step identifier when this task is part of a multi-step delegation plan. Lets a coordinating delegator correlate sub-task receipts."
+        },
+        "delegated_scope": {
+          "type": "string",
+          "description": "Scope from the DelegationToken that authorized this task (when relay-mediated and authorized via a token). Restricts which tools the executor may invoke. Echoed into the ExecutionReceipt's `delegated_scope`."
+        },
+        "invocation_origin": {
+          "type": "string",
+          "enum": ["user-tap", "ai-loop", "scheduled", "agent-to-agent"],
+          "description": "How this task was authorized for invocation. Propagated into the eventual ExecutionReceipt where it becomes signature-bound. See spec/execution-ledger-v1.md §IntentOrigin and docs/doctrine/surface-determinism.md."
+        }
+      },
+      "required": ["task_id", "motebit_id", "prompt", "submitted_at", "status"],
+      "additionalProperties": true
+    }
+  }
+}

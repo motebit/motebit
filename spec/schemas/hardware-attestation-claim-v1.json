@@ -1,0 +1,54 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/hardware-attestation-claim-v1.json",
+  "title": "HardwareAttestationClaim (v1)",
+  "description": "Optional hardware-custody claim embedded as the `hardware_attestation` field on `TrustCredentialSubject`. Declares whether the subject agent's identity key lives inside a hardware keystore (Secure Enclave, TPM, Android StrongBox, Apple DeviceCheck) or in software. Consumed by `HardwareAttestationSemiring` in `@motebit/semiring` to rank hardware-attested agents above software-only agents during routing. See spec/credential-v1.md §3.4.",
+  "type": "object",
+  "properties": {
+    "platform": {
+      "type": "string",
+      "enum": ["secure_enclave", "tpm", "play_integrity", "device_check", "webauthn", "software"],
+      "description": "Attestation surface identifier. `secure_enclave` = Apple Secure Enclave / Android StrongBox class; `tpm` = Trusted Platform Module (PC); `play_integrity` = Google Play Integrity attestation; `device_check` = Apple DeviceCheck/App Attest; `webauthn` = W3C WebAuthn platform authenticator (browser-minted, packed attestation format verified against a pinned FIDO root set); `software` is the explicit no-hardware sentinel (truthfully claims 'this key is not hardware-backed', distinct from an absent claim which means 'unknown')."
+    },
+    "key_exported": {
+      "type": "boolean",
+      "description": "True when the private key was exported from hardware storage to software (backup, pairing, migration). Weakens the claim — the hardware no longer uniquely holds the material. Absent is equivalent to `false` for backward compatibility."
+    },
+    "attestation_receipt": {
+      "type": "string",
+      "description": "Opaque platform-specific attestation blob (Apple DeviceCheck assertion, Google Play Integrity token, TPM quote) encoded as the platform expects (base64url by convention). Motebit does not parse this; platform adapters verify it as a side channel. Absent when no platform receipt is available."
+    }
+  },
+  "required": ["platform"],
+  "additionalProperties": false,
+  "definitions": {
+    "HardwareAttestationClaim": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": [
+            "secure_enclave",
+            "tpm",
+            "play_integrity",
+            "device_check",
+            "webauthn",
+            "software"
+          ],
+          "description": "Attestation surface identifier. `secure_enclave` = Apple Secure Enclave / Android StrongBox class; `tpm` = Trusted Platform Module (PC); `play_integrity` = Google Play Integrity attestation; `device_check` = Apple DeviceCheck/App Attest; `webauthn` = W3C WebAuthn platform authenticator (browser-minted, packed attestation format verified against a pinned FIDO root set); `software` is the explicit no-hardware sentinel (truthfully claims 'this key is not hardware-backed', distinct from an absent claim which means 'unknown')."
+        },
+        "key_exported": {
+          "type": "boolean",
+          "description": "True when the private key was exported from hardware storage to software (backup, pairing, migration). Weakens the claim — the hardware no longer uniquely holds the material. Absent is equivalent to `false` for backward compatibility."
+        },
+        "attestation_receipt": {
+          "type": "string",
+          "description": "Opaque platform-specific attestation blob (Apple DeviceCheck assertion, Google Play Integrity token, TPM quote) encoded as the platform expects (base64url by convention). Motebit does not parse this; platform adapters verify it as a side channel. Absent when no platform receipt is available."
+        }
+      },
+      "required": ["platform"],
+      "additionalProperties": false
+    }
+  }
+}

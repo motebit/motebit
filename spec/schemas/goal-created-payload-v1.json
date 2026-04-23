@@ -1,0 +1,107 @@
+{
+  "$comment": "SPDX-License-Identifier: MIT",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/goal-created-payload-v1.json",
+  "title": "GoalCreatedPayload (v1)",
+  "description": "Payload of a `goal_created` event — initial declaration or yaml-driven revision of a goal. See spec/goal-lifecycle-v1.md §5.1.",
+  "type": "object",
+  "properties": {
+    "goal_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable UUID of the goal; stable across yaml-driven revisions."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Natural-language goal text. REQUIRED on initial creation; MAY be absent on revision when only scheduling metadata changed."
+    },
+    "interval_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Scheduling cadence in milliseconds. Absent for one-shot goals."
+    },
+    "mode": {
+      "type": "string",
+      "description": "Scheduling mode — e.g. `\"recurring\"` or `\"once\"`. Future variants reserved."
+    },
+    "wall_clock_ms": {
+      "type": "integer",
+      "description": "Wall-clock anchor for the first run (Unix milliseconds)."
+    },
+    "project_id": {
+      "type": "string",
+      "description": "User-facing project grouping. Opaque to the protocol."
+    },
+    "routine_id": {
+      "type": "string",
+      "description": "Source routine id when materialized from a motebit.yaml routine."
+    },
+    "routine_source": {
+      "type": "string",
+      "description": "Free-text source attribution (e.g. yaml file path)."
+    },
+    "routine_hash": {
+      "type": "string",
+      "description": "Canonical hash of the source routine. Used to detect yaml drift."
+    },
+    "update": {
+      "type": "boolean",
+      "const": true,
+      "description": "Marker set on yaml-driven revisions; absent on initial creation."
+    }
+  },
+  "required": ["goal_id"],
+  "additionalProperties": true,
+  "definitions": {
+    "GoalCreatedPayload": {
+      "type": "object",
+      "properties": {
+        "goal_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable UUID of the goal; stable across yaml-driven revisions."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Natural-language goal text. REQUIRED on initial creation; MAY be absent on revision when only scheduling metadata changed."
+        },
+        "interval_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Scheduling cadence in milliseconds. Absent for one-shot goals."
+        },
+        "mode": {
+          "type": "string",
+          "description": "Scheduling mode — e.g. `\"recurring\"` or `\"once\"`. Future variants reserved."
+        },
+        "wall_clock_ms": {
+          "type": "integer",
+          "description": "Wall-clock anchor for the first run (Unix milliseconds)."
+        },
+        "project_id": {
+          "type": "string",
+          "description": "User-facing project grouping. Opaque to the protocol."
+        },
+        "routine_id": {
+          "type": "string",
+          "description": "Source routine id when materialized from a motebit.yaml routine."
+        },
+        "routine_source": {
+          "type": "string",
+          "description": "Free-text source attribution (e.g. yaml file path)."
+        },
+        "routine_hash": {
+          "type": "string",
+          "description": "Canonical hash of the source routine. Used to detect yaml drift."
+        },
+        "update": {
+          "type": "boolean",
+          "const": true,
+          "description": "Marker set on yaml-driven revisions; absent on initial creation."
+        }
+      },
+      "required": ["goal_id"],
+      "additionalProperties": true
+    }
+  }
+}
