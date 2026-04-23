@@ -75,8 +75,89 @@ A migration or compatibility path may be removed only when:
 - **Protocol-level cross-relay migration** (`spec/migration-v1.md`, `services/api/src/migration.ts`): permanent. Never a cleanup target.
 - **Client-side SQLite / IndexedDB schemas** (`@motebit/persistence`, `@motebit/browser-persistence`): per-user-per-device. Pre-1.0 users can reset; post-1.0 treat as N-holder and deprecate-then-strip.
 
+## State-shape migrators — implementation pattern
+
+Symbol deprecation is an API-layer concern — `deprecation-lifecycle.md` owns it. Persisted state shapes (config.json, localStorage, IndexedDB schemas, on-disk key blobs) are a separate axis. They have no call site to annotate; the "holder" is bytes on disk under a key a running process doesn't control.
+
+The pattern below extends state-holder analysis into the mechanics every future config/state migration should follow.
+
+### Where the migrator lives
+
+At the **read site**, co-located with the shape it migrates. Not in a central migrations module.
+
+- Reading is where you know the caller's intent and the canonical shape expected.
+- Co-location keeps the migrator and the canonical type in the same file — a future reader sees the shape history without cross-referencing.
+- No "migrations/" folder for local state; that pattern is for relay DB schema where ordered application matters.
+
+### Three mechanical shapes (matched to holder bucket)
+
+| Holder bucket                                                   | Migrator shape                                                                                                              | Example                                                                                                                         |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **0 holders**                                                   | No migrator. Strip the reader branch.                                                                                       | Post-strip `LegacyProviderConfig` — reader returns `null`, consumer falls back to defaults.                                     |
+| **1 holder you control**                                        | In-place rewrite on read, re-persist canonical shape, remove migrator next release.                                         | Single-operator relay row shape changes — migrate on load, save canonical, strip next release.                                  |
+| **N uncontrolled (reachable on every load)**                    | In-place rewrite on read, persist canonical shape immediately (shrinks holder count each load), keep migrator until sunset. | `extractPersonality` in `apps/cli/src/config.ts` — `"ollama"` → `"local-server"` on every read. Marked `@permanent` by policy.  |
+| **Malformed beyond migration** (corruption, truncation, tamper) | Hard error with explicit "reset" instruction. No silent fallback, no best-effort recovery.                                  | PIN-encrypted key migration in `packages/runtime/src/operator.ts` — malformed ciphertext → reset error, not legacy-format read. |
+
+### Canonical pattern
+
+```ts
+export function loadUserConfig(): UserConfig | null {
+  const raw = readFromDisk();
+  if (raw == null) return null;
+
+  // 1. Happy path — canonical shape
+  if (isCanonical(raw)) return raw;
+
+  // 2. Known legacy shape — migrate in place, warn once, re-persist
+  if (isLegacyShapeV1(raw)) {
+    warnOncePerProcess(
+      "userConfig v1 shape deprecated since 1.0.0; " +
+        "migrated on read. Will stop migrating at 2.0.0.",
+    );
+    const migrated = migrateV1(raw);
+    writeToDisk(migrated); // shrink holder count by one
+    return migrated;
+  }
+
+  // 3. Malformed — explicit reset, not silent default
+  throw new Error(
+    "User config at ~/.motebit/config.json is malformed. " +
+      "Back up and delete the file, then re-run to regenerate.",
+  );
+}
+```
+
+Three properties:
+
+- **Warn-on-migration, not warn-on-canonical.** The canonical path stays silent; warnings fire only when a legacy shape is hit. Every successful migration shrinks `N`.
+- **Rewrite on read.** Don't leave legacy bytes on disk after a successful migration — the holder becomes canonical the first time they run the new code. This is how holder count actually drops during a deprecation window.
+- **Warn once per process.** Not once per read. Log spam defeats the signal. Cache the warning key.
+
+### Staged removal
+
+Three phases, matching the deprecation-lifecycle windows:
+
+1. **Coexist-rewrite** (`since N.0`) — migrator active, canonical shape persisted on read, warnings in dev. This is the default state during the deprecation window.
+2. **Sunset-warn** (the release before `removed in`) — escalate warning from dev to production for one minor cycle, telegraphing imminent removal to any holder who hasn't loaded in months.
+3. **Strip + null** (`removed in`) — remove the migrator branch. Reader returns `null`; consumer falls back to defaults or hard-fails per the canonical pattern above. At this point the bytes-on-disk become unreadable state; that's the explicit cost of the deprecation window expiring.
+
+Never extend a state-shape migrator silently past `removed in`. If holder count is still too high at the graduation point, update the annotation to name a new sunset, document why, and extend — but do it visibly, not by dropping the strip.
+
+### When to force reset vs preserve
+
+Default: **preserve and rewrite.** Users should never be asked to clear local state for a cosmetic change.
+
+Force reset (hard error, no migration path) only when:
+
+- The legacy shape contains material that can't be semantically mapped to the canonical shape (e.g. encryption with a different scheme whose keys are gone).
+- The legacy shape is indistinguishable from corruption — no reliable discriminator.
+- Security requires it — migrating would perpetuate a vulnerability (e.g. plaintext secret that must be re-encrypted under a fresh KDF the user actively chose).
+
+The PIN-encrypted-key case in `operator.ts` meets the third criterion: plain-hex private keys were a security downgrade; migrating them silently would have left derivable bytes on disk. Explicit reset is correct there.
+
 ## Cross-references
 
 - [`protocol-model.md`](protocol-model.md) — the protocol/implementation/accumulated-state three-layer model. Protocol-layer migrations belong to the permanent category; implementation-layer migrations obey state-holder analysis.
+- [`deprecation-lifecycle.md`](deprecation-lifecycle.md) — the addition partner. Deprecation contract, sunset windows, and runtime-warning guidelines for symbol-level deprecations; state-shape migrators in this doc inherit the same `since` / `removed in` discipline.
 - [`surface-determinism.md`](surface-determinism.md) — related principle for runtime affordances. "Honest degradation, not graceful" mirrors "strip dead compat, don't keep fallbacks for states no one holds."
 - [`coverage-graduation.md`](coverage-graduation.md) — the model for soft-signal drift defenses that nudge classification passes without blocking builds.
