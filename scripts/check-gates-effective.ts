@@ -601,6 +601,37 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
         `import type { ToolDefinition } from "@motebit/sdk";\nexport const untaggedProbeDefinition: ToolDefinition = {\n  name: "untagged_probe",\n  description: "Probe fixture — intentionally missing mode tag.",\n  inputSchema: { type: "object", properties: {} },\n};\n`,
       ),
   },
+  {
+    script: "check-hardware-attestation-primitives",
+    proves:
+      "flags an inline `AgentTrustCredential` VC composer — file contains the literal type-tuple + a `hardware_attestation:` subject assignment but does not import `composeHardwareAttestationCredential`",
+    perturb: () =>
+      // Fixture: a file under apps/web/src/ that composes the VC envelope
+      // inline — literal `type: ["VerifiableCredential", "AgentTrustCredential"]`
+      // tuple plus `hardware_attestation:` in a `credentialSubject` literal.
+      // This is the exact drift shape the gate exists to prevent (the third
+      // inline copy after CLI and desktop). No import of the canonical
+      // composer means Rule A fires.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}inline_ha_composer.ts`,
+        `// Probe-only fixture — inline composition of a hardware-attestation VC.
+export function rogueCompose(issuerDid: string, identityHex: string): unknown {
+  return {
+    "@context": ["https://www.w3.org/ns/credentials/v2"],
+    type: ["VerifiableCredential", "AgentTrustCredential"],
+    issuer: issuerDid,
+    validFrom: new Date().toISOString(),
+    credentialSubject: {
+      id: issuerDid,
+      identity_public_key: identityHex,
+      hardware_attestation: { platform: "software", key_exported: false },
+      attested_at: Date.now(),
+    },
+  };
+}
+`,
+      ),
+  },
 ];
 
 /**

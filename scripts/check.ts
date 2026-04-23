@@ -249,6 +249,12 @@ const GATES: ReadonlyArray<Gate> = [
       'every ToolDefinition literal declares a `mode: "api" | "ax" | "pixels"` field so the tool registry\'s cost-tier sort lands the AI\'s default choice on the cheapest structured tool that can answer (invariant #36, added 2026-04-22 as the hybrid-engine enforcement — structural bias, not prompt reasoning, keeps the AI from reaching for pixel screenshots when an MCP tool would have answered in 500 tokens; applies to packages/tools/src/builtins and app-level tauri-tools; MCP-imported tools default to api in packages/mcp-client)',
     script: "check-tool-modes",
   },
+  {
+    name: "check-hardware-attestation-primitives",
+    defends:
+      'the canonical composer (`composeHardwareAttestationCredential` in @motebit/encryption) and verifier (`verifyHardwareAttestationClaim` in @motebit/crypto) are the only way to build or parse a HardwareAttestationClaim-carrying AgentTrustCredential — inline VC composers (type-tuple ["VerifiableCredential", "AgentTrustCredential"] + `hardware_attestation:` subject) and inline attestation_receipt parsers (.split(\'.\') / base64url decode / P-256 verify) are CI failures (invariant #37, added 2026-04-22 after the CLI+desktop consolidation and ahead of the iOS / Expo mobile surface landing — extends the protocol-primitive doctrine to hardware-attestation judgment, prevents the third inline copy of the VC envelope and the first inline copy of the receipt parser)',
+    script: "check-hardware-attestation-primitives",
+  },
 ];
 
 interface Result {
