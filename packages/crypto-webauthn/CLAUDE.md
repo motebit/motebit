@@ -1,6 +1,8 @@
 # @motebit/crypto-webauthn
 
-WebAuthn platform-authenticator attestation adapter. BSL-1.1, Layer 2. Sibling of `@motebit/crypto-appattest` — the BSL metabolic leaf that `@motebit/crypto`'s dispatcher calls when a `HardwareAttestationClaim` declares `platform: "webauthn"`.
+WebAuthn platform-authenticator attestation adapter. MIT, Layer 2. Sibling of `@motebit/crypto-appattest` — the metabolic leaf that `@motebit/crypto`'s dispatcher calls when a `HardwareAttestationClaim` declares `platform: "webauthn"`.
+
+MIT because it answers "how is this artifact verified?" against the W3C WebAuthn `packed` attestation format and the FIDO Alliance's published vendor roots (Apple Anonymous Attestation, Yubico, Microsoft). CBOR parsing, chain-walking, `fmt` routing, and `clientDataHash` identity-binding are deterministic from those public specs plus the pinned root set. Motebit-canonical composition (default RP ID, which `fmt` values to accept, CLI shape) lives one layer up in `@motebit/verify` (BSL).
 
 ## Why this package exists
 
@@ -11,7 +13,7 @@ WebAuthn's packed-attestation format is **X.509-shaped judgment**, not raw crypt
 3. For `fmt: "packed"` without `x5c` (self attestation): verifying `attStmt.sig` over `authData || clientDataHash` using the public key carried IN `authData` (the credential public key itself). Self-attestation proves only that the credential's own key signed the challenge — not that any specific vendor minted it — and scores as hardware-exported-equivalent (0.5) in the semiring.
 4. Confirming the attested body names the caller's Ed25519 identity key. Re-derived from `(attested_at, device_id, identity_public_key, motebit_id, platform: "webauthn", version: "1")` the caller threads in via `WebAuthnVerifyOptions`. SHA-256 of the reconstructed body must equal the transmitted `clientDataHash` — byte-identical to the App Attest identity-binding contract.
 
-Step 2 is the reason this lives in BSL, not MIT. **Which roots to pin** is a policy judgment. **Which `fmt` values to accept** is a policy judgment (v1 accepts only `packed`; `tpm`, `android-key`, `android-safetynet`, `fido-u2f`, `apple` are rejected with a named error). `@motebit/crypto` stays dep-thin and pure; this package metabolizes `@peculiar/x509` + `cbor2` to produce a yes/no answer the sovereign verifier consumes.
+The pinned FIDO roots are each vendor's own published attestation root — Apple, Yubico, Microsoft at landing. Scope (v1 accepts only `packed`; other `fmt` values return a named error) is a specification-level cut, not accumulated judgment; additional fmts are additive — new arm plus fixture. `@motebit/crypto` stays dep-thin and pure; this package metabolizes `@peculiar/x509` + `cbor2` to produce a yes/no answer the sovereign verifier consumes.
 
 ## Rules
 

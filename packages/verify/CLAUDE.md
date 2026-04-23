@@ -10,13 +10,13 @@ The canonical motebit artifact verifier. BSL-1.1, Layer 6 (Applications). Ships 
 @motebit/crypto                   MIT L0  Primitives — verify, sign, suite dispatch
 ```
 
-Same shape as the lineages that survive for decades: `git` / `libgit2`, `cargo` / `tokio`, `npm` / `@npm/arborist`. The verb-named tool gets the short name and the BSL license because it aggregates; the library underneath stays MIT and dep-thin so third parties can build their own verifiers without accepting motebit's license terms.
+Same shape as the lineages that survive for decades: `git` / `libgit2`, `cargo` / `tokio`, `npm` / `@npm/arborist`. The verb-named tool gets the short name and the BSL license because it carries motebit-canonical aggregation — the opinionated defaults (bundle IDs, RP ID, integrity floor) and CLI ergonomics that represent motebit's particular composition of the MIT leaves. The library underneath stays dep-thin MIT, and the four platform verifiers are themselves MIT (each answers "how is this artifact verified?" against a published public trust anchor — the MIT side of the protocol-model boundary test).
 
 ## Why this package exists as the aggregator
 
-`@motebit/verifier` (MIT, L6 library) could have shipped a CLI itself, but that would have forced a choice: either carry the four platform adapter leaves as dependencies (breaking the MIT-only discipline of library consumers) or leave hardware-attestation claims perpetually unverifiable (breaking the self-attesting-system thesis).
+`@motebit/verifier` (MIT, L6 library) stays dep-thin on purpose: file I/O, `formatHuman`, and the injection point for an optional hardware-attestation verifier. Pulling the four platform adapters into it would force every MIT-library consumer to accept the `cbor2` / `@peculiar/x509` dep surface and motebit's specific root-pin choices, even when the consumer just wants to verify software identity files.
 
-Splitting gave us both properties at once. The library stays MIT; the CLI carries the BSL dependencies that end users don't care about at install time. When a third-party auditor wants to reproduce motebit's verification decision in their own MIT-licensed code, they compose `@motebit/crypto` and wire their own verifier adapters. When a human runs `motebit-verify cred.json`, they install one package, get every platform, and type six characters.
+Splitting lets the library stay a deterministic primitive and lets this package carry the motebit-canonical wiring — default bundle IDs `com.motebit.mobile`, default RP ID `motebit.com`, default integrity floor `MEETS_DEVICE_INTEGRITY`, CLI argument shape. A third-party auditor who wants to reproduce motebit's verification decision in their own MIT-licensed code composes `@motebit/crypto` + `@motebit/verifier` + any subset of the four MIT `@motebit/crypto-*` leaves — and pins the roots they trust. A human running `motebit-verify cred.json` installs one BSL package and gets motebit's opinionated composition out of the box.
 
 ## Rules
 

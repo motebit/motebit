@@ -50,10 +50,10 @@ motebit/
 │   ├── wire-schemas/          [L1]          Zod schemas for wire-format types. Generates committed JSON Schema artifacts into `spec/schemas/` — the protocol-owned MIT tree third parties implement against.
 │   │
 │   │   # Layer 2 — Engines
-│   ├── crypto-appattest/      [L2]          Apple App Attest chain verifier — pinned root, platform-specific judgment.
-│   ├── crypto-play-integrity/ [L2]          Google Play Integrity JWT verifier — pinned JWKS, ES256/RS256 dispatch.
-│   ├── crypto-tpm/            [L2]          Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
-│   ├── crypto-webauthn/       [L2]          WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO root set.
+│   ├── crypto-appattest/      [L2 · MIT]    Apple App Attest chain verifier — pinned Apple root, deterministic from Apple's public spec.
+│   ├── crypto-play-integrity/ [L2 · MIT]    Google Play Integrity JWT verifier — pinned JWKS, ES256/RS256 dispatch.
+│   ├── crypto-tpm/            [L2 · MIT]    Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
+│   ├── crypto-webauthn/       [L2 · MIT]    WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO root set (Apple, Yubico, Microsoft).
 │   ├── market/                [L2]          Budget, settlement, reputation, graph routing.
 │   ├── behavior-engine/       [L2]          state → BehaviorCues (deterministic, pure).
 │   ├── state-vector/          [L2]          Tick-based EMA smoothing, hysteresis, 60 FPS interp.
@@ -83,7 +83,7 @@ motebit/
 │   ├── create-motebit/        [L6 · MIT]    Public scaffolder. npm create motebit.
 │   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
 │   ├── verifier/              [L6 · MIT]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. MIT-pure; no bin.
-│   ├── verify/                [L6]          Canonical `motebit-verify` CLI — the BSL aggregator that bundles the four platform adapter leaves (App Attest, TPM, Play Integrity, WebAuthn) for one-install offline verification.
+│   ├── verify/                [L6]          Canonical `motebit-verify` CLI — the BSL aggregator that bundles the four MIT platform leaves (App Attest, TPM, Play Integrity, WebAuthn) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification.
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.
@@ -134,16 +134,23 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 
 ## MIT / BSL boundary
 
-Four packages are MIT (the open protocol). `check-deps.ts` enforces that MIT packages export only types, enums, branded casts, and constants — never algorithms that would bind a competing implementation to this codebase.
+Nine packages are MIT (the open protocol). `check-deps.ts` enforces that MIT packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
 | Package | Answers | Layer |
 |---------|---------|-------|
 | `@motebit/protocol` | What is the artifact? What's the algebra? | L0 |
 | `@motebit/crypto` | How is it signed? How is it verified? | L0 |
 | `@motebit/sdk` | What interface must an implementation satisfy? | L0 |
+| `@motebit/crypto-appattest` | How is an Apple App Attest receipt verified? | L2 |
+| `@motebit/crypto-play-integrity` | How is a Google Play Integrity token verified? | L2 |
+| `@motebit/crypto-tpm` | How is a TPM 2.0 quote verified? | L2 |
+| `@motebit/crypto-webauthn` | How is a WebAuthn packed attestation verified? | L2 |
+| `@motebit/verifier` | How does a third party compose offline verification? | L6 |
 | `create-motebit` | How does a third party scaffold against the protocol? | L6 |
 
-The remaining 31 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. See `LICENSING.md` for the full boundary test and commercial terms.
+The four `crypto-*` platform leaves verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) — no motebit-specific judgment. Motebit-canonical aggregation (default bundle IDs, RP ID, CLI shape) lives in `@motebit/verify` (BSL) one layer up.
+
+The remaining 26 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. See `LICENSING.md` for the full boundary test and commercial terms.
 
 ## Apps
 

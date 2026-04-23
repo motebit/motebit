@@ -97,12 +97,21 @@ const LAYER: Record<string, number> = {
 const APP_LAYER = 6;
 
 // MIT-licensed packages — must not import from BSL packages, must export only types.
+// The four platform-attestation adapters are MIT because each one answers "how is
+// this artifact verified?" against a published public trust anchor (Apple root,
+// Google JWKS, vendor TPM roots, FIDO roots) — the MIT side of the protocol-model
+// boundary test. Motebit-canonical composition (bundle IDs, RP IDs, the CLI shape)
+// stays BSL in @motebit/verify, which aggregates these four leaves.
 const MIT_PACKAGES = new Set([
   "@motebit/protocol",
   "@motebit/sdk",
   "@motebit/crypto",
   "create-motebit",
   "@motebit/verifier",
+  "@motebit/crypto-appattest",
+  "@motebit/crypto-play-integrity",
+  "@motebit/crypto-tpm",
+  "@motebit/crypto-webauthn",
 ]);
 
 // MIT packages allowed to import from other MIT packages only (plus external deps).
@@ -114,6 +123,10 @@ const MIT_IMPORT_ALLOWED = new Set([
   "@motebit/crypto",
   "create-motebit",
   "@motebit/verifier",
+  "@motebit/crypto-appattest",
+  "@motebit/crypto-play-integrity",
+  "@motebit/crypto-tpm",
+  "@motebit/crypto-webauthn",
 ]);
 
 // Allowlisted non-trivial exported functions in MIT packages.

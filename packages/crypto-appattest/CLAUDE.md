@@ -1,6 +1,8 @@
 # @motebit/crypto-appattest
 
-Apple App Attest chain-verification adapter. BSL-1.1, Layer 2. The second metabolic leaf in motebit's hardware-attestation platform lineup — sits beside `@motebit/encryption` / `@motebit/crypto` as the platform-specific verifier that `@motebit/crypto`'s `HardwareAttestationClaim` dispatcher calls when a claim declares `platform: "device_check"`.
+Apple App Attest chain-verification adapter. MIT, Layer 2. The second metabolic leaf in motebit's hardware-attestation platform lineup — sits beside `@motebit/encryption` / `@motebit/crypto` as the platform-specific verifier that `@motebit/crypto`'s `HardwareAttestationClaim` dispatcher calls when a claim declares `platform: "device_check"`.
+
+MIT because it answers "how is this artifact verified?" against Apple's public App Attest root CA. Every step is deterministic from Apple's published spec plus the pinned public PEM. Motebit-canonical composition (default bundle IDs, CLI shape, integrity floor) lives one layer up in `@motebit/verify` (BSL), which bundles this leaf into the operator CLI.
 
 ## Why this package exists
 
@@ -12,7 +14,7 @@ Apple's App Attest attestation format is **X.509-shaped judgment**, not raw cryp
 4. Parsing the WebAuthn-shaped `authData` to assert `rpIdHash === SHA256(bundleId)`.
 5. Confirming the attested body names the caller's Ed25519 identity key. Re-derived from `(motebit_id, device_id, identity_public_key, attested_at)` the caller threads in via `AppAttestVerifyOptions` / `DeviceCheckVerifierContext` — byte-identical to the Swift `CanonicalBody.encode` in `apps/mobile/modules/expo-app-attest/`. SHA-256 of the reconstructed body must equal the transmitted `clientDataHash`. A malicious native client that substitutes any other body fails here.
 
-Step 2 is the reason this lives in BSL, not MIT. **Which root to pin** is a policy judgment. **How to handle chain-path validation, revocation, and clock-skew** is a policy judgment. `@motebit/crypto` stays dep-thin and pure; this package metabolizes `@peculiar/x509` + `cbor2` to produce a yes/no answer the sovereign verifier consumes.
+The pinned root is not judgment — it is Apple's published App Attest root CA, byte-identical to what every conformant Apple-attestation verifier pins. Chain-path validation, clock-skew handling, and OID extraction are deterministic from Apple's published spec. `@motebit/crypto` stays dep-thin and pure; this package metabolizes `@peculiar/x509` + `cbor2` to produce a yes/no answer the sovereign verifier consumes. Motebit-canonical composition (default bundle IDs, verifier CLI shape) stays in BSL one layer up, not here.
 
 ## Rules
 

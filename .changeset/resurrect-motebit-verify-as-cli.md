@@ -12,9 +12,9 @@
 
 The entire published protocol surface bumps to 1.0.0 in a coordinated release. What changes at npm:
 
-- **`@motebit/verify@1.0.0`** — fresh lineage superseding the deprecated `0.7.0` zero-dep library. Ships the `motebit-verify` CLI binary with every hardware-attestation platform bundled (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn). Network-free, self-attesting. License: BSL-1.1. Runs `npm install -g @motebit/verify` to get the tool.
+- **`@motebit/verify@1.0.0`** — fresh lineage superseding the deprecated `0.7.0` zero-dep library. Ships the `motebit-verify` CLI binary with every hardware-attestation platform bundled (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn) and motebit-canonical defaults pre-wired (bundle IDs, RP ID, integrity floor). Network-free, self-attesting. License: BSL-1.1 — the opinionated motebit composition is what's restricted; the underlying leaves stay MIT. Runs `npm install -g @motebit/verify` to get the tool.
 
-- **`@motebit/verifier@1.0.0`** — library-only. The `motebit-verify` CLI that used to live here has moved to `@motebit/verify` (above). This package now ships only the MIT helpers (`verifyFile`, `verifyArtifact`, `formatHuman`, `VerifyFileOptions` with the optional `hardwareAttestation` injection point). Third parties writing MIT-only TypeScript verifiers compose this + `@motebit/crypto` without pulling BSL code.
+- **`@motebit/verifier@1.0.0`** — library-only. The `motebit-verify` CLI that used to live here has moved to `@motebit/verify` (above). This package now ships only the MIT helpers (`verifyFile`, `verifyArtifact`, `formatHuman`, `VerifyFileOptions` with the optional `hardwareAttestation` injection point). Third parties writing MIT-only TypeScript verifiers compose this with `@motebit/crypto` — and optionally any subset of the four MIT `@motebit/crypto-*` platform leaves — without pulling BSL code.
 
 - **`@motebit/crypto@1.0.0`** — unchanged in role, version bump to mark 1.0 maturity of the primitive substrate. MIT, zero monorepo deps.
 
@@ -29,10 +29,16 @@ The entire published protocol surface bumps to 1.0.0 in a coordinated release. W
 The three-package lineage for verification tooling follows the pattern that survives decades — git / libgit2, cargo / tokio, npm / @npm/arborist:
 
 ```
-@motebit/verify     BSL  the CLI motebit-verify + bundled adapters
-@motebit/verifier   MIT  library: verifyFile, verifyArtifact, formatHuman
-@motebit/crypto     MIT  primitives: verify, sign, suite dispatch
+@motebit/verify              BSL  the CLI motebit-verify + motebit-canonical defaults over the bundled leaves
+@motebit/verifier            MIT  library: verifyFile, verifyArtifact, formatHuman
+@motebit/crypto              MIT  primitives: verify, sign, suite dispatch
+@motebit/crypto-appattest    MIT  Apple App Attest chain verifier (pinned Apple root)
+@motebit/crypto-play-integrity MIT Google Play Integrity JWT verifier (pinned Google JWKS)
+@motebit/crypto-tpm          MIT  TPM 2.0 EK chain verifier (pinned vendor roots)
+@motebit/crypto-webauthn     MIT  WebAuthn packed-attestation verifier (pinned FIDO roots)
 ```
+
+The four platform leaves are MIT — each answers "how is this artifact verified?" against a published public trust anchor, the MIT side of the protocol-model boundary test. Motebit-canonical composition (default bundle IDs, RP ID, CLI shape) stays BSL one layer up in `@motebit/verify`.
 
 ## Migration
 

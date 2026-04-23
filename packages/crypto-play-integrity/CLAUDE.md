@@ -1,6 +1,8 @@
 # @motebit/crypto-play-integrity
 
-Google Play Integrity JWT verifier. BSL-1.1, Layer 2. Sibling of `@motebit/crypto-appattest` — the Android metabolic leaf that `@motebit/crypto`'s `HardwareAttestationClaim` dispatcher calls when a claim declares `platform: "play_integrity"`.
+Google Play Integrity JWT verifier. MIT, Layer 2. Sibling of `@motebit/crypto-appattest` — the Android metabolic leaf that `@motebit/crypto`'s `HardwareAttestationClaim` dispatcher calls when a claim declares `platform: "play_integrity"`.
+
+MIT because it answers "how is this artifact verified?" against Google's published Play Integrity JWKS. JWT parsing, algorithm dispatch (ES256 / RS256), nonce-rebinding, package binding, and the device-integrity floor are all deterministic from Google's published spec plus the pinned JWKS bytes. Motebit-canonical composition (default integrity floor, CLI shape) lives one layer up in `@motebit/verify` (BSL).
 
 ## Scope note — v1 is not-yet-production
 

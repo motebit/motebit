@@ -4,18 +4,23 @@ Motebit uses a dual-license model: an open protocol layer and a source-available
 
 ## Protocol Layer — MIT License
 
-The protocol specification, type definitions, identity verification, and scaffolding are MIT-licensed. Use them for any purpose, including commercial, without restriction.
+The protocol specification, type definitions, identity verification, scaffolding, and the hardware-attestation platform-leaf verifiers are MIT-licensed. Use them for any purpose, including commercial, without restriction.
 
-| Package                    | npm                 | Purpose                                              |
-| -------------------------- | ------------------- | ---------------------------------------------------- |
-| `spec/`                    | —                   | Identity, execution-ledger, federation, market specs |
-| `packages/protocol/`       | `@motebit/protocol` | Network protocol types (0 deps)                      |
-| `packages/sdk/`            | `@motebit/sdk`      | Full type vocabulary (re-exports protocol)           |
-| `packages/crypto/`         | `@motebit/crypto`   | Standalone signature verification (0 deps)           |
-| `packages/create-motebit/` | `create-motebit`    | Identity scaffolding CLI (0 deps)                    |
-| `packages/github-action/`  | —                   | GitHub Action for identity verification              |
+| Package                           | npm                              | Purpose                                                  |
+| --------------------------------- | -------------------------------- | -------------------------------------------------------- |
+| `spec/`                           | —                                | Identity, execution-ledger, federation, market specs     |
+| `packages/protocol/`              | `@motebit/protocol`              | Network protocol types (0 deps)                          |
+| `packages/sdk/`                   | `@motebit/sdk`                   | Full type vocabulary (re-exports protocol)               |
+| `packages/crypto/`                | `@motebit/crypto`                | Standalone signature verification (0 deps)               |
+| `packages/verifier/`              | `@motebit/verifier`              | Library: `verifyFile`, `verifyArtifact`, `formatHuman`   |
+| `packages/crypto-appattest/`      | `@motebit/crypto-appattest`      | Apple App Attest chain verifier (pinned Apple root)      |
+| `packages/crypto-play-integrity/` | `@motebit/crypto-play-integrity` | Google Play Integrity JWT verifier (pinned JWKS)         |
+| `packages/crypto-tpm/`            | `@motebit/crypto-tpm`            | TPM 2.0 EK chain verifier (pinned vendor roots)          |
+| `packages/crypto-webauthn/`       | `@motebit/crypto-webauthn`       | WebAuthn packed-attestation verifier (pinned FIDO roots) |
+| `packages/create-motebit/`        | `create-motebit`                 | Identity scaffolding CLI (0 deps)                        |
+| `packages/github-action/`         | —                                | GitHub Action for identity verification                  |
 
-These components have their own `LICENSE` files. They are **not** subject to the Business Source License.
+These components have their own `LICENSE` files. They are **not** subject to the Business Source License. The four `crypto-*` platform leaves answer "how is this artifact verified?" against each platform's published public trust anchor — the MIT side of the protocol-model boundary test. Motebit-canonical aggregation (default bundle IDs, RP ID, CLI shape) lives in `@motebit/verify` (BSL) one layer up.
 
 ## Runtime Layer — Business Source License 1.1
 
@@ -83,7 +88,8 @@ After four years, the recipe is free. By then, the network of sovereign agents w
 ## Quick reference
 
 ```
-MIT (now, any use):          protocol · crypto · sdk · create-motebit · spec · github-action
-BSL-1.1 (source-visible):   runtime · engines · apps · services · everything else
+MIT (now, any use):          protocol · crypto · sdk · verifier · crypto-appattest · crypto-play-integrity ·
+                             crypto-tpm · crypto-webauthn · create-motebit · spec · github-action
+BSL-1.1 (source-visible):   verify · runtime · engines · apps · services · everything else
 BSL → Apache 2.0 conversion: 4 years per version, automatic, irrevocable
 ```
