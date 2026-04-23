@@ -3949,6 +3949,94 @@
         pointer-events: auto;
         transform: translateY(0);
       }
+      .sync-popup-header {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 2px;
+      }
+      .sync-popup-subtitle {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin: 0 0 10px;
+        line-height: 1.4;
+      }
+      .sync-popup-field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin: 6px 0;
+      }
+      .sync-popup-field label {
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+      .sync-popup-field input {
+        font-size: 12px;
+        padding: 6px 10px;
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid var(--border-input);
+        background: var(--bg-input);
+        color: var(--text-input);
+        outline: none;
+        font-family: inherit;
+        box-sizing: border-box;
+      }
+      .sync-popup-field input:focus {
+        border-color: var(--accent-border);
+      }
+      .sync-popup-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      .sync-btn {
+        flex: 1;
+        padding: 6px 0;
+        border-radius: 8px;
+        font-size: 11px;
+        cursor: pointer;
+        font-family: inherit;
+        transition:
+          background 0.15s,
+          border-color 0.15s,
+          color 0.15s;
+      }
+      .sync-btn.connect {
+        border: 1px solid var(--accent-border, rgba(120, 100, 255, 0.3));
+        background: var(--accent-bg, rgba(120, 100, 255, 0.08));
+        color: var(--text-heading);
+      }
+      .sync-btn.connect:hover {
+        background: var(--accent-bg, rgba(120, 100, 255, 0.16));
+      }
+      .sync-btn.disconnect {
+        border: 1px solid var(--border-medium);
+        background: var(--bg-input);
+        color: var(--text-secondary);
+      }
+      .sync-btn.disconnect:hover {
+        background: var(--bg-btn-hover);
+      }
+      .sync-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .sync-status-text {
+        margin-top: 8px;
+        font-size: 11px;
+        color: var(--text-muted);
+        min-height: 14px;
+      }
+      .sync-status-text.error {
+        color: #ff6b6b;
+      }
+      #sync-popup-stats {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--border-light);
+      }
       .sync-popup-row {
         display: flex;
         justify-content: space-between;
@@ -3961,23 +4049,6 @@
       .sync-popup-value {
         font-weight: 500;
         font-size: 11px;
-      }
-      .sync-popup-action {
-        margin-top: 8px;
-        padding: 5px 0;
-        width: 100%;
-        border: 1px solid var(--border-medium);
-        border-radius: 8px;
-        background: var(--bg-input);
-        color: var(--text-secondary);
-        font-size: 11px;
-        cursor: pointer;
-        font-family: inherit;
-      }
-      .sync-popup-action:hover {
-        background: var(--accent-bg);
-        border-color: var(--accent-border);
-        color: var(--accent-text);
       }
 
       /* System action messages (error recovery buttons in chat) */
@@ -5325,23 +5396,37 @@
     </div>
     <div id="sync-tooltip"></div>
     <div id="sync-popup">
-      <div class="sync-popup-row">
-        <span class="sync-popup-label">Status</span>
-        <span class="sync-popup-value" id="sync-popup-status">Disconnected</span>
+      <div class="sync-popup-header">Relay</div>
+      <div class="sync-popup-subtitle">Sync devices, delegate tasks, share credentials.</div>
+      <div class="sync-popup-field">
+        <label for="sync-relay-url">Relay URL</label>
+        <input id="sync-relay-url" type="url" autocomplete="off" spellcheck="false" />
       </div>
-      <div class="sync-popup-row">
-        <span class="sync-popup-label">Last sync</span>
-        <span class="sync-popup-value" id="sync-popup-last-sync">Never</span>
+      <div class="sync-popup-actions">
+        <button id="sync-connect-btn" class="sync-btn connect">Connect</button>
+        <button id="sync-disconnect-btn" class="sync-btn disconnect" style="display: none">
+          Disconnect
+        </button>
       </div>
-      <div class="sync-popup-row">
-        <span class="sync-popup-label">Events pushed</span>
-        <span class="sync-popup-value" id="sync-popup-pushed">0</span>
+      <div id="sync-status-text" class="sync-status-text"></div>
+      <div id="sync-popup-stats" style="display: none">
+        <div class="sync-popup-row">
+          <span class="sync-popup-label">Status</span>
+          <span class="sync-popup-value" id="sync-popup-status">Disconnected</span>
+        </div>
+        <div class="sync-popup-row">
+          <span class="sync-popup-label">Last sync</span>
+          <span class="sync-popup-value" id="sync-popup-last-sync">Never</span>
+        </div>
+        <div class="sync-popup-row">
+          <span class="sync-popup-label">Events pushed</span>
+          <span class="sync-popup-value" id="sync-popup-pushed">0</span>
+        </div>
+        <div class="sync-popup-row">
+          <span class="sync-popup-label">Events pulled</span>
+          <span class="sync-popup-value" id="sync-popup-pulled">0</span>
+        </div>
       </div>
-      <div class="sync-popup-row">
-        <span class="sync-popup-label">Events pulled</span>
-        <span class="sync-popup-value" id="sync-popup-pulled">0</span>
-      </div>
-      <button class="sync-popup-action" id="sync-popup-action">Sync now</button>
     </div>
     <button id="settings-btn" title="Settings" aria-label="Settings">
       <svg

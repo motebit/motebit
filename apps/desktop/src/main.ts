@@ -826,6 +826,17 @@ async function bootstrap(): Promise<void> {
 
 // === Sync Status Indicator ===
 
+/** Canonical default relay URL for the Connect input when no url is configured. */
+const DEFAULT_RELAY_URL = "https://relay.motebit.com";
+
+/** Normalize a user-entered relay URL: trim, prepend `https://` if no scheme. */
+function normalizeRelayUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 function initSyncStatusIndicator(ctx: DesktopContext): void {
   const indicator = document.getElementById("sync-status") as HTMLDivElement;
   const tooltip = document.getElementById("sync-tooltip") as HTMLDivElement;
@@ -834,7 +845,11 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   const popupLastSync = document.getElementById("sync-popup-last-sync") as HTMLSpanElement;
   const popupPushed = document.getElementById("sync-popup-pushed") as HTMLSpanElement;
   const popupPulled = document.getElementById("sync-popup-pulled") as HTMLSpanElement;
-  const popupAction = document.getElementById("sync-popup-action") as HTMLButtonElement;
+  const urlInput = document.getElementById("sync-relay-url") as HTMLInputElement;
+  const connectBtn = document.getElementById("sync-connect-btn") as HTMLButtonElement;
+  const disconnectBtn = document.getElementById("sync-disconnect-btn") as HTMLButtonElement;
+  const statsDiv = document.getElementById("sync-popup-stats") as HTMLDivElement;
+  const statusText = document.getElementById("sync-status-text") as HTMLDivElement;
 
   const arrowsEl = indicator.querySelector(".sync-arrows") as SVGElement;
   const slashEl = indicator.querySelector(".sync-slash") as SVGElement;
@@ -842,10 +857,28 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   const xEl = indicator.querySelector(".sync-x") as SVGElement;
   const warnEl = indicator.querySelector(".sync-warn") as SVGElement;
 
-  let currentStatus: SyncIndicatorStatus = "disconnected";
   let lastEvent: SyncStatusEvent | null = null;
   let popupOpen = false;
   let tooltipTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Persist `sync_url` into `~/.motebit/config.json` via the Tauri bridge.
+   * Read-modify-write preserves every other key. Clearing passes `null` so the
+   * next launch reads `undefined` and treats the relay as unconfigured.
+   */
+  async function writeSyncUrlToConfig(
+    invoke: import("./tauri-storage").InvokeFn,
+    url: string | null,
+  ): Promise<void> {
+    const raw = await invoke<string>("read_config");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (url == null) {
+      delete parsed.sync_url;
+    } else {
+      parsed.sync_url = url;
+    }
+    await invoke("write_config", { json: JSON.stringify(parsed) });
+  }
 
   function hideAllOverlays(): void {
     arrowsEl.style.display = "none";
@@ -857,7 +890,6 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
 
   function updateIndicator(event: SyncStatusEvent): void {
     lastEvent = event;
-    currentStatus = event.status;
 
     // Remove all state classes
     indicator.className = event.status;
@@ -900,31 +932,61 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   }
 
   function updatePopup(): void {
-    if (!lastEvent) return;
+    const config = ctx.getConfig();
+    const configuredUrl = config?.syncUrl ?? "";
 
-    const statusLabels: Record<SyncIndicatorStatus, string> = {
-      disconnected: "Not connected",
-      connecting: "Connecting...",
-      connected: "Connected",
-      syncing: "Syncing...",
-      conflict: "Conflicts detected",
-      error: "Error",
-    };
-    popupStatus.textContent = statusLabels[lastEvent.status];
-    popupLastSync.textContent =
-      lastEvent.lastSyncAt != null && lastEvent.lastSyncAt > 0
-        ? formatTimeAgo(lastEvent.lastSyncAt)
-        : "Never";
-    popupPushed.textContent = String(lastEvent.eventsPushed);
-    popupPulled.textContent = String(lastEvent.eventsPulled);
+    // Populate the URL input — preserve what the user is typing if the popup
+    // is open and the input already has a non-placeholder value, otherwise
+    // fall back to the configured url or the default. Re-opens always reflect
+    // the current persisted config, not stale in-flight edits.
+    if (!popupOpen) {
+      urlInput.value = configuredUrl !== "" ? configuredUrl : DEFAULT_RELAY_URL;
+    }
 
-    // Update action button text
-    if (lastEvent.status === "error" || lastEvent.status === "disconnected") {
-      popupAction.textContent = "Reconnect";
-    } else if (lastEvent.status === "conflict") {
-      popupAction.textContent = "View conflicts";
+    // Active = connection lifecycle is engaged. Toggle button visibility to
+    // match: before/after connection shows Connect; mid/post-connection shows
+    // Disconnect. Same grammar as web.
+    const status = lastEvent?.status ?? "disconnected";
+    const isActive = status === "connecting" || status === "connected" || status === "syncing";
+    connectBtn.style.display = isActive ? "none" : "";
+    disconnectBtn.style.display = isActive ? "" : "none";
+
+    // Stats block lives below the separator and only materializes once the
+    // relay is actually engaged. Hiding it pre-connect keeps the popup
+    // inviting (relay URL + Connect button dominant) instead of dumping a
+    // wall of zero-valued rows on a user who just wants to get connected.
+    statsDiv.style.display = isActive || status === "error" ? "" : "none";
+
+    if (lastEvent) {
+      const statusLabels: Record<SyncIndicatorStatus, string> = {
+        disconnected: "Not connected",
+        connecting: "Connecting…",
+        connected: "Connected",
+        syncing: "Syncing…",
+        conflict: "Conflicts detected",
+        error: "Error",
+      };
+      popupStatus.textContent = statusLabels[lastEvent.status];
+      popupLastSync.textContent =
+        lastEvent.lastSyncAt != null && lastEvent.lastSyncAt > 0
+          ? formatTimeAgo(lastEvent.lastSyncAt)
+          : "Never";
+      popupPushed.textContent = String(lastEvent.eventsPushed);
+      popupPulled.textContent = String(lastEvent.eventsPulled);
+    }
+
+    // Status text below the buttons — carries errors or transient messages.
+    // Cleared on every popup open so stale errors don't linger.
+    if (status === "error" && lastEvent?.error != null && lastEvent.error !== "") {
+      statusText.textContent = lastEvent.error;
+      statusText.classList.add("error");
+    } else if (status === "conflict" && lastEvent != null) {
+      const n = lastEvent.conflictCount;
+      statusText.textContent = `${n} conflict${n !== 1 ? "s" : ""} detected — resolve in settings`;
+      statusText.classList.remove("error");
     } else {
-      popupAction.textContent = "Sync now";
+      statusText.textContent = "";
+      statusText.classList.remove("error");
     }
   }
 
@@ -954,7 +1016,10 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
     tooltip.classList.remove("visible");
   });
 
-  // Click handler
+  // Click handler — ALWAYS open the popup, never dead-end on a toast. The
+  // popup is the one place where every relay action lives (enter URL,
+  // Connect, view stats, Disconnect). Mirrors apps/web/src/ui/gated-panels.ts
+  // — no branch on current status, no toast escape-hatch for "unconfigured".
   indicator.addEventListener("click", () => {
     tooltip.classList.remove("visible");
     if (tooltipTimer) {
@@ -968,84 +1033,80 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
       return;
     }
 
-    // If error/disconnected, attempt reconnect via toast
-    if (currentStatus === "error" || currentStatus === "disconnected") {
-      const config = ctx.getConfig();
-      if (
-        config?.syncUrl != null &&
-        config.syncUrl !== "" &&
-        config.isTauri &&
-        config.invoke != null
-      ) {
-        void ctx.app
-          .startSync(config.invoke, config.syncUrl, config.syncMasterToken)
-          .then(() => {
-            ctx.showToast("Sync reconnected");
-          })
-          .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            ctx.showToast(`Sync failed: ${msg}`);
-          });
-      } else {
-        ctx.showToast("No sync relay configured");
-      }
-      return;
-    }
-
-    // If conflict, show toast with conflict info
-    if (currentStatus === "conflict" && lastEvent != null) {
-      ctx.showToast(
-        `${lastEvent.conflictCount} sync conflict${lastEvent.conflictCount !== 1 ? "s" : ""} detected`,
-      );
-      return;
-    }
-
-    // Otherwise, show popup with details
     updatePopup();
     positionPopup();
     popup.classList.add("open");
     popupOpen = true;
   });
 
-  // Popup action button
-  popupAction.addEventListener("click", () => {
-    popup.classList.remove("open");
-    popupOpen = false;
+  // Connect button — normalize the URL the user typed, persist it into
+  // config.json, then start sync. The popup stays open so the user sees the
+  // status transition (Connecting → Connected) inline rather than having to
+  // re-open it to check whether Connect worked.
+  connectBtn.addEventListener("click", () => {
+    const url = normalizeRelayUrl(urlInput.value);
+    if (!url) {
+      statusText.textContent = "Relay URL is required";
+      statusText.classList.add("error");
+      urlInput.focus();
+      return;
+    }
+    urlInput.value = url;
 
     const config = ctx.getConfig();
-    if (lastEvent?.status === "error" || lastEvent?.status === "disconnected") {
-      if (
-        config?.syncUrl != null &&
-        config.syncUrl !== "" &&
-        config.isTauri &&
-        config.invoke != null
-      ) {
-        void ctx.app
-          .startSync(config.invoke, config.syncUrl, config.syncMasterToken)
-          .catch(() => {});
-      }
-    } else if (lastEvent?.status === "conflict") {
-      ctx.showToast(
-        `${lastEvent.conflictCount} conflict${lastEvent.conflictCount !== 1 ? "s" : ""} — resolve in settings`,
-      );
-    } else {
-      if (config?.syncUrl != null && config.syncUrl !== "") {
-        void ctx.app
-          .syncConversations(config.syncUrl, config.syncMasterToken)
-          .then((result) => {
-            const total =
-              result.conversations_pushed +
-              result.conversations_pulled +
-              result.messages_pushed +
-              result.messages_pulled;
-            ctx.showToast(total > 0 ? `Synced (${total} changes)` : "Already up to date");
-          })
-          .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            ctx.showToast(`Sync failed: ${msg}`);
-          });
-      }
+    if (config?.isTauri !== true || config.invoke == null) {
+      statusText.textContent = "Sync requires the desktop app (not available in dev mode)";
+      statusText.classList.add("error");
+      return;
     }
+    const invoke = config.invoke;
+
+    statusText.textContent = "Connecting…";
+    statusText.classList.remove("error");
+    connectBtn.disabled = true;
+
+    void (async (): Promise<void> => {
+      try {
+        await writeSyncUrlToConfig(invoke, url);
+        // Refresh the in-memory config so downstream reads see the new url.
+        ctx.setConfig({ ...config, syncUrl: url });
+        await ctx.app.startSync(invoke, url, config.syncMasterToken);
+        statusText.textContent = "";
+        statusText.classList.remove("error");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        statusText.textContent = `Failed: ${msg}`;
+        statusText.classList.add("error");
+      } finally {
+        connectBtn.disabled = false;
+      }
+    })();
+  });
+
+  // Disconnect button — stop the sync loop, clear `sync_url` from the
+  // config so the next launch doesn't auto-reconnect. The master token in
+  // the keyring is preserved; reconnecting to the same relay later will
+  // re-use it without a fresh pairing.
+  disconnectBtn.addEventListener("click", () => {
+    const config = ctx.getConfig();
+    disconnectBtn.disabled = true;
+    void (async (): Promise<void> => {
+      try {
+        ctx.app.stopSync();
+        if (config?.isTauri === true && config.invoke != null) {
+          await writeSyncUrlToConfig(config.invoke, null);
+          ctx.setConfig({ ...config, syncUrl: undefined });
+        }
+        statusText.textContent = "";
+        statusText.classList.remove("error");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        statusText.textContent = `Disconnect failed: ${msg}`;
+        statusText.classList.add("error");
+      } finally {
+        disconnectBtn.disabled = false;
+      }
+    })();
   });
 
   // Close popup on click outside
