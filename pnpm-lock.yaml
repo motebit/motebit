@@ -1615,6 +1615,12 @@ importers:
         specifier: workspace:*
         version: link:../crypto
     devDependencies:
+      '@noble/ed25519':
+        specifier: ~3.0.1
+        version: 3.0.1
+      '@noble/hashes':
+        specifier: ~1.6.0
+        version: 1.6.1
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
