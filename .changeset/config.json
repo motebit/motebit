@@ -8,6 +8,7 @@
       "@motebit/sdk",
       "@motebit/crypto",
       "@motebit/verifier",
+      "@motebit/verify",
       "create-motebit",
       "motebit"
     ]

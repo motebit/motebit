@@ -41,7 +41,9 @@
     "url": "https://github.com/motebit/motebit.git",
     "directory": "packages/verify"
   },
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",
