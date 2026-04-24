@@ -71,7 +71,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 import { EventStore } from "@motebit/event-log";
 import { IdentityManager } from "@motebit/core-identity";
-import { openMotebitDatabase } from "@motebit/persistence";
+import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
 import { parseBoolEnv, parseIntEnv, parseFloatEnv } from "./env.js";
@@ -324,7 +324,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         })
       : null;
 
-  const moteDb: MotebitDatabase = await openMotebitDatabase(dbPath);
+  // Strict driver — requires native better-sqlite3 (declared directly in
+  // services/api/package.json so `pnpm deploy --prod` flattens it into the
+  // runtime image). The sql.js WASM fallback in `openMotebitDatabase` is
+  // reserved for exotic-platform consumers (CLI scaffold on Nix/WSL) — a
+  // relay running on sql.js silently loses WAL + debounces writes with
+  // full-file rewrites, which is wrong for the only centralized, durability-
+  // sensitive node in the architecture. If better-sqlite3 is missing at
+  // runtime we want a loud boot-time failure, not a silent downgrade.
+  // See drift-defenses #42 and docs/doctrine/settlement-rails.md.
+  const moteDb: MotebitDatabase = createMotebitDatabase(dbPath);
   const eventStore = new EventStore(moteDb.eventStore);
   const identityManager = new IdentityManager(moteDb.identityStorage, eventStore);
 
@@ -1391,6 +1400,7 @@ if (process.env.VITEST != null) {
   const bootLogger = createLogger({ service: "relay" });
   bootLogger.info("relay.starting", {
     db: process.env.MOTEBIT_DB_PATH ?? ":memory:",
+    driver: relay.moteDb.db.driverName,
     deviceAuth: parseBoolEnv("MOTEBIT_ENABLE_DEVICE_AUTH", true),
     federation: process.env.MOTEBIT_FEDERATION_ENDPOINT_URL ?? "disabled",
     keyEncryption: process.env.MOTEBIT_RELAY_KEY_PASSPHRASE ? "active" : "disabled",

@@ -1,7 +1,7 @@
 /**
  * Deployment parity check.
  *
- * Enforces three invariants across services that ship to production:
+ * Enforces four invariants across services that ship to production:
  *
  *   1. services/<svc>/fly.toml → .github/workflows/deploy-<app>.yml
  *      If a service declares a fly.toml with `app = "motebit-<name>"`, the
@@ -21,6 +21,18 @@
  *      that motivated this gate: MOTEBIT_IDENTITY_PATH and
  *      MOTEBIT_PRIVATE_KEY_HEX survived in .env.example for months after
  *      the service migrated to bootstrapAndEmitIdentity).
+ *
+ *   4. Fly-deployed service that depends on @motebit/persistence must
+ *      declare better-sqlite3 as a direct dependency.
+ *      `@motebit/persistence` lists better-sqlite3 in optionalDependencies
+ *      so the CLI scaffold on exotic platforms (Nix, WSL, etc.) can fall
+ *      back to sql.js (WASM). `pnpm --filter <svc> deploy --prod` follows
+ *      the service's own package.json — transitive optionalDependencies of
+ *      workspace packages get dropped. Without a direct declaration, the
+ *      native binding never ships and `openMotebitDatabase` silently falls
+ *      back to sql.js: WAL becomes a no-op, writes become 1-second-debounced
+ *      full-file rewrites, Litestream goes dark. Durability + perf regress
+ *      invisibly. Any fly-deployed relay-shaped service consumes this.
  *
  * Services without a fly.toml are not deployed and are skipped entirely
  * (e.g. services/proxy ships via Vercel edge — a different deploy
@@ -176,6 +188,28 @@ function main(): void {
         violations.push({
           service: svc,
           detail: `${relative(ROOT, envExample)} declares "${name}" but nothing in src reads process.env.${name} — stale doc`,
+        });
+      }
+    }
+
+    // Invariant 4: persistence consumers must declare better-sqlite3 directly.
+    // `@motebit/persistence` keeps better-sqlite3 in optionalDependencies so
+    // the CLI scaffold can fall back to sql.js on exotic platforms. Fly-
+    // deployed services are not that audience — they need the native
+    // binding to ship. `pnpm deploy --prod` follows the service's direct
+    // deps; transitive optional-of-workspace-dep drops. Direct declaration
+    // is the single mechanism that guarantees the binding reaches the
+    // runtime image.
+    const pkgJsonPath = join(serviceDir, "package.json");
+    if (existsSync(pkgJsonPath)) {
+      const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as {
+        dependencies?: Record<string, string>;
+      };
+      const deps = pkg.dependencies ?? {};
+      if ("@motebit/persistence" in deps && !("better-sqlite3" in deps)) {
+        violations.push({
+          service: svc,
+          detail: `${relative(ROOT, pkgJsonPath)} depends on @motebit/persistence but does not declare "better-sqlite3" directly — \`pnpm deploy --prod\` will drop the native binding (it's an optionalDependency of persistence for the CLI scaffold's sql.js fallback path) and the running service will silently degrade to sql.js (WAL disabled, full-file rewrites on a 1s debounce). Add \`"better-sqlite3": "^12.0.0"\` to this service's dependencies`,
         });
       }
     }
