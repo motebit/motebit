@@ -258,6 +258,16 @@ export class SlabManager {
       opacity: 0, // Starts invisible; reveals on first item.
       side: THREE.DoubleSide,
     });
+    // Meniscus mask: a feathered rounded-rectangle alphaMap that
+    // softens the plane's edges into a surface-tension curve. The
+    // underlying 17×17 grid geometry is preserved (so pinch physics,
+    // breathing, and rest-position deformation still index into a
+    // dense vertex array); the shape is purely in alpha.
+    const meniscusMap = createMeniscusAlphaMap(SLAB_WIDTH, SLAB_HEIGHT);
+    if (meniscusMap) {
+      this.planeMaterial.alphaMap = meniscusMap;
+      this.planeMaterial.needsUpdate = true;
+    }
     this.planeMesh = new THREE.Mesh(planeGeo, this.planeMaterial);
     this.planeMesh.visible = false; // skip GL work when truly recessed
     this.group.add(this.planeMesh);
@@ -524,6 +534,7 @@ export class SlabManager {
     this.clearItems();
     this.css2dRenderer.domElement.remove();
     this.planeMesh.geometry.dispose();
+    this.planeMaterial.alphaMap?.dispose();
     this.planeMaterial.dispose();
   }
 
@@ -808,6 +819,78 @@ export class SlabManager {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Build a CanvasTexture whose alpha channel is a softly-feathered
+ * rounded rectangle. Applied as the plane material's `alphaMap`, this
+ * gives the slab a meniscus-like edge without changing the underlying
+ * grid geometry (pinch physics, breathing, rest positions all remain
+ * indexed by the flat plane's vertex array).
+ *
+ * Doctrine: motebit-computer.md §"Visual properties (binding)" —
+ * `Edges: meniscus (rounded surface-tension curve), no frame, no
+ * border, no corner radius`. A flat rectangle violates this; a
+ * rounded rectangle with a soft gaussian falloff at the rim reads as
+ * the same liquid-glass material family as the creature, flattened.
+ *
+ * Returns `null` in headless contexts (no `document`); the caller
+ * falls back to the un-masked rectangle so tests still run.
+ *
+ * `aspectW` / `aspectH` should match the plane geometry's aspect —
+ * the canvas uses those as its pixel dimensions so the mask's corner
+ * radius maps uniformly in UV space without distortion.
+ */
+function createMeniscusAlphaMap(aspectW: number, aspectH: number): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  // Scale up for crisp edges; anti-aliasing + slight blur handle the
+  // feather.
+  const scale = 8;
+  const w = Math.round(aspectW * scale);
+  const h = Math.round(aspectH * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // Background: fully transparent (alpha 0). White pixels inside the
+  // rounded rectangle become opaque (alpha 1); the feather is supplied
+  // by a gaussian blur applied during the fill.
+  ctx.clearRect(0, 0, w, h);
+
+  // Corner radius: ~28% of the shorter side. Enough curvature to read
+  // as a droplet (not a rectangle with softened corners) while still
+  // leaving a usable flat interior for items to mount onto.
+  const short = Math.min(w, h);
+  const radius = short * 0.28;
+
+  // Feather: gaussian blur for the meniscus rim softness. ~2% of the
+  // shorter side — subtle, not a glow. Drawn inside an inset padding
+  // so the blur has room to spread without clipping at the canvas
+  // edge.
+  const feather = Math.round(short * 0.02);
+  ctx.filter = `blur(${feather}px)`;
+  ctx.fillStyle = "white";
+
+  const pad = feather * 2;
+  const x0 = pad;
+  const y0 = pad;
+  const x1 = w - pad;
+  const y1 = h - pad;
+  ctx.beginPath();
+  ctx.moveTo(x0 + radius, y0);
+  ctx.arcTo(x1, y0, x1, y0 + radius, radius);
+  ctx.arcTo(x1, y1, x1 - radius, y1, radius);
+  ctx.arcTo(x0, y1, x0, y1 - radius, radius);
+  ctx.arcTo(x0, y0, x0 + radius, y0, radius);
+  ctx.closePath();
+  ctx.fill();
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
 
 /**
  * Build the items-container element. In a browser this is a real
