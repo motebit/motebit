@@ -8,8 +8,8 @@ if [ -n "$LITESTREAM_REPLICA_BUCKET" ] && command -v litestream >/dev/null 2>&1;
   litestream restore -if-replica-exists -config /app/litestream.yml /data/motebit.db
 
   # Start relay under litestream (WAL changes stream to S3)
-  exec litestream replicate -exec "node dist/index.js" -config /app/litestream.yml
+  exec litestream replicate -exec "node dist/server.js" -config /app/litestream.yml
 else
   # No Litestream — run relay directly (volume-only persistence)
-  exec node dist/index.js
+  exec node dist/server.js
 fi

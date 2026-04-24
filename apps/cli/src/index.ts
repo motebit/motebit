@@ -58,6 +58,7 @@ import {
   handleUp,
   handleCredentials,
   handleRegister,
+  handleRelayUp,
   handleRotate,
   handleFederationStatus,
   handleFederationPeers,
@@ -246,6 +247,17 @@ async function main(): Promise<void> {
       await handleFederationPeer(config);
     } else {
       console.error("Usage: motebit federation [status|peers|peer <url>]");
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === "relay") {
+    const relayCmd = config.positionals[1];
+    if (relayCmd === "up") {
+      await handleRelayUp(config);
+    } else {
+      console.error("Usage: motebit relay up [--port|--db-path|--pay-to-address|...]");
       process.exit(1);
     }
     return;

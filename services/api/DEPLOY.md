@@ -99,7 +99,7 @@ After=network.target
 Type=simple
 User=motebit
 WorkingDirectory=/opt/motebit-sync
-ExecStart=/usr/bin/node dist/index.js
+ExecStart=/usr/bin/node dist/server.js
 Restart=always
 Environment="NODE_ENV=production"
 Environment="PORT=3000"

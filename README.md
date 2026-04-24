@@ -43,7 +43,13 @@ cd my-agent && node verify.js
 # Install the full operator console
 npm install -g motebit
 motebit
+
+# Run your own relay — sovereign, local, one command
+motebit relay up
+# ✓ listening on http://localhost:3000
 ```
+
+`motebit relay up` is the sovereignty one-liner. Your relay, your identity key (Ed25519, generated on first boot, stored in `~/.motebit/relay/relay.db`), your settlement policy. Isolated by default — federation is opt-in via `--federation-url <public-url>`. x402 settlement stays off until you pass `--pay-to-address 0x…`. Nothing peers with `relay.motebit.com` unless you tell it to.
 
 ### Build a service agent
 

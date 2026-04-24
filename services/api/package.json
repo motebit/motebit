@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc -b",
     "dev": "sh -c 'set -a; [ -f .env ] && . ./.env; set +a; exec tsx watch src/index.ts'",
-    "start": "node dist/index.js",
+    "start": "node dist/server.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",

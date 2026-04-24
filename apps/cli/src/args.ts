@@ -70,6 +70,18 @@ export interface CliConfig {
   limit?: number;
   /** `motebit migrate` — forfeit remaining relay balance instead of withdrawing. */
   waive?: boolean;
+  /** `motebit relay up` — HTTP port the relay binds to (default 3000). */
+  port?: string;
+  /** `motebit relay up` — x402 payout address (enables the x402 settlement rail). */
+  payToAddress?: string;
+  /** `motebit relay up` — x402 CAIP-2 network id (default eip155:84532 / Base Sepolia). */
+  network?: string;
+  /** `motebit relay up` — x402 facilitator URL override. */
+  facilitatorUrl?: string;
+  /** `motebit relay up` — public URL to announce; enables federation. */
+  federationUrl?: string;
+  /** `motebit relay up` — prompt interactively for the relay key passphrase. */
+  passphrase?: boolean;
   version: boolean;
   help: boolean;
   positionals: string[];
@@ -124,6 +136,12 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       tail: { type: "boolean", default: false },
       limit: { type: "string" },
       waive: { type: "boolean", default: false },
+      port: { type: "string" },
+      "pay-to-address": { type: "string" },
+      network: { type: "string" },
+      "facilitator-url": { type: "string" },
+      "federation-url": { type: "string" },
+      passphrase: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -223,6 +241,12 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     tail: values.tail,
     limit: values.limit != null ? parseInt(values.limit, 10) : undefined,
     waive: values.waive,
+    port: values.port,
+    payToAddress: values["pay-to-address"],
+    network: values.network,
+    facilitatorUrl: values["facilitator-url"],
+    federationUrl: values["federation-url"],
+    passphrase: values.passphrase,
     version: values.version,
     help: values.help,
     positionals,
@@ -367,6 +391,15 @@ Commands:
   federation status           Show relay identity (motebit_id, DID, public key)
   federation peers            List active federation peers
   federation peer <url>       Peer with another relay (mutual handshake)
+  relay up                    Start a local sync relay (your own, on your machine)
+    --port <n>                  HTTP port (default: 3000)
+    --db-path <path>            SQLite path (default: ~/.motebit/relay/relay.db)
+    --pay-to-address <addr>     x402 payout address — enables paid task settlement
+    --network <caip2>           x402 network (default: eip155:84532, Base Sepolia)
+    --facilitator-url <url>     x402 facilitator override
+    --federation-url <url>      Public URL for this relay — enables federation (default: off)
+    --passphrase                Prompt for relay key encryption passphrase
+                                (or set MOTEBIT_RELAY_KEY_PASSPHRASE)
 
 Options:
   --provider <name>       AI provider (default: anthropic)

@@ -47,6 +47,7 @@ export { handleUp } from "./up.js";
 export { handleMigrate } from "./migrate.js";
 export { handleBalance, handleFund, handleWithdraw } from "./market.js";
 export { handleRegister } from "./register.js";
+export { handleRelayUp } from "./relay.js";
 export { handleRotate } from "./rotate.js";
 export { handleSchema } from "./schema.js";
 export { handleVerify } from "./verify.js";
