@@ -652,6 +652,23 @@ export function rogueLookup(): HTMLElement | null {
 `,
       ),
   },
+  {
+    script: "check-deprecation-discipline",
+    proves:
+      "flags a `@deprecated` annotation that lacks a replacement pointer and a `Reason:` block — violates two of the four-field contract rules the deprecation-lifecycle doctrine mandates",
+    perturb: () =>
+      // Fixture: a packages/sdk source file with a `@deprecated` annotation
+      // that has since + removed in but no replacement pointer and no
+      // Reason: block. The gate should fire with both violations named.
+      writeFixture(
+        `packages/sdk/src/${PROBE_PREFIX}deprecation_drift.ts`,
+        `/**
+ * @deprecated since 1.0.0, removed in 1.1.0.
+ */
+export const __probeOnlyDeprecationDrift = 1;
+`,
+      ),
+  },
 ];
 
 /**
