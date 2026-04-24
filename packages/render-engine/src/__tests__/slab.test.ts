@@ -34,6 +34,7 @@ vi.mock("three/addons/renderers/CSS2DRenderer.js", async () => {
 });
 
 import { SlabManager } from "../slab.js";
+import { GOLDEN_RATIO } from "../design-ratios.js";
 import type { SlabItemSpec, ArtifactSpec, ArtifactHandle } from "../spec.js";
 
 // Minimal element stand-in — SlabManager only touches .style
@@ -233,6 +234,27 @@ describe("SlabManager — plane visibility + ambient", () => {
     const material = planeMesh.material as THREE.MeshPhysicalMaterial;
     expect(material.opacity).toBeLessThan(0.02);
     expect(planeMesh.visible).toBe(false);
+  });
+});
+
+describe("SlabManager — design-ratio compliance", () => {
+  it("plane aspect ratio equals φ (per design-ratios.ts rule)", () => {
+    // Natural proof of the aspect-ratio rule: the consumer carries
+    // its own compliance test. If someone hand-tweaks SLAB_WIDTH /
+    // SLAB_HEIGHT off φ, this fails in the slab's own suite — blame
+    // lands exactly where drift happened, no central gate needed.
+    const mgr = makeManager();
+    const group = mgr.getGroup();
+    const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    const geo = planeMesh.geometry;
+    geo.computeBoundingBox();
+    const bbox = geo.boundingBox!;
+    const width = bbox.max.x - bbox.min.x;
+    const height = bbox.max.y - bbox.min.y;
+    // 6 decimal places: tight enough to catch a hand-tweaked ratio,
+    // loose enough for float32 geometry positions + rounded-corner
+    // vertex-snap arithmetic.
+    expect(width / height).toBeCloseTo(GOLDEN_RATIO, 6);
   });
 });
 
