@@ -124,7 +124,11 @@ import { runHousekeeping } from "./housekeeping.js";
 import type { HousekeepingDeps } from "./housekeeping.js";
 import { PresenceController } from "./presence.js";
 import { ScopedToolRegistry } from "./scoped-tool-registry.js";
-import { createSlabController, type SlabController } from "./slab-controller.js";
+import {
+  createSlabController,
+  type SlabController,
+  type SlabItemOutcome,
+} from "./slab-controller.js";
 import {
   runConsolidationCycle,
   type ConsolidationCycleConfig,
@@ -168,6 +172,50 @@ const TENDING_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "prune_memory",
   "search_conversations",
 ]);
+
+/**
+ * Tool names whose completed slab items settle into `resting` rather
+ * than dissolving. Doctrine (motebit-computer.md §"Three end states"):
+ * working material — fetched pages, terminal output, search results —
+ * stays on the workstation as reference until the user dismisses it.
+ * Everything else (embedding calls, plumbing tools, failed invocations)
+ * dissolves through the default endItem path.
+ *
+ * This list is the runtime's _end-state policy_ for tool calls; it
+ * does not affect which renderer handles the card (that's the
+ * renderer's name-routing in slab-items.ts). The runtime decides
+ * the phase; the renderer decides the visual.
+ */
+const RESTING_TOOLS: ReadonlySet<string> = new Set([
+  "read_url",
+  "fetch_url",
+  "web_search",
+  "shell_exec",
+  "bash",
+  "shell",
+  "exec",
+  "run_command",
+  "read_file",
+  "recall_memories",
+  "search_memories",
+]);
+
+function isRestingTool(name: string): boolean {
+  return RESTING_TOOLS.has(name);
+}
+
+/**
+ * Tool names whose slab items belong to the `virtual_browser`
+ * embodiment mode — the motebit is navigating an isolated browser
+ * viewport, and the user sees the rendered page in the plane.
+ * Doctrine (motebit-computer.md §"Embodiment modes"). Anything not
+ * in this set uses the default inference (tool_result).
+ */
+const VIRTUAL_BROWSER_TOOLS: ReadonlySet<string> = new Set(["read_url", "fetch_url"]);
+
+function embodimentForTool(name: string): "virtual_browser" | "tool_result" {
+  return VIRTUAL_BROWSER_TOOLS.has(name) ? "virtual_browser" : "tool_result";
+}
 
 export class MotebitRuntime {
   readonly motebitId: string;
@@ -1215,6 +1263,175 @@ export class MotebitRuntime {
     }
   }
 
+  /**
+   * Project a turn's chunk stream onto the slab's lifecycle events.
+   *
+   * Wraps an async chunk stream and yields every chunk unchanged,
+   * while side-effecting `this.slab` calls so surfaces see the
+   * motebit's work materialize on the liquid-glass plane. See
+   * `docs/doctrine/motebit-computer.md` for the item kinds and end
+   * states. The method is architected as a projection wrapper rather
+   * than inline emission in `sendMessageStreaming` / `generateActivation`
+   * because:
+   *
+   *   - The two callers (user turn, activation turn) have identical
+   *     slab semantics — one implementation, two call sites.
+   *   - Yielding chunks to the caller is a separate concern from
+   *     emitting lifecycle events to the slab. Inlining them coupled
+   *     both into a 200-line method at the tagged exploration state;
+   *     this wrapper is ~120 lines and lives outside `sendMessageStreaming`
+   *     so the streaming method stays readable.
+   *   - try/catch/finally around the loop handles all exit paths —
+   *     normal completion (`restItem` with final text / default outcome),
+   *     failure (`endItem` with failed outcome, rethrows), and any
+   *     interrupt surfaces through the same cleanup.
+   *
+   * Kinds emitted here:
+   *
+   *   - `stream` — one per turn, opened at entry, updated on every
+   *     `text` chunk with accumulated text, ended on exit (rests on
+   *     success, dissolves on failure).
+   *   - `delegation` — one per `delegation_start` chunk; ended on
+   *     the matching `delegation_complete` chunk, with the signed
+   *     receipt (if returned) triggering a `detach` to an artifact so
+   *     the receipt persists in the scene after the slab item clears.
+   *   - `tool_call` — one per `tool_status: "calling"` chunk (unless
+   *     the tool is a delegation, in which case the delegation item
+   *     owns the lifecycle). Ends on `tool_status: "done"` either
+   *     by resting (fetched-page / shell-output / search kinds per
+   *     `RESTING_TOOLS`) or by dissolving (plumbing calls).
+   */
+  private async *projectSlabForTurn(
+    stream: AsyncGenerator<StreamChunk>,
+    options: { turnId: string; runId?: string; activationOnly?: boolean },
+  ): AsyncGenerator<StreamChunk> {
+    const { turnId, runId, activationOnly } = options;
+    const basePayload = activationOnly
+      ? { text: "", runId, activationOnly: true as const }
+      : { text: "", runId };
+    this.slab.openItem({ id: turnId, kind: "stream", payload: basePayload });
+
+    let accumulatedText = "";
+    let outcome: SlabItemOutcome = { kind: "completed" };
+    const toolItemIds = new Map<string, string>();
+    const delegationToolNames = new Set<string>();
+
+    try {
+      for await (const chunk of stream) {
+        if (chunk.type === "text") {
+          accumulatedText += chunk.text;
+          const updatePayload = activationOnly
+            ? { text: accumulatedText, runId, activationOnly: true as const }
+            : { text: accumulatedText, runId };
+          this.slab.updateItem(turnId, updatePayload);
+        } else if (chunk.type === "delegation_start") {
+          // Delegation to a peer motebit — doctrine (motebit-computer.md
+          // §Hand): "a packet leaves the slab toward a peer, returns as
+          // a bead with a signed receipt." Open the delegation-kind
+          // item; the matching tool_status: "calling" is skipped so
+          // we don't dual-render.
+          delegationToolNames.add(chunk.tool);
+          const delegationItemId = `slab-delegation-${turnId}-${chunk.tool}-${Date.now()}`;
+          toolItemIds.set(chunk.tool, delegationItemId);
+          this.slab.openItem({
+            id: delegationItemId,
+            kind: "delegation",
+            payload: {
+              server: chunk.server,
+              tool: chunk.tool,
+              motebit_id: chunk.motebit_id,
+              status: "outbound",
+            },
+          });
+        } else if (chunk.type === "delegation_complete") {
+          const delegationItemId = toolItemIds.get(chunk.tool);
+          if (delegationItemId != null) {
+            toolItemIds.delete(chunk.tool);
+            delegationToolNames.delete(chunk.tool);
+            // A signed receipt is durable — pinch to a receipt artifact
+            // in the scene so the proof persists after the slab item
+            // clears. Unsigned summaries dissolve; the turn's prose
+            // already references the outcome.
+            const endOutcome: SlabItemOutcome = chunk.full_receipt
+              ? {
+                  kind: "completed",
+                  result: {
+                    server: chunk.server,
+                    tool: chunk.tool,
+                    receipt: chunk.receipt,
+                    full_receipt: chunk.full_receipt,
+                  },
+                  detachAs: "receipt",
+                }
+              : {
+                  kind: "completed",
+                  result: { server: chunk.server, tool: chunk.tool, receipt: chunk.receipt },
+                };
+            this.slab.endItem(delegationItemId, endOutcome);
+          }
+        } else if (chunk.type === "tool_status") {
+          // Delegations own their own slab item (opened on
+          // delegation_start, ended on delegation_complete). Skip the
+          // generic tool_call path for them to avoid dual-render.
+          if (delegationToolNames.has(chunk.name)) {
+            // no-op — delegation slab item handles lifecycle
+          } else if (chunk.status === "calling") {
+            const toolItemId = `slab-tool-${turnId}-${chunk.name}-${Date.now()}`;
+            toolItemIds.set(chunk.name, toolItemId);
+            this.slab.openItem({
+              id: toolItemId,
+              kind: "tool_call",
+              mode: embodimentForTool(chunk.name),
+              payload: { name: chunk.name, context: chunk.context, status: "calling" },
+            });
+          } else if (chunk.status === "done") {
+            const toolItemId = toolItemIds.get(chunk.name);
+            if (toolItemId != null) {
+              toolItemIds.delete(chunk.name);
+              // End state: dissolve, rest, or detach? Doctrine
+              // (motebit-computer.md §"Three end states"): the
+              // workstation holds working material. Fetched pages,
+              // terminal output, and search results are the motebit's
+              // open tabs — they stay on the slab as reference until
+              // the user dismisses them. Everything else (embedding
+              // calls, plumbing tools, failed invocations) dissolves.
+              if (isRestingTool(chunk.name) && chunk.result != null) {
+                this.slab.restItem(toolItemId, {
+                  name: chunk.name,
+                  context: chunk.context,
+                  status: "done",
+                  result: chunk.result,
+                });
+              } else {
+                this.slab.endItem(toolItemId, { kind: "completed", result: chunk.result });
+              }
+            }
+          }
+        }
+        yield chunk;
+      }
+    } catch (err: unknown) {
+      outcome = { kind: "failed", error: err instanceof Error ? err.message : String(err) };
+      throw err;
+    } finally {
+      // End the slab stream item. On successful completion, the turn's
+      // response is durable working material — the user may still be
+      // reading it, may want to refer back to it, may want to compare
+      // it against the next answer. Doctrine (§"Three end states") puts
+      // this in `rest`: it stays on the slab until the user dismisses
+      // it or a fresh turn replaces it. Failures and interruptions
+      // still dissolve — there's nothing to hold.
+      if (outcome.kind === "completed") {
+        const restPayload = activationOnly
+          ? { text: accumulatedText, runId, activationOnly: true as const }
+          : { text: accumulatedText, runId };
+        this.slab.restItem(turnId, restPayload);
+      } else {
+        this.slab.endItem(turnId, outcome);
+      }
+    }
+  }
+
   async *sendMessageStreaming(
     text: string,
     runId?: string,
@@ -1279,9 +1496,14 @@ export class MotebitRuntime {
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
-      yield* this.streaming.processStream(this._catchDeferredFormationChunks(stream), text, runId, {
-        suppressHistory: options?.suppressHistory === true,
-      });
+      const slabTurnId = `slab-turn-${runId ?? crypto.randomUUID()}`;
+      const processed = this.streaming.processStream(
+        this._catchDeferredFormationChunks(stream),
+        text,
+        runId,
+        { suppressHistory: options?.suppressHistory === true },
+      );
+      yield* this.projectSlabForTurn(processed, { turnId: slabTurnId, runId });
       // First-conversation guidance fades after a few exchanges
       if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
         this._isFirstConversation = false;
@@ -1337,7 +1559,13 @@ export class MotebitRuntime {
         firstConversation: true,
         activationPrompt,
       });
-      yield* this.streaming.processStream(stream, "", runId, { activationOnly: true });
+      const slabTurnId = `slab-activation-${runId ?? crypto.randomUUID()}`;
+      const processed = this.streaming.processStream(stream, "", runId, { activationOnly: true });
+      yield* this.projectSlabForTurn(processed, {
+        turnId: slabTurnId,
+        runId,
+        activationOnly: true,
+      });
     } finally {
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
