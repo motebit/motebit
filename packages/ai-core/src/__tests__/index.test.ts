@@ -4,6 +4,7 @@ import {
   AnthropicProvider,
   CloudProvider,
   stripPartialActionTag,
+  stripInternalTags,
   getImpulsesForAction,
 } from "../index";
 import type { AnthropicProviderConfig } from "../index";
@@ -359,6 +360,78 @@ describe("stripPartialActionTag", () => {
 
   it("preserves text without tags", () => {
     expect(stripPartialActionTag("Hello world")).toBe("Hello world");
+  });
+
+  // Composed behavior: stripPartialActionTag must strip everything
+  // stripInternalTags strips (pre-fix regression: desktop rendered
+  // <thinking> and [EXTERNAL_DATA] as visible chat content).
+  it("strips thinking tags inherited from stripInternalTags", () => {
+    expect(stripPartialActionTag("<thinking>planning</thinking>Hello")).toBe("Hello");
+  });
+
+  it("strips EXTERNAL_DATA boundaries inherited from stripInternalTags", () => {
+    expect(
+      stripPartialActionTag('[EXTERNAL_DATA source="tool:web_search"]payload[/EXTERNAL_DATA]done'),
+    ).toBe("done");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stripInternalTags — canonical chat-surface primitive
+// ---------------------------------------------------------------------------
+
+describe("stripInternalTags", () => {
+  it("strips completed <thinking> blocks", () => {
+    expect(stripInternalTags("<thinking>pondering</thinking>Sure.")).toBe("Sure.");
+  });
+
+  it("strips completed <memory> blocks with attributes", () => {
+    expect(stripInternalTags('<memory key="name">Alice</memory>Hello, Alice.')).toBe(
+      "Hello, Alice.",
+    );
+  });
+
+  it("strips self-closing <state/> tags", () => {
+    expect(stripInternalTags('<state mood="curious" />Let me check.')).toBe("Let me check.");
+  });
+
+  it("strips [EXTERNAL_DATA] boundaries with attributes", () => {
+    expect(
+      stripInternalTags('[EXTERNAL_DATA source="tool:fetch"]raw html[/EXTERNAL_DATA]summary'),
+    ).toBe("summary");
+  });
+
+  it("strips [MEMORY_DATA] boundaries", () => {
+    expect(stripInternalTags("[MEMORY_DATA]recalled fact[/MEMORY_DATA]applying…")).toBe(
+      "applying…",
+    );
+  });
+
+  it("strips partial opener mid-stream (unclosed <thinking)", () => {
+    expect(stripInternalTags("Hello <thinking")).toBe("Hello ");
+  });
+
+  it("strips partial [EXTERNAL_DATA] opener without closer", () => {
+    expect(stripInternalTags('Hello [EXTERNAL_DATA source="x"]mid-payload')).toBe(
+      "Hello mid-payload",
+    );
+  });
+
+  it("strips orphan [/MEMORY_DATA] closer", () => {
+    expect(stripInternalTags("tail[/MEMORY_DATA]")).toBe("tail");
+  });
+
+  it("preserves *asterisk* content — that is the surface-specific pass", () => {
+    expect(stripInternalTags("Hello *smile* world")).toBe("Hello *smile* world");
+  });
+
+  it("handles the full stack in one pass", () => {
+    const input =
+      '<thinking>plan</thinking><state foo="bar" />' +
+      '[EXTERNAL_DATA source="tool:x"]payload[/EXTERNAL_DATA]' +
+      "[MEMORY_DATA]recall[/MEMORY_DATA]" +
+      '<memory key="k">v</memory>visible';
+    expect(stripInternalTags(input)).toBe("visible");
   });
 });
 

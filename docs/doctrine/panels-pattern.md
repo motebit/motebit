@@ -65,11 +65,11 @@ Revisit trigger: a third chat surface wanting streaming + approval orchestration
 
 Known drifts (close whether or not a controller ships):
 
-1. Web's `streamingTTS` is a module-scope singleton; two concurrent chats would share state. Desktop passes TTS through callbacks so the surface owns lifecycle.
-2. Web strips `<thinking>` / `<memory>` / `<state>` tags and `[EXTERNAL_DATA]` / `[MEMORY_DATA]` markers (`apps/web/src/ui/chat.ts:12–24`). Desktop only calls `stripPartialActionTag` from `@motebit/ai-core`. If the runtime emits tags, desktop renders artifacts.
-3. Memory footer — confidence scores and Recalled-vs-Formed distinction (`apps/desktop/src/ui/chat.ts:545–642`) — is desktop-only. Web has no equivalent.
-4. Approval nesting: desktop's callback-driven `consumeApproval` chain allows recursive `approval_request` (line 428); web's Promise-based `showApprovalCard` flattens to sequence. Different UX for multi-step delegation with nested approvals.
-5. `showToolStatus(name, context?)` — web preserves context (`apps/web/src/ui/chat.ts:337–338`: "Searching the web — github.com"); desktop ignores it.
+1. ~~Web's `streamingTTS` is a module-scope singleton; two concurrent chats would share state.~~ **Accepted 2026-04-24.** Web is strictly single-chat-per-tab by design — the runtime has no code path that mounts two simultaneous chat surfaces in one window. The singleton is architecturally equivalent to a surface-owned instance given that constraint. Revisit when web introduces multi-chat (split panes, floating secondary chat, etc.); the desktop pattern (callback-owned lifecycle) is the reference.
+2. ~~Web strips `<thinking>` / `<memory>` / `<state>` tags and `[EXTERNAL_DATA]` / `[MEMORY_DATA]` markers; desktop doesn't.~~ **Closed 2026-04-24.** Canonical `stripInternalTags` primitive added to `@motebit/ai-core`; `stripPartialActionTag` now composes it (so desktop picks up the thinking/external-data stripping via its existing call site) and web imports it directly. Both surfaces route every tag-stripping pass through the same regex set. Adding a new internal tag is one edit in `packages/ai-core/src/core.ts`.
+3. Memory footer — confidence scores and Recalled-vs-Formed distinction (`apps/desktop/src/ui/chat.ts:545–642`) — is desktop-only. Web has no equivalent. **Still open** — scope question, not a mechanical fix (is the memory footer a desktop-specific affordance because the desktop surface has more vertical space, or is it a web feature gap?). Revisit when product weighs in.
+4. Approval nesting: desktop's callback-driven `consumeApproval` chain allows recursive `approval_request` (line 428); web's Promise-based `showApprovalCard` flattens to sequence. Different UX for multi-step delegation with nested approvals. **Still open** — semantic-design question, not a mechanical fix (nested approvals vs sequential approvals is a product decision about how the creature asks permission for compound actions).
+5. ~~`showToolStatus(name, context?)` — web preserves context; desktop ignores it.~~ **Closed 2026-04-24.** Desktop's `showToolStatus` signature widened to `(name, context?)` with `formatToolLabel` helper mirroring web. `completeToolStatus` rewritten to preserve the context label (was `${name} done` — recomposed from `name` alone, dropping context; now rewrites only the trailing `...` on the live element text, matching web's pattern). The four `tool_status` chunk handlers in `apps/desktop/src/ui/chat.ts` now thread `chunk.context` through.
 
 ### Settings
 
@@ -79,14 +79,7 @@ Canonical types already live in `@motebit/sdk` (`GovernanceConfig`, `AppearanceC
 
 Known drifts (each is a policy / audit question, not a mechanical cleanup):
 
-1. **`APPROVAL_PRESET_CONFIGS` diverges silently across surfaces.** Desktop imports from `@motebit/sdk`; web (`apps/web/src/ui/settings.ts:189–196`) and mobile (`apps/mobile/src/mobile-app.ts:106–125`) re-define locally. Web's values match the SDK; **mobile's values do not**:
-
-   | Preset       | SDK `requireApprovalAbove` / `denyAbove` | Mobile `requireApprovalAbove` / `denyAbove` | Effect on mobile                                                               |
-   | ------------ | ---------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
-   | `balanced`   | 1 / 3                                    | 1 / 4                                       | **Looser** — mobile users can approve R4 Money tasks; SDK blocks them outright |
-   | `autonomous` | 3 / 4                                    | 2 / 4                                       | **Stricter** — mobile asks approval at R2 Write; SDK asks at R3 Execute        |
-
-   Aligning mobile to SDK is a **security-policy change**, not code cleanup. Decide the direction (align mobile down to SDK, or promote mobile's values to canonical) before the fix ships.
+1. ~~**`APPROVAL_PRESET_CONFIGS` diverges silently across surfaces.**~~ **Closed 2026-04-24** (commit `bb35843c`). Web and mobile now import from `@motebit/sdk`; mobile's divergent values (`balanced` denyAbove: 4 → 3, `autonomous` requireApprovalAbove: 2 → 3) are gone. Direction chosen: align to SDK — canonical values win when surfaces diverge, even when a surface was stricter. Recurrence prevented by drift-defense #40 (`check-preset-imports`): any `apps/*` redeclaration of an SDK-canonical identifier fails CI.
 
 2. Desktop hardcodes `maxMemoriesPerTurn: 5` (`apps/desktop/src/ui/settings.ts:1734`) instead of reading `DEFAULT_GOVERNANCE_CONFIG.maxMemoriesPerTurn`. The field is not user-editable on desktop.
 

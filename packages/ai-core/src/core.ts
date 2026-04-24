@@ -538,13 +538,61 @@ export function getImpulsesForAction(
 }
 
 /**
- * Strip completed action/memory/state tags AND any trailing unclosed `*tag` during streaming.
- * Prevents partial action tags from flashing in chat bubbles.
+ * Strip every internal tag and prompt-injection boundary marker the runtime
+ * emits into streaming output — including partial fragments mid-stream.
+ *
+ * Canonical chat-surface primitive: every surface that renders streaming
+ * assistant text (desktop, web, mobile, spatial, cli TUI) routes through
+ * this function. The set of tags/markers evolves with the runtime —
+ * adding a new one (e.g. a future `<plan>…</plan>` narration envelope)
+ * lands in one place and every surface picks it up.
+ *
+ * What's stripped:
+ *
+ *   - `<state key="value" />`              — state update narration
+ *   - `<thinking>…</thinking>`             — model reasoning traces
+ *   - `<memory key="…">…</memory>`         — memory-formation narration
+ *   - `[EXTERNAL_DATA source="…"]…[/EXTERNAL_DATA]` — tool-result boundaries
+ *   - `[MEMORY_DATA]…[/MEMORY_DATA]`       — recalled-memory boundaries
+ *   - Any of the above in partial/unclosed form (streaming mid-tag)
+ *
+ * Does NOT strip the `*action*` asterisk pattern used in creature action
+ * syntax — that is a plain-text-surface concern composed on top of this
+ * function (see {@link stripPartialActionTag}).
+ *
+ * Before this primitive was centralized, `apps/web/src/ui/chat.ts` had
+ * its own copy of the full set while desktop's `stripPartialActionTag`
+ * only handled `<memory>` + `<state/>`. Runtime chunks carrying
+ * `<thinking>` or `[EXTERNAL_DATA]` markers rendered as visible chat
+ * content on desktop. One primitive, one regex set, surfaces converge.
+ */
+export function stripInternalTags(text: string): string {
+  return (
+    text
+      // Completed tag/marker pairs
+      .replace(/<state\s+[^>]*\/>/g, "")
+      .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+      .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+      .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
+      .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
+      // Partial fragments — opener or closer alone, mid-stream
+      .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
+      .replace(/\[\/EXTERNAL_DATA\]/g, "")
+      .replace(/\[MEMORY_DATA\]/g, "")
+      .replace(/\[\/MEMORY_DATA\]/g, "")
+      .replace(/<(?:state|thinking|memory)[^>]*$/g, "")
+  );
+}
+
+/**
+ * Strip internal tags plus the creature's `*action*` asterisk syntax and
+ * normalize whitespace. Used by plain-text chat surfaces (desktop) that
+ * render `bubble.textContent` directly — markdown surfaces (web) use
+ * `stripInternalTags` alone because their `*italic*` asterisks are
+ * rendered by the markdown pass, not stripped.
  */
 export function stripPartialActionTag(text: string): string {
-  return text
-    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-    .replace(/<state\s+[^>]*\/>/g, "")
+  return stripInternalTags(text)
     .replace(/\*[^*]+\*/g, "")
     .replace(/\*[^*]*$/, "")
     .replace(/\n{3,}/g, "\n\n")

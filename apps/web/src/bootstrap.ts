@@ -4,6 +4,7 @@
  *
  * These live here (not in main.ts) so they can be tested without DOM side effects.
  */
+import { stripInternalTags } from "@motebit/ai-core";
 import type { ProviderConfig } from "./storage";
 
 // === Local Inference Probing ===
@@ -233,12 +234,7 @@ export function cleanConversationHistory(
   const result: Array<{ role: "user" | "assistant"; content: string }> = [];
   for (const msg of messages) {
     if (msg.role !== "user" && msg.role !== "assistant") continue;
-    const clean = msg.content
-      .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-      .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-      .replace(/<state\s+[^>]*\/>/g, "")
-      .replace(/ {2,}/g, " ")
-      .trim();
+    const clean = stripInternalTags(msg.content).replace(/ {2,}/g, " ").trim();
     if (clean) {
       result.push({ role: msg.role, content: clean });
     }

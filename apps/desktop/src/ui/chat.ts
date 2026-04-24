@@ -296,10 +296,15 @@ export function showToast(text: string, duration = 3000): void {
 
 // === Internal Helpers ===
 
-function showToolStatus(name: string): void {
+function formatToolLabel(name: string, context?: string): string {
+  if (!context) return name;
+  return `${name} — ${context}`;
+}
+
+function showToolStatus(name: string, context?: string): void {
   const el = document.createElement("div");
   el.className = "tool-status";
-  el.textContent = `${name}...`;
+  el.textContent = `${formatToolLabel(name, context)}...`;
   chatLog.appendChild(el);
   chatLog.scrollTop = chatLog.scrollHeight;
   toolStatusElements.set(name, el);
@@ -308,7 +313,11 @@ function showToolStatus(name: string): void {
 function completeToolStatus(name: string): void {
   const el = toolStatusElements.get(name);
   if (!el) return;
-  el.textContent = `${name} done`;
+  // Preserve the context label set by showToolStatus — rewrite only the
+  // trailing "..." suffix, don't recompose the label from `name` alone
+  // (that path drops context and rots the UX that invariant #5 fixes).
+  const current = el.textContent ?? `${name}...`;
+  el.textContent = current.replace(/\.{3}$/, "") + " done";
   el.classList.add("done");
   setTimeout(() => {
     el.classList.add("fade-out");
@@ -423,7 +432,7 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
         chatLog.scrollTop = chatLog.scrollHeight;
       } else if (chunk.type === "tool_status") {
         if (chunk.status === "calling") {
-          showToolStatus(chunk.name);
+          showToolStatus(chunk.name, chunk.context);
         } else if (chunk.status === "done") {
           completeToolStatus(chunk.name);
         }
@@ -527,7 +536,7 @@ async function consumeGoalApproval(ctx: DesktopContext, approved: boolean): Prom
         chatLog.scrollTop = chatLog.scrollHeight;
       } else if (chunk.type === "tool_status") {
         if (chunk.status === "calling") {
-          showToolStatus(chunk.name);
+          showToolStatus(chunk.name, chunk.context);
         } else if (chunk.status === "done") {
           completeToolStatus(chunk.name);
         }
@@ -1105,7 +1114,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         } else if (chunk.type === "tool_status") {
           if (chunk.status === "calling") {
             removeThinkingIndicator(thinkingEl);
-            showToolStatus(chunk.name);
+            showToolStatus(chunk.name, chunk.context);
           } else if (chunk.status === "done") {
             completeToolStatus(chunk.name);
           }
@@ -1248,7 +1257,7 @@ End with a question — you are curious about who they are.`;
         textEl.textContent = stripPartialActionTag(accumulated);
         chatLog.scrollTop = chatLog.scrollHeight;
       } else if (chunk.type === "tool_status") {
-        if (chunk.status === "calling") showToolStatus(chunk.name);
+        if (chunk.status === "calling") showToolStatus(chunk.name, chunk.context);
         else if (chunk.status === "done") completeToolStatus(chunk.name);
       } else if (chunk.type === "result") {
         const r = chunk.result as {

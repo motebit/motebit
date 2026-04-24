@@ -68,6 +68,7 @@
     "check-hardware-attestation-primitives": "npx tsx scripts/check-hardware-attestation-primitives.ts",
     "check-dom-id-references": "npx tsx scripts/check-dom-id-references.ts",
     "check-preset-imports": "npx tsx scripts/check-preset-imports.ts",
+    "check-chat-tag-stripping": "npx tsx scripts/check-chat-tag-stripping.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",

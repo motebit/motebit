@@ -2,26 +2,12 @@ import type { WebContext } from "../types";
 import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 import { StreamingTTSQueue, WebSpeechTTSProvider } from "@motebit/voice";
 import type { TTSProvider } from "@motebit/voice";
+import { stripInternalTags } from "@motebit/ai-core";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { buildReceiptArtifact } from "@motebit/render-engine";
 import { installPrUrlChip } from "./pr-url-chip";
 
 // === Lightweight Markdown Renderer ===
-
-/** Strip internal tags (state, thinking, memory) including incomplete streaming fragments. */
-function stripInternalTags(text: string): string {
-  return text
-    .replace(/<state\s+[^>]*\/>/g, "")
-    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
-    .replace(/\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\]/g, "")
-    .replace(/\[\/MEMORY_DATA\]/g, "")
-    .replace(/<(?:state|thinking|memory)[^>]*$/g, "");
-}
 
 /** Convert markdown to safe HTML. No external dependencies. */
 export function renderMarkdown(raw: string): string {

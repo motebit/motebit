@@ -273,6 +273,12 @@ const GATES: ReadonlyArray<Gate> = [
       'canonical preset identifiers exported from `@motebit/sdk` (APPROVAL_PRESET_CONFIGS, ApprovalPresetConfig, COLOR_PRESETS, RISK_LABELS, DEFAULT_GOVERNANCE_CONFIG, DEFAULT_VOICE_CONFIG, DEFAULT_APPEARANCE_CONFIG) are not locally redeclared in any `apps/*/src` file. Re-export trampolines (`export { X } from "@motebit/sdk"`) are allowed; `const`/`interface`/`type`/`enum` redeclarations are CI failures (invariant #40, added 2026-04-24 after an audit found `apps/mobile/src/mobile-app.ts` had redefined `APPROVAL_PRESET_CONFIGS` with `balanced: { denyAbove: 4 }` while the SDK\'s canonical value was `denyAbove: 3` — same motebit identity, divergent governance posture per surface. Extends the sibling-boundary rule to the developer-contract surface: if it ships from `@motebit/sdk` as public API, no app is allowed to shadow it).',
     script: "check-preset-imports",
   },
+  {
+    name: "check-chat-tag-stripping",
+    defends:
+      "every inline `.replace(...)` against an internal-tag / prompt-injection-marker pattern (`<thinking>`, `<memory>`, `<state/>`, `[EXTERNAL_DATA]`, `[MEMORY_DATA]`) in apps or services source trees is colocated with an import of `stripInternalTags` or `stripPartialActionTag` from `@motebit/ai-core` — inline regex copies outside the canonical primitive are CI failures (invariant #41, added 2026-04-24 after a chat-surface audit found desktop's `stripPartialActionTag` missed the thinking/external-data token set entirely while web's chat had its own private copy of the full regex set and web's `bootstrap.ts` had a third near-copy of the same stripping pass. Runtime chunks carrying `<thinking>…</thinking>` and `[EXTERNAL_DATA…]…[/EXTERNAL_DATA]` rendered as visible chat content on desktop — a real, user-visible correctness bug. Fix: centralized `stripInternalTags` in `@motebit/ai-core/core.ts`; `stripPartialActionTag` now composes it; every surface routes through one regex set. Extends the protocol-primitive doctrine to chat-surface judgment — the tag set is runtime-emitted state, not a per-surface rendering decision).",
+    script: "check-chat-tag-stripping",
+  },
 ];
 
 interface Result {
