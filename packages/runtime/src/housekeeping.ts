@@ -51,6 +51,24 @@ export interface HousekeepingResult {
  *   1. Decayed confidence falls below memoryGovernor.persistenceThreshold
  *   2. Age exceeds the sensitivity-level retention period
  * Pinned memories are always preserved.
+ *
+ * @deprecated since 0.2.0, removed in 1.0.0. Use `runConsolidationCycle` from
+ * `./consolidation-cycle.ts` for the prune + episodic-consolidation work;
+ * curiosity-target computation (the one behavior this function provides that
+ * the cycle does not yet cover) should be called separately via
+ * `findCuriosityTargets` from `@motebit/memory-graph`.
+ *
+ * Reason: this function is the pre-unification housekeeping path. The
+ * four-phase consolidation cycle (`runConsolidationCycle`) is the canonical
+ * maintenance loop per `docs/doctrine/proactive-interior.md` — its prune
+ * phase supersedes this function's retention/decay/episodic work. The
+ * one remaining asymmetry is curiosity-target computation; resolving
+ * that is a separate design conversation before the 1.0.0 removal.
+ * The drift-defense allowlist in
+ * `scripts/check-consolidation-primitives.ts` already calls this a
+ * "deprecated alias"; the annotation here formalizes the claim so the
+ * doctrine is visible in every consumer's IDE and enforced by
+ * drift-defense #39.
  */
 export async function runHousekeeping(deps: HousekeepingDeps): Promise<HousekeepingResult> {
   try {

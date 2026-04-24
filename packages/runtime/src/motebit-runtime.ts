@@ -119,6 +119,7 @@ import type { InteractiveDelegationConfig } from "./interactive-delegation.js";
 
 import { performReflection, runReflectionSafe } from "@motebit/reflection";
 import type { ReflectionDeps } from "@motebit/reflection";
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional import of the deprecated runHousekeeping; the runtime's own `housekeeping()` method is deprecated in lockstep and both retire together at 1.0.0 when curiosity-target computation joins the consolidation cycle
 import { runHousekeeping } from "./housekeeping.js";
 import type { HousekeepingDeps } from "./housekeeping.js";
 import { PresenceController } from "./presence.js";
@@ -1672,6 +1673,29 @@ export class MotebitRuntime {
     }
   }
 
+  /**
+   * @deprecated since 0.2.0, removed in 1.0.0. Rework the caller — migrate
+   * to {@link consolidationCycle} for prune + episodic-consolidation and
+   * call `findCuriosityTargets` from `@motebit/memory-graph` directly
+   * (then pass the result to `getGradientManager().setCuriosityTargets`)
+   * if curiosity-target recomputation is still required.
+   *
+   * Reason: `housekeeping()` predates the unified four-phase consolidation
+   * cycle. The cycle's prune phase supersedes housekeeping's
+   * retention/decay/episodic work and the cycle's gather phase
+   * supersedes reflection's notability ranking. The one behavior not
+   * yet covered by `consolidationCycle()` is curiosity-target
+   * computation, which still lives in `runHousekeeping`'s second pass.
+   * Unifying curiosity into the cycle is a separate design question
+   * (does it belong in gather, or stay a separate signal the
+   * gradient manager subscribes to?) — see
+   * `docs/doctrine/proactive-interior.md` § "What's deferred". This
+   * method retires at 1.0.0 with whatever unification shape lands;
+   * the annotation here formalizes the doctrine's existing
+   * "deprecated alias" claim and routes the migration through
+   * drift-defense #39 rather than PR review.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional wrapper around the deprecated runHousekeeping; see JSDoc above for the migration path
   async housekeeping(): Promise<void> {
     const result = await runHousekeeping(this.housekeepingDeps);
     this.gradientManager.setCuriosityTargets(result.curiosityTargets);
