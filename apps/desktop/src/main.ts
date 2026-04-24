@@ -90,6 +90,7 @@ const chat = initChat(ctx, {
   openSettings: () => settings.open(),
   openConversationsPanel: () => conversations.open(),
   openGoalsPanel: () => goals.open(),
+  openWorkstationPanel: () => workstationPanel.open(),
   openMemoryPanel: (nodeId, auditFlags) => memory.open(nodeId, auditFlags),
   speakResponse: (text) => voice.speakAssistantResponse(text),
   pushTTSChunk: (delta) => voice.pushTTSChunk(delta),

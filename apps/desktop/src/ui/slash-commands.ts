@@ -26,6 +26,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "clear", description: "Clear chat, start new conversation" },
   { name: "conversations", description: "Browse past conversations" },
   { name: "goals", description: "View and manage goals" },
+  { name: "workstation", description: "Open workstation (read_url / computer use)" },
   { name: "tools", description: "List registered tools" },
   { name: "settings", description: "Open settings" },
   { name: "operator", description: "Show operator mode status" },
