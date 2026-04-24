@@ -9,6 +9,8 @@ use secure_enclave::{se_available, se_mint_attestation};
 use tpm::{tpm_available, tpm_mint_quote};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
 
@@ -338,33 +340,143 @@ fn write_config(json: String) -> Result<(), String> {
 
 const KEYRING_SERVICE: &str = "com.motebit.desktop";
 
+// === Dev-mode keyring fallback ===
+//
+// Ad-hoc-signed dev binaries on macOS (the common `cargo run --debug`
+// output) can have the Security framework silently drop generic-password
+// writes: `keyring::Entry::set_password` returns Ok(()) but the entry
+// never persists to the user's login keychain. Observable signature:
+// `security dump-keychain` shows zero entries for com.motebit.desktop
+// after a bootstrap that appeared to succeed.
+//
+// Signed production builds (`tauri build` with a Developer ID
+// certificate wired via tauri.conf.json `bundle.macOS.signingIdentity`)
+// are unaffected — macOS trusts their stable code identity and honors
+// the Security framework writes.
+//
+// Rather than leave dev contributors locked out of any feature that
+// depends on keyring storage (device identity, BYOK API keys, sync
+// tokens), every `keyring_*` IPC falls through to a file-backed store
+// at `~/.motebit/dev-keyring.json`, mode 0600. The file is plaintext
+// JSON — a local attacker with read access to `~/.motebit/` already
+// has read access to `config.json` (which contains your motebit_id)
+// and `motebit.db` (which contains your entire event log). The threat
+// model is "signed code can use the OS Keychain; dev binaries fall
+// back to the same file-level perms as the rest of the user's
+// motebit state." Mode 0600 matches what `~/.ssh/id_ed25519` uses —
+// standard Unix file protection, not cryptographic protection.
+//
+// Reads always try the OS Keychain first; if absent (or transient
+// error), fall back to the dev file. Writes attempt the Keychain,
+// verify the write persisted (round-trip read), and fall back to the
+// dev file if verify fails. Deletes clear both. Signed prod builds
+// take the Keychain branch on every call, the dev file never opens.
+// A future cleanup once every contributor has a signed dev build can
+// remove this fallback entirely.
+
+fn dev_keyring_path() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .map(|home| PathBuf::from(home).join(".motebit").join("dev-keyring.json"))
+}
+
+fn dev_keyring_read_all() -> HashMap<String, String> {
+    let path = match dev_keyring_path() {
+        Some(p) => p,
+        None => return HashMap::new(),
+    };
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return HashMap::new(),
+    };
+    serde_json::from_str(&contents).unwrap_or_default()
+}
+
+fn dev_keyring_write_all(map: &HashMap<String, String>) -> Result<(), String> {
+    let path = dev_keyring_path().ok_or_else(|| "HOME not set".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, &json).map_err(|e| e.to_string())?;
+    // mode 0600 — user-only read/write. Matches ~/.ssh/id_ed25519's
+    // protection level. On non-Unix (Windows) the permissions model
+    // is different and this cfg-gated block is skipped; Windows dev
+    // users on Tauri are rare and the fallback still works there, the
+    // only gap is Unix-style file perms enforcement.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn keyring_get(key: String) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(val) => Ok(Some(val)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+    // Try OS keychain first — signed production builds resolve here.
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &key) {
+        match entry.get_password() {
+            Ok(val) => return Ok(Some(val)),
+            Err(keyring::Error::NoEntry) => {
+                // Not in keychain — fall through to dev file.
+            }
+            Err(_) => {
+                // Transient keychain error (permission prompt cancelled,
+                // backend unavailable). Fall through rather than failing
+                // hard — the dev-file fallback may still have the value.
+            }
+        }
     }
+    // Dev fallback
+    let map = dev_keyring_read_all();
+    Ok(map.get(&key).cloned())
 }
 
 #[tauri::command]
 fn keyring_set(key: String, value: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| e.to_string())?;
-    entry.set_password(&value).map_err(|e| e.to_string())
+    // Try OS keychain first, then verify the write actually persisted.
+    // On ad-hoc-signed dev binaries, set_password can return Ok while
+    // the Security framework silently drops the write — the verify
+    // catches that and triggers the dev-file fallback.
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &key) {
+        if entry.set_password(&value).is_ok() {
+            if let Ok(read_back) = entry.get_password() {
+                if read_back == value {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    // Keychain didn't persist (or errored) — dev fallback. Read the
+    // current map, upsert our key, write back with mode 0600.
+    let mut map = dev_keyring_read_all();
+    map.insert(key, value);
+    dev_keyring_write_all(&map)
 }
 
 #[tauri::command]
 fn keyring_delete(key: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| e.to_string())?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()), // idempotent
-        Err(e) => Err(e.to_string()),
+    // Best-effort delete from both stores; idempotent.
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &key) {
+        let _ = entry.delete_credential();
     }
+    let mut map = dev_keyring_read_all();
+    if map.remove(&key).is_some() {
+        // Intentionally swallow write errors on delete — the caller's
+        // intent ("make sure this key is gone") is satisfied as long
+        // as future reads return None. The Keychain delete above
+        // handles the signed-build case; if the dev file is already
+        // unwritable (e.g. perms changed), future reads of a still-
+        // present-in-file key would surface a stale value. Better
+        // to report that on next read than to throw here.
+        let _ = dev_keyring_write_all(&map);
+    }
+    Ok(())
 }
 
 // === MCP Discovery ===

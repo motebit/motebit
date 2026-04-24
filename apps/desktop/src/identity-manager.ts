@@ -118,38 +118,24 @@ export class IdentityManager {
 
     const keyStore: BootstrapKeyStore = {
       async storePrivateKey(privKeyHex) {
+        // Rust's keyring_set is dual-store: tries the OS Keychain (with
+        // a verify-read to detect macOS ad-hoc-signing silent-drops),
+        // then falls back to a mode-0600 file at
+        // `~/.motebit/dev-keyring.json` if the Keychain didn't persist.
+        // A resolved promise here means the value is stored somewhere
+        // durable; no TS-side verify needed.
         await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
-        // Write-then-verify-read. The Rust keyring_set IPC returns Ok(())
-        // on macOS even when the underlying Security framework silently
-        // drops the write — this happens with ad-hoc-signed dev builds
-        // where the process lacks a stable code identity the Keychain
-        // will trust. Without this verify step, bootstrap returns
-        // "success" but leaves the caller with a half-initialized
-        // identity (public key in config, no private key in keychain),
-        // which downstream operations discover only when they try to
-        // sign something. This catches the divergent state at the moment
-        // it would have been created, not hours later in sync. Signed
-        // production builds don't hit this path; dev builds on macOS do.
-        const verify = await invoke<string | null>("keyring_get", {
-          key: "device_private_key",
-        });
-        if (verify !== privKeyHex) {
-          throw new Error(
-            "Keyring write silently failed — macOS rejected the Keychain store " +
-              "(common with ad-hoc-signed dev binaries). Run a signed production " +
-              "build, or accept a dev-only encrypted-file fallback in a future PR.",
-          );
-        }
       },
       async hasPrivateKey() {
         try {
+          // Rust's keyring_get checks Keychain first, then the dev-
+          // keyring file. Returns null if neither has the key.
           const val = await invoke<string | null>("keyring_get", { key: "device_private_key" });
           return val != null && val !== "";
         } catch {
-          // Keyring access denied / unavailable → treat as absent. The
-          // first-launch recovery will try to write through the same
-          // keyring, which will surface any real permission issue with
-          // a clearer error.
+          // Keyring backend unavailable entirely (unusual) — treat as
+          // absent. The first-launch recovery will try to write through
+          // the same keyring, which surfaces any real storage failure.
           return false;
         }
       },
