@@ -119,6 +119,27 @@ export class IdentityManager {
     const keyStore: BootstrapKeyStore = {
       async storePrivateKey(privKeyHex) {
         await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
+        // Write-then-verify-read. The Rust keyring_set IPC returns Ok(())
+        // on macOS even when the underlying Security framework silently
+        // drops the write — this happens with ad-hoc-signed dev builds
+        // where the process lacks a stable code identity the Keychain
+        // will trust. Without this verify step, bootstrap returns
+        // "success" but leaves the caller with a half-initialized
+        // identity (public key in config, no private key in keychain),
+        // which downstream operations discover only when they try to
+        // sign something. This catches the divergent state at the moment
+        // it would have been created, not hours later in sync. Signed
+        // production builds don't hit this path; dev builds on macOS do.
+        const verify = await invoke<string | null>("keyring_get", {
+          key: "device_private_key",
+        });
+        if (verify !== privKeyHex) {
+          throw new Error(
+            "Keyring write silently failed — macOS rejected the Keychain store " +
+              "(common with ad-hoc-signed dev binaries). Run a signed production " +
+              "build, or accept a dev-only encrypted-file fallback in a future PR.",
+          );
+        }
       },
       async hasPrivateKey() {
         try {
