@@ -11,12 +11,14 @@
 
   Every service was running the same ~50-line skeleton inline:
 
-        bootstrapAndEmitIdentity()
-        openMotebitDatabase()
-        new InMemoryToolRegistry()
-        new MotebitRuntime(..., NullRenderer)
-        wireServerDeps / startServiceServer
-        handleAgentTask handler
+  ```text
+  bootstrapAndEmitIdentity()
+  openMotebitDatabase()
+  new InMemoryToolRegistry()
+  new MotebitRuntime(..., NullRenderer)
+  wireServerDeps / startServiceServer
+  handleAgentTask handler
+  ```
 
   Five sibling copies of the same wire — exactly the drift shape the
   `feedback_protocol_primitive_blindness` doctrine names. The boot
