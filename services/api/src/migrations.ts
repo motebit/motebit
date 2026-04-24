@@ -86,13 +86,42 @@ export function runMigrations(db: DatabaseDriver, migrations: Migration[]): void
 }
 
 // ── Relay Migrations ──────────────────────────────────────────────────────
+//
+// Squashed to a single `v1_initial` on 2026-04-24 as part of the 1.0 release.
+// Before the squash, this file held 15 ordered migrations (v1 through v15)
+// spanning 2026-03 through 2026-04. The production relay at motebit.com
+// applied them in sequence; its `relay_schema_migrations` table still
+// records the historical chain. Fresh installs from 1.0 forward get
+// `v1_initial` in one step — same final schema, 1/15 the ceremony.
+//
+// The pre-squash migrations are preserved verbatim as a test fixture at
+// `__tests__/fixtures/migrations-v1-through-v15.ts`, and the equivalence
+// between the two paths is enforced permanently by
+// `__tests__/migrations-squash-equivalence.test.ts`. Reshaping this file
+// without keeping the fixture-vs-live equivalence would drift fresh
+// installs away from motebit.com's schema — the test fails first.
+//
+// Per the migration-cleanup doctrine (`docs/doctrine/migration-cleanup.md`):
+// relay DB migrations were a "1 holder you control" case — motebit.com was
+// the only production relay when 1.0 shipped, so verifying max(version)=15
+// once was sufficient audit to collapse the chain. Adding a new schema
+// change lands as `v16`, `v17`, … appended below — never edit `v1_initial`.
 
 export const relayMigrations: Migration[] = [
   {
     version: 1,
-    name: "initial_schema",
+    name: "v1_initial",
     up: (db) => {
-      // Agent discovery registry
+      // ── Migration-owned tables ─────────────────────────────────────
+      //
+      // Column order is the order SQLite produces after the historical
+      // chain runs — original v1 columns first, then ALTERs appended by
+      // v3 / v8 / v9 / v13 / v14 / v15 in their historical application
+      // order. The equivalence test enforces this per-ordinal-position.
+
+      // agent_registry — v1 base + v3 {revoked, guardian_public_key,
+      // federation_visible} + v8 {settlement_address, settlement_modes}
+      // + v9 {sweep_threshold}
       db.exec(`
         CREATE TABLE IF NOT EXISTS agent_registry (
           motebit_id    TEXT PRIMARY KEY,
@@ -102,11 +131,17 @@ export const relayMigrations: Migration[] = [
           metadata      TEXT,
           registered_at INTEGER NOT NULL,
           last_heartbeat INTEGER NOT NULL,
-          expires_at    INTEGER NOT NULL
+          expires_at    INTEGER NOT NULL,
+          revoked INTEGER DEFAULT 0,
+          guardian_public_key TEXT,
+          federation_visible INTEGER DEFAULT 1,
+          settlement_address TEXT,
+          settlement_modes TEXT DEFAULT 'relay',
+          sweep_threshold INTEGER
         );
       `);
 
-      // Market relay tables
+      // relay_service_listings — v1 only
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_service_listings (
           listing_id    TEXT PRIMARY KEY,
@@ -120,7 +155,10 @@ export const relayMigrations: Migration[] = [
           regulatory_risk REAL,
           updated_at    INTEGER NOT NULL DEFAULT 0
         );
+      `);
 
+      // relay_latency_stats — v1 only
+      db.exec(`
         CREATE TABLE IF NOT EXISTS relay_latency_stats (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           motebit_id TEXT NOT NULL,
@@ -128,7 +166,10 @@ export const relayMigrations: Migration[] = [
           latency_ms REAL NOT NULL,
           recorded_at INTEGER NOT NULL
         );
+      `);
 
+      // relay_delegation_edges — v1 only
+      db.exec(`
         CREATE TABLE IF NOT EXISTS relay_delegation_edges (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           from_motebit_id TEXT NOT NULL,
@@ -143,7 +184,10 @@ export const relayMigrations: Migration[] = [
         );
       `);
 
-      // Settlement ledger
+      // relay_settlements — v1 base + v3 {x402_tx_hash, x402_network}
+      // + v8 {settlement_mode, p2p_tx_hash, payment_verification_status,
+      //       payment_verified_at, payment_verification_error, delegator_id}
+      // + v13 {issuer_relay_id, suite, signature} + v14 {anchor_batch_id}
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_settlements (
           settlement_id TEXT PRIMARY KEY,
@@ -156,11 +200,23 @@ export const relayMigrations: Migration[] = [
           platform_fee INTEGER NOT NULL DEFAULT 0,
           platform_fee_rate REAL NOT NULL DEFAULT 0.05,
           status TEXT NOT NULL,
-          settled_at INTEGER NOT NULL
+          settled_at INTEGER NOT NULL,
+          x402_tx_hash TEXT,
+          x402_network TEXT,
+          settlement_mode TEXT DEFAULT 'relay',
+          p2p_tx_hash TEXT,
+          payment_verification_status TEXT DEFAULT 'verified',
+          payment_verified_at INTEGER,
+          payment_verification_error TEXT,
+          delegator_id TEXT,
+          issuer_relay_id TEXT,
+          suite TEXT,
+          signature TEXT,
+          anchor_batch_id TEXT
         );
       `);
 
-      // Budget allocations
+      // relay_allocations — v1 only
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_allocations (
           allocation_id TEXT PRIMARY KEY,
@@ -175,7 +231,7 @@ export const relayMigrations: Migration[] = [
         );
       `);
 
-      // Collaborative plan proposals
+      // relay_proposals — v1 only
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_proposals (
           proposal_id TEXT PRIMARY KEY,
@@ -187,7 +243,10 @@ export const relayMigrations: Migration[] = [
           expires_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         );
+      `);
 
+      // relay_proposal_participants — v1 only
+      db.exec(`
         CREATE TABLE IF NOT EXISTS relay_proposal_participants (
           proposal_id TEXT NOT NULL,
           motebit_id TEXT NOT NULL,
@@ -198,7 +257,10 @@ export const relayMigrations: Migration[] = [
           signature TEXT,
           PRIMARY KEY (proposal_id, motebit_id)
         );
+      `);
 
+      // relay_collaborative_step_results — v1 only
+      db.exec(`
         CREATE TABLE IF NOT EXISTS relay_collaborative_step_results (
           proposal_id TEXT NOT NULL,
           step_id TEXT NOT NULL,
@@ -211,7 +273,7 @@ export const relayMigrations: Migration[] = [
         );
       `);
 
-      // Verifiable credentials
+      // relay_credentials — v1 base + v15 {anchor_batch_id}
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_credentials (
           credential_id TEXT PRIMARY KEY,
@@ -219,11 +281,12 @@ export const relayMigrations: Migration[] = [
           issuer_did TEXT NOT NULL,
           credential_type TEXT NOT NULL,
           credential_json TEXT NOT NULL,
-          issued_at INTEGER NOT NULL
+          issued_at INTEGER NOT NULL,
+          anchor_batch_id TEXT
         );
       `);
 
-      // Execution ledgers
+      // relay_execution_ledgers — v1 only
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_execution_ledgers (
           ledger_id TEXT PRIMARY KEY,
@@ -236,7 +299,7 @@ export const relayMigrations: Migration[] = [
         );
       `);
 
-      // Key succession
+      // relay_key_successions — v1 only
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_key_successions (
           id INTEGER PRIMARY KEY,
@@ -253,7 +316,7 @@ export const relayMigrations: Migration[] = [
         );
       `);
 
-      // Token blacklist
+      // relay_token_blacklist — v1 only
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_token_blacklist (
           jti TEXT PRIMARY KEY,
@@ -263,7 +326,9 @@ export const relayMigrations: Migration[] = [
         );
       `);
 
-      // Revoked credentials
+      // relay_revoked_credentials — v1 base (already includes revoked_by;
+      // v3's ALTER was a no-op on fresh DBs because v1's CREATE TABLE
+      // already declared the column)
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_revoked_credentials (
           credential_id TEXT PRIMARY KEY,
@@ -273,130 +338,8 @@ export const relayMigrations: Migration[] = [
           revoked_by TEXT
         );
       `);
-    },
-  },
 
-  {
-    version: 2,
-    name: "add_indexes",
-    up: (db) => {
-      // Service listings
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_listings_motebit ON relay_service_listings(motebit_id);",
-      );
-
-      // Latency stats
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_latency_pair ON relay_latency_stats(motebit_id, remote_motebit_id);",
-      );
-
-      // Delegation edges
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_delegation_edges_from ON relay_delegation_edges(from_motebit_id);",
-      );
-
-      // Settlements
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_settlements_alloc ON relay_settlements(allocation_id);",
-      );
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_settlements_motebit ON relay_settlements(motebit_id);",
-      );
-      db.exec(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_settlements_dedup ON relay_settlements(task_id, motebit_id);",
-      );
-
-      // Allocations
-      db.exec("CREATE INDEX IF NOT EXISTS idx_allocations_task ON relay_allocations(task_id);");
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_allocations_status ON relay_allocations(status) WHERE status = 'locked';",
-      );
-
-      // Proposals
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_proposals_initiator ON relay_proposals(initiator_motebit_id);",
-      );
-
-      // Credentials
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_creds_subject ON relay_credentials(subject_motebit_id);",
-      );
-
-      // Execution ledgers
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_ledgers_motebit ON relay_execution_ledgers(motebit_id);",
-      );
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_ledgers_goal ON relay_execution_ledgers(goal_id);",
-      );
-
-      // Key successions
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_key_successions_motebit ON relay_key_successions(motebit_id);",
-      );
-    },
-  },
-
-  {
-    version: 3,
-    name: "add_column_migrations",
-    up: (db) => {
-      // x402 payment proof columns on relay_federation_settlements
-      const fedCols = db.prepare("PRAGMA table_info(relay_federation_settlements)").all() as Array<{
-        name: string;
-      }>;
-      const fedColNames = new Set(fedCols.map((c) => c.name));
-      if (!fedColNames.has("x402_tx_hash")) {
-        db.exec("ALTER TABLE relay_federation_settlements ADD COLUMN x402_tx_hash TEXT");
-      }
-      if (!fedColNames.has("x402_network")) {
-        db.exec("ALTER TABLE relay_federation_settlements ADD COLUMN x402_network TEXT");
-      }
-
-      // x402 payment proof columns on relay_settlements
-      const settleCols = db.prepare("PRAGMA table_info(relay_settlements)").all() as Array<{
-        name: string;
-      }>;
-      const settleColNames = new Set(settleCols.map((c) => c.name));
-      if (!settleColNames.has("x402_tx_hash")) {
-        db.exec("ALTER TABLE relay_settlements ADD COLUMN x402_tx_hash TEXT");
-      }
-      if (!settleColNames.has("x402_network")) {
-        db.exec("ALTER TABLE relay_settlements ADD COLUMN x402_network TEXT");
-      }
-
-      // agent_registry column additions
-      const agentCols = db.prepare("PRAGMA table_info(agent_registry)").all() as Array<{
-        name: string;
-      }>;
-      const agentColNames = new Set(agentCols.map((c) => c.name));
-      if (!agentColNames.has("revoked")) {
-        db.exec("ALTER TABLE agent_registry ADD COLUMN revoked INTEGER DEFAULT 0");
-      }
-      if (!agentColNames.has("guardian_public_key")) {
-        db.exec("ALTER TABLE agent_registry ADD COLUMN guardian_public_key TEXT");
-      }
-      if (!agentColNames.has("federation_visible")) {
-        db.exec("ALTER TABLE agent_registry ADD COLUMN federation_visible INTEGER DEFAULT 1");
-      }
-
-      // revoked_by on revoked credentials
-      const revokedCols = db
-        .prepare("PRAGMA table_info(relay_revoked_credentials)")
-        .all() as Array<{
-        name: string;
-      }>;
-      const revokedColNames = new Set(revokedCols.map((c) => c.name));
-      if (!revokedColNames.has("revoked_by")) {
-        db.exec("ALTER TABLE relay_revoked_credentials ADD COLUMN revoked_by TEXT");
-      }
-    },
-  },
-
-  {
-    version: 4,
-    name: "add_relay_config",
-    up: (db) => {
+      // relay_config (v4)
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_config (
           key TEXT PRIMARY KEY,
@@ -404,12 +347,8 @@ export const relayMigrations: Migration[] = [
           updated_at INTEGER NOT NULL
         );
       `);
-    },
-  },
-  {
-    version: 5,
-    name: "add_refund_log",
-    up: (db) => {
+
+      // relay_refund_log (v5) — refund audit (retry-driven, completed-state default)
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_refund_log (
           refund_id TEXT PRIMARY KEY,
@@ -422,14 +361,9 @@ export const relayMigrations: Migration[] = [
           error TEXT,
           created_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_refund_log_task ON relay_refund_log(task_id);
       `);
-    },
-  },
-  {
-    version: 6,
-    name: "add_push_tokens",
-    up: (db) => {
+
+      // relay_push_tokens (v6) — composite primary key (motebit_id, device_id)
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_push_tokens (
           motebit_id TEXT NOT NULL,
@@ -440,98 +374,12 @@ export const relayMigrations: Migration[] = [
           expires_at INTEGER,
           PRIMARY KEY (motebit_id, device_id)
         );
-        CREATE INDEX IF NOT EXISTS idx_push_tokens_motebit ON relay_push_tokens(motebit_id);
       `);
-    },
-  },
-  {
-    version: 7,
-    name: "add_key_transfer_columns",
-    up: (db) => {
-      // Guard: columns already exist on fresh installs (createPairingTables includes them).
-      const cols = (
-        db.prepare("PRAGMA table_info(pairing_sessions)").all() as { name: string }[]
-      ).map((c) => c.name);
-      if (!cols.includes("claiming_x25519_pubkey")) {
-        db.exec("ALTER TABLE pairing_sessions ADD COLUMN claiming_x25519_pubkey TEXT");
-      }
-      if (!cols.includes("key_transfer_payload")) {
-        db.exec("ALTER TABLE pairing_sessions ADD COLUMN key_transfer_payload TEXT");
-      }
-    },
-  },
-  {
-    version: 8,
-    name: "add_p2p_settlement_columns",
-    up: (db) => {
-      // Agent settlement capabilities (explicit, not inferred from identity key)
-      const agentCols = (
-        db.prepare("PRAGMA table_info(agent_registry)").all() as { name: string }[]
-      ).map((c) => c.name);
-      if (!agentCols.includes("settlement_address")) {
-        db.exec("ALTER TABLE agent_registry ADD COLUMN settlement_address TEXT");
-      }
-      if (!agentCols.includes("settlement_modes")) {
-        db.exec("ALTER TABLE agent_registry ADD COLUMN settlement_modes TEXT DEFAULT 'relay'");
-      }
 
-      // Settlement mode tracking on relay_settlements
-      const settleCols = (
-        db.prepare("PRAGMA table_info(relay_settlements)").all() as { name: string }[]
-      ).map((c) => c.name);
-      if (!settleCols.includes("settlement_mode")) {
-        db.exec("ALTER TABLE relay_settlements ADD COLUMN settlement_mode TEXT DEFAULT 'relay'");
-      }
-      if (!settleCols.includes("p2p_tx_hash")) {
-        db.exec("ALTER TABLE relay_settlements ADD COLUMN p2p_tx_hash TEXT");
-      }
-      if (!settleCols.includes("payment_verification_status")) {
-        db.exec(
-          "ALTER TABLE relay_settlements ADD COLUMN payment_verification_status TEXT DEFAULT 'verified'",
-        );
-      }
-      if (!settleCols.includes("payment_verified_at")) {
-        db.exec("ALTER TABLE relay_settlements ADD COLUMN payment_verified_at INTEGER");
-      }
-      if (!settleCols.includes("payment_verification_error")) {
-        db.exec("ALTER TABLE relay_settlements ADD COLUMN payment_verification_error TEXT");
-      }
-      if (!settleCols.includes("delegator_id")) {
-        db.exec("ALTER TABLE relay_settlements ADD COLUMN delegator_id TEXT");
-      }
-
-      // Uniqueness: one settlement per (task_id, settlement_mode)
-      try {
-        db.exec(
-          "CREATE UNIQUE INDEX IF NOT EXISTS idx_settlements_task_mode ON relay_settlements(task_id, settlement_mode)",
-        );
-      } catch {
-        /* index may already exist */
-      }
-    },
-  },
-  {
-    version: 9,
-    name: "add_sweep_threshold",
-    up: (db) => {
-      const agentCols = (
-        db.prepare("PRAGMA table_info(agent_registry)").all() as { name: string }[]
-      ).map((c) => c.name);
-      if (!agentCols.includes("sweep_threshold")) {
-        db.exec("ALTER TABLE agent_registry ADD COLUMN sweep_threshold INTEGER");
-      }
-    },
-  },
-  {
-    version: 10,
-    name: "add_relay_receipts",
-    up: (db) => {
-      // Durable archive of the full signed ExecutionReceipt tree.
-      // relay_settlements keeps only receipt_hash; this table keeps the
-      // byte-identical canonical JSON so an auditor can reconstruct the
-      // chain and re-verify signatures without relay contact.
-      // See spec/execution-ledger-v1.md §11.1 Storage and
-      // docs/doctrine/operator-transparency.md "Operational".
+      // relay_receipts (v10) — byte-identical append-only receipt archive.
+      // Per services/api CLAUDE.md rule 11: receipt_json must equal
+      // canonicalJson(receipt) at write time; the column is read-only
+      // output for auditors re-verifying signatures offline.
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_receipts (
           motebit_id        TEXT NOT NULL,
@@ -548,29 +396,9 @@ export const relayMigrations: Migration[] = [
           PRIMARY KEY (motebit_id, task_id)
         );
       `);
-      db.exec("CREATE INDEX IF NOT EXISTS idx_relay_receipts_task ON relay_receipts(task_id);");
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_receipts_parent ON relay_receipts(parent_task_id, depth);",
-      );
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_relay_receipts_origin ON relay_receipts(invocation_origin);",
-      );
-    },
-  },
-  {
-    version: 11,
-    name: "add_pending_withdrawals",
-    up: (db) => {
-      // Aggregation ledger for sweep-driven withdrawals. The sweep
-      // enqueues here instead of firing immediately; a batch worker
-      // groups by rail, applies the per-rail shouldBatchSettle policy,
-      // and fires serially (or via withdrawBatch on a BatchableGuestRail).
-      // See spec/settlement-v1.md §11.2 and packages/market settlement.ts.
-      //
-      // State machine: pending → firing → fired | failed; cancelled is
-      // reserved for operator intervention. Debit on the virtual account
-      // happens at enqueue time, mirroring the pre-aggregation sweep
-      // invariant — the money is held the moment it's claimed for sweep.
+
+      // relay_pending_withdrawals (v11) — aggregation ledger for sweep-driven
+      // withdrawals. Debit happens at enqueue time (CLAUDE.md rule 12).
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_pending_withdrawals (
           pending_id      TEXT PRIMARY KEY,
@@ -587,60 +415,9 @@ export const relayMigrations: Migration[] = [
           idempotency_key TEXT
         );
       `);
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_rail_status ON relay_pending_withdrawals(rail, status, enqueued_at);",
-      );
-      db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_motebit ON relay_pending_withdrawals(motebit_id, status);",
-      );
-    },
-  },
-  {
-    version: 12,
-    name: "pending_withdrawals_idempotency_unique",
-    up: (db) => {
-      // Mirror idx_relay_withdrawals_idempotency: a partial UNIQUE INDEX
-      // keyed by (motebit_id, idempotency_key) where the key is set. The
-      // `debitAndEnqueuePending` primitive's replay semantics rest on a
-      // SELECT pre-check inside the same synchronous call; the index is
-      // belt-and-suspenders against multi-writer races and enforces the
-      // documented contract at the storage layer.
-      db.exec(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_withdrawals_idempotency ON relay_pending_withdrawals (motebit_id, idempotency_key) WHERE idempotency_key IS NOT NULL;",
-      );
-    },
-  },
-  {
-    version: 13,
-    name: "settlements_signature_columns",
-    up: (db) => {
-      // Self-attesting settlements (audit follow-up #1).
-      // SettlementRecord wire format now MUST be signed by the issuing relay
-      // (delegation-v1.md §6.4 foundation law). Adds the three required
-      // columns to relay_settlements; nullable for backward-compat with rows
-      // written before this migration. Going forward, every INSERT into
-      // relay_settlements MUST populate signature/suite/issuer_relay_id —
-      // the audit-emission path filters out NULL-signature legacy rows.
-      db.exec("ALTER TABLE relay_settlements ADD COLUMN issuer_relay_id TEXT;");
-      db.exec("ALTER TABLE relay_settlements ADD COLUMN suite TEXT;");
-      db.exec("ALTER TABLE relay_settlements ADD COLUMN signature TEXT;");
-    },
-  },
-  {
-    version: 14,
-    name: "agent_settlement_anchor_batches",
-    up: (db) => {
-      // Per-agent settlement Merkle anchoring (the "ceiling" alongside the
-      // signing "floor" landed in v13). Federation settlements already get
-      // batched + anchored onchain (relay-federation-v1.md §7.6); this
-      // brings per-agent settlements to feature parity so a worker can
-      // verify they were paid the right amount WITHOUT contacting the
-      // relay — just by holding the SettlementRecord, the inclusion
-      // proof, and pointing at the chain transaction.
-      //
-      // Mirrors relay_anchor_batches (federation) but as a separate table
-      // because the audiences differ: federation = inter-relay peer audit;
-      // agent settlement = worker audit of relay-as-counterparty.
+
+      // relay_agent_anchor_batches (v14) — per-agent Merkle settlement
+      // anchoring (the "ceiling" alongside the per-row signing "floor").
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_agent_anchor_batches (
           batch_id          TEXT PRIMARY KEY,
@@ -657,43 +434,113 @@ export const relayMigrations: Migration[] = [
           created_at        INTEGER NOT NULL
         );
       `);
+
+      // ── Indexes (v2, v5, v6, v8, v10, v11, v12, v14, v15) ──────────
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_listings_motebit ON relay_service_listings(motebit_id);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_latency_pair ON relay_latency_stats(motebit_id, remote_motebit_id);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_delegation_edges_from ON relay_delegation_edges(from_motebit_id);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_settlements_alloc ON relay_settlements(allocation_id);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_settlements_motebit ON relay_settlements(motebit_id);",
+      );
+      db.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_settlements_dedup ON relay_settlements(task_id, motebit_id);",
+      );
+      db.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_settlements_task_mode ON relay_settlements(task_id, settlement_mode);",
+      );
+      db.exec("CREATE INDEX IF NOT EXISTS idx_allocations_task ON relay_allocations(task_id);");
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_allocations_status ON relay_allocations(status) WHERE status = 'locked';",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_proposals_initiator ON relay_proposals(initiator_motebit_id);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_creds_subject ON relay_credentials(subject_motebit_id);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_ledgers_motebit ON relay_execution_ledgers(motebit_id);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_ledgers_goal ON relay_execution_ledgers(goal_id);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_key_successions_motebit ON relay_key_successions(motebit_id);",
+      );
+      db.exec("CREATE INDEX IF NOT EXISTS idx_refund_log_task ON relay_refund_log(task_id);");
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_push_tokens_motebit ON relay_push_tokens(motebit_id);",
+      );
+      db.exec("CREATE INDEX IF NOT EXISTS idx_relay_receipts_task ON relay_receipts(task_id);");
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_receipts_parent ON relay_receipts(parent_task_id, depth);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_receipts_origin ON relay_receipts(invocation_origin);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_rail_status ON relay_pending_withdrawals(rail, status, enqueued_at);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_motebit ON relay_pending_withdrawals(motebit_id, status);",
+      );
+      db.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_withdrawals_idempotency ON relay_pending_withdrawals (motebit_id, idempotency_key) WHERE idempotency_key IS NOT NULL;",
+      );
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_agent_anchor_batches_status ON relay_agent_anchor_batches(status) WHERE status != 'confirmed';",
       );
-      db.exec("ALTER TABLE relay_settlements ADD COLUMN anchor_batch_id TEXT;");
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_relay_settlements_unanchored ON relay_settlements(settled_at, settlement_id) WHERE anchor_batch_id IS NULL AND signature IS NOT NULL;",
       );
-    },
-  },
-  {
-    version: 15,
-    name: "credentials_anchor_batch_id",
-    up: (db) => {
-      // credential-anchor-v1.md §7 — relay_credentials.anchor_batch_id is the
-      // per-credential pointer into relay_credential_anchor_batches. The
-      // column was originally added via an idempotent ALTER TABLE inside
-      // createCredentialAnchoringTables(), but that helper runs BEFORE the
-      // migration that creates relay_credentials (createFederationTables
-      // precedes createRelaySchema in createSyncRelay so pairing/federation
-      // tables exist for later migrations). Result: the ALTER TABLE silently
-      // failed on fresh DBs, and the credential anchor-proof endpoint was
-      // non-functional end-to-end. Surfaced by the HTTP integration test
-      // added alongside the doctrinal auth-allowlist fix (services/api
-      // CLAUDE.md rule 6).
-      //
-      // Guarded with PRAGMA because DBs that somehow DID pick up the column
-      // via the old path (unlikely but possible) would trip a duplicate-
-      // column error.
-      const cols = db.prepare("PRAGMA table_info(relay_credentials)").all() as {
-        name: string;
-      }[];
-      if (!cols.some((c) => c.name === "anchor_batch_id")) {
-        db.exec("ALTER TABLE relay_credentials ADD COLUMN anchor_batch_id TEXT;");
-      }
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_relay_credentials_unanchored ON relay_credentials(issued_at, credential_id) WHERE anchor_batch_id IS NULL;",
       );
+
+      // ── Helper-owned tables: idempotent ALTERs for columns migrations added ──
+      //
+      // `relay_federation_settlements` is created by `createFederationTables`
+      // BEFORE `runMigrations` fires (see `createSyncRelay` init order).
+      // v3 added these columns to it; the helper never declared them.
+      // PRAGMA-guarded ALTERs are the historical shape — safe to re-run.
+      //
+      // v7 added columns to `pairing_sessions`, but `createPairingTables`
+      // already declares them. On fresh installs those ALTERs were no-ops;
+      // preserving them as belt-and-suspenders matches the historical chain
+      // and keeps the squash self-healing if an older helper variant ever
+      // lost the columns.
+      const fedCols = (
+        db.prepare("PRAGMA table_info(relay_federation_settlements)").all() as {
+          name: string;
+        }[]
+      ).map((c) => c.name);
+      if (!fedCols.includes("x402_tx_hash")) {
+        db.exec("ALTER TABLE relay_federation_settlements ADD COLUMN x402_tx_hash TEXT");
+      }
+      if (!fedCols.includes("x402_network")) {
+        db.exec("ALTER TABLE relay_federation_settlements ADD COLUMN x402_network TEXT");
+      }
+
+      const pairCols = (
+        db.prepare("PRAGMA table_info(pairing_sessions)").all() as {
+          name: string;
+        }[]
+      ).map((c) => c.name);
+      if (!pairCols.includes("claiming_x25519_pubkey")) {
+        db.exec("ALTER TABLE pairing_sessions ADD COLUMN claiming_x25519_pubkey TEXT");
+      }
+      if (!pairCols.includes("key_transfer_payload")) {
+        db.exec("ALTER TABLE pairing_sessions ADD COLUMN key_transfer_payload TEXT");
+      }
     },
   },
 ];
