@@ -129,6 +129,7 @@ import {
   type SlabController,
   type SlabItemOutcome,
 } from "./slab-controller.js";
+import { toolPolicy } from "./tool-policy.js";
 import {
   runConsolidationCycle,
   type ConsolidationCycleConfig,
@@ -173,49 +174,9 @@ const TENDING_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "search_conversations",
 ]);
 
-/**
- * Tool names whose completed slab items settle into `resting` rather
- * than dissolving. Doctrine (motebit-computer.md §"Three end states"):
- * working material — fetched pages, terminal output, search results —
- * stays on the slab as reference until the user dismisses it.
- * Everything else (embedding calls, plumbing tools, failed invocations)
- * dissolves through the default endItem path.
- *
- * This list is the runtime's _end-state policy_ for tool calls; it
- * does not affect which renderer handles the card (that's the
- * renderer's name-routing in slab-items.ts). The runtime decides
- * the phase; the renderer decides the visual.
- */
-const RESTING_TOOLS: ReadonlySet<string> = new Set([
-  "read_url",
-  "fetch_url",
-  "web_search",
-  "shell_exec",
-  "bash",
-  "shell",
-  "exec",
-  "run_command",
-  "read_file",
-  "recall_memories",
-  "search_memories",
-]);
-
-function isRestingTool(name: string): boolean {
-  return RESTING_TOOLS.has(name);
-}
-
-/**
- * Tool names whose slab items belong to the `virtual_browser`
- * embodiment mode — the motebit is navigating an isolated browser
- * viewport, and the user sees the rendered page in the plane.
- * Doctrine (motebit-computer.md §"Embodiment modes"). Anything not
- * in this set uses the default inference (tool_result).
- */
-const VIRTUAL_BROWSER_TOOLS: ReadonlySet<string> = new Set(["read_url", "fetch_url"]);
-
-function embodimentForTool(name: string): "virtual_browser" | "tool_result" {
-  return VIRTUAL_BROWSER_TOOLS.has(name) ? "virtual_browser" : "tool_result";
-}
+// Slab-projection policy for tool calls (kind × mode × endState per
+// tool name) lives in `./tool-policy.ts`. See that file for the
+// doctrine mapping; this module is a consumer.
 
 export class MotebitRuntime {
   readonly motebitId: string;
@@ -1298,9 +1259,10 @@ export class MotebitRuntime {
    *     the receipt persists in the scene after the slab item clears.
    *   - `tool_call` — one per `tool_status: "calling"` chunk (unless
    *     the tool is a delegation, in which case the delegation item
-   *     owns the lifecycle). Ends on `tool_status: "done"` either
-   *     by resting (fetched-page / shell-output / search kinds per
-   *     `RESTING_TOOLS`) or by dissolving (plumbing calls).
+   *     owns the lifecycle). Kind + mode + endState come from
+   *     `toolPolicy(name)` in `./tool-policy.ts`; a tool with
+   *     `endState: "rest"` settles on the slab as an open tab, a tool
+   *     with `endState: "dissolve"` ripples away.
    */
   private async *projectSlabForTurn(
     stream: AsyncGenerator<StreamChunk>,
@@ -1379,32 +1341,27 @@ export class MotebitRuntime {
           } else if (chunk.status === "calling") {
             const toolItemId = `slab-tool-${turnId}-${chunk.name}-${Date.now()}`;
             toolItemIds.set(chunk.name, toolItemId);
-            // virtual_browser tools carry a richer kind so the renderer
-            // can mount a real reader-view iframe instead of the generic
-            // tool-call card. Doctrine: kind is the fine-grained content
-            // shape; mode is the coarse-grained embodiment. A fetch kind
-            // under tool_result mode is a different item than a fetch
-            // kind under virtual_browser mode — they share the renderer
-            // but the mode gates what content the item may reveal.
-            const slabKind = VIRTUAL_BROWSER_TOOLS.has(chunk.name) ? "fetch" : "tool_call";
+            // Single tool-policy lookup drives kind (renderer routing)
+            // + mode (embodiment / governance) + endState (set on
+            // `done` below). See tool-policy.ts for the registry; it
+            // is the one place tool→slab projection is defined.
+            const policy = toolPolicy(chunk.name);
             this.slab.openItem({
               id: toolItemId,
-              kind: slabKind,
-              mode: embodimentForTool(chunk.name),
+              kind: policy.kind,
+              mode: policy.mode,
               payload: { name: chunk.name, context: chunk.context, status: "calling" },
             });
           } else if (chunk.status === "done") {
             const toolItemId = toolItemIds.get(chunk.name);
             if (toolItemId != null) {
               toolItemIds.delete(chunk.name);
-              // End state: dissolve, rest, or detach? Doctrine
-              // (motebit-computer.md §"Three end states"): the slab
-              // holds working material. Fetched pages, terminal output,
-              // and search results are the motebit's open tabs — they
-              // stay on the slab as reference until the user dismisses
-              // them. Everything else (embedding calls, plumbing tools,
-              // failed invocations) dissolves.
-              if (isRestingTool(chunk.name) && chunk.result != null) {
+              // End-state policy: rest = working material the user may
+              // consult (tabs open on the slab); dissolve = ephemeral
+              // plumbing. Policy comes from the canonical registry.
+              // Doctrine: motebit-computer.md §"Three end states."
+              const policy = toolPolicy(chunk.name);
+              if (policy.endState === "rest" && chunk.result != null) {
                 this.slab.restItem(toolItemId, {
                   name: chunk.name,
                   context: chunk.context,
