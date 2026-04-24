@@ -14,6 +14,7 @@ import type {
 } from "./spec.js";
 import { ArtifactManager } from "./artifacts.js";
 import { WorkstationPlane } from "./workstation-plane.js";
+import { SlabManager } from "./slab.js";
 import {
   createCreature,
   createCreatureState,
@@ -84,6 +85,7 @@ export class ThreeJSAdapter implements RenderAdapter {
   private controls: OrbitControls | null = null;
   private artifactManager: ArtifactManager | null = null;
   private workstationPlane: WorkstationPlane | null = null;
+  private slab: SlabManager | null = null;
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -126,6 +128,13 @@ export class ThreeJSAdapter implements RenderAdapter {
       // single-stage CSS2D anchor. Hidden by default — revealed by
       // the launcher button / Option+W hotkey.
       this.workstationPlane = new WorkstationPlane(this.creatureRefs.group, container);
+      // Slab — the "Motebit Computer" (docs/doctrine/motebit-computer.md).
+      // Hangs off the creature group; detachHandler routes pinched items
+      // into the existing artifact scene so detach → resting artifact
+      // is a single scene-graph hand-off, not two parallel systems.
+      this.slab = new SlabManager(this.creatureRefs.group, container, {
+        detachHandler: (spec) => this.addArtifact(spec),
+      });
     }
 
     // === Lighting ===
@@ -165,6 +174,10 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.workstationPlane.update(frame.time, frame.delta_time);
       this.workstationPlane.render(this.scene, this.camera);
     }
+    if (this.slab) {
+      this.slab.update(frame.time, frame.delta_time);
+      this.slab.render(this.scene, this.camera);
+    }
   }
 
   getSpec(): RenderSpec {
@@ -181,6 +194,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     }
     this.artifactManager?.resize(width, height);
     this.workstationPlane?.resize(width, height);
+    this.slab?.resize(width, height);
   }
 
   // === Spatial Canvas ===
@@ -212,51 +226,33 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.workstationPlane?.pulseActivity();
   }
 
-  // === Slab ("Motebit Computer") — Phase-6 wiring pending ===
+  // === Slab ("Motebit Computer") — docs/doctrine/motebit-computer.md ===
   //
-  // The slab methods on RenderAdapter (addSlabItem, dissolveSlabItem,
-  // detachSlabItemAsArtifact, clearSlabItems) have their type declared
-  // in spec.ts and their semantic contract in docs/doctrine/motebit-
-  // computer.md. Phase 5c binds the `SlabController` to this adapter
-  // via `bindSlabControllerToRenderer(...)`; the bridge uses optional
-  // chaining (`renderer.addSlabItem?.(spec)`) so missing methods are
-  // safe no-ops.
-  //
-  // The stubs below exist so `ThreeJSAdapter` satisfies the bridge's
-  // `SlabRendererTarget` structural type without a cast. They will be
-  // replaced in Phase 6 with real implementations that mount
-  // CSS2DObjects on the `SlabManager`'s plane, trigger the ripple /
-  // pinch physics, and thread the artifact detach handoff through the
-  // scene graph. The SlabManager (packages/render-engine/src/slab.ts)
-  // already has the primitives; this adapter needs to construct one
-  // on init(), mount it next to the creature, and delegate these
-  // four methods to it.
-  //
-  // Leaving these as explicit stubs (not `undefined` or absent) marks
-  // the implementation target for the next pass and keeps type
-  // relationships honest. Each method is a narrow no-op today.
+  // Delegates to the SlabManager constructed in init() and mounted on
+  // the creature group. The bridge uses optional chaining, so a null
+  // manager (headless / test init) degrades to safe no-ops.
 
-  addSlabItem(_spec: SlabItemSpec): SlabItemHandle | undefined {
-    return undefined;
+  addSlabItem(spec: SlabItemSpec): SlabItemHandle | undefined {
+    return this.slab?.addItem(spec);
   }
 
-  dissolveSlabItem(_id: string): Promise<void> {
-    return Promise.resolve();
+  dissolveSlabItem(id: string): Promise<void> {
+    return this.slab?.dissolveItem(id) ?? Promise.resolve();
   }
 
   detachSlabItemAsArtifact(
-    _id: string,
-    _artifact: ArtifactSpec,
+    id: string,
+    artifact: ArtifactSpec,
   ): Promise<ArtifactHandle | undefined> {
-    return Promise.resolve(undefined);
+    return this.slab?.detachItemAsArtifact(id, artifact) ?? Promise.resolve(undefined);
   }
 
   clearSlabItems(): void {
-    // Phase-6: SlabManager.clear() once the manager is wired
+    this.slab?.clearItems();
   }
 
-  setSlabVisible(_visible: boolean): void {
-    // Phase-6: SlabManager visibility toggle once the manager is wired
+  setSlabVisible(visible: boolean): void {
+    this.slab?.setUserVisible(visible);
   }
 
   setBackground(color: number | null): void {
@@ -296,6 +292,8 @@ export class ThreeJSAdapter implements RenderAdapter {
     // Mirror the soul color onto the workstation plane so the plane
     // and the creature read as one body when the plane is open.
     this.workstationPlane?.setInteriorColor(color);
+    // Same for the slab — one body, one soul, across primary surfaces.
+    this.slab?.setInteriorColor(color);
   }
 
   setAudioReactivity(energy: AudioReactivity | null): void {
@@ -343,6 +341,8 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.artifactManager = null;
     this.workstationPlane?.dispose();
     this.workstationPlane = null;
+    this.slab?.dispose();
+    this.slab = null;
 
     if (this.scene?.environment) this.scene.environment.dispose();
     if (this.scene) {
