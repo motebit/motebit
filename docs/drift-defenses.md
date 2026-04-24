@@ -63,6 +63,26 @@ Forty-four invariants are enforced today. Thirty-five run as hard CI gates via `
 
 Each defense exists because something drifted. These are the stories. They are not binding doctrine; they exist so future maintainers understand _why_ the check exists before they consider weakening it.
 
+### The annotation-layer detour (2026-04-22 → 2026-04-24, no gate)
+
+A product-vision drift that didn't land in a gate because its failure mode is semantic, not mechanical. Preserved as doctrine so the category of mistake is recognizable next time.
+
+**What happened.** The `motebit-computer.md` doctrine — 321 lines, six commits of live-test-driven deepening, tagged at `motebit-computer-exploration-2026-04-21` — was retired on 2026-04-21 17:32 (commit `fdf4cd52`) with the rationale that the specific metaphor was "aesthetic framing around a product shape other agent systems ship under plainer names" and "the motebit-unique layers sit above whichever execution mode is active and don't need a bespoke scene primitive." The cross-surface contract types (`SlabItemKind`, `SlabItemPhase`, etc.) were also removed with the fair observation that no main-branch consumer had imported them.
+
+Two separate decisions got fused into one retire commit: (a) retire the _premature cross-surface contract scaffolding_ — correct, no consumers existed; and (b) retire the _product vision_ itself — a category error, the vision had matured through six corrections and answered the question "what category does motebit occupy?" in a way nothing else did.
+
+Over the next three days (2026-04-22 → 2026-04-24) the vision was re-derived in progressively weaker forms: `workstation-viewport.md` framed the motebit's workstation as a "shared act-space" (better than nothing but missing the first-person frame); a Phase-2 "viewport MVP" shipped a frame-dominant pane rendering the user's own screen back at them (rejected in product review as redundant recursion); an "annotation-layer" reframe corrected the specific mirror mistake without questioning the pane-as-dashboard framing; a detailed `workstation-frontend.md` spec'd an eight-state control pane in 512 lines — a better Operator with signed receipts underneath, which is category-adjacent rather than category-creating.
+
+**The shape of the drift.** At each step the design converged to a local optimum starting from the previous step's mistake. When the frame-dominant MVP was wrong, the fix stayed at the pane layer rather than questioning the pane itself. When "the pane is a mirror of the user's screen" was named as the mistake, the fix was "don't mirror; annotate" rather than "maybe the problem is that it's a pane." Each local correction lost more of the original vision's distinctness — six embodiment modes became one; droplet physics became CSS transitions; first-person perceptual frame became second-person activity dashboard; scene-graph placement became DOM overlay.
+
+The failure mode generalizes: **when a vision is retired, check whether the retire commit fused a tactical decision with a strategic one.** Tactical decisions (premature protocol types, ahead-of-consumers scaffolding) are often correct to undo. Strategic decisions (retiring the product vision they belonged to) require a separate justification. If both are bundled in one commit, the strategic one rides on the tactical one's momentum without being independently examined.
+
+**What made the detour end.** A fresh-eyes principle-review on 2026-04-24: "did we contaminate the doctrine throughout the exploration, or was the exploration good?" Answer: the six-commit exploration was good. Each commit caught something from live test or review. Nothing was bolt-on. The contamination was in the retire commit's framing and in the re-derivations that compounded from it. The restoration commit (same day) brings `motebit-computer.md` back at the tagged state and retires `workstation-viewport.md` + `workstation-frontend.md`.
+
+**What remains correct from the detour.** The Phase 1 cleanup (commit `ec508447`) that removed the URL bar + Reader iframe from the desktop/web Workstation panels is still correct — `read_url` labeled as a shared browsing surface was a category error under any doctrine. Phase 1 stays.
+
+**No mechanical gate.** The drift pattern is "fuse tactical + strategic into one retire" — not something a linter catches. The prevention is doctrinal: when authoring a retire commit, separate "retire X because no consumer imported it" from "retire the vision X belonged to." The latter needs its own independent argument.
+
 ### 9. Spec Wire format types ↔ `@motebit/protocol` exports
 
 Landed in warning mode after the `settlement_modes: string` vs `string[]` drift in `discovery-v1.md`. The spec said one thing, the protocol types said another, and neither was obviously wrong. Flipped to strict on 2026-04-13 once all twelve specs adopted the wire-vs-storage split — specs declare `#### Wire format (foundation law)` subsections separately from `#### Storage` subsections, and every type named under Wire format must be exported from `@motebit/protocol`.

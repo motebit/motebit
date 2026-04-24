@@ -11,11 +11,13 @@
  * a stable contract without touching any of the signed-receipt,
  * governance, or UI wiring.
  *
- * Surface support (`docs/doctrine/workstation-viewport.md` §Per-surface
- * map): only the desktop surface registers this tool with a real
- * dispatcher. Web / mobile / spatial sandboxes cannot reach the OS; they
- * should NOT include `computer` in the AI model's advertised tool list at
- * all, and the handler here is a defense-in-depth fallback.
+ * Surface support (`docs/doctrine/motebit-computer.md` § "Embodiment
+ * modes"): the `desktop_drive` mode registers this tool on desktop with a
+ * real dispatcher. Web / mobile / spatial sandboxes cannot reach the OS;
+ * those surfaces reach the user's world via `virtual_browser` / `shared_gaze`
+ * (cloud-hosted) when those modes ship. They MUST NOT include `computer` in
+ * the AI model's advertised tool list at all, and the handler here is a
+ * defense-in-depth fallback.
  */
 
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";

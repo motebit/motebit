@@ -108,11 +108,12 @@ export function registerDesktopTools(
     registry.register(tauriWriteFileDefinition, createTauriWriteFileHandler(invoke));
     registry.register(tauriShellExecDefinition, createTauriShellExecHandler(invoke));
 
-    // Computer-use — full-fidelity viewport on desktop per
-    // docs/doctrine/workstation-viewport.md. Currently backed by a
-    // Rust stub returning `not_supported`; the real screen-capture +
-    // input-injection implementation lands without touching this TS
-    // wiring (the dispatcher boundary is stable).
+    // Computer-use — desktop_drive embodiment mode per
+    // docs/doctrine/motebit-computer.md § "Embodiment modes". The real
+    // screen-capture + input-injection implementation lives in Rust
+    // (apps/desktop/src-tauri/src/computer_use.rs via xcap + enigo);
+    // this TS wiring is a thin dispatcher boundary that lets the mode
+    // render on the slab as a live fragment of the user's desktop.
     computer = registerComputerTool(registry, {
       invoke,
       motebitId: runtime.motebitId,

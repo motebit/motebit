@@ -1,22 +1,21 @@
-// === Workstation Panel (web surface) ===
+// === Workstation Panel (web surface) — transitional ===
 //
-// Sibling of `apps/desktop/src/ui/workstation-panel.ts`. Structurally
-// identical — same controller, same DOM, same behavior — just typed
-// against `WebContext`. Per the panels-pattern doctrine, each surface
-// renders its own DOM; the cross-surface seam is the controller in
-// @motebit/panels.
+// This DOM panel is the SIGNED-RECEIPT LOG only. It is NOT the slab.
+// Per `docs/doctrine/motebit-computer.md`, the motebit's active work
+// renders on the slab — a liquid-glass plane in the 3D scene beside
+// the creature. On web (sandboxed, no OS access) the slab renders
+// `virtual_browser` / `shared_gaze` modes once their cloud-browser
+// infrastructure ships; `desktop_drive` is desktop-only. Until the
+// slab ships, this panel serves as the audit-log projection of the
+// motebit's tool-call receipts.
 //
-// Scope per `docs/doctrine/workstation-viewport.md` + records-vs-acts:
-// a live log of the motebit's signed tool-call receipts. This is the
-// shared-gaze affordance at Phase-1 fidelity — the user sees every
-// tool the motebit invokes, with args/result/signature fingerprints,
-// as independently-verifiable receipts. Phase 2 adds the cloud-browser
-// viewport (web sandboxed, no OS access): when the motebit drives a
-// cloud-hosted browser, the pane shows the live frame stream. Until
-// then this file is deliberately just the receipt log — no URL bar,
-// no Reader iframe, no browser chrome. The previous Phase-0 shape
-// conflated `read_url` (an AI tool) with a shared browsing surface,
-// which the doctrine explicitly forbids.
+// Phase 1 (2026-04-24) removed the Phase-0 URL bar + Reader iframe
+// because it conflated `read_url` (an AI tool returning text for the
+// reasoning loop) with a shared browsing surface — a category error
+// the slab doctrine explicitly forbids.
+//
+// Structural sibling: `apps/desktop/src/ui/workstation-panel.ts`
+// (same controller, same DOM, typed against DesktopContext).
 
 import type { WebContext } from "../types";
 import {
