@@ -669,6 +669,60 @@ export const __probeOnlyDeprecationDrift = 1;
 `,
       ),
   },
+  {
+    script: "check-preset-imports",
+    proves:
+      "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",
+    perturb: () =>
+      // Fixture: an apps/admin src file that redeclares APPROVAL_PRESET_CONFIGS
+      // locally. The gate scans apps/*/src for top-level
+      // const/let/interface/type/enum declarations whose name matches any
+      // canonical SDK preset identifier; a re-export trampoline would be
+      // accepted, a bare declaration is a violation.
+      writeFixture(
+        `apps/admin/src/${PROBE_PREFIX}preset_shadow.ts`,
+        `export const APPROVAL_PRESET_CONFIGS = { drifted: { requireApprovalAbove: 99, denyAbove: 100 } };\n`,
+      ),
+  },
+  {
+    script: "check-chat-tag-stripping",
+    proves:
+      "flags a surface file with an inline `.replace(/<thinking>/…)` stripping pass that doesn't import `stripInternalTags` / `stripPartialActionTag` from @motebit/ai-core",
+    perturb: () =>
+      // Fixture: an apps/admin src file that strips the <thinking> tag inline
+      // (the runtime-emitted narration token the canonical primitive owns)
+      // without importing the primitive. The gate should fire because the
+      // file has a .replace against a stripping token AND no canonical import.
+      writeFixture(
+        `apps/admin/src/${PROBE_PREFIX}tag_strip_drift.ts`,
+        `export function clean(text: string): string {\n  return text.replace(/<thinking>[\\s\\S]*?<\\/thinking>/g, "");\n}\n`,
+      ),
+  },
+  {
+    script: "check-drift-defenses-inventory",
+    proves:
+      "flags a GATES entry in scripts/check.ts that has no corresponding row in docs/drift-defenses.md's inventory table",
+    perturb: () =>
+      // Perturbation: delete the inventory row for check-scene-primitives.
+      // Chose this gate because it's referenced in exactly ONE line of the
+      // document (its own inventory row — no incident-history prose, no
+      // cross-reference from another invariant's row). Deleting that one
+      // line leaves the gate registered in scripts/check.ts GATES but
+      // entirely absent from docs/drift-defenses.md — the exact drift
+      // shape the meta-gate defends against. mutateFile restores the
+      // file byte-identical on cleanup.
+      //
+      // If scene-primitives ever gains a second inventory reference
+      // (e.g. cross-linked from another row), pick a different single-
+      // mention gate — check-tool-modes is the current alternate. The
+      // probe wants a surgical perturbation that nothing else masks.
+      mutateFile("docs/drift-defenses.md", (src) =>
+        src.replace(
+          /^\|\s+\d+\s+\|[^|]*\|[^|]*`check-scene-primitives\.ts`[^|]*\|[^|]*\|\s*\n/m,
+          "",
+        ),
+      ),
+  },
 ];
 
 /**
