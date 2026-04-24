@@ -34,6 +34,17 @@ Multi-device sync is the only relay function with a legitimate centralization pr
 
 Protocol specs must distinguish what every implementation must preserve (foundation law) from what one particular implementation happens to be elegant at (convention). Foundation law should survive chain change, hardware upgrades, multisig wrappers, and hot/cold key splits without breaking. Conventions are how a specific reference implementation chooses to satisfy the foundation law, not binding on alternative implementations. When writing a spec, if a rule cannot survive swapping the chain or the wallet topology, it does not belong in foundation law — it belongs in the reference implementation section, clearly marked as convention.
 
+### Naming: interop law vs reference default
+
+The distinction shows up in constants exported from `@motebit/protocol`. The review question at export-add time: _"would a third-party motebit implementation compute wrong answers if it ignored this value?"_
+
+- **Yes** → interop law. No prefix. Two implementations must agree or wire compatibility breaks. Examples: `TRUST_LEVEL_SCORES` (the enum→score mapping is compared across federation boundaries), `TRUST_ZERO` / `TRUST_ONE` (semiring identity elements), `PLATFORM_FEE_RATE`.
+- **No** → reference default. `REFERENCE_` prefix. Motebit's reference implementation picks a value; a federated implementation MAY override and still interoperate because the value is policy, not protocol. Example: `REFERENCE_TRUST_THRESHOLDS` (promote/demote policy — trust scores get compared; the rules that derive them do not).
+
+`DEFAULT_` misleads — it reads as "THE value every implementation uses." When renaming an existing `DEFAULT_` to `REFERENCE_`, ship additively: new export, `@deprecated` alias on the old name with the four-field contract (drift-defense #39), parity test asserting bit-identical values until the removal version, migrate internal consumers. The 2026-04-24 rename of `DEFAULT_TRUST_THRESHOLDS` → `REFERENCE_TRUST_THRESHOLDS` (commit `9923185c`) is the reference pattern.
+
+This rule is semantic, not syntactic — no mechanical gate catches it. PR review is the enforcement layer.
+
 ## Cryptosuite agility (2026-04-13)
 
 The verification recipe — not the primitive name — is foundation law. Every signed wire-format artifact carries a `suite: SuiteId` field alongside its `signature`; `SuiteId` is a closed string-literal union in `@motebit/protocol/crypto-suite.ts`. The suite bundles algorithm + canonicalization + signature encoding + key encoding into one identifier (matches W3C VC 2.0's `cryptosuite: "eddsa-jcs-2022"` and COSE/JOSE algorithm registries).
