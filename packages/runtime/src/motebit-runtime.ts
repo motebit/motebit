@@ -1378,9 +1378,17 @@ export class MotebitRuntime {
           } else if (chunk.status === "calling") {
             const toolItemId = `slab-tool-${turnId}-${chunk.name}-${Date.now()}`;
             toolItemIds.set(chunk.name, toolItemId);
+            // virtual_browser tools carry a richer kind so the renderer
+            // can mount a real reader-view iframe instead of the generic
+            // tool-call card. Doctrine: kind is the fine-grained content
+            // shape; mode is the coarse-grained embodiment. A fetch kind
+            // under tool_result mode is a different item than a fetch
+            // kind under virtual_browser mode — they share the renderer
+            // but the mode gates what content the item may reveal.
+            const slabKind = VIRTUAL_BROWSER_TOOLS.has(chunk.name) ? "fetch" : "tool_call";
             this.slab.openItem({
               id: toolItemId,
-              kind: "tool_call",
+              kind: slabKind,
               mode: embodimentForTool(chunk.name),
               payload: { name: chunk.name, context: chunk.context, status: "calling" },
             });

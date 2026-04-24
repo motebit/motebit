@@ -1604,6 +1604,8 @@ function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement
       return renderStream(item);
     case "tool_call":
       return renderToolCall(item, actions);
+    case "fetch":
+      return renderFetch(item, actions);
     case "plan_step":
       return renderPlanStep(item);
     case "delegation":
@@ -1611,7 +1613,6 @@ function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement
     case "memory":
       return renderMemory(item, actions);
     case "shell":
-    case "fetch":
     case "embedding":
     default:
       return renderGeneric(item);
@@ -1627,6 +1628,9 @@ export function updateSlabItem(item: SlabItem, element: HTMLElement): void {
     case "tool_call":
       updateToolCall(item, element);
       break;
+    case "fetch":
+      updateFetch(item, element);
+      break;
     case "plan_step":
       updatePlanStep(item, element);
       break;
@@ -1637,7 +1641,6 @@ export function updateSlabItem(item: SlabItem, element: HTMLElement): void {
       updateMemory(item, element);
       break;
     case "shell":
-    case "fetch":
     case "embedding":
     default:
       // No-op for generic kinds — their initial render is sufficient
