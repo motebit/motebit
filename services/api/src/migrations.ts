@@ -88,24 +88,12 @@ export function runMigrations(db: DatabaseDriver, migrations: Migration[]): void
 // ── Relay Migrations ──────────────────────────────────────────────────────
 //
 // Append-only. Never edit a shipped migration — always add a new one below.
-// Each entry is one dated schema change with a single concern; the list IS
-// the history, and fresh installs compose it top-to-bottom to reach HEAD.
+// Each entry is one dated schema change; the list IS the history.
+// See `docs/doctrine/migration-cleanup.md` for why the chain stays this way.
 //
-// This file briefly carried a squashed `v1_initial` (commits 21a29fc4 →
-// d8c49a92, 2026-04-24) that collapsed the chain into one migration. The
-// squash was reverted the same day: the chain's append-only immutability
-// is a stronger invariant than a shorter file, and at 15 migrations the
-// squash's tidiness win didn't earn the structural cost. See
-// `docs/doctrine/migration-cleanup.md` — the "squash relay migrations"
-// cleanup target has been rescinded and the lesson captured there.
-//
-// v13 and v14 gained PRAGMA-guarded ALTERs during the revert as one-time
-// defensive hardening: any DB that had briefly initialized on the
-// squashed v1_initial would have the columns already present, and
-// unguarded ALTERs would fail on rollback. The guards are net-zero on
-// pre-squash DBs (columns missing → added once → skipped thereafter).
-// Once the "never edit shipped migrations" invariant resumes below, the
-// guards stay as they are — modifying them is out of scope.
+// v13 and v14 carry PRAGMA-guarded ALTERs where other ALTER-heavy migrations
+// don't — one-time defensive hardening; the inline comment at each site has
+// the specifics.
 
 export const relayMigrations: Migration[] = [
   {
@@ -642,9 +630,8 @@ export const relayMigrations: Migration[] = [
       // relay_settlements MUST populate signature/suite/issuer_relay_id —
       // the audit-emission path filters out NULL-signature legacy rows.
       //
-      // PRAGMA guards added during the 2026-04-24 squash revert: any DB that
-      // briefly initialized on the squashed v1_initial has these columns
-      // already; unguarded ALTERs would fail with "duplicate column name."
+      // PRAGMA-guarded from landing because a transient schema state could
+      // have the columns already; net-zero on pre-squash DBs.
       const cols = (
         db.prepare("PRAGMA table_info(relay_settlements)").all() as { name: string }[]
       ).map((c) => c.name);
@@ -693,9 +680,7 @@ export const relayMigrations: Migration[] = [
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_agent_anchor_batches_status ON relay_agent_anchor_batches(status) WHERE status != 'confirmed';",
       );
-      // PRAGMA guard added during the 2026-04-24 squash revert (same reason
-      // as v13 above — DBs briefly initialized on v1_initial already have
-      // this column).
+      // PRAGMA-guarded from landing — same reason as v13 above.
       const cols = (
         db.prepare("PRAGMA table_info(relay_settlements)").all() as { name: string }[]
       ).map((c) => c.name);
