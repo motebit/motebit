@@ -56,6 +56,12 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
  * The function is intentionally defensive — it operates on `unknown` because
  * the typical caller is reading from `localStorage` / `AsyncStorage` / a
  * Tauri JSON config, all of which return untyped blobs.
+ *
+ * @permanent — never remove. Unlike a deprecated-then-sunset API symbol
+ * (which has callers we can refactor and ship a removal for), this
+ * migration reads persisted user data we can never crawl and rewrite.
+ * It must keep working for every `localStorage` / `AsyncStorage` /
+ * Tauri JSON config that has ever existed in the wild.
  */
 export function migrateVoiceConfig(raw: unknown): VoiceConfig {
   if (raw == null || typeof raw !== "object") return { ...DEFAULT_VOICE_CONFIG };

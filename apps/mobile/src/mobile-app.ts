@@ -304,6 +304,12 @@ export function mobileSettingsToUnifiedProvider(
  *     VoiceConfig; canonical shape uses `enabled`/`autoSend`/`speakResponses`).
  *   - flat `colorPreset`/`customHue`/`customSaturation`/`theme`  →  nested
  *     `appearance: AppearanceConfig` (align with sdk AppearanceConfig).
+ *
+ * @permanent — never remove. Unlike a deprecated-then-sunset API symbol
+ * (which has callers we can refactor and ship a removal for), this
+ * migration reads persisted user data we can never crawl and rewrite.
+ * It must keep working for every `AsyncStorage` blob that has ever
+ * existed in the wild on a tester or user device.
  */
 function migrateLegacyMobileSettings(
   raw: (Partial<MobileSettings> & { provider?: string }) | Record<string, unknown>,
