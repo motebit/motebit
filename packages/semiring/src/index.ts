@@ -32,6 +32,8 @@ export {
   trustMultiply,
   composeTrustChain,
   joinParallelRoutes,
+  REFERENCE_TRUST_THRESHOLDS,
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional re-export of deprecated alias
   DEFAULT_TRUST_THRESHOLDS,
   evaluateTrustTransition,
   composeDelegationTrust,

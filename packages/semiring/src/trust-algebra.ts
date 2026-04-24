@@ -10,7 +10,7 @@
 import type { AgentTrustRecord, TrustTransitionThresholds } from "@motebit/protocol";
 import {
   AgentTrustLevel,
-  DEFAULT_TRUST_THRESHOLDS,
+  REFERENCE_TRUST_THRESHOLDS,
   trustMultiply,
   joinParallelRoutes,
 } from "@motebit/protocol";
@@ -26,6 +26,10 @@ export {
   trustMultiply,
   composeTrustChain,
   joinParallelRoutes,
+  REFERENCE_TRUST_THRESHOLDS,
+  // Back-compat alias — deprecated since 1.0.1, removed in 2.0.0.
+  // Downstream code should switch to REFERENCE_TRUST_THRESHOLDS.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional re-export of deprecated alias
   DEFAULT_TRUST_THRESHOLDS,
 } from "@motebit/protocol";
 
@@ -44,7 +48,7 @@ export function evaluateTrustTransition(
   record: AgentTrustRecord,
   thresholds?: Partial<TrustTransitionThresholds>,
 ): AgentTrustLevel | null {
-  const t = { ...DEFAULT_TRUST_THRESHOLDS, ...thresholds };
+  const t = { ...REFERENCE_TRUST_THRESHOLDS, ...thresholds };
   const level = record.trust_level;
   const succeeded = record.successful_tasks ?? 0;
   const failed = record.failed_tasks ?? 0;

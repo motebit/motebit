@@ -12,7 +12,7 @@ import {
   joinParallelRoutes,
   composeDelegationTrust,
   evaluateTrustTransition,
-  DEFAULT_TRUST_THRESHOLDS,
+  REFERENCE_TRUST_THRESHOLDS,
   type DelegationReceiptLike,
 } from "../index.js";
 
@@ -331,8 +331,8 @@ describe("evaluateTrustTransition", () => {
       // Promotion to Verified requires ≥80% success rate
       // Demotion from Verified requires <50% success rate
       // Gap of 30% prevents oscillation
-      expect(DEFAULT_TRUST_THRESHOLDS.promoteToVerified_minRate).toBeGreaterThan(
-        DEFAULT_TRUST_THRESHOLDS.demote_belowRate,
+      expect(REFERENCE_TRUST_THRESHOLDS.promoteToVerified_minRate).toBeGreaterThan(
+        REFERENCE_TRUST_THRESHOLDS.demote_belowRate,
       );
     });
   });

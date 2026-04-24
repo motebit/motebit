@@ -13,6 +13,8 @@ import {
   trustMultiply,
   composeTrustChain,
   joinParallelRoutes,
+  REFERENCE_TRUST_THRESHOLDS,
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- under-test alias until 2.0.0 removal
   DEFAULT_TRUST_THRESHOLDS,
 } from "../index.js";
 
@@ -131,13 +133,22 @@ describe("Trust Semiring Algebra", () => {
     });
   });
 
-  // ── DEFAULT_TRUST_THRESHOLDS ──
+  // ── REFERENCE_TRUST_THRESHOLDS ──
 
-  describe("DEFAULT_TRUST_THRESHOLDS", () => {
+  describe("REFERENCE_TRUST_THRESHOLDS", () => {
     it("exists and has expected shape", () => {
-      expect(DEFAULT_TRUST_THRESHOLDS).toBeDefined();
-      expect(typeof DEFAULT_TRUST_THRESHOLDS.promoteToVerified_minTasks).toBe("number");
-      expect(typeof DEFAULT_TRUST_THRESHOLDS.promoteToTrusted_minRate).toBe("number");
+      expect(REFERENCE_TRUST_THRESHOLDS).toBeDefined();
+      expect(typeof REFERENCE_TRUST_THRESHOLDS.promoteToVerified_minTasks).toBe("number");
+      expect(typeof REFERENCE_TRUST_THRESHOLDS.promoteToTrusted_minRate).toBe("number");
+    });
+
+    // Deprecation back-compat: DEFAULT_TRUST_THRESHOLDS is re-exported as
+    // an alias until 2.0.0 so pinned 1.x consumers keep working. The
+    // parity assertion prevents drift between the two names during the
+    // deprecation window — any divergence would split reference-impl
+    // policy into two inconsistent values.
+    it("DEFAULT_TRUST_THRESHOLDS is a bit-identical alias until 2.0.0 removal", () => {
+      expect(DEFAULT_TRUST_THRESHOLDS).toBe(REFERENCE_TRUST_THRESHOLDS);
     });
   });
 });

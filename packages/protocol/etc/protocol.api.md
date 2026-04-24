@@ -777,7 +777,7 @@ export enum DataClass {
     SECRET = "secret"
 }
 
-// @public (undocumented)
+// @public @deprecated (undocumented)
 export const DEFAULT_TRUST_THRESHOLDS: TrustTransitionThresholds;
 
 // @public (undocumented)
@@ -2062,6 +2062,9 @@ export interface PushTokenRegistration {
 export function recordSemiring<R extends Record<string, unknown>>(fields: {
     [K in keyof R]: Semiring<R[K]>;
 }): Semiring<R>;
+
+// @public (undocumented)
+export const REFERENCE_TRUST_THRESHOLDS: TrustTransitionThresholds;
 
 // @public
 export const RegulatoryRiskSemiring: Semiring<number>;

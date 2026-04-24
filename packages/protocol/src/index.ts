@@ -2010,6 +2010,7 @@ export {
   trustMultiply,
   composeTrustChain,
   joinParallelRoutes,
+  REFERENCE_TRUST_THRESHOLDS,
   DEFAULT_TRUST_THRESHOLDS,
 } from "./trust-algebra.js";
 
