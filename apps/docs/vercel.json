@@ -1,0 +1,3 @@
+{
+  "ignoreCommand": "npx -y turbo-ignore @motebit/docs"
+}
