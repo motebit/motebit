@@ -1054,8 +1054,38 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (!nonce) throw new HTTPException(400, { message: "nonce is required" });
 
     checkFederationEnabled();
-    checkPeerPolicy(relay_id);
     checkVersionCompatibility(spec_version);
+
+    // Self-propose: a relay signing a (relay_id, nonce) tuple as itself.
+    // Used by the CLI's `motebit federation peer` client and by
+    // federation-e2e tests to extract a confirm-verifiable signature
+    // without a third party. No-op on storage — there is no protocol
+    // path that confirms a self-peer, so a stored row is inert junk
+    // that would 409 every subsequent self-propose against the same DB.
+    // Skips peer-policy / peer-limit / max-peers / 409-existing —
+    // none of those quotas mean anything for self. The signature is
+    // bound to relay_id:nonce:SUITE exactly as a non-self propose,
+    // so this is not a new oracle: the existing handler already signs
+    // any (relay_id, nonce) sent to it; we just no longer persist the
+    // side effect when relay_id is our own id.
+    if (relay_id === relayIdentity.relayMotebitId) {
+      const ourNonceBytes = new Uint8Array(32);
+      crypto.getRandomValues(ourNonceBytes);
+      const ourNonce = bytesToHex(ourNonceBytes);
+      const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}:${FEDERATION_SUITE}`);
+      const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
+      return c.json({
+        relay_id: relayIdentity.relayMotebitId,
+        public_key: relayIdentity.publicKeyHex,
+        endpoint_url: federationConfig?.endpointUrl ?? "self",
+        display_name: federationConfig?.displayName ?? null,
+        nonce: ourNonce,
+        challenge: bytesToHex(challengeSig),
+        spec_version: RELAY_SPEC_VERSION,
+      });
+    }
+
+    checkPeerPolicy(relay_id);
     checkPeerLimit(relay_id);
     checkMaxPeers();
 

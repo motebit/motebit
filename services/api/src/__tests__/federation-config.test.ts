@@ -287,4 +287,103 @@ describe("Federation configuration enforcement", () => {
       expect(body.agents).toEqual([]);
     });
   });
+
+  // ── Self-propose: signature oracle, no storage ──
+  //
+  // The `motebit federation peer` CLI client extracts each relay's
+  // signature over `relay_id:nonce:SUITE` by self-proposing — the
+  // only proposer-id whose challenge will satisfy the peer's
+  // confirm endpoint. The propose handler returns the signature but
+  // MUST NOT persist a row keyed on the relay's own id, otherwise
+  // the second handshake against the same DB would 409. This block
+  // pins that contract.
+
+  describe("self-propose (relay_id == own id)", () => {
+    let relay: SyncRelay;
+
+    beforeEach(async () => {
+      relay = await createRelay({
+        endpointUrl: "http://self.test:3000",
+        enabled: true,
+      });
+    });
+
+    it("returns 200 with a fresh nonce + challenge signed over the requested nonce", async () => {
+      const ownId = relay.relayIdentity.relayMotebitId;
+      const ownPk = relay.relayIdentity.publicKeyHex;
+      const requestedNonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+
+      const res = await relay.app.request("/federation/v1/peer/propose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          relay_id: ownId,
+          public_key: ownPk,
+          endpoint_url: "http://self.test:3000",
+          nonce: requestedNonce,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        relay_id: string;
+        public_key: string;
+        nonce: string;
+        challenge: string;
+      };
+      expect(body.relay_id).toBe(ownId);
+      expect(body.public_key).toBe(ownPk);
+      expect(body.nonce).not.toBe(requestedNonce); // server generates its own
+      expect(body.challenge).toMatch(/^[0-9a-f]+$/);
+    });
+
+    it("does NOT persist a relay_peers row keyed on the relay's own id", async () => {
+      const ownId = relay.relayIdentity.relayMotebitId;
+      await relay.app.request("/federation/v1/peer/propose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          relay_id: ownId,
+          public_key: relay.relayIdentity.publicKeyHex,
+          endpoint_url: "http://self.test:3000",
+          nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
+        }),
+      });
+
+      const row = relay.moteDb.db
+        .prepare("SELECT peer_relay_id, state FROM relay_peers WHERE peer_relay_id = ?")
+        .get(ownId);
+      expect(row).toBeUndefined();
+    });
+
+    it("is idempotent: repeated self-propose succeeds (no 409)", async () => {
+      const ownId = relay.relayIdentity.relayMotebitId;
+      const ownPk = relay.relayIdentity.publicKeyHex;
+
+      for (let i = 0; i < 3; i++) {
+        const res = await relay.app.request("/federation/v1/peer/propose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            relay_id: ownId,
+            public_key: ownPk,
+            endpoint_url: "http://self.test:3000",
+            nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
+          }),
+        });
+        expect(res.status).toBe(200);
+      }
+    });
+
+    it("non-self propose still creates a pending peer row (regression)", async () => {
+      const peerId = "peer-not-self";
+      const res = await proposePeer(relay, peerId);
+      expect(res.status).toBe(200);
+
+      const row = relay.moteDb.db
+        .prepare("SELECT peer_relay_id, state FROM relay_peers WHERE peer_relay_id = ?")
+        .get(peerId) as { peer_relay_id: string; state: string } | undefined;
+      expect(row?.state).toBe("pending");
+    });
+  });
 });
