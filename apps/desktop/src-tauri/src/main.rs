@@ -863,6 +863,47 @@ fn goals_outcomes(
     Ok(results)
 }
 
+// === fetch_url: native HTTP fetch for read_url ===
+//
+// Webview fetch() hits WKWebView's ATS/CORS restrictions and fails with
+// the opaque "Load failed" for any external URL. Rust-side reqwest has
+// none of that — the read_url tool routes through this command so
+// read-the-web actually works in the Tauri surface (and in production).
+
+#[derive(serde::Serialize)]
+struct FetchUrlResponse {
+    status: u16,
+    content_type: String,
+    body: String,
+}
+
+#[tauri::command]
+async fn fetch_url(url: String) -> Result<FetchUrlResponse, String> {
+    use std::time::Duration;
+    let client = reqwest::Client::builder()
+        .user_agent("Motebit/0.1")
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {}", e))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Fetch failed: {}", e))?;
+    let status = resp.status().as_u16();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Read body failed: {}", e))?;
+    Ok(FetchUrlResponse { status, content_type, body })
+}
+
 // === TTS Command (OpenAI API key stays in keyring, never in webview) ===
 
 #[tauri::command]
@@ -987,6 +1028,7 @@ fn main() {
             goals_toggle,
             goals_delete,
             goals_outcomes,
+            fetch_url,
             tts_openai_speech,
             computer_query_display,
             computer_execute,

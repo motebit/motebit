@@ -30,9 +30,14 @@ import {
   type ReflectionToolResult,
 } from "./builtins/self-reflect.js";
 import type { SearchProvider } from "./search-provider.js";
+import type { ReadUrlFetcher } from "./builtins/read-url.js";
 
 export { webSearchDefinition, createWebSearchHandler } from "./builtins/web-search.js";
-export { readUrlDefinition, createReadUrlHandler } from "./builtins/read-url.js";
+export {
+  readUrlDefinition,
+  createReadUrlHandler,
+  type ReadUrlFetcher,
+} from "./builtins/read-url.js";
 export {
   recallMemoriesDefinition,
   createRecallMemoriesHandler,
@@ -78,6 +83,12 @@ export type { ToolDefinition, ToolResult, ToolHandler, ToolRegistry } from "@mot
 export interface BrowserSafeBuiltinOptions {
   searchProvider?: SearchProvider;
   readUrlProxy?: string;
+  /**
+   * Replaces the webview's `fetch()` with a surface-native fetcher —
+   * desktop (Tauri) routes through Rust/reqwest to escape WKWebView's
+   * ATS/CORS gate. `readUrlProxy` still takes precedence when set.
+   */
+  readUrlFetcher?: ReadUrlFetcher;
   memorySearchFn?: (
     query: string,
     limit: number,
@@ -124,7 +135,13 @@ export function registerBrowserSafeBuiltins(
   registry.register(webSearchDefinition, createWebSearchHandler(options.searchProvider));
   registry.register(
     readUrlDefinition,
-    createReadUrlHandler(options.readUrlProxy ? { proxyUrl: options.readUrlProxy } : undefined),
+    createReadUrlHandler(
+      options.readUrlProxy
+        ? { proxyUrl: options.readUrlProxy }
+        : options.readUrlFetcher
+          ? { fetcher: options.readUrlFetcher }
+          : undefined,
+    ),
   );
 
   if (options.memorySearchFn) {

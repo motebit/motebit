@@ -1175,6 +1175,54 @@ describe("read_url proxy", () => {
     expect(result.ok).toBe(true);
     expect(result.data).toBe("");
   });
+});
+
+// ---------- read_url fetcher injection ----------
+
+describe("read_url fetcher", () => {
+  it("calls the injected fetcher instead of global fetch (HTML stripping preserved)", async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      status: 200,
+      contentType: "text/html",
+      body: "<html><body><p>Hello</p><script>alert(1)</script></body></html>",
+    });
+
+    const handler = createReadUrlHandler({ fetcher });
+    const result = await handler({ url: "https://target.example" });
+
+    expect(fetcher).toHaveBeenCalledWith("https://target.example");
+    expect(result.ok).toBe(true);
+    expect(result.data as string).toContain("Hello");
+    expect(result.data as string).not.toContain("<script>");
+  });
+
+  it("injected fetcher with JSON content re-parses and pretty-prints", async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      status: 200,
+      contentType: "application/json",
+      body: '{"key":"value"}',
+    });
+
+    const handler = createReadUrlHandler({ fetcher });
+    const result = await handler({ url: "https://api.example" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data as string).toContain('"key": "value"');
+  });
+
+  it("injected fetcher HTTP error surfaces as tool error", async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      status: 500,
+      contentType: "",
+      body: "",
+    });
+
+    const handler = createReadUrlHandler({ fetcher });
+    const result = await handler({ url: "https://bad.example" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("HTTP 500");
+  });
 
   it("returns error on fetch exception", async () => {
     globalThis.fetch = vi

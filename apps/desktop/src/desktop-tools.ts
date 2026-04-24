@@ -31,7 +31,7 @@ import {
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
 } from "@motebit/tools/web-safe";
-import type { SearchProvider } from "@motebit/tools/web-safe";
+import type { SearchProvider, ReadUrlFetcher } from "@motebit/tools/web-safe";
 import {
   tauriReadFileDefinition,
   createTauriReadFileHandler,
@@ -59,8 +59,23 @@ export function registerDesktopTools(
     ]);
   }
 
+  // When running in Tauri, route read_url through Rust (reqwest) so
+  // WKWebView's ATS/CORS gate doesn't turn every external URL into an
+  // opaque "Load failed". Outside Tauri (pure web dev), fall through
+  // to the default webview fetch.
+  const readUrlFetcher: ReadUrlFetcher | undefined = invoke
+    ? async (url) => {
+        const res = await invoke<{ status: number; content_type: string; body: string }>(
+          "fetch_url",
+          { url },
+        );
+        return { status: res.status, contentType: res.content_type, body: res.body };
+      }
+    : undefined;
+
   registerBrowserSafeBuiltins(registry, {
     searchProvider,
+    readUrlFetcher,
     memorySearchFn: async (query, limit) => {
       const queryEmbedding = await embedText(query);
       const nodes = await runtime.memory.recallRelevant(queryEmbedding, { limit });
