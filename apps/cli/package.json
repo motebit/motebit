@@ -49,6 +49,7 @@
     "build-schema": "tsx scripts/build-schema.ts",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
+    "test:dogfood": "scripts/federation-dogfood.sh",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "lint:pack": "publint --strict",
