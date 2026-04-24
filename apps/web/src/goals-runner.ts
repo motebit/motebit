@@ -102,8 +102,7 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
         };
       }
 
-      // Recurring goals use single-turn execution. Workstation is the
-      // only surface that creates these today.
+      // Recurring goals use single-turn execution.
       let accumulated = "";
       try {
         for await (const chunk of app.sendMessageStreaming(goal.prompt, undefined, {

@@ -158,37 +158,6 @@ export interface RenderAdapter {
    * touching the motebit's work underneath.
    */
   setSlabVisible?(visible: boolean): void;
-
-  // === Workstation Plane (transitional — pre-slab) ===
-  //
-  // These methods are the pre-slab DOM-panel mount API that the
-  // Phase-1 Workstation panel (apps/{desktop,web}/src/ui/workstation-
-  // panel.ts) uses to project its receipt log onto the liquid-glass
-  // plane. They exist while the slab scene primitive is being restored
-  // from the tagged exploration. Once the slab's `addSlabItem` family
-  // is live on a surface, that surface's Workstation panel can migrate
-  // and this transitional API retires on that surface. See
-  // docs/doctrine/motebit-computer.md for the endgame shape.
-
-  /**
-   * Mount a caller-owned HTML element as the workstation plane's
-   * stage content. Replaces whatever was there; `null` clears.
-   */
-  setWorkstationStageChild?(el: HTMLElement | null): void;
-  /**
-   * Toggle the workstation plane's visibility. The launcher button
-   * and Option+W hotkey route through here. When `false`, the plane
-   * fades out and its DOM stops capturing pointer events.
-   */
-  setWorkstationVisible?(visible: boolean): void;
-  /**
-   * Signal that a tool is in-flight — briefly brightens the plane
-   * with soul-color warmth so the user sees the motebit is working
-   * right now. The pulse decays on its own; callers just fire it
-   * when activity arrives. Multiple calls in quick succession keep
-   * the plane lit.
-   */
-  pulseWorkstationActivity?(): void;
 }
 
 // === Slab ("Motebit Computer") — scene primitive types ===

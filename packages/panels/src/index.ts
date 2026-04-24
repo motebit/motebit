@@ -72,13 +72,3 @@ export {
 } from "./goals/runner";
 
 export { formatCountdownUntil } from "./goals/format";
-
-export {
-  createWorkstationController,
-  type WorkstationController,
-  type WorkstationControllerOptions,
-  type WorkstationFetchAdapter,
-  type WorkstationState,
-  type ToolInvocationReceiptLike,
-  type ToolActivityEvent,
-} from "./workstation/controller";

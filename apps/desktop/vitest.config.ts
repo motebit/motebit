@@ -48,7 +48,6 @@ export default defineMotebitTest({
     "src/ui/sovereign.ts",
     "src/ui/theme.ts",
     "src/ui/voice.ts",
-    "src/ui/workstation-panel.ts",
   ],
   thresholds: { statements: 67, branches: 83, functions: 62, lines: 67 },
 });

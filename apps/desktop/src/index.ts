@@ -453,16 +453,16 @@ export class DesktopApp {
   });
   private _proxySession: ProxySession | null = null;
   private _proxyConfig: ProxyProviderConfig | null = null;
-  // Workstation receipt bus. Same shape as WebApp's — the runtime's
-  // onToolInvocation config fires into this set; the workstation
-  // panel's adapter subscribes. A Set so multiple observers can share
-  // the stream without stomping each other.
+  // Tool-invocation bus. Same shape as WebApp's — the runtime's
+  // onToolInvocation config fires into this set; consumers (panels,
+  // telemetry) subscribe. A Set so multiple observers can share the
+  // stream without stomping each other.
   private _toolInvocationListeners = new Set<
     (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void
   >();
-  // Parallel activity bus — raw args/result for the virtual-browser
-  // pane. Subscribers must not retain the payload (per the runtime's
-  // onToolActivity contract).
+  // Parallel activity bus — raw args/result feeding slab-item
+  // lifecycle via the projection wrapper. Subscribers must not retain
+  // the payload (per the runtime's onToolActivity contract).
   private _toolActivityListeners = new Set<
     (event: import("@motebit/runtime").ToolActivityEvent) => void
   >();
@@ -574,12 +574,13 @@ export class DesktopApp {
   }
 
   /** Expose the render adapter so UI modules can drive scene primitives
-   *  directly (workstation plane, artifact manager). */
+   *  directly (slab, artifact manager). */
   getRenderer(): ThreeJSAdapter {
     return this.renderer;
   }
 
-  /** Workstation receipt-stream subscribe. Same shape as WebApp. */
+  /** Tool-invocation bus — signed `ToolInvocationReceipt` stream.
+   *  Same shape as WebApp. */
   subscribeToolInvocations(
     listener: (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void,
   ): () => void {
@@ -589,9 +590,9 @@ export class DesktopApp {
     };
   }
 
-  /** Workstation activity-stream subscribe — raw args/result for the
-   *  live browser-pane renderer. Subscribers must not persist the
-   *  payload (per the runtime's onToolActivity contract). */
+  /** Tool-activity bus — raw args/result, feeds slab-item lifecycle.
+   *  Subscribers must not persist the payload (per the runtime's
+   *  onToolActivity contract). */
   subscribeToolActivity(
     listener: (event: import("@motebit/runtime").ToolActivityEvent) => void,
   ): () => void {
@@ -601,9 +602,9 @@ export class DesktopApp {
     };
   }
 
-  /** Deterministic local-tool path for surface affordances (the
-   *  workstation URL bar routes through here). Same contract as the
-   *  WebApp equivalent. */
+  /** Deterministic local-tool path for surface affordances. Signed
+   *  audit trail tags `invocation_origin` to separate user-driven
+   *  from model-driven calls. Same contract as the WebApp equivalent. */
   async invokeLocalTool(
     name: string,
     args: Record<string, unknown>,
@@ -921,7 +922,9 @@ export class DesktopApp {
         },
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
-        // Workstation receipt bus — same fan-out pattern as WebApp.
+        // Tool-invocation bus — signed receipts fan out to any subscriber
+        // (panels, artifact views). Tool-activity events feed slab-item
+        // lifecycle via the projection wrapper in MotebitRuntime.
         onToolInvocation: (receipt) => {
           for (const listener of this._toolInvocationListeners) {
             try {
@@ -932,7 +935,6 @@ export class DesktopApp {
           }
         },
         onToolActivity: (event) => {
-          this.renderer.pulseWorkstationActivity?.();
           for (const listener of this._toolActivityListeners) {
             try {
               listener(event);

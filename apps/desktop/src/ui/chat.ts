@@ -664,7 +664,6 @@ export interface ChatCallbacks {
   openSettings(): void;
   openConversationsPanel(): void;
   openGoalsPanel(): void;
-  openWorkstationPanel(): void;
   openMemoryPanel(nodeId?: string, auditFlags?: Map<string, string>): void;
   speakResponse(text: string): void;
   pushTTSChunk(delta: string): void;
@@ -863,9 +862,6 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         return;
       case "goals":
         callbacks.openGoalsPanel();
-        return;
-      case "workstation":
-        callbacks.openWorkstationPanel();
         return;
       case "settings":
         callbacks.openSettings();

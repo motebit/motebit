@@ -162,23 +162,21 @@ export class WebApp {
     smile_curvature: 0,
     speaking_activity: 0,
   };
-  // Workstation receipt bus. The runtime's `onToolInvocation` config
+  // Tool-invocation bus. The runtime's `onToolInvocation` config
   // fires into this set; `subscribeToolInvocations` adds late-binding
-  // listeners (e.g. the workstation panel adapter). A Set rather than
-  // a single callback so multiple panels / devtools / telemetry sinks
-  // can observe the same stream without stomping each other. Errors
-  // in individual listeners are isolated — one subscriber's fault
-  // must not starve the others.
+  // listeners (panels, telemetry, devtools). A Set rather than a
+  // single callback so multiple observers can share the stream
+  // without stomping each other. Errors in individual listeners are
+  // isolated — one subscriber's fault must not starve the others.
   private _toolInvocationListeners = new Set<
     (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void
   >();
   // Parallel activity bus — delivers the ephemeral raw args/result
-  // alongside the signed receipt. The workstation's virtual-browser
-  // pane reads `args.url` + the fetched content from `event.result`
-  // to render pages live. Subscribers must not retain the payload
-  // (per the runtime's `onToolActivity` contract — args/result may
-  // contain sensitive content that's intentionally not in the signed
-  // receipt).
+  // alongside the signed receipt. Feeds slab-item lifecycle via the
+  // projection wrapper in MotebitRuntime. Subscribers must not retain
+  // the payload (per the runtime's `onToolActivity` contract — args/
+  // result may contain sensitive content that's intentionally not in
+  // the signed receipt).
   private _toolActivityListeners = new Set<
     (event: import("@motebit/runtime").ToolActivityEvent) => void
   >();
@@ -362,9 +360,9 @@ export class WebApp {
         proactiveQuietWindowMs: 90_000,
         proactiveAction: proactive.enabled ? "consolidate" : "none",
         proactiveAnchor,
-        // Workstation panel substrate: the runtime signs a
+        // Tool-invocation bus: the runtime signs a
         // ToolInvocationReceipt per tool call; we fan it out to every
-        // subscriber on the web app's bus. The panel's adapter joins
+        // subscriber. Consumers (panels, telemetry, audit UIs) join
         // the bus via `subscribeToolInvocations` after bootstrap.
         onToolInvocation: (receipt) => {
           for (const listener of this._toolInvocationListeners) {
@@ -377,12 +375,11 @@ export class WebApp {
             }
           }
         },
-        // Parallel activity bus — raw args/result for the live
-        // browser-pane renderer. Same fan-out + isolation as the
-        // receipt bus. Also pulses the workstation plane's warmth
-        // so the user sees the motebit is working in real time.
+        // Parallel activity bus — raw args/result for slab-item
+        // lifecycle via the projection wrapper, and any surface
+        // subscriber wiring live UI off tool activity. Same fan-out +
+        // isolation as the receipt bus.
         onToolActivity: (event) => {
-          this.renderer.pulseWorkstationActivity?.();
           for (const listener of this._toolActivityListeners) {
             try {
               listener(event);
@@ -778,13 +775,13 @@ export class WebApp {
     }
   }
 
-  // === Workstation receipt bus ===
+  // === Tool-invocation bus ===
 
   /**
    * Subscribe to signed `ToolInvocationReceipt`s as the runtime emits
-   * them. Returns an unsubscribe thunk. Consumers: the workstation
-   * panel's adapter in the primary path; devtools / telemetry / future
-   * audit UIs can join the same stream without stepping on each other.
+   * them. Returns an unsubscribe thunk. Consumers: panels, devtools,
+   * telemetry, future audit UIs — all can join the same stream
+   * without stepping on each other.
    *
    * Fires once per matched tool_call calling→done pair, after the
    * runtime has composed and signed the receipt. Listener faults are
@@ -804,8 +801,8 @@ export class WebApp {
    * Subscribe to the ephemeral tool-activity stream — the raw args +
    * result bytes the receipt's hashes commit to. Fires at the same
    * moment as `subscribeToolInvocations`, so consumers that need both
-   * (the workstation's browser pane reads `event.args.url` to render
-   * the page the motebit is reading) receive them in lockstep.
+   * (e.g. slab-item projection reads `event.args` + `event.result`
+   * to paint live content onto the plane) receive them in lockstep.
    *
    * Contract: subscribers must not retain the payload across calls.
    * Activity is for live rendering, not persistence — the signed
@@ -822,18 +819,17 @@ export class WebApp {
 
   /**
    * Expose the render adapter so surface modules that need to drive
-   * scene primitives directly (workstation plane, artifact manager)
-   * can reach them without holding a reference through every seam.
-   * Returns the concrete `ThreeJSAdapter` the web app instantiates.
+   * scene primitives directly (slab, artifact manager) can reach
+   * them without holding a reference through every seam. Returns
+   * the concrete `ThreeJSAdapter` the web app instantiates.
    */
   getRenderer(): ThreeJSAdapter {
     return this.renderer;
   }
 
   /**
-   * Access to the goals runner — the workstation panel's scheduled
-   * section AND the Goals panel both read / mutate via this. Null if
-   * bootstrap hasn't finished yet.
+   * Access to the goals runner — the Goals panel reads / mutates via
+   * this. Null if bootstrap hasn't finished yet.
    */
   getGoalsRunner(): GoalsRunner | null {
     return this._goalsRunner;
@@ -841,13 +837,10 @@ export class WebApp {
 
   /**
    * Deterministic path for surface affordances to fire a local tool.
-   * The Workstation URL bar uses this: user types a URL, presses
-   * enter, the motebit's own `read_url` tool runs with
-   * `invocation_origin: "user-tap"` so the signed audit trail
+   * `invocation_origin: "user-tap"` in the signed audit trail
    * discriminates user-driven from model-driven calls. The activity
-   * bus + receipt bus fan out as usual, so the Workstation pane's
-   * browser + receipt log update from the same pipeline the AI
-   * loop's tool calls use.
+   * bus + receipt bus fan out as usual, so subscribers (slab, panels)
+   * update from the same pipeline the AI loop's tool calls use.
    */
   async invokeLocalTool(
     name: string,

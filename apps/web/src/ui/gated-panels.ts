@@ -3,7 +3,7 @@
 // Sync popup is functional (connects to relay via signed tokens).
 // Goals panel is functional — reads/writes the shared GoalsRunner in
 // @motebit/panels, filtered to one-shot goals (mode: "once"). Recurring
-// goals render in the Workstation plane instead.
+// goals execute via GoalsRunner and surface through the slab.
 
 import type { WebContext } from "../types";
 import type { WebSyncStatus } from "../web-app";

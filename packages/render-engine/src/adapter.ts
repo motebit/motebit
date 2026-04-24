@@ -13,7 +13,6 @@ import type {
   SlabItemHandle,
 } from "./spec.js";
 import { ArtifactManager } from "./artifacts.js";
-import { WorkstationPlane } from "./workstation-plane.js";
 import { SlabManager } from "./slab.js";
 import {
   createCreature,
@@ -84,7 +83,6 @@ export class ThreeJSAdapter implements RenderAdapter {
 
   private controls: OrbitControls | null = null;
   private artifactManager: ArtifactManager | null = null;
-  private workstationPlane: WorkstationPlane | null = null;
   private slab: SlabManager | null = null;
 
   init(target: unknown): Promise<void> {
@@ -122,12 +120,6 @@ export class ThreeJSAdapter implements RenderAdapter {
     const container = canvas.parentElement ?? document.body;
     if (this.creatureRefs) {
       this.artifactManager = new ArtifactManager(this.creatureRefs.group, container);
-      // Liquid-glass workstation plane floats to the creature's right,
-      // hung off the creature group so it inherits world transform
-      // (drift, bob, sag). Hosts the workstation panel DOM via its
-      // single-stage CSS2D anchor. Hidden by default — revealed by
-      // the launcher button / Option+W hotkey.
-      this.workstationPlane = new WorkstationPlane(this.creatureRefs.group, container);
       // Slab — the "Motebit Computer" (docs/doctrine/motebit-computer.md).
       // Hangs off the creature group; detachHandler routes pinched items
       // into the existing artifact scene so detach → resting artifact
@@ -170,10 +162,6 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.artifactManager.update(frame.delta_time);
       this.artifactManager.render(this.scene, this.camera);
     }
-    if (this.workstationPlane) {
-      this.workstationPlane.update(frame.time, frame.delta_time);
-      this.workstationPlane.render(this.scene, this.camera);
-    }
     if (this.slab) {
       this.slab.update(frame.time, frame.delta_time);
       this.slab.render(this.scene, this.camera);
@@ -193,7 +181,6 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.renderer.setSize(width, height, false);
     }
     this.artifactManager?.resize(width, height);
-    this.workstationPlane?.resize(width, height);
     this.slab?.resize(width, height);
   }
 
@@ -210,20 +197,6 @@ export class ThreeJSAdapter implements RenderAdapter {
 
   clearArtifacts(): void {
     this.artifactManager?.clear();
-  }
-
-  // === Workstation Plane ===
-
-  setWorkstationStageChild(el: HTMLElement | null): void {
-    this.workstationPlane?.setStageChild(el);
-  }
-
-  setWorkstationVisible(visible: boolean): void {
-    this.workstationPlane?.setUserVisible(visible);
-  }
-
-  pulseWorkstationActivity(): void {
-    this.workstationPlane?.pulseActivity();
   }
 
   // === Slab ("Motebit Computer") — docs/doctrine/motebit-computer.md ===
@@ -289,10 +262,7 @@ export class ThreeJSAdapter implements RenderAdapter {
       this.creatureRefs.bodyMaterial.emissiveIntensity = color.glowIntensity ?? 0.0;
       this.creatureRefs.bodyMaterial.needsUpdate = true;
     }
-    // Mirror the soul color onto the workstation plane so the plane
-    // and the creature read as one body when the plane is open.
-    this.workstationPlane?.setInteriorColor(color);
-    // Same for the slab — one body, one soul, across primary surfaces.
+    // Mirror the soul color onto the slab — one body, one soul.
     this.slab?.setInteriorColor(color);
   }
 
@@ -339,8 +309,6 @@ export class ThreeJSAdapter implements RenderAdapter {
 
     this.artifactManager?.dispose();
     this.artifactManager = null;
-    this.workstationPlane?.dispose();
-    this.workstationPlane = null;
     this.slab?.dispose();
     this.slab = null;
 

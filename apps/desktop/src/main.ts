@@ -27,7 +27,6 @@ import { initColorPicker } from "./ui/color-picker";
 import { initConversations } from "./ui/conversations";
 import { initAgents } from "./ui/agents";
 import { initGoals } from "./ui/goals";
-import { initWorkstationPanel } from "./ui/workstation-panel";
 import { initMemory } from "./ui/memory";
 import { initPairing } from "./ui/pairing";
 import { initVoice } from "./ui/voice";
@@ -79,7 +78,6 @@ const goals = initGoals(ctx);
 const memory = initMemory(ctx);
 const pairing = initPairing(ctx);
 const sovereign = initSovereign(ctx);
-const workstationPanel = initWorkstationPanel(ctx);
 
 const voice = initVoice(ctx, {
   onTranscriptReady: () => chat.handleSend(),
@@ -90,7 +88,6 @@ const chat = initChat(ctx, {
   openSettings: () => settings.open(),
   openConversationsPanel: () => conversations.open(),
   openGoalsPanel: () => goals.open(),
-  openWorkstationPanel: () => workstationPanel.open(),
   openMemoryPanel: (nodeId, auditFlags) => memory.open(nodeId, auditFlags),
   speakResponse: (text) => voice.speakAssistantResponse(text),
   pushTTSChunk: (delta) => voice.pushTTSChunk(delta),
@@ -153,8 +150,6 @@ document.addEventListener("keydown", (e) => {
       settings.closeRotateKeyDialog();
     } else if (settings.isPinDialogOpen()) {
       settings.closePinDialog();
-    } else if (workstationPanel.isOpen()) {
-      workstationPanel.close();
     } else if (agentsPanel.classList.contains("open")) {
       agents.close();
     } else if (sovereignPanel.classList.contains("open")) {
@@ -168,13 +163,6 @@ document.addEventListener("keydown", (e) => {
     } else if (settingsModal.classList.contains("open")) {
       settings.close();
     }
-  }
-  // Workstation toggle: Option+W / Alt+W. Mirrors the web surface
-  // shortcut (`e.code === "KeyW"` avoids the macOS `Option+W → ∑`
-  // remap that would silently break matching on `e.key`).
-  if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyW") {
-    e.preventDefault();
-    workstationPanel.toggle();
   }
 });
 
