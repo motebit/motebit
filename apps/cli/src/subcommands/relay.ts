@@ -63,11 +63,10 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
 import { serve } from "@hono/node-server";
 import { createSyncRelay, type SyncRelayConfig } from "@motebit/api";
 import type { CliConfig } from "../args.js";
+import { RELAY_DIR, RELAY_DB_PATH } from "../config.js";
 import { promptPassphrase } from "../identity.js";
 import { bold, dim, cyan, success } from "../colors.js";
 
@@ -132,18 +131,19 @@ export function isTestnetNetwork(network: string): boolean {
 }
 
 /**
- * Resolve the relay DB path — flag > env > `~/.motebit/relay/relay.db`.
- * Creates the parent directory if missing. Mirrors
- * `runtime-factory.getDbPath` but in a relay-specific subdir so the
- * relay's state does not collide with the CLI-agent's own DB.
+ * Resolve the relay DB path — flag > env > `RELAY_DB_PATH`
+ * (`~/.motebit/relay/relay.db`, derived from `CONFIG_DIR` in
+ * `../config.ts`). Creates the parent directory if missing.
+ * The default lives in `config.ts` alongside `CONFIG_DIR` /
+ * `CONFIG_PATH` so every `~/.motebit/*` path has one declaration site
+ * — `storage_key_conventions` applies.
  */
 export function resolveRelayDbPath(override: string | undefined): string {
   if (override != null && override !== "") return override;
   const envPath = process.env["MOTEBIT_RELAY_DB_PATH"];
   if (envPath != null && envPath !== "") return envPath;
-  const dir = path.join(os.homedir(), ".motebit", "relay");
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, "relay.db");
+  fs.mkdirSync(RELAY_DIR, { recursive: true });
+  return RELAY_DB_PATH;
 }
 
 async function resolveOptions(config: CliConfig): Promise<RelayCliOptions> {

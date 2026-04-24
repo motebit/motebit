@@ -17,6 +17,9 @@ export const VERSION: string =
   typeof __PKG_VERSION__ !== "undefined" ? __PKG_VERSION__ : "0.0.0-dev";
 export const CONFIG_DIR = path.join(os.homedir(), ".motebit");
 export const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
+/** Local-relay state lives in a subdir so `motebit relay up` cannot collide with the CLI-agent's own `motebit.db`. */
+export const RELAY_DIR = path.join(CONFIG_DIR, "relay");
+export const RELAY_DB_PATH = path.join(RELAY_DIR, "relay.db");
 
 export interface FullConfig {
   // Personality (existing)
