@@ -54,7 +54,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/panels-pattern.md`](docs/doctrine/panels-pattern.md) — four shapes for multi-surface panel state; what's shipped, what's evaluated, what's open
 - [`docs/doctrine/records-vs-acts.md`](docs/doctrine/records-vs-acts.md) — body shows acts; panels hold records; the category test before any new mount
 - [`docs/doctrine/goals-vs-tasks.md`](docs/doctrine/goals-vs-tasks.md) — goal = user-declared outcome; task = emergent plan step
-- [`docs/doctrine/workstation-viewport.md`](docs/doctrine/workstation-viewport.md) — workstation = viewport at surface's fidelity; computer use ⊇ browser ⊇ reader; per-surface map + governance invariants
+- [`docs/doctrine/workstation-viewport.md`](docs/doctrine/workstation-viewport.md) — workstation = shared act-space: motebit + user work the same surface; desktop = real machine, sandboxed surfaces = cloud browser; computer use ⊇ cloud browser ⊇ reader; receipts are the trust substrate, not the headline
 - [`docs/doctrine/coverage-graduation.md`](docs/doctrine/coverage-graduation.md) — money/identity packages below 80 carry a raise-by date; soft signal via `pnpm coverage-graduation`
 - [`docs/doctrine/proactive-interior.md`](docs/doctrine/proactive-interior.md) — presence mode + 4-phase consolidation cycle + fail-closed proactive tool scope; `runtime.consolidationCycle()` is the only loop
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out
