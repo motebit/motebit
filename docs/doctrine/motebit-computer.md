@@ -317,5 +317,5 @@ One type surface, one event stream, three renderers — following the existing p
 - [`records-vs-acts.md`](records-vs-acts.md) — the substrate categorization.
 - [`panels-pattern.md`](panels-pattern.md) — the cross-surface controller shape the slab extends to scene primitives.
 - [`surface-determinism.md`](surface-determinism.md) — affordances that trigger slab work must be deterministic.
-- `DROPLET.md` — the physics the slab inherits (Rayleigh–Plateau, surface tension, eigenmode breathing).
-- `THE_ACTOR_PRINCIPLE.md` — agents-to-agents shape that shows on the slab as delegation traffic.
+- [`DROPLET.md`](../../DROPLET.md) — the physics the slab inherits (Rayleigh–Plateau, surface tension, eigenmode breathing).
+- [`THE_ACTOR_PRINCIPLE.md`](../../THE_ACTOR_PRINCIPLE.md) — agents-to-agents shape that shows on the slab as delegation traffic.
