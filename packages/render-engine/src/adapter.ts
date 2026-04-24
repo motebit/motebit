@@ -9,6 +9,8 @@ import type {
   AudioReactivity,
   ArtifactSpec,
   ArtifactHandle,
+  SlabItemSpec,
+  SlabItemHandle,
 } from "./spec.js";
 import { ArtifactManager } from "./artifacts.js";
 import { WorkstationPlane } from "./workstation-plane.js";
@@ -208,6 +210,53 @@ export class ThreeJSAdapter implements RenderAdapter {
 
   pulseWorkstationActivity(): void {
     this.workstationPlane?.pulseActivity();
+  }
+
+  // === Slab ("Motebit Computer") — Phase-6 wiring pending ===
+  //
+  // The slab methods on RenderAdapter (addSlabItem, dissolveSlabItem,
+  // detachSlabItemAsArtifact, clearSlabItems) have their type declared
+  // in spec.ts and their semantic contract in docs/doctrine/motebit-
+  // computer.md. Phase 5c binds the `SlabController` to this adapter
+  // via `bindSlabControllerToRenderer(...)`; the bridge uses optional
+  // chaining (`renderer.addSlabItem?.(spec)`) so missing methods are
+  // safe no-ops.
+  //
+  // The stubs below exist so `ThreeJSAdapter` satisfies the bridge's
+  // `SlabRendererTarget` structural type without a cast. They will be
+  // replaced in Phase 6 with real implementations that mount
+  // CSS2DObjects on the `SlabManager`'s plane, trigger the ripple /
+  // pinch physics, and thread the artifact detach handoff through the
+  // scene graph. The SlabManager (packages/render-engine/src/slab.ts)
+  // already has the primitives; this adapter needs to construct one
+  // on init(), mount it next to the creature, and delegate these
+  // four methods to it.
+  //
+  // Leaving these as explicit stubs (not `undefined` or absent) marks
+  // the implementation target for the next pass and keeps type
+  // relationships honest. Each method is a narrow no-op today.
+
+  addSlabItem(_spec: SlabItemSpec): SlabItemHandle | undefined {
+    return undefined;
+  }
+
+  dissolveSlabItem(_id: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  detachSlabItemAsArtifact(
+    _id: string,
+    _artifact: ArtifactSpec,
+  ): Promise<ArtifactHandle | undefined> {
+    return Promise.resolve(undefined);
+  }
+
+  clearSlabItems(): void {
+    // Phase-6: SlabManager.clear() once the manager is wired
+  }
+
+  setSlabVisible(_visible: boolean): void {
+    // Phase-6: SlabManager visibility toggle once the manager is wired
   }
 
   setBackground(color: number | null): void {

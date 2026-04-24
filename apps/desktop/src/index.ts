@@ -10,8 +10,14 @@ import {
   ProxySession,
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
+  bindSlabControllerToRenderer,
 } from "@motebit/runtime";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
+import {
+  renderSlabItem,
+  updateSlabItem,
+  renderDetachArtifact as renderSlabDetachArtifact,
+} from "./ui/slab-items";
 import type {
   TurnResult,
   StorageAdapters,
@@ -388,6 +394,14 @@ export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
   private renderer: ThreeJSAdapter;
   /**
+   * Slab bridge unsub — set after the runtime is constructed and the
+   * slab controller is bound to the render adapter via
+   * `bindSlabControllerToRenderer(...)`. Called on `stop()` to drop
+   * the controller → renderer subscription so the runtime can be
+   * replaced without leaking handlers. Null before bind + after unsub.
+   */
+  private slabBridgeUnsub: (() => void) | null = null;
+  /**
    * The MCP manager owns the mcpAdapters / mcpConfigs / mcpToolCounts
    * maps + the connect / disconnect / tool-dispatch lifecycle. It reads
    * the runtime lazily via a getter so DesktopApp can swap the runtime
@@ -509,6 +523,10 @@ export class DesktopApp {
   }
 
   stop(): void {
+    if (this.slabBridgeUnsub) {
+      this.slabBridgeUnsub();
+      this.slabBridgeUnsub = null;
+    }
     this.runtime?.stop();
     this.renderer.dispose();
   }
@@ -952,6 +970,27 @@ export class DesktopApp {
       DeviceCapability.Keyring,
       DeviceCapability.Background,
     ]);
+
+    // Slab ("Motebit Computer") bridge — wire the runtime's slab
+    // controller to the render adapter so tool-call / stream /
+    // plan-step items emitted from the runtime project onto the
+    // liquid-glass plane. The per-kind renderers (`renderSlabItem`,
+    // `updateSlabItem`, `renderDetachArtifact`) live in
+    // ./ui/slab-items.ts — sibling-aligned with apps/web's copy.
+    // Doctrine: docs/doctrine/motebit-computer.md.
+    //
+    // Today the bridge listens; no items flow yet because the
+    // runtime's streaming paths don't call `runtime.slab.openItem`
+    // yet (Phase-5b next commit). Wiring is in place so adding the
+    // emissions in 5b is a single-point change, not a multi-surface
+    // rewire.
+    this.slabBridgeUnsub = bindSlabControllerToRenderer({
+      controller: this.runtime.slab,
+      renderer: this.renderer,
+      renderItem: renderSlabItem,
+      updateItem: updateSlabItem,
+      renderDetachArtifact: renderSlabDetachArtifact,
+    });
 
     // Create PlanEngine for multi-step goal execution
     if (config.isTauri && config.invoke) {

@@ -124,6 +124,7 @@ import { runHousekeeping } from "./housekeeping.js";
 import type { HousekeepingDeps } from "./housekeeping.js";
 import { PresenceController } from "./presence.js";
 import { ScopedToolRegistry } from "./scoped-tool-registry.js";
+import { createSlabController, type SlabController } from "./slab-controller.js";
 import {
   runConsolidationCycle,
   type ConsolidationCycleConfig,
@@ -231,6 +232,15 @@ export class MotebitRuntime {
   private scopedToolRegistry: ScopedToolRegistry;
   /** Operational mode state machine. Public so surfaces can subscribe. */
   readonly presence: PresenceController;
+  /**
+   * Slab controller — the "Motebit Computer" lifecycle orchestrator.
+   * Projects the runtime's stream / tool-call / plan-step events into
+   * typed `SlabItem*` lifecycle events the surface layer can diff and
+   * render. Public so the surface startup path can bind it to its
+   * render adapter via `bindSlabControllerToRenderer(...)`. See
+   * `docs/doctrine/motebit-computer.md`.
+   */
+  readonly slab: SlabController;
   /** Allowed proactive capability names. Empty by default — fail-closed
    *  sovereign default. User opts in explicitly via runtime config. */
   private _proactiveCapabilities: ReadonlySet<string>;
@@ -426,6 +436,13 @@ export class MotebitRuntime {
     });
     this._deferMemoryFormation = config.deferMemoryFormation ?? false;
     this.memoryFormation = createMemoryFormationQueue({ logger: this._logger });
+    // Slab ("Motebit Computer") lifecycle controller — see
+    // docs/doctrine/motebit-computer.md. Surfaces bind this to their
+    // render adapter via `bindSlabControllerToRenderer` at startup; the
+    // runtime's streaming/tool-call paths (Phase 5b, subsequent commit)
+    // project events onto it. Initialized here with the runtime's
+    // logger; no additional config today.
+    this.slab = createSlabController({ logger: this._logger });
     if (config.proactiveTickMs != null && config.proactiveTickMs > 0) {
       const tickMs = config.proactiveTickMs;
       const quietMs = config.proactiveQuietWindowMs ?? 60_000;
@@ -747,6 +764,7 @@ export class MotebitRuntime {
     void this.housekeeping();
     // Disconnect MCP servers in background
     void Promise.allSettled(this.mcpAdapters.map((a) => a.disconnect()));
+    this.slab.dispose();
     this.renderer.dispose();
     this.clearSigningKeys();
     this.running = false;
