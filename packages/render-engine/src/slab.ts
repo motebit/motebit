@@ -78,14 +78,18 @@ const SLAB_TILT_X = -0.22; // ~12.5° forward (radians)
 const SLAB_TILT_Y = -0.09; // ~5° yaw toward creature (radians) — doctrine
 
 /**
- * Workstation-scale plane — sized to host window-pane cards (~520×320
- * CSS px at the default camera) without visible empty margins around
- * the container. Aspect stays ~16:10 so the display reads as a screen
- * rather than a HUD strip. Doctrine: the plane is the display, not a
- * backdrop.
+ * Plane dimensions — sized to host window-pane cards (~520×334 CSS px
+ * at the default camera) without visible empty margins around the
+ * container. Aspect locked to the golden ratio (φ ≈ 1.618) per
+ * motebit-computer.md §"Visual properties (binding)" —
+ * `Aspect ratio: ~16:9 to golden-ratio (~1.618:1) — held-tablet
+ * feel, not wall-monitor.` Height is derived from width so the
+ * relationship is in code, not in two magic numbers that could
+ * drift.
  */
+const GOLDEN_RATIO = (1 + Math.sqrt(5)) / 2; // φ
 const SLAB_WIDTH = 0.54;
-const SLAB_HEIGHT = 0.34;
+const SLAB_HEIGHT = SLAB_WIDTH / GOLDEN_RATIO;
 
 /**
  * Sympathetic breathing amplitude factor. 0.3 of the creature's
