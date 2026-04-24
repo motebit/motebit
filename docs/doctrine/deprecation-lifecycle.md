@@ -126,9 +126,19 @@ The ~15 existing `@deprecated` markers across the codebase land in the grandfath
 
 Each marker gets rewritten to the four-field contract in a dedicated pass. No behavior change in the classification commit — only annotation fidelity.
 
-## Drift defense candidate
+## Drift defense
 
-A `check-deprecation-discipline.ts` drift gate could enforce the four-field contract: scan every `@deprecated` annotation, reject any that omits `since`, `removed in`, or a replacement pointer. Same shape as `check-changeset-discipline`. Add when the classification pass completes and the 15 markers are compliant.
+`check-deprecation-discipline.ts` (landed 2026-04-24, invariant #39) enforces the four-field contract mechanically. It scans every `.ts` / `.tsx` file under `packages/**`, `apps/**`, `services/**`, extracts the comment block surrounding each `@deprecated` token (walking both backward to the block opener and forward to the closer — motebit's convention places `Reason:` lines AFTER the annotation), and validates five rules:
+
+- `since <X.Y.Z>` present on the annotation line
+- `removed in <X.Y.Z>` present on the annotation line
+- `removed in` version strictly greater than the containing package's current version (a past-due sunset shipped unremoved is a broken promise)
+- replacement pointer recognizable by one of five hints (`Use {@link X}`, ``Use `X` instead``, `Pass a configured …`, `no replacement; rework the caller`)
+- `Reason:` block somewhere in the surrounding comment
+
+Baseline at landing: 19 sites across 8 packages, all passing. The effectiveness probe inserts a deliberately-incomplete `@deprecated` and confirms the gate exits non-zero with specific rule violations.
+
+Together with `check-changeset-discipline` (enforces `## Migration` sections on `major` bumps) and `check-api-surface` (enforces that public-API changes ship a pending changeset), the deprecation pipeline is now mechanically complete: four-field marker → major changeset with migration guide → removal PR that updates api-extractor baselines.
 
 ## Cross-references
 

@@ -49,6 +49,7 @@
     "check-gates-effective": "npx tsx scripts/check-gates-effective.ts",
     "check-api-surface": "npx tsx scripts/check-api-surface.ts",
     "check-changeset-discipline": "npx tsx scripts/check-changeset-discipline.ts",
+    "check-deprecation-discipline": "npx tsx scripts/check-deprecation-discipline.ts",
     "check-docs-tree": "npx tsx scripts/check-docs-tree.ts",
     "check-spec-permissive-boundary": "npx tsx scripts/check-spec-permissive-boundary.ts",
     "check-privacy-ring": "npx tsx scripts/check-privacy-ring.ts",

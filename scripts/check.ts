@@ -154,6 +154,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-changeset-discipline",
   },
   {
+    name: "check-deprecation-discipline",
+    defends:
+      "every `@deprecated` annotation carries the four-field contract (since, removed in, replacement, Reason:) and no `removed in` version is past-due (invariant #39, added 2026-04-24 — the gate candidate the deprecation-lifecycle doctrine named but hadn't shipped; locked in against 19 currently-passing sites)",
+    script: "check-deprecation-discipline",
+  },
+  {
     name: "check-api-surface",
     defends:
       "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",
