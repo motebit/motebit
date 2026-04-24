@@ -1,5 +1,33 @@
 # @motebit/core-identity
 
+## 0.1.18
+
+### Patch Changes
+
+- Updated dependencies [ceb00b2]
+- Updated dependencies [8cef783]
+- Updated dependencies [e897ab0]
+- Updated dependencies [1690469]
+- Updated dependencies [c64a2fb]
+- Updated dependencies [bd3f7a4]
+- Updated dependencies [54158b1]
+- Updated dependencies [009f56e]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [620394e]
+- Updated dependencies [4eb2ebc]
+- Updated dependencies [85579ac]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [54e5ca9]
+- Updated dependencies [3747b7a]
+- Updated dependencies [db5af58]
+- Updated dependencies [1e07df5]
+  - @motebit/protocol@1.0.0
+  - @motebit/encryption@0.2.0
+  - @motebit/event-log@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

@@ -2,7 +2,7 @@
   "name": "@motebit/vscode",
   "displayName": "Motebit",
   "description": "motebit.yaml validation, hover, and completion — backed by the `motebit lsp` language server that ships with the motebit CLI.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "BSL-1.1",
   "private": true,
   "publisher": "motebit",

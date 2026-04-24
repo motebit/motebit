@@ -1,6 +1,6 @@
 {
   "name": "@motebit/protocol",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "Motebit protocol — identity, receipts, credentials, delegation, settlement, and trust algebra for sovereign AI agents. Types, semirings, routing primitives. Apache-2.0, zero dependencies.",
   "type": "module",
   "main": "./dist/index.js",

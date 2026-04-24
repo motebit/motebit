@@ -1,5 +1,25 @@
 # @motebit/privacy-layer
 
+## 0.1.18
+
+### Patch Changes
+
+- Updated dependencies [699ba41]
+- Updated dependencies [1690469]
+- Updated dependencies [009f56e]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [85579ac]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [3747b7a]
+- Updated dependencies [1e07df5]
+  - @motebit/sdk@1.0.0
+  - @motebit/encryption@0.2.0
+  - @motebit/memory-graph@0.2.0
+  - @motebit/event-log@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

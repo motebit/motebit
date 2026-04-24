@@ -1,5 +1,29 @@
 # @motebit/mcp-client
 
+## 0.1.18
+
+### Patch Changes
+
+- Updated dependencies [699ba41]
+- Updated dependencies [e897ab0]
+- Updated dependencies [1690469]
+- Updated dependencies [bd3f7a4]
+- Updated dependencies [54158b1]
+- Updated dependencies [009f56e]
+- Updated dependencies [06b61e8]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [85579ac]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [3747b7a]
+- Updated dependencies [be2dba3]
+- Updated dependencies [1e07df5]
+  - @motebit/sdk@1.0.0
+  - @motebit/tools@0.2.0
+  - @motebit/encryption@0.2.0
+
 ## 0.1.17
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "Sign and verify every Motebit artifact — identity files, execution receipts, credentials, delegations, succession records, credential anchors. Ed25519 today, cryptosuite-agile for post-quantum tomorrow. Apache-2.0, zero monorepo dependencies.",
   "type": "module",
   "main": "./dist/index.js",
