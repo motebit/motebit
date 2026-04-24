@@ -506,18 +506,27 @@ export const relayMigrations: Migration[] = [
         "CREATE INDEX IF NOT EXISTS idx_relay_credentials_unanchored ON relay_credentials(issued_at, credential_id) WHERE anchor_batch_id IS NULL;",
       );
 
-      // ── Helper-owned tables: idempotent ALTERs for columns migrations added ──
+      // ── DO NOT REMOVE — helper-owned tables need these ALTERs ─────
       //
-      // `relay_federation_settlements` is created by `createFederationTables`
-      // BEFORE `runMigrations` fires (see `createSyncRelay` init order).
-      // v3 added these columns to it; the helper never declared them.
-      // PRAGMA-guarded ALTERs are the historical shape — safe to re-run.
+      // The two blocks below ALTER tables that are created by init helpers
+      // (`createFederationTables`, `createPairingTables`) BEFORE this
+      // migration fires. See `createSyncRelay` in index.ts — the helpers
+      // run at line ~332; `runMigrations` runs at line ~468. By the time
+      // we get here, `relay_federation_settlements` and `pairing_sessions`
+      // already exist but may be missing columns historical migrations
+      // v3 and v7 added.
       //
-      // v7 added columns to `pairing_sessions`, but `createPairingTables`
-      // already declares them. On fresh installs those ALTERs were no-ops;
-      // preserving them as belt-and-suspenders matches the historical chain
-      // and keeps the squash self-healing if an older helper variant ever
-      // lost the columns.
+      // If a future contributor sees "weird ALTER block at the end of a
+      // CREATE-TABLE-heavy migration" and deletes it: fresh installs lose
+      // `relay_federation_settlements.x402_tx_hash` and `x402_network`,
+      // and federation-level x402 settlement persistence silently drops
+      // those fields. The squash-equivalence test catches the drift
+      // (`__tests__/migrations-squash-equivalence.test.ts`) — trust the
+      // red, don't delete the ALTERs.
+      //
+      // If the helper ever learns to declare these columns itself, this
+      // block becomes a no-op via the PRAGMA guard and can be retired in
+      // a follow-up commit. Until then it is load-bearing.
       const fedCols = (
         db.prepare("PRAGMA table_info(relay_federation_settlements)").all() as {
           name: string;
