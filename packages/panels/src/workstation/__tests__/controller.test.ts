@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from "vitest";
 
 import {
   createWorkstationController,
-  type ToolActivityEvent,
   type ToolInvocationReceiptLike,
   type WorkstationFetchAdapter,
 } from "../controller";
@@ -33,27 +32,18 @@ function makeReceipt(
 
 function makeAdapter(opts: { withActivity?: boolean } = {}): WorkstationFetchAdapter & {
   fire(receipt: ToolInvocationReceiptLike): void;
-  fireActivity(event: ToolActivityEvent): void;
   unsubscribed: boolean;
-  activityUnsubscribed: boolean;
   listenerCount: number;
 } {
   const listeners = new Set<(r: ToolInvocationReceiptLike) => void>();
-  const activityListeners = new Set<(e: ToolActivityEvent) => void>();
   let unsubscribed = false;
-  let activityUnsubscribed = false;
   const base: WorkstationFetchAdapter & {
     fire(receipt: ToolInvocationReceiptLike): void;
-    fireActivity(event: ToolActivityEvent): void;
     unsubscribed: boolean;
-    activityUnsubscribed: boolean;
     listenerCount: number;
   } = {
     get unsubscribed() {
       return unsubscribed;
-    },
-    get activityUnsubscribed() {
-      return activityUnsubscribed;
     },
     get listenerCount() {
       return listeners.size;
@@ -68,33 +58,17 @@ function makeAdapter(opts: { withActivity?: boolean } = {}): WorkstationFetchAda
     fire(receipt) {
       for (const listener of listeners) listener(receipt);
     },
-    fireActivity(event) {
-      for (const listener of activityListeners) listener(event);
-    },
   };
   if (opts.withActivity !== false) {
-    base.subscribeToolActivity = (listener) => {
-      activityListeners.add(listener);
-      return () => {
-        activityListeners.delete(listener);
-        activityUnsubscribed = true;
-      };
+    // Activity subscription is still part of the adapter surface (Phase 2
+    // computer-use viewport will subscribe); the cleanup test below
+    // verifies the controller works whether or not the adapter supplies it.
+    base.subscribeToolActivity = () => () => {
+      // Noop unsubscribe — the receipt-log-only MVP controller does not
+      // consume activity events today.
     };
   }
   return base;
-}
-
-function makeActivity(overrides: Partial<ToolActivityEvent> = {}): ToolActivityEvent {
-  return {
-    invocation_id: `act-${Math.random().toString(36).slice(2, 8)}`,
-    task_id: "task-1",
-    tool_name: "read_url",
-    args: { url: "https://motebit.com" },
-    result: "page content here",
-    started_at: 1700000000000,
-    completed_at: 1700000001500,
-    ...overrides,
-  };
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -248,155 +222,6 @@ describe("createWorkstationController", () => {
     expect(controller.getState().receiptCount).toBe(1);
   });
 
-  // === Activity stream (virtual-browser pane) ===
-
-  it("state.currentPage starts null", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-    expect(controller.getState().currentPage).toBeNull();
-    controller.dispose();
-  });
-
-  it("populates currentPage when a read_url activity event arrives", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-
-    adapter.fireActivity(
-      makeActivity({
-        invocation_id: "act_1",
-        tool_name: "read_url",
-        args: { url: "https://motebit.com" },
-        result: "hello world",
-      }),
-    );
-
-    const page = controller.getState().currentPage;
-    expect(page).not.toBeNull();
-    expect(page!.url).toBe("https://motebit.com");
-    expect(page!.content).toBe("hello world");
-    expect(page!.invocation_id).toBe("act_1");
-    controller.dispose();
-  });
-
-  it("supersedes currentPage on a later page-fetch", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-
-    adapter.fireActivity(
-      makeActivity({ invocation_id: "a1", args: { url: "https://a.com" }, result: "A" }),
-    );
-    adapter.fireActivity(
-      makeActivity({ invocation_id: "a2", args: { url: "https://b.com" }, result: "B" }),
-    );
-
-    const page = controller.getState().currentPage;
-    expect(page!.url).toBe("https://b.com");
-    expect(page!.content).toBe("B");
-    expect(page!.invocation_id).toBe("a2");
-    controller.dispose();
-  });
-
-  it("accepts virtual_browser and browse_page as page-fetch tool names", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-
-    adapter.fireActivity(
-      makeActivity({
-        invocation_id: "vb",
-        tool_name: "virtual_browser",
-        args: { url: "https://vb.example" },
-        result: "vb content",
-      }),
-    );
-    expect(controller.getState().currentPage!.url).toBe("https://vb.example");
-
-    adapter.fireActivity(
-      makeActivity({
-        invocation_id: "bp",
-        tool_name: "browse_page",
-        args: { url: "https://bp.example" },
-        result: "bp content",
-      }),
-    );
-    expect(controller.getState().currentPage!.url).toBe("https://bp.example");
-    controller.dispose();
-  });
-
-  it("ignores activity events for non-page-fetch tools", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-
-    adapter.fireActivity(
-      makeActivity({
-        tool_name: "web_search",
-        args: { q: "motebit", url: "irrelevant" },
-        result: { hits: [] },
-      }),
-    );
-    expect(controller.getState().currentPage).toBeNull();
-
-    adapter.fireActivity(
-      makeActivity({ tool_name: "shell_exec", args: { cmd: "ls" }, result: "output" }),
-    );
-    expect(controller.getState().currentPage).toBeNull();
-    controller.dispose();
-  });
-
-  it("ignores read_url activity missing a url arg", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-
-    adapter.fireActivity(makeActivity({ tool_name: "read_url", args: {}, result: "something" }));
-    adapter.fireActivity(
-      makeActivity({ tool_name: "read_url", args: { url: "" }, result: "empty url" }),
-    );
-    adapter.fireActivity(
-      makeActivity({
-        tool_name: "read_url",
-        args: { url: 42 as unknown as string },
-        result: "non-string url",
-      }),
-    );
-    expect(controller.getState().currentPage).toBeNull();
-    controller.dispose();
-  });
-
-  it("coerces non-string result to JSON for content", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-
-    adapter.fireActivity(
-      makeActivity({
-        tool_name: "read_url",
-        args: { url: "https://obj.example" },
-        result: { title: "hi", body: "there" },
-      }),
-    );
-    const page = controller.getState().currentPage!;
-    expect(page.content).toBe('{"title":"hi","body":"there"}');
-    controller.dispose();
-  });
-
-  it("clearHistory does not blank currentPage", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-
-    adapter.fire(makeReceipt({ invocation_id: "tc_1" }));
-    adapter.fireActivity(makeActivity({ args: { url: "https://still.reading" }, result: "..." }));
-    expect(controller.getState().history).toHaveLength(1);
-    expect(controller.getState().currentPage).not.toBeNull();
-
-    controller.clearHistory();
-
-    // Audit history is cleared; the page the user is actively
-    // reading is preserved — clearing the log should not blank the
-    // browser pane.
-    expect(controller.getState().history).toEqual([]);
-    expect(controller.getState().currentPage).not.toBeNull();
-    expect(controller.getState().currentPage!.url).toBe("https://still.reading");
-    controller.dispose();
-  });
-
   it("works when the adapter omits subscribeToolActivity", () => {
     const adapter = makeAdapter({ withActivity: false });
     expect((adapter as WorkstationFetchAdapter).subscribeToolActivity).toBeUndefined();
@@ -404,19 +229,6 @@ describe("createWorkstationController", () => {
     const controller = createWorkstationController(adapter);
     adapter.fire(makeReceipt({ invocation_id: "tc_1" }));
     expect(controller.getState().history).toHaveLength(1);
-    expect(controller.getState().currentPage).toBeNull();
     controller.dispose();
-  });
-
-  it("unsubscribes from both channels on dispose", () => {
-    const adapter = makeAdapter();
-    const controller = createWorkstationController(adapter);
-
-    controller.dispose();
-    expect(adapter.unsubscribed).toBe(true);
-    expect(adapter.activityUnsubscribed).toBe(true);
-
-    adapter.fireActivity(makeActivity({ args: { url: "https://post.dispose" }, result: "nope" }));
-    expect(controller.getState().currentPage).toBeNull();
   });
 });

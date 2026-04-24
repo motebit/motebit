@@ -29,7 +29,17 @@ What makes that not reckless: sovereign identity binds every observation and act
 | Mobile          | Cloud-hosted browser | CDP on the cloud browser backend       | Input forwarded via relay |
 | Spatial         | Cloud-hosted browser | CDP on the cloud browser backend       | Input forwarded via relay |
 
-Today's shipped state: only the Reader projection exists on desktop + web. Computer use and cloud browser are both deferred. The current pane content (reader-mode text of the motebit's last `read_url`) is an honest placeholder for the endgame — it shows what the motebit is reading, not the shared act-space the doctrine points at.
+Today's shipped state, by layer:
+
+- **Protocol + runtime (full-fidelity viewport):** `spec/computer-use-v1.md` (Draft v1.0), `packages/protocol/src/computer-use.ts`, `packages/wire-schemas/src/computer-use.ts`, `packages/tools/src/builtins/computer.ts`, `packages/runtime/src/computer-use.ts` — all shipped. The desktop Tauri app registers the `computer` tool when invoke is available (`apps/desktop/src/desktop-tools.ts`), and `apps/desktop/src-tauri/src/computer_use.rs` implements real screen capture (via `xcap`) + input injection (via `enigo`) + macOS TCC permission handling. The AI can already call `computer_screenshot`, `computer_click`, `computer_type`, etc. on desktop; every call emits a signed `ToolInvocationReceipt`.
+- **Workstation UI pane (desktop + web):** at Phase-1 fidelity — a live log of the motebit's signed tool-call receipts. Each row renders `tool_name`, duration, relative time, args/result/signature fingerprints; clicking copies the full receipt JSON for independent verification. This is the doctrine-correct shared-gaze affordance while the computer-use viewport rendering is in flight. The previous Phase-0 shape (URL bar + Reader iframe) was removed 2026-04-24 because it conflated `read_url` (an AI tool whose output goes to the model's context window) with a shared browsing surface, which §3 explicitly forbids.
+- **Cloud browser (web / mobile / spatial):** not started. Deferred until the desktop computer-use viewport rendering proves out and a federation peer validates the governance contract end-to-end.
+
+What's **left to ship** for the viewport endgame:
+
+1. **Desktop viewport rendering** — extend the Workstation panel to render a live computer-use session: latest screenshot as a frame, action annotations as a timeline ("clicked (400, 200)", "typed 'hello'"), session lifecycle banner, user-takeover affordance. Protocol + runtime + Rust are ready; this is pure surface-layer work.
+2. **Pixel sensitivity classification** — sensitivity redaction on screen-capture bytes before any AI provider sees them (§3 governance invariant 2). The classifier runs after `computer_screenshot` returns, before the receipt's `bytes_base64` flows into the model's next turn.
+3. **Cloud-browser infrastructure** — CDP-backed cloud browser, frame streaming to the sandboxed surfaces, input forwarding through the relay, signed observations identical in shape to desktop's computer-use receipts.
 
 ## Why this matters
 

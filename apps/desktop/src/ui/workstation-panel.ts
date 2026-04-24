@@ -7,28 +7,16 @@
 // controller in @motebit/panels.
 //
 // Scope per `docs/doctrine/workstation-viewport.md` + records-vs-acts:
-// URL bar (shared gaze) + live tool-call receipt log + reader/browser
-// pane. No scheduled/recurring goal state — that's a record and lives
-// in the Goals panel (see the 2026-04-22 web unification on commit
-// c5518202).
-//
-//
-// Live view into the motebit's tool calls. Each call the runtime makes
-// emits a signed `ToolInvocationReceipt`; this panel renders them in
-// arrival order, with tool name, relative time, args/result hashes,
-// and the signature truncated to a fingerprint. The receipts are
-// independently self-verifiable — a verifier with only the motebit's
-// public key can prove any row here is authentic.
-//
-// The state layer lives in @motebit/panels/workstation/controller;
-// this file renders DOM from controller state and wires the web app's
-// tool-invocation bus into the controller's adapter. No relay fetch,
-// no network calls — the panel is a pure projection of the in-process
-// receipt stream.
-//
-// MVP scope: receipt log only. Follow-up passes add the browser pane
-// (virtual_browser mode), the plan-approval affordance, and the
-// delegation view.
+// a live log of the motebit's signed tool-call receipts. This is the
+// shared-gaze affordance at Phase-1 fidelity — the user sees every
+// tool the motebit invokes, with args/result/signature fingerprints,
+// as independently-verifiable receipts. Phase 2 adds the computer-use
+// viewport: when the motebit opens a computer-use session, the
+// pane replaces the receipt list with a live screenshot stream +
+// action annotations. Until then this file is deliberately just the
+// receipt log — no URL bar, no Reader iframe, no browser chrome. The
+// previous Phase-0 shape conflated `read_url` (an AI tool) with a
+// shared browsing surface, which the doctrine explicitly forbids.
 
 import type { DesktopContext } from "../types";
 import {
@@ -74,108 +62,77 @@ function shortHash(hex: string, chars: number = 8): string {
 // --- DOM scaffold ---
 
 // No entry in index.html for this panel — it's built dynamically and
-// appended to the body on first open. Keeps the MVP contained to one
-// file; a future pass can extract the markup to index.html when the
-// panel stabilizes and needs the stylesheet of a first-class surface.
+// appended to the stage (liquid-glass plane) or the body (fallback)
+// on first open. Keeps the panel contained to one file.
 
-function buildScaffold(): {
+interface Scaffold {
   panel: HTMLDivElement;
   list: HTMLDivElement;
   empty: HTMLDivElement;
-  closeBtn: HTMLButtonElement;
   headerCount: HTMLSpanElement;
   clearBtn: HTMLButtonElement;
-  browserPane: HTMLDivElement;
-  browserUrl: HTMLSpanElement;
-  browserFrame: HTMLIFrameElement;
-  browserBackBtn: HTMLButtonElement;
-  browserForwardBtn: HTMLButtonElement;
-  urlBar: HTMLInputElement;
-  urlStatus: HTMLSpanElement;
-} {
-  // The panel mounts INSIDE the liquid-glass workstation plane via
-  // the renderer's CSS2DObject stage — not as a fixed overlay. Sizing
-  // fills the stage element (580×360 by convention); the plane owns
-  // the positioning in 3D space, the breathing, and the visibility
-  // fade. No backdrop, no fixed-position chrome, no z-index battles
-  // with other surfaces.
+  closeBtn: HTMLButtonElement;
+}
+
+function buildScaffold(): Scaffold {
   const panel = document.createElement("div");
   panel.id = "workstation-panel";
-  panel.setAttribute("role", "region");
-  panel.setAttribute("aria-label", "Workstation — motebit tool calls");
   Object.assign(panel.style, {
-    width: "100%",
-    height: "100%",
-    color: "rgba(14, 22, 40, 0.96)",
-    // Transparent background — the plane IS the surface. Content sits
-    // directly on the glass; no overlay card, no drop shadow, no
-    // backdrop-filter duplication.
-    background: "transparent",
-    overflow: "hidden",
     display: "flex",
     flexDirection: "column",
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif",
-    pointerEvents: "auto",
+    overflow: "hidden",
+    width: "100%",
+    height: "100%",
+    boxSizing: "border-box",
   });
 
-  // Header — tuned for the liquid-glass substrate. Lower contrast
-  // than the old dark-panel treatment so text sits on the glass, not
-  // against a filled background. No bottom border; a soft separator
-  // below is enough on a translucent plane.
+  // === Header ===
   const header = document.createElement("div");
   Object.assign(header.style, {
     display: "flex",
     alignItems: "center",
-    padding: "12px 14px 10px",
+    gap: "10px",
+    padding: "12px 14px",
+    borderBottom: "1px solid rgba(60, 75, 105, 0.10)",
     flex: "0 0 auto",
-    borderBottom: "1px solid rgba(60, 75, 105, 0.12)",
   });
 
-  const title = document.createElement("span");
+  const title = document.createElement("div");
   title.textContent = "Workstation";
   Object.assign(title.style, {
-    fontSize: "12.5px",
     fontWeight: "600",
+    fontSize: "12px",
+    color: "rgba(20, 30, 50, 0.96)",
     letterSpacing: "0.02em",
-    flex: "1 1 auto",
-    color: "rgba(20, 30, 50, 0.92)",
   });
 
   const headerCount = document.createElement("span");
-  headerCount.id = "workstation-count";
   Object.assign(headerCount.style, {
     fontSize: "10px",
-    color: "rgba(80, 100, 140, 0.72)",
-    letterSpacing: "0.04em",
-    marginRight: "10px",
+    color: "rgba(90, 110, 150, 0.72)",
     fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+    marginLeft: "8px",
+    letterSpacing: "0.03em",
   });
 
   const clearBtn = document.createElement("button");
   clearBtn.type = "button";
   clearBtn.textContent = "clear";
-  clearBtn.title = "Clear history";
   Object.assign(clearBtn.style, {
+    marginLeft: "auto",
     background: "transparent",
     border: "none",
-    color: "rgba(80, 100, 140, 0.72)",
+    color: "rgba(60, 80, 120, 0.68)",
     cursor: "pointer",
-    fontSize: "10.5px",
-    padding: "2px 6px",
-    marginRight: "6px",
-    borderRadius: "3px",
-    letterSpacing: "0.04em",
+    fontSize: "11px",
+    letterSpacing: "0.02em",
+    padding: "0 4px",
   });
-  clearBtn.addEventListener("mouseenter", () => (clearBtn.style.color = "rgba(20, 30, 50, 0.92)"));
-  clearBtn.addEventListener(
-    "mouseleave",
-    () => (clearBtn.style.color = "rgba(80, 100, 140, 0.72)"),
-  );
 
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";
+  closeBtn.setAttribute("aria-label", "Close workstation panel");
   closeBtn.textContent = "×";
-  closeBtn.setAttribute("aria-label", "Close workstation");
   Object.assign(closeBtn.style, {
     background: "transparent",
     border: "none",
@@ -192,335 +149,39 @@ function buildScaffold(): {
   header.appendChild(closeBtn);
   panel.appendChild(header);
 
-  // === URL bar (shared gaze) ===
-  // User types a URL here; pressing enter fires the motebit's
-  // `read_url` tool via `invokeLocalTool`. The page lands in the
-  // browser pane below the same way it does when the motebit
-  // navigates on its own — both you and the motebit are looking at
-  // the same source. The signed receipt records `user-tap` origin,
-  // so the audit trail discriminates who drove the call.
-  const urlRow = document.createElement("div");
-  Object.assign(urlRow.style, {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    padding: "8px 14px",
-    borderBottom: "1px solid rgba(60, 75, 105, 0.10)",
-    flex: "0 0 auto",
-  });
-
-  const urlPrefix = document.createElement("span");
-  urlPrefix.textContent = "→";
-  Object.assign(urlPrefix.style, {
-    color: "rgba(90, 110, 150, 0.62)",
-    fontSize: "12px",
-    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
-  });
-
-  const urlBar = document.createElement("input");
-  urlBar.type = "text";
-  urlBar.spellcheck = false;
-  urlBar.autocomplete = "off";
-  urlBar.autocapitalize = "off";
-  urlBar.placeholder = "type a URL — you and the motebit see the same page";
-  Object.assign(urlBar.style, {
-    flex: "1 1 auto",
-    minWidth: "0",
-    border: "none",
-    outline: "none",
-    background: "transparent",
-    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
-    fontSize: "11.5px",
-    color: "rgba(20, 30, 50, 0.92)",
-    letterSpacing: "0.01em",
-  });
-
-  const urlStatus = document.createElement("span");
-  Object.assign(urlStatus.style, {
-    fontSize: "10px",
-    color: "rgba(90, 110, 150, 0.72)",
-    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
-    letterSpacing: "0.04em",
-    flex: "0 0 auto",
-  });
-
-  urlRow.appendChild(urlPrefix);
-  urlRow.appendChild(urlBar);
-  urlRow.appendChild(urlStatus);
-  panel.appendChild(urlRow);
-
-  // === Browser pane (virtual_browser mode) ===
-  // Renders the motebit's currently-read page as a sandboxed iframe
-  // sitting directly on the glass. Hidden until the first read_url /
-  // virtual_browser / browse_page call arrives.
-  const browserPane = document.createElement("div");
-  browserPane.id = "workstation-browser";
-  Object.assign(browserPane.style, {
-    display: "none",
-    flexDirection: "column",
-    flex: "1 1 auto",
-    minHeight: "0",
-    borderBottom: "1px solid rgba(60, 75, 105, 0.10)",
-    background: "transparent",
-  });
-
-  const browserStrip = document.createElement("div");
-  Object.assign(browserStrip.style, {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    padding: "6px 14px",
-    borderBottom: "1px solid rgba(60, 75, 105, 0.08)",
-    flex: "0 0 auto",
-    fontSize: "10.5px",
-    letterSpacing: "0.04em",
-    color: "rgba(80, 100, 140, 0.72)",
-  });
-
-  const browserBackBtn = document.createElement("button");
-  browserBackBtn.type = "button";
-  browserBackBtn.textContent = "‹";
-  browserBackBtn.title = "Back";
-  browserBackBtn.disabled = true;
-  Object.assign(browserBackBtn.style, {
-    background: "transparent",
-    border: "none",
-    color: "rgba(60, 80, 120, 0.72)",
-    cursor: "pointer",
-    fontSize: "16px",
-    lineHeight: "1",
-    padding: "0 4px",
-    fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
-  });
-
-  const browserForwardBtn = document.createElement("button");
-  browserForwardBtn.type = "button";
-  browserForwardBtn.textContent = "›";
-  browserForwardBtn.title = "Forward";
-  browserForwardBtn.disabled = true;
-  Object.assign(browserForwardBtn.style, {
-    background: "transparent",
-    border: "none",
-    color: "rgba(60, 80, 120, 0.72)",
-    cursor: "pointer",
-    fontSize: "16px",
-    lineHeight: "1",
-    padding: "0 4px",
-    fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
-  });
-
-  const browserLabel = document.createElement("span");
-  browserLabel.textContent = "reading";
-  Object.assign(browserLabel.style, {
-    color: "rgba(100, 120, 155, 0.62)",
-    fontSize: "9.5px",
-    textTransform: "uppercase",
-    letterSpacing: "0.1em",
-  });
-
-  const browserUrl = document.createElement("span");
-  browserUrl.id = "workstation-browser-url";
-  Object.assign(browserUrl.style, {
-    fontFamily: "'SF Mono', Menlo, Consolas, monospace",
-    fontSize: "10.5px",
-    color: "rgba(30, 50, 90, 0.86)",
-    flex: "1 1 auto",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  });
-
-  browserStrip.appendChild(browserBackBtn);
-  browserStrip.appendChild(browserForwardBtn);
-  browserStrip.appendChild(browserLabel);
-  browserStrip.appendChild(browserUrl);
-  browserPane.appendChild(browserStrip);
-
-  const browserFrame = document.createElement("iframe");
-  browserFrame.id = "workstation-browser-frame";
-  browserFrame.setAttribute("sandbox", "allow-same-origin");
-  browserFrame.setAttribute("referrerpolicy", "no-referrer");
-  browserFrame.title = "Workstation browser pane";
-  Object.assign(browserFrame.style, {
-    border: "none",
-    width: "100%",
-    flex: "1 1 auto",
-    minHeight: "180px",
-    background: "transparent",
-    colorScheme: "light",
-  });
-  browserPane.appendChild(browserFrame);
-
-  panel.appendChild(browserPane);
-
-  // List container
+  // === Receipt list ===
+  // The log of signed tool-call receipts, newest on top. Each row is
+  // independently self-verifiable — clicking copies the full JSON to
+  // the clipboard so the user can paste into a third-party verifier.
   const list = document.createElement("div");
-  list.id = "workstation-list";
+  list.id = "workstation-receipt-list";
   Object.assign(list.style, {
-    overflowY: "auto",
-    padding: "8px 8px 14px",
+    display: "none",
     flex: "1 1 auto",
     minHeight: "0",
+    overflowY: "auto",
+    overflowX: "hidden",
+    padding: "10px 12px",
   });
   panel.appendChild(list);
 
-  // Empty state (shown when history is empty)
+  // === Empty state ===
   const empty = document.createElement("div");
-  empty.id = "workstation-empty";
   empty.textContent = "No tool calls yet.";
   Object.assign(empty.style, {
-    padding: "36px 20px",
+    display: "block",
+    flex: "1 1 auto",
+    padding: "40px 16px",
     textAlign: "center",
+    color: "rgba(90, 110, 150, 0.62)",
     fontSize: "11.5px",
-    color: "rgba(90, 110, 150, 0.58)",
     fontStyle: "italic",
+    letterSpacing: "0.02em",
   });
   panel.appendChild(empty);
 
-  return {
-    panel,
-    list,
-    empty,
-    closeBtn,
-    headerCount,
-    clearBtn,
-    browserPane,
-    browserUrl,
-    browserFrame,
-    browserBackBtn,
-    browserForwardBtn,
-    urlBar,
-    urlStatus,
-  };
+  return { panel, list, empty, headerCount, clearBtn, closeBtn };
 }
-
-/**
- * Normalize user-typed URL input. Bare hostnames get `https://`
- * prefixed; space-containing or dot-less strings route through
- * DuckDuckGo so the input reads as "URL or search" without needing
- * a separate search affordance.
- */
-function normalizeUrlInput(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (/\s/.test(trimmed) || !/\./.test(trimmed)) {
-    return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
-  }
-  return `https://${trimmed}`;
-}
-
-// Reader-mode HTML for rendering the motebit's currently-fetched page
-// inside the sandboxed iframe. Same typography + structure treatment
-// as the reader view used elsewhere so the two modalities (motebit-
-// initiated vs user-initiated page read) look consistent.
-function buildReaderSrcdoc(content: string, sourceUrl: string): string {
-  const body = parseStructuredText(content);
-  const hostAttr = (() => {
-    try {
-      return escapeHtml(new URL(sourceUrl).href);
-    } catch {
-      return "";
-    }
-  })();
-  return `<!doctype html><html><head><meta charset="utf-8">${hostAttr ? `<base href="${hostAttr}">` : ""}<style>
-    html, body { margin: 0; padding: 0; background: transparent; color-scheme: light; }
-    body {
-      font-family: ui-serif, "New York", "Iowan Old Style", Charter,
-        "Palatino Linotype", Palatino, Georgia, serif;
-      font-size: 13.5px;
-      line-height: 1.65;
-      color: rgba(14, 22, 40, 0.92);
-      padding: 16px 22px 22px;
-      max-width: 560px;
-      word-wrap: break-word;
-    }
-    h1, h2, h3, h4, h5, h6 {
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
-      color: rgba(10, 18, 32, 0.98);
-      line-height: 1.25;
-      margin: 20px 0 8px;
-      letter-spacing: -0.02em;
-    }
-    h1 { font-size: 19px; font-weight: 700; margin-top: 0; }
-    h2 { font-size: 16px; font-weight: 600; }
-    h3 { font-size: 14px; font-weight: 600; }
-    p { margin: 0 0 12px 0; }
-    ul { padding-left: 20px; margin: 0 0 12px 0; }
-    li { margin-bottom: 4px; }
-    a {
-      color: rgba(60, 100, 170, 0.92);
-      text-decoration: underline;
-      text-decoration-thickness: 0.5px;
-      text-underline-offset: 3px;
-    }
-    ::selection { background: rgba(80, 110, 165, 0.25); }
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(100, 120, 160, 0.3); border-radius: 3px; }
-  </style></head><body><article>${body}</article></body></html>`;
-}
-
-function parseStructuredText(source: string): string {
-  const lines = source.split(/\n/);
-  const out: string[] = [];
-  let inList = false;
-  let paragraphBuffer: string[] = [];
-  const flushParagraph = (): void => {
-    if (paragraphBuffer.length === 0) return;
-    out.push(`<p>${paragraphBuffer.join("<br>")}</p>`);
-    paragraphBuffer = [];
-  };
-  const closeList = (): void => {
-    if (inList) {
-      out.push("</ul>");
-      inList = false;
-    }
-  };
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (line === "") {
-      flushParagraph();
-      closeList();
-      continue;
-    }
-    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(line);
-    if (headingMatch) {
-      flushParagraph();
-      closeList();
-      const level = headingMatch[1]!.length;
-      out.push(`<h${level}>${inlineMarkdown(headingMatch[2]!)}</h${level}>`);
-      continue;
-    }
-    if (line.startsWith("- ")) {
-      flushParagraph();
-      if (!inList) {
-        out.push("<ul>");
-        inList = true;
-      }
-      out.push(`<li>${inlineMarkdown(line.slice(2))}</li>`);
-      continue;
-    }
-    closeList();
-    paragraphBuffer.push(inlineMarkdown(line));
-  }
-  flushParagraph();
-  closeList();
-  return out.join("\n");
-}
-
-function inlineMarkdown(s: string): string {
-  const escaped = escapeHtml(s);
-  return escaped.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    (match: string, text: string, href: string) => {
-      if (!/^https?:\/\//i.test(href)) return match;
-      return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
-    },
-  );
-}
-
-// --- Receipt row ---
 
 function buildReceiptRow(receipt: ToolInvocationReceiptLike): HTMLDivElement {
   const row = document.createElement("div");
@@ -628,45 +289,25 @@ function buildReceiptRow(receipt: ToolInvocationReceiptLike): HTMLDivElement {
 
 // --- Rendering ---
 
-function render(
-  state: WorkstationState,
-  refs: {
-    list: HTMLDivElement;
-    empty: HTMLDivElement;
-    headerCount: HTMLSpanElement;
-    browserPane: HTMLDivElement;
-    browserUrl: HTMLSpanElement;
-    browserFrame: HTMLIFrameElement;
-  },
-  cache: { lastPageInvocationId: string | null; renderedIds: Set<string> },
-): void {
+interface RenderRefs {
+  list: HTMLDivElement;
+  empty: HTMLDivElement;
+  headerCount: HTMLSpanElement;
+}
+
+interface RenderCache {
+  renderedIds: Set<string>;
+}
+
+function render(state: WorkstationState, refs: RenderRefs, cache: RenderCache): void {
   refs.headerCount.textContent =
     state.receiptCount > 0
       ? `${state.receiptCount} call${state.receiptCount === 1 ? "" : "s"}`
       : "";
 
-  // Browser pane — live. Only rebuild the iframe srcdoc when the
-  // page actually changes (by invocation_id); re-rendering on every
-  // receipt would reset scroll position on every row arrival.
-  if (state.currentPage) {
-    refs.browserPane.style.display = "flex";
-    refs.browserUrl.textContent = state.currentPage.url;
-    if (cache.lastPageInvocationId !== state.currentPage.invocation_id) {
-      refs.browserFrame.srcdoc = buildReaderSrcdoc(
-        state.currentPage.content,
-        state.currentPage.url,
-      );
-      cache.lastPageInvocationId = state.currentPage.invocation_id;
-    }
-  } else {
-    refs.browserPane.style.display = "none";
-  }
-
   if (state.history.length === 0) {
     refs.list.style.display = "none";
-    // Hide the empty card when the browser pane is showing a page —
-    // "No tool calls yet" under a live page would be misleading.
-    refs.empty.style.display = state.currentPage ? "none" : "block";
+    refs.empty.style.display = "block";
     cache.renderedIds.clear();
     while (refs.list.firstChild) refs.list.removeChild(refs.list.firstChild);
     return;
@@ -697,7 +338,7 @@ function render(
   }
 }
 
-// --- Init ---
+// --- Launcher ---
 
 function buildLauncher(onClick: () => void): HTMLButtonElement {
   const btn = document.createElement("button");
@@ -737,8 +378,10 @@ function buildLauncher(onClick: () => void): HTMLButtonElement {
   return btn;
 }
 
+// --- Init ---
+
 export function initWorkstationPanel(ctx: DesktopContext): WorkstationPanelAPI {
-  let scaffold: ReturnType<typeof buildScaffold> | null = null;
+  let scaffold: Scaffold | null = null;
   let controller: WorkstationController | null = null;
   let open_ = false;
 
@@ -748,40 +391,19 @@ export function initWorkstationPanel(ctx: DesktopContext): WorkstationPanelAPI {
   // overlay so the surface still functions without 3D.
   const renderer = ctx.app.getRenderer?.() ?? null;
 
-  function ensureBuilt(): ReturnType<typeof buildScaffold> {
+  function ensureBuilt(): Scaffold {
     if (scaffold) return scaffold;
 
     scaffold = buildScaffold();
-    const {
-      list,
-      empty,
-      closeBtn,
-      headerCount,
-      clearBtn,
-      browserPane,
-      browserUrl,
-      browserFrame,
-      browserBackBtn,
-      browserForwardBtn,
-      urlBar,
-      urlStatus,
-    } = scaffold;
+    const { list, empty, closeBtn, headerCount, clearBtn } = scaffold;
 
     const adapter: WorkstationFetchAdapter = {
       subscribeToolInvocations: (listener) => ctx.app.subscribeToolInvocations(listener),
-      subscribeToolActivity: (listener) => ctx.app.subscribeToolActivity(listener),
     };
     controller = createWorkstationController(adapter);
 
-    const renderRefs = { list, empty, headerCount, browserPane, browserUrl, browserFrame };
-    // Scroll-preservation + incremental-render cache. lastPageInvocationId
-    // keeps the iframe from re-loading on every receipt arrival; renderedIds
-    // tracks which rows are already in the DOM so only new ones get the
-    // emergence animation.
-    const renderCache = {
-      lastPageInvocationId: null as string | null,
-      renderedIds: new Set<string>(),
-    };
+    const renderRefs: RenderRefs = { list, empty, headerCount };
+    const renderCache: RenderCache = { renderedIds: new Set<string>() };
 
     controller.subscribe((state) => {
       render(state, renderRefs, renderCache);
@@ -790,131 +412,6 @@ export function initWorkstationPanel(ctx: DesktopContext): WorkstationPanelAPI {
 
     closeBtn.addEventListener("click", close);
     clearBtn.addEventListener("click", () => controller?.clearHistory());
-
-    // Reader pane — what the motebit read, not what the user browses.
-    //
-    // `read_url` is the motebit's text-extractor tool: server-side
-    // fetch + HTML strip, output goes into the AI reasoning loop. This
-    // pane renders that text on the glass so the user can see what the
-    // motebit is reading. It is NOT a browser — see
-    // `docs/doctrine/workstation-viewport.md` for the per-surface map.
-    //
-    // The desktop Workstation viewport endgame is full computer use
-    // (screen capture + OS input via Tauri + macOS Accessibility /
-    // Windows UI Automation). That replaces the "window to the
-    // internet / to your machine" role the Reader temporarily
-    // occupies; `read_url` stays as the AI's reading tool regardless.
-
-    const navHistory: string[] = [];
-    let navIndex = -1;
-    let navFetchSeq = 0;
-
-    interface NavCacheEntry {
-      content: string;
-      sourceUrl: string;
-    }
-    const pageCache = new Map<string, NavCacheEntry>();
-
-    function updateNavButtons(): void {
-      const canBack = navIndex > 0;
-      const canForward = navIndex < navHistory.length - 1;
-      browserBackBtn.disabled = !canBack;
-      browserBackBtn.style.opacity = canBack ? "1" : "0.3";
-      browserBackBtn.style.cursor = canBack ? "pointer" : "default";
-      browserForwardBtn.disabled = !canForward;
-      browserForwardBtn.style.opacity = canForward ? "1" : "0.3";
-      browserForwardBtn.style.cursor = canForward ? "pointer" : "default";
-    }
-
-    async function loadUrl(url: string): Promise<boolean> {
-      const cached = pageCache.get(url);
-      if (cached) {
-        browserFrame.srcdoc = buildReaderSrcdoc(cached.content, cached.sourceUrl);
-        browserUrl.textContent = cached.sourceUrl;
-        urlStatus.textContent = "";
-        return true;
-      }
-      urlStatus.textContent = "fetching…";
-      const seq = ++navFetchSeq;
-      const result = await ctx.app.invokeLocalTool("read_url", { url });
-      if (seq !== navFetchSeq) return false;
-      urlStatus.textContent = result.ok ? "" : "failed";
-      return result.ok;
-    }
-
-    async function navigateTo(url: string): Promise<void> {
-      const ok = await loadUrl(url);
-      if (!ok) return;
-      navHistory.splice(navIndex + 1);
-      navHistory.push(url);
-      navIndex = navHistory.length - 1;
-      urlBar.value = url;
-      updateNavButtons();
-    }
-
-    async function goBack(): Promise<void> {
-      if (navIndex <= 0) return;
-      navIndex--;
-      const url = navHistory[navIndex]!;
-      await loadUrl(url);
-      urlBar.value = url;
-      updateNavButtons();
-    }
-
-    async function goForward(): Promise<void> {
-      if (navIndex >= navHistory.length - 1) return;
-      navIndex++;
-      const url = navHistory[navIndex]!;
-      await loadUrl(url);
-      urlBar.value = url;
-      updateNavButtons();
-    }
-
-    controller.subscribe((state) => {
-      if (state.currentPage) {
-        pageCache.set(state.currentPage.url, {
-          content: state.currentPage.content,
-          sourceUrl: state.currentPage.url,
-        });
-      }
-    });
-
-    urlBar.addEventListener("keydown", (ev) => {
-      if (ev.key !== "Enter") return;
-      ev.preventDefault();
-      const url = normalizeUrlInput(urlBar.value);
-      if (!url) return;
-      urlBar.value = url;
-      void navigateTo(url);
-    });
-
-    browserBackBtn.addEventListener("click", () => {
-      void goBack();
-    });
-    browserForwardBtn.addEventListener("click", () => {
-      void goForward();
-    });
-
-    browserFrame.addEventListener("load", () => {
-      const doc = browserFrame.contentDocument;
-      if (!doc) return;
-      doc.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
-        const href = anchor.getAttribute("href") ?? "";
-        if (!href) return;
-        anchor.addEventListener("click", (ev: MouseEvent) => {
-          ev.preventDefault();
-          const currentUrl = navIndex >= 0 ? (navHistory[navIndex] ?? undefined) : undefined;
-          let resolved: string;
-          try {
-            resolved = currentUrl ? new URL(href, currentUrl).toString() : href;
-          } catch {
-            return;
-          }
-          if (!/^https?:\/\//i.test(resolved)) return;
-          void navigateTo(resolved);
-        });
-      });
-    });
 
     return scaffold;
   }

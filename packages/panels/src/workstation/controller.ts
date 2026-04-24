@@ -45,14 +45,21 @@ export interface ToolInvocationReceiptLike {
 }
 
 /**
- * Activity event — the raw args/result bytes the workstation's browser
- * pane consumes to render *what the motebit is doing right now*.
- * Matches the runtime's `ToolActivityEvent`; duplicated here for the
- * same Layer-5 self-contained reason as `ToolInvocationReceiptLike`.
+ * Activity event — the raw args/result bytes the workstation consumes
+ * to render *what the motebit is doing right now* (when the tool's
+ * output is something worth showing — e.g. a screenshot frame for
+ * computer-use). Matches the runtime's `ToolActivityEvent`; duplicated
+ * here for the same Layer-5 self-contained reason as
+ * `ToolInvocationReceiptLike`.
  *
  * Unlike the signed receipt, activity is ephemeral — consumers must
  * not retain the payload (args/result may contain sensitive content
  * that's deliberately not part of the audit trail).
+ *
+ * The interface is kept in the public surface so Phase 2's computer-use
+ * viewport state can subscribe to it without reshaping the adapter; for
+ * the receipt-log-only MVP today the adapter's
+ * `subscribeToolActivity` is optional and unused.
  */
 export interface ToolActivityEvent {
   invocation_id: string;
@@ -105,24 +112,6 @@ export interface WorkstationControllerOptions {
 
 // ── State ────────────────────────────────────────────────────────────
 
-/**
- * Page the motebit is currently "looking at" — populated from
- * `read_url` activity events, and superseded as the motebit reads
- * new sources. Null when the motebit hasn't read a page yet in this
- * session, or when the most recent tool call wasn't a page fetch.
- *
- * `content` is the raw result the tool returned (typically HTML
- * text or reader-mode markdown); the host surface decides how to
- * render it (iframe srcdoc, sandboxed view, reader template).
- * Ephemeral — rotates forward on every new `read_url` call.
- */
-export interface WorkstationCurrentPage {
-  url: string;
-  content: string;
-  fetchedAt: number;
-  invocation_id: string;
-}
-
 export interface WorkstationState {
   /**
    * Completed tool calls in arrival order (oldest first). Each entry is
@@ -145,13 +134,6 @@ export interface WorkstationState {
    * deep-equal-checking `history`.
    */
   receiptCount: number;
-  /**
-   * Current page the motebit is focused on — updated when a `read_url`
-   * (or equivalent) activity event arrives. Null before the first
-   * page-fetch of the session. The workstation's browser pane reads
-   * from this; Ring-1 text surfaces ignore it without issue.
-   */
-  currentPage: WorkstationCurrentPage | null;
 }
 
 function initialState(): WorkstationState {
@@ -159,7 +141,6 @@ function initialState(): WorkstationState {
     history: [],
     lastReceiptAt: null,
     receiptCount: 0,
-    currentPage: null,
   };
 }
 
@@ -222,40 +203,7 @@ export function createWorkstationController(
     });
   }
 
-  /**
-   * Tool-name set recognized as "page fetches" — their args MUST
-   * carry a `url` string and their result is the page content. Extend
-   * this list when new page-fetching tools land (e.g. `fetch_archive`,
-   * `read_pdf`). Activity events for tools outside the set don't
-   * touch `currentPage`; they just populate the audit log via the
-   * receipt channel.
-   */
-  const PAGE_FETCH_TOOLS = new Set(["read_url", "virtual_browser", "browse_page"]);
-
-  function onActivity(event: ToolActivityEvent): void {
-    if (disposed) return;
-    if (!PAGE_FETCH_TOOLS.has(event.tool_name)) return;
-    const url = event.args["url"];
-    if (typeof url !== "string" || url.length === 0) return;
-    const content =
-      typeof event.result === "string"
-        ? event.result
-        : event.result === undefined || event.result === null
-          ? ""
-          : JSON.stringify(event.result);
-    emit({
-      ...state,
-      currentPage: {
-        url,
-        content,
-        fetchedAt: event.completed_at,
-        invocation_id: event.invocation_id,
-      },
-    });
-  }
-
   const unsubscribeReceipts = adapter.subscribeToolInvocations(onReceipt);
-  const unsubscribeActivity = adapter.subscribeToolActivity?.(onActivity) ?? (() => {});
 
   function getState(): WorkstationState {
     return state;
@@ -270,9 +218,6 @@ export function createWorkstationController(
 
   function clearHistory(): void {
     if (disposed) return;
-    // `currentPage` is intentionally preserved — a user clearing the
-    // audit log while actively reading a page shouldn't blank the
-    // browser pane. The next page-fetch supersedes it normally.
     emit({
       ...state,
       history: [],
@@ -284,12 +229,10 @@ export function createWorkstationController(
   function dispose(): void {
     if (disposed) return;
     disposed = true;
-    for (const unsub of [unsubscribeReceipts, unsubscribeActivity]) {
-      try {
-        unsub();
-      } catch {
-        // Best-effort — an adapter's unsubscribe fault must not leak.
-      }
+    try {
+      unsubscribeReceipts();
+    } catch {
+      // Best-effort — an adapter's unsubscribe fault must not leak.
     }
     listeners.clear();
   }
