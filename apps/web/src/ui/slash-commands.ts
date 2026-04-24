@@ -69,6 +69,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "memories", description: "Browse memories" },
   { name: "goals", description: "Browse goals" },
   { name: "goal", description: "Quick-add a goal" },
+  { name: "computer", description: "Motebit Computer — reveal or hide the slab" },
   { name: "mcp", description: "MCP server management" },
   { name: "state", description: "Show state vector" },
   { name: "tools", description: "List registered tools" },
@@ -113,6 +114,8 @@ export interface SlashCommandsCallbacks {
   openGoals(): void;
   openAgents(): void;
   newConversation(): void;
+  /** Toggle the Motebit Computer slab's user-held visibility. */
+  toggleSlab(): boolean;
 }
 
 export interface SlashCommandsHandle {
@@ -215,6 +218,10 @@ export function initSlashCommands(
       case "agents":
         chatInput.value = "";
         callbacks.openAgents();
+        return;
+      case "computer":
+        chatInput.value = "";
+        callbacks.toggleSlab();
         return;
       case "mcp": {
         chatInput.value = "";

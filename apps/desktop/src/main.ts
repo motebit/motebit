@@ -88,6 +88,7 @@ const chat = initChat(ctx, {
   openSettings: () => settings.open(),
   openConversationsPanel: () => conversations.open(),
   openGoalsPanel: () => goals.open(),
+  toggleSlab: () => app.getRenderer().toggleSlabVisible?.() ?? false,
   openMemoryPanel: (nodeId, auditFlags) => memory.open(nodeId, auditFlags),
   speakResponse: (text) => voice.speakAssistantResponse(text),
   pushTTSChunk: (delta) => voice.pushTTSChunk(delta),
@@ -163,6 +164,15 @@ document.addEventListener("keydown", (e) => {
     } else if (settingsModal.classList.contains("open")) {
       settings.close();
     }
+  }
+  // Motebit Computer toggle: Option+C / Alt+C. Holds the empty slab
+  // open for prep (drag-in, inspecting layout); toggling off lets
+  // the plane auto-hide when no items are present. `e.code === "KeyC"`
+  // avoids the macOS `Option+C → ç` remap that would break matching
+  // on `e.key`.
+  if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyC") {
+    e.preventDefault();
+    app.getRenderer().toggleSlabVisible?.();
   }
 });
 

@@ -664,6 +664,8 @@ export interface ChatCallbacks {
   openSettings(): void;
   openConversationsPanel(): void;
   openGoalsPanel(): void;
+  /** Toggle the Motebit Computer slab's user-held visibility. */
+  toggleSlab(): boolean;
   openMemoryPanel(nodeId?: string, auditFlags?: Map<string, string>): void;
   speakResponse(text: string): void;
   pushTTSChunk(delta: string): void;
@@ -862,6 +864,9 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         return;
       case "goals":
         callbacks.openGoalsPanel();
+        return;
+      case "computer":
+        callbacks.toggleSlab();
         return;
       case "settings":
         callbacks.openSettings();

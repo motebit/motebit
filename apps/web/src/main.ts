@@ -171,6 +171,7 @@ const slashCommands = initSlashCommands(ctx, {
   openMemory: (auditNodeIds) => gatedPanels.openMemory(auditNodeIds),
   openGoals: () => gatedPanels.openGoals(),
   openAgents: () => gatedPanels.openAgents(),
+  toggleSlab: () => app.getRenderer().toggleSlabVisible?.() ?? false,
   newConversation: () => {
     app.resetConversation();
     const chatLog = document.getElementById("chat-log") as HTMLDivElement;
@@ -220,6 +221,13 @@ document.addEventListener("keydown", (e) => {
     } else if (settingsModal.classList.contains("open")) {
       settings.close();
     }
+  }
+  // Motebit Computer toggle: Option+C (Alt+C). `e.code === "KeyC"`
+  // avoids the macOS `Option+C → ç` remap that would silently break
+  // matching on `e.key`.
+  if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyC") {
+    e.preventDefault();
+    app.getRenderer().toggleSlabVisible?.();
   }
 });
 

@@ -156,19 +156,8 @@ export class SlabManager {
   private readonly css2dRenderer: CSS2DRenderer;
   private readonly items = new Map<string, ManagedSlabItem>();
   private readonly detachHandler: DetachArtifactHandler | null;
-  /** Seconds since the last active item ended. Drives idle → recessed. */
-  private emptyTime = 0;
-  /** Cached ambient visibility of the plane — used to skip per-frame reruns. */
+  /** Cached ambient visibility of the plane — eased each frame. */
   private planeVisibility = 0;
-  /**
-   * Workstation default: the screen is on. `hasBeenActive` was a hold-
-   * over from the earlier doctrine where the plane emerged only with
-   * the first item; under the workstation frame the plane is a display
-   * that stays visible, and items appear on it. Kept as `true` so the
-   * idle visibility kicks in from the start; the user's Cmd+Shift+S /
-   * `/screen` toggle is now the only thing that can hide the plane.
-   */
-  private hasBeenActive = true;
   /**
    * Current soul color. Doctrine mandates the slab's active tint
    * derives from the creature's interior color — "cyan creature → cyan
@@ -182,14 +171,18 @@ export class SlabManager {
   /** Current emissive coupling 0..1. Eased toward the target each frame. */
   private activeWarmth = 0;
   /**
-   * User-driven visibility toggle. When `false`, the plane (and all
-   * mounted items) are forced hidden regardless of ambient state —
-   * the motebit's work still happens underneath; the user has just
-   * pulled the screen out of view. Wired to `setSlabVisible` on the
-   * adapter, bound to a hotkey and `/screen` slash command surface-
-   * side. True by default: visibility driven by ambient as usual.
+   * User-held visibility override. Doctrine (motebit-computer.md
+   * §"Ambient states"): the slab is absent by default when empty —
+   * the creature droplet is the iconic presence, not a second plane
+   * sitting next to it. When the motebit gets work, the plane
+   * emerges; when work ends, the plane auto-hides again.
+   *
+   * The user can explicitly pull the plane open via Option+C or
+   * `/computer`; that flips this flag to `true` and the plane stays
+   * visible until toggled off, even when empty. Default `false`:
+   * auto-ambient (follow item activity).
    */
-  private userVisible = true;
+  private userHeldVisible = false;
 
   constructor(
     creatureGroup: THREE.Group,
@@ -319,29 +312,32 @@ export class SlabManager {
   }
 
   /**
-   * Show / hide the slab plane on user request. Doesn't touch
-   * controller state — items still open, update, and age inside; the
-   * plane is just pulled out of view. Toggling back to visible
-   * restores the ambient-driven visibility immediately; if no items
-   * are active, the plane sits at its idle baseline (refraction +
-   * meniscus) rather than waiting for new work to reveal it.
+   * Hold the empty slab visible. Items always make the plane
+   * visible regardless; this flag only matters when there are no
+   * items and the user wants the plane open (to drag perception in,
+   * to see where slab items will land, etc.).
+   *
+   * Wired to `setSlabVisible` on the adapter. Surfaces bind this to
+   * Option+C / `/computer`.
    */
   setUserVisible(visible: boolean): void {
-    this.userVisible = visible;
-    // Reflect on the stage too so its DOM node doesn't continue
-    // capturing pointer events while the plane is gone.
-    if (this.stageEl.style) {
-      this.stageEl.style.display = visible ? "block" : "none";
-    }
-    // When turning back on, pre-warm the visibility to the idle
-    // baseline so the user sees the screen immediately without
-    // waiting for the fade-in curve. The next update() tick will
-    // pick the right target (active if items present, idle otherwise)
-    // and smooth from here.
+    this.userHeldVisible = visible;
+    // Pre-warm the opacity so the user sees the plane materialize
+    // immediately on open; the update() tick then eases to the
+    // right target.
     if (visible && this.planeVisibility < 0.5) {
       this.planeVisibility = 0.85;
-      this.emptyTime = 0;
     }
+  }
+
+  /**
+   * Flip the user-held visibility. Returns the new state so callers
+   * can echo it (toast, UI indicator, etc.) without a separate
+   * getter round-trip.
+   */
+  toggleUserVisible(): boolean {
+    this.setUserVisible(!this.userHeldVisible);
+    return this.userHeldVisible;
   }
 
   // ── Public API — mirrors the RenderAdapter slab methods ───────────
@@ -465,26 +461,20 @@ export class SlabManager {
       (i) => i.phase !== "dissolving" && i.phase !== "detached" && i.phase !== "gone",
     ).length;
 
+    // Doctrine (motebit-computer.md §"Ambient states"): the slab is
+    // absent when empty. The creature droplet is the iconic presence;
+    // a second plane sitting next to it steals focus. Work brings
+    // the plane; work ending dismisses it. The user can hold the
+    // plane open via Option+C / `/computer` for prep (drag-in,
+    // inspecting layout) — `userHeldVisible` is the sticky override.
     let warmthTarget = 0;
     if (active > 0) {
-      this.emptyTime = 0;
-      this.hasBeenActive = true;
       this.planeVisibility = Math.min(1, this.planeVisibility + deltaTime * 3);
       warmthTarget = 1;
-    } else if (!this.hasBeenActive) {
-      // Before first activity ever, the slab is fully invisible — no
-      // droplet has emerged from nothing to show.
-      this.planeVisibility = 0;
+    } else if (this.userHeldVisible) {
+      this.planeVisibility = smoothToward(this.planeVisibility, 0.85, deltaTime, 4);
     } else {
-      this.emptyTime += deltaTime;
-      // Idle baseline. The workstation is always on — the display
-      // stays perceptible even when no content is rendered and even
-      // after prolonged idleness. Only the user toggle (Cmd+Shift+S
-      // / `/screen`) can hide the plane; recession as auto-fade was a
-      // holdover from the earlier "acts-only, dims when silent"
-      // doctrine and collides with the workstation framing.
-      const idleVisibility = 0.85;
-      this.planeVisibility = smoothToward(this.planeVisibility, idleVisibility, deltaTime, 4);
+      this.planeVisibility = smoothToward(this.planeVisibility, 0, deltaTime, 4);
     }
 
     // Ease the active warmth toward its target — soul color only shows
@@ -511,18 +501,14 @@ export class SlabManager {
     this.planeMaterial.emissive.setRGB(this.soulGlow[0], this.soulGlow[1], this.soulGlow[2]);
     this.planeMaterial.emissiveIntensity = w * 0.12 * (0.85 + 0.15 * breatheRaw);
 
-    // User-driven hide overrides the ambient visibility entirely.
-    // The mesh stops rendering and the material reads 0 opacity so
-    // any lingering transparency sort doesn't paint a ghost rectangle.
-    if (!this.userVisible) {
-      this.planeMaterial.opacity = 0;
-      this.planeMesh.visible = false;
-      this.planeMesh.scale.set(1, 1, 1);
-      return;
-    }
     this.planeMaterial.opacity = this.planeVisibility;
     this.planeMesh.visible = this.planeVisibility > 0.01;
     this.planeMesh.scale.set(1 + breathe, 1 + breathe, 1);
+    // Sync the CSS2D stage so its DOM node doesn't keep capturing
+    // pointer events when the plane is effectively gone.
+    if (this.stageEl.style) {
+      this.stageEl.style.display = this.planeMesh.visible ? "block" : "none";
+    }
   }
 
   /** Called after WebGL render each frame — syncs CSS overlay. */

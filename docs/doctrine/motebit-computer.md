@@ -208,7 +208,7 @@ Dissolution still means dissolution — items leaving rest use the same physics 
 
 ### What ends the session
 
-The motebit going idle does **not** force the slab to empty. A workstation with open tabs doesn't disappear when you stop typing. The slab recedes (§Recession below) only when it holds _no_ items — neither active nor resting. Rest persists through the motebit's idle.
+The motebit going idle does **not** force the slab to empty. A workstation with open tabs doesn't disappear when you stop typing. The slab auto-hides (§Dismissal below) only when it holds _no_ items — neither active nor resting. Rest persists through the motebit's idle.
 
 ## Lifecycle
 
@@ -234,23 +234,33 @@ The physics: the slab surface dimples upward at the item's center as internal pr
 
 Droplets bead → tension → release. The slab obeys the same law as its parent body. Detachment is **not** what happens to every finished item — only the ones that have become _graduates_ of the workstation.
 
-### Recession
+### Dismissal
 
-When the slab holds no items at all — neither active nor resting — it recedes: fades to near-invisible refraction, retaining only its meniscus and a faint specular mark at the right edge of the scene. The plane is still present (identity preserved, no remount cost on the next turn) — just honest-empty. Reappears without re-emergence animation when the next item arrives; the emergence is the _first_ item's physics, not the plane's.
+When the slab holds no items at all — neither active nor resting — it fades away completely, clearing space so the creature droplet is the sole iconic presence in the scene. A plane sitting empty next to the creature (even subtly) dilutes that icon and breaks the calm-software thesis: absence is the most honest empty state. The plane re-materializes with full emergence physics when the next item arrives.
 
-## Silent state
+## Ambient states
 
-The slab has three ambient states; the doctrine requires all three to be implemented:
+The slab has **two** ambient states — a plane that's there because work is happening, or a plane that isn't there:
 
-| State        | Visual                                                             | When                                                                                             |
-| ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| **idle**     | meniscus + refraction + faint specular; zero content, zero glow    | no items of any kind on the slab; motebit thinking-without-tool-calling                          |
-| **active**   | internal warmth matched to soul color; items visible through glass | at least one active or resting item on the slab; work in progress _or_ work resting as reference |
-| **recessed** | edge refraction only, plane retained behind the scene envelope     | prolonged idle — no items at all; next item will re-animate the first-item pop                   |
+| State      | Visual                                                             | When                                                                                             |
+| ---------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| **absent** | no plane; creature droplet alone in the scene                      | no items of any kind on the slab, and the user has not held the plane open                       |
+| **active** | internal warmth matched to soul color; items visible through glass | at least one active or resting item on the slab; work in progress _or_ work resting as reference |
 
-The idle state is not a bug. It is the proof that the slab respects silence — the motebit can think without performing for you. Do not fill the idle state with skeleton loaders, typing dots, progress bars, or "thinking…" strings. If the slab is idle, the slab shows idle.
+The absent state is not a bug. It is the proof that the slab respects silence — the motebit can think without performing for you, and the creature droplet doesn't have to compete with an empty screen for focus. Do not fill the absent state with a ghost plane, skeleton loaders, typing dots, progress bars, or "thinking…" strings. If the slab is absent, the slab is absent.
 
-The **active** state covers both kinds of presence: the motebit currently working (emerging / active items), and the workstation holding material the user may still consult (resting items). The slab does not go idle just because no tool is running; it goes idle when the workstation itself is empty.
+The **active** state covers both kinds of presence: the motebit currently working (emerging / active items), and the workstation holding material the user may still consult (resting items). The slab does not go absent just because no tool is running; it goes absent when the workstation itself is empty.
+
+### User-held visibility (orthogonal)
+
+The user can pull the empty plane into view on purpose — to drag perception in (future gesture), to inspect where slab items will land, to have the computer "open and ready" before giving the motebit a task. This is orthogonal to the ambient state: user-held-visible + no items = plane stays open; items arrive = stays open; user releases the hold + no items = absent.
+
+Bindings:
+
+- **Option+C** (desktop + web): toggle user-held visibility
+- **`/computer`** slash command (desktop + web): same toggle via the command palette
+
+User-held visibility is a hold, not a kill switch. When there are items, the plane is visible regardless; the user's hold only matters in the empty case.
 
 ## Visual properties (binding)
 
@@ -307,7 +317,7 @@ One type surface, one event stream, three renderers — following the existing p
 3. Does **chat already render this richly** as text? A one-line textual echo in chat ("reading example.com…") is acceptable as Ring-1 fallback; a full reproduction of the act's content in both places is the collapse. If chat renders more than a thin status, the frames have merged — trim chat back to a one-liner.
 4. Which **embodiment mode** does the item belong to — `mind`, `tool_result`, `virtual_browser`, `shared_gaze`, `desktop_drive`, or `peer_viewport`? Most items default from their kind (tool_call → tool_result, memory → mind, delegation → peer_viewport); higher-agency modes need an explicit governance grant. If you're unsure, you're probably flattening modes into `tool_result` — the failure mode the spectrum was introduced to prevent.
 5. Which of the **three end states** does the item land in when its active work finishes — dissolve (ephemeral plumbing, nothing to keep), rest (working material, stays on the workstation), or detach (graduate, pinches to scene)? The default for most tool calls is rest, not dissolve. Explicitly chose one; don't leave it to an implicit policy.
-6. Does it survive the **idle test** — would hiding it when the slab is idle break its semantics? Active items say no (they shouldn't persist after their work ends). Resting items say yes (they persist through the motebit's idle until the user or the session dismisses them). Records-in-disguise also say yes — if the answer is yes for a reason other than rest, it's probably a panel record, not a slab item.
+6. Does it survive the **absent test** — would the plane going absent (because no items remain) break this item's semantics? Active items say no (they shouldn't persist after their work ends). Resting items say yes (they persist through the motebit's idle until the user or the session dismisses them). Records-in-disguise also say yes — if the answer is yes for a reason other than rest, it's probably a panel record, not a slab item.
 7. Does its transition obey **droplet physics** — emergence as meniscus-expansion, dissolution as surface-ripple-absorption, detachment as bead-tension-release? If not, the metaphor is leaking.
 8. Does it render **identically across web, desktop, spatial, and mobile**? If surface-specific, it's either a renderer detail (fine) or a capability split (needs justification per the capability-rings doctrine).
 9. Does it have the **minimum gesture set** — tap (focus) and swipe (dismiss) at least? A kind with rich rendering but no user touch drifts toward movie. A kind with "run tool" chrome drifts toward remote desktop. Ship the third state, not either adjacent one.

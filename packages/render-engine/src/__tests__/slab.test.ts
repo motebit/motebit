@@ -158,14 +158,26 @@ describe("SlabManager — item lifecycle", () => {
 });
 
 describe("SlabManager — plane visibility + ambient", () => {
-  it("plane is visible at its idle baseline before any item is added", () => {
-    // Under the workstation frame the plane is an always-on display:
-    // the user expects the screen to be present, with items appearing
-    // on it. The earlier "hidden until first item" behavior was a
-    // holdover from the emergence-as-droplet-pop doctrine, now
-    // replaced by the supervised-agency workstation framing.
+  it("plane is hidden by default before any item is added", () => {
+    // Doctrine (motebit-computer.md §"Ambient states"): the slab is
+    // absent when empty. The creature droplet is the iconic presence;
+    // a second always-visible plane steals focus. Work brings the
+    // plane; absence is the honest empty state.
     const mgr = makeManager();
-    // Run enough frames for the idle visibility to settle in.
+    for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
+    const group = mgr.getGroup();
+    const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    expect(planeMesh.visible).toBe(false);
+    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
+    expect(material.opacity).toBe(0);
+  });
+
+  it("setUserVisible(true) holds the empty plane open for user prep", () => {
+    // Option+C / `/computer` routes here. The user explicitly wants
+    // to see the plane (to drag perception in, to inspect layout)
+    // even when the motebit has no active work.
+    const mgr = makeManager();
+    mgr.setUserVisible(true);
     for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
     const group = mgr.getGroup();
     const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
@@ -174,33 +186,26 @@ describe("SlabManager — plane visibility + ambient", () => {
     expect(material.opacity).toBeGreaterThan(0);
   });
 
-  it("setUserVisible(false) hides the plane regardless of ambient state", () => {
+  it("setUserVisible(false) releases the hold — plane auto-hides", () => {
     const mgr = makeManager();
+    mgr.setUserVisible(true);
     for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
     mgr.setUserVisible(false);
-    mgr.update(2, 0.1);
+    for (let i = 0; i < 30; i++) mgr.update(1 + i * 0.1, 0.1);
     const group = mgr.getGroup();
     const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
     expect(planeMesh.visible).toBe(false);
-    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
-    expect(material.opacity).toBe(0);
   });
 
-  it("setUserVisible(true) restores the plane without waiting for new items", () => {
+  it("toggleUserVisible flips the hold and returns the new state", () => {
     const mgr = makeManager();
-    mgr.setUserVisible(false);
-    mgr.update(0, 0.1);
-    mgr.setUserVisible(true);
-    mgr.update(0.2, 0.1);
-    const group = mgr.getGroup();
-    const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
-    expect(planeMesh.visible).toBe(true);
+    expect(mgr.toggleUserVisible()).toBe(true);
+    expect(mgr.toggleUserVisible()).toBe(false);
   });
 
-  it("plane reveals when an item is present", () => {
+  it("plane reveals when an item is present, regardless of user hold", () => {
     const mgr = makeManager();
     mgr.addItem(makeSpec("s1"));
-    // Several frames to ramp the plane's visibility curve up
     for (let i = 0; i < 30; i++) mgr.update(i * 0.1, 0.1);
     const group = mgr.getGroup();
     const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
@@ -209,12 +214,10 @@ describe("SlabManager — plane visibility + ambient", () => {
     expect(material.opacity).toBeGreaterThan(0);
   });
 
-  it("plane holds its idle baseline after prolonged idleness — no auto-recession", async () => {
-    // Under the always-on workstation frame, the display stays
-    // visible indefinitely when no items are present. Only the user
-    // toggle (setUserVisible) can hide it; auto-recession was
-    // dropped when the slab stopped being an acts-only transient
-    // surface and became a persistent workstation display.
+  it("plane auto-hides after the last item ends (no user hold)", async () => {
+    // Doctrine: absence is the default empty state. Work brings the
+    // plane; work ending dismisses it. The user can hold it open via
+    // setUserVisible(true); without that, the plane fades away.
     const mgr = makeManager();
     const h = mgr.addItem(makeSpec("s1"));
     for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
@@ -223,16 +226,13 @@ describe("SlabManager — plane visibility + ambient", () => {
     await dissolvePromise;
     expect(h.getPhase()).toBe("gone");
 
-    // Advance well past what used to be the recession window.
     for (let i = 0; i < 200; i++) mgr.update(2 + i * 0.1, 0.1);
 
     const group = mgr.getGroup();
     const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
     const material = planeMesh.material as THREE.MeshPhysicalMaterial;
-    // Holds the idle baseline (~0.85). Not 1.0 because smoothToward
-    // eases but doesn't snap, and the idle target is 0.85.
-    expect(material.opacity).toBeGreaterThan(0.7);
-    expect(planeMesh.visible).toBe(true);
+    expect(material.opacity).toBeLessThan(0.02);
+    expect(planeMesh.visible).toBe(false);
   });
 });
 
