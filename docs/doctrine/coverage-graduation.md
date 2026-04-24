@@ -22,11 +22,11 @@ The packages on the **money path** or the **identity path** — anything where a
 
 A package belongs in this scope when an untested path could move money, sign on behalf of an identity, or admit a signed artifact that should have been rejected.
 
-A package is **a graduation candidate** when any axis of its declared threshold is below 80. As of 2026-04-20, `@motebit/wallet-solana` is the only entry: 42% statements / 86% branches / 58% functions / 42% lines, locked at the 2026-04-16 baseline. The vitest.config comment names the gap (Web3JsRpcAdapter + memo-submitter batch/revocation paths). Target: 80% statements / 80% functions / 80% lines, by 2026-06-01.
+A package is **a graduation candidate** when any axis of its declared threshold is below 80. As of 2026-04-24 the manifest is empty — every in-scope package sits at or above the 80/80/80 target. The most recent graduation was `@motebit/wallet-solana`: 42/86/58/42 at the 2026-04-16 baseline, raised in three passes (memo-submitter → rail.ts → jupiter.ts) to 97/96/100/97 by 2026-04-20, then removed from the manifest ahead of the 2026-06-01 deadline per the "when all targets are met, remove the entry" rule. See `packages/wallet-solana/vitest.config.ts` for the per-pass narrative.
 
 ## Manifest
 
-`coverage-graduation.json` at the repo root.
+`coverage-graduation.json` at the repo root. The shape when an entry is active:
 
 ```json
 {
@@ -44,6 +44,8 @@ A package is **a graduation candidate** when any axis of its declared threshold 
   ]
 }
 ```
+
+Today `packages` is `[]` — the quiet state is an explicit statement that no money/identity package is below floor.
 
 Three states per entry:
 

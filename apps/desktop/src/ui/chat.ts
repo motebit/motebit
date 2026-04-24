@@ -319,7 +319,15 @@ function completeToolStatus(name: string): void {
   }, 1000);
 }
 
-const RISK_LABELS: Record<number, { label: string; cls: string }> = {
+// Desktop presentation for risk badges: CSS class + user-visible short label.
+// The *semantic* taxonomy lives in `@motebit/sdk`'s `RISK_LABELS` ("R0 Read"
+// … "R4 Money"); this table carries the desktop-chat badge's presentation
+// decisions (class name + lowercase label) and is intentionally separate.
+// Reconciling the two label vocabularies (lowercase "read" vs canonical
+// "R0 Read") is a product UX call — out of scope for the gate-landing
+// rename. The name change (RISK_LABELS → RISK_BADGES) is what stops the
+// identifier from shadowing the SDK canonical.
+const RISK_BADGES: Record<number, { label: string; cls: string }> = {
   0: { label: "read", cls: "risk-read" },
   1: { label: "draft", cls: "risk-draft" },
   2: { label: "write", cls: "risk-write" },
@@ -341,10 +349,10 @@ function showApprovalCard(
   toolDiv.className = "approval-tool";
   toolDiv.textContent = name;
 
-  if (riskLevel != null && RISK_LABELS[riskLevel]) {
+  if (riskLevel != null && RISK_BADGES[riskLevel]) {
     const badge = document.createElement("span");
-    badge.className = `approval-risk ${RISK_LABELS[riskLevel].cls}`;
-    badge.textContent = RISK_LABELS[riskLevel].label;
+    badge.className = `approval-risk ${RISK_BADGES[riskLevel].cls}`;
+    badge.textContent = RISK_BADGES[riskLevel].label;
     toolDiv.appendChild(badge);
   }
 
@@ -455,10 +463,10 @@ export function showGoalApprovalCard(ctx: DesktopContext, event: GoalApprovalEve
   toolDiv.className = "approval-tool";
   toolDiv.textContent = event.toolName;
 
-  if (event.riskLevel != null && RISK_LABELS[event.riskLevel]) {
+  if (event.riskLevel != null && RISK_BADGES[event.riskLevel]) {
     const badge = document.createElement("span");
-    badge.className = `approval-risk ${RISK_LABELS[event.riskLevel]!.cls}`;
-    badge.textContent = RISK_LABELS[event.riskLevel]!.label;
+    badge.className = `approval-risk ${RISK_BADGES[event.riskLevel]!.cls}`;
+    badge.textContent = RISK_BADGES[event.riskLevel]!.label;
     toolDiv.appendChild(badge);
   }
   card.appendChild(toolDiv);

@@ -2,7 +2,15 @@ import React, { useMemo } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useTheme, type ThemeColors } from "../theme";
 
-const RISK_LABELS: Record<number, { label: string; color: string; bg: string }> = {
+// Mobile presentation for risk badges: fg/bg hex + user-visible short label.
+// The *semantic* taxonomy lives in `@motebit/sdk`'s `RISK_LABELS` ("R0 Read"
+// … "R4 Money"); this table carries the approval-card's presentation
+// decisions (RN color pair + lowercase label) and is intentionally separate.
+// Reconciling the two label vocabularies (lowercase "read" vs canonical
+// "R0 Read") is a product UX call — out of scope for the gate-landing
+// rename. The name change (RISK_LABELS → RISK_BADGES) is what stops the
+// identifier from shadowing the SDK canonical.
+const RISK_BADGES: Record<number, { label: string; color: string; bg: string }> = {
   0: { label: "read", color: "#60a0c0", bg: "#102030" },
   1: { label: "draft", color: "#80a060", bg: "#1a2810" },
   2: { label: "write", color: "#c0a040", bg: "#2a2010" },
@@ -30,7 +38,7 @@ export function ApprovalCard({
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const argsPreview = JSON.stringify(args).slice(0, 120);
-  const risk = riskLevel != null ? RISK_LABELS[riskLevel] : undefined;
+  const risk = riskLevel != null ? RISK_BADGES[riskLevel] : undefined;
 
   return (
     <View style={styles.card}>

@@ -267,6 +267,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every `document.getElementById(literal)` / `document.querySelector('#literal')` call in `apps/{desktop,web,admin}/src` resolves against an `id=\"literal\"` declared either in the same app's index.html or in its TS source (via `.id = \"literal\"`, `setAttribute('id', 'literal')`, or an inline `innerHTML`/template-string HTML fragment). Waivers live in `scripts/check-dom-id-references.allow.json` with a required reason string (invariant #38, added 2026-04-23 after a 37-day dormant `rotate-key-*` id mismatch — commit 6f682fcd (2026-03-17) shipped TS querying `rotate-key-cancel` against HTML ids `rotate-cancel-btn`/etc. The crash sat silent behind an earlier Buffer-polyfill drift that killed module init first; when the Buffer polyfill fix landed the rotate-key crash became reachable and took out the render bootstrap. This gate catches that shape on day one rather than day 37 — extends the sibling-boundary rule to the TS↔HTML pair in surface apps).",
     script: "check-dom-id-references",
   },
+  {
+    name: "check-preset-imports",
+    defends:
+      'canonical preset identifiers exported from `@motebit/sdk` (APPROVAL_PRESET_CONFIGS, ApprovalPresetConfig, COLOR_PRESETS, RISK_LABELS, DEFAULT_GOVERNANCE_CONFIG, DEFAULT_VOICE_CONFIG, DEFAULT_APPEARANCE_CONFIG) are not locally redeclared in any `apps/*/src` file. Re-export trampolines (`export { X } from "@motebit/sdk"`) are allowed; `const`/`interface`/`type`/`enum` redeclarations are CI failures (invariant #40, added 2026-04-24 after an audit found `apps/mobile/src/mobile-app.ts` had redefined `APPROVAL_PRESET_CONFIGS` with `balanced: { denyAbove: 4 }` while the SDK\'s canonical value was `denyAbove: 3` — same motebit identity, divergent governance posture per surface. Extends the sibling-boundary rule to the developer-contract surface: if it ships from `@motebit/sdk` as public API, no app is allowed to shadow it).',
+    script: "check-preset-imports",
+  },
 ];
 
 interface Result {

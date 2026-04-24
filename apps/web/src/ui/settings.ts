@@ -1,6 +1,6 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, GovernanceConfig, VoiceConfig, AppearanceConfig } from "../storage";
-import { DEFAULT_GOVERNANCE_CONFIG, RISK_LABELS } from "@motebit/sdk";
+import { APPROVAL_PRESET_CONFIGS, DEFAULT_GOVERNANCE_CONFIG, RISK_LABELS } from "@motebit/sdk";
 import {
   saveProviderConfig,
   saveSoulColor,
@@ -211,15 +211,6 @@ export interface SettingsAPI {
 export interface SettingsDeps {
   colorPicker: ColorPickerAPI;
 }
-
-const APPROVAL_PRESET_CONFIGS: Record<
-  string,
-  { maxRiskLevel: number; requireApprovalAbove: number; denyAbove: number }
-> = {
-  cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
-  balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
-  autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
-};
 
 const policySummary = document.getElementById("governance-policy-summary") as HTMLDivElement;
 

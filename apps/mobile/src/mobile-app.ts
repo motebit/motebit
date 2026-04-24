@@ -93,41 +93,14 @@ import { MobileMcpManager } from "./mcp-manager";
 import { MobilePairingManager } from "./pairing-manager";
 import { MobilePushTokenManager } from "./push-token-manager";
 
-// Color presets — canonical source in @motebit/sdk. Re-exported so any
-// existing `import { COLOR_PRESETS } from "./mobile-app"` consumer keeps
-// working. Adding a new preset means editing packages/sdk/src/color-presets.ts.
+// Color presets + approval presets — canonical source in @motebit/sdk.
+// Re-exported so any existing `import { COLOR_PRESETS } from "./mobile-app"`
+// consumer keeps working. Adding a new preset means editing the package
+// source in packages/sdk/src/*. Guarded by `check-preset-imports` — apps
+// must not redeclare these identifiers locally.
 import { COLOR_PRESETS } from "@motebit/sdk";
-export { COLOR_PRESETS } from "@motebit/sdk";
-
-// === Approval Presets ===
-
-export interface ApprovalPresetConfig {
-  label: string;
-  description: string;
-  requireApprovalAbove: number;
-  denyAbove: number;
-}
-
-export const APPROVAL_PRESET_CONFIGS: Record<string, ApprovalPresetConfig> = {
-  cautious: {
-    label: "Cautious",
-    description: "Approve everything above read-only",
-    requireApprovalAbove: 0,
-    denyAbove: 3,
-  },
-  balanced: {
-    label: "Balanced",
-    description: "Auto-allow low risk, approve medium",
-    requireApprovalAbove: 1,
-    denyAbove: 4,
-  },
-  autonomous: {
-    label: "Autonomous",
-    description: "Auto-allow most, deny only dangerous",
-    requireApprovalAbove: 2,
-    denyAbove: 4,
-  },
-};
+export { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
+export type { ApprovalPresetConfig } from "@motebit/sdk";
 
 // === Settings ===
 
