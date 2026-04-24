@@ -119,19 +119,60 @@ export interface RenderAdapter {
   /** Remove all artifacts immediately. */
   clearArtifacts?(): void;
 
-  // === Workstation Plane ===
+  // ── Slab ("Motebit Computer") — see docs/doctrine/motebit-computer.md ──
   //
   // A liquid-glass plane floating to the right of the creature where
-  // the agent-workstation surface mounts its content (receipt log,
-  // browser pane). Same material family as the creature, held-tablet
-  // pose, sympathetic breathing. The plane is implicit — the renderer
-  // owns it — callers drive it via these two methods only.
+  // computation materializes. Sibling to constellation / artifact / chat
+  // bubble. The slab itself is implicit (renderer-managed); callers add
+  // slab ITEMS and the renderer handles the plane's emergence, idle
+  // state, and recession. Items either dissolve (ephemeral work), rest
+  // (working material stays on the surface), or detach as artifacts
+  // (durable output — the pinch). Detachment is the pinch — a typed
+  // lifecycle phase, not a private animation detail.
+
+  /** Place a slab item on the working surface. */
+  addSlabItem?(spec: SlabItemSpec): SlabItemHandle | undefined;
+  /** Dissolve a slab item back into the surface (ephemeral end, no artifact). */
+  dissolveSlabItem?(id: string): Promise<void>;
+  /**
+   * Detach a slab item as an artifact via the surface-tension pinch.
+   * Returns the artifact handle the item becomes in the wider scene.
+   * The slab runs the detachment physics (dimple → bead → snap); the
+   * provided `artifact` describes what the detached bead should settle
+   * into mid-flight.
+   */
+  detachSlabItemAsArtifact?(
+    id: string,
+    artifact: ArtifactSpec,
+  ): Promise<ArtifactHandle | undefined>;
+  /** Clear every slab item immediately (no dissolution animation). */
+  clearSlabItems?(): void;
+  /**
+   * User-driven toggle for the slab plane's visibility. When `false`,
+   * the plane is forced hidden regardless of ambient state (items may
+   * still exist in the controller; they're just not on screen). When
+   * `true` (default), visibility is driven by ambient as usual.
+   *
+   * Surfaces wire this to a hotkey and/or a `/screen` slash command so
+   * the user can pull the Motebit Computer out of the scene without
+   * touching the motebit's work underneath.
+   */
+  setSlabVisible?(visible: boolean): void;
+
+  // === Workstation Plane (transitional — pre-slab) ===
+  //
+  // These methods are the pre-slab DOM-panel mount API that the
+  // Phase-1 Workstation panel (apps/{desktop,web}/src/ui/workstation-
+  // panel.ts) uses to project its receipt log onto the liquid-glass
+  // plane. They exist while the slab scene primitive is being restored
+  // from the tagged exploration. Once the slab's `addSlabItem` family
+  // is live on a surface, that surface's Workstation panel can migrate
+  // and this transitional API retires on that surface. See
+  // docs/doctrine/motebit-computer.md for the endgame shape.
 
   /**
    * Mount a caller-owned HTML element as the workstation plane's
    * stage content. Replaces whatever was there; `null` clears.
-   * The element is positioned on the plane via a CSS2DObject; the
-   * renderer handles projection to screen space.
    */
   setWorkstationStageChild?(el: HTMLElement | null): void;
   /**
@@ -148,6 +189,161 @@ export interface RenderAdapter {
    * the plane lit.
    */
   pulseWorkstationActivity?(): void;
+}
+
+// === Slab ("Motebit Computer") — scene primitive types ===
+//
+// See docs/doctrine/motebit-computer.md. The slab is the canonical
+// surface for acts-in-progress; records go in panels, durable outputs
+// detach as artifacts. These types are the cross-surface contract.
+
+/**
+ * Kind of in-progress work a slab item represents. Unlike `ArtifactKind`
+ * (which describes detached, durable outputs), SlabItemKind enumerates
+ * the procedural categories of live work the slab renders.
+ *
+ *   - `stream` — live LLM token stream before it crystallizes.
+ *   - `tool_call` — MCP or function call, {input → output} card.
+ *   - `plan_step` — one step of a running plan.
+ *   - `shell` — bash/command output streaming.
+ *   - `fetch` — web fetch / search / read-url in flight.
+ *   - `embedding` — inference / embedding call in flight.
+ *   - `delegation` — outbound task to a peer motebit on the relay.
+ *     A packet leaves the slab with the target's identity visible;
+ *     returns as a bead carrying a signed ExecutionReceipt. Doctrine:
+ *     motebit-computer.md §Hand — "Delegation outbound." The returned
+ *     receipt is durable — the item pinches to a receipt artifact.
+ *   - `memory` — a memory node rising into attention as the motebit
+ *     thinks (proactive consolidation, same-turn recall). The Mind
+ *     organ's visible breath: "memory surfaces on the slab as it
+ *     becomes relevant." Ephemeral — dissolves when attention moves
+ *     on. Doctrine: motebit-computer.md §Mind.
+ */
+export type SlabItemKind =
+  | "stream"
+  | "tool_call"
+  | "plan_step"
+  | "shell"
+  | "fetch"
+  | "embedding"
+  | "delegation"
+  | "memory";
+
+/**
+ * Embodiment mode — the coarse-grained perceptual category the slab
+ * item belongs to. Orthogonal to `SlabItemKind` (which is the fine-
+ * grained content shape). A single item has both: a `fetch` kind is
+ * typically `tool_result` mode today and may become `virtual_browser`
+ * mode when the renderer ships real embedded pages.
+ *
+ * The motebit perceives through many embodiments, not one. The
+ * Motebit Computer is the single surface where whichever embodiment
+ * is active is rendered live, governed by what the user has granted.
+ * See docs/doctrine/motebit-computer.md §"Embodiment modes" for the
+ * spectrum, the mode × end-state matrix, and the governance gates.
+ *
+ *   - `mind` — internal memory / reasoning surfacing. Always
+ *     permitted; no external governance gate.
+ *   - `tool_result` — cleaned output from a sandboxed tool call.
+ *     Turn-scoped by invocation. The thinnest embodiment.
+ *   - `virtual_browser` — an isolated browser viewport the motebit
+ *     is navigating (Operator-shape). Session-scoped consent.
+ *   - `shared_gaze` — a source both the motebit and the user look
+ *     at (Zed-pattern). Per-source consent.
+ *   - `desktop_drive` — the motebit acts on the user's real desktop
+ *     (Claude Cowork-shape). Explicit, revocable grant.
+ *   - `peer_viewport` — looking into a peer motebit's work via
+ *     federation. Signed delegation + trust graph.
+ */
+export type EmbodimentMode =
+  | "mind"
+  | "tool_result"
+  | "virtual_browser"
+  | "shared_gaze"
+  | "desktop_drive"
+  | "peer_viewport";
+
+/**
+ * Sensible default mapping from `SlabItemKind` to `EmbodimentMode`.
+ * Runtime can override per item when the embodiment doesn't match the
+ * default (e.g., a `fetch` kind opened inside a consented virtual
+ * browser upgrades from `tool_result` to `virtual_browser`).
+ *
+ * The defaults are published in the protocol so every consumer
+ * (controller, bridge, renderer, tests) agrees on what an un-
+ * annotated kind means.
+ */
+export function defaultEmbodimentMode(kind: SlabItemKind): EmbodimentMode {
+  switch (kind) {
+    case "stream":
+    case "plan_step":
+    case "embedding":
+    case "memory":
+      return "mind";
+    case "tool_call":
+    case "shell":
+    case "fetch":
+      return "tool_result";
+    case "delegation":
+      return "peer_viewport";
+  }
+}
+
+/**
+ * Lifecycle phase for a slab item. The doctrine treats detachment as a
+ * typed phase (not a private animation detail) so cross-surface
+ * renderers can't silently diverge on the pinch physics.
+ *
+ *   - `emerging` — item is materializing onto the slab.
+ *   - `active` — item is present and may be streaming updates.
+ *   - `resting` — active work has finished, the item remains on the
+ *     slab as working material (open tab / reference). Stays until
+ *     dismissed by the user, closed by the motebit, or evicted.
+ *     The workstation's natural state; third end-branch alongside
+ *     `pinching` and `dissolving`. Doctrine: motebit-computer.md
+ *     §"Three end states — dissolve, rest, detach."
+ *   - `pinching` — item has produced a durable output; surface dimples
+ *     and the bead is separating under surface tension. Artifact is
+ *     about to spawn; slab is about to ripple back to flat.
+ *   - `detached` — item has left the slab as an artifact in the wider
+ *     scene. The slab's own ripple may still be settling.
+ *   - `dissolving` — item is fading back into the slab surface with
+ *     no artifact spawn (ephemeral end, interrupt, failure, or
+ *     user-dismissed rest item).
+ *   - `gone` — item no longer on the slab; no further transitions.
+ */
+export type SlabItemPhase =
+  | "emerging"
+  | "active"
+  | "resting"
+  | "pinching"
+  | "detached"
+  | "dissolving"
+  | "gone";
+
+/**
+ * Specification for a slab item. The host-element pattern mirrors
+ * `ArtifactSpec` (surface-native HTMLElement held by the caller, slab
+ * positions and animates it in 3D) — keeps the renderer Three.js-free
+ * and lets each surface render content with its native text/streaming
+ * primitives.
+ */
+export interface SlabItemSpec {
+  /** Unique ID for lifecycle management. Stable across phase transitions. */
+  id: string;
+  /** Procedural category (informs default positioning + Fresnel treatment). */
+  kind: SlabItemKind;
+  /** The HTML element to mount onto the slab surface. Owned by the caller. */
+  element: HTMLElement;
+}
+
+/** Handle returned after placing a slab item — controls its lifecycle. */
+export interface SlabItemHandle {
+  id: string;
+  /** Current phase. Renderer drives transitions; callers read for coordination. */
+  getPhase(): SlabItemPhase;
+  /** Subscribe to phase transitions. Returns an unsubscribe thunk. */
+  onPhaseChange(listener: (phase: SlabItemPhase) => void): () => void;
 }
 
 // === Frame-Independent Delta Smoothing ===

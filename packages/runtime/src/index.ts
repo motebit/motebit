@@ -214,3 +214,31 @@ export { deriveStreamActivity, derivePlanActivity, ActivityTracker } from "./act
 export type { ActivityLabel } from "./activity.js";
 export { resolveProactiveAnchor } from "./proactive-anchor.js";
 export type { ResolveProactiveAnchorArgs } from "./proactive-anchor.js";
+
+// Slab ("Motebit Computer") — controller + bridge. See
+// docs/doctrine/motebit-computer.md. Exposed so surfaces and tests
+// consume the lifecycle controller and the cross-surface bridge as
+// one public API. The render-side types (SlabItemSpec,
+// SlabItemHandle, SlabItemPhase, SlabItemKind, EmbodimentMode) live
+// in @motebit/render-engine; controller types here are runtime-layer.
+export {
+  createSlabController,
+  defaultDetachPolicy,
+  type SlabController,
+  type SlabControllerDeps,
+  type SlabItem,
+  type SlabItemOutcome,
+  type SlabState,
+  type SlabAmbient,
+  type SlabSubscriber,
+  type ArtifactKindForDetach,
+  type DetachDecision,
+  type DetachPolicy,
+  type TimeoutHandle,
+} from "./slab-controller.js";
+export {
+  bindSlabControllerToRenderer,
+  type SlabBridgeDeps,
+  type SlabItemActions,
+  type SlabRendererTarget,
+} from "./slab-bridge.js";
