@@ -197,18 +197,19 @@ export class SlabManager {
     this.group.rotation.set(SLAB_TILT_X, SLAB_TILT_Y, 0);
     creatureGroup.add(this.group);
 
-    // Plane geometry — flat rectangular sheet. The meniscus impression
-    // comes from the liquid-glass material's edge Fresnel, not geometry.
-    // Pass 3 may extrude the edges for a more pronounced surface-tension
-    // curve if it reads flat against the creature.
-    // Segmented plane so the pinch physics (Pass 3) has vertices to
-    // displace. 16×16 gives a visible Gaussian bump without overhead
-    // that matters on any device that runs Three.js. The unpinched
-    // geometry is co-planar — vertex Z stays at 0 except during
-    // active pinch displacement.
-    const planeGeo = new THREE.PlaneGeometry(SLAB_WIDTH, SLAB_HEIGHT, 16, 16);
-    // Preserve the flat Z=0 positions so the pinch code can reset to
-    // rest without a geometry rebuild each frame.
+    // Plane geometry — a 17×17 grid (same as PlaneGeometry 16×16) with
+    // the outer ring snapped onto a rounded-rectangle boundary. This
+    // gives the slab a true meniscus-curve outline per doctrine (no
+    // sharp corners) while preserving the dense interior grid that
+    // pinch physics and sympathetic breathing deform. Using geometry
+    // rather than an `alphaMap` because MeshPhysicalMaterial's
+    // `transmission` render pass ignores alphaMap — the material reads
+    // as a hard rectangle regardless. Rounding the actual mesh fixes
+    // both the sharp-corner failure mode and any transmission conflict
+    // in one move.
+    const planeGeo = createMeniscusPlaneGeometry(SLAB_WIDTH, SLAB_HEIGHT, 16, 16);
+    // Preserve the rest positions so the pinch code can reset to
+    // unpinched without a geometry rebuild each frame.
     const posAttr = planeGeo.attributes.position;
     if (posAttr != null) {
       const restPositions = posAttr.array.slice();
@@ -258,16 +259,6 @@ export class SlabManager {
       opacity: 0, // Starts invisible; reveals on first item.
       side: THREE.DoubleSide,
     });
-    // Meniscus mask: a feathered rounded-rectangle alphaMap that
-    // softens the plane's edges into a surface-tension curve. The
-    // underlying 17×17 grid geometry is preserved (so pinch physics,
-    // breathing, and rest-position deformation still index into a
-    // dense vertex array); the shape is purely in alpha.
-    const meniscusMap = createMeniscusAlphaMap(SLAB_WIDTH, SLAB_HEIGHT);
-    if (meniscusMap) {
-      this.planeMaterial.alphaMap = meniscusMap;
-      this.planeMaterial.needsUpdate = true;
-    }
     this.planeMesh = new THREE.Mesh(planeGeo, this.planeMaterial);
     this.planeMesh.visible = false; // skip GL work when truly recessed
     this.group.add(this.planeMesh);
@@ -534,7 +525,6 @@ export class SlabManager {
     this.clearItems();
     this.css2dRenderer.domElement.remove();
     this.planeMesh.geometry.dispose();
-    this.planeMaterial.alphaMap?.dispose();
     this.planeMaterial.dispose();
   }
 
@@ -821,75 +811,80 @@ export class SlabManager {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /**
- * Build a CanvasTexture whose alpha channel is a softly-feathered
- * rounded rectangle. Applied as the plane material's `alphaMap`, this
- * gives the slab a meniscus-like edge without changing the underlying
- * grid geometry (pinch physics, breathing, rest positions all remain
- * indexed by the flat plane's vertex array).
+ * Build a meniscus-shaped plane: a rectangular grid of vertices with
+ * the outer ring snapped onto a rounded-rectangle boundary. Produces
+ * the same vertex count + face topology as `THREE.PlaneGeometry` of
+ * the same segmentation, so pinch physics, sympathetic breathing,
+ * and rest-position deformation all index into the dense interior
+ * grid unchanged — only the silhouette softens.
  *
  * Doctrine: motebit-computer.md §"Visual properties (binding)" —
  * `Edges: meniscus (rounded surface-tension curve), no frame, no
- * border, no corner radius`. A flat rectangle violates this; a
- * rounded rectangle with a soft gaussian falloff at the rim reads as
- * the same liquid-glass material family as the creature, flattened.
+ * border, no corner radius. Droplet family.` A sharp-cornered
+ * rectangle violates this; the creature is a beaded sphere under
+ * surface tension, and the slab is supposed to read as the same
+ * material family flattened.
  *
- * Returns `null` in headless contexts (no `document`); the caller
- * falls back to the un-masked rectangle so tests still run.
+ * Why geometry and not an `alphaMap`: MeshPhysicalMaterial's
+ * `transmission` render pass ignores alphaMap (known Three.js
+ * behavior through at least r170), so a masked plane reads as a
+ * hard rectangle despite the alpha. Rounding the mesh itself fixes
+ * the silhouette and sidesteps the conflict in one move.
  *
- * `aspectW` / `aspectH` should match the plane geometry's aspect —
- * the canvas uses those as its pixel dimensions so the mask's corner
- * radius maps uniformly in UV space without distortion.
+ * The corner-snap maps each vertex that lands inside a corner-square
+ * of side `r` onto the arc of radius `r` centered on the inscribed
+ * rectangle's corner. Interior vertices are untouched; only the
+ * outer band warps. Result: a dense flat grid inside, a softly
+ * curved outline outside.
  */
-function createMeniscusAlphaMap(aspectW: number, aspectH: number): THREE.Texture | null {
-  if (typeof document === "undefined") return null;
-  // Scale up for crisp edges; anti-aliasing + slight blur handle the
-  // feather.
-  const scale = 8;
-  const w = Math.round(aspectW * scale);
-  const h = Math.round(aspectH * scale);
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
+function createMeniscusPlaneGeometry(
+  width: number,
+  height: number,
+  segX: number,
+  segY: number,
+): THREE.PlaneGeometry {
+  const geo = new THREE.PlaneGeometry(width, height, segX, segY);
+  const pos = geo.attributes.position;
+  if (pos == null) return geo;
 
-  // Background: fully transparent (alpha 0). White pixels inside the
-  // rounded rectangle become opaque (alpha 1); the feather is supplied
-  // by a gaussian blur applied during the fill.
-  ctx.clearRect(0, 0, w, h);
+  // Corner radius: ~28% of the shorter side. Generous enough to read
+  // as a droplet rather than "a rectangle with softened corners,"
+  // while leaving a flat interior large enough to host items.
+  const r = Math.min(width, height) * 0.28;
+  const halfW = width / 2;
+  const halfH = height / 2;
+  // Inscribed rectangle's corner coordinates — the centers of the
+  // four corner arcs.
+  const cx = halfW - r;
+  const cy = halfH - r;
 
-  // Corner radius: ~28% of the shorter side. Enough curvature to read
-  // as a droplet (not a rectangle with softened corners) while still
-  // leaving a usable flat interior for items to mount onto.
-  const short = Math.min(w, h);
-  const radius = short * 0.28;
-
-  // Feather: gaussian blur for the meniscus rim softness. ~2% of the
-  // shorter side — subtle, not a glow. Drawn inside an inset padding
-  // so the blur has room to spread without clipping at the canvas
-  // edge.
-  const feather = Math.round(short * 0.02);
-  ctx.filter = `blur(${feather}px)`;
-  ctx.fillStyle = "white";
-
-  const pad = feather * 2;
-  const x0 = pad;
-  const y0 = pad;
-  const x1 = w - pad;
-  const y1 = h - pad;
-  ctx.beginPath();
-  ctx.moveTo(x0 + radius, y0);
-  ctx.arcTo(x1, y0, x1, y0 + radius, radius);
-  ctx.arcTo(x1, y1, x1 - radius, y1, radius);
-  ctx.arcTo(x0, y1, x0, y1 - radius, radius);
-  ctx.arcTo(x0, y0, x0 + radius, y0, radius);
-  ctx.closePath();
-  ctx.fill();
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.NoColorSpace;
-  tex.needsUpdate = true;
-  return tex;
+  const arr = pos.array as Float32Array;
+  for (let i = 0; i < arr.length; i += 3) {
+    const x = arr[i]!;
+    const y = arr[i + 1]!;
+    const absX = Math.abs(x);
+    const absY = Math.abs(y);
+    // Only touch vertices inside a corner region.
+    if (absX <= cx || absY <= cy) continue;
+    // Vector from the corner-arc center out to this vertex.
+    const ax = Math.sign(x) * cx;
+    const ay = Math.sign(y) * cy;
+    const dx = x - ax;
+    const dy = y - ay;
+    const d = Math.hypot(dx, dy);
+    if (d === 0) continue;
+    // Snap the vertex onto the arc (vertices already inside the arc
+    // stay where they are — only those beyond `r` from the corner
+    // center move inward).
+    if (d > r) {
+      const scale = r / d;
+      arr[i] = ax + dx * scale;
+      arr[i + 1] = ay + dy * scale;
+    }
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
 }
 
 /**
