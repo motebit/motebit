@@ -506,27 +506,15 @@ export const relayMigrations: Migration[] = [
         "CREATE INDEX IF NOT EXISTS idx_relay_credentials_unanchored ON relay_credentials(issued_at, credential_id) WHERE anchor_batch_id IS NULL;",
       );
 
-      // ── DO NOT REMOVE — helper-owned tables need these ALTERs ─────
-      //
-      // The two blocks below ALTER tables that are created by init helpers
-      // (`createFederationTables`, `createPairingTables`) BEFORE this
-      // migration fires. See `createSyncRelay` in index.ts — the helpers
-      // run at line ~332; `runMigrations` runs at line ~468. By the time
-      // we get here, `relay_federation_settlements` and `pairing_sessions`
-      // already exist but may be missing columns historical migrations
-      // v3 and v7 added.
-      //
-      // If a future contributor sees "weird ALTER block at the end of a
-      // CREATE-TABLE-heavy migration" and deletes it: fresh installs lose
-      // `relay_federation_settlements.x402_tx_hash` and `x402_network`,
-      // and federation-level x402 settlement persistence silently drops
-      // those fields. The squash-equivalence test catches the drift
-      // (`__tests__/migrations-squash-equivalence.test.ts`) — trust the
-      // red, don't delete the ALTERs.
-      //
-      // If the helper ever learns to declare these columns itself, this
-      // block becomes a no-op via the PRAGMA guard and can be retired in
-      // a follow-up commit. Until then it is load-bearing.
+      // DO NOT REMOVE — load-bearing on `relay_federation_settlements`.
+      // `createFederationTables` and `createPairingTables` run before
+      // `runMigrations` in `createSyncRelay`; historical v3 and v7 added
+      // columns to tables those helpers already created. The pairing
+      // ALTERs are no-ops on the current helper (which declares the
+      // columns) and kept as belt-and-suspenders; the federation ALTERs
+      // are the load-bearing pair — delete them and fresh installs lose
+      // `x402_tx_hash` / `x402_network`. The squash-equivalence test
+      // catches the drift — trust the red, don't delete the block.
       const fedCols = (
         db.prepare("PRAGMA table_info(relay_federation_settlements)").all() as {
           name: string;
