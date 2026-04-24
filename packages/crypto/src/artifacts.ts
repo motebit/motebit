@@ -248,9 +248,9 @@ export async function verifyExecutionReceiptDetailed(
  * Structurally compatible with `@motebit/protocol` ToolInvocationReceipt.
  *
  * A per-tool-call signed artifact: one receipt per invocation of a tool
- * during an agent turn. The workstation surface emits these live as tool
- * calls complete. Binding to the enclosing task is by `task_id`; a
- * verifier can gather all invocations for a task by matching it.
+ * during an agent turn. The slab emits these live as tool calls
+ * complete. Binding to the enclosing task is by `task_id`; a verifier
+ * can gather all invocations for a task by matching it.
  *
  * Commits to structural facts only — tool name, canonical-JSON SHA-256
  * hashes of args and result, timestamps, identities. The raw args and

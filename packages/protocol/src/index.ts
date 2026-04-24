@@ -716,9 +716,9 @@ export interface ExecutionReceipt {
  * Signed per-tool-call proof: one receipt per invocation of a tool during
  * an agent turn. Complements `ExecutionReceipt` (which commits to the
  * task as a whole) by committing to each individual tool call inside
- * the task — the finer-grained audit granularity the agent-workstation
- * surface needs to show the user exactly which tool ran, what it was
- * given, and what it returned, with a signature per call.
+ * the task — the finer-grained audit granularity the Motebit Computer
+ * needs to show the user exactly which tool ran, what it was given,
+ * and what it returned, with a signature per call.
  *
  * Why this exists as its own artifact instead of an inner field on
  * `ExecutionReceipt`:
@@ -726,8 +726,8 @@ export interface ExecutionReceipt {
  *   - Third-party implementers verifying a single tool's output do not
  *     need the enclosing task's receipt — the per-call receipt is
  *     independently self-verifiable with just the signer's public key.
- *   - The workstation surface emits these live as tool calls complete,
- *     before the enclosing task finishes; nesting inside `ExecutionReceipt`
+ *   - The slab emits these live as tool calls complete, before the
+ *     enclosing task finishes; nesting inside `ExecutionReceipt`
  *     would force the UI to wait for the outer receipt.
  *   - Delegation is recursive at the task level (`delegation_receipts`);
  *     keeping tool-invocation receipts separate avoids tangling two

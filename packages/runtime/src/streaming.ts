@@ -104,7 +104,7 @@ export interface StreamingDeps {
    * receipts are auditable per-device, not just per-motebit. Optional
    * on the type for source-compatibility with legacy deps; absent
    * deps skip receipt emission fail-closed (no unsigned artifact
-   * leaves the runtime — the workstation surface just gets no stream
+   * leaves the runtime — downstream subscribers just get no stream
    * from this runtime, and that's the honest signal).
    */
   getDeviceId?: () => string | null;
@@ -130,9 +130,9 @@ export interface StreamingDeps {
    * matched `tool_status.calling` + `tool_status.done` pair, after the
    * receipt has been composed + signed via `signToolInvocationReceipt`.
    *
-   * The workstation surface subscribes to this: it's the event stream
-   * that populates the per-call audit trail the user sees while the
-   * motebit works. Subscribers MUST NOT mutate the receipt (frozen by
+   * The slab projection subscribes to this (via the runtime's
+   * `projectSlabForTurn` wrapper); panels + telemetry subscribe
+   * as peers. Subscribers MUST NOT mutate the receipt (frozen by
    * `signToolInvocationReceipt`) or block the generator — they get
    * fire-and-forget delivery and any exception is logged and dropped.
    */
@@ -141,17 +141,17 @@ export interface StreamingDeps {
    * Sink for live tool-invocation activity — the raw args + result
    * bytes the receipt's `args_hash` / `result_hash` commit to. Fires
    * at the same point as `onToolInvocation`, with a payload shaped
-   * for rendering (the workstation's browser pane reads `args.url`
-   * and the fetched content from `result`).
+   * for rendering (slab items in virtual_browser mode read
+   * `args.url` and the fetched content from `result`).
    *
    * Separate channel from `onToolInvocation` on purpose: the receipt
    * is a signed audit artifact that commits to hashes only, so the
    * signed wire stays thin and sensitive content never sits in a
-   * persisted receipt. Activity is ephemeral UX context — the panel
-   * consumes it to render what the motebit is currently doing, then
-   * the next activity event supersedes it. Callers that only want
-   * audit use `onToolInvocation`; callers that only want live UX use
-   * `onToolActivity`; the workstation surface uses both.
+   * persisted receipt. Activity is ephemeral UX context — the slab
+   * (via projectSlabForTurn) consumes it to render what the motebit
+   * is currently doing, then the next activity event supersedes it.
+   * Callers that only want audit use `onToolInvocation`; callers
+   * that only want live UX use `onToolActivity`; the slab uses both.
    *
    * Subscribers MUST NOT retain the payload beyond the call — the
    * args and result are not part of the audit trail and may contain
@@ -162,8 +162,8 @@ export interface StreamingDeps {
 
 /**
  * Payload shape for the `onToolActivity` sink. Carries the raw bytes
- * the receipt's hashes commit to, so the workstation surface can
- * render live content (e.g. the fetched page of a `read_url` call)
+ * the receipt's hashes commit to, so the slab (in virtual_browser
+ * mode) can render live content (e.g. the fetched page of a `read_url` call)
  * without waiting for the signed receipt to be composed.
  *
  * The `invocation_id` matches `ToolInvocationReceipt.invocation_id`
@@ -316,15 +316,15 @@ export class StreamingManager {
           this.deps.logToolUsed(chunk.name, chunk.result);
           // Per-tool-call signed receipt: match with the earlier
           // "calling" snapshot by tool_call_id, compose, sign, fire
-          // the workstation sink. Fail-closed at every branch — no
+          // the invocation sink. Fail-closed at every branch — no
           // unsigned or half-composed artifact leaves the runtime.
           if (typeof chunk.tool_call_id === "string") {
             const pending = pendingToolCalls.get(chunk.tool_call_id);
             if (pending) {
               pendingToolCalls.delete(chunk.tool_call_id);
               const completedAt = Date.now();
-              // Fire the ephemeral activity channel FIRST — the
-              // workstation panel's browser pane responds to this
+              // Fire the ephemeral activity channel FIRST — slab
+              // items in virtual_browser mode respond to this
               // immediately; the signed receipt follows microseconds
               // later. Each sink is independent and fail-closed.
               this.fireToolActivity({
@@ -443,10 +443,10 @@ export class StreamingManager {
 
     if (result) {
       // Scheduled runs (suppressHistory) don't appear in the chat
-      // conversation at all — they have their own surface in the
-      // workstation panel's scheduled-runs view. Skipping the push
-      // keeps recurring background tasks from polluting the dialogue
-      // the user is having with the motebit.
+      // conversation at all — they surface through the slab via
+      // the projection wrapper and list in the Goals panel. Skipping
+      // the chat push keeps recurring background tasks from polluting
+      // the dialogue the user is having with the motebit.
       if (options?.suppressHistory) {
         // no history push — scheduled/background run
       } else if (options?.activationOnly) {
@@ -637,7 +637,7 @@ export class StreamingManager {
   /**
    * Fire the raw activity event to the live UX channel (if wired).
    * No signing, no hashing — this is the ephemeral "what the motebit
-   * is doing right now" stream the workstation's browser pane
+   * is doing right now" stream the slab (in virtual_browser mode)
    * consumes. Subscribers that throw are isolated from each other
    * and from the signed-receipt path.
    */
@@ -655,7 +655,7 @@ export class StreamingManager {
 
   /**
    * Compose and sign a `ToolInvocationReceipt` for one matched
-   * calling→done pair, then deliver it to the workstation sink.
+   * calling→done pair, then deliver it to the invocation sink.
    *
    * Fail-closed at every dependency boundary:
    *   - no `onToolInvocation` sink → drop silently (consumer opted out)

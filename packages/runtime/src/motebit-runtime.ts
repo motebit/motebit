@@ -177,7 +177,7 @@ const TENDING_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
  * Tool names whose completed slab items settle into `resting` rather
  * than dissolving. Doctrine (motebit-computer.md §"Three end states"):
  * working material — fetched pages, terminal output, search results —
- * stays on the workstation as reference until the user dismisses it.
+ * stays on the slab as reference until the user dismisses it.
  * Everything else (embedding calls, plumbing tools, failed invocations)
  * dissolves through the default endItem path.
  *
@@ -359,14 +359,14 @@ export class MotebitRuntime {
    * streaming manager fires this once per matched calling→done pair
    * after composing + signing the receipt. Wired through from
    * `RuntimeConfig.onToolInvocation` at construction time; the
-   * workstation surface subscribes here to populate the per-call
-   * audit trail the user sees while the motebit works.
+   * slab projection + panels + telemetry subscribe here to populate
+   * the per-call audit trail the user sees while the motebit works.
    */
   private _onToolInvocation:
     | ((receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void)
     | null;
   /**
-   * Live activity sink for the Workstation panel's browser pane and
+   * Live activity sink for slab items in virtual_browser mode and
    * any other surface that needs the raw args/result alongside the
    * signed audit trail. Ephemeral by contract — consumers must not
    * persist the payload beyond the call.
@@ -885,12 +885,13 @@ export class MotebitRuntime {
 
   /**
    * Execute a local tool directly — the deterministic, LLM-free path
-   * for surface affordances that must invoke a specific tool (e.g. the
-   * Workstation URL bar firing `read_url` when the user types + enters
-   * a URL). Mirrors the same activity + signed-receipt hooks the AI
-   * loop fires, but with `invocation_origin` defaulting to `"user-tap"`
-   * so the audit trail discriminates user-driven invocations from
-   * model-mediated ones.
+   * for surface affordances that must invoke a specific tool (e.g. a
+   * slash command firing `read_url` with a user-supplied URL, a user
+   * tap re-running a rested fetch). Mirrors the same activity +
+   * signed-receipt hooks the AI loop fires, but with
+   * `invocation_origin` defaulting to `"user-tap"` so the audit
+   * trail discriminates user-driven invocations from model-mediated
+   * ones.
    *
    * Per the surface-determinism doctrine, explicit UI affordances
    * MUST route through a typed capability path, never through a
@@ -923,8 +924,8 @@ export class MotebitRuntime {
     const completedAt = Date.now();
     const visibleResult = result.ok ? (result.data ?? null) : (result.error ?? null);
 
-    // Fire the live activity channel first — the workstation pane
-    // renders immediately; receipt lands right after.
+    // Fire the live activity channel first — the slab renders
+    // immediately; receipt lands right after.
     if (this._onToolActivity) {
       try {
         this._onToolActivity({
@@ -1397,12 +1398,12 @@ export class MotebitRuntime {
             if (toolItemId != null) {
               toolItemIds.delete(chunk.name);
               // End state: dissolve, rest, or detach? Doctrine
-              // (motebit-computer.md §"Three end states"): the
-              // workstation holds working material. Fetched pages,
-              // terminal output, and search results are the motebit's
-              // open tabs — they stay on the slab as reference until
-              // the user dismisses them. Everything else (embedding
-              // calls, plumbing tools, failed invocations) dissolves.
+              // (motebit-computer.md §"Three end states"): the slab
+              // holds working material. Fetched pages, terminal output,
+              // and search results are the motebit's open tabs — they
+              // stay on the slab as reference until the user dismisses
+              // them. Everything else (embedding calls, plumbing tools,
+              // failed invocations) dissolves.
               if (isRestingTool(chunk.name) && chunk.result != null) {
                 this.slab.restItem(toolItemId, {
                   name: chunk.name,

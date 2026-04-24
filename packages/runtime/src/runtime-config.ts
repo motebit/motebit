@@ -101,8 +101,8 @@ export interface RuntimeConfig {
    * Optional sink for signed `ToolInvocationReceipt`s emitted by the
    * streaming manager. Called once per matched tool-call calling→done
    * pair, after the receipt has been composed and signed via
-   * `signToolInvocationReceipt`. The workstation surface subscribes
-   * here.
+   * `signToolInvocationReceipt`. The slab subscribes here via the
+   * projection wrapper; panels and telemetry subscribe as peers.
    *
    * Fail-closed: if this is undefined, no signing or sink delivery
    * happens — no background signing cost for consumers that don't
@@ -114,7 +114,7 @@ export interface RuntimeConfig {
    * Optional live-activity sink for tool calls — delivers the raw args
    * + result bytes alongside the structured event at the same moment
    * the receipt is signed. Intended for surfaces that render *what the
-   * motebit is doing right now* (the Workstation panel's browser pane
+   * motebit is doing right now* (the slab in virtual_browser mode
    * reads the URL from `event.args.url` and the fetched content from
    * `event.result`). See `ToolActivityEvent` for the shape.
    *

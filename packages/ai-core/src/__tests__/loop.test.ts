@@ -569,7 +569,7 @@ describe("runTurnStreaming (agentic loop)", () => {
       | undefined;
     expect(toolCallingChunk).toBeDefined();
     expect(toolCallingChunk!.name).toBe("get_weather");
-    // The workstation receipt signer (see @motebit/crypto
+    // The tool-invocation receipt signer (see @motebit/crypto
     // signToolInvocationReceipt) needs tool_call_id + args + started_at
     // present on "calling" so it can hash + sign per-invocation.
     expect(toolCallingChunk!.tool_call_id).toBe("tc_1");

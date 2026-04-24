@@ -36,8 +36,8 @@ import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/
 
 // ── Hover-close affordance ────────────────────────────────────────────
 //
-// Under the workstation frame (motebit-computer.md §"Affordances that
-// emerge from the surface, not conventional window chrome"): desktop
+// Per motebit-computer.md §"Affordances that emerge from the surface,
+// not conventional window chrome": desktop
 // pointers need a close affordance, but it must read as a droplet
 // meniscus-dip, not a gray OS button. The × only materializes on
 // pointerenter, dissolves on leave, and routes through the typed
