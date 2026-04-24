@@ -5,8 +5,14 @@ import {
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
+  bindSlabControllerToRenderer,
 } from "@motebit/runtime";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
+import {
+  renderSlabItem,
+  updateSlabItem,
+  renderDetachArtifact as renderSlabDetachArtifact,
+} from "./ui/slab-items";
 import type {
   ConversationMessage,
   BehaviorCues,
@@ -114,6 +120,15 @@ export class WebApp {
   private renderer = new ThreeJSAdapter();
   private cursorPresence = new CursorPresence();
   private runtime: MotebitRuntime | null = null;
+  /**
+   * Slab bridge unsub — set after the runtime is constructed and the
+   * slab controller is bound to the render adapter via
+   * `bindSlabControllerToRenderer(...)`. Called on `stop()` to drop
+   * the controller → renderer subscription so the runtime can be
+   * replaced without leaking handlers. Null before bind + after unsub.
+   * Sibling of `DesktopApp.slabBridgeUnsub`.
+   */
+  private slabBridgeUnsub: (() => void) | null = null;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -383,6 +398,26 @@ export class WebApp {
     // Web surface: HTTP MCP only (no stdio, no filesystem, no secure keyring)
     this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp]);
 
+    // Slab ("Motebit Computer") bridge — sibling of DesktopApp's
+    // binding (apps/desktop/src/index.ts). runtime.slab emits
+    // lifecycle events for stream / tool_call / delegation items; the
+    // bridge diffs state and mounts per-item HTMLElements on the
+    // Three.js slab plane via the four RenderAdapter methods. Per-
+    // kind renderers in ./ui/slab-items.ts stay out of this file.
+    // Doctrine: docs/doctrine/motebit-computer.md.
+    //
+    // Today the ThreeJSAdapter's slab methods are stubs (Phase-6
+    // pending); items flow but don't visually render yet. The
+    // subscription plumbing is still correct — the stubs no-op
+    // cleanly via optional chaining in the bridge.
+    this.slabBridgeUnsub = bindSlabControllerToRenderer({
+      controller: this.runtime.slab,
+      renderer: this.renderer,
+      renderItem: renderSlabItem,
+      updateItem: updateSlabItem,
+      renderDetachArtifact: renderSlabDetachArtifact,
+    });
+
     // Register web-safe tools
     this.registerWebTools();
 
@@ -575,6 +610,10 @@ export class WebApp {
     if (this.housekeepingInterval != null) {
       clearInterval(this.housekeepingInterval);
       this.housekeepingInterval = null;
+    }
+    if (this.slabBridgeUnsub) {
+      this.slabBridgeUnsub();
+      this.slabBridgeUnsub = null;
     }
     this.runtime?.stop();
     this.renderer.dispose();

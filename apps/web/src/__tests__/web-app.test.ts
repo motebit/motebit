@@ -40,6 +40,30 @@ vi.mock("@motebit/render-engine", () => {
     tick() {}
     dispose() {}
   }
+  // Slab default-embodiment mapping is a pure function in spec.ts.
+  // SlabController imports it at module load via @motebit/render-engine;
+  // the test mock must export it so `createSlabController(...)` (called
+  // from MotebitRuntime's constructor) can construct without throwing.
+  // Mirrors real behavior — default is tool_result for tool_call / shell /
+  // fetch kinds, mind for stream / plan_step / embedding / memory, and
+  // peer_viewport for delegation.
+  function defaultEmbodimentMode(kind: string): string {
+    switch (kind) {
+      case "stream":
+      case "plan_step":
+      case "embedding":
+      case "memory":
+        return "mind";
+      case "tool_call":
+      case "shell":
+      case "fetch":
+        return "tool_result";
+      case "delegation":
+        return "peer_viewport";
+      default:
+        return "tool_result";
+    }
+  }
   return {
     ThreeJSAdapter: MockThreeJSAdapter,
     NullRenderAdapter: MockThreeJSAdapter,
@@ -49,6 +73,7 @@ vi.mock("@motebit/render-engine", () => {
     // the web-app renders without satellites (same contract as when
     // getCreatureGroup() returns null).
     mountCredentialSatellites: () => null,
+    defaultEmbodimentMode,
   };
 });
 
