@@ -1,5 +1,44 @@
 # @motebit/mcp-server
 
+## 0.1.18
+
+### Patch Changes
+
+- 78f7d69: fix: default log callback to visible console.warn instead of silent no-op
+
+  `startServiceServer`'s `log` callback was optional, defaulting to silent
+  when callers didn't pass one. None of the six reference services wired it,
+  so registration failures (`"Relay registration failed: 401"`, etc.) and
+  successes (`"Registered with relay (capabilities: …)"`) were invisible in
+  every deployed service — classic fail-loudly violation hiding real
+  operational drift.
+
+  Default now routes to `console.warn` with a `[motebit/mcp-server]` prefix.
+  Callers who want to suppress entirely can pass `() => {}`; callers who want
+  structured logging can still pass their own function. No breaking change for
+  anyone who passed a custom `log`; anyone who didn't now sees the previously-
+  hidden output.
+
+  Discovered while diagnosing why only `research` appeared in motebit.com's
+  Discover tab despite five other services being deployed and healthy. The
+  registration code was running silently across all six; the failures were
+  hidden by this default.
+
+- Updated dependencies [699ba41]
+- Updated dependencies [1690469]
+- Updated dependencies [009f56e]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [3747b7a]
+- Updated dependencies [1e07df5]
+  - @motebit/sdk@1.0.0
+  - @motebit/encryption@0.2.0
+  - @motebit/identity-file@0.1.18
+  - @motebit/core-identity@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

@@ -1,5 +1,648 @@
 # motebit CLI Changelog
 
+## 1.0.0
+
+### Major Changes
+
+- 009f56e: Add cryptosuite discriminator to every signed wire-format artifact.
+
+  `@motebit/protocol` now exports `SuiteId`, `SuiteEntry`, `SuiteStatus`,
+  `SuiteAlgorithm`, `SuiteCanonicalization`, `SuiteSignatureEncoding`,
+  `SuitePublicKeyEncoding`, `SUITE_REGISTRY`, `ALL_SUITE_IDS`, `isSuiteId`,
+  `getSuiteEntry`. Every signed artifact type gains a required `suite:
+SuiteId` field alongside `signature`. Four Ed25519 suites enumerated
+  (`motebit-jcs-ed25519-b64-v1`, `motebit-jcs-ed25519-hex-v1`,
+  `motebit-jwt-ed25519-v1`, `motebit-concat-ed25519-hex-v1`) plus the
+  existing W3C `eddsa-jcs-2022` for Verifiable Credentials.
+
+  Verifiers reject missing or unknown `suite` values fail-closed. No
+  legacy compatibility path. Signers emit `suite` on every new artifact.
+
+  Identity file signature format changed:
+  - Old: `<!-- motebit:sig:Ed25519:{hex} -->`
+  - New: `<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex} -->`
+
+  The `identity.algorithm` frontmatter field is deprecated (ignored with
+  a warning when present; no longer emitted on export).
+
+  Post-quantum migration becomes a new `SuiteId` entry + dispatch arm in
+  `@motebit/crypto/suite-dispatch.ts`, not a wire-format change.
+
+  ## Migration
+
+  This release is breaking for every consumer that constructs, signs, or verifies a motebit signed artifact. The change is mechanical — add one field on construction, pass one argument on sign, re-sign identity files once — but there is no legacy acceptance path, so every caller must update in lockstep. Verifiers reject unsuited or unknown-suite artifacts fail-closed. Migration steps follow, grouped by the consumer surface.
+
+  ### For consumers of `@motebit/protocol` types
+
+  Every signed-artifact type now has a required `suite: SuiteId` field.
+  Anywhere you construct one (tests, mocks, fixtures), add the correct
+  suite value for that artifact class — see `SUITE_REGISTRY`'s
+  `description` field for the per-artifact assignment, or consult
+  `spec/<artifact>-v1.md §N.N` for the binding wire format.
+
+  ```ts
+  // Before
+  const receipt: ExecutionReceipt = {
+    task_id, motebit_id, ...,
+    signature: sigHex,
+  };
+
+  // After
+  import type { SuiteId } from "@motebit/protocol";
+  const receipt: ExecutionReceipt = {
+    task_id, motebit_id, ...,
+    suite: "motebit-jcs-ed25519-b64-v1" satisfies SuiteId,
+    signature: sigHex,
+  };
+  ```
+
+  ### For consumers of `@motebit/crypto` sign/verify helpers
+
+  Sign helpers that previously accepted just keys now require a `suite`
+  parameter constrained to the suites valid for the artifact class:
+
+  ```ts
+  // Before
+  const receipt = await signExecutionReceipt(body, privateKey);
+
+  // After
+  const receipt = await signExecutionReceipt(body, privateKey, {
+    suite: "motebit-jcs-ed25519-b64-v1",
+  });
+  ```
+
+  Verify helpers route through the internal `verifyBySuite` dispatcher;
+  direct calls are unchanged at the boundary, but behavior now rejects
+  artifacts without a `suite` field (legacy-no-suite path is deleted).
+
+  ### For consumers of `motebit.md` identity files
+
+  Identity files signed before this release will fail to parse. Re-sign
+  by running `motebit export --regenerate` (or the CLI equivalent) after
+  upgrading. The `identity.algorithm` YAML field is ignored on new
+  parses and no longer emitted on export.
+
+  ### For consumers of `DelegationToken` (`@motebit/crypto`)
+
+  `DelegationToken` carries two breaking changes beyond the suite addition.
+  Public keys are now **hex-encoded** (64 chars, lowercase) instead of
+  base64url — consistent with every other Ed25519-key-carrying motebit
+  artifact. And `signDelegation` takes `Omit<DelegationToken, "signature"
+| "suite">` (the signer stamps the suite).
+
+  ```ts
+  // Before
+  const token = await signDelegation(
+    {
+      delegator_id,
+      delegator_public_key: toBase64Url(kp.publicKey),
+      delegate_id,
+      delegate_public_key: toBase64Url(otherKp.publicKey),
+      scope,
+      issued_at,
+      expires_at,
+    },
+    kp.privateKey,
+  );
+
+  // After
+  const token = await signDelegation(
+    {
+      delegator_id,
+      delegator_public_key: bytesToHex(kp.publicKey),
+      delegate_id,
+      delegate_public_key: bytesToHex(otherKp.publicKey),
+      scope,
+      issued_at,
+      expires_at,
+    },
+    kp.privateKey,
+  );
+  // token.suite is stamped as "motebit-jcs-ed25519-b64-v1"
+  ```
+
+  Verifiers reject tokens without `suite` (or with any value other than
+  `"motebit-jcs-ed25519-b64-v1"`) fail-closed, and decode `delegator_public_key`
+  from hex. Base64url-encoded tokens issued before this release do not
+  verify — pre-launch, no migration tool is provided; re-issue tokens
+  after upgrading.
+
+  ### Running the new drift gates locally
+
+  `pnpm run check` now runs ten drift gates (previously eight). Two new
+  gates — `check-suite-declared` and `check-suite-dispatch` — enforce
+  that every signed Wire-format spec section names a `suite` field and
+  that every verifier in `@motebit/crypto` dispatches via the shared
+  `verifyBySuite` function (no direct primitive calls).
+
+- e17bf47: Publish the four hardware-attestation platform verifier leaves as first-class
+  Apache-2.0 packages, joining the fixed-group release at 1.0.0.
+
+  Stop-ship finding from the 1.0 pre-publish audit: `@motebit/verify@1.0.0`
+  declared runtime dependencies on four `@motebit/crypto-*` adapters marked
+  `"private": true`, which would have caused `npm install @motebit/verify` to
+  404 on the adapters. The root `LICENSE`, `README.md`, `LICENSING.md`, and the
+  hardware-attestation doctrine all claim these adapters as public Apache-2.0
+  permissive-floor packages — the `"private": true` markers were doctrine drift
+  left behind from scaffolding.
+
+  This changeset closes the drift by publishing the adapters and wiring them
+  into the fixed group so they bump in lockstep with the rest of the protocol
+  surface:
+  - `@motebit/crypto-appattest` — Apple App Attest chain verifier (pinned
+    Apple root)
+  - `@motebit/crypto-play-integrity` — Google Play Integrity JWT verifier
+    (pinned Google JWKS; structurally complete, fail-closed by default pending
+    operator key wiring)
+  - `@motebit/crypto-tpm` — TPM 2.0 Endorsement-Key chain verifier (pinned
+    vendor roots)
+  - `@motebit/crypto-webauthn` — WebAuthn packed-attestation verifier (pinned
+    FIDO roots)
+
+  Each carries the standard permissive-floor manifest (description, `exports`,
+  `files`, `sideEffects: false`, `NOTICE`, keywords, homepage/repository/bugs,
+  `publishConfig: public`, `lint:pack` with `publint` + `attw`, focused README
+  showing how to wire the verifier into `@motebit/crypto`'s
+  `HardwareAttestationVerifiers` dispatcher).
+
+  Also in this changeset:
+  - `engines.node` aligned to `>=20` across `@motebit/protocol`, `@motebit/sdk`,
+    and `@motebit/crypto` — matches the rest of the fixed group and removes
+    downstream consumer confusion (a `@motebit/verify` consumer on Node 18
+    previously got inconsistent engines-check signals between libraries).
+  - `NOTICE` added to `motebit` (the bundled CLI's tarball, required by Apache
+    §4(d) because the bundle inlines Apache-licensed code from the permissive
+    floor).
+
+  No code changes — all four adapter implementations and public APIs are
+  unchanged. The flip is manifest + metadata + README + fixed-group wiring.
+
+  ## Migration
+
+  **For `@motebit/verify` consumers:** no action required. `npm install -g @motebit/verify@1.0.0` now correctly pulls the four platform adapter packages from npm instead of failing on unpublished `workspace:*` refs. Before this changeset, `npm install @motebit/verify@1.0.0` would have 404'd on `@motebit/crypto-appattest@1.0.0` et al.
+
+  **For direct library consumers (new capability):** the four platform adapters can now be imported independently when a third party wants only one platform's verifier without pulling the full CLI. Wiring into `@motebit/crypto`'s dispatcher:
+
+  ```ts
+  // Before (1.0.0-rc and earlier — adapters not installable from npm):
+  // only possible via @motebit/verify's bundled verifyFile():
+  import { verifyFile } from "@motebit/verifier";
+  import { buildHardwareVerifiers } from "@motebit/verify";
+  const result = await verifyFile("cred.json", {
+    hardwareAttestation: buildHardwareVerifiers(),
+  });
+
+  // After (1.0.0 — fine-grained composition):
+  import { verify } from "@motebit/crypto";
+  import { deviceCheckVerifier } from "@motebit/crypto-appattest";
+  import { webauthnVerifier } from "@motebit/crypto-webauthn";
+
+  const result = await verify(credential, {
+    hardwareAttestation: {
+      deviceCheck: deviceCheckVerifier({ expectedBundleId: "com.example.app" }),
+      webauthn: webauthnVerifier({ expectedRpId: "example.com" }),
+      // tpm / playIntegrity omitted — verifier returns `adapter-not-configured` for those platforms
+    },
+  });
+  ```
+
+  **For Node 18 consumers of `@motebit/protocol`, `@motebit/sdk`, or `@motebit/crypto`:** the `engines.node` field now declares `>=20` across the entire fixed group (previously drifted: protocol/sdk/crypto said `>=18`, other packages said `>=20`). npm does not hard-enforce `engines` by default, so installs continue to succeed — but teams running strict-engine linters should upgrade to Node 20 LTS. Node 18 entered maintenance-only status April 2025.
+
+  **For third-party protocol implementers:** no wire-format changes. The four platform attestation wire formats (`AppAttestCbor`, Play Integrity JWT, `TPMS_ATTEST`, WebAuthn packed attestation) are unchanged — this changeset only publishes the reference TypeScript verifiers for each.
+
+- 58c6d99: **@motebit/verify resurrected as the canonical CLI, three-package lineage locked in.**
+
+  The entire published protocol surface bumps to 1.0.0 in a coordinated release. What changes at npm:
+  - **`@motebit/verify@1.0.0`** — fresh lineage superseding the deprecated `0.7.0` zero-dep library. Ships the `motebit-verify` CLI binary with every hardware-attestation platform bundled (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn) and motebit-canonical defaults pre-wired (bundle IDs, RP ID, integrity floor). Network-free, self-attesting. License: Apache-2.0 — the aggregator encodes no motebit-proprietary judgment (defaults are overridable flags, not trust scoring or economics), so it sits on the permissive floor alongside the underlying leaves. Runs `npm install -g @motebit/verify` to get the tool, no license friction in CI pipelines or enterprise audit tooling.
+  - **`@motebit/verifier@1.0.0`** — library-only. The `motebit-verify` CLI that used to live here has moved to `@motebit/verify` (above). This package now ships only the Apache-2.0 helpers (`verifyFile`, `verifyArtifact`, `formatHuman`, `VerifyFileOptions` with the optional `hardwareAttestation` injection point). Third parties writing Apache-2.0-only TypeScript verifiers compose this with `@motebit/crypto` — and optionally any subset of the four Apache-2.0 `@motebit/crypto-*` platform leaves — without pulling BSL code.
+  - **`@motebit/crypto@1.0.0`** — role unchanged; version bump marks 1.0 maturity of the primitive substrate. Apache-2.0 (upgraded from MIT in the same release; the floor flip gives every contributor's work an explicit patent grant and litigation-termination clause), zero monorepo deps.
+  - **`@motebit/protocol@1.0.0`** — wire types + algebra. Apache-2.0 permissive floor. 1.0 signals the protocol surface is stable enough to implement against.
+  - **`@motebit/sdk@1.0.0`** — stable developer-contract surface. 1.0 locks the provider-resolver / preset / config vocabulary for integrators.
+  - **`create-motebit@1.0.0`** — scaffolder bumps to match.
+  - **`motebit@1.0.0`** — operator console CLI bumps to match.
+
+  The three-package lineage for verification tooling follows the pattern that survives decades — git / libgit2, cargo / tokio, npm / @npm/arborist:
+
+  ```
+  @motebit/verify                Apache-2.0  the CLI motebit-verify + motebit-canonical defaults over the bundled leaves
+  @motebit/verifier              Apache-2.0  library: verifyFile, verifyArtifact, formatHuman
+  @motebit/crypto                Apache-2.0  primitives: verify, sign, suite dispatch
+  @motebit/crypto-appattest      Apache-2.0  Apple App Attest chain verifier (pinned Apple root)
+  @motebit/crypto-play-integrity Apache-2.0  Google Play Integrity JWT verifier (pinned Google JWKS)
+  @motebit/crypto-tpm            Apache-2.0  TPM 2.0 EK chain verifier (pinned vendor roots)
+  @motebit/crypto-webauthn       Apache-2.0  WebAuthn packed-attestation verifier (pinned FIDO roots)
+  ```
+
+  All seven packages in the verification lineage ship Apache-2.0 — the full verification surface lives on the permissive floor. Each answers "how is this artifact verified?" against a published public trust anchor, the permissive side of the protocol-model boundary test. The BSL line holds at `motebit` (the operator console) and everything below it, where the actual reference-implementation judgment lives (daemon, MCP server, delegation routing, market integration, federation wiring). See the separate `permissive-floor-apache-2-0` and `verify-cli-apache-2-0` changesets for the rationale behind the floor licensing.
+
+  ## Migration
+
+  The 1.0 release is a coordinated major bump across the fixed release group. The APIs exported by `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `create-motebit`, and `motebit` have NOT broken — this major marks endgame-pattern maturity, not a code-shape change. The actual behavioral shifts are confined to the verification-tooling lineage:
+
+  **1. `@motebit/verifier` bin removed (breaking).**
+
+  ```ts
+  // Before — @motebit/verifier@0.8.x shipped a `motebit-verify` binary.
+  // After  — @motebit/verifier@1.0.0 is library-only.
+  // Install `@motebit/verify@^1.0.0` for the CLI:
+  //   npm install -g @motebit/verify
+  //   motebit-verify cred.json
+  // The programmatic library surface is unchanged:
+  import { verifyFile, formatHuman } from "@motebit/verifier"; // ← still works
+  ```
+
+  **2. `@motebit/verify@0.7.0` (deprecated library) → `@motebit/verify@1.0.0` (resurrected CLI).**
+
+  | You were using (0.7.0)                               | Migrate to                                                                          |
+  | ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
+  | `verify()` function in TypeScript                    | `import { verify } from "@motebit/crypto"` — same shape, more features              |
+  | `verifyFile` / `formatHuman` / programmatic wrappers | `import { verifyFile } from "@motebit/verifier"`                                    |
+  | Running `motebit-verify` on the command line         | `npm install -g @motebit/verify` at `^1.0.0` — same command, full platform coverage |
+
+  Users pinned to `"@motebit/verify": "^0.7.0"` stay on the deprecated 0.x line automatically — semver prevents auto-bumps to 1.0.0. The 0.x tarballs remain immutable on npm; archaeology is preserved.
+
+  ## Rationale
+
+  The entire published protocol surface hits 1.0 together as the endgame-pattern milestone. The three-package lineage for verification tooling (verify / verifier / crypto) follows the shape long-lived tool families use — git / libgit2, cargo / tokio, npm / @npm/arborist. The coordinated major signals that this is the architecture intended to hold long-term.
+
+  **Operator follow-up — run immediately after `pnpm changeset publish` returns:**
+
+  ```bash
+  npm deprecate @motebit/verify@0.7.0 \
+    "Superseded by @motebit/verify@1.x — the canonical CLI. For the library, see @motebit/crypto."
+  ```
+
+  The current deprecation message on `0.7.0` dates from the 2026-04-09 package rename and still claims "Same MIT license" — factually correct then, stale the moment 1.0.0 ships (the permissive floor is now Apache-2.0). The replacement message points at both migration paths — the CLI (`@motebit/verify@1.x`) and the library (`@motebit/crypto`) — and makes no license claim that can age. Running it immediately after publish keeps the stale-message window down to minutes, not days.
+
+### Minor Changes
+
+- e897ab0: Ship the three-tier answer engine.
+
+  Every query now routes through a knowledge hierarchy with one shared
+  citation shape: **interior → (federation) → public web**. The motebit's
+  own answer to "what is Motebit?" now comes from the corpus it ships with,
+  not from a Brave index that returns Motobilt (Jeep parts) because
+  open-web signal for a new product is near-zero.
+
+  ### Ship-today scope
+  - **Interior tier:** new `@motebit/self-knowledge` package — a committed
+    BM25 index over `README.md`, `DROPLET.md`, `THE_SOVEREIGN_INTERIOR.md`,
+    `THE_METABOLIC_PRINCIPLE.md`. Zero runtime dependencies, zero network,
+    zero tokens. Build script `scripts/build-self-knowledge.ts` regenerates
+    the corpus deterministically; source hash is deterministic so the file
+    is diff-stable when sources don't change.
+  - **`recall_self` builtin tool** in `@motebit/tools` (web-safe), mirroring
+    `recall_memories` shape. Registered alongside existing builtins in
+    `apps/web` and `apps/cli`. (Spatial surface intentionally deferred — it
+    doesn't register builtin tools today; `recall_self` would be ahead of
+    the parity line.)
+  - **Site biasing:** new `BiasedSearchProvider` wrapper in `@motebit/tools`
+    composes with `FallbackSearchProvider`. `services/web-search` wraps its
+    Brave→DuckDuckGo chain with the default motebit bias rule —
+    `"motebit"` queries are rewritten to include
+    `site:motebit.com OR site:docs.motebit.com OR site:github.com/motebit`.
+    Word-boundary matching prevents "Motobilt" from tripping the rule.
+  - **`CitedAnswer` + `Citation` wire types** in `@motebit/protocol`
+    (Apache-2.0 permissive floor). Universal shape for grounded answers
+    across tiers: interior citations are self-attested (corpus locator,
+    no receipt); web and federation citations bind to a signed
+    `ExecutionReceipt.task_id` in the outer receipt's `delegation_receipts`
+    chain. A new step in `permissive-client-only-e2e.test.ts` proves an
+    auditor with only the permissive-floor surface (`@motebit/protocol` +
+    `@motebit/crypto`) can verify the chain.
+  - **`services/research` extended with the interior tier.** New
+    `motebit_recall_self` tool runs locally inside the Claude tool-use
+    loop (no MCP atom, no delegation receipt — interior is self-attested).
+    System prompt instructs recall-self-first for motebit-related
+    questions. `ResearchResult` adds `citations` and `recall_self_count`
+    fields alongside existing `delegation_receipts` / `search_count` /
+    `fetch_count`.
+  - **`IDENTITY` prompt augmented** in `@motebit/ai-core` with one concrete
+    sentence about Motebit-the-platform. New `KNOWLEDGE_DOCTRINE` constant
+    in the static prefix instructs: "try recall_self first for self-queries;
+    never fabricate; say you don't know when sources come up empty."
+
+  ### Deferred
+  - **Agent-native search provider** — a follow-up PR adds an adapter for
+    a search index with long-tail recall better suited to niche / new
+    domains than the current generic web index. Slots into
+    `FallbackSearchProvider` as the primary; current chain stays as
+    fallback. Separate from this change so the biasing-wrapper impact is
+    measurable in isolation.
+  - **Federation tier** (`answerViaFederation`): blocked on peer density.
+  - **Multi-step synthesis loop** (fact-check pass over draft answers):
+    orthogonal quality improvement.
+  - **`recall_self` on spatial surface:** comes when spatial's builtin-tool
+    suite lands; today it has no `web_search` / `recall_memories` parity
+    either.
+
+  ### Drift-gate infrastructure
+
+  `scripts/check-deps.ts` gains an `AUTO-GENERATED`/`@generated` banner
+  exception to its license-in-source rule — the committed
+  `packages/self-knowledge/src/corpus-data.ts` carries verbatim doc content
+  that incidentally includes BSL/Apache license tokens (from README badges).
+  Banner skip is the generic pattern; future generated modules benefit.
+
+- 4aad6eb: Add `motebit lsp` — a Language Server for `motebit.yaml`. Ships three
+  features derived from the live zod schema in `apps/cli/src/yaml-config.ts`:
+  diagnostics (every `parseMotebitYaml` error mapped to an LSP Diagnostic),
+  hover (`.describe()` text for the field under the cursor), and completion
+  (field names + enum values). Because it speaks LSP, Cursor, Vim/Neovim,
+  and JetBrains IDEs pick it up without a per-editor plugin; a thin VS Code
+  extension (`apps/vscode`) spawns `motebit lsp` over stdio for VS Code /
+  Cursor users.
+
+  New drift defense #20 (`yaml-config.test.ts`) enumerates every schema
+  field and asserts each has a non-empty `.describe()` — a new field shipped
+  without hover documentation fails CI.
+
+- a51147d: Add `motebit verify <kind> <path>` — a CLI subcommand that validates a
+  wire-format artifact against the published `@motebit/wire-schemas`
+  contract AND verifies its Ed25519 signature using the embedded
+  public key. Three kinds today: `receipt`, `token`, `listing`.
+
+  This is the proof point that closes the wire-schemas loop. A non-motebit
+  developer building a Python or Go worker can now check protocol
+  compliance with one command:
+
+  ```sh
+  motebit verify receipt my-emitted-receipt.json
+  ```
+
+  Output is structured per-check — schema, suite, signature (and time
+  window for tokens) each report independently, so a failure tells you
+  exactly what's wrong:
+
+  ```
+  ✓ OK  receipt  /path/to/receipt.json
+    ✓ json       parsed 636 bytes
+    ✓ schema     ExecutionReceipt v1
+    ✓ suite      recognized: motebit-jcs-ed25519-b64-v1
+    ✓ signature  Ed25519 over JCS body — verified with embedded public_key
+  ```
+
+  `--json` flag emits a structured report for programmatic consumers.
+
+  Backward-compatible with existing `motebit verify <path>` for identity
+  files. Two-arg form (`verify <kind> <path>`) discriminates on the
+  kind keyword; one-arg form (or explicit `verify identity <path>`) goes
+  to the existing identity-file verifier.
+
+  Self-attesting in action: the verifier doesn't require trust in the
+  motebit runtime, just in the published schema and Ed25519 math.
+
+- 96bc311: Publish `motebit-yaml-v1.json` — the JSON Schema for `motebit.yaml` is now
+  a committed protocol artifact at `apps/cli/schema/motebit-yaml-v1.json`,
+  generated from the same zod source the CLI parser and LSP consume.
+
+  Third-party validators (VS Code's Red Hat YAML extension, CI actions,
+  the dashboard) can reference it via its stable `$id` — no `motebit`
+  install required. Users who want an inline yaml-language-server pragma:
+
+  ```yaml
+  # yaml-language-server: $schema=https://raw.githubusercontent.com/motebit/motebit/main/apps/cli/schema/motebit-yaml-v1.json
+  version: 1
+  # ...
+  ```
+
+  New subcommand `motebit schema` emits the same schema to stdout for
+  vendoring into air-gapped workspaces. Drift defense #21 regenerates the
+  schema in-process on every test run and fails CI if the committed file
+  has drifted from the zod source.
+
+### Patch Changes
+
+- 699ba41: Rewrite three fixed-group `@deprecated` annotations to the four-field
+  contract from `docs/doctrine/deprecation-lifecycle.md`:
+  `OLLAMA_SUGGESTED_MODELS` and `OllamaSuggestedModel` in `@motebit/sdk`,
+  and `cli_private_key` on `motebit`'s `FullConfig` shape. Each marker
+  now carries `since`, `removed in`, a replacement pointer, and a reason
+  — downstream consumers see a consistent deprecation format across the
+  entire fixed-group publish surface, and the planned
+  `check-deprecation-discipline` drift gate has a clean starting line
+  when it lands post-1.0.
+
+  No behavior change — JSDoc-only edits.
+
+- bce38b7: Complete the four-field-contract classification pass on every remaining
+  `@deprecated` annotation in motebit's source: 14 markers across
+  `@motebit/ai-core`, `@motebit/market`, `@motebit/mcp-client`,
+  `services/api`, `apps/web`, and `apps/cli` now name `since`,
+  `removed in`, replacement, and reason — matching the contract codified
+  in `docs/doctrine/deprecation-lifecycle.md`.
+
+  Two small takes-own-medicine fixes landed with the pass:
+  `apps/desktop` dropped its re-export of the deprecated
+  `OllamaDetectionResult` alias, and `services/api`'s federation-e2e
+  tests migrated from the deprecated `PeerRateLimiter` alias to
+  `FixedWindowLimiter` directly. The `authToken` field on
+  `McpClientConfig` keeps its internal callers intentionally — the
+  `StaticCredentialSource` wrapper is the documented deprecation-window
+  bridge, matching the doctrine's "wrap + warn + strip at named sunset"
+  pattern.
+
+  No runtime behavior change. The post-1.0 `check-deprecation-discipline`
+  drift gate (named in the doctrine) will scan a uniform shape across
+  the entire codebase with no grandfathered exceptions.
+
+- 9dc5421: Internal hygiene: migrate motebit's own callers off the `verifyIdentityFile`
+  legacy shim (`@motebit/crypto`). Every `create-motebit` and `motebit` call
+  site now uses the unified `verify()` dispatcher, so the fixed-group 1.0
+  publish no longer ships code that consumes its own `@deprecated` API.
+
+  The `verifyIdentityFile` and `LegacyVerifyResult` exports remain published
+  from `@motebit/crypto` for external pre-0.4.0 consumers through the
+  deprecation window, with their `@deprecated` annotations rewritten to the
+  four-field contract (`since 1.0.0, removed in 2.0.0, Use verify(content)
+instead, …reason`) required by `docs/doctrine/deprecation-lifecycle.md`.
+
+- 1690469: Wire `BalanceWaiver` producer + verifier (spec/migration-v1.md §7.2). `@motebit/crypto` adds `signBalanceWaiver` / `verifyBalanceWaiver` / `BALANCE_WAIVER_SUITE` alongside the existing artifact signers; `@motebit/encryption` re-exports them so apps stay on the product-vocabulary surface. `@motebit/virtual-accounts` gains a `"waiver"` `TransactionType` so the debit carries a dedicated audit-trail category. The relay's `/migrate/depart` route now accepts an optional `balance_waiver` body — balance > 0 requires either a confirmed withdrawal (prior behavior) or a valid signed waiver for at least the current balance; the persisted waiver JSON is stored verbatim on the migration row for auditor reverification. The `motebit migrate` CLI gains a `--waive` flag that signs the waiver with the identity key and attaches it to the depart call, with a destructive-action confirmation prompt. Closes the one-pass-delivery gap left over from commit `7afce18c` (wire artifact without consumers).
+- 3e8e7ec: Close H3 from the `cd70d3d8..HEAD` security audit — add a
+  `transaction<T>(fn): T` primitive to `DatabaseDriver` and migrate the
+  two raw-`BEGIN`/`ROLLBACK` call sites off hand-rolled strings.
+
+  The prior pattern in `SqliteAccountStore.debitAndEnqueuePending` and
+  in `buildCreditOnDepositCallback` issued `db.exec("BEGIN")` /
+  `db.exec("COMMIT")` / `db.exec("ROLLBACK")` directly. That's brittle
+  under nesting (a second BEGIN throws), under ROLLBACK-after-BEGIN-fail
+  (masks the original error), and under driver swap (sql.js has no
+  native helper; better-sqlite3 does).
+
+  The new primitive lives at the persistence boundary — one layer below
+  `@motebit/virtual-accounts`'s `AccountStore`, where the rule
+  "no `withTransaction(fn)` on the ledger interface" still stands.
+  Services that need multi-statement atomicity no longer reinvent
+  BEGIN/COMMIT.
+
+  Driver implementations:
+  - **BetterSqliteDriver** delegates to native `inner.transaction(fn)()`,
+    which handles savepoint-based nesting automatically.
+  - **SqlJsDriver** runs `BEGIN`/`COMMIT`/`ROLLBACK` on the outer call
+    and `SAVEPOINT`/`RELEASE`/`ROLLBACK TO` for nested calls, matching
+    the better-sqlite3 shape exactly.
+
+  Call-site migration:
+  - `SqliteAccountStore.debitAndEnqueuePending`: wraps the three-statement
+    debit + ledger + pending insert in `db.transaction`. The
+    insufficient-funds path now returns `null` from the fn (empty
+    transaction commits harmlessly); any other throw rolls back.
+  - `buildCreditOnDepositCallback` in `services/api/src/deposit-detector.ts`:
+    same shape — the credit + dedup-insert pair runs inside `db.transaction`.
+
+  Tests: 10 new in `packages/persistence/src/__tests__/transaction.test.ts`
+  covering commit-on-return, rollback-on-throw, null-return semantics,
+  nesting (inner throw vs outer throw), and sequential top-level
+  independence. Exercised against **both** driver implementations. All
+  862 services/api tests and 165 persistence tests still pass. 15 drift
+  gates green.
+
+- c3a3e7d: Narrow the fail-open surface in `SqliteAccountStore.getUnwithdrawableHold`
+  and `getSweepConfig` (H2 from the `cd70d3d8..HEAD` security audit).
+
+  Before this change, both methods wrapped the real query in a bare
+  `try/catch` that returned `0` (no hold) or the null sweep pair on ANY
+  SQL error — schema drift, DB locked, malformed state, anything — not
+  only the "table absent in minimal test setups" case the comment
+  claimed. That opens a withdrawal path the dispute window is supposed
+  to gate. Silent money-path fallbacks violate the root `CLAUDE.md`
+  fail-closed doctrine ("Deny on error").
+
+  The new shape probes `sqlite_master` explicitly for the expected
+  tables before running the real query:
+  - **Tables missing** (test setups that skip those migrations) →
+    degraded mode preserved (0 / null-pair).
+  - **Tables present** → the real query runs unhedged; any error
+    propagates to the caller, which is what the withdrawal path needs
+    to refuse loudly.
+
+  `scripts/check-deps.ts` gains an `isAutoGenerated(file)` helper that
+  skips committed `AUTO-GENERATED` files for both the license-in-source
+  check (existing) and the undeclared-deps check (new) — the
+  `@motebit/self-knowledge` corpus embeds README code fences containing
+  verbatim `import` strings that the regex-based scanner would
+  otherwise flag.
+
+  10 new regression tests in
+  `services/api/src/__tests__/account-store-fail-closed.test.ts` pin the
+  three branches via a mock `DatabaseDriver`: missing-tables degraded
+  mode, happy-path real-query execution, and error propagation. The
+  existing 7 `withdrawal-hold.test.ts` assertions are unchanged and
+  still pass.
+
+- 28c46dd: `getPublicKeyBySuite(privateKey, suite)` — new permissive-floor (Apache-2.0) primitive for suite-dispatched public-key derivation. Closes a real protocol-primitive-blindness violation in the CLI and plugs the regex hole that let it slip past `check-suite-dispatch`.
+
+  A surface-parity audit on 2026-04-18 found that `apps/cli/src/subcommands/delegate.ts` was calling `ed.getPublicKeyAsync(privateKey)` directly via dynamic import — protocol-primitive-blindness as defined in `feedback_protocol_primitive_blindness.md` and the `@motebit/crypto/CLAUDE.md` Rule 1 ("`src/suite-dispatch.ts` is the ONLY file permitted to call `@noble/ed25519` primitives directly"). The violation slipped past `check-suite-dispatch` because its FORBIDDEN_PATTERNS regex `/\bed\.getPublicKey\b/` does not match `ed.getPublicKeyAsync` — `\b` requires a word/non-word transition, and `K` followed by `A` (both word chars) is not a boundary.
+
+  This pass:
+  - **`getPublicKeyBySuite(privateKey: Uint8Array, suite: SuiteId): Promise<Uint8Array>`** added to `packages/crypto/src/suite-dispatch.ts`. Sibling to `verifyBySuite` / `signBySuite` / `generateEd25519Keypair` — same exhaustive switch on the `SuiteId` literal union so the TypeScript compiler refuses to compile when ML-DSA / SLH-DSA suites land without an explicit arm. Re-exported through `signing.ts` so it surfaces from `@motebit/crypto`.
+  - **Permissive export allowlist updated.** `getPublicKeyBySuite` added to `PERMISSIVE_ALLOWED_FUNCTIONS["@motebit/crypto"]` in `scripts/check-deps.ts`.
+  - **CLI delegate path routed through the dispatcher.** `apps/cli/src/subcommands/delegate.ts` now imports `getPublicKeyBySuite` from `@motebit/crypto` instead of dynamically importing `@noble/ed25519`. PQ-ready by construction — when ML-DSA suites land, only the dispatcher arm changes. `apps/cli/package.json` declares `@motebit/crypto` directly (was previously consumed only transitively through `@motebit/runtime`).
+  - **Regex hole patched.** `scripts/check-suite-dispatch.ts` adds `\bed\.getPublicKeyAsync\b` to FORBIDDEN_PATTERNS and tightens the existing `\bed\.getPublicKey\b` to `\b...\b(?!Async)` matching the established convention used by `verify` / `sign` (every primitive name has both a sync rule and an explicit Async rule). The next time anyone tries to call `ed.getPublicKeyAsync` outside the dispatcher, CI fails immediately.
+
+  The Ring 1 doctrine ("capability, not form") is unchanged — surfaces correctly continue to consume crypto through `@motebit/encryption` (which re-exports from `@motebit/crypto`) where appropriate. Adding `check-surface-primitives` to mandate dep declarations was considered and rejected: the existing `check-suite-dispatch` already covers the real failure mode (direct `@noble` calls); the dep-declaration question is style, not architecture.
+
+- a792355: Close the idempotency contract on `debitAndEnqueuePending`.
+
+  The `AccountStore.debitAndEnqueuePending` interface documented an
+  idempotency key for "external replay protection" that neither
+  implementation honored — a second call with the same `(motebitId,
+idempotencyKey)` would silently debit the account a second time and
+  insert a duplicate `relay_pending_withdrawals` row. The parameter was
+  live wiring (plumbed through `enqueuePendingWithdrawal` and the sweep
+  loop) waiting for a consumer to discover the gap.
+
+  Fix mirrors the sibling `requestWithdrawal` + `insertWithdrawal`
+  pattern that already exists for user-initiated withdrawals: a replay
+  pre-check inside the compound primitive, plus a schema-level partial
+  UNIQUE INDEX as belt-and-suspenders.
+  - `packages/virtual-accounts`: both `InMemoryAccountStore` and the
+    interface contract doc describe the replay semantics — on
+    `idempotencyKey !== null` match, return the existing `pendingId` and
+    current balance without debiting or inserting again. `null` keys are
+    never deduplicated.
+  - `services/api`: `SqliteAccountStore.debitAndEnqueuePending` gains the
+    same pre-check. Migration v12 adds
+    `idx_pending_withdrawals_idempotency` — a partial UNIQUE INDEX on
+    `(motebit_id, idempotency_key) WHERE idempotency_key IS NOT NULL` —
+    so a direct INSERT that skips the primitive still hits the guard.
+    Mirrors `idx_relay_withdrawals_idempotency` byte-for-byte.
+
+- c757777: Rename `createGoalsController` / `GoalsController` / `GoalsControllerDeps` in
+  `@motebit/runtime` to `createGoalsEmitter` / `GoalsEmitter` / `GoalsEmitterDeps`.
+
+  The runtime's goals primitive is a goal-lifecycle event emitter — it authors
+  `goal_*` events against the event log. The previous name collided with the
+  completely different `createGoalsController` in `@motebit/panels`, which is a
+  subscribable UI state machine for rendering a goals panel. Two functions with
+  the same name, same return-type name, different signatures, different
+  semantics, different layers.
+
+  The panels pattern (`createSovereignController`, `createAgentsController`,
+  `createMemoryController`, `createGoalsController`) is a consistent 4-family
+  UI-state-controller convention and should keep its name. The runtime primitive
+  is the outlier; renamed to reflect its actual role (an emitter, which is also
+  how it is already described in the `runtime.goals` doc comment and in
+  `spec/goal-lifecycle-v1.md §9`).
+
+  ### Migration
+
+  ```ts
+  // before
+  import { createGoalsController, type GoalsController } from "@motebit/runtime";
+  // after
+  import { createGoalsEmitter, type GoalsEmitter } from "@motebit/runtime";
+  ```
+
+  `runtime.goals` retains the same type shape (only the name changed).
+  No wire-format or event-log impact; this is a type-surface rename only.
+  `@motebit/panels` exports are unchanged.
+
+- be2dba3: Add Tavily as an agent-tuned primary search provider in `@motebit/tools`
+  and slot it at the head of the `services/web-search` fallback chain.
+
+  Motivation: generic open-web indexes (Brave, DuckDuckGo) rank by
+  backlink density and ad-supported signals. For niche or new domains —
+  like first-party content on motebit.com today — recall is
+  disproportionately poor. The three-tier answer engine already biases
+  self-queries via `BiasedSearchProvider`, but the underlying index
+  matters once the query escapes first-party domains. Tavily is tuned
+  for agent RAG: structured JSON response, no HTML to parse, ranking
+  designed around what an agent actually reads.
+
+  Provider chain after this change, in `services/web-search`:
+
+  BiasedSearchProvider
+  └─ FallbackSearchProvider
+  ├─ Tavily (if TAVILY_API_KEY set — primary)
+  ├─ Brave (if BRAVE_SEARCH_API_KEY set — fallback)
+  └─ DuckDuckGo (always — last resort)
+
+  Each tier is opt-in via env var; a deploy with neither paid key runs
+  on DuckDuckGo alone. No interface change on `SearchProvider`, so the
+  relay's browser-side `ProxySearchProvider` sees the upgrade transparently.
+
+  Package surface:
+  - `TavilySearchProvider` + `TavilySearchProviderOptions` exported from
+    `@motebit/tools` root and `@motebit/tools/web-safe`.
+  - Constructor accepts an injected `fetch` for tests; defaults to
+    `globalThis.fetch`.
+  - Constructor accepts `searchDepth: "basic" | "advanced"` (default
+    "basic"). `include_answer` is forced off — synthesis happens in
+    `services/research`, not in the provider.
+
+  Tests: 9 in `packages/tools/src/providers/__tests__/tavily-search.test.ts`
+  covering wire shape (POST + body fields), searchDepth override,
+  content→snippet mapping, defensive filtering of incomplete results,
+  empty responses, HTTP error propagation (401 / 429 / large-body
+  truncation), and fetch-level network errors. Service wiring in
+  `services/web-search/src/index.ts` reorders the chain Tavily →
+  Brave → DuckDuckGo, `.env.example` documents the new var.
+
+  All 151 @motebit/tools tests + 15 drift gates pass.
+
+- 1e07df5: Ship `@motebit/verifier` — offline third-party verifier for every signed Motebit artifact (identity files, execution receipts, W3C verifiable credentials, presentations). Exposes `verifyFile` / `verifyArtifact` / `formatHuman` as a library and the `motebit-verify` CLI with POSIX exit codes (0 valid · 1 invalid · 2 usage/IO). Zero network, zero deps beyond `@motebit/crypto`. Joins the fixed public-surface version group.
+
 ## 0.8.0
 
 ### Minor Changes

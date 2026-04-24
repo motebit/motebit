@@ -1,5 +1,55 @@
 # @motebit/spatial
 
+## 0.1.18
+
+### Patch Changes
+
+- Updated dependencies [699ba41]
+- Updated dependencies [0e7d690]
+- Updated dependencies [e897ab0]
+- Updated dependencies [1690469]
+- Updated dependencies [09737d7]
+- Updated dependencies [bd3f7a4]
+- Updated dependencies [54158b1]
+- Updated dependencies [009f56e]
+- Updated dependencies [356bae9]
+- Updated dependencies [06b61e8]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [620394e]
+- Updated dependencies [4eb2ebc]
+- Updated dependencies [85579ac]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [67e64ab]
+- Updated dependencies [e17bf47]
+- Updated dependencies [c757777]
+- Updated dependencies [58c6d99]
+- Updated dependencies [fdf4cd5]
+- Updated dependencies [54e5ca9]
+- Updated dependencies [a801771]
+- Updated dependencies [7fbdc48]
+- Updated dependencies [3747b7a]
+- Updated dependencies [be2dba3]
+- Updated dependencies [403fee0]
+- Updated dependencies [1e07df5]
+- Updated dependencies [f0a86c7]
+- Updated dependencies [c42b45a]
+- Updated dependencies [cbb61d1]
+  - @motebit/sdk@1.0.0
+  - @motebit/ai-core@0.2.0
+  - @motebit/tools@0.2.0
+  - @motebit/encryption@0.2.0
+  - @motebit/runtime@0.2.0
+  - @motebit/semiring@0.2.0
+  - @motebit/browser-persistence@0.1.18
+  - @motebit/render-engine@0.2.0
+  - @motebit/identity-file@0.1.18
+  - @motebit/mcp-client@0.1.18
+  - @motebit/privacy-layer@0.1.18
+  - @motebit/sync-engine@0.1.18
+  - @motebit/core-identity@0.1.18
+  - @motebit/event-log@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

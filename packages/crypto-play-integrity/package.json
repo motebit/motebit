@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto-play-integrity",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Apache-2.0 verifier for Google Play Integrity hardware-attestation credentials — offline JWT signature verification against the pinned Google Play Integrity JWKS. Plugs into @motebit/crypto's HardwareAttestationVerifiers dispatcher to validate Android device-attested motebit identities.",
   "type": "module",
   "main": "./dist/index.js",

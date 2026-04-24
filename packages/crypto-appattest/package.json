@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto-appattest",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Apache-2.0 verifier for Apple App Attest hardware-attestation credentials — offline chain verification against the pinned Apple App Attest root CA. Plugs into @motebit/crypto's HardwareAttestationVerifiers dispatcher to validate iOS device-attested motebit identities.",
   "type": "module",
   "main": "./dist/index.js",

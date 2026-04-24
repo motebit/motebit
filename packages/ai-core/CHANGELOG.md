@@ -1,5 +1,107 @@
 # @motebit/ai-core
 
+## 0.2.0
+
+### Minor Changes
+
+- 0e7d690: Extend the `tool_status` variant of `AgenticChunk` with three optional
+  fields carried through the turn-streaming generator:
+  - `tool_call_id?: string` — model-assigned identifier, present on both
+    `"calling"` and `"done"` chunks for the same invocation. Lets a
+    downstream consumer pair a completion chunk to the call that started
+    it without guessing from tool name and order.
+  - `args?: Record<string, unknown>` — the arguments the tool was
+    dispatched with, emitted only on `"calling"` chunks. Saves the
+    consumer from refetching them from a side channel at sign time.
+  - `started_at?: number` — Unix ms at dispatch, emitted only on
+    `"calling"`. Paired with wall-clock time at `"done"` arrival, it
+    gives a timing window without adding a separate event.
+
+  All three are optional on the type — legacy callers that construct
+  chunks by hand don't need to change. Every emission site in the
+  `runTurnStreaming` loop now sets them unconditionally.
+
+  Why this change: the workstation surface's per-tool-call receipt
+  (`ToolInvocationReceipt` from `@motebit/crypto`, landed in the prior
+  commit) requires a stable invocation identity, the canonical arg
+  bytes, and a timestamp at sign time. The streaming manager in
+  `@motebit/runtime` (next commit) reads these three fields, composes
+  a `SignableToolInvocationReceipt`, dispatches through
+  `signToolInvocationReceipt`, and hands the signed artifact to the
+  runtime's workstation-event sink. No new chunk variant — the
+  existing `tool_status` is the natural carrier.
+
+  No runtime behavior changes: the fields are additive and optional.
+  344/344 ai-core tests pass; the round-trip test for the tool-call
+  path now asserts that `tool_call_id` / `args` / `started_at` appear
+  on the `"calling"` chunk and that `tool_call_id` appears on the
+  matching `"done"` chunk, so a future regression that drops them
+  fails loudly.
+
+### Patch Changes
+
+- 403fee0: Fix HTTP 400 "temperature is deprecated for this model" on motebit.com
+  after the first reflection/planning task runs.
+
+  The 2026-04-17 fix (ai-core 89f3b978) omitted `temperature` from the
+  Anthropic request body when `config.temperature` was undefined — the
+  correct handling for Claude Opus 4.7+, which rejects the parameter.
+  That fix is still right. This PR closes **three compounding defects in
+  the task-router path that 89f3b978 did not touch**:
+  1. `TaskRouter.resolve()` hardcoded `?? 0.7` as the final fallback,
+     so the resolved config _always_ carried a number.
+  2. `withTaskConfig` apply path unconditionally called
+     `provider.setTemperature(taskConfig.temperature)` — so any task
+     borrowed a temperature even when none was configured upstream.
+  3. `withTaskConfig` restore path (the worst): if `savedTemperature`
+     was undefined, the `finally` block set it back to `0.7`,
+     **permanently poisoning the provider for every subsequent call.**
+     One reflection task per session was enough to break the next
+     normal chat turn with HTTP 400.
+
+  That last one explains the "worked, worked, broke" pattern users saw
+  on motebit.com: the reflection task that runs every couple of turns
+  ran fine, then silently restored 0.7 as the provider's default, and
+  the next chat turn was rejected.
+
+  Fixes:
+  - `ResolvedTaskConfig.temperature` is now optional. Undefined means
+    "let the model use its own default" and propagates through the
+    whole chain without reintroducing a number.
+  - `TaskRouter.resolve()` preserves undefined instead of falling back
+    to 0.7.
+  - `withTaskConfig` only touches `setTemperature` when the task config
+    explicitly set one; the restore path passes undefined verbatim.
+  - `StreamingProvider.setTemperature` signature widened to
+    `number | undefined` so it can clear the field. Concrete setters
+    on `AnthropicProvider` and `OpenAIProvider` updated symmetrically.
+  - `PLANNING_TASK_ROUTER` (runtime) drops the hardcoded 0.3/0.5 for
+    `planning` and `plan_reflection`. Those predated the Opus 4.7
+    deprecation and were arbitrary tuning values; leaving them in
+    would have tripped the same 400 even after the task-router fix.
+
+  Two regression tests pin the behavior (task-router unit test for the
+  resolve contract + coverage-uplift for the withTaskConfig restore
+  contract). Both were inverted from tests that actively codified the
+  buggy `?? 0.7` fallback.
+
+  **Deploy impact:** motebit.com web chat was rejecting Anthropic
+  requests after the first reflection task per session. A redeploy
+  from this commit restores it.
+
+- Updated dependencies [699ba41]
+- Updated dependencies [009f56e]
+- Updated dependencies [85579ac]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [1e07df5]
+  - @motebit/sdk@1.0.0
+  - @motebit/memory-graph@0.2.0
+  - @motebit/behavior-engine@0.1.18
+  - @motebit/state-vector@0.1.18
+  - @motebit/event-log@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

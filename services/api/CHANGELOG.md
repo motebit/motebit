@@ -1,5 +1,342 @@
 # @motebit/api
 
+## 0.2.0
+
+### Minor Changes
+
+- 8cef783: Per-agent settlement anchoring becomes a first-class protocol artifact.
+
+  The `/api/v1/settlements/:id/anchor-proof` and `/api/v1/settlement-anchors/:batchId`
+  endpoints shipped on 2026-04-18 returned ad-hoc shapes with no spec, no
+  JSON Schema, and no protocol type. This pass closes the full doctrinal
+  stack so the worker-audit pyramid (signed `SettlementRecord` floor +
+  Merkle inclusion proof + onchain anchor ceiling) is externally legible
+  without bundling motebit:
+  - **Spec:** `spec/agent-settlement-anchor-v1.md` — parallel artifact to
+    `credential-anchor-v1.md`. Defines leaf hash (whole signed
+    `SettlementRecord` including signature), batch wire format,
+    proof wire format, verification algorithm, and §9 distinguishing
+    per-agent from federation (relay-federation-v1.md §7.6) and
+    credential anchoring. Cross-references §7.6 for the shared Merkle
+    algorithm — same precedent credential-anchor uses.
+  - **Protocol types** (`@motebit/protocol`): `AgentSettlementAnchorBatch`,
+    `AgentSettlementAnchorProof`, `AgentSettlementChainAnchor`. Same
+    shape grammar as the credential-anchor pair so verifiers built for
+    one work for the other with a field-name swap.
+  - **Wire schemas** (`@motebit/wire-schemas`): published
+    `agent-settlement-anchor-batch-v1.json` and
+    `agent-settlement-anchor-proof-v1.json` JSON Schemas at stable `$id`
+    URLs. A non-motebit Python/Go/Rust verifier consumes them at the
+    URL and validates without any monorepo dependency. Drift gate #22
+    pins them; gates #9 and #23 ensure spec ↔ TS ↔ JSON Schema parity.
+  - **Endpoint shape aligned to spec.** The 2026-04-18 endpoints used
+    `{leaf_hash, proof, ...}` (older federation-style vocabulary).
+    Per-agent now matches the credential-anchor convention:
+    `{settlement_hash, siblings, layer_sizes, relay_id,
+relay_public_key, suite, batch_signature, anchor: {...} | null}`.
+    Hours-old code, zero external consumers, alignment matters more
+    than churn.
+  - **Architecture page** lists the new spec (`check-docs-tree` enforces).
+  - **Test setup** for per-agent anchoring uses the test relay's actual
+    identity from `relay_identity` instead of synthesizing a fresh
+    keypair — the proof-serve path looks up the relay's public key from
+    that table, so this tests the production wiring end-to-end.
+  - **Cosmetic regen** of 14 previously-committed JSON Schemas to match
+    the canonical `build-schemas` output (compact arrays expanded to
+    one-element-per-line). Drift test was tolerant of the difference
+    but the next `build-schemas` run would have surfaced them anyway.
+
+- 84e9729: Per-agent settlement Merkle anchoring — the "ceiling" parallel to
+  the federation case. Closes the self-attesting trust pyramid for
+  per-agent settlements: signed `SettlementRecord` (floor) + Merkle
+  inclusion proof (middle) + onchain anchor reference (ceiling).
+
+  What ships:
+  - **Batching loop**: `cutAgentSettlementBatch` collects signed,
+    unanchored rows from `relay_settlements`; `submitAgentAnchorOnChain`
+    publishes the root via the same `OnChainAnchorSubmitter` abstraction
+    as the federation path. Loop wires under `agentAnchorInterval` in
+    `createSyncRelay`. New table `relay_agent_anchor_batches` keeps
+    the per-agent ledger separate from the federation ledger — distinct
+    audiences, identical primitives.
+  - **HTTP endpoints** (public, rate-limited):
+    - `GET /api/v1/settlements/:settlementId/anchor-proof` — returns
+      `202 {status: "pending"}` with `Retry-After: 60` for signed-but-
+      unbatched settlements; `200` with leaf hash + Merkle path + batch
+      metadata once anchored; `404` for unknown.
+    - `GET /api/v1/settlement-anchors/:batchId` — returns the signed
+      batch metadata (root, leaf count, optional chain reference).
+
+  Doctrinal sibling-fix: the catch-all `/api/v1/*` bearer-auth
+  middleware was gating all four anchor-proof endpoints (credential
+  - settlement). That contradicts services/api CLAUDE.md rule 6 —
+    "every truth the relay asserts is independently verifiable onchain
+    without relay contact." An external auditor doesn't hold a relay
+    bearer token. Both endpoint pairs are now allowlisted as public,
+    rate-limited at the same `publicLimiter` tier as `/credentials/verify`.
+
+  External verifier flow now mechanical: fetch SettlementRecord +
+  proof + chain tx → verify Ed25519 signature → reconstruct leaf →
+  walk Merkle path → compare root to chain. No relay contact needed
+  beyond the initial proof fetch.
+
+- 8997521: Per-agent settlement Merkle anchoring — the "ceiling" alongside
+  the signing "floor" (audit follow-up #1 part C). Brings per-agent
+  settlements to feature parity with federation settlements
+  (relay-federation-v1.md §7.6, already shipped).
+
+  ## What this delivers
+
+  A worker can now verify they were paid the right amount **without
+  contacting the relay** — by holding their signed SettlementRecord,
+  the inclusion proof, and the chain transaction reference. Three
+  levels of self-attestation now stack:
+  1. **Signature** (v13): commits the relay to its claimed amounts.
+     "Trust the relay's word" → "trust the relay's commitment."
+  2. **Anchor** (this commit): commits the relay to its claimed
+     history. Even an issuer-key compromise cannot retroactively
+     rewrite anchored records — the chain transaction is immutable.
+  3. **External chain verifier** (consumer-side): independent
+     confirmation of the Merkle root onchain.
+
+  `services/api/CLAUDE.md` rule 6 — "Every truth the relay asserts
+  is independently verifiable onchain without relay contact" — is
+  now mechanically delivered for per-agent settlements at parity
+  with federation.
+
+  ## What's in this commit
+  - **Migration v14** (`agent_settlement_anchor_batches`): - Creates `relay_agent_anchor_batches` table (mirrors
+    `relay_anchor_batches` for federation; separate table because
+    audiences differ — federation = peer audit, agent = worker audit). - Adds `anchor_batch_id` column to `relay_settlements` (nullable;
+    set when batched). - Index on `(settled_at, settlement_id) WHERE anchor_batch_id IS
+NULL AND signature IS NOT NULL` — selection is constant-time per
+    batch cut.
+  - **`anchoring.ts`**:
+    - `cutAgentSettlementBatch(db, relayIdentity, maxSize?)` — selects
+      unanchored signed settlements, computes leaves via
+      `SHA-256(canonicalJson(signed_record))`, builds Merkle tree,
+      signs the anchor record, persists batch + assigns `batch_id` to
+      each row. Mirrors `cutBatch` (federation).
+    - `submitAgentAnchorOnChain(db, batchId, submitter)` — submits
+      Merkle root onchain via existing `ChainAnchorSubmitter`.
+      Idempotent: only acts on `status = 'signed'` batches.
+    - `getAgentSettlementProof(db, settlementId)` — returns inclusion
+      proof + anchor record for a settlement. Sufficient for an
+      external verifier to recompute the leaf from their held
+      SettlementRecord, walk the Merkle path, and compare against
+      the onchain root.
+  - **Legacy-row safety**: only signed settlements are batched.
+    Pre-v13 unsigned rows skip selection (`signature IS NOT NULL`
+    filter) — they cannot be anchored because the leaf would not
+    match what the relay signed (it didn't).
+
+  8 new tests (cutAgentSettlementBatch + getAgentSettlementProof
+  covering happy path, batch_id assignment, legacy-row filter,
+  maxSize, proof reconstruction, missing-batch). 870 relay tests
+  total (was 862).
+
+  ## Architectural symmetry
+
+  | Audience        | Table                        | Cut function              | Proof function            |
+  | --------------- | ---------------------------- | ------------------------- | ------------------------- |
+  | Federation peer | `relay_anchor_batches`       | `cutBatch`                | `getSettlementProof`      |
+  | Agent (worker)  | `relay_agent_anchor_batches` | `cutAgentSettlementBatch` | `getAgentSettlementProof` |
+
+  Same `ChainAnchorSubmitter` adapter (Solana Memo by default; EVM
+  contract via legacy submitter). Same Merkle primitives
+  (`buildMerkleTree`, `getMerkleProof` from `@motebit/encryption`).
+  Different leaf computations, different aggregation, but the trust
+  shape is identical.
+
+  ## Out of scope (future work)
+  - Wire-format `AgentSettlementAnchorProof` schema in
+    `@motebit/wire-schemas` (would parallel `CredentialAnchorProof`).
+  - HTTP endpoint to fetch a proof for an agent settlement.
+  - CLI subcommand `motebit verify agent-settlement-proof <path>`
+    to run end-to-end verification offline.
+  - Periodic batching loop hook for per-agent settlements (today
+    callable manually; production deployment can wire it into
+    `startBatchAnchorLoop` parallel).
+
+- fe975cd: Endgame marketplace: decouple discoverability from runtime availability. Service agents stay discoverable while asleep — a motebit's identity, listing, and reputation are durable signed artifacts that don't need a running Fly.io machine to exist.
+
+  The relay's `agent_registry.expires_at` becomes a 90-day janitor lease (was 15 minutes). Every read path (`/api/v1/agents/discover`, `/api/v1/agents/:id`, `/federation/v1/task/forward`, `queryLocalAgents`, `buildCandidateProfiles`) drops the `WHERE expires_at > now` visibility filter. `revoked = 0` remains the correct "don't show this agent" filter.
+
+  Discovery response gains a `freshness` field — a computed render hint driven by `last_heartbeat` age, with four bands: `awake` (< 6 min), `recently_seen` (< 30 min), `dormant` (< 24 h), `cold` (≥ 24 h). Additive to the response shape, backward compatible.
+
+  `forwardTaskViaMcp` gets a wake-on-delegation hook: a 5-second GET to the agent's `/health` before MCP init, triggering Fly's auto-start for machines suspended under `auto_stop_machines = "stop"`. Fail-open — MCP init's 30-second timeout still absorbs residual cold-start latency.
+
+  Routing behavior: `buildCandidateProfiles` now computes `is_online` from freshness (awake or recently_seen), not `expires_at`. Dormant and cold candidates remain rankable, not excluded — wake-on-delegation makes them reachable.
+
+  Closes the visibility deadlock that caused motebit.com's Discover panel to show "No agents on the network yet" despite 5 deployed service agents (sleeping services invisible → no delegation → no wake → still invisible).
+
+  Client apps (web, desktop, mobile) render a 6px freshness dot next to the existing "seen X ago" text, matching the calm-software `goal-status-dot` palette. No spatial changes — marketplace scene is tracked separately.
+
+- 1848d2e: Validate inbound wire-format bodies against `@motebit/wire-schemas` at
+  the relay boundary. Hand-rolled `as Type` casts are no longer the
+  first line of defense — schemas parse bodies (or reject 400) before
+  any handler touches them, fail-closed.
+
+  Handlers wired:
+  - `POST /agent/:motebitId/verify-receipt` — body is `ExecutionReceipt`
+  - `POST /agent/:motebitId/task/:taskId/result` — body is
+    `ExecutionReceipt`; replaces the structural `typeof`/status
+    allowlist
+  - `POST /federation/v1/task/result` — nested `body.receipt` is
+    `ExecutionReceipt`
+  - `POST /api/v1/agents/accept-migration` — nested `migration_token`,
+    `departure_attestation`, `credential_bundle` validated against
+    `MigrationTokenSchema`, `DepartureAttestationSchema`,
+    `CredentialBundleSchema` respectively
+
+  The package was already a Layer-1 BSL primitive pinned to
+  `@motebit/protocol` types by drift defenses #22 and #23; the relay
+  was the last unconsumed boundary. Non-motebit implementers (Python,
+  Go, Rust workers) have been able to hit the published JSON Schemas
+  for months — the runtime guard now matches the declared contract.
+
+  Error body keeps the existing `{ error }` convention — callers see
+  the zod `flatten()` shape on schema failure instead of a bespoke
+  "missing field X" string.
+
+  Endpoints with no matching wire schema (e.g. federation peering,
+  sync push, task submit, dispute filing, subscription webhooks) are
+  untouched — the submission shapes there are ad-hoc input bodies
+  that the relay uses to construct wire artifacts, not wire artifacts
+  themselves. If a missing schema is later identified as a wire
+  artifact, the fix is to add the schema in `@motebit/wire-schemas`
+  and wire it in here — never to inline validation in the service.
+
+- 683ab13: Sign every per-task SettlementRecord at the relay (audit follow-up
+  #1, relay integration). The protocol-layer primitive shipped in
+  the prior commit; this commit makes the relay actually use it.
+
+  ## What changed
+  - **Migration v13** (`relay_settlements_signature_columns`): adds
+    three nullable columns to `relay_settlements` —
+    `issuer_relay_id`, `suite`, `signature`. Backward-compat: rows
+    written before this migration carry NULL signatures and remain
+    in place.
+  - **`tasks.ts` settlement INSERT sites** (3 of them: main relay
+    settlement, multi-hop sub-settlement, P2P audit settlement):
+    call `signSettlement(...)` from `@motebit/encryption` with the
+    relay's private key, persist `issuer_relay_id`/`suite`/
+    `signature` alongside the existing columns.
+
+  Going forward, every emitted SettlementRecord carries a signature
+  committing the relay to the exact (amount_settled, platform_fee,
+  platform_fee_rate, status) tuple. A relay that issues
+  inconsistent records to different observers fails self-attestation:
+  at most one of the records verifies (delegation-v1.md §6.4).
+
+  ## Concurrency footgun caught + named
+
+  `signSettlement` is async (Ed25519 over canonical bytes). The
+  naive placement — `await` inside the `BEGIN`/`COMMIT` block — let
+  concurrent receipts interleave their transactions, corrupting
+  INSERT-OR-IGNORE semantics. Only 1 of 5 settlements landed in
+  the money-loop-concurrency test on first attempt.
+
+  Fix: pre-compute the signature OUTSIDE the synchronous
+  transaction. The signature only depends on body fields known
+  before BEGIN; lifting it preserves transaction atomicity.
+  Comments at each site name this concurrency invariant for future
+  maintainers. Caught by the existing
+  `money-loop-concurrency.test.ts` "concurrent settlements
+  crediting same worker" suite.
+
+  ## Closes the doctrinal commitment
+
+  `services/api/CLAUDE.md` rule 6: "Every truth the relay asserts
+  (credential anchor proofs, revocation memos, settlement receipts)
+  is independently verifiable onchain without relay contact."
+  Federation settlements deliver this through Merkle batching +
+  onchain anchoring (relay-federation-v1.md §7.6); per-agent
+  settlements now deliver it through embedded signatures. Future
+  work could add Merkle batching for per-agent settlements too —
+  this commit ships the floor (signature), not the ceiling
+  (anchoring).
+
+  All 862 relay tests pass; all 16 drift defenses green.
+
+### Patch Changes
+
+- aa15449: Fix: relay_credentials.anchor_batch_id column missing on fresh DBs
+  (latent since credential anchoring shipped 2026-04-10).
+
+  The column was added via an idempotent `ALTER TABLE` inside
+  `createCredentialAnchoringTables()`, but that helper runs BEFORE the
+  migration that creates `relay_credentials` — `createSyncRelay` calls
+  `createFederationTables` (which depends on pairing/data-sync tables
+  for later migrations) ahead of `createRelaySchema` (which runs
+  migrations). The ALTER silently failed; the migration then created
+  `relay_credentials` without the column. Result: the credential
+  anchor-proof endpoint was non-functional end-to-end on any fresh
+  relay.
+
+  Fix: migration v15 adds the column with a PRAGMA-guarded ALTER
+  plus the partial index on unanchored rows that mirrors the v14
+  index on `relay_settlements`. Surfaced by the HTTP integration
+  test added for the credential anchor-proof endpoint as part of
+  the sibling-boundary closure of the anchor-proof auth-allowlist
+  fix (services/api CLAUDE.md rule 6).
+
+- Updated dependencies [699ba41]
+- Updated dependencies [bce38b7]
+- Updated dependencies [9dc5421]
+- Updated dependencies [ceb00b2]
+- Updated dependencies [4db67e7]
+- Updated dependencies [78a5cf1]
+- Updated dependencies [8cef783]
+- Updated dependencies [38043ff]
+- Updated dependencies [e897ab0]
+- Updated dependencies [1690469]
+- Updated dependencies [7afce18]
+- Updated dependencies [c64a2fb]
+- Updated dependencies [bd3f7a4]
+- Updated dependencies [54158b1]
+- Updated dependencies [2641cff]
+- Updated dependencies [f567e8d]
+- Updated dependencies [7761ae6]
+- Updated dependencies [d969e7c]
+- Updated dependencies [009f56e]
+- Updated dependencies [eba3f2c]
+- Updated dependencies [356bae9]
+- Updated dependencies [b96387b]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [28c46dd]
+- Updated dependencies [620394e]
+- Updated dependencies [4eb2ebc]
+- Updated dependencies [85579ac]
+- Updated dependencies [99a7a34]
+- Updated dependencies [4edd4ae]
+- Updated dependencies [a792355]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [4ea58fd]
+- Updated dependencies [f69d3fb]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [c73189e]
+- Updated dependencies [54e5ca9]
+- Updated dependencies [9a5b9d5]
+- Updated dependencies [3747b7a]
+- Updated dependencies [db5af58]
+- Updated dependencies [1e07df5]
+- Updated dependencies [f60493e]
+  - @motebit/sdk@1.0.0
+  - @motebit/crypto@1.0.0
+  - @motebit/protocol@1.0.0
+  - @motebit/wire-schemas@0.2.0
+  - @motebit/encryption@0.2.0
+  - @motebit/virtual-accounts@0.2.0
+  - @motebit/market@0.2.0
+  - @motebit/wallet-solana@0.2.0
+  - @motebit/persistence@0.1.18
+  - @motebit/settlement-rails@0.1.18
+  - @motebit/core-identity@0.1.18
+  - @motebit/event-log@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

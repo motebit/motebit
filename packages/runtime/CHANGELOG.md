@@ -1,5 +1,502 @@
 # @motebit/runtime
 
+## 0.2.0
+
+### Minor Changes
+
+- 09737d7: `computer-use` session manager primitive — the TS-side seam between
+  `spec/computer-use-v1.md` and every surface-specific dispatcher
+  (desktop Tauri Rust bridge first; cloud-browser-on-web later).
+
+  **Why this module.** The spec pins wire format + foundation law. Each
+  surface's computer-use integration needs the same scaffolding — session
+  allocation, lifecycle, governance routing, failure-reason
+  normalization, approval-flow wiring. Without a primitive that owns
+  those invariants, every surface would re-derive them inline (the same
+  drift pattern `runtime.goals` fixed for goal events). This module is
+  the single authorship site.
+
+  **Public surface:**
+  - `createComputerSessionManager({ dispatcher, governance?, approvalFlow?, ... })`.
+  - `ComputerPlatformDispatcher` — the platform-specific bridge interface.
+    `queryDisplay()` + `execute(action, onChunk?)` + optional `dispose()`.
+  - `ComputerDispatcherError` — dispatcher implementations throw this
+    with a `ComputerFailureReason` to get structured outcome
+    propagation; generic `Error` throws map to `platform_blocked`.
+  - `ComputerGovernanceClassifier` — classifies per-action as
+    `allow | require_approval | deny`. Default is allow-all (dev mode);
+    production desktop builds MUST wire `@motebit/policy-invariants`.
+  - `ComputerApprovalFlow` — invoked when governance returns
+    `require_approval`; returns `true` to authorize.
+  - `ComputerSessionHandle` + `ComputerSessionManager.openSession /
+closeSession / executeAction / getSession / activeSessionIds /
+dispose`.
+
+  **Session-lifecycle events are returned as data, not emitted directly
+  from this module.** The caller (desktop surface's integration layer)
+  wires `ComputerSessionOpened` / `ComputerSessionClosed` into the event
+  log via `runtime.events`. Same separation `runtime.goals` uses for
+  `goal_created` etc.
+
+  **Action receipts flow through the existing `ToolInvocationReceipt`
+  pipeline.** The `computer` tool in `@motebit/tools` receives AI-loop
+  invocations, delegates to this session manager's `executeAction`, and
+  the runtime's tool-call signer emits the receipt as it does for every
+  tool. This module does NOT mint receipts — duplicating the crypto path
+  would diverge the audit trail.
+
+  **Tests:** +17. Coverage of all four invariants —
+  1. Session lifecycle (open, close, idempotent close, close-unknown,
+     dispose-closes-all).
+  2. Governance gate (allow / deny → policy_denied /
+     require_approval-without-flow → approval_required /
+     require_approval-with-consent → success /
+     require_approval-denied → approval_required).
+  3. Dispatcher error taxonomy (ComputerDispatcherError preserves
+     reason, generic Error → platform_blocked, non-Error throws
+     preserved).
+  4. Session validity (execute-without-open → session_closed,
+     execute-after-close → session_closed).
+
+  Plus streaming pass-through and default session-id generator.
+
+  **Seam for the Tauri Rust bridge:** implement
+  `ComputerPlatformDispatcher` — `queryDisplay` via
+  ScreenCaptureKit/Windows APIs, `execute` via `enigo` + OS
+  accessibility. Throw `ComputerDispatcherError` with a typed reason on
+  failure. The rest — sessions, governance, failure normalization —
+  already works.
+
+  All 28 drift gates pass. 612 runtime tests green (+17 session manager).
+
+- c757777: Rename `createGoalsController` / `GoalsController` / `GoalsControllerDeps` in
+  `@motebit/runtime` to `createGoalsEmitter` / `GoalsEmitter` / `GoalsEmitterDeps`.
+
+  The runtime's goals primitive is a goal-lifecycle event emitter — it authors
+  `goal_*` events against the event log. The previous name collided with the
+  completely different `createGoalsController` in `@motebit/panels`, which is a
+  subscribable UI state machine for rendering a goals panel. Two functions with
+  the same name, same return-type name, different signatures, different
+  semantics, different layers.
+
+  The panels pattern (`createSovereignController`, `createAgentsController`,
+  `createMemoryController`, `createGoalsController`) is a consistent 4-family
+  UI-state-controller convention and should keep its name. The runtime primitive
+  is the outlier; renamed to reflect its actual role (an emitter, which is also
+  how it is already described in the `runtime.goals` doc comment and in
+  `spec/goal-lifecycle-v1.md §9`).
+
+  ### Migration
+
+  ```ts
+  // before
+  import { createGoalsController, type GoalsController } from "@motebit/runtime";
+  // after
+  import { createGoalsEmitter, type GoalsEmitter } from "@motebit/runtime";
+  ```
+
+  `runtime.goals` retains the same type shape (only the name changed).
+  No wire-format or event-log impact; this is a type-surface rename only.
+  `@motebit/panels` exports are unchanged.
+
+- 54e5ca9: Close the three convergence items from goal-lifecycle-v1 §9 and both
+  from plan-lifecycle-v1 §8 — spec bumps to v1.1 on each.
+
+  **New primitive: `runtime.goals`** (`packages/runtime/src/goals.ts`).
+  Single authorship site for every `goal_*` event in the runtime
+  process. Five methods (`created / executed / progress / completed /
+removed`) mirror the spec event types, each typed against
+  `@motebit/protocol`'s `Goal*Payload`. Migrates emission out of three
+  surfaces (`apps/cli/src/subcommands/{goals,up}.ts`,
+  `apps/cli/src/scheduler.ts`, `apps/desktop/src/goal-scheduler.ts`) into
+  one runtime-owned surface. Desktop and CLI both call
+  `runtime.goals.*`; no surface constructs goal event payloads inline.
+
+  **Failure-path emission (goal v1.1 additive).** `GoalExecutedPayload`
+  gains an optional `error` field. Failed goal runs in the CLI scheduler
+  now emit `goal_executed { error }` alongside the existing
+  `goal_outcomes` projection row, fixing the §1 "ledger is the semantic
+  source of truth" violation that left failures invisible to event-log
+  replay.
+
+  **Terminal-state guard.** The goals primitive accepts an optional
+  `getGoalStatus` resolver; when registered (the CLI scheduler does this
+  on start), `executed / progress / completed` calls against a goal in a
+  terminal state are dropped with a logger warning. `goal_removed` is
+  exempt — spec §3.4 explicitly permits defensive re-removal.
+
+  **Plan step-lifecycle state machine (plan v1.1 enforcement).**
+  `_logPlanChunkEvent` in `plan-execution.ts` tracks per-`step_id` state
+  (pending → started → (delegated)? → terminal) and rejects invalid
+  transitions inline. Out-of-order and double-delegation chunks log a
+  warning and are not appended to the event log.
+
+  **Payload-direct delegation correlation (plan v1.1 additive).**
+  `PlanStepCompletedPayload` and `PlanStepFailedPayload` gain an optional
+  `task_id` field. Terminal events that close a delegated step now carry
+  the `task_id` from the preceding `plan_step_delegated`, so receivers
+  reconstruct the delegation chain by payload join rather than
+  cross-referencing sibling events.
+
+  All wire changes are additive under `.passthrough()` envelopes — v1.0
+  implementations continue to validate v1.1 payloads. Drift defenses #9,
+  #22, #23, #31, #33 all pass; type parity between protocol / zod / JSON
+  Schema holds across all 12 payload types.
+
+- a801771: `StreamingManager` emits a signed `ToolInvocationReceipt` for every
+  matched `tool_status.calling` + `tool_status.done` pair in a turn.
+
+  Wired through:
+  - New optional `StreamingDeps` fields: `getDeviceId`,
+    `getSigningPrivateKey`, `getSigningPublicKey`, `onToolInvocation`.
+    All optional at the type level — legacy consumers pass none and
+    the streaming path short-circuits before any hashing or signing
+    cost.
+  - New optional `RuntimeConfig` fields: `deviceId` (defaults to
+    `"runtime-default"`) and `onToolInvocation` (the public sink).
+  - `MotebitRuntime` stores `_deviceId` + `_onToolInvocation` at
+    construction and wires them into the `StreamingManager` deps so
+    the existing signing keys (`_signingKeys`) flow through to
+    `signToolInvocationReceipt` via the same suite-dispatch path as
+    `ExecutionReceipt`.
+
+  Inside `processStream`, a turn-scoped `Map<tool_call_id, {toolName,
+args, startedAt}>` captures each `calling` chunk. When the matching
+  `done` chunk arrives, the manager composes a
+  `SignableToolInvocationReceipt`:
+  - `invocation_id` = the model-assigned `tool_call_id`
+  - `task_id` = the current `runId` (falls back to `invocation_id`)
+  - `args_hash` = JCS-canonical SHA-256 of the captured args
+  - `result_hash` = JCS-canonical SHA-256 of the (possibly redacted)
+    result bytes — a verifier holding the same bytes recomputes and
+    matches; pre-redaction bytes will not match, which is the honest
+    signal that redaction happened
+  - `invocation_origin` = `"ai-loop"` (model-mediated dispatch)
+  - `suite` = `motebit-jcs-ed25519-b64-v1`
+  - `signature` over the canonical body
+
+  Fail-closed at every dependency boundary. No sink → no signing (no
+  background cost). Keys locked → no emission. Sign throws → warn + drop
+  (no partial artifact leaks). Sink throws → warn + swallow (isolated
+  from the streaming generator).
+
+  Tests: 7 new cases in `streaming.test.ts` covering one-receipt-per-call
+  emission, end-to-end verification against the runtime's public key,
+  silent fail-closed when signing keys are missing, no emission when the
+  sink is unwired, legacy streams without the new fields (skip
+  emission), multi-tool-call turns producing multiple receipts, and
+  sink-throw isolation.
+
+  This closes the workstation-surface substrate: the per-call audit
+  trail is now a stream of signed artifacts the panel controller
+  subscribes to. No sovereign behavior change for existing consumers
+  (no sink wired today), so the build is green without touching any
+  app code.
+
+- 7fbdc48: Fix two of the three honest limitations on scheduled agents:
+
+  **Priority yield now retries on next tick.** Previous behaviour:
+  when a scheduled fire collided with an in-flight user turn, the
+  runner skipped the fire AND advanced `next_run_at` by a full cadence
+  — so a missed fire waited up to `interval_ms` before trying again.
+  Now: the `fire()` contract returns `fired | skipped | error`.
+  `skipped` leaves `next_run_at` alone; the next 30s tick retries.
+  `error` advances once (one backoff) so a failing fire doesn't
+  loop every 30s. `fired` advances normally.
+
+  **Scheduled runs no longer pollute the chat transcript.** New
+  `RuntimeConfig` / `sendMessageStreaming` / `processStream` option:
+  `suppressHistory`. When true, the turn runs the normal pipeline
+  (signed receipts, tool calls, activity events all emit as usual)
+  but neither `pushExchange` nor `pushActivation` fires — the
+  conversation stays focused on user ↔ motebit dialogue. The web
+  app's scheduler opts in; receipts from scheduled runs still land
+  in the workstation's audit log.
+
+  **Recent runs view.** The runner now tracks the last 50 runs
+  (in-memory). Each run record:
+  - `run_id`, `agent_id`, `prompt`, `started_at`, `completed_at`
+  - `status`: `running` | `fired` | `skipped` | `error`
+  - `responsePreview`: 160-char truncation for the inline UI
+  - `errorMessage`: set on `error`
+
+  Workstation panel renders the last 10 runs below the agent list —
+  one row per run with status mark (✓ / … / ⏸ / ✗), relative
+  time, and preview. Live-updates as runs progress through states.
+  Separate from the main receipt log below; receipts stay canonical
+  for audit, runs are the UX lens.
+
+  **Remaining limitation (deferred).** Tab-local firing — runs only
+  happen while motebit.com is open. The fix is relay-side scheduling
+  (new endpoint + DB + scheduler + push), a multi-session effort.
+  Today's data shape + runner contract match the endgame: swapping
+  the tab-local runner for a relay subscription doesn't change the
+  UI or the storage format.
+
+  All 28 drift gates pass. Runtime + web tests green. Full workspace
+  build clean.
+
+- f0a86c7: Virtual-browser pane on the Workstation panel — when the motebit
+  fetches a page (`read_url`, `virtual_browser`, `browse_page`), the
+  fetched content renders live as a sandboxed reader-mode iframe
+  inside the panel, above the audit log.
+
+  Two channels now flow out of the runtime per tool call, not one:
+  - `onToolInvocation(receipt)` — the signed, hash-only audit artifact
+    (unchanged; landed in prior commits).
+  - `onToolActivity(event)` — new. Ephemeral raw args + result bytes,
+    delivered at the same moment the receipt is signed. The audit
+    channel commits to hashes; the activity channel carries what
+    those hashes commit to, so the workstation's browser pane can
+    render the page the motebit is reading without round-tripping a
+    separate fetch.
+
+  Separation-of-concerns contract:
+  - Activity subscribers MUST NOT persist the payload — args/result
+    are deliberately not part of the signed audit trail and may
+    contain sensitive content.
+  - The signed receipt is the audit; activity is the live UX. A
+    Ring-1 text surface can ignore activity entirely and just render
+    the audit log.
+
+  Changes by package:
+
+  `@motebit/runtime`:
+  - New `StreamingDeps.onToolActivity` + `ToolActivityEvent` type.
+  - New `RuntimeConfig.onToolActivity` wired through `MotebitRuntime`.
+  - `StreamingManager.fireToolActivity` runs alongside the receipt
+    emitter at the moment a calling→done pair matches.
+  - 4 new runtime tests: coexistence with receipts, sink-undefined
+    silence, sink-throw isolation, legacy-stream skip.
+
+  `@motebit/panels`:
+  - New `ToolActivityEvent` type (inline shape, no crypto import —
+    same Layer 5 self-containment strategy as the receipt shape).
+  - `WorkstationFetchAdapter.subscribeToolActivity` (optional — Ring-1
+    surfaces omit it and `state.currentPage` stays null).
+  - `WorkstationState.currentPage: WorkstationCurrentPage | null`
+    populated when a `read_url`/`virtual_browser`/`browse_page`
+    activity event arrives with a string `args.url`. Non-string result
+    coerced to JSON. `clearHistory()` preserves `currentPage` — the
+    user clearing the log shouldn't blank the page they're actively
+    reading.
+  - 10 new panel tests covering page-fetch recognition, supersession,
+    non-page-fetch ignore, missing-url ignore, JSON coercion, clear
+    preserving the page, absent activity subscription, and dual-
+    channel unsubscribe on dispose.
+
+  `@motebit/web`:
+  - `WebApp` gains a parallel `_toolActivityListeners` bus and
+    `subscribeToolActivity(listener) → unsubscribe`.
+  - Panel scaffold now includes the browser pane (URL strip + sandboxed
+    iframe, `sandbox="allow-same-origin"`, dark reader typography).
+  - Panel renders the iframe srcdoc only when `currentPage.invocation_id`
+    changes, preserving scroll position as new receipts arrive.
+  - Panel width widened from 440px to 680px to accommodate the pane.
+
+  End-to-end: the motebit calls `read_url` → ai-core yields
+  `tool_status calling` with args → StreamingManager captures →
+  `tool_status done` arrives → activity fires with raw args+result →
+  `WebApp` bus fans out → `WorkstationFetchAdapter.subscribeToolActivity`
+  forwards → `createWorkstationController` populates `state.currentPage`
+  → panel renders the fetched page in the sandboxed iframe. Same call
+  also produces the signed receipt row below.
+
+  All 28 drift gates pass. 591/591 runtime, 108/108 panels, 178/178
+  web tests green. Full workspace build clean.
+
+- cbb61d1: User-drivable URL bar in the Workstation — type a URL, press enter,
+  the motebit's `read_url` tool fires and the page lands in the
+  browser pane. Both user and motebit share the same gaze: whenever
+  either of you requests a URL, both see it. The signed receipt
+  records `invocation_origin: "user-tap"` when you drove it and
+  `"ai-loop"` when the motebit did, so the audit trail discriminates.
+
+  New runtime primitive: `MotebitRuntime.invokeLocalTool(name, args,
+options?)`. The deterministic, LLM-free path for surface affordances
+  to fire a specific local tool. Mirrors the same activity + signed-
+  receipt hooks the AI loop's tool execution uses:
+  - fires `onToolActivity` with raw args + result (populates the
+    workstation's browser pane)
+  - composes + signs a `ToolInvocationReceipt` via the same suite-
+    dispatch path as `ExecutionReceipt`, defaults to
+    `invocation_origin: "user-tap"`
+  - returns the `ToolResult` so callers can react inline (toast on
+    failure, status reset on success)
+
+  Fail-closed: no signing key → no receipt. Sink throws are isolated
+  via the runtime's logger. Separate from `invokeCapability`, which
+  remains the path for relay-delegated tasks; `invokeLocalTool` is
+  the path for in-process tools like `read_url` and `web_search`.
+
+  Per the surface-determinism doctrine, explicit UI affordances (like
+  the URL bar's enter handler) MUST route through a typed capability
+  path, never through a constructed prompt. `invokeLocalTool` is that
+  path for local tools.
+
+  Web surface:
+  - `WebApp.invokeLocalTool(name, args)` forwards to the runtime.
+  - URL bar component in the workstation panel — input with `→`
+    prefix, placeholder text ("type a URL — you and the motebit see
+    the same page"), tiny status indicator to the right showing
+    "fetching…" / "failed".
+  - `normalizeUrlInput` handles bare hostnames (prefixes `https://`)
+    and space-containing or dot-less strings (routes through
+    DuckDuckGo so the input doubles as a search bar).
+  - Enter key fires `ctx.app.invokeLocalTool("read_url", { url })`;
+    the existing activity bus populates `state.currentPage`; the
+    iframe renders the same reader view it shows for AI-driven reads.
+
+  All 28 drift gates pass. 595/595 runtime tests (no regression),
+  178/178 web tests green. Full workspace build clean.
+
+### Patch Changes
+
+- 356bae9: Add `deriveSolanaAddress(publicKey: Uint8Array): string` to
+  `@motebit/wallet-solana` — pure base58 derivation of the motebit's
+  sovereign address from its Ed25519 identity public key, with no RPC,
+  Keypair, or rail instantiation required.
+
+  Motivation: `MotebitRuntime.getSolanaAddress()` previously returned null
+  whenever `_solanaWallet` (the RPC-backed rail) wasn't instantiated —
+  even when the identity public key was known. This blocked the deposit
+  path on surfaces where `config.solana` wasn't wired or rail init
+  failed: the Stripe onramp flow needs the address, not the rail, and
+  was rendering "no wallet configured" despite a valid identity.
+
+  `getSolanaAddress()` now falls back to `deriveSolanaAddress(signingKeys
+.publicKey)` whenever signing keys are present. Balance queries and
+  transaction signing still require the full rail. The address is
+  rail-independent by design: it's the public key, base58-encoded.
+
+  Side effect on the confused-deputy defense: the existing
+  `payee_address !== getSolanaAddress()` cross-check now fires in more
+  cases (any motebit with signing keys, regardless of rail state), which
+  is strictly stronger. Receipt-exchange happy-path tests updated to use
+  the real derived address via `deriveSolanaAddress(kp.publicKey)`
+  instead of placeholder strings.
+
+- 620394e: Ship `spec/goal-lifecycle-v1.md` and `spec/plan-lifecycle-v1.md` —
+  event-shaped wire-format specs for the goal and plan event families
+  already emitted by `@motebit/runtime` and its CLI / desktop callers.
+
+  Pattern matches `memory-delta-v1.md` (landed 2026-04-19): each event
+  type gets a `#### Wire format (foundation law)` block, a payload type
+  in `@motebit/protocol`, a zod schema in `@motebit/wire-schemas` with
+  `.passthrough()` envelope + `_TYPE_PARITY` compile-time assertion, a
+  committed JSON Schema artifact at a stable `$id` URL, and a roundtrip
+  case in `drift.test.ts`.
+
+  **Goal-lifecycle (5 events):**
+  - `goal_created` — initial declaration or yaml-driven revision
+  - `goal_executed` — one run's terminal outcome
+  - `goal_progress` — mid-run narrative note
+  - `goal_completed` — goal's terminal transition
+  - `goal_removed` — tombstone via user command or yaml pruning
+
+  **Plan-lifecycle (7 events):**
+  - `plan_created` — plan materialized with N steps
+  - `plan_step_started` / `_completed` / `_failed` / `_delegated`
+  - `plan_completed` / `plan_failed` — plan-level terminal transitions
+
+  `@motebit/runtime` now declares implementation of both specs in its
+  `motebit.implements` array (enforced by `check-spec-impl-coverage`,
+  invariant #31). Cross-spec correlation with memory-delta and future
+  reflection/trust specs is via `goal_id` on plan events.
+
+- 403fee0: Fix HTTP 400 "temperature is deprecated for this model" on motebit.com
+  after the first reflection/planning task runs.
+
+  The 2026-04-17 fix (ai-core 89f3b978) omitted `temperature` from the
+  Anthropic request body when `config.temperature` was undefined — the
+  correct handling for Claude Opus 4.7+, which rejects the parameter.
+  That fix is still right. This PR closes **three compounding defects in
+  the task-router path that 89f3b978 did not touch**:
+  1. `TaskRouter.resolve()` hardcoded `?? 0.7` as the final fallback,
+     so the resolved config _always_ carried a number.
+  2. `withTaskConfig` apply path unconditionally called
+     `provider.setTemperature(taskConfig.temperature)` — so any task
+     borrowed a temperature even when none was configured upstream.
+  3. `withTaskConfig` restore path (the worst): if `savedTemperature`
+     was undefined, the `finally` block set it back to `0.7`,
+     **permanently poisoning the provider for every subsequent call.**
+     One reflection task per session was enough to break the next
+     normal chat turn with HTTP 400.
+
+  That last one explains the "worked, worked, broke" pattern users saw
+  on motebit.com: the reflection task that runs every couple of turns
+  ran fine, then silently restored 0.7 as the provider's default, and
+  the next chat turn was rejected.
+
+  Fixes:
+  - `ResolvedTaskConfig.temperature` is now optional. Undefined means
+    "let the model use its own default" and propagates through the
+    whole chain without reintroducing a number.
+  - `TaskRouter.resolve()` preserves undefined instead of falling back
+    to 0.7.
+  - `withTaskConfig` only touches `setTemperature` when the task config
+    explicitly set one; the restore path passes undefined verbatim.
+  - `StreamingProvider.setTemperature` signature widened to
+    `number | undefined` so it can clear the field. Concrete setters
+    on `AnthropicProvider` and `OpenAIProvider` updated symmetrically.
+  - `PLANNING_TASK_ROUTER` (runtime) drops the hardcoded 0.3/0.5 for
+    `planning` and `plan_reflection`. Those predated the Opus 4.7
+    deprecation and were arbitrary tuning values; leaving them in
+    would have tripped the same 400 even after the task-router fix.
+
+  Two regression tests pin the behavior (task-router unit test for the
+  resolve contract + coverage-uplift for the withTaskConfig restore
+  contract). Both were inverted from tests that actively codified the
+  buggy `?? 0.7` fallback.
+
+  **Deploy impact:** motebit.com web chat was rejecting Anthropic
+  requests after the first reflection task per session. A redeploy
+  from this commit restores it.
+
+- Updated dependencies [699ba41]
+- Updated dependencies [bce38b7]
+- Updated dependencies [9dc5421]
+- Updated dependencies [0e7d690]
+- Updated dependencies [1690469]
+- Updated dependencies [d969e7c]
+- Updated dependencies [009f56e]
+- Updated dependencies [356bae9]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [28c46dd]
+- Updated dependencies [4eb2ebc]
+- Updated dependencies [85579ac]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [f69d3fb]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [fdf4cd5]
+- Updated dependencies [3747b7a]
+- Updated dependencies [403fee0]
+- Updated dependencies [db5af58]
+- Updated dependencies [1e07df5]
+- Updated dependencies [c42b45a]
+  - @motebit/sdk@1.0.0
+  - @motebit/crypto@1.0.0
+  - @motebit/ai-core@0.2.0
+  - @motebit/encryption@0.2.0
+  - @motebit/wallet-solana@0.2.0
+  - @motebit/semiring@0.2.0
+  - @motebit/memory-graph@0.2.0
+  - @motebit/render-engine@0.2.0
+  - @motebit/behavior-engine@0.1.18
+  - @motebit/gradient@0.1.18
+  - @motebit/mcp-client@0.1.18
+  - @motebit/planner@0.1.18
+  - @motebit/policy-invariants@0.1.18
+  - @motebit/privacy-layer@0.1.18
+  - @motebit/reflection@0.1.18
+  - @motebit/state-vector@0.1.18
+  - @motebit/sync-engine@0.1.18
+  - @motebit/core-identity@0.1.18
+  - @motebit/event-log@0.1.18
+  - @motebit/policy@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

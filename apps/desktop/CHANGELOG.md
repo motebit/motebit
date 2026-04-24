@@ -1,5 +1,278 @@
 # @motebit/desktop
 
+## 0.2.0
+
+### Minor Changes
+
+- 06b61e8: Desktop surface now registers the `computer` tool end-to-end — AI-loop
+  tool call → session manager → governance gate → Tauri Rust bridge →
+  stub dispatcher. When the real screen-capture + input-injection
+  implementation lands on the Rust side, only the command bodies in
+  `apps/desktop/src-tauri/src/computer_use.rs` change; every layer above
+  is stable.
+
+  **New — Rust side:**
+  - `apps/desktop/src-tauri/src/computer_use.rs` — two Tauri commands
+    (`computer_query_display`, `computer_execute`) + a `FailureEnvelope`
+    error shape the TS bridge unwraps into typed failure reasons. v1 stub
+    returns `{ reason: "not_supported", message: "…" }`; real platform
+    implementations (ScreenCaptureKit, Windows.Graphics.Capture, xcap,
+    enigo) land in a follow-up.
+  - `apps/desktop/src-tauri/src/main.rs` — module wired + commands added
+    to `invoke_handler!`.
+
+  **New — TS side:**
+  - `apps/desktop/src/computer-bridge.ts` — `createTauriComputerDispatcher`
+    implements `ComputerPlatformDispatcher` by proxying to the Rust
+    commands via `invoke`. Unwraps Rust's `FailureEnvelope` into a
+    `ComputerDispatcherError` with the right `ComputerFailureReason`;
+    unknown / malformed rejections default to `platform_blocked`.
+  - `apps/desktop/src/computer-tool.ts` — `registerComputerTool` builds
+    the session manager (with pluggable governance + approval flow hooks
+    for future integration), lazy-opens a default session on first tool
+    call, and registers the `computer` tool with a handler that
+    auto-fills `session_id` from the default session. AI sees only
+    `action`; the wire-format receipt still binds the full
+    `ComputerActionRequest` with the session id included.
+  - `apps/desktop/src/desktop-tools.ts` — `registerDesktopTools` now
+    returns `{ computer: ComputerToolRegistration | null }` so the
+    DesktopApp can dispose the session on teardown. `computer` joins
+    `read_file` / `write_file` / `shell_exec` as an invoke-gated
+    Tauri-privileged tool.
+
+  **Tool-schema relaxation (@motebit/tools):**
+  - `computerDefinition.inputSchema.required` drops `session_id`
+    (from `["session_id", "action"]` to `["action"]`). `session_id`
+    remains an optional property on the schema; the AI doesn't manage
+    sessions. The wire format (`ComputerActionRequest` in
+    `@motebit/protocol`) still requires `session_id` — handler-filled.
+    Description on `session_id` updated to reflect the optional
+    AI-boundary semantics.
+
+  **Tests: +2 desktop, +1 tools update.**
+  - Desktop: `computer` registers when invoke is present; doesn't when
+    absent. Full flow test mocks invoke to throw a Rust-shape
+    `FailureEnvelope`; the bridge unwraps into a `ComputerDispatcherError`;
+    the session manager normalizes to a failure outcome; the tool handler
+    surfaces `{ ok: false, error: "<reason>: <message>" }`.
+  - Tools: updated schema-required assertion.
+
+  Surface matrix (`docs/doctrine/workstation-viewport.md` §Per-surface
+  map) now concretely implemented on desktop: AI model sees the
+  `computer` tool; every invocation routes through the complete stack
+  and surfaces a typed `not_supported` until Rust has real platform
+  work.
+
+  All 28 drift gates pass. 405/405 desktop tests, 171/171 tools tests.
+  Rust compiles clean.
+
+- 8dda3f0: Desktop surface mount of the Workstation. Same liquid-glass plane,
+  same receipt log, same URL bar, same virtual-browser pane, same
+  scheduled-agents section — everything the web surface ships, now in
+  the Tauri app. Ring-1 parity validated: the `@motebit/panels/
+workstation` controller was designed surface-agnostic; the port
+  exercised the abstraction end-to-end.
+
+  **Why this matters strategically.** The scheduled-agents feature we
+  just shipped on web is tab-local — agents stop firing when the
+  browser closes. On desktop, the Tauri window is long-lived
+  (quit-to-tray keeps the runner alive), so recurring tasks fire
+  through more of the day. The feature is genuinely useful on desktop
+  in a way it can't be on web until relay-side scheduling lands.
+  Users who want "my motebit works while I sleep" install the desktop
+  app; users who want "try it in my browser" get the web surface.
+
+  **Changes:**
+
+  `apps/desktop/src/index.ts` (`DesktopApp`):
+  - New runtime config fields: `deviceId`, `onToolInvocation`,
+    `onToolActivity` — same fan-out pattern as `WebApp`.
+  - `_toolInvocationListeners` / `_toolActivityListeners` buses with
+    isolated subscriber faults.
+  - `getRenderer()` — exposes the `ThreeJSAdapter` for UI modules
+    (workstation plane, launcher).
+  - `subscribeToolInvocations(listener)` / `subscribeToolActivity(listener)`
+    — mirror the web API.
+  - `invokeLocalTool(name, args)` — deterministic local-tool path for
+    surface affordances (URL bar routes through here).
+  - `getScheduledAgents()` — returns the runner; workstation panel
+    reads from it.
+  - Scheduled-agents runner initialized at the end of `initAI` with
+    the same `fire` contract the web uses (fired / skipped / error).
+
+  `apps/desktop/src/scheduled-agents.ts` — byte-identical copy of the
+  web module. `localStorage` is available in the Tauri WebView; the
+  shape fits. If/when desktop gets a Rust-daemon scheduler, the runner
+  swaps and the UI stays.
+
+  `apps/desktop/src/ui/workstation-panel.ts` — byte-identical copy of
+  the web panel, with two single-line diffs:
+  `WebContext → DesktopContext`, panel header reframed for surface.
+  The `@motebit/panels` controller + workstation plane primitive are
+  shared, so the DOM + CSS + animations are verbatim.
+
+  `apps/desktop/src/main.ts` — `initWorkstationPanel(ctx)` at module
+  init, Escape key handler, Option+W hotkey (same `e.code === "KeyW"`
+  guard as web so the macOS `Option+W → ∑` remap doesn't break
+  matching).
+
+  `apps/desktop/package.json` — `@motebit/crypto` added (the runtime
+  config imports `SignableToolInvocationReceipt` + `ToolActivityEvent`
+  types from crypto / runtime respectively). Caught by `check-deps`.
+
+  **Deferred on desktop:**
+  - **Unify scheduled-agents with the existing Rust daemon goal
+    scheduler** (`apps/desktop/src/goal-scheduler.ts`). The daemon is
+    sophisticated (plan-based execution, approval suspension) but it
+    operates on a different data model (`ScheduledGoal` vs
+    `ScheduledAgent`). A follow-up bridges them so one UX covers both
+    mechanisms.
+  - **Sibling parity for `WorkstationController` drift gate.** A
+    second consumer of `@motebit/panels/workstation` is now shipping;
+    the check-panel-controllers gate should extend to cover the
+    controller. Deferred to the next pass for a focused gate update.
+
+  All 28 drift gates pass. 403/403 desktop tests green (no new
+  tests — the port reuses the web-side test coverage for the shared
+  controller + panel render; desktop DOM tests follow when the first
+  bug demands one). Full workspace build clean.
+
+- 43e2560: Workstation becomes a navigable "window to the internet" — user and
+  motebit share one gaze, both drive the same reader-mode browser surface.
+
+  **Phase 1 scope — reader-mode interactive navigation:**
+  - Links inside the browser pane now click through to `read_url` via
+    `invokeLocalTool`, so both model-driven and user-driven navigation
+    flow through the same signed `ToolInvocationReceipt` pipeline.
+  - New Back button in the browser strip (disabled when history is
+    empty). Maintains per-panel-instance history stack; standard browser
+    semantics (forward history truncates on new navigation).
+  - URL-bar Enter now pushes to history alongside link-click-through.
+  - Every navigation is auditable via the existing receipt stream —
+    nothing new to wire; governance + sensitivity gates apply as-is.
+
+  **What did NOT change:**
+  - Backend stays `read_url` reader-mode (server-side fetch + HTML-strip
+    - markdown render). Phase 2 swaps the backend for real interactive
+      browsing — embedded WebView on desktop, relay-hosted cloud browser
+      on web/mobile/spatial — without changing this UX contract.
+  - No new protocol primitive. `BrowserSession` is deferred until Phase
+    2 infra actually requires session state (cookies, tabs, auth).
+    Premature protocol shape locks in the wrong abstraction.
+
+  **Phase 2 roadmap (not in this commit):**
+  - Desktop: embed a real WebView, forward input, stream DOM events
+    through the same navigation pipeline. Workstation becomes the
+    motebit's actual web browser.
+  - Web/mobile/spatial: relay-hosted cloud browser (sovereign-via-relay,
+    fits the 5% relay-business model; BYO headless supported for
+    sovereign tier).
+  - Desktop-only: computer use via OS accessibility APIs + signed
+    `screen.observe` / `screen.act` tools.
+
+  All 28 drift gates pass; all 178 web tests pass.
+
+- 1f49f7f: Close the remaining Phase 1 gaps on the Workstation browser pane.
+
+  **Added:**
+  - **Forward button** (`›`) next to Back. Disabled when no forward
+    history; standard browser semantics (new navigation truncates
+    forward history).
+  - **In-memory page cache** keyed by URL. Back/Forward render cached
+    reader-mode content instantly without re-firing `read_url`. The
+    cache populates from the controller's `state.currentPage` stream
+    on every successful navigation, so both motebit-initiated and
+    user-driven reads get cached once. Re-visiting a cached URL skips
+    the tool call — no double-signed receipt for content the audit
+    trail already has.
+  - **Relative URL resolution** — `<a href="/path">` now resolves
+    against the current page via `new URL(href, currentUrl)`. Links
+    with bare paths or `../` segments navigate correctly instead of
+    getting silently dropped.
+  - Non-http(s) schemes still filtered after resolution (mailto,
+    javascript, data, etc.).
+
+  **Phase 1 now complete.** The Workstation is a navigable reader-mode
+  browser window: forward, back, link click-through, cache, relative
+  URLs, URL-bar navigation, all through one `read_url` signed pipeline
+  with user and motebit sharing one gaze.
+
+  **Phase 2 targets** (infrastructure work, deferred — protocol
+  primitives for a real interactive browser + computer use land next
+  as dedicated cross-cutting pass):
+  - Desktop: embedded WebView (Tauri WKWebView/WebView2).
+  - Web/mobile/spatial: relay-hosted cloud browser with frame streaming.
+  - Desktop-only: computer use via OS accessibility APIs.
+
+  All 28 drift gates pass; 178 web tests green.
+
+### Patch Changes
+
+- Updated dependencies [699ba41]
+- Updated dependencies [bce38b7]
+- Updated dependencies [9dc5421]
+- Updated dependencies [ceb00b2]
+- Updated dependencies [8cef783]
+- Updated dependencies [0e7d690]
+- Updated dependencies [e897ab0]
+- Updated dependencies [1690469]
+- Updated dependencies [c64a2fb]
+- Updated dependencies [09737d7]
+- Updated dependencies [bd3f7a4]
+- Updated dependencies [54158b1]
+- Updated dependencies [d969e7c]
+- Updated dependencies [009f56e]
+- Updated dependencies [356bae9]
+- Updated dependencies [06b61e8]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [28c46dd]
+- Updated dependencies [620394e]
+- Updated dependencies [3b7db2c]
+- Updated dependencies [4eb2ebc]
+- Updated dependencies [85579ac]
+- Updated dependencies [937226e]
+- Updated dependencies [43fc843]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [f69d3fb]
+- Updated dependencies [e17bf47]
+- Updated dependencies [c757777]
+- Updated dependencies [58c6d99]
+- Updated dependencies [fdf4cd5]
+- Updated dependencies [54e5ca9]
+- Updated dependencies [a801771]
+- Updated dependencies [7fbdc48]
+- Updated dependencies [3747b7a]
+- Updated dependencies [be2dba3]
+- Updated dependencies [403fee0]
+- Updated dependencies [db5af58]
+- Updated dependencies [1e07df5]
+- Updated dependencies [f0a86c7]
+- Updated dependencies [c42b45a]
+- Updated dependencies [cbb61d1]
+  - @motebit/sdk@1.0.0
+  - @motebit/crypto@1.0.0
+  - @motebit/protocol@1.0.0
+  - @motebit/ai-core@0.2.0
+  - @motebit/tools@0.2.0
+  - @motebit/encryption@0.2.0
+  - @motebit/runtime@0.2.0
+  - @motebit/wallet-solana@0.2.0
+  - @motebit/panels@0.2.0
+  - @motebit/memory-graph@0.2.0
+  - @motebit/render-engine@0.2.0
+  - @motebit/behavior-engine@0.1.18
+  - @motebit/gradient@0.1.18
+  - @motebit/identity-file@0.1.18
+  - @motebit/mcp-client@0.1.18
+  - @motebit/planner@0.1.18
+  - @motebit/policy-invariants@0.1.18
+  - @motebit/privacy-layer@0.1.18
+  - @motebit/state-vector@0.1.18
+  - @motebit/sync-engine@0.1.18
+  - @motebit/core-identity@0.1.18
+  - @motebit/event-log@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

@@ -1,5 +1,187 @@
 # @motebit/crypto
 
+## 0.2.0
+
+### Minor Changes
+
+- 1690469: Wire `BalanceWaiver` producer + verifier (spec/migration-v1.md §7.2). `@motebit/crypto` adds `signBalanceWaiver` / `verifyBalanceWaiver` / `BALANCE_WAIVER_SUITE` alongside the existing artifact signers; `@motebit/encryption` re-exports them so apps stay on the product-vocabulary surface. `@motebit/virtual-accounts` gains a `"waiver"` `TransactionType` so the debit carries a dedicated audit-trail category. The relay's `/migrate/depart` route now accepts an optional `balance_waiver` body — balance > 0 requires either a confirmed withdrawal (prior behavior) or a valid signed waiver for at least the current balance; the persisted waiver JSON is stored verbatim on the migration row for auditor reverification. The `motebit migrate` CLI gains a `--waive` flag that signs the waiver with the identity key and attaches it to the depart call, with a destructive-action confirmation prompt. Closes the one-pass-delivery gap left over from commit `7afce18c` (wire artifact without consumers).
+- 25b14fc: Close dispute-v1 §6.5 foundation-law gap: "A relay must not self-adjudicate when it is the defendant." `@motebit/crypto` adds `signAdjudicatorVote` / `verifyAdjudicatorVote` / `ADJUDICATOR_VOTE_SUITE` and `signDisputeResolution` / `verifyDisputeResolution` / `DISPUTE_RESOLUTION_SUITE` alongside the other artifact signers. The vote signature binds `dispute_id` (spec §6.5 replay-prevention invariant — votes from one dispute cannot be stuffed into another). The resolution verifier re-checks every embedded vote signature when the federation path is populated — aggregated-only verdicts are rejected. `@motebit/encryption` re-exports.
+
+  The relay's `/resolve` route now refuses to self-adjudicate when the relay is the filer or respondent (409 with §6.3/§6.5 pointer) and routes signing through `signDisputeResolution` instead of constructing canonical JSON inline. Leader-side federation orchestration (peer enumeration, vote collection, aggregation, timeout handling) is deferred until the first federation peer peers in production — the primitives are now in place so the orchestrator has no plumbing lag when it lands.
+
+- 3539756: Add `signDisputeRequest` / `verifyDisputeRequest`, `signDisputeEvidence` /
+  `verifyDisputeEvidence`, and `signDisputeAppeal` / `verifyDisputeAppeal`
+  primitives to `@motebit/crypto` (re-exported through `@motebit/encryption`).
+
+  Each follows the `signAdjudicatorVote` / `signDisputeResolution` shape:
+  the signer owns `signature` and `suite`; the verifier fail-closes on
+  unknown suite, base64url decode error, and primitive verification
+  failure. The associated suite constants (`DISPUTE_REQUEST_SUITE`,
+  `DISPUTE_EVIDENCE_SUITE`, `DISPUTE_APPEAL_SUITE`) are added alongside
+  and currently equal `motebit-jcs-ed25519-b64-v1`.
+
+  Motivation: the relay now enforces spec/dispute-v1.md §4.2 + §5.2 + §8.2
+  foundation law that every dispute artifact MUST be signed by its
+  authoring party. Previously these were inline `c.req.json<{…}>()`
+  construction inputs at `services/api/src/disputes.ts`; without the
+  signature binding the relay could not verify foundation law §4.4
+  ("filing party must be a direct party to the task"). Third parties
+  implementing motebit/dispute@1.0 now have the canonical sign + verify
+  recipes available in Apache-2.0-licensed `@motebit/crypto` with zero monorepo
+  dependencies.
+
+  ### Migration
+
+  ```ts
+  import { signDisputeRequest } from "@motebit/encryption"; // or @motebit/crypto
+
+  const signed = await signDisputeRequest(
+    {
+      dispute_id: "dsp-uuid-v7",
+      task_id,
+      allocation_id,
+      filed_by,
+      respondent,
+      category,
+      description,
+      evidence_refs,
+      filed_at,
+    },
+    filerPrivateKey,
+  );
+  // POST signed → /api/v1/allocations/:allocationId/dispute
+  ```
+
+- 3747b7a: Sign SettlementRecord — protocol-layer support. Closes audit
+  finding #1 from the cross-plane review.
+
+  `services/api/CLAUDE.md` rule 6 states: "Every truth the relay
+  asserts (credential anchor proofs, revocation memos, settlement
+  receipts) is independently verifiable onchain without relay
+  contact." Federation settlements deliver this through Merkle
+  batching + onchain anchoring (relay-federation-v1.md §7.6). **Per-
+  agent settlements did not** — the wire format was unsigned, so a
+  relay could issue inconsistent records to different observers (e.g.
+  show the worker `{amount_settled: 95, fee: 5}` and an auditor
+  `{amount_settled: 80, fee: 20}`) and both would "validate" because
+  no signature committed the relay to either claim.
+
+  This commit adds the protocol-layer self-attestation primitive:
+  - `SettlementRecord` gains `issuer_relay_id` + `suite` + `signature`
+    fields (`@motebit/protocol`)
+  - `signSettlement(record, issuerPrivateKey)` and
+    `verifySettlement(record, issuerPublicKey)` shipped in
+    `@motebit/crypto`, re-exported from `@motebit/encryption`
+  - `@motebit/wire-schemas` SettlementRecord flips back to `.strict()`
+    with the three new required fields; `additionalProperties: false`
+    in the published JSON Schema
+  - Spec `delegation-v1.md` §6.3 wire-format table updated; §6.4
+    foundation law adds: "Every emitted SettlementRecord MUST be
+    signed by its issuer_relay_id. The signature covers the entire
+    record except `signature` itself, including `amount_settled`,
+    `platform_fee`, and `platform_fee_rate` — committing the relay
+    to the exact values it published. A relay that issues
+    inconsistent records to different observers fails self-
+    attestation: at most one of the records verifies."
+
+  Crypto-layer round-trip + tampering tests added: amount tampering,
+  fee_rate tampering, wrong-key, unknown-suite all reject as
+  expected. Determinism (same input → same signature) verified.
+
+  ## Migration
+
+  `SettlementRecord.issuer_relay_id`, `suite`, and `signature` are
+  now required fields in the wire format. Any consumer constructing
+  a `SettlementRecord` literal must add them:
+
+  ```diff
+   const record: SettlementRecord = {
+     settlement_id: "...",
+     allocation_id: "...",
+     receipt_hash: "...",
+     ledger_hash: null,
+     amount_settled: 950_000,
+     platform_fee: 50_000,
+     platform_fee_rate: 0.05,
+     status: "completed",
+     settled_at: Date.now(),
+  +  issuer_relay_id: "<relay motebit_id>",
+  +  suite: "motebit-jcs-ed25519-b64-v1",
+  +  signature: "<base64url Ed25519 over canonical body minus signature>",
+   };
+  ```
+
+  Use `signSettlement(unsignedRecord, issuerPrivateKey)` from
+  `@motebit/crypto` (or `@motebit/encryption`) to produce a valid
+  signed record from the body fields:
+
+  ```ts
+  import { signSettlement } from "@motebit/encryption";
+
+  const signed = await signSettlement(
+    {
+      settlement_id,
+      allocation_id,
+      receipt_hash,
+      ledger_hash,
+      amount_settled,
+      platform_fee,
+      platform_fee_rate,
+      status,
+      settled_at,
+      issuer_relay_id,
+    },
+    relayPrivateKey,
+  );
+  // signed.suite + signed.signature are now set
+  ```
+
+  Verifiers use `verifySettlement(record, issuerPublicKey)` —
+  returns `true` only if the signature matches the canonical body
+  under the embedded suite.
+
+  `@motebit/api` (services/api) is NOT updated by this commit. The
+  SettlementRecord-shaped output the relay produces today will fail
+  the new wire schema validation until the relay integration commit
+  (C) lands. That commit adds the `signature` column to
+  `relay_settlements`, signs at INSERT time, and emits the signed
+  shape on the audit-facing endpoints. The protocol-layer ships
+  first so the contract is unambiguous before consumer code is
+  modified.
+
+  Drift defense #22 (zod ↔ TS ↔ JSON) and #23 (spec ↔ schema) both
+  green after `api:extract` baseline refresh.
+
+### Patch Changes
+
+- Updated dependencies [bce38b7]
+- Updated dependencies [9dc5421]
+- Updated dependencies [ceb00b2]
+- Updated dependencies [8cef783]
+- Updated dependencies [e897ab0]
+- Updated dependencies [1690469]
+- Updated dependencies [c64a2fb]
+- Updated dependencies [bd3f7a4]
+- Updated dependencies [54158b1]
+- Updated dependencies [d969e7c]
+- Updated dependencies [009f56e]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [28c46dd]
+- Updated dependencies [620394e]
+- Updated dependencies [4eb2ebc]
+- Updated dependencies [85579ac]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [f69d3fb]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [54e5ca9]
+- Updated dependencies [3747b7a]
+- Updated dependencies [db5af58]
+- Updated dependencies [1e07df5]
+  - @motebit/crypto@1.0.0
+  - @motebit/protocol@1.0.0
+
 ## 0.1.17
 
 ### Patch Changes

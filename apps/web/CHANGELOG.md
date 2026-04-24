@@ -1,5 +1,532 @@
 # @motebit/web
 
+## 0.2.0
+
+### Minor Changes
+
+- c551820: Goals panel becomes the single surface for all user-declared goals —
+  one-shot and recurring. Workstation drops its recurring-goals section.
+
+  **Goals panel:**
+  - Compose gains a cadence select (`once` / `hourly` / `daily` /
+    `weekly`). Default is `once`, matching the prior one-shot UX.
+  - List shows every goal regardless of mode. Recurring rows get a
+    cadence badge + countdown label; active recurring rows get Pause +
+    Run-now controls; once rows keep the Execute button for pending state.
+  - Countdown refreshes every 30s while the panel is open.
+  - New CSS classes `.goal-cadence-badge` + `.goal-countdown`.
+
+  **Workstation panel:**
+  - Recurring-goals section removed (DOM, scaffold fields, consumer
+    block, helper functions `buildGoalRow`, `buildRunRow`, `statusMark`,
+    `statusColor`, `formatRelativePast`, and the `formatCountdownUntil`
+    import). Workstation now holds only URL bar + live tool-call
+    receipts + browser pane.
+
+  **Doctrine:**
+  - Records-vs-acts: panels hold records (user-declared goals); the
+    Workstation plane shows live acts (current tool activity). Having
+    recurring goals in two places was UI-layer drift that the data-layer
+    unification already removed. This closes it.
+
+  All 178 web tests pass; all 28 drift gates pass.
+
+- 7fbdc48: Fix two of the three honest limitations on scheduled agents:
+
+  **Priority yield now retries on next tick.** Previous behaviour:
+  when a scheduled fire collided with an in-flight user turn, the
+  runner skipped the fire AND advanced `next_run_at` by a full cadence
+  — so a missed fire waited up to `interval_ms` before trying again.
+  Now: the `fire()` contract returns `fired | skipped | error`.
+  `skipped` leaves `next_run_at` alone; the next 30s tick retries.
+  `error` advances once (one backoff) so a failing fire doesn't
+  loop every 30s. `fired` advances normally.
+
+  **Scheduled runs no longer pollute the chat transcript.** New
+  `RuntimeConfig` / `sendMessageStreaming` / `processStream` option:
+  `suppressHistory`. When true, the turn runs the normal pipeline
+  (signed receipts, tool calls, activity events all emit as usual)
+  but neither `pushExchange` nor `pushActivation` fires — the
+  conversation stays focused on user ↔ motebit dialogue. The web
+  app's scheduler opts in; receipts from scheduled runs still land
+  in the workstation's audit log.
+
+  **Recent runs view.** The runner now tracks the last 50 runs
+  (in-memory). Each run record:
+  - `run_id`, `agent_id`, `prompt`, `started_at`, `completed_at`
+  - `status`: `running` | `fired` | `skipped` | `error`
+  - `responsePreview`: 160-char truncation for the inline UI
+  - `errorMessage`: set on `error`
+
+  Workstation panel renders the last 10 runs below the agent list —
+  one row per run with status mark (✓ / … / ⏸ / ✗), relative
+  time, and preview. Live-updates as runs progress through states.
+  Separate from the main receipt log below; receipts stay canonical
+  for audit, runs are the UX lens.
+
+  **Remaining limitation (deferred).** Tab-local firing — runs only
+  happen while motebit.com is open. The fix is relay-side scheduling
+  (new endpoint + DB + scheduler + push), a multi-session effort.
+  Today's data shape + runner contract match the endgame: swapping
+  the tab-local runner for a relay subscription doesn't change the
+  UI or the storage format.
+
+  All 28 drift gates pass. Runtime + web tests green. Full workspace
+  build clean.
+
+- 8046534: Scheduled agents — recurring tasks the motebit fires on cadence.
+  "Every morning, brief me on AI news." "Every Thursday, scan for
+  updates." Each fire runs through the normal chat pipeline and
+  produces a signed `ExecutionReceipt` the user can inspect or
+  export — every scheduled run is verifiable, which is the layer
+  no hosted agent product can match without rebuilding the identity
+  substrate.
+
+  **Current scope (tab-local):**
+  - Storage: `localStorage` under `motebit.scheduled_agents`. Small
+    JSON array, one record per agent.
+  - Scheduler: single `setInterval(30_000)` tick in `WebApp`. Agents
+    whose `next_run_at <= now && enabled` fire immediately.
+  - Execution: the runner drains `webApp.sendMessageStreaming(prompt)`
+    to completion so the normal chat pipeline emits signed
+    receipts the existing workstation log captures.
+  - Coordination: scheduled fires yield to in-flight user turns —
+    the runner skips firing when `_isProcessing` is true and relies
+    on the next cadence slot to catch up.
+
+  **UI (inside the workstation panel):**
+  - "Scheduled" section between the URL bar and the browser pane.
+  - Inline compose: prompt input + cadence dropdown (hourly / daily
+    / weekly) + schedule / cancel buttons.
+  - Per-row actions: pause/resume toggle (⏸ / ▶), "run" (fire now,
+    bypasses cadence), delete (×). Row shows cadence badge, prompt,
+    countdown to next fire (updated every 30s).
+  - Empty state: "No recurring tasks yet. Add one — the motebit
+    runs it on cadence."
+
+  **Deferred (endgame):**
+  - Relay-side scheduling so runs fire while no tab is open. The
+    current module's storage + public shape match the endgame — when
+    relay scheduling ships, the runner swaps to a subscription to
+    relay-fired events; UI and data don't change.
+  - Desktop surface mount. The desktop app already has a scheduled-
+    goals daemon (Rust); a follow-up unifies the UX.
+  - Per-run linkage from receipts back to the originating scheduled
+    agent. Today receipts appear in the main audit log; a future
+    pass adds a per-agent receipt thread.
+
+  **API surface:**
+  - `WebApp.getScheduledAgents(): ScheduledAgentsRunner | null`
+  - `ScheduledAgentsRunner`:
+    - `list()` → snapshot array
+    - `subscribe(listener)` → unsubscribe thunk
+    - `add({ prompt, cadence })` → new agent
+    - `setEnabled(id, enabled)`
+    - `remove(id)`
+    - `runNow(id)` — manual fire
+    - `dispose()`
+
+  All 28 drift gates pass. 178/178 web tests green. Full workspace
+  build clean.
+
+  Strategic context: this is motebit's answer to Perplexity Computer's
+  "Scheduled" row (portfolio tracker hourly, morning brief daily,
+  trend research weekly). The differentiator we add on top —
+  cryptographic receipt per run — requires no platform cooperation;
+  every fire produces a verifiable artifact of what the motebit
+  actually did.
+
+- f0a86c7: Virtual-browser pane on the Workstation panel — when the motebit
+  fetches a page (`read_url`, `virtual_browser`, `browse_page`), the
+  fetched content renders live as a sandboxed reader-mode iframe
+  inside the panel, above the audit log.
+
+  Two channels now flow out of the runtime per tool call, not one:
+  - `onToolInvocation(receipt)` — the signed, hash-only audit artifact
+    (unchanged; landed in prior commits).
+  - `onToolActivity(event)` — new. Ephemeral raw args + result bytes,
+    delivered at the same moment the receipt is signed. The audit
+    channel commits to hashes; the activity channel carries what
+    those hashes commit to, so the workstation's browser pane can
+    render the page the motebit is reading without round-tripping a
+    separate fetch.
+
+  Separation-of-concerns contract:
+  - Activity subscribers MUST NOT persist the payload — args/result
+    are deliberately not part of the signed audit trail and may
+    contain sensitive content.
+  - The signed receipt is the audit; activity is the live UX. A
+    Ring-1 text surface can ignore activity entirely and just render
+    the audit log.
+
+  Changes by package:
+
+  `@motebit/runtime`:
+  - New `StreamingDeps.onToolActivity` + `ToolActivityEvent` type.
+  - New `RuntimeConfig.onToolActivity` wired through `MotebitRuntime`.
+  - `StreamingManager.fireToolActivity` runs alongside the receipt
+    emitter at the moment a calling→done pair matches.
+  - 4 new runtime tests: coexistence with receipts, sink-undefined
+    silence, sink-throw isolation, legacy-stream skip.
+
+  `@motebit/panels`:
+  - New `ToolActivityEvent` type (inline shape, no crypto import —
+    same Layer 5 self-containment strategy as the receipt shape).
+  - `WorkstationFetchAdapter.subscribeToolActivity` (optional — Ring-1
+    surfaces omit it and `state.currentPage` stays null).
+  - `WorkstationState.currentPage: WorkstationCurrentPage | null`
+    populated when a `read_url`/`virtual_browser`/`browse_page`
+    activity event arrives with a string `args.url`. Non-string result
+    coerced to JSON. `clearHistory()` preserves `currentPage` — the
+    user clearing the log shouldn't blank the page they're actively
+    reading.
+  - 10 new panel tests covering page-fetch recognition, supersession,
+    non-page-fetch ignore, missing-url ignore, JSON coercion, clear
+    preserving the page, absent activity subscription, and dual-
+    channel unsubscribe on dispose.
+
+  `@motebit/web`:
+  - `WebApp` gains a parallel `_toolActivityListeners` bus and
+    `subscribeToolActivity(listener) → unsubscribe`.
+  - Panel scaffold now includes the browser pane (URL strip + sandboxed
+    iframe, `sandbox="allow-same-origin"`, dark reader typography).
+  - Panel renders the iframe srcdoc only when `currentPage.invocation_id`
+    changes, preserving scroll position as new receipts arrive.
+  - Panel width widened from 440px to 680px to accommodate the pane.
+
+  End-to-end: the motebit calls `read_url` → ai-core yields
+  `tool_status calling` with args → StreamingManager captures →
+  `tool_status done` arrives → activity fires with raw args+result →
+  `WebApp` bus fans out → `WorkstationFetchAdapter.subscribeToolActivity`
+  forwards → `createWorkstationController` populates `state.currentPage`
+  → panel renders the fetched page in the sandboxed iframe. Same call
+  also produces the signed receipt row below.
+
+  All 28 drift gates pass. 591/591 runtime, 108/108 panels, 178/178
+  web tests green. Full workspace build clean.
+
+- d124855: Web adopts the unified Goals primitive from `@motebit/panels`. The two
+  parallel web models are gone: `ScheduledAgent` (recurring simple) and
+  the in-panel `WebGoal` (one-shot plan) now share one runner + one
+  store.
+
+  **Replaces:**
+  - `apps/web/src/scheduled-agents.ts` (391 lines) — deleted. The
+    tab-local runner + storage + cadence helpers are now provided by
+    `createGoalsRunner` from `@motebit/panels/goals`. The web-side
+    wrapper in `apps/web/src/goals-runner.ts` owns the localStorage
+    adapter + the fire() routing:
+    - `mode: "once"` → `app.executeGoal` plan stream (Goals panel)
+    - `mode: "recurring"` → `app.sendMessageStreaming` single turn
+      with `suppressHistory: true` (Workstation)
+      The dispatch rule keeps prior behavior without needing an explicit
+      `strategy` field on the goal — execution style is encoded by which
+      surface creates the goal.
+
+  **WebApp changes:**
+  - `WebApp.getScheduledAgents()` → `WebApp.getGoalsRunner()`.
+  - Private `_scheduledAgents` → `_goalsRunner`.
+
+  **Workstation panel:**
+  - The "scheduled" section's underlying type is now `ScheduledGoal`,
+    filtered to `mode: "recurring"`. One-shot goals live in the Goals
+    panel. UI label and layout unchanged.
+  - `setPaused` replaces `setEnabled`; terminal states skip pause by
+    design.
+
+  **Goals panel:**
+  - Reads from the shared runner, filtered to `mode: "once"`. Add /
+    execute / delete all go through the runner API. The runner
+    forwards plan chunks via an optional `onChunk` callback so the
+    panel still renders step-by-step progress during execution — UI
+    fidelity unchanged.
+  - Subscription attaches on first `openGoals()` (runner is built
+    during `app.bootstrap`, which runs after panel init).
+
+  **Storage:**
+  - Unified key `motebit.goals` (array of `ScheduledGoal`) + runs under
+    `motebit.goals_runs`. No migration from the old `motebit:goals` /
+    `motebit.scheduled_agents` keys — solo-dev pre-launch, no users with
+    data in those formats.
+
+  All 178 web tests pass; all 28 drift gates pass.
+
+- 3f25ac8: Web surface: Workstation panel — a live view into the motebit's tool
+  calls, each row backed by a signed `ToolInvocationReceipt`.
+
+  What's visible:
+  - A floating launcher button (bottom-right, beside the existing
+    sovereign button) opens the panel.
+  - Option+W toggles it via keyboard; Escape closes.
+  - Each tool call arrives as a row showing tool name, elapsed time,
+    short prefixes of `args_hash` / `result_hash` / `signature`, and a
+    relative "ago" timestamp. Newest on top.
+  - Clicking a row copies the full signed receipt JSON to the
+    clipboard — the user can paste it into any third-party verifier
+    holding the motebit's public key, no relay required. This is the
+    motebit-unique property made visible in the UI.
+  - `Clear` resets the history view without dropping the subscription
+    (fresh-session UX).
+  - Empty state is honest ("No tool calls yet.") — no skeleton
+    loaders, no "thinking…" chatter.
+
+  Wiring:
+  - `WebApp` gains `subscribeToolInvocations(listener) → unsubscribe`
+    backed by a `Set` — multiple panels / devtools / telemetry sinks
+    can observe the same receipt stream. Listener faults are isolated.
+  - `RuntimeConfig.onToolInvocation` on the runtime fires into the
+    bus at construction time.
+  - `initWorkstationPanel` creates a `WorkstationFetchAdapter` whose
+    `subscribeToolInvocations` proxies to the web app's bus, builds
+    a `createWorkstationController` on top, and renders DOM rows
+    from controller state.
+
+  MVP scope — receipt log only. Not yet shipped: virtual-browser pane
+  (motebit-driven embedded Chromium), plan-approval affordance,
+  delegation view. Each of those lands additively on the same
+  controller; the state shape won't break.
+
+  Package dependency: `@motebit/crypto` added to `@motebit/web` for
+  `SignableToolInvocationReceipt`. Enforced by `check-deps`.
+
+  All 28 drift gates pass. 178/178 web tests green. Full workspace
+  build clean (7s cached).
+
+- c42b45a: Workstation panel now mounts on a liquid-glass plane in the scene,
+  next to the creature — not as a fixed overlay. The spatial treatment
+  is motebit-native: one body, one material family, sympathetic
+  breathing locked to the creature's time base. Every other agent UI
+  collapses into a conventional browser tab; motebit's spatial
+  embodiment is the differentiator.
+
+  New render primitive: `WorkstationPlane` (`packages/render-engine/
+src/workstation-plane.ts`). A lean ~230-line class — plane mesh with
+  borosilicate-IOR + clearcoat chemistry, CSS2DObject stage for mounting
+  arbitrary HTML, held-tablet tilt (~12° forward, ~5° yaw), 0.3 Hz
+  breathing at 30% creature amplitude, soul-color tint coupling on
+  attenuation + emissive, user-visibility toggle with smooth fade.
+
+  No per-item management, no pinch physics, no embodiment-mode
+  machinery — just the primitive the workstation needs. The per-tool
+  state lives in `@motebit/panels/workstation/controller`; the plane
+  only knows how to host one stage element.
+
+  `RenderAdapter` interface gains:
+  - `setWorkstationStageChild?(el: HTMLElement | null): void`
+  - `setWorkstationVisible?(visible: boolean): void`
+
+  `ThreeJSAdapter` instantiates a `WorkstationPlane` as a child of the
+  creature group so it inherits the creature's world transform (drift,
+  bob, sag). `setInteriorColor` mirrors the soul color onto the plane
+  so the plane and creature read as one body when the plane is open.
+  `resize` and `dispose` forward to the plane.
+
+  `apps/web`:
+  - `WebApp.getRenderer()` exposes the `ThreeJSAdapter` so surface
+    modules can reach scene primitives without threading the reference
+    through every seam.
+  - `initWorkstationPanel` detects the renderer's workstation methods
+    at construction. Primary path: mount the panel DOM into the plane's
+    stage via `setWorkstationStageChild`, reveal the plane via
+    `setWorkstationVisible`. Fallback path (WebGL unavailable / headless
+    tests / NullAdapter): float as a fixed overlay as before so the
+    surface still functions without 3D.
+  - Panel visual treatment retuned for the glass substrate: transparent
+    background (the plane IS the surface), light-on-glass typography,
+    frosted-droplet receipt rows on white-alpha backdrops, serif reader
+    view switched from dark-mode palette to glass-appropriate colors.
+    No backdrop overlay, no drop-shadow chrome, no z-index battles.
+  - Launcher button restyled to match (semi-transparent white with
+    blur, low-saturation icon color).
+
+  The controller stays untouched — the spatial reshape is purely
+  rendering. Ring-1 text fallback (the fixed-overlay path) keeps the
+  surface functional when the plane isn't available.
+
+  All 28 drift gates pass. 249/249 render-engine tests, 178/178 web
+  tests green. Full workspace build clean.
+
+- 43e2560: Workstation becomes a navigable "window to the internet" — user and
+  motebit share one gaze, both drive the same reader-mode browser surface.
+
+  **Phase 1 scope — reader-mode interactive navigation:**
+  - Links inside the browser pane now click through to `read_url` via
+    `invokeLocalTool`, so both model-driven and user-driven navigation
+    flow through the same signed `ToolInvocationReceipt` pipeline.
+  - New Back button in the browser strip (disabled when history is
+    empty). Maintains per-panel-instance history stack; standard browser
+    semantics (forward history truncates on new navigation).
+  - URL-bar Enter now pushes to history alongside link-click-through.
+  - Every navigation is auditable via the existing receipt stream —
+    nothing new to wire; governance + sensitivity gates apply as-is.
+
+  **What did NOT change:**
+  - Backend stays `read_url` reader-mode (server-side fetch + HTML-strip
+    - markdown render). Phase 2 swaps the backend for real interactive
+      browsing — embedded WebView on desktop, relay-hosted cloud browser
+      on web/mobile/spatial — without changing this UX contract.
+  - No new protocol primitive. `BrowserSession` is deferred until Phase
+    2 infra actually requires session state (cookies, tabs, auth).
+    Premature protocol shape locks in the wrong abstraction.
+
+  **Phase 2 roadmap (not in this commit):**
+  - Desktop: embed a real WebView, forward input, stream DOM events
+    through the same navigation pipeline. Workstation becomes the
+    motebit's actual web browser.
+  - Web/mobile/spatial: relay-hosted cloud browser (sovereign-via-relay,
+    fits the 5% relay-business model; BYO headless supported for
+    sovereign tier).
+  - Desktop-only: computer use via OS accessibility APIs + signed
+    `screen.observe` / `screen.act` tools.
+
+  All 28 drift gates pass; all 178 web tests pass.
+
+- 1f49f7f: Close the remaining Phase 1 gaps on the Workstation browser pane.
+
+  **Added:**
+  - **Forward button** (`›`) next to Back. Disabled when no forward
+    history; standard browser semantics (new navigation truncates
+    forward history).
+  - **In-memory page cache** keyed by URL. Back/Forward render cached
+    reader-mode content instantly without re-firing `read_url`. The
+    cache populates from the controller's `state.currentPage` stream
+    on every successful navigation, so both motebit-initiated and
+    user-driven reads get cached once. Re-visiting a cached URL skips
+    the tool call — no double-signed receipt for content the audit
+    trail already has.
+  - **Relative URL resolution** — `<a href="/path">` now resolves
+    against the current page via `new URL(href, currentUrl)`. Links
+    with bare paths or `../` segments navigate correctly instead of
+    getting silently dropped.
+  - Non-http(s) schemes still filtered after resolution (mailto,
+    javascript, data, etc.).
+
+  **Phase 1 now complete.** The Workstation is a navigable reader-mode
+  browser window: forward, back, link click-through, cache, relative
+  URLs, URL-bar navigation, all through one `read_url` signed pipeline
+  with user and motebit sharing one gaze.
+
+  **Phase 2 targets** (infrastructure work, deferred — protocol
+  primitives for a real interactive browser + computer use land next
+  as dedicated cross-cutting pass):
+  - Desktop: embedded WebView (Tauri WKWebView/WebView2).
+  - Web/mobile/spatial: relay-hosted cloud browser with frame streaming.
+  - Desktop-only: computer use via OS accessibility APIs.
+
+  All 28 drift gates pass; 178 web tests green.
+
+- cbb61d1: User-drivable URL bar in the Workstation — type a URL, press enter,
+  the motebit's `read_url` tool fires and the page lands in the
+  browser pane. Both user and motebit share the same gaze: whenever
+  either of you requests a URL, both see it. The signed receipt
+  records `invocation_origin: "user-tap"` when you drove it and
+  `"ai-loop"` when the motebit did, so the audit trail discriminates.
+
+  New runtime primitive: `MotebitRuntime.invokeLocalTool(name, args,
+options?)`. The deterministic, LLM-free path for surface affordances
+  to fire a specific local tool. Mirrors the same activity + signed-
+  receipt hooks the AI loop's tool execution uses:
+  - fires `onToolActivity` with raw args + result (populates the
+    workstation's browser pane)
+  - composes + signs a `ToolInvocationReceipt` via the same suite-
+    dispatch path as `ExecutionReceipt`, defaults to
+    `invocation_origin: "user-tap"`
+  - returns the `ToolResult` so callers can react inline (toast on
+    failure, status reset on success)
+
+  Fail-closed: no signing key → no receipt. Sink throws are isolated
+  via the runtime's logger. Separate from `invokeCapability`, which
+  remains the path for relay-delegated tasks; `invokeLocalTool` is
+  the path for in-process tools like `read_url` and `web_search`.
+
+  Per the surface-determinism doctrine, explicit UI affordances (like
+  the URL bar's enter handler) MUST route through a typed capability
+  path, never through a constructed prompt. `invokeLocalTool` is that
+  path for local tools.
+
+  Web surface:
+  - `WebApp.invokeLocalTool(name, args)` forwards to the runtime.
+  - URL bar component in the workstation panel — input with `→`
+    prefix, placeholder text ("type a URL — you and the motebit see
+    the same page"), tiny status indicator to the right showing
+    "fetching…" / "failed".
+  - `normalizeUrlInput` handles bare hostnames (prefixes `https://`)
+    and space-containing or dot-less strings (routes through
+    DuckDuckGo so the input doubles as a search bar).
+  - Enter key fires `ctx.app.invokeLocalTool("read_url", { url })`;
+    the existing activity bus populates `state.currentPage`; the
+    iframe renders the same reader view it shows for AI-driven reads.
+
+  All 28 drift gates pass. 595/595 runtime tests (no regression),
+  178/178 web tests green. Full workspace build clean.
+
+### Patch Changes
+
+- Updated dependencies [699ba41]
+- Updated dependencies [bce38b7]
+- Updated dependencies [9dc5421]
+- Updated dependencies [ceb00b2]
+- Updated dependencies [8cef783]
+- Updated dependencies [0e7d690]
+- Updated dependencies [e897ab0]
+- Updated dependencies [1690469]
+- Updated dependencies [c64a2fb]
+- Updated dependencies [09737d7]
+- Updated dependencies [bd3f7a4]
+- Updated dependencies [54158b1]
+- Updated dependencies [d969e7c]
+- Updated dependencies [009f56e]
+- Updated dependencies [356bae9]
+- Updated dependencies [06b61e8]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [28c46dd]
+- Updated dependencies [620394e]
+- Updated dependencies [3b7db2c]
+- Updated dependencies [4eb2ebc]
+- Updated dependencies [85579ac]
+- Updated dependencies [937226e]
+- Updated dependencies [43fc843]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [67e64ab]
+- Updated dependencies [f69d3fb]
+- Updated dependencies [e17bf47]
+- Updated dependencies [c757777]
+- Updated dependencies [58c6d99]
+- Updated dependencies [fdf4cd5]
+- Updated dependencies [54e5ca9]
+- Updated dependencies [a801771]
+- Updated dependencies [7fbdc48]
+- Updated dependencies [3747b7a]
+- Updated dependencies [be2dba3]
+- Updated dependencies [403fee0]
+- Updated dependencies [db5af58]
+- Updated dependencies [1e07df5]
+- Updated dependencies [f0a86c7]
+- Updated dependencies [c42b45a]
+- Updated dependencies [cbb61d1]
+  - @motebit/sdk@1.0.0
+  - @motebit/crypto@1.0.0
+  - @motebit/protocol@1.0.0
+  - @motebit/ai-core@0.2.0
+  - @motebit/tools@0.2.0
+  - @motebit/encryption@0.2.0
+  - @motebit/runtime@0.2.0
+  - @motebit/panels@0.2.0
+  - @motebit/memory-graph@0.2.0
+  - @motebit/browser-persistence@0.1.18
+  - @motebit/render-engine@0.2.0
+  - @motebit/behavior-engine@0.1.18
+  - @motebit/gradient@0.1.18
+  - @motebit/mcp-client@0.1.18
+  - @motebit/planner@0.1.18
+  - @motebit/policy-invariants@0.1.18
+  - @motebit/privacy-layer@0.1.18
+  - @motebit/state-vector@0.1.18
+  - @motebit/sync-engine@0.1.18
+  - @motebit/core-identity@0.1.18
+  - @motebit/event-log@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

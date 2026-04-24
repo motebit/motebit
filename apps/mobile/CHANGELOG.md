@@ -1,5 +1,72 @@
 # @motebit/mobile
 
+## 0.1.18
+
+### Patch Changes
+
+- d969e7c: Ship `@motebit/crypto-appattest` — the Apple App Attest chain verifier. Verifies a `HardwareAttestationClaim` with `platform: "device_check"` by decoding Apple's CBOR attestation object, chain-verifying the leaf + intermediate against the pinned Apple App Attestation Root CA, checking the `1.2.840.113635.100.8.2` nonce-binding extension against `SHA256(authData || clientDataHash)`, and asserting `authData.rpIdHash === SHA256(bundleId)`. Apache-2.0 Layer 2 permissive-floor leaf — metabolizes `@peculiar/x509` + `cbor2` while `@motebit/crypto` stays permissive-floor-pure.
+
+  `@motebit/crypto::verifyHardwareAttestationClaim` now accepts an optional `HardwareAttestationVerifiers` record; consumers wire `deviceCheckVerifier(...)` from `@motebit/crypto-appattest` into `verify(cred, { hardwareAttestation: { deviceCheck } })` to enable App Attest verification. Unwired platforms fail-closed with a named-missing-adapter error. The dispatcher's return type is now `HardwareAttestationVerifyResult | Promise<HardwareAttestationVerifyResult>` — the SE path remains synchronous; injected adapters may return a Promise.
+
+  Mobile mint path now cascades App Attest → Secure Enclave → software via the new `expo-app-attest` native module (iOS `DCAppAttestService`, Android stub). The canonical composer `composeHardwareAttestationCredential` and the drift gates stay unchanged — every surface still delegates VC envelope + eddsa-jcs-2022 signing to the single source of truth.
+
+- Updated dependencies [699ba41]
+- Updated dependencies [ceb00b2]
+- Updated dependencies [8cef783]
+- Updated dependencies [0e7d690]
+- Updated dependencies [e897ab0]
+- Updated dependencies [1690469]
+- Updated dependencies [c64a2fb]
+- Updated dependencies [09737d7]
+- Updated dependencies [bd3f7a4]
+- Updated dependencies [54158b1]
+- Updated dependencies [009f56e]
+- Updated dependencies [356bae9]
+- Updated dependencies [06b61e8]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [620394e]
+- Updated dependencies [3b7db2c]
+- Updated dependencies [4eb2ebc]
+- Updated dependencies [85579ac]
+- Updated dependencies [937226e]
+- Updated dependencies [43fc843]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [e17bf47]
+- Updated dependencies [c757777]
+- Updated dependencies [58c6d99]
+- Updated dependencies [fdf4cd5]
+- Updated dependencies [54e5ca9]
+- Updated dependencies [a801771]
+- Updated dependencies [7fbdc48]
+- Updated dependencies [3747b7a]
+- Updated dependencies [be2dba3]
+- Updated dependencies [403fee0]
+- Updated dependencies [db5af58]
+- Updated dependencies [1e07df5]
+- Updated dependencies [f0a86c7]
+- Updated dependencies [c42b45a]
+- Updated dependencies [cbb61d1]
+  - @motebit/sdk@1.0.0
+  - @motebit/protocol@1.0.0
+  - @motebit/ai-core@0.2.0
+  - @motebit/tools@0.2.0
+  - @motebit/encryption@0.2.0
+  - @motebit/runtime@0.2.0
+  - @motebit/panels@0.2.0
+  - @motebit/memory-graph@0.2.0
+  - @motebit/render-engine@0.2.0
+  - @motebit/behavior-engine@0.1.18
+  - @motebit/gradient@0.1.18
+  - @motebit/identity-file@0.1.18
+  - @motebit/mcp-client@0.1.18
+  - @motebit/planner@0.1.18
+  - @motebit/privacy-layer@0.1.18
+  - @motebit/state-vector@0.1.18
+  - @motebit/sync-engine@0.1.18
+  - @motebit/core-identity@0.1.18
+  - @motebit/event-log@0.1.18
+
 ## 0.1.17
 
 ### Patch Changes

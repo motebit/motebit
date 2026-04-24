@@ -1,5 +1,29 @@
 # @motebit/identity-file
 
+## 0.1.18
+
+### Patch Changes
+
+- Updated dependencies [699ba41]
+- Updated dependencies [bce38b7]
+- Updated dependencies [9dc5421]
+- Updated dependencies [1690469]
+- Updated dependencies [d969e7c]
+- Updated dependencies [009f56e]
+- Updated dependencies [25b14fc]
+- Updated dependencies [3539756]
+- Updated dependencies [28c46dd]
+- Updated dependencies [2d8b91a]
+- Updated dependencies [f69d3fb]
+- Updated dependencies [e17bf47]
+- Updated dependencies [58c6d99]
+- Updated dependencies [3747b7a]
+- Updated dependencies [db5af58]
+- Updated dependencies [1e07df5]
+  - @motebit/sdk@1.0.0
+  - @motebit/crypto@1.0.0
+  - @motebit/encryption@0.2.0
+
 ## 0.1.17
 
 ### Patch Changes
