@@ -29,7 +29,7 @@ function makeSyntheticScheduler() {
     },
     advance(ms: number): void {
       const target = now + ms;
-      while (true) {
+      for (;;) {
         queue.sort((a, b) => a.at - b.at);
         const next = queue.find((q) => !q.cancelled && q.at <= target);
         if (!next) break;

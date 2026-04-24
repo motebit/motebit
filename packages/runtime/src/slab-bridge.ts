@@ -1,3 +1,5 @@
+/// <reference lib="dom" />
+
 /**
  * Slab bridge — wires a `SlabController` (runtime layer) to any
  * render-side target that implements the slab surface of
