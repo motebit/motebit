@@ -464,12 +464,11 @@ function formatToolStatus(
 // first ~240 characters of the cleaned page appear — that's what the
 // motebit perceived at the moment of reading.
 
-function renderFetch(item: SlabItem, actions: SlabItemActions): HTMLElement {
+function renderFetch(item: SlabItem, _actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-fetch");
   card.style.cursor = "pointer";
   card.style.touchAction = "pan-y"; // keep vertical page scroll; horizontal becomes swipe
-  attachFetchGestures(card, actions);
 
   // Browser-like window chrome. Favicon + host (left), path (middle),
   // reading time (right). The entire bar is clickable — opens the
@@ -898,15 +897,28 @@ function extractFetchPreview(payload: { status?: string; result?: unknown } | nu
 const SWIPE_PX = 60; // horizontal threshold before swipe fires
 const SWIPE_MAX_ANGLE = 0.8; // radians — ignore vertical-heavy motion
 
-function attachFetchGestures(card: HTMLDivElement, actions: SlabItemActions): void {
-  // Body scrolls natively now — no expand/collapse toggle needed. The
-  // window-sized reader view gives enough room that users can read
-  // long pages inline by scrolling within the body element.
-
-  // Swipe — pointer down, track horizontal delta, release past
-  // threshold triggers dismiss. Routes through `actions.dismiss`
-  // which the bridge mapped to `controller.dismissItem(id)`. No
-  // prompt construction; typed capability per surface-determinism.
+/**
+ * Universal swipe-to-dismiss gesture — attached to every slab-item
+ * card via the `renderSlabItem` wrapper. Horizontal swipe past the
+ * threshold fires `actions.dismiss`, which the bridge maps to
+ * `controller.dismissItem(id)`. Typed capability routing per
+ * surface-determinism doctrine — no prompt construction, no
+ * constructed invocation; the gesture invokes the typed action
+ * directly.
+ *
+ * Doctrine (motebit-computer.md §"The user's touch — supervised
+ * agency"): swipe is the user's force-dissolve. Second only to
+ * tap (focus) in the minimum-viable gesture set; both are the
+ * invariants that keep the slab from drifting toward "movie"
+ * (no user touch) or "remote desktop" (user drives every call).
+ *
+ * Per-kind tap/click behavior stays inside the renderer that needs
+ * it (delegation's expand-detail is pure local UI, not a typed
+ * capability). This helper handles the cross-kind gesture that
+ * every card must support; kind-specific interactions compose on
+ * top without reaching into the helper.
+ */
+function attachSlabGestures(card: HTMLDivElement, actions: SlabItemActions): void {
   let startX = 0;
   let startY = 0;
   let tracking = false;
@@ -950,7 +962,7 @@ function attachFetchGestures(card: HTMLDivElement, actions: SlabItemActions): vo
 // Gestures: tap expands the output area (removes the max-height
 // cap so long logs can be read); swipe dismisses.
 
-function renderShell(item: SlabItem, actions: SlabItemActions): HTMLElement {
+function renderShell(item: SlabItem, _actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-shell");
   card.style.cursor = "pointer";
@@ -1006,7 +1018,6 @@ function renderShell(item: SlabItem, actions: SlabItemActions): HTMLElement {
   card.appendChild(out);
 
   applyShellPayload(item.payload, cmd, out);
-  attachShellGestures(card, actions);
   return card;
 }
 
@@ -1082,37 +1093,6 @@ function applyShellPayload(payload: unknown, cmd: HTMLElement, out: HTMLElement)
   // Tint for non-zero exit / error — stays legible, just warms the
   // block toward a terracotta so the reader's eye catches it.
   out.style.color = isError ? "rgba(255, 200, 180, 0.95)" : "rgba(220, 232, 250, 0.94)";
-}
-
-function attachShellGestures(card: HTMLDivElement, actions: SlabItemActions): void {
-  // Output block scrolls natively now — no expand toggle needed.
-  // Terminal fills the window; long output stays readable in place.
-
-  // Swipe — dismiss via typed capability.
-  let startX = 0;
-  let startY = 0;
-  let tracking = false;
-  card.addEventListener("pointerdown", (ev) => {
-    if (ev.pointerType === "mouse" && ev.button !== 0) return;
-    startX = ev.clientX;
-    startY = ev.clientY;
-    tracking = true;
-  });
-  card.addEventListener("pointerup", (ev) => {
-    if (!tracking) return;
-    tracking = false;
-    const dx = ev.clientX - startX;
-    const dy = ev.clientY - startY;
-    if (Math.abs(dx) < SWIPE_PX) return;
-    if (Math.abs(dy) > Math.abs(dx) * Math.tan(SWIPE_MAX_ANGLE)) return;
-    card.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
-    card.style.transform = `translateX(${dx > 0 ? 180 : -180}px)`;
-    card.style.opacity = "0";
-    actions.dismiss();
-  });
-  card.addEventListener("pointercancel", () => {
-    tracking = false;
-  });
 }
 
 function renderPlanStep(item: SlabItem): HTMLElement {
@@ -1222,7 +1202,7 @@ function formatStepStatus(
 // dismiss (the network request still completes; the UI just stops
 // showing it — the returned artifact, if any, still graduates).
 
-function renderDelegation(item: SlabItem, actions: SlabItemActions): HTMLElement {
+function renderDelegation(item: SlabItem, _actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-delegation");
   card.style.cursor = "pointer";
@@ -1299,8 +1279,21 @@ function renderDelegation(item: SlabItem, actions: SlabItemActions): HTMLElement
 
   card.appendChild(body);
 
+  // Tap-to-expand is delegation-specific local UI (not a typed
+  // capability) — stays inline. Universal swipe-to-dismiss comes
+  // from `attachSlabGestures` at the outer wrapper.
+  card.addEventListener("click", () => {
+    const expanded = card.dataset.expanded === "true";
+    if (expanded) {
+      card.dataset.expanded = "false";
+      detail.style.display = "none";
+    } else {
+      card.dataset.expanded = "true";
+      detail.style.display = "block";
+    }
+  });
+
   applyDelegationPayload(item.payload, peer, toolEl, bodyText, detail);
-  attachDelegationGestures(card, actions);
   return card;
 }
 
@@ -1378,49 +1371,6 @@ function formatDuration(ms: number): string {
   return s < 10 ? `${s.toFixed(1)}s` : `${Math.round(s)}s`;
 }
 
-function attachDelegationGestures(card: HTMLDivElement, actions: SlabItemActions): void {
-  // Tap — toggle the expanded detail block. Pure client-side.
-  card.addEventListener("click", () => {
-    const detail = card.querySelector('[data-slot="detail"]');
-    if (!(detail instanceof HTMLElement)) return;
-    const expanded = card.dataset.expanded === "true";
-    if (expanded) {
-      card.dataset.expanded = "false";
-      detail.style.display = "none";
-    } else {
-      card.dataset.expanded = "true";
-      detail.style.display = "block";
-    }
-  });
-
-  // Swipe — dismiss via typed capability. Network request still
-  // completes; UI stops rendering it.
-  let startX = 0;
-  let startY = 0;
-  let tracking = false;
-  card.addEventListener("pointerdown", (ev) => {
-    if (ev.pointerType === "mouse" && ev.button !== 0) return;
-    startX = ev.clientX;
-    startY = ev.clientY;
-    tracking = true;
-  });
-  card.addEventListener("pointerup", (ev) => {
-    if (!tracking) return;
-    tracking = false;
-    const dx = ev.clientX - startX;
-    const dy = ev.clientY - startY;
-    if (Math.abs(dx) < SWIPE_PX) return;
-    if (Math.abs(dy) > Math.abs(dx) * Math.tan(SWIPE_MAX_ANGLE)) return;
-    card.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
-    card.style.transform = `translateX(${dx > 0 ? 180 : -180}px)`;
-    card.style.opacity = "0";
-    actions.dismiss();
-  });
-  card.addEventListener("pointercancel", () => {
-    tracking = false;
-  });
-}
-
 // ── Memory — the Mind organ's visible breath ──────────────────────────
 //
 // Doctrine (motebit-computer.md §Mind): "memory surfaces on the slab
@@ -1435,7 +1385,7 @@ function attachDelegationGestures(card: HTMLDivElement, actions: SlabItemActions
 // circle ("◉"), matching the "mote" vocabulary ("memory_mote") that
 // already lives in the scene-primitive catalog.
 
-function renderMemory(item: SlabItem, actions: SlabItemActions): HTMLElement {
+function renderMemory(item: SlabItem, _actions: SlabItemActions): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-memory");
   card.style.cursor = "pointer";
@@ -1501,7 +1451,6 @@ function renderMemory(item: SlabItem, actions: SlabItemActions): HTMLElement {
   card.appendChild(body);
 
   applyMemoryPayload(item.payload, shortId, text);
-  attachMemoryGestures(card, actions);
   return card;
 }
 
@@ -1522,35 +1471,6 @@ function applyMemoryPayload(payload: unknown, shortId: HTMLElement, body: HTMLEl
   shortId.textContent = p?.short_id ?? (p?.node_id ? p.node_id.slice(0, 8) : "");
   const content = (p?.content ?? "").trim();
   body.textContent = content;
-}
-
-function attachMemoryGestures(card: HTMLDivElement, actions: SlabItemActions): void {
-  // Body scrolls natively; no expand toggle needed.
-
-  let startX = 0;
-  let startY = 0;
-  let tracking = false;
-  card.addEventListener("pointerdown", (ev) => {
-    if (ev.pointerType === "mouse" && ev.button !== 0) return;
-    startX = ev.clientX;
-    startY = ev.clientY;
-    tracking = true;
-  });
-  card.addEventListener("pointerup", (ev) => {
-    if (!tracking) return;
-    tracking = false;
-    const dx = ev.clientX - startX;
-    const dy = ev.clientY - startY;
-    if (Math.abs(dx) < SWIPE_PX) return;
-    if (Math.abs(dy) > Math.abs(dx) * Math.tan(SWIPE_MAX_ANGLE)) return;
-    card.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
-    card.style.transform = `translateX(${dx > 0 ? 180 : -180}px)`;
-    card.style.opacity = "0";
-    actions.dismiss();
-  });
-  card.addEventListener("pointercancel", () => {
-    tracking = false;
-  });
 }
 
 function renderGeneric(item: SlabItem): HTMLElement {
@@ -1593,6 +1513,13 @@ export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLEl
   }
   const card = buildCardForKind(item, actions);
   if (card instanceof HTMLDivElement) {
+    // Universal gestures (swipe-to-dismiss) apply to every kind —
+    // doctrine (motebit-computer.md §"The user's touch"): force-
+    // dissolve is the minimum-viable gesture every slab item must
+    // support. Hover-close is the desktop-pointer equivalent
+    // (meniscus-dip × instead of a swipe) and routes through the
+    // same typed `actions.dismiss`.
+    attachSlabGestures(card, actions);
     attachHoverClose(card, actions);
   }
   return card;
