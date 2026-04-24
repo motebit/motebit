@@ -439,21 +439,25 @@ fn keyring_get(key: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn keyring_set(key: String, value: String) -> Result<(), String> {
-    // Try OS keychain first, then verify the write actually persisted.
-    // On ad-hoc-signed dev binaries, set_password can return Ok while
-    // the Security framework silently drops the write — the verify
-    // catches that and triggers the dev-file fallback.
+    // Dual-write: Keychain (best-effort) + dev file (authoritative).
+    //
+    // An earlier attempt verified the Keychain write via a round-trip
+    // read, but `keyring::Entry` is consistent within the process even
+    // when the Security framework silently drops the write on macOS
+    // ad-hoc-signed dev binaries — set_password returns Ok, the
+    // subsequent get_password returns the same value, yet `security
+    // dump-keychain` from another process shows nothing. The in-process
+    // cache hides the drop from the verify step.
+    //
+    // Fix: always write to the dev file too. Signed production builds
+    // read from Keychain first (gets the fresh value). Dev builds read
+    // from Keychain (empty) and fall through to the dev file (fresh).
+    // In both cases the reader sees the latest value. A stale dev file
+    // never causes a read bug because reads prefer Keychain whenever
+    // it has the key.
     if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &key) {
-        if entry.set_password(&value).is_ok() {
-            if let Ok(read_back) = entry.get_password() {
-                if read_back == value {
-                    return Ok(());
-                }
-            }
-        }
+        let _ = entry.set_password(&value); // ignore — file below is authoritative
     }
-    // Keychain didn't persist (or errored) — dev fallback. Read the
-    // current map, upsert our key, write back with mode 0600.
     let mut map = dev_keyring_read_all();
     map.insert(key, value);
     dev_keyring_write_all(&map)
