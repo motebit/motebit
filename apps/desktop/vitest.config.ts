@@ -36,6 +36,13 @@ export default defineMotebitTest({
     // are tested directly; everything else is platform surface.
     "src/ui/agents.ts",
     "src/ui/chat.ts",
+    // slab-items.ts is a ~1700-line DOM rendering module: iframes,
+    // canvas, gesture handlers, CSS2DObject mounts. Exercised
+    // end-to-end via render-engine's slab.test.ts (the SlabManager
+    // integration); unit-covering its per-kind renderers in
+    // isolation would require the same jsdom + DOM-shim surface as
+    // the other ui/*.ts files in this exclusion list.
+    "src/ui/slab-items.ts",
     "src/ui/color-picker.ts",
     "src/ui/config.ts",
     "src/ui/conversations.ts",
