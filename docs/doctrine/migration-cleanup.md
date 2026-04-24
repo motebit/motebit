@@ -18,12 +18,12 @@ Every migration, legacy branch, or backward-compat shim is a **coordination debt
 
 Classify every migration or compat path into exactly one bucket:
 
-| Holders                        | What to do                                                | Example                                                                                                                                                                                                                     |
-| ------------------------------ | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **0 holders**                  | Remove now. Free.                                         | `if (!artifact.suite) { /* pre-cryptosuite fallback */ }` after cryptosuite became fail-closed — no such artifact can exist.                                                                                                |
-| **1 holder you control**       | Verify, then squash. Cheap.                               | `services/api/src/migrations.ts` — 15 ordered relay migrations. Verify motebit.com's `relay_schema_migrations` table has `max(version) = 15`; squash into one canonical `v1_initial`; fresh installs skip the 15-step play. |
-| **N uncontrolled holders**     | Deprecate first, strip at a named sunset date.            | `migrateLegacyProvider` in `@motebit/sdk` — reads old on-disk/localStorage config shapes. Holders are every dev machine + tester browser. Keep through 1.0; strip at 2.0 after a coordinated "clear your state" window.     |
-| **Protocol holders (forever)** | **Never strip** unless the protocol itself is superseded. | `spec/migration-v1.md` + `services/api/src/migration.ts` (cross-relay agent migration). Any third-party implementer reads this spec. Permanent protocol vocabulary.                                                         |
+| Holders                        | What to do                                                | Example                                                                                                                                                                                                                                                                                                                |
+| ------------------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0 holders**                  | Remove now. Free.                                         | `if (!artifact.suite) { /* pre-cryptosuite fallback */ }` after cryptosuite became fail-closed — no such artifact can exist.                                                                                                                                                                                           |
+| **1 holder you control**       | Verify if stripping is _valuable_, not just _cheap_.      | `services/api/src/migrations.ts` migrations were a 1-holder case. "Squashable" was true (motebit.com at `max(version)=15`, verifying was one SQL call); squashing was still wrong because append-only immutability is a stronger invariant than a shorter file. See the 2026-04-24 squash-and-revert postmortem below. |
+| **N uncontrolled holders**     | Deprecate first, strip at a named sunset date.            | `migrateLegacyProvider` in `@motebit/sdk` — reads old on-disk/localStorage config shapes. Holders are every dev machine + tester browser. Keep through 1.0; strip at 2.0 after a coordinated "clear your state" window.                                                                                                |
+| **Protocol holders (forever)** | **Never strip** unless the protocol itself is superseded. | `spec/migration-v1.md` + `services/api/src/migration.ts` (cross-relay agent migration). Any third-party implementer reads this spec. Permanent protocol vocabulary.                                                                                                                                                    |
 
 ## Keep infrastructure, strip content
 
@@ -67,9 +67,17 @@ A migration or compatibility path may be removed only when:
 
 "Pre-users" is evidence that holder counts are low, not permission to strip indiscriminately.
 
+## Cheap is not a reason
+
+The 1-holder-you-control bucket's "cheap to coordinate" property removes an _objection_ to change; it does not _supply a reason_ for change. For state you fully control, "we could squash / reshape / collapse this without coordinating with anyone" says nothing about whether the squash / reshape / collapse is a win. The question worth answering first is always _what invariant does the current shape hold, and is the proposed change a net gain against that invariant_.
+
+For migrations specifically: the append-only chain IS a structural invariant. Each migration is a closed, dated, named unit; the history is the code; column order emerges from the ALTER sequence for free; one source of truth; no fixture needed. A squash trades that for a shorter file plus (a) load-bearing column ordering in the squashed initial, (b) prose recapitulating what names+dates used to carry, (c) reconciliation code for init helpers, and (d) a fixture + drift gate to reconstruct correctness the chain had by construction. Mature frameworks (Rails, Django, Alembic) treat squashing as a last-resort measure earned at hundreds-of-migrations scale, not hygiene. Below that scale, the chain is the more beautiful system.
+
+The 2026-04-24 squash-and-revert on `services/api/src/migrations.ts` (15 → 1 → 15 across commits 21a29fc4 → revert) is the canonical example. The doctrine entry that called it out as a cleanup target treated "1 holder, cheap audit" as permission to squash; it should have required an argument for squash being a win on its own architectural terms. At 15 migrations, that argument didn't exist.
+
 ## How to apply at motebit (as of 2026-04-23)
 
-- **Relay DB migrations** (`services/api/src/migrations.ts`): 1 controlled holder. Squashable after verifying motebit.com is at HEAD. Post-squash, new operators get a one-step install instead of a 15-step play.
+- **Relay DB migrations** (`services/api/src/migrations.ts`): 1 controlled holder. The squash target has been rescinded. Keep the chain append-only; new schema changes land as `v16`, `v17`, … appended below. Revisit only if the chain reaches hundreds of migrations or CI migration-apply time becomes measurable.
 - **Config-shape migrators** (`migrateLegacyProvider` in `@motebit/sdk`): N uncontrolled holders (every dev machine + tester browser). Keep through 1.0; add a deprecation header with a named sunset version.
 - **Runtime version branches**: audit for `if (!artifact.suite)` or `if (artifact.version < X)` after cryptosuite agility made those paths fail-closed. Zero-holder candidates.
 - **Protocol-level cross-relay migration** (`spec/migration-v1.md`, `services/api/src/migration.ts`): permanent. Never a cleanup target.
