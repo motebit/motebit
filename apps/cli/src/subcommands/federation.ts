@@ -135,17 +135,20 @@ export async function handleFederationPeer(config: CliConfig): Promise<void> {
   const proposeBody2 = (await propose2.json()) as { nonce: string; challenge: string };
   console.log("  ✓ Proposed to our relay");
 
-  // 4. Get signatures via oracle trick: propose to each relay from a dummy with the nonce we want signed
-  const dummyKey1 = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  // 4. Self-propose to extract each relay's signature over its own
+  //    relay_id + the peer's nonce. The relay's confirm endpoint
+  //    binds the challenge to `relay_id:nonce:SUITE`, so a dummy
+  //    proposer cannot stand in — the signature must be over the
+  //    real relay_id, which only the relay's own propose path will
+  //    produce. Mirrors the federation-e2e test's self-propose
+  //    pattern (services/api/src/__tests__/federation-e2e.test.ts).
   const oracle1 = await fetch(`${relayUrl}/federation/v1/peer/propose`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      relay_id: `dummy-${crypto.randomUUID()}`,
-      public_key: dummyKey1,
-      endpoint_url: "http://dummy.test",
+      relay_id: ourId.relay_motebit_id,
+      public_key: ourId.public_key,
+      endpoint_url: relayUrl,
       nonce: proposeBody1.nonce, // peer's nonce — our relay will sign it
     }),
   });
@@ -155,16 +158,13 @@ export async function handleFederationPeer(config: CliConfig): Promise<void> {
   }
   const oracleBody1 = (await oracle1.json()) as { challenge: string };
 
-  const dummyKey2 = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
   const oracle2 = await fetch(`${peerEndpoint}/federation/v1/peer/propose`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      relay_id: `dummy-${crypto.randomUUID()}`,
-      public_key: dummyKey2,
-      endpoint_url: "http://dummy.test",
+      relay_id: peerId.relay_motebit_id,
+      public_key: peerId.public_key,
+      endpoint_url: peerEndpoint,
       nonce: proposeBody2.nonce, // our nonce — peer will sign it
     }),
   });
