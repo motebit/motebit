@@ -55,6 +55,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/records-vs-acts.md`](docs/doctrine/records-vs-acts.md) — body shows acts; panels hold records; the category test before any new mount
 - [`docs/doctrine/goals-vs-tasks.md`](docs/doctrine/goals-vs-tasks.md) — goal = user-declared outcome; task = emergent plan step
 - [`docs/doctrine/motebit-computer.md`](docs/doctrine/motebit-computer.md) — the slab: liquid-glass plane beside the creature, first-person perceptual field made visible. Six embodiment modes unified on one surface (mind / tool_result / virtual_browser / shared_gaze / desktop_drive / peer_viewport), three organs (eye / hand / mind), three end states (dissolve / rest / detach) rooted in droplet physics, supervised agency via gestures on items. Cross-surface Ring-1 capability
+- [`docs/doctrine/design-ratios.md`](docs/doctrine/design-ratios.md) — aspect-ratio decisions for droplet-family surfaces default to φ (golden ratio) unless physics dictates otherwise; canonical `GOLDEN_RATIO` exported from `@motebit/render-engine`
 - [`docs/doctrine/coverage-graduation.md`](docs/doctrine/coverage-graduation.md) — money/identity packages below 80 carry a raise-by date; soft signal via `pnpm coverage-graduation`
 - [`docs/doctrine/proactive-interior.md`](docs/doctrine/proactive-interior.md) — presence mode + 4-phase consolidation cycle + fail-closed proactive tool scope; `runtime.consolidationCycle()` is the only loop
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out

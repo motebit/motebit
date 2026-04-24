@@ -55,6 +55,7 @@ import type {
   SlabItemPhase,
 } from "./spec.js";
 import { CANONICAL_MATERIAL } from "./spec.js";
+import { GOLDEN_RATIO } from "./design-ratios.js";
 
 // ── Geometry + positioning constants ─────────────────────────────────
 
@@ -81,13 +82,9 @@ const SLAB_TILT_Y = -0.09; // ~5° yaw toward creature (radians) — doctrine
  * Plane dimensions — sized to host window-pane cards (~520×334 CSS px
  * at the default camera) without visible empty margins around the
  * container. Aspect locked to the golden ratio (φ ≈ 1.618) per
- * motebit-computer.md §"Visual properties (binding)" —
- * `Aspect ratio: ~16:9 to golden-ratio (~1.618:1) — held-tablet
- * feel, not wall-monitor.` Height is derived from width so the
- * relationship is in code, not in two magic numbers that could
- * drift.
+ * `docs/doctrine/design-ratios.md` — the slab is the first droplet-
+ * family surface under that rule.
  */
-const GOLDEN_RATIO = (1 + Math.sqrt(5)) / 2; // φ
 const SLAB_WIDTH = 0.54;
 const SLAB_HEIGHT = SLAB_WIDTH / GOLDEN_RATIO;
 
