@@ -15,6 +15,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
  * fall through to web research.
  */
 
+/** @internal */
 export const recallSelfDefinition: ToolDefinition = {
   name: "recall_self",
   mode: "api",

@@ -3,6 +3,7 @@ import type { SearchProvider } from "../search-provider.js";
 import { SearchProviderError } from "../search-provider.js";
 import { DuckDuckGoSearchProvider } from "../providers/duckduckgo.js";
 
+/** @spec motebit/delegation@1.0 */
 export const webSearchDefinition: ToolDefinition = {
   name: "web_search",
   mode: "api",

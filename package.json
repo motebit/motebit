@@ -37,6 +37,7 @@
     "check-unused": "knip",
     "check-specs": "npx tsx scripts/check-spec-references.ts",
     "check-spec-coverage": "npx tsx scripts/check-spec-coverage.ts",
+    "check-spec-tools": "npx tsx scripts/check-spec-tools.ts",
     "check-spec-wire-schemas": "npx tsx scripts/check-spec-wire-schemas.ts",
     "check-wire-schema-usage": "npx tsx scripts/check-wire-schema-usage.ts",
     "check-suite-declared": "npx tsx scripts/check-suite-declared.ts",

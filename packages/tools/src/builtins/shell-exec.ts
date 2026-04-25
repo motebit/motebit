@@ -54,6 +54,7 @@ export interface ShellExecConfig {
 
 // === Tool Definition ===
 
+/** @internal */
 export const shellExecDefinition: ToolDefinition = {
   name: "shell_exec",
   mode: "api",

@@ -98,6 +98,12 @@ const GATES: ReadonlyArray<Gate> = [
     args: ["--strict"],
   },
   {
+    name: "check-spec-tools",
+    defends:
+      "every MCP tool name declared in a spec/*.md `#### Tools (foundation law)` block is annotated `@spec <id>` on a registered tool, every `@spec` annotation cross-references a spec declaration, every public tool carries one of `@spec` / `@internal` / `@experimental`, and every `@experimental` carries the four-field temporal-sanity contract with a not-past-due `@stabilizes_by` (invariant #47, added 2026-04-24 as the first construct-level enforcement of the protocol-faithfulness invariant family — promise enforcement, not change detection; companion gate check-spec-routes follows once this pattern has run for a beat)",
+    script: "check-spec-tools",
+  },
+  {
     name: "check-spec-wire-schemas",
     defends:
       "every wire-format type declared in spec/*.md has a matching <TypeName>Schema export from @motebit/wire-schemas (invariant #23, added 2026-04-18 alongside the wire-schemas publication — completes the spec → TS-type → zod-schema → JSON-Schema chain so third-party implementers can validate without bundling motebit)",

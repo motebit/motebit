@@ -77,6 +77,7 @@ const MODIFIERS_SCHEMA = {
   description: "Modifier keys held during the action.",
 };
 
+/** @spec motebit/computer-use@1.0 */
 export const computerDefinition: ToolDefinition = {
   name: "computer",
   mode: "pixels",

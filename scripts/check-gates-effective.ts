@@ -604,6 +604,20 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
       ),
   },
   {
+    script: "check-spec-tools",
+    proves:
+      "flags a public ToolDefinition under packages/tools/src/builtins that carries none of @spec / @internal / @experimental — the unclassified rule (rule c) is the load-bearing case because it catches a new tool shipping without any classification, which is the exact debt the gate exists to surface",
+    perturb: () =>
+      // Fixture: a builtin ToolDefinition literal with `mode:` and `name:` but
+      // no preceding @spec/@internal/@experimental annotation. The gate's
+      // pending-annotation TTL fires nothing for this declaration, so the
+      // tool name lands in the `unclassified` bucket and the gate exits 1.
+      writeFixture(
+        `packages/tools/src/builtins/${PROBE_PREFIX}unclassified_tool.ts`,
+        `import type { ToolDefinition } from "@motebit/sdk";\nexport const unclassifiedProbeDefinition: ToolDefinition = {\n  name: "unclassified_probe",\n  mode: "api",\n  description: "Probe fixture — intentionally missing classification annotation.",\n  inputSchema: { type: "object", properties: {} },\n};\n`,
+      ),
+  },
+  {
     script: "check-hardware-attestation-primitives",
     proves:
       "flags an inline `AgentTrustCredential` VC composer — file contains the literal type-tuple + a `hardware_attestation:` subject assignment but does not import `composeHardwareAttestationCredential`",

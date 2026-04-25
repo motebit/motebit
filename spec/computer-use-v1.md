@@ -99,6 +99,12 @@ Pointer actions (`click`, `double_click`, `mouse_move`, `drag`) MAY carry an opt
 
 All actions are emitted through a single tool primitive: `computer` in `@motebit/tools`.
 
+#### Tools (foundation law)
+
+The canonical tool name every conforming computer-use implementation registers. Renaming is a wire break.
+
+- `computer` — observe or act on the user's computer. Input is a `ComputerActionRequest` (§5.1); output is a `ComputerObservationResult` (§5.2) for observation actions or a success/failure record for input actions.
+
 ---
 
 ## 5. Wire Format

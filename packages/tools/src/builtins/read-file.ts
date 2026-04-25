@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isPathAllowed } from "./path-sandbox.js";
 
+/** @internal */
 export const readFileDefinition: ToolDefinition = {
   name: "read_file",
   mode: "api",

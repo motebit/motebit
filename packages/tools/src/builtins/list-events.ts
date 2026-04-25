@@ -1,5 +1,6 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
+/** @internal */
 export const listEventsDefinition: ToolDefinition = {
   name: "list_events",
   mode: "api",

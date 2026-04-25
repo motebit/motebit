@@ -13,6 +13,7 @@
 
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
+/** @internal */
 export const currentTimeDefinition: ToolDefinition = {
   name: "current_time",
   mode: "api",

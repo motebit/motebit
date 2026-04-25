@@ -1,5 +1,6 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
+/** @internal */
 export const selfReflectDefinition: ToolDefinition = {
   name: "self_reflect",
   mode: "api",

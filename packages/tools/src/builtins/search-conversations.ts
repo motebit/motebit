@@ -17,6 +17,7 @@
 
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
+/** @internal */
 export const searchConversationsDefinition: ToolDefinition = {
   name: "search_conversations",
   mode: "api",

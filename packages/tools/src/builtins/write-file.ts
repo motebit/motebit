@@ -11,6 +11,7 @@ export interface WriteFileConfig {
   enableBackup?: boolean;
 }
 
+/** @internal */
 export const writeFileDefinition: ToolDefinition = {
   name: "write_file",
   mode: "api",

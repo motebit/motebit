@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "@motebit/sdk";
 import { RiskLevel, DataClass, SideEffect } from "@motebit/sdk";
 
+/** @internal */
 export const createSubGoalDefinition: ToolDefinition = {
   name: "create_sub_goal",
   mode: "api",
@@ -37,6 +38,7 @@ export const createSubGoalDefinition: ToolDefinition = {
   },
 };
 
+/** @internal */
 export const completeGoalDefinition: ToolDefinition = {
   name: "complete_goal",
   mode: "api",
@@ -56,6 +58,7 @@ export const completeGoalDefinition: ToolDefinition = {
   },
 };
 
+/** @internal */
 export const reportProgressDefinition: ToolDefinition = {
   name: "report_progress",
   mode: "api",

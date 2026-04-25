@@ -532,6 +532,7 @@ export class McpServerAdapter {
         "Ask this motebit a question — AI response with memory context",
         RiskLevel.R2_WRITE,
       );
+      /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_query",
         "Ask this motebit a question — AI response with memory context",
@@ -555,6 +556,7 @@ export class McpServerAdapter {
         "Store a memory in this motebit",
         RiskLevel.R2_WRITE,
       );
+      /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_remember",
         "Store a memory in this motebit",
@@ -593,6 +595,7 @@ export class McpServerAdapter {
         "Search this motebit's semantic memory",
         RiskLevel.R1_DRAFT,
       );
+      /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_recall",
         "Search this motebit's semantic memory",
@@ -619,6 +622,7 @@ export class McpServerAdapter {
         "Submit an autonomous task — returns a signed ExecutionReceipt",
         RiskLevel.R3_EXECUTE,
       );
+      /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_task",
         "Submit an autonomous task — returns a signed ExecutionReceipt",
@@ -807,6 +811,7 @@ export class McpServerAdapter {
       "Return this motebit's identity information",
       RiskLevel.R0_READ,
     );
+    /** @spec motebit/agent-mcp-surface@1.0 */
     // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
     server.tool("motebit_identity", "Return this motebit's identity information", async () => {
       const denied = this.validateSyntheticTool(identityToolDef, {});
@@ -839,6 +844,7 @@ export class McpServerAdapter {
       "List available tools with risk levels",
       RiskLevel.R0_READ,
     );
+    /** @spec motebit/agent-mcp-surface@1.0 */
     // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
     server.tool("motebit_tools", "List available tools with risk levels", async () => {
       const denied = this.validateSyntheticTool(toolsToolDef, {});
@@ -863,6 +869,7 @@ export class McpServerAdapter {
         "Get this agent's signed verifiable credentials (gradient, reputation)",
         RiskLevel.R0_READ,
       );
+      /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_credentials",
         "Get this agent's signed verifiable credentials (gradient, reputation)",
@@ -888,6 +895,7 @@ export class McpServerAdapter {
         "Get this agent's service listing (capabilities, pricing, SLA)",
         RiskLevel.R0_READ,
       );
+      /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_service_listing",
         "Get this agent's service listing (capabilities, pricing, SLA)",

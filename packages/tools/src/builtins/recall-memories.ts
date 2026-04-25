@@ -1,5 +1,6 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
+/** @internal */
 export const recallMemoriesDefinition: ToolDefinition = {
   name: "recall_memories",
   mode: "api",

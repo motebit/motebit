@@ -24,6 +24,7 @@
 
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
+/** @internal */
 export const rewriteMemoryDefinition: ToolDefinition = {
   name: "rewrite_memory",
   mode: "api",

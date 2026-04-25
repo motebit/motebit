@@ -67,6 +67,17 @@ const WAIVERS: Record<string, string> = {
   // Nested in existing top-level schemas (covered structurally):
   CapabilityPrice:
     "nested inside AgentServiceListingSchema as the pricing[] element — covered structurally",
+  // MCP tool-call input shapes — validated at the MCP layer by the zod shapes
+  // registered with server.tool() in @motebit/mcp-server, not as standalone
+  // JSON Schemas. Pinned by name in spec/agent-mcp-surface-v1.md so a sibling
+  // implementation knows the canonical shape; standalone @motebit/wire-schemas
+  // exports + spec/schemas/ JSON deferred to v1.1 once the broader agent-MCP
+  // surface (output payloads, profile-aware conformance) is exercised by a
+  // second implementer.
+  MotebitTaskInput:
+    "MCP tool-call input — runtime-validated by zod shape on `motebit_task` registration in McpServerAdapter; standalone JSON Schema deferred to agent-mcp-surface@1.1",
+  MotebitRememberInput:
+    "MCP tool-call input — runtime-validated by zod shape on `motebit_remember` registration in McpServerAdapter; standalone JSON Schema deferred to agent-mcp-surface@1.1",
 };
 
 // ---------------------------------------------------------------------------

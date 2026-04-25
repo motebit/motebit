@@ -214,6 +214,16 @@ The `SettlementRecord` type in `@motebit/protocol` is the binding machine-readab
 
 How agents advertise capabilities and how delegators find workers.
 
+### 7.0 Canonical Capability Vocabulary
+
+delegation-v1 owns the canonical cross-motebit capability vocabulary referenced by delegation scope tokens. The names listed below are the binding strings every conforming delegator and worker uses when constructing or interpreting `required_capabilities` (§3.1) and `delegated_scope` (§5.1). Renaming a name in this vocabulary breaks in-flight delegation tokens; new entries are added as cross-motebit delegation patterns emerge.
+
+#### Tools (foundation law)
+
+The names below are the canonical capability identifiers. Each names a tool whose registration in a worker motebit's runtime makes that worker eligible to claim delegations carrying the name in `required_capabilities` or `delegated_scope`.
+
+- `web_search` — search the web for information; returns summarized results. The canonical example of a capability that crosses delegation boundaries (a personal motebit delegates research to a worker that holds the search-API credential).
+
 ### 7.1 — AgentServiceListing
 
 #### Wire format (foundation law)
