@@ -142,9 +142,30 @@ jobs:
           MAJOR_BUMPS=""
           while IFS= read -r f; do
             [ -z "$f" ] && continue
+
+            # Read the post-bump file's full metadata in one git show.
+            META=$(git show "origin/changeset-release/main:$f")
+            PRIVATE=$(echo "$META" | jq -r '.private // false')
+            NAME=$(echo "$META" | jq -r '.name // ""')
+            NEW=$(echo "$META" | jq -r '.version // ""')
+
+            # The doctrine governs **published** semver. Private workspace
+            # packages don't ship to npm; their version field, if it
+            # exists at all, has no consumer-facing meaning. Skip them
+            # so a private app's version drift cannot block a release
+            # train. The `.private` field is the authoritative signal —
+            # check-deps already enforces that publishable packages
+            # never carry `"private": true`.
+            [ "$PRIVATE" = "true" ] && continue
+
+            # Defensive: a malformed package.json with no name or no
+            # version isn't something this gate is qualified to reason
+            # about. Let it pass; other gates (publint, lint:pack)
+            # catch malformed publish surfaces upstream.
+            [ -z "$NAME" ] || [ "$NAME" = "null" ] && continue
+            [ -z "$NEW" ] || [ "$NEW" = "null" ] && continue
+
             OLD=$(git show "main:$f" 2>/dev/null | jq -r '.version // empty' || true)
-            NEW=$(git show "origin/changeset-release/main:$f" | jq -r '.version // empty')
-            NAME=$(git show "origin/changeset-release/main:$f" | jq -r '.name')
 
             # New file (no version on base) or version unchanged → skip.
             [ -z "$OLD" ] && continue

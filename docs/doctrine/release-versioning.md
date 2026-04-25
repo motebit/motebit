@@ -77,7 +77,7 @@ When the train detects a major in the PR's package.json deltas, the workflow exi
 2. **Intentional** — the maintainer merges manually (`gh pr merge ... --squash --delete-branch`), pairing the merge with a named migration path in the release notes.
 3. **Out-of-window emergency major** — `workflow_dispatch` on `release-train.yml` with `reason=other-emergency` and a justification in the run notes.
 
-Implementation detail: the check compares actual `package.json` `version` values across the `main` and `changeset-release/main` refs rather than parsing diff strings. The comparison is per-package; a single major in one package is enough to refuse the whole train.
+Implementation detail: the check compares actual `package.json` `version` values across the `main` and `changeset-release/main` refs rather than parsing diff strings. **Private workspace packages are skipped** — the `.private` field is the authoritative "ships to npm or doesn't" signal, and the doctrine governs published semver only. A private app's version drifting for any reason cannot block a release train. The comparison is per-package; a single major in one published package is enough to refuse the whole train.
 
 ### Patch storms are a smell
 
