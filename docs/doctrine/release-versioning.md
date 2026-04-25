@@ -87,6 +87,12 @@ If a release ships and is broken, the fix is **one** release, not six. Six relea
 
 The contributor declares the level in the `.changeset/*.md` frontmatter. Changesets does not auto-detect from the diff — the semver decision is human, captured at PR-write time and verified at review time. When several changesets target the same package, the highest level wins.
 
+The mental model carries the doctrine's opening rule down to every release decision:
+
+- **Patch = repaired promise.** Same public contract, better implementation.
+- **Minor = expanded promise.** New backward-compatible capability a caller can opt into.
+- **Major = broken or replaced promise.** A previously valid caller, artifact, wire message, or CLI invocation is now invalid.
+
 The decision rule, in order of strictness:
 
 ### Major (`x.0.0`)
@@ -99,6 +105,7 @@ Triggers:
 - function/method signature change that drops or reorders parameters, narrows a return type, or loosens a parameter type in a way that breaks call sites
 - wire-format field renamed, removed, or repurposed; required field added without a default
 - `motebit-verify` / `motebit` CLI flag removed or its semantics changed incompatibly
+- CLI exit-code contract changed — `0` becomes non-zero (or vice versa) for an input that previously had a defined exit semantics; consumer shell scripts and CI pipelines pin against specific exit codes
 - protocol behavior that was valid is now rejected (e.g., a SuiteId being retired, a credential shape becoming invalid)
 - TypeScript type narrowing that produces new `tsc --strict` errors at consumer call sites — type-only changes count
 
