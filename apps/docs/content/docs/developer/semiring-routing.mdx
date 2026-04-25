@@ -189,15 +189,16 @@ Provenance models derivation as sets of paths:
 
 Combine any value semiring with provenance tracking:
 
+```typescript
+import { TrustSemiring, WeightedDigraph, optimalPaths } from "@motebit/protocol";
+```
+
+The protocol-floor symbols above are Apache-2.0 public surface. The `annotatedSemiring` combinator itself is reference-implementation judgment:
+
 <ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/annotated.ts">
 
 ```typescript
-import {
-  annotatedSemiring,
-  TrustSemiring,
-  WeightedDigraph,
-  optimalPaths,
-} from "@motebit/semiring";
+import { annotatedSemiring } from "@motebit/semiring";
 import type { Annotated } from "@motebit/semiring";
 
 const AnnotatedTrust = annotatedSemiring(TrustSemiring);
@@ -288,10 +289,16 @@ const ranked = rankReachableAgents(graph, selfId, {
 
 `projectGraph` projects a multi-dimensional graph down to a single semiring dimension — the functorial projection from `RouteWeight` to `T`:
 
+```typescript
+import { TrustSemiring } from "@motebit/protocol";
+```
+
+`TrustSemiring` is on the Apache-2.0 floor; the `projectGraph` combinator that consumes it is reference-implementation judgment:
+
 <ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-graph.ts">
 
 ```typescript
-import { projectGraph, TrustSemiring } from "@motebit/semiring";
+import { projectGraph } from "@motebit/semiring";
 
 const trustOnly = projectGraph(graph, TrustSemiring, (w) => w.trust);
 // WeightedDigraph<number> — only trust edges, ready for TrustSemiring traversal
