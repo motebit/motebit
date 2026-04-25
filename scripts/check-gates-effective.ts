@@ -723,6 +723,72 @@ export const __probeOnlyDeprecationDrift = 1;
         ),
       ),
   },
+  {
+    script: "check-cli-surface",
+    proves:
+      "flags a divergence between the motebit CLI operator-ergonomic surface (subcommands / flags / exit codes / on-disk paths) and apps/cli/etc/cli-surface.json baseline",
+    skipWhen: () => {
+      // Gate's escape hatch: a pending `motebit: major` changeset accepts
+      // any drift. If one is present, perturbing the surface tests the
+      // escape rather than the detection.
+      const dir = resolve(ROOT, ".changeset");
+      if (!existsSync(dir)) return { skip: false, reason: "" };
+      const files = readdirSync(dir).filter(
+        (f) => f.endsWith(".md") && f !== "README.md" && f !== "CHANGELOG.md",
+      );
+      for (const f of files) {
+        const front = readFileSync(resolve(dir, f), "utf-8").match(/^---\n([\s\S]*?)\n---/);
+        if (!front) continue;
+        for (const line of front[1]!.split("\n")) {
+          const m = line.match(/^"motebit":\s*(patch|minor|major)/);
+          if (m && m[1] === "major") {
+            return {
+              skip: true,
+              reason: "pending `motebit: major` changeset authorizes CLI-surface drift",
+            };
+          }
+        }
+      }
+      return { skip: false, reason: "" };
+    },
+    perturb: () =>
+      // Comment out the `voice` flag declaration in args.ts. Extract pulls
+      // every `name: { type: ... }` entry; once `voice` is hidden behind
+      // `//`, the regex no longer matches, the extracted set drops the
+      // flag, and the gate emits `flag-removed: --voice` against the
+      // baseline. mutateFile restores byte-identical on cleanup. Choosing
+      // `voice` over higher-traffic flags keeps the perturbation surgical:
+      // single-line declaration, no comma-juggling, no semantic side
+      // effects in CLI arg parsing during the brief window the file is
+      // mutated (the gate is a static read).
+      mutateFile("apps/cli/src/args.ts", (src) =>
+        src.replace(
+          /^(\s+)voice: \{ type: "boolean", default: false \},$/m,
+          '$1// voice: { type: "boolean", default: false },',
+        ),
+      ),
+  },
+  {
+    script: "check-doc-counts",
+    proves:
+      "flags a numeric count claim in README.md / CLAUDE.md / architecture.mdx that disagrees with the filesystem (packages/specs/apps/services)",
+    perturb: () =>
+      // Mutate the README architecture banner from "46 packages" to "36
+      // packages" — exactly the drift shape this gate was built for
+      // (the 2026-04-24 incident found three doc surfaces drifted to
+      // 36/40/37 against an actual filesystem of 46). Distinctive enough
+      // that grep-and-revert is trivial if cleanup ever fails. Other
+      // count claims (specs, the second package mention) stay correct,
+      // so only the perturbed line should appear in the gate's
+      // findings — proves the gate is per-line precise, not just a
+      // pass/fail of the whole doc.
+      mutateFile("README.md", (src) =>
+        src.replace(
+          "**46 packages across 7 architectural layers",
+          "**36 packages across 7 architectural layers",
+        ),
+      ),
+  },
 ];
 
 /**
