@@ -11,7 +11,7 @@ Motebit supports three modes of intelligence:
 
 - **Cloud** — Hosted APIs like Anthropic or OpenAI. High capability, requires an API key and network connection.
 - **Local** — On-device inference via Ollama. Private by default, no data leaves your machine.
-- **Hybrid** — Cloud-first with automatic fallback to local. If the cloud provider is unreachable, the agent switches to local inference seamlessly.
+- **Hybrid** — Cloud-first with automatic fallback to local. If the cloud provider is unreachable, the agent retries against the local provider on the next turn — same conversation, no restart.
 
 Switch any time. Nothing resets. Your identity persists, your memories stay, your governance rules remain. The intelligence provider is a replaceable component — the agent is not.
 

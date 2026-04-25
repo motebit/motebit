@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+# Public protocol-portability proof artifacts (LLM ingestion convention).
+Allow: /llms.txt
+Allow: /llms-full.txt
+
+Sitemap: https://docs.motebit.com/sitemap.xml

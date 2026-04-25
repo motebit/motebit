@@ -35,7 +35,7 @@ export type {
   PropagatedTrust,
   TrustPropagationOptions,
 } from "./trust-propagation.js";
-export { allocateBudget, estimateCost } from "./budget.js";
+export { allocateBudget, allocateCollaborativeBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";
 export { computeServiceReputation } from "./reputation.js";
 export type { ReputationSnapshot } from "./reputation.js";

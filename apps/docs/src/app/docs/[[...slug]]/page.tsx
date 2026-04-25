@@ -45,8 +45,32 @@ export async function generateMetadata(props: { params: Promise<{ slug?: string[
   const page = source.getPage(params.slug);
   if (!page) notFound();
 
+  // Per-page OpenGraph + Twitter card. Without these, sharing
+  // /docs/X surfaces only the root site preview from layout.tsx;
+  // with them, social embeds and chat tools (Slack, iMessage,
+  // Discord) render the page-specific title and description.
+  const title = page.data.title ?? "Motebit docs";
+  const description =
+    page.data.description ?? "Sovereign agent infrastructure — identity, trust, governance.";
+  const url = `https://docs.motebit.com${page.url}`;
+
   return {
-    title: page.data.title,
-    description: page.data.description,
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      url,
+      siteName: "Motebit docs",
+      type: "article",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+    },
+    alternates: {
+      canonical: url,
+    },
   };
 }
