@@ -1,6 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Reuse the same module mocks as mobile-app.test.ts, minimal set
+
+// expo's `requireNativeModule` — stubbed so the hardware-attestation
+// cascade doesn't try to load real native modules at test-time.
+vi.mock("expo", () => ({
+  requireNativeModule: (name: string) => {
+    if (name === "ExpoAppAttest") {
+      return { appAttestAvailable: vi.fn(), appAttestMint: vi.fn() };
+    }
+    if (name === "ExpoPlayIntegrity") {
+      return { playIntegrityAvailable: vi.fn(), playIntegrityMint: vi.fn() };
+    }
+    return { seAvailable: vi.fn(), seMintAttestation: vi.fn() };
+  },
+}));
+
 vi.mock("react-native", () => ({
   AppState: {
     addEventListener: vi.fn(() => ({ remove: vi.fn() })),

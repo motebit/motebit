@@ -74,6 +74,16 @@ export const ASYNC_STORAGE_KEYS = {
   relayUrl: "@motebit/relay_url",
   /** Legacy key for relay URL. Read-only fallback during migration. */
   legacyRelayUrl: "@motebit/proxy_url",
+  /**
+   * Wall-clock ms of the last successful hardware-attestation credential
+   * publish to the relay. Acts as a per-device rate limiter on the App
+   * Attest / Play Integrity / Secure Enclave native calls — the cascade
+   * itself is fast, but Apple and Google rate-limit attestation services
+   * device-side, and a re-mint per app launch would burn that quota for
+   * no gain (the relay accepts a refreshed credential but didn't ask for
+   * one). Re-mint cadence is 30 days; see `publish-hardware-credential.ts`.
+   */
+  lastHardwareAttestationMintAt: "@motebit/hw_attest_last_mint_at",
 } as const;
 
 // === Keyring (cross-device identity via expo keyring adapter) ===
