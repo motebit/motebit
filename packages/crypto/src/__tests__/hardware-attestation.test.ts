@@ -18,6 +18,7 @@ import type { HardwareAttestationClaim } from "@motebit/protocol";
 import {
   canonicalSecureEnclaveBodyForTest,
   encodeSecureEnclaveReceiptForTest,
+  mintSecureEnclaveReceiptForTest,
   verifyHardwareAttestationClaim,
 } from "../hardware-attestation.js";
 
@@ -445,5 +446,52 @@ describe("verifyHardwareAttestationClaim — non-SE platforms", () => {
     expect(result.valid).toBe(false);
     expect(result.platform).toBeNull();
     expect(result.errors[0]!.message).toContain("unknown platform");
+  });
+});
+
+// ── mintSecureEnclaveReceiptForTest convenience helper ──────────────
+
+describe("mintSecureEnclaveReceiptForTest", () => {
+  // The helper bundles keypair generation + canonical-body encoding +
+  // signing + receipt assembly into one call so cross-workspace tests
+  // (e.g. services/api) can exercise the SE verification path without
+  // pulling @noble/curves into their own dep tree. The contract is:
+  // whatever it returns must round-trip through verifyHardwareAttestationClaim
+  // with valid:true. If the helper drifts from the verifier's
+  // expectations, every consumer of the helper silently breaks.
+  it("produces a claim that verifies against its returned se_public_key", async () => {
+    const { claim, sePublicKeyHex } = await mintSecureEnclaveReceiptForTest({
+      motebit_id: MOTEBIT_ID,
+      device_id: DEVICE_ID,
+      identity_public_key: IDENTITY_HEX,
+      attested_at: 1_700_000_000_000,
+    });
+    expect(claim.platform).toBe("secure_enclave");
+    expect(claim.key_exported).toBe(false);
+    const result = await verifyHardwareAttestationClaim(claim, IDENTITY_HEX);
+    expect(result.valid).toBe(true);
+    expect(result.se_public_key).toBe(sePublicKeyHex);
+    expect(result.attested_at).toBe(1_700_000_000_000);
+  });
+
+  it("produces a fresh keypair on each call (returned receipts diverge)", async () => {
+    // Belt-and-suspenders against an accidental shared-key regression —
+    // the helper must call randomPrivateKey() on each invocation. Two
+    // mints with identical inputs should still produce distinct se
+    // pubkeys.
+    const a = await mintSecureEnclaveReceiptForTest({
+      motebit_id: MOTEBIT_ID,
+      device_id: DEVICE_ID,
+      identity_public_key: IDENTITY_HEX,
+      attested_at: 1_700_000_000_000,
+    });
+    const b = await mintSecureEnclaveReceiptForTest({
+      motebit_id: MOTEBIT_ID,
+      device_id: DEVICE_ID,
+      identity_public_key: IDENTITY_HEX,
+      attested_at: 1_700_000_000_000,
+    });
+    expect(a.sePublicKeyHex).not.toBe(b.sePublicKeyHex);
+    expect(a.claim.attestation_receipt).not.toBe(b.claim.attestation_receipt);
   });
 });
