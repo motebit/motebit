@@ -3,7 +3,7 @@ title: CLI
 description: The developer REPL — slash commands, streaming, and debugging.
 ---
 
-The CLI is a developer debugging interface. Same runtime as the desktop app, different surface — a Node.js REPL with streaming output, tool approval prompts, and direct access to the motebit's internals.
+The CLI is the reference runtime's primary operator-facing surface. Same bundled runtime that ships via `npm install -g motebit` — when you run `pnpm --filter @motebit/cli dev` from a monorepo clone, you're invoking the same daemon, MCP server, policy engine, and relay code operators get from npm, with direct access to the motebit's internals for inspection. A Node.js REPL with streaming output and tool approval prompts.
 
 ## Running the CLI
 
