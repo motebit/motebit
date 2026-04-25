@@ -266,6 +266,15 @@ jobs:
       - name: Install Python dependencies
         run: pip install --quiet --requirement examples/python-device-register/requirements.txt
 
+      - name: Build relay and its workspace dependencies
+        # services/api depends on workspace packages whose `main` points to
+        # ./dist/index.js. Running `npx tsx services/api/src/server.ts`
+        # without a prior build fails at module resolution because the dist/
+        # outputs don't exist yet. Filter to `@motebit/api...` so we only
+        # build the relay's transitive workspace deps, not the entire
+        # monorepo.
+        run: pnpm --filter @motebit/api... build
+
       - name: Boot relay in background
         # Minimal env: X402_PAY_TO_ADDRESS is the only required var; :memory:
         # DB keeps each CI run hermetic. server.ts is the executable boot
@@ -292,7 +301,7 @@ jobs:
             sleep 1
           done
           echo "relay never became healthy; last log:"
-          tail -50 /tmp/relay.out /tmp/relay.err
+          tail -n 50 /tmp/relay.out /tmp/relay.err
           exit 1
 
       - name: Run Python conformance test
@@ -359,6 +368,11 @@ jobs:
       - name: Install Python dependencies
         run: pip install --quiet --requirement examples/python-receipt-verifier/requirements.txt
 
+      - name: Build relay and its workspace dependencies
+        # See sibling python-conformance job for rationale; same boot recipe,
+        # same tsx-resolves-dist requirement.
+        run: pnpm --filter @motebit/api... build
+
       - name: Boot relay in background
         env:
           PORT: "3199"
@@ -381,7 +395,7 @@ jobs:
             sleep 1
           done
           echo "relay never became healthy; last log:"
-          tail -50 /tmp/relay.out /tmp/relay.err
+          tail -n 50 /tmp/relay.out /tmp/relay.err
           exit 1
 
       - name: Run Python receipt-verifier conformance test
