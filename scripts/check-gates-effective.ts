@@ -618,6 +618,20 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
       ),
   },
   {
+    script: "check-spec-routes",
+    proves:
+      "flags a public Hono route registration under services/api/src that carries none of @spec / @internal / @experimental — the unclassified rule (rule c) is the load-bearing case because it catches a new route shipping without any classification, which is the exact debt the gate exists to surface",
+    perturb: () =>
+      // Fixture: a TS file under services/api/src/ that registers a Hono
+      // route with no preceding annotation. The gate's pending-annotation
+      // TTL fires nothing for this declaration, so the route lands in the
+      // `unclassified` bucket and the gate exits 1.
+      writeFixture(
+        `services/api/src/${PROBE_PREFIX}unclassified_route.ts`,
+        `import type { Hono } from "hono";\nexport function registerProbeRoute(app: Hono): void {\n  app.get("/__probe__/unclassified", (c) => c.text("probe"));\n}\n`,
+      ),
+  },
+  {
     script: "check-hardware-attestation-primitives",
     proves:
       "flags an inline `AgentTrustCredential` VC composer — file contains the literal type-tuple + a `hardware_attestation:` subject assignment but does not import `composeHardwareAttestationCredential`",

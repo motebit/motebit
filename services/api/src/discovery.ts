@@ -73,6 +73,7 @@ export function registerDiscoveryRoutes(deps: DiscoveryDeps): void {
 
   // ── GET /.well-known/motebit.json (§3) ──
   // Unauthenticated. Signed relay metadata.
+  /** @spec motebit/discovery@1.0 */
   app.get("/.well-known/motebit.json", async (c) => {
     // Gather federation peers
     const peers = db
@@ -130,6 +131,7 @@ export function registerDiscoveryRoutes(deps: DiscoveryDeps): void {
 
   // ── GET /api/v1/discover/:motebitId (§5) ──
   // Agent resolution with federation propagation.
+  /** @spec motebit/discovery@1.0 */
   app.get("/api/v1/discover/:motebitId", async (c) => {
     const motebitId = c.req.param("motebitId");
     const hopLimit = parseInt(c.req.header("X-Hop-Limit") ?? String(DEFAULT_MAX_HOPS), 10);

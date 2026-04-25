@@ -142,7 +142,10 @@ function parseJsdocBlock(block: string): PendingAnnotation | null {
   // @since/@stabilizes_by/@replacement/@reason) are the four-field
   // temporal-sanity contract; the map captures every one.
   const tags: Record<string, string> = {};
-  const re = /@(spec|internal|experimental|since|stabilizes_by|replacement|reason)\b\s*([^\n]*)/g;
+  // Use [ \t]* not \s* — \s matches newlines, which would let @experimental
+  // (with no value on its own line) swallow the next line's @since tag.
+  const re =
+    /@(spec|internal|experimental|since|stabilizes_by|replacement|reason)\b[ \t]*([^\n]*)/g;
   for (const m of block.matchAll(re)) {
     const tag = m[1]!.toLowerCase();
     const val = (m[2] ?? "")

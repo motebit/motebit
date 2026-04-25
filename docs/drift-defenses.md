@@ -8,59 +8,60 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-Forty-five invariants are enforced today. Thirty-six run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
+Forty-six invariants are enforced today. Thirty-seven run as hard CI gates via `pnpm check`; one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
 
 ## Inventory
 
-| #   | Invariant                                                                                  | Defense                                                        | Landed     |
-| --- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------- | ---------- |
-| 1   | Protocol primitives ↔ service implementations                                              | `check-service-primitives.ts`                                  | —          |
-| 2   | Architectural layers ↔ dependencies                                                        | `check-deps.ts`                                                | —          |
-| 3   | Spec filenames ↔ implementation references                                                 | `check-spec-references.ts` (`--strict`)                        | —          |
-| 4   | Sibling boundaries ↔ each other                                                            | `check-sibling-boundaries.ts` (advisory, PR-diff)              | —          |
-| 5   | Coverage thresholds ↔ measurements                                                         | `turbo run test:coverage`                                      | —          |
-| 6   | Capability rings ↔ surfaces                                                                | `check-app-primitives.ts`                                      | —          |
-| 7   | Deps declarations ↔ actual use                                                             | `knip` (soft signal)                                           | —          |
-| 8   | Published API ↔ consumer contract                                                          | `check-api-surface.ts`                                         | —          |
-| 9   | Spec Wire format types ↔ `@motebit/protocol` exports                                       | `check-spec-coverage.ts` (`--strict`)                          | 2026-04-13 |
-| 10  | Spec Wire format signatures ↔ cryptosuite declarations                                     | `check-suite-declared.ts`                                      | 2026-04-13 |
-| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher                                          | `check-suite-dispatch.ts`                                      | 2026-04-13 |
-| 12  | Published binaries ↔ dist-boot smoke                                                       | `check-dist-smoke.ts`                                          | 2026-04-13 |
-| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`                                      | `check-docs-tree.ts`                                           | 2026-04-14 |
-| 14  | Spec callables ↔ permissive-floor package exports                                          | `check-spec-permissive-boundary.ts`                            | 2026-04-14 |
-| 15  | Surface affordances ↔ deterministic invocation path                                        | `check-affordance-routing.ts`                                  | 2026-04-14 |
-| 16  | Ring 2 privacy substrate ↔ surface package declarations                                    | `check-privacy-ring.ts`                                        | 2026-04-16 |
-| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface                                     | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)                   | 2026-04-17 |
-| 18  | Routine `every` grammar ↔ `parseInterval`                                                  | zod `.transform()` calls `parseInterval` once                  | 2026-04-17 |
-| 19  | Goal columns ↔ `routineToGoal` mapper                                                      | `satisfies Goal` assertion in `yaml-config.ts`                 | 2026-04-17 |
-| 20  | motebit.yaml schema fields ↔ zod `.describe()` hover                                       | `yaml-config.test.ts` (schema walk assertion)                  | 2026-04-17 |
-| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema                                         | `yaml-json-schema.test.ts` (roundtrip assertion)               | 2026-04-17 |
-| 22  | Wire-format types ↔ zod schemas ↔ committed JSON Schema                                    | `@motebit/wire-schemas` 3-way pin (satisfies + roundtrip test) | 2026-04-17 |
-| 23  | spec/\*.md wire-format types ↔ `@motebit/wire-schemas` exports                             | `check-spec-wire-schemas.ts` + waiver list                     | 2026-04-18 |
-| 24  | README.md "What you see:" block ↔ scaffold + runtime defaults                              | `check-readme.ts`                                              | 2026-04-18 |
-| 25  | Per-directory CLAUDE.md files ↔ root CLAUDE.md doctrine index                              | `check-claude-md.ts`                                           | 2026-04-18 |
-| 26  | SpatialExpression renderers ↔ `@motebit/render-engine` package                             | `check-scene-primitives.ts`                                    | 2026-04-19 |
-| 27  | Memory-retrieval ordering ↔ `@motebit/memory-graph` recall\*                               | `check-retrieval-primitives.ts`                                | 2026-04-19 |
-| 28  | Reputation scoring ↔ `@motebit/policy` + `@motebit/market`                                 | `check-reputation-primitives.ts`                               | 2026-04-19 |
-| 29  | Notability scoring ↔ `@motebit/memory-graph` notability module                             | `check-notability-primitives.ts`                               | 2026-04-19 |
-| 30  | Trust propagation ↔ `@motebit/market` trust-propagation module                             | `check-trust-propagation-primitives.ts`                        | 2026-04-19 |
-| 31  | Stable spec ↔ `motebit.implements` package declaration                                     | `check-spec-impl-coverage.ts`                                  | 2026-04-19 |
-| 32  | Referent disambiguation ↔ `@motebit/semiring` disambiguation                               | `check-disambiguation-primitives.ts`                           | 2026-04-19 |
-| 33  | Panel state ↔ `@motebit/panels` controllers (sovereign, agents, memory, goals)             | `check-panel-controllers.ts`                                   | 2026-04-19 |
-| 34  | Consolidation cycle ↔ `runtime.consolidationCycle()` / `runConsolidationCycle`             | `check-consolidation-primitives.ts`                            | 2026-04-20 |
-| 35  | Inbound wire bodies at `services/api` ↔ `@motebit/wire-schemas` parsers                    | `check-wire-schema-usage.ts`                                   | 2026-04-20 |
-| 36  | `ToolDefinition` literals ↔ `mode: "api" \| "ax" \| "pixels"` cost-tier tag                | `check-tool-modes.ts`                                          | 2026-04-22 |
-| 37  | Hardware-attestation VC envelope + `attestation_receipt` parser ↔ canonical primitives     | `check-hardware-attestation-primitives.ts`                     | 2026-04-22 |
-| 38  | TS `getElementById(literal)` / `querySelector('#literal')` ↔ HTML or TS-declared ids       | `check-dom-id-references.ts` + allowlist with reason strings   | 2026-04-23 |
-| 39  | `@deprecated` annotations ↔ four-field contract + temporal sanity                          | `check-deprecation-discipline.ts`                              | 2026-04-24 |
-| 40  | Canonical `@motebit/sdk` preset identifiers ↔ surface-app declarations                     | `check-preset-imports.ts`                                      | 2026-04-24 |
-| 41  | Chat-surface tag/marker stripping ↔ `@motebit/ai-core` canonical primitive                 | `check-chat-tag-stripping.ts`                                  | 2026-04-24 |
-| 42  | Fly-deployed service ↔ direct `better-sqlite3` declaration (native-driver parity)          | `check-deploy-parity.ts` rule 4                                | 2026-04-24 |
-| 43  | Changeset bodies (every changeset) + `## Migration` section (every `major` bump)           | `check-changeset-discipline.ts`                                | 2026-04-12 |
-| 44  | `scripts/check.ts` GATES ↔ `docs/drift-defenses.md` inventory table                        | `check-drift-defenses-inventory.ts`                            | 2026-04-24 |
-| 45  | Numeric count claims (packages/specs/apps/services) ↔ filesystem truth across docs         | `check-doc-counts.ts`                                          | 2026-04-24 |
-| 46  | `motebit` CLI operator-ergonomic surface (subcommands / flags / exit codes / paths)        | `check-cli-surface.ts`                                         | 2026-04-24 |
-| 47  | spec/\*.md `Tools (foundation law)` declarations ↔ `@spec` annotations on registered tools | `check-spec-tools.ts`                                          | 2026-04-24 |
+| #   | Invariant                                                                                    | Defense                                                        | Landed     |
+| --- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------- |
+| 1   | Protocol primitives ↔ service implementations                                                | `check-service-primitives.ts`                                  | —          |
+| 2   | Architectural layers ↔ dependencies                                                          | `check-deps.ts`                                                | —          |
+| 3   | Spec filenames ↔ implementation references                                                   | `check-spec-references.ts` (`--strict`)                        | —          |
+| 4   | Sibling boundaries ↔ each other                                                              | `check-sibling-boundaries.ts` (advisory, PR-diff)              | —          |
+| 5   | Coverage thresholds ↔ measurements                                                           | `turbo run test:coverage`                                      | —          |
+| 6   | Capability rings ↔ surfaces                                                                  | `check-app-primitives.ts`                                      | —          |
+| 7   | Deps declarations ↔ actual use                                                               | `knip` (soft signal)                                           | —          |
+| 8   | Published API ↔ consumer contract                                                            | `check-api-surface.ts`                                         | —          |
+| 9   | Spec Wire format types ↔ `@motebit/protocol` exports                                         | `check-spec-coverage.ts` (`--strict`)                          | 2026-04-13 |
+| 10  | Spec Wire format signatures ↔ cryptosuite declarations                                       | `check-suite-declared.ts`                                      | 2026-04-13 |
+| 11  | `@motebit/crypto` verify paths ↔ suite dispatcher                                            | `check-suite-dispatch.ts`                                      | 2026-04-13 |
+| 12  | Published binaries ↔ dist-boot smoke                                                         | `check-dist-smoke.ts`                                          | 2026-04-13 |
+| 13  | Architecture-docs tree ↔ filesystem + `check-deps.ts`                                        | `check-docs-tree.ts`                                           | 2026-04-14 |
+| 14  | Spec callables ↔ permissive-floor package exports                                            | `check-spec-permissive-boundary.ts`                            | 2026-04-14 |
+| 15  | Surface affordances ↔ deterministic invocation path                                          | `check-affordance-routing.ts`                                  | 2026-04-14 |
+| 16  | Ring 2 privacy substrate ↔ surface package declarations                                      | `check-privacy-ring.ts`                                        | 2026-04-16 |
+| 17  | motebit.yaml schema ↔ `FullConfig` declarative surface                                       | `yaml-config.test.ts` (NON_DECLARATIVE_KEYS)                   | 2026-04-17 |
+| 18  | Routine `every` grammar ↔ `parseInterval`                                                    | zod `.transform()` calls `parseInterval` once                  | 2026-04-17 |
+| 19  | Goal columns ↔ `routineToGoal` mapper                                                        | `satisfies Goal` assertion in `yaml-config.ts`                 | 2026-04-17 |
+| 20  | motebit.yaml schema fields ↔ zod `.describe()` hover                                         | `yaml-config.test.ts` (schema walk assertion)                  | 2026-04-17 |
+| 21  | Committed `motebit-yaml-v1.json` ↔ live zod schema                                           | `yaml-json-schema.test.ts` (roundtrip assertion)               | 2026-04-17 |
+| 22  | Wire-format types ↔ zod schemas ↔ committed JSON Schema                                      | `@motebit/wire-schemas` 3-way pin (satisfies + roundtrip test) | 2026-04-17 |
+| 23  | spec/\*.md wire-format types ↔ `@motebit/wire-schemas` exports                               | `check-spec-wire-schemas.ts` + waiver list                     | 2026-04-18 |
+| 24  | README.md "What you see:" block ↔ scaffold + runtime defaults                                | `check-readme.ts`                                              | 2026-04-18 |
+| 25  | Per-directory CLAUDE.md files ↔ root CLAUDE.md doctrine index                                | `check-claude-md.ts`                                           | 2026-04-18 |
+| 26  | SpatialExpression renderers ↔ `@motebit/render-engine` package                               | `check-scene-primitives.ts`                                    | 2026-04-19 |
+| 27  | Memory-retrieval ordering ↔ `@motebit/memory-graph` recall\*                                 | `check-retrieval-primitives.ts`                                | 2026-04-19 |
+| 28  | Reputation scoring ↔ `@motebit/policy` + `@motebit/market`                                   | `check-reputation-primitives.ts`                               | 2026-04-19 |
+| 29  | Notability scoring ↔ `@motebit/memory-graph` notability module                               | `check-notability-primitives.ts`                               | 2026-04-19 |
+| 30  | Trust propagation ↔ `@motebit/market` trust-propagation module                               | `check-trust-propagation-primitives.ts`                        | 2026-04-19 |
+| 31  | Stable spec ↔ `motebit.implements` package declaration                                       | `check-spec-impl-coverage.ts`                                  | 2026-04-19 |
+| 32  | Referent disambiguation ↔ `@motebit/semiring` disambiguation                                 | `check-disambiguation-primitives.ts`                           | 2026-04-19 |
+| 33  | Panel state ↔ `@motebit/panels` controllers (sovereign, agents, memory, goals)               | `check-panel-controllers.ts`                                   | 2026-04-19 |
+| 34  | Consolidation cycle ↔ `runtime.consolidationCycle()` / `runConsolidationCycle`               | `check-consolidation-primitives.ts`                            | 2026-04-20 |
+| 35  | Inbound wire bodies at `services/api` ↔ `@motebit/wire-schemas` parsers                      | `check-wire-schema-usage.ts`                                   | 2026-04-20 |
+| 36  | `ToolDefinition` literals ↔ `mode: "api" \| "ax" \| "pixels"` cost-tier tag                  | `check-tool-modes.ts`                                          | 2026-04-22 |
+| 37  | Hardware-attestation VC envelope + `attestation_receipt` parser ↔ canonical primitives       | `check-hardware-attestation-primitives.ts`                     | 2026-04-22 |
+| 38  | TS `getElementById(literal)` / `querySelector('#literal')` ↔ HTML or TS-declared ids         | `check-dom-id-references.ts` + allowlist with reason strings   | 2026-04-23 |
+| 39  | `@deprecated` annotations ↔ four-field contract + temporal sanity                            | `check-deprecation-discipline.ts`                              | 2026-04-24 |
+| 40  | Canonical `@motebit/sdk` preset identifiers ↔ surface-app declarations                       | `check-preset-imports.ts`                                      | 2026-04-24 |
+| 41  | Chat-surface tag/marker stripping ↔ `@motebit/ai-core` canonical primitive                   | `check-chat-tag-stripping.ts`                                  | 2026-04-24 |
+| 42  | Fly-deployed service ↔ direct `better-sqlite3` declaration (native-driver parity)            | `check-deploy-parity.ts` rule 4                                | 2026-04-24 |
+| 43  | Changeset bodies (every changeset) + `## Migration` section (every `major` bump)             | `check-changeset-discipline.ts`                                | 2026-04-12 |
+| 44  | `scripts/check.ts` GATES ↔ `docs/drift-defenses.md` inventory table                          | `check-drift-defenses-inventory.ts`                            | 2026-04-24 |
+| 45  | Numeric count claims (packages/specs/apps/services) ↔ filesystem truth across docs           | `check-doc-counts.ts`                                          | 2026-04-24 |
+| 46  | `motebit` CLI operator-ergonomic surface (subcommands / flags / exit codes / paths)          | `check-cli-surface.ts`                                         | 2026-04-24 |
+| 47  | spec/\*.md `Tools (foundation law)` declarations ↔ `@spec` annotations on registered tools   | `check-spec-tools.ts`                                          | 2026-04-24 |
+| 48  | spec/\*.md `Routes (foundation law)` declarations ↔ `@spec` annotations on registered routes | `check-spec-routes.ts`                                         | 2026-04-24 |
 
 ## Incident histories
 
@@ -269,6 +270,14 @@ The incident that forced the gate was a 37-day dormant crash. Commit `6f682fcd` 
 Defense: `check-dom-id-references.ts` collects the set of declared ids from every surface app's `index.html` (`id="..."` or `id='...'`) and its TS sources (`.id = "..."`, `setAttribute("id", "...")`, and any `id="..."` inside `innerHTML`/`insertAdjacentHTML`/template-string HTML fragments — the third pattern catches dynamically-built chrome like confirm dialogs and toast bodies). It then finds every `document.getElementById("literal")` and `document.querySelector("#literal")` in the same TS tree and fails CI if any literal is not in the declared set. Non-literal arguments (variables, interpolated template literals) are skipped — not statically analyzable and not the drift pattern this gate catches. Tests under `__tests__` are skipped — they construct test DOM. A `scripts/check-dom-id-references.allow.json` escape hatch takes a `{ appDir: { id: "reason" } }` structure where each waiver must carry a non-empty reason string (rejected at load time, not silently accepted — waivers without a reason rot faster than the gate can catch them). First waiver: `apps/web` `max-tokens-select`, documented as an intentional residual from commit `05ba088c` on 2026-04-01 ("Remove Response Length setting from all surfaces") where the element was deleted but the TS lookup was kept with explicit `| null` typing and null-guarded use per that commit's own message ("JS handles null element gracefully"). First run against current main found one waivable case and 454 lookups that resolve cleanly.
 
 Every id mismatch in the repo's surface layer now fails CI on day one instead of day 37. The pattern generalizes — wherever one language queries a string-identity declared by another (DOM ids, CSS class hooks, sync-channel names, IPC command names), a lookup ↔ declaration pair is a drift surface and benefits from the same static sweep.
+
+### 48. spec/\*.md `Routes (foundation law)` declarations ↔ `@spec` annotations on registered routes
+
+Companion to #47, against the larger 155-route HTTP surface in `services/api/src`. Same three-layer pattern (spec convention + impl annotation + narrow gate); same three rules (promise-not-served / orphan-annotation / unclassified); same `@experimental` four-field temporal-sanity contract.
+
+Promise enforcement, not change detection. Routes the relay serves to motebits and other relays are protocol promises; renaming or relocating any of the 59 `@spec` routes is a wire break that breaks federation. The remaining 89 routes carry `@internal` (admin / observability / sync convenience / billing / webhooks / pairing / health / A2A bridge / transparency manifest), and 7 carry `@experimental` (6 proposals routes plus the solvency-proof route — both with a `@stabilizes_by 2026-07-31` forcing function: each must promote to `@spec` with a spec section, demote to `@internal`, or be removed by that date).
+
+Phase 1 (inventory + classification) committed two doctrinal decisions in addition to the per-route classification: (1) **delegation-v1 owns the canonical cross-motebit capability vocabulary** referenced by delegation scope tokens (the doctrine line that landed alongside #47 against `web_search`); (2) **discovery-v1 owns the agent_registry surface** — the WRITE side of "Find an agent" — distinct from `agent_listings` (capability + pricing + SLA offers), which lives in delegation-v1 §7. The two registries don't overlap: registration is "I exist here"; listing is "I offer these capabilities at these prices." Phase 2 implemented the Routes blocks across 10 specs (relay-federation, migration, discovery, credential-anchor, agent-settlement-anchor, delegation, credential, dispute, identity, device-self-registration); Phase 3 annotated all 155 routes; Phase 4 landed the gate. Closes the protocol-faithfulness invariant family for routes and tools — future construct types (error codes, anchor formats, etc.) get their own narrow gates following the same shape.
 
 ### 47. spec/\*.md `Tools (foundation law)` declarations ↔ `@spec` annotations on registered tools
 

@@ -141,6 +141,7 @@ export function registerProxyTokenRoutes(
   // ── POST /api/v1/agents/:motebitId/proxy-token ────────────────────────
   // Issue a signed proxy token carrying the agent's current balance.
   // The proxy checks bal > 0 before serving and debits after each response.
+  /** @internal */
   app.post("/api/v1/agents/:motebitId/proxy-token", async (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -176,6 +177,7 @@ export function registerProxyTokenRoutes(
   // ── POST /api/v1/agents/:motebitId/debit ──────────────────────────────
   // Called by the proxy after each message to deduct actual compute cost.
   // Authenticated via shared secret (x-relay-secret header), not user auth.
+  /** @internal */
   app.post("/api/v1/agents/:motebitId/debit", async (c) => {
     const secret = c.req.header("x-relay-secret");
     const expectedSecret = process.env.RELAY_PROXY_SECRET;
@@ -225,6 +227,7 @@ export function registerProxyTokenRoutes(
   // ── GET /api/v1/subscriptions/session-status ────────────────────────────
   // Verify a checkout session and activate subscription + credits if paid.
   // Called by the web app on return from Stripe (no webhook needed for activation).
+  /** @internal */
   app.get("/api/v1/subscriptions/session-status", async (c) => {
     const sessionId = c.req.query("session_id");
     if (!sessionId) return c.json({ error: "session_id required" }, 400);
@@ -310,6 +313,7 @@ export function registerProxyTokenRoutes(
 
   // ── POST /api/v1/subscriptions/checkout ─────────────────────────────────
   // Create a Stripe subscription checkout ($20/mo → $20 credits/month).
+  /** @internal */
   app.post("/api/v1/subscriptions/checkout", async (c) => {
     const body = await c.req.json<{
       motebit_id: string;
@@ -387,6 +391,7 @@ export function registerProxyTokenRoutes(
   // `webhooks/stripe-webhook-adapter.ts`. This inversion matches the
   // `settlement-rails/stripe-rail.ts` pattern for the deposit path and
   // isolates Stripe's API-version churn from the account-crediting logic.
+  /** @internal */
   app.post("/api/v1/subscriptions/webhook", async (c) => {
     // Pre-check: when no adapter was injected, the library-embedder fallback
     // requires STRIPE_WEBHOOK_SECRET (and STRIPE_SECRET_KEY to build the
@@ -544,6 +549,7 @@ export function registerProxyTokenRoutes(
 
   // ── POST /api/v1/subscriptions/:motebitId/cancel ──────────────────────
   // Cancel subscription at period end. User keeps remaining credits.
+  /** @internal */
   app.post("/api/v1/subscriptions/:motebitId/cancel", async (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -583,6 +589,7 @@ export function registerProxyTokenRoutes(
 
   // ── POST /api/v1/subscriptions/:motebitId/resubscribe ──────────────────
   // Undo cancellation — resume the existing subscription.
+  /** @internal */
   app.post("/api/v1/subscriptions/:motebitId/resubscribe", async (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -620,6 +627,7 @@ export function registerProxyTokenRoutes(
 
   // ── GET /api/v1/subscriptions/:motebitId/status ───────────────────────
   // Returns subscription status + credit balance.
+  /** @internal */
   app.get("/api/v1/subscriptions/:motebitId/status", (c) => {
     const motebitId = c.req.param("motebitId");
 

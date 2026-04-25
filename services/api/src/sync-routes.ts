@@ -64,6 +64,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   const { app, eventStore, identityManager, connections } = deps;
 
   // --- Sync: push events (HTTP fallback) ---
+  /** @internal */
   app.post("/sync/:motebitId/push", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{ events: EventLogEntry[] }>();
@@ -115,6 +116,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   });
 
   // --- Sync: pull events (HTTP fallback) ---
+  /** @internal */
   app.get("/sync/:motebitId/pull", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const afterClock = Number(c.req.query("after_clock") ?? "0");
@@ -130,6 +132,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   });
 
   // --- Sync: latest clock ---
+  /** @internal */
   app.get("/sync/:motebitId/clock", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const clock = await eventStore.getLatestClock(motebitId);
@@ -137,6 +140,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   });
 
   // --- Device: register ---
+  /** @internal */
   app.post("/device/register", async (c) => {
     const body = await c.req.json<{
       motebit_id: string;
@@ -167,6 +171,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   });
 
   // --- Identity: create ---
+  /** @internal */
   app.post("/identity", async (c) => {
     const body = await c.req.json<{ owner_id: string }>();
     if (!body.owner_id || typeof body.owner_id !== "string" || body.owner_id.trim() === "") {
@@ -177,6 +182,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   });
 
   // --- Identity: load ---
+  /** @internal */
   app.get("/identity/:motebitId", async (c) => {
     const id = asMotebitId(c.req.param("motebitId"));
     const identity = await identityManager.load(id);
@@ -196,6 +202,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   // Wire format and verification recipe: spec/device-self-registration-v1.md.
   // Trust posture: a self-registered device starts at trust zero. Trust
   // accrues through receipts and credentials (docs/doctrine/protocol-model.md).
+  /** @spec motebit/device-self-registration@1.0 */
   app.post("/api/v1/devices/register-self", async (c) => {
     const body = (await c.req.json().catch(() => null)) as SignableDeviceRegistration | null;
     if (!body) {

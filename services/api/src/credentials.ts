@@ -48,6 +48,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
 
   // POST /api/v1/credentials/:motebitId/reputation — compute reputation, issue VC
   // Only available when relay credential issuance is enabled.
+  /** @spec motebit/credential@1.0 */
   app.post("/api/v1/credentials/:motebitId/reputation", async (c) => {
     if (!issueCredentials) {
       return c.json(
@@ -156,6 +157,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   });
 
   // POST /api/v1/credentials/verify — verify a VerifiableCredential (public)
+  /** @spec motebit/credential@1.0 */
   app.post("/api/v1/credentials/verify", async (c) => {
     let body: unknown;
     try {
@@ -188,6 +190,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
 
   // POST /api/v1/agents/:motebitId/revoke-credential — revoke a verifiable credential
   // Allowed when caller is the subject OR the issuer of the credential.
+  /** @spec motebit/credential@1.0 */
   app.post("/api/v1/agents/:motebitId/revoke-credential", async (c) => {
     const motebitId = c.req.param("motebitId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
@@ -241,6 +244,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   });
 
   // POST /api/v1/credentials/batch-status — batch credential revocation status check
+  /** @spec motebit/credential@1.0 */
   app.post("/api/v1/credentials/batch-status", async (c) => {
     let body: unknown;
     try {
@@ -279,6 +283,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   });
 
   // GET /api/v1/credentials/:credentialId/status — public credential revocation status
+  /** @spec motebit/credential@1.0 */
   app.get("/api/v1/credentials/:credentialId/status", (c) => {
     const credentialId = c.req.param("credentialId");
     const row = db
@@ -291,6 +296,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   });
 
   // GET /api/v1/agents/:motebitId/credentials — list credentials issued to/by agent
+  /** @spec motebit/credential@1.0 */
   app.get("/api/v1/agents/:motebitId/credentials", (c) => {
     const mid = asMotebitId(c.req.param("motebitId"));
     const typeFilter = c.req.query("type");
@@ -327,6 +333,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   });
 
   // POST /api/v1/agents/:motebitId/presentation — bundle credentials into a signed VP
+  /** @spec motebit/credential@1.0 */
   app.post("/api/v1/agents/:motebitId/presentation", async (c) => {
     const mid = asMotebitId(c.req.param("motebitId"));
     const typeFilter = c.req.query("type");
@@ -374,6 +381,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   // Each credential is verified (Ed25519 signature check) before storage. Self-issued credentials
   // (issuer === subject) are rejected — they carry no trust signal and the sybil defense layer
   // would filter them anyway, but rejecting at ingestion is cleaner.
+  /** @spec motebit/credential@1.0 */
   app.post("/api/v1/agents/:motebitId/credentials/submit", async (c) => {
     const motebitId = c.req.param("motebitId");
 

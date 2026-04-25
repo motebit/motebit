@@ -115,6 +115,12 @@ Verification proves the registrant controls the private key corresponding to the
 
 ## 5. Endpoint
 
+#### Routes (foundation law)
+
+The one route below is the binding cross-implementation contract.
+
+- `POST /api/v1/devices/register-self` — self-attesting device → relay registration. The request's Ed25519 signature is the auth; no bearer token.
+
 ```
 POST /api/v1/devices/register-self
 Content-Type: application/json

@@ -585,6 +585,23 @@ Administrators can manually block a peer relay by transitioning its state to `re
 
 All federation endpoints are under the `/federation/v1/` path prefix. All requests MUST include an Ed25519 signature in the `X-Relay-Signature` header, computed over the canonical JSON request body using the sending relay's private key.
 
+#### Routes (foundation law)
+
+The twelve routes below are the binding cross-relay contract. Renaming or relocating any of them is a wire break.
+
+- `GET /federation/v1/identity` — return this relay's public identity.
+- `POST /federation/v1/peer/propose` — initiate peering handshake (step 1).
+- `POST /federation/v1/peer/confirm` — complete peering handshake (step 3).
+- `POST /federation/v1/peer/heartbeat` — send heartbeat to peer.
+- `POST /federation/v1/peer/remove` — remove a peer relationship.
+- `GET /federation/v1/peers` — list current federation peers.
+- `POST /federation/v1/discover` — forward a discovery query.
+- `POST /federation/v1/task/forward` — forward a task to a peer relay.
+- `POST /federation/v1/task/result` — return a task result to origin relay.
+- `POST /federation/v1/settlement/forward` — forward settlement to peer relay.
+- `GET /federation/v1/settlements` — list inbound forwarded settlements.
+- `GET /federation/v1/settlement/proof` — Merkle inclusion proof (§7.6.6).
+
 ### 10.1 — Endpoints
 
 | Method | Path                                | Description                           | Rate Limit      |

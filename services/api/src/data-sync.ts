@@ -244,6 +244,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
   const { db, app, connections } = deps;
 
   // --- Conversation Sync: push conversations ---
+  /** @internal */
   app.post("/sync/:motebitId/conversations", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{ conversations: SyncConversation[] }>();
@@ -274,6 +275,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
   });
 
   // --- Conversation Sync: pull conversations ---
+  /** @internal */
   app.get("/sync/:motebitId/conversations", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const since = Number(c.req.query("since") ?? "0");
@@ -286,6 +288,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
   });
 
   // --- Conversation Sync: push messages ---
+  /** @internal */
   app.post("/sync/:motebitId/messages", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{ messages: SyncConversationMessage[] }>();
@@ -316,6 +319,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
   });
 
   // --- Conversation Sync: pull messages ---
+  /** @internal */
   app.get("/sync/:motebitId/messages", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const conversationId = c.req.query("conversation_id");
@@ -337,6 +341,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
   });
 
   // --- Plan Sync: push plans ---
+  /** @internal */
   app.post("/sync/:motebitId/plans", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{ plans: SyncPlan[] }>();
@@ -365,6 +370,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
   });
 
   // --- Plan Sync: pull plans ---
+  /** @internal */
   app.get("/sync/:motebitId/plans", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const since = Number(c.req.query("since") ?? "0");
@@ -377,6 +383,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
   });
 
   // --- Plan Sync: push steps ---
+  /** @internal */
   app.post("/sync/:motebitId/plan-steps", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const body = await c.req.json<{ steps: SyncPlanStep[] }>();
@@ -405,6 +412,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
   });
 
   // --- Plan Sync: pull steps ---
+  /** @internal */
   app.get("/sync/:motebitId/plan-steps", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const since = Number(c.req.query("since") ?? "0");

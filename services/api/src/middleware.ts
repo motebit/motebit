@@ -489,6 +489,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   const uptimeSeconds = () => Math.floor((Date.now() - startTime) / 1000);
 
   // GET /health — backward compatible
+  /** @internal */
   app.get("/health", (c) => {
     const isDraining =
       deps.healthCheckDeps?.isDraining() ??
@@ -512,9 +513,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   });
 
   // GET /health/live — liveness probe (always 200 if process is running)
+  /** @internal */
   app.get("/health/live", (c) => c.json({ status: "alive", uptime_s: uptimeSeconds() }));
 
   // GET /health/ready — readiness probe with dependency checks
+  /** @internal */
   app.get("/health/ready", (c) => {
     const hd = deps.healthCheckDeps;
     if (!hd) {

@@ -27,6 +27,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   const { app, moteDb, eventStore, identityManager, redactSensitiveEvents } = deps;
 
   // --- State vector snapshot ---
+  /** @internal */
   app.get("/api/v1/state/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const json = moteDb.stateSnapshot.loadState(motebitId);
@@ -42,6 +43,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Memory graph ---
+  /** @internal */
   app.get("/api/v1/memory/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const sensitivityParam = c.req.query("sensitivity");
@@ -59,6 +61,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Memory tombstone ---
+  /** @internal */
   app.delete("/api/v1/memory/:motebitId/:nodeId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const nodeId = asNodeId(c.req.param("nodeId"));
@@ -77,6 +80,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Goals ---
+  /** @internal */
   app.get("/api/v1/goals/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const goals = moteDb.goalStore.list(motebitId);
@@ -84,6 +88,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Conversations ---
+  /** @internal */
   app.get("/api/v1/conversations/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const conversations = moteDb.db
@@ -93,6 +98,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Conversation messages ---
+  /** @internal */
   app.get("/api/v1/conversations/:motebitId/:conversationId/messages", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const conversationId = asConversationId(c.req.param("conversationId"));
@@ -105,6 +111,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Devices ---
+  /** @internal */
   app.get("/api/v1/devices/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const devices = await identityManager.listDevices(motebitId);
@@ -112,6 +119,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Tool audit trail ---
+  /** @internal */
   app.get("/api/v1/audit/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const turnId = c.req.query("turn_id");
@@ -126,6 +134,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Plans ---
+  /** @internal */
   app.get("/api/v1/plans/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const plans = moteDb.planStore.listPlans(motebitId);
@@ -136,6 +145,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
     return c.json({ motebit_id: motebitId, plans: plansWithSteps });
   });
 
+  /** @internal */
   app.get("/api/v1/plans/:motebitId/:planId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const planId = asPlanId(c.req.param("planId"));
@@ -148,6 +158,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Intelligence gradient history ---
+  /** @internal */
   app.get("/api/v1/gradient/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const limit = Number(c.req.query("limit") ?? "100");
@@ -183,6 +194,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Admin sync pull (alias for /sync/:motebitId/pull under master auth) ---
+  /** @internal */
   app.get("/api/v1/sync/:motebitId/pull", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const afterClock = Number(c.req.query("after_clock") ?? "0");
@@ -198,6 +210,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   });
 
   // --- Execution ledger reconstruction ---
+  /** @internal */
   app.get("/api/v1/execution/:motebitId/:goalId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const goalId = c.req.param("goalId");

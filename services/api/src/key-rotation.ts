@@ -72,6 +72,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   }
 
   // --- Key rotation ---
+  /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/rotate-key", async (c) => {
     const motebitId = c.req.param("motebitId");
     const body = await c.req.json<KeySuccessionRecord>();
@@ -157,6 +158,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   });
 
   // --- Key succession chain query ---
+  /** @spec motebit/identity@1.0 */
   app.get("/api/v1/agents/:motebitId/succession", (c) => {
     const motebitId = c.req.param("motebitId");
     const correlationId = c.req.header("x-correlation-id") ?? crypto.randomUUID();
@@ -198,6 +200,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   });
 
   // --- Token revocation ---
+  /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/revoke-tokens", async (c) => {
     const motebitId = c.req.param("motebitId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
@@ -217,6 +220,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   });
 
   // --- Agent revocation ---
+  /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/revoke", async (c) => {
     const motebitId = c.req.param("motebitId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
@@ -237,6 +241,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   });
 
   // --- Create approval request ---
+  /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/approvals", async (c) => {
     const motebitId = c.req.param("motebitId");
     const body = await c.req.json<{
@@ -309,6 +314,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   });
 
   // --- Submit vote ---
+  /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/approvals/:approvalId/vote", async (c) => {
     const motebitId = c.req.param("motebitId");
     const approvalId = c.req.param("approvalId");
@@ -426,6 +432,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   });
 
   // --- Approval quorum status ---
+  /** @spec motebit/identity@1.0 */
   app.get("/api/v1/agents/:motebitId/approvals/:approvalId", (c) => {
     const motebitId = c.req.param("motebitId");
     const approvalId = c.req.param("approvalId");

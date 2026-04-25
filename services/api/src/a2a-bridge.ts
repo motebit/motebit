@@ -138,6 +138,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
 
   // --- Relay-level Agent Card (/.well-known/agent.json) ---
   // Returns the relay itself as a meta-agent that can route to specific agents.
+  /** @internal */
   app.get("/.well-known/agent.json", (c) => {
     const card: A2AAgentCard = {
       name: `motebit-relay-${relayIdentity.relayMotebitId.slice(0, 8)}`,
@@ -191,6 +192,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
   });
 
   // --- Per-agent Agent Card ---
+  /** @internal */
   app.get("/a2a/agents/:motebitId/agent.json", (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -276,6 +278,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
 
   // --- A2A SendMessage (task submission) ---
   // Maps A2A message format → motebit task submission → A2A task response.
+  /** @internal */
   app.post("/a2a/agents/:motebitId", async (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -435,6 +438,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
    * Translates the mandate into a motebit task, routes through the relay,
    * and returns an AP2 Payment Mandate with the signed ExecutionReceipt.
    */
+  /** @internal */
   app.post("/ap2/agents/:motebitId/mandate", async (c) => {
     const motebitId = c.req.param("motebitId");
 

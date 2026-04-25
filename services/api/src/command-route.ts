@@ -68,6 +68,7 @@ export interface CommandRouteDeps {
 export function registerCommandRoutes(deps: CommandRouteDeps): void {
   const { app, db, connections } = deps;
 
+  /** @internal */
   app.post("/api/v1/agents/:motebitId/command", async (c) => {
     const motebitId = c.req.param("motebitId");
     const body: Record<string, unknown> = await c.req.json();
@@ -126,6 +127,7 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
 
   // --- Handle command_response messages from WebSocket ---
   // This is called from the WebSocket onMessage handler in websocket.ts
+  /** @internal */
   app.get("/__internal/noop", (c) => c.text("ok")); // placeholder to keep Hono happy
 }
 

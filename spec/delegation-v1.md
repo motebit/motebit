@@ -366,6 +366,21 @@ Self-delegation (Agent A delegates to itself) is permitted for execution and set
 - An agent cannot manufacture reputation by delegating to itself.
 - These five layers are required by any implementation that participates in trust-weighted routing.
 
+## 9.5 Relay Routes
+
+#### Routes (foundation law)
+
+The eight routes below are the binding cross-implementation contract for delegation. Renaming or relocating any of them is a wire break.
+
+- `POST /agent/:motebitId/task` — submit an `AgentTask` (§3.1) for delegation.
+- `GET /agent/:motebitId/task/:taskId` — poll task status / fetch result.
+- `POST /agent/:motebitId/task/:taskId/result` — executor delivers task result + signed `ExecutionReceipt`.
+- `POST /api/v1/receipts/exchange` — initiate sovereign receipt exchange (§8 SovereignReceiptRequest).
+- `GET /api/v1/receipts/pending` — payee fetches pending receipt requests.
+- `POST /api/v1/receipts/respond` — payee responds with signed receipt (§8 SovereignReceiptResponse).
+- `POST /api/v1/agents/:motebitId/listing` — publish or refresh an `AgentServiceListing` (§7.1).
+- `GET /api/v1/agents/:motebitId/listing` — fetch a worker's published service listing.
+
 ## 10. Relationship to Other Specs
 
 | Spec                  | Relationship                                                                                                      |

@@ -353,6 +353,19 @@ Relays support batch revocation queries (up to 100 credential IDs per request) f
 
 The relay provides credential infrastructure. Agents issue credentials directly (peer-to-peer via Ed25519 signing); the relay stores, indexes, and serves them.
 
+#### Routes (foundation law)
+
+The eight routes below are the binding cross-implementation contract for credential infrastructure. Renaming or relocating any of them is a wire break.
+
+- `POST /api/v1/credentials/:motebitId/reputation` — compute and issue a ReputationCredential from settlement records.
+- `POST /api/v1/credentials/verify` — verify a credential's Ed25519 signature.
+- `POST /api/v1/agents/:motebitId/revoke-credential` — revoke a credential (subject or issuer only).
+- `POST /api/v1/credentials/batch-status` — check revocation status of up to 100 credentials.
+- `GET /api/v1/credentials/:credentialId/status` — public revocation status for a single credential.
+- `GET /api/v1/agents/:motebitId/credentials` — list credentials for an agent (filterable by type, limit 200).
+- `POST /api/v1/agents/:motebitId/presentation` — bundle credentials into a signed Verifiable Presentation.
+- `POST /api/v1/agents/:motebitId/credentials/submit` — submit peer-collected credentials for relay indexing.
+
 | Endpoint                                       | Method | Description                                                      |
 | ---------------------------------------------- | ------ | ---------------------------------------------------------------- |
 | `/api/v1/credentials/:motebitId/reputation`    | POST   | Compute and issue a ReputationCredential from settlement records |

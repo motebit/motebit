@@ -100,8 +100,14 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-spec-tools",
     defends:
-      "every MCP tool name declared in a spec/*.md `#### Tools (foundation law)` block is annotated `@spec <id>` on a registered tool, every `@spec` annotation cross-references a spec declaration, every public tool carries one of `@spec` / `@internal` / `@experimental`, and every `@experimental` carries the four-field temporal-sanity contract with a not-past-due `@stabilizes_by` (invariant #47, added 2026-04-24 as the first construct-level enforcement of the protocol-faithfulness invariant family — promise enforcement, not change detection; companion gate check-spec-routes follows once this pattern has run for a beat)",
+      "every MCP tool name declared in a spec/*.md `#### Tools (foundation law)` block is annotated `@spec <id>` on a registered tool, every `@spec` annotation cross-references a spec declaration, every public tool carries one of `@spec` / `@internal` / `@experimental`, and every `@experimental` carries the four-field temporal-sanity contract with a not-past-due `@stabilizes_by` (invariant #47, added 2026-04-24 as the first construct-level enforcement of the protocol-faithfulness invariant family — promise enforcement, not change detection)",
     script: "check-spec-tools",
+  },
+  {
+    name: "check-spec-routes",
+    defends:
+      "every HTTP route declared in a spec/*.md `#### Routes (foundation law)` block is annotated `@spec <id>` on a registered route, every `@spec` annotation cross-references a spec declaration, every public route carries one of `@spec` / `@internal` / `@experimental`, and every `@experimental` carries the four-field temporal-sanity contract with a not-past-due `@stabilizes_by` (invariant #48, added 2026-04-24 as the second construct-level enforcement in the protocol-faithfulness family — same three-layer pattern as #47 against the larger 155-route surface; closes the protocol-faithfulness invariant family for routes and tools)",
+    script: "check-spec-routes",
   },
   {
     name: "check-spec-wire-schemas",

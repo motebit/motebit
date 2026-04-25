@@ -417,6 +417,7 @@ export async function registerTransparencyRoutes(deps: TransparencyRouteDeps): P
 
   // Public endpoint — unauthenticated, served as canonical JSON for
   // verifier compatibility (no Express middleware-style key reordering).
+  /** @internal */
   app.get("/.well-known/motebit-transparency.json", (_c) => {
     return new Response(canonicalJson(declaration), {
       status: 200,
@@ -430,6 +431,7 @@ export async function registerTransparencyRoutes(deps: TransparencyRouteDeps): P
   // Admin endpoint — same declaration plus a future-anchor placeholder so
   // operators can see whether the disappearance test is fully satisfied
   // by this build. Audience-bound at the auth layer (admin:query).
+  /** @internal */
   app.get("/api/v1/admin/transparency", (c) => {
     return c.json({
       declaration,

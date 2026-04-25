@@ -185,6 +185,13 @@ A relay running both federation and per-agent anchoring shares one submitter; ea
 
 ## 7. Relay API
 
+#### Routes (foundation law)
+
+The two routes below are the binding cross-implementation contract. Renaming or relocating either is a wire break.
+
+- `GET /api/v1/settlements/:settlementId/anchor-proof` — return the `AgentSettlementAnchorProof` (§5.1) for the named settlement. Public; no bearer auth (§7.1).
+- `GET /api/v1/settlement-anchors/:batchId` — return `AgentSettlementAnchorBatch` (§4.1) metadata including anchor status. Public.
+
 ### 7.1 Proof Retrieval
 
 ```

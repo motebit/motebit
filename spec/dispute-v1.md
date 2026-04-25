@@ -332,6 +332,18 @@ Per-agent caps on active disputes prevent a single identity from flooding the sy
 - Maximum 3 active disputes per agent.
 - Relays MAY waive the trust threshold for `non_payment` disputes, since theft can happen on first contact.
 
+## 9.5 Relay Routes
+
+#### Routes (foundation law)
+
+The five routes below are the binding cross-implementation contract for the dispute lifecycle. Renaming or relocating any of them is a wire break.
+
+- `POST /api/v1/allocations/:allocationId/dispute` — file a dispute against a budget allocation (§4).
+- `POST /api/v1/disputes/:disputeId/evidence` — submit additional evidence to an open dispute (§5).
+- `POST /api/v1/disputes/:disputeId/resolve` — adjudicator submits resolution (§6).
+- `POST /api/v1/disputes/:disputeId/appeal` — appeal a resolution (§8).
+- `GET /api/v1/disputes/:disputeId` — read dispute state.
+
 ## 10. Security Considerations
 
 **Evidence immutability.** All evidence artifacts are Ed25519-signed. Tampering invalidates the signature and the evidence is rejected. The dispute lifecycle itself is signed at every state transition.

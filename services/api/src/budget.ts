@@ -63,6 +63,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
 
   // --- Deposit ---
+  /** @internal */
   app.post("/api/v1/agents/:motebitId/deposit", async (c) => {
     const motebitId = c.req.param("motebitId");
     const correlationId = c.get("correlationId" as never) as string;
@@ -177,6 +178,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Balance ---
+  /** @internal */
   app.get("/api/v1/agents/:motebitId/balance", (c) => {
     const motebitId = c.req.param("motebitId");
     const account = getAccountBalance(moteDb.db, motebitId);
@@ -215,6 +217,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Withdraw ---
+  /** @internal */
   app.post("/api/v1/agents/:motebitId/withdraw", async (c) => {
     const motebitId = c.req.param("motebitId");
     const correlationId = c.get("correlationId" as never) as string;
@@ -463,6 +466,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Withdrawal history ---
+  /** @internal */
   app.get("/api/v1/agents/:motebitId/withdrawals", (c) => {
     const motebitId = c.req.param("motebitId");
     const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map((w) => ({
@@ -473,6 +477,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Admin: pending withdrawals ---
+  /** @internal */
   app.get("/api/v1/admin/withdrawals/pending", (c) => {
     const withdrawals = getPendingWithdrawals(moteDb.db).map((w) => ({
       ...w,
@@ -482,6 +487,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Admin: complete withdrawal ---
+  /** @internal */
   app.post("/api/v1/admin/withdrawals/:withdrawalId/complete", async (c) => {
     const withdrawalId = c.req.param("withdrawalId");
     const correlationId = c.get("correlationId" as never) as string;
@@ -588,6 +594,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Admin: fail withdrawal ---
+  /** @internal */
   app.post("/api/v1/admin/withdrawals/:withdrawalId/fail", async (c) => {
     const withdrawalId = c.req.param("withdrawalId");
     const correlationId = c.get("correlationId" as never) as string;
@@ -604,6 +611,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Admin: reconciliation ---
+  /** @internal */
   app.get("/api/v1/admin/reconciliation", (c) => {
     const correlationId = c.get("correlationId" as never) as string;
     const result = reconcileLedger(moteDb.db);
@@ -616,6 +624,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Admin: emergency freeze ---
+  /** @internal */
   app.post("/api/v1/admin/freeze", async (c) => {
     const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as { reason?: string });
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
@@ -633,6 +642,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     return c.json({ status: "frozen", message: "All write operations suspended", reason });
   });
 
+  /** @internal */
   app.post("/api/v1/admin/unfreeze", async (c) => {
     const previousReason = freezeState.reason;
     persistFreeze(moteDb.db, freezeState, false, null);
@@ -648,6 +658,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Stripe checkout ---
+  /** @internal */
   app.post("/api/v1/agents/:motebitId/checkout", async (c) => {
     if (!stripeRail && (!stripeClient || !stripeConfig))
       throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
@@ -731,6 +742,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Stripe webhook ---
+  /** @internal */
   app.post("/api/v1/stripe/webhook", async (c) => {
     if (!stripeRail && (!stripeClient || !stripeConfig))
       throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
@@ -803,6 +815,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   });
 
   // --- Bridge webhook ---
+  /** @internal */
   app.post("/api/v1/bridge/webhook", async (c) => {
     const correlationId = c.get("correlationId" as never) as string;
 

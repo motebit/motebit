@@ -27,6 +27,7 @@ export function registerTrustGraphRoutes(deps: TrustGraphDeps): void {
   const { app, moteDb, taskRouter } = deps;
 
   // --- Agent Trust: trust records for known agents ---
+  /** @internal */
   app.get("/api/v1/agent-trust/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const records = await moteDb.agentTrustStore.listAgentTrust(motebitId);
@@ -34,6 +35,7 @@ export function registerTrustGraphRoutes(deps: TrustGraphDeps): void {
   });
 
   // --- Graph Query: trust closure for an agent ---
+  /** @internal */
   app.get("/api/v1/agents/:motebitId/trust-closure", (c) => {
     const motebitId = c.req.param("motebitId");
     const { profiles } = taskRouter.buildCandidateProfiles(undefined, undefined, 100, motebitId);
@@ -45,6 +47,7 @@ export function registerTrustGraphRoutes(deps: TrustGraphDeps): void {
   });
 
   // --- Graph Query: find trusted path between two agents ---
+  /** @internal */
   app.get("/api/v1/agents/:motebitId/path-to/:targetId", (c) => {
     const motebitId = c.req.param("motebitId");
     const targetId = c.req.param("targetId");
@@ -57,6 +60,7 @@ export function registerTrustGraphRoutes(deps: TrustGraphDeps): void {
   });
 
   // --- Graph Query: full routing graph for an agent ---
+  /** @internal */
   app.get("/api/v1/agents/:motebitId/graph", (c) => {
     const motebitId = c.req.param("motebitId");
     const { profiles } = taskRouter.buildCandidateProfiles(undefined, undefined, 100, motebitId);
@@ -73,6 +77,7 @@ export function registerTrustGraphRoutes(deps: TrustGraphDeps): void {
   });
 
   // --- Graph Query: routing explanation with full scoring detail ---
+  /** @internal */
   app.get("/api/v1/agents/:motebitId/routing-explanation", (c) => {
     const motebitId = c.req.param("motebitId");
     const capability = c.req.query("capability");

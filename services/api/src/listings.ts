@@ -19,6 +19,8 @@ export interface ListingsDeps {
 export function registerListingsRoutes(deps: ListingsDeps): void {
   const { app, moteDb, taskRouter } = deps;
 
+  /** @spec motebit/delegation@1.0 */
+
   app.post("/api/v1/agents/:motebitId/listing", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
@@ -60,6 +62,8 @@ export function registerListingsRoutes(deps: ListingsDeps): void {
     return c.json({ listing_id: listingId, updated_at: now }, 200);
   });
 
+  /** @spec motebit/delegation@1.0 */
+
   app.get("/api/v1/agents/:motebitId/listing", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const row = moteDb.db
@@ -83,6 +87,8 @@ export function registerListingsRoutes(deps: ListingsDeps): void {
       updated_at: row.updated_at,
     });
   });
+
+  /** @internal */
 
   app.get("/api/v1/market/revenue", (c) => {
     const days = Math.min(parseInt(c.req.query("days") ?? "30", 10) || 30, 365);
@@ -133,6 +139,8 @@ export function registerListingsRoutes(deps: ListingsDeps): void {
       })),
     });
   });
+
+  /** @internal */
 
   app.get("/api/v1/market/candidates", (c) => {
     const capability = c.req.query("capability");

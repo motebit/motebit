@@ -258,6 +258,7 @@ export function registerOnrampRoutes(
   adapter: OnrampAdapter | null,
   solanaRpcUrl?: string,
 ): void {
+  /** @internal */
   app.post("/api/v1/onramp/session", async (c) => {
     if (!adapter) {
       throw new HTTPException(503, {

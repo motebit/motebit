@@ -111,6 +111,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
   }
 
   // --- Pairing: initiate (Device A, authenticated) ---
+  /** @internal */
   app.post("/pairing/initiate", async (c) => {
     const device = await verifyPairingAuth(c.req.header("authorization"));
     if (!device) {
@@ -133,6 +134,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
   });
 
   // --- Pairing: claim (Device B, no auth) ---
+  /** @internal */
   app.post("/pairing/claim", async (c) => {
     const body = await c.req.json<{
       pairing_code: string;
@@ -188,6 +190,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
   });
 
   // --- Pairing: get session (Device A, authenticated) ---
+  /** @internal */
   app.get("/pairing/:pairingId", async (c) => {
     const device = await verifyPairingAuth(c.req.header("authorization"));
     if (!device) {
@@ -227,6 +230,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
   });
 
   // --- Pairing: approve (Device A, authenticated) ---
+  /** @internal */
   app.post("/pairing/:pairingId/approve", async (c) => {
     const device = await verifyPairingAuth(c.req.header("authorization"));
     if (!device) {
@@ -298,6 +302,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
   });
 
   // --- Pairing: deny (Device A, authenticated) ---
+  /** @internal */
   app.post("/pairing/:pairingId/deny", async (c) => {
     const device = await verifyPairingAuth(c.req.header("authorization"));
     if (!device) {
@@ -330,6 +335,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
   });
 
   // --- Pairing: status (Device B polls, no auth) ---
+  /** @internal */
   app.get("/pairing/:pairingId/status", (c) => {
     const pairingId = c.req.param("pairingId");
     const session = db
@@ -362,6 +368,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
   });
 
   // --- Pairing: update device key after identity key transfer (Device B, no auth) ---
+  /** @internal */
   app.post("/pairing/:pairingId/update-key", async (c) => {
     const pairingId = c.req.param("pairingId");
     const body = await c.req.json<{ public_key: string }>();

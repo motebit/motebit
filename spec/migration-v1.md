@@ -298,6 +298,19 @@ Migration changes the relay. It does not change the identity.
 - The key succession chain (identity@1.0) is the proof of identity continuity. If the agent rotated keys before migration, the full chain must be presented and validated.
 - A relay that encounters a `motebit_id` collision (an existing agent with the same ID) MUST reject the presentation. Collisions indicate either a UUID failure or an attack — both require manual resolution.
 
+## 9.5 Relay Routes
+
+#### Routes (foundation law)
+
+The six routes below are the binding cross-implementation contract for the migration lifecycle. Renaming or relocating any of them is a wire break.
+
+- `POST /api/v1/agents/:motebitId/migrate` — initiate migration (§4 MigrationRequest).
+- `GET /api/v1/agents/:motebitId/migration/attestation` — fetch the source relay's signed DepartureAttestation (§5).
+- `GET /api/v1/agents/:motebitId/migration/export` — fetch the credential bundle for export (§6).
+- `POST /api/v1/agents/accept-migration` — destination relay accepts the MigrationPresentation (§8).
+- `POST /api/v1/agents/:motebitId/migrate/cancel` — cancel an in-progress migration before departure.
+- `POST /api/v1/agents/:motebitId/migrate/depart` — finalize departure at the source relay.
+
 ## 10. Security Considerations
 
 **Relay coercion prevention.** The mandatory token issuance rule (§4.3) prevents relays from holding agents hostage. An agent that cannot obtain a MigrationToken can still depart by presenting its identity file and credentials directly to a destination relay — the attestation is valuable but not required for onboarding if anchor proofs are sufficient.

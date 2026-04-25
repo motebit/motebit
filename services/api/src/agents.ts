@@ -115,6 +115,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   } = deps;
 
   // GET /agent/:motebitId/settlements — settlement history for this agent
+  /** @internal */
   app.get("/agent/:motebitId/settlements", (c) => {
     const mid = asMotebitId(c.req.param("motebitId"));
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
@@ -147,6 +148,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // GET /agent/:motebitId/capabilities — public (no auth)
+  /** @spec motebit/discovery@1.0 */
   app.get("/agent/:motebitId/capabilities", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const identity = await identityManager.load(motebitId);
@@ -185,6 +187,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // GET /api/v1/agents/:motebitId/solvency-proof — relay-signed balance attestation (public)
+  /**
+   * @experimental
+   * @since 1.0.0
+   * @stabilizes_by 2026-07-31
+   * @replacement <none — pin in spec or remove>
+   * @reason Endpoint emits a signed cross-verifiable solvency proof but the artifact wire format is not pinned by any current spec. By stabilizes_by, either land a spec section (e.g. settlement-v1 §X "Relay Solvency Proof") and promote to @spec, or remove the route. The annotation is the forcing function.
+   */
   app.get("/api/v1/agents/:motebitId/solvency-proof", async (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -226,6 +235,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // POST /agent/:motebitId/verify-receipt — public receipt verification
+  /** @internal */
   app.post("/agent/:motebitId/verify-receipt", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const rawBody: unknown = await c.req.json().catch(() => null);
@@ -267,6 +277,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   // === Execution Ledger: submit and retrieve signed manifests ===
 
   // POST /agent/:motebitId/ledger — submit a signed execution ledger
+  /** @internal */
   app.post("/agent/:motebitId/ledger", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
@@ -334,6 +345,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // GET /agent/:motebitId/ledger/:goalId — retrieve signed execution ledger
+  /** @internal */
   app.get("/agent/:motebitId/ledger/:goalId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const goalId = c.req.param("goalId");
@@ -425,6 +437,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   // POST /api/v1/agents/bootstrap — unauthenticated (rate-limited) one-call identity + device registration
   // Allows a CLI motebit to register with the relay without a master token.
   // Idempotent for same motebit_id + same public_key. Rejects attempts to re-register with a different key.
+  /** @internal */
   app.post("/api/v1/agents/bootstrap", async (c) => {
     const body = await c.req.json<{
       motebit_id: string;
@@ -565,6 +578,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // POST /api/v1/agents/register — register/refresh an agent's MCP endpoint
+  /** @spec motebit/discovery@1.0 */
   app.post("/api/v1/agents/register", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
 
@@ -864,6 +878,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // POST /api/v1/agents/heartbeat — refresh TTL
+  /** @spec motebit/discovery@1.0 */
   app.post("/api/v1/agents/heartbeat", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     // Fall back to body.motebit_id for master-token callers (services use API token, not signed tokens)
@@ -914,6 +929,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   // Validation mirrors the register endpoint so the two paths can't drift:
   // sweep_threshold is a non-negative integer in micro-units; settlement_address
   // is 32-44 base58 chars (Solana format).
+  /** @internal */
   app.patch("/api/v1/agents/:motebitId/sweep-config", async (c) => {
     const motebitId = c.req.param("motebitId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
@@ -1006,6 +1022,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // GET /api/v1/agents/discover — find agents (with optional federation forwarding)
+  /** @spec motebit/discovery@1.0 */
   app.get("/api/v1/agents/discover", async (c) => {
     const capability = c.req.query("capability");
     const motebitId = c.req.query("motebit_id");
@@ -1108,6 +1125,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // GET /api/v1/agents/:motebitId — get specific agent
+  /** @spec motebit/identity@1.0 */
   app.get("/api/v1/agents/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
@@ -1140,6 +1158,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // DELETE /api/v1/agents/deregister — remove registration
+  /** @spec motebit/discovery@1.0 */
   app.delete("/api/v1/agents/deregister", (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (!callerMotebitId) {
@@ -1152,6 +1171,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
   // --- Push token management (mobile wake-on-demand) ---
 
+  /** @internal */
   app.post("/api/v1/agents/push-token", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (!callerMotebitId) {
@@ -1177,6 +1197,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     return c.json({ ok: true });
   });
 
+  /** @internal */
   app.delete("/api/v1/agents/push-token", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (!callerMotebitId) {

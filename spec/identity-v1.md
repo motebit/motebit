@@ -570,6 +570,21 @@ The previous signature becomes invalid. If the file is tracked in version contro
 
 ---
 
+## 7.5 Relay Routes
+
+#### Routes (foundation law)
+
+The eight routes below are the binding cross-implementation contract for identity resolution and key-rotation lifecycle. Renaming or relocating any of them is a wire break.
+
+- `GET /api/v1/agents/:motebitId` — resolve a motebit identity (public key + endpoint) by `motebit_id`.
+- `POST /api/v1/agents/:motebitId/rotate-key` — rotate the identity key, appending a succession record (§3.8).
+- `GET /api/v1/agents/:motebitId/succession` — return the full key-succession chain.
+- `POST /api/v1/agents/:motebitId/revoke-tokens` — revoke outstanding bearer tokens for this motebit.
+- `POST /api/v1/agents/:motebitId/revoke` — revoke the agent (governance / quorum action).
+- `POST /api/v1/agents/:motebitId/approvals` — submit a multi-party approval proposal.
+- `POST /api/v1/agents/:motebitId/approvals/:approvalId/vote` — cast a vote in a multi-party approval.
+- `GET /api/v1/agents/:motebitId/approvals/:approvalId` — read approval state.
+
 ## 8. Security Considerations
 
 ### 8.1 — Private Key Storage

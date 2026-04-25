@@ -302,6 +302,20 @@ The reference implementation defaults to `https://relay.motebit.com`, operated b
 
 ---
 
+## 6.5 Relay Routes
+
+#### Routes (foundation law)
+
+The seven routes below are the binding cross-implementation contract for the discovery surface. Discovery owns the `agent_registry` write side: registration, heartbeat, deregistration, capability listing, plus the well-known + per-agent resolution endpoints. The `agent_listings` surface (capabilities + pricing + SLA offers) lives in `delegation-v1.md` §7 — listings are a different category, distinguished from the basic existence-and-key registration here.
+
+- `GET /.well-known/motebit.json` — relay metadata (§3.1).
+- `GET /api/v1/discover/:motebitId` — agent resolution by `motebit_id` (§5).
+- `POST /api/v1/agents/register` — service motebit registers with the relay; `motebit_id`, `public_key`, `endpoint_url`, `capabilities`.
+- `POST /api/v1/agents/heartbeat` — refresh the registration TTL.
+- `DELETE /api/v1/agents/deregister` — voluntary departure from the registry.
+- `GET /api/v1/agents/discover` — registry-wide query (filtered by capability).
+- `GET /agent/:motebitId/capabilities` — per-entry capability list.
+
 ## 7. Security Considerations
 
 ### 7.1 — Relay Metadata Integrity

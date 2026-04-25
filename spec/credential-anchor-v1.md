@@ -210,6 +210,13 @@ The anchor format in the proof (`{chain, network, tx_hash, anchored_at}`) is cha
 
 ## 7. Relay API
 
+#### Routes (foundation law)
+
+The two routes below are the binding cross-implementation contract. Renaming or relocating either is a wire break.
+
+- `GET /api/v1/credentials/:credentialId/anchor-proof` — return the `CredentialAnchorProof` (§5.1) for the named credential. Public; no bearer auth.
+- `GET /api/v1/credential-anchors/:batchId` — return batch metadata including anchor status.
+
 ### 7.1 Proof Retrieval
 
 ```

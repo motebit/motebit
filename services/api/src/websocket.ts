@@ -72,6 +72,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
     logger,
   } = deps;
 
+  /** @internal */
   app.get(
     "/ws/sync/:motebitId",
     upgradeWebSocket((c) => {

@@ -780,6 +780,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   let credentialAnchorAddress: string | null = null;
 
   // --- Credential anchor proof routes (credential-anchor-v1.md §7) ---
+  /** @spec motebit/credential-anchor@1.0 */
   app.get("/api/v1/credentials/:credentialId/anchor-proof", async (c) => {
     const credentialId = c.req.param("credentialId");
 
@@ -796,6 +797,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     return c.json(proof);
   });
+
+  /** @spec motebit/credential-anchor@1.0 */
 
   app.get("/api/v1/credential-anchors/:batchId", (c) => {
     const batchId = c.req.param("batchId");
@@ -814,6 +817,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // External verifier flow: fetch SettlementRecord + proof + chain tx → verify
   // signature → reconstruct leaf → walk Merkle path → compare root to chain.
   // No relay contact needed beyond the initial proof fetch.
+  /** @spec motebit/agent-settlement-anchor@1.0 */
   app.get("/api/v1/settlements/:settlementId/anchor-proof", async (c) => {
     const settlementId = c.req.param("settlementId");
 
@@ -831,6 +835,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     return c.json(proof);
   });
 
+  /** @spec motebit/agent-settlement-anchor@1.0 */
+
   app.get("/api/v1/settlement-anchors/:batchId", (c) => {
     const batchId = c.req.param("batchId");
     const batch = getAgentAnchorBatch(moteDb.db, batchId);
@@ -841,6 +847,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // Admin: credential anchoring overview (batches, stats, anchor address)
+  /** @internal */
   app.get("/api/v1/admin/credential-anchoring", (c) => {
     const stats = getCredentialAnchoringStats(moteDb.db);
     const batches = listCredentialAnchorBatches(moteDb.db, 50);
@@ -858,6 +865,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // produced at ingestion, so an auditor can strip `signature`,
   // re-canonicalize the body, and re-verify Ed25519 against
   // `public_key` without relay contact.
+  /** @internal */
   app.get("/api/v1/admin/receipts/:motebitId/:taskId", (c) => {
     const json = getStoredReceiptJson(moteDb.db, c.req.param("motebitId"), c.req.param("taskId"));
     if (json == null) {
@@ -873,11 +881,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Shows operators how many items are queued per rail, total aggregated
   // value, and the age of the oldest pending row — enough to spot a
   // policy misfire or a rail outage without querying the DB directly.
+  /** @internal */
   app.get("/api/v1/admin/pending-withdrawals", (c) => {
     return c.json(getPendingWithdrawalsSummary(moteDb.db));
   });
 
   // Admin: settlement stats by mode (relay vs p2p) + recent p2p settlements
+  /** @internal */
   app.get("/api/v1/admin/settlements", async (c) => {
     const { getSettlementStatsByMode, getRecentP2pSettlements } = await import("./p2p-verifier.js");
     const statsByMode = getSettlementStatsByMode(moteDb.db);

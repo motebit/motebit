@@ -1026,6 +1026,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 1: Identity ──
 
+  /** @spec motebit/relay-federation@1.0 */
   app.get("/federation/v1/identity", (c) => {
     return c.json({
       spec: RELAY_SPEC_VERSION,
@@ -1037,6 +1038,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 2: Peering Protocol ──
 
+  /** @spec motebit/relay-federation@1.0 */
   app.post("/federation/v1/peer/propose", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1145,6 +1147,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
+  /** @spec motebit/relay-federation@1.0 */
   app.post("/federation/v1/peer/confirm", async (c) => {
     const body = await c.req.json<{ relay_id?: string; challenge_response?: string }>();
     const { relay_id, challenge_response } = body;
@@ -1187,6 +1190,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "active", peered_at: now });
   });
 
+  /** @spec motebit/relay-federation@1.0 */
   app.post("/federation/v1/peer/heartbeat", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1280,6 +1284,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
+  /** @spec motebit/relay-federation@1.0 */
   app.post("/federation/v1/peer/remove", async (c) => {
     const body = await c.req.json<{ relay_id?: string; signature?: string }>();
     const { relay_id, signature: sig } = body;
@@ -1304,6 +1309,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "removed" });
   });
 
+  /** @spec motebit/relay-federation@1.0 */
   app.get("/federation/v1/peers", (c) => {
     const rows = db
       .prepare(
@@ -1329,6 +1335,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 3: Federated Discovery ──
 
+  /** @spec motebit/relay-federation@1.0 */
   app.post("/federation/v1/discover", async (c) => {
     const body = await c.req.json<{
       query: { capability?: string; motebit_id?: string; limit?: number };
@@ -1432,6 +1439,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 4: Task Forwarding ──
 
+  /** @spec motebit/relay-federation@1.0 */
   app.post("/federation/v1/task/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1499,6 +1507,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     );
   });
 
+  /** @spec motebit/relay-federation@1.0 */
   app.post("/federation/v1/task/result", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1544,6 +1553,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement ──
 
+  /** @spec motebit/relay-federation@1.0 */
   app.post("/federation/v1/settlement/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1592,6 +1602,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
+  /** @spec motebit/relay-federation@1.0 */
   app.get("/federation/v1/settlements", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
     const rows = db
@@ -1602,6 +1613,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement Proof (§7.6.6) ──
 
+  /** @spec motebit/relay-federation@1.0 */
   app.get("/federation/v1/settlement/proof", async (c) => {
     const settlementId = c.req.query("settlement_id");
     if (!settlementId) {

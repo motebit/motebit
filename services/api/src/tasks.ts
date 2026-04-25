@@ -1406,6 +1406,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
   }
 
   // --- POST /agent/:motebitId/task — submit a task (master token or signed device token) ---
+  /** @spec motebit/delegation@1.0 */
   app.post("/agent/:motebitId/task", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
@@ -2115,6 +2116,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
   });
 
   // --- GET /agent/:motebitId/task/:taskId — poll task status ---
+  /** @spec motebit/delegation@1.0 */
   app.get("/agent/:motebitId/task/:taskId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const taskId = c.req.param("taskId");
@@ -2184,6 +2186,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
   });
 
   // --- POST /agent/:motebitId/task/:taskId/result — device posts signed receipt ---
+  /** @spec motebit/delegation@1.0 */
   app.post("/agent/:motebitId/task/:taskId/result", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const taskId = c.req.param("taskId");

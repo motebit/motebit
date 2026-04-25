@@ -134,6 +134,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
   // ── POST /api/v1/agents/:motebitId/migrate (§4) ──
   // Initiate migration. Issues a MigrationToken.
+  /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/:motebitId/migrate", async (c) => {
     const motebitId = c.req.param("motebitId");
     const body = await c.req.json<{
@@ -201,6 +202,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
   // ── GET /api/v1/agents/:motebitId/migration/attestation (§5) ──
   // Generate signed DepartureAttestation from existing trust records.
+  /** @spec motebit/migration@1.0 */
   app.get("/api/v1/agents/:motebitId/migration/attestation", async (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -295,6 +297,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
   // ── GET /api/v1/agents/:motebitId/migration/export (§6) ──
   // Bundle all credentials + anchor proofs + key succession into CredentialBundle.
+  /** @spec motebit/migration@1.0 */
   app.get("/api/v1/agents/:motebitId/migration/export", async (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -364,6 +367,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
   // ── POST /api/v1/agents/accept-migration (§8) ──
   // Validate MigrationPresentation at destination, onboard agent.
+  /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/accept-migration", async (c) => {
     const body = await c.req.json<{
       migration_token: MigrationToken;
@@ -503,6 +507,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
   // ── POST /api/v1/agents/:motebitId/migrate/cancel ──
   // Cancel an in-progress migration (§3.2: agents MAY cancel before departed).
+  /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/:motebitId/migrate/cancel", (c) => {
     const motebitId = c.req.param("motebitId");
     const migration = getActiveMigration(db, motebitId);
@@ -520,6 +525,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   // advance to `departed` when the virtual-account balance is zero OR
   // the agent presents a signed BalanceWaiver for at least the current
   // balance.
+  /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/:motebitId/migrate/depart", async (c) => {
     const motebitId = c.req.param("motebitId");
     const migration = getActiveMigration(db, motebitId);

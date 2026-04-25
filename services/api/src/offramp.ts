@@ -207,6 +207,7 @@ export class MockOfframpAdapter implements OfframpAdapter {
 // ── HTTP route registration ──────────────────────────────────────────
 
 export function registerOfframpRoutes(app: Hono, adapter: OfframpAdapter | null): void {
+  /** @internal */
   app.post("/api/v1/offramp/session", async (c) => {
     if (!adapter) {
       throw new HTTPException(503, {

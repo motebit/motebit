@@ -198,6 +198,7 @@ export function registerReceiptExchangeRoutes(
   // a waiting poller), then holds the HTTP connection open until the
   // payee responds or the exchange timeout fires.
 
+  /** @spec motebit/delegation@1.0 */
   app.post("/api/v1/receipts/exchange", async (c) => {
     let body: { payee_motebit_id?: string; request?: OpaquePayload };
     try {
@@ -265,6 +266,7 @@ export function registerReceiptExchangeRoutes(
   // to pollTimeoutMs, returning an empty response on timeout so the
   // payee can re-poll.
 
+  /** @spec motebit/delegation@1.0 */
   app.get("/api/v1/receipts/pending", async (c) => {
     const motebitId = c.req.query("motebit_id");
     if (typeof motebitId !== "string" || !motebitId) {
@@ -308,6 +310,7 @@ export function registerReceiptExchangeRoutes(
   // Payee returns the signed receipt (or an error). Relay matches on
   // request_id and resolves the payer's pending promise.
 
+  /** @spec motebit/delegation@1.0 */
   app.post("/api/v1/receipts/respond", async (c) => {
     let body: { request_id?: string; response?: OpaquePayload };
     try {

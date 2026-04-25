@@ -141,6 +141,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   // The unsigned-construction-input shape is gone; without the signature
   // binding the relay could not enforce foundation law §4.4 ("filing
   // party must be a direct party to the task").
+  /** @spec motebit/dispute@1.0 */
   app.post("/api/v1/allocations/:allocationId/dispute", async (c) => {
     const allocationId = c.req.param("allocationId");
     const rawBody: unknown = await c.req.json().catch(() => null);
@@ -291,6 +292,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   // `DisputeEvidence` wire artifact per spec §5.2 — verified against the
   // submitter's registered public key (foundation law §5.4: evidence
   // must be cryptographically verifiable; unsigned/tampered rejected).
+  /** @spec motebit/dispute@1.0 */
   app.post("/api/v1/disputes/:disputeId/evidence", async (c) => {
     const disputeId = c.req.param("disputeId");
     const rawBody: unknown = await c.req.json().catch(() => null);
@@ -380,6 +382,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
   // ── POST /api/v1/disputes/:disputeId/resolve (§6) ──
   // Operator resolution (single-relay adjudication).
+  /** @spec motebit/dispute@1.0 */
   app.post("/api/v1/disputes/:disputeId/resolve", async (c) => {
     const disputeId = c.req.param("disputeId");
     const body = await c.req.json<{
@@ -514,6 +517,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   // File appeal against a resolution. The body MUST be a signed
   // `DisputeAppeal` wire artifact per spec §8.2 — verified against the
   // appealing party's registered public key.
+  /** @spec motebit/dispute@1.0 */
   app.post("/api/v1/disputes/:disputeId/appeal", async (c) => {
     const disputeId = c.req.param("disputeId");
     const rawBody: unknown = await c.req.json().catch(() => null);
@@ -587,6 +591,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
   // ── GET /api/v1/disputes/:disputeId ──
   // Query dispute status.
+  /** @spec motebit/dispute@1.0 */
   app.get("/api/v1/disputes/:disputeId", (c) => {
     const disputeId = c.req.param("disputeId");
     const dispute = getDispute(db, disputeId);
@@ -638,6 +643,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
   // ── GET /api/v1/admin/disputes ──
   // Admin panel view — all disputes with stats.
+  /** @internal */
   app.get("/api/v1/admin/disputes", (c) => {
     const disputes = db
       .prepare("SELECT * FROM relay_disputes ORDER BY filed_at DESC LIMIT 100")
