@@ -108,7 +108,7 @@ Triggers:
 - new optional parameter on an existing function, with a safe default
 - new optional wire field that older clients can ignore
 - new SuiteId entry in `@motebit/protocol` (cryptosuite agility is additive by doctrine)
-- new platform leaf in `HardwareAttestationSemiring` (`platform` union entry + dispatch arm — additive by doctrine)
+- new hardware-attestation platform — a `platform` union entry in `@motebit/protocol` plus a verifier dispatch arm in `@motebit/crypto`. The semiring rank picks the new entry up automatically; rank and verifier are closed under additions per the hardware-rooted-identity-is-additive principle in root `CLAUDE.md`.
 - new CLI subcommand, or new optional flag on an existing command
 - a new credential type, capability, or rail registration
 
@@ -127,9 +127,13 @@ Triggers:
 - dependency-only updates (the cascade case — `updateInternalDependencies: "patch"` writes these for you when a workspace dep moves)
 - correcting a previous release's changelog or release-notes prose
 
-### When in doubt, bump higher
+### When in doubt
 
-The cost of an over-cautious minor is one wasted minor number. The cost of an under-cautious patch that turns out to break a consumer is a CVE-shaped incident report and a paper trail explaining why the new patch broke their pinned `~1.0.5`. **Asymmetric cost favors the higher level.** If two reviewers honestly disagree between `patch` and `minor`, ship `minor`. Between `minor` and `major`, ship `major`.
+The two boundaries are not symmetric and the rule is different at each.
+
+**Patch vs minor — prefer minor.** The cost of an over-cautious minor is one wasted minor number. The cost of an under-cautious patch that turns out to break a consumer is a CVE-shaped incident report and a paper trail explaining why the new patch broke their pinned `~1.0.5`. Asymmetric cost favors the higher level here. If two reviewers honestly disagree, ship `minor`.
+
+**Minor vs major — name the broken caller.** Majors in protocol-shaped packages cascade coordination overhead through every downstream consumer. Spending one to resolve a reviewer disagreement is the wrong trade. The diagnostic move is to identify the **specific previously-valid public caller, wire artifact, or CLI invocation that is now invalid**. If no one can name it concretely, it isn't a major. Pause the train, do the analysis, and either name the break or ship `minor`.
 
 The `check-changeset-discipline` gate already flags `major` bumps for explicit reviewer attention and rejects empty changesets. Minor-vs-patch is left to human judgment because automating it would require modeling the public surface of every package — a project the api-extractor baselines do for type surface but cannot do for wire-format or behavioral semantics.
 
