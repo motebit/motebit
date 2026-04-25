@@ -15,7 +15,12 @@ The exhaustive type surface for each Apache-2.0 published package lives in a com
 | `@motebit/sdk` | Developer contract — stable types, adapter interfaces, governance config (re-exports `@motebit/protocol` plus surface-config types) | [`sdk.api.md`](https://github.com/motebit/motebit/blob/main/packages/sdk/etc/sdk.api.md) |
 | `@motebit/crypto` | Sign and verify every motebit artifact — Ed25519 today, cryptosuite-agile for post-quantum | [`crypto.api.md`](https://github.com/motebit/motebit/blob/main/packages/crypto/etc/crypto.api.md) |
 
-The other published packages (`@motebit/verifier`, `@motebit/verify`, `@motebit/crypto-{appattest,play-integrity,tpm,webauthn}`, `create-motebit`, `motebit`) expose narrow surfaces — their public APIs are documented in each package's [README on npm](https://www.npmjs.com/org/motebit) and committed under `packages/<name>/README.md`.
+The other published packages expose narrow surfaces, documented in each package's [README on npm](https://www.npmjs.com/org/motebit) and committed under `packages/<name>/README.md`. The two close-named ones to disambiguate at install time:
+
+- **`@motebit/verifier`** — the programmatic library you `import`. `verifyFile`, `verifyArtifact`, `formatHuman`. Use this in Node code.
+- **`@motebit/verify`** — the package that ships the `motebit-verify` CLI binary. Use this when you want a command-line verifier; install it globally or run it via `npx`.
+
+The other narrow-surface published packages: `@motebit/crypto-{appattest,play-integrity,tpm,webauthn}` (the four hardware-attestation leaves bundled by `@motebit/verify`), `create-motebit` (scaffold), and `motebit` (the BSL-1.1 reference runtime CLI).
 
 > Workspace-private packages (`@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, and the rest of the interior machinery) are pinned to `0.0.0-private` and have no public API surface. See [Public surface](/docs/concepts/public-surface) for the full boundary doctrine. Code blocks in this guide that import from a private package are wrapped in a `Reference implementation` callout — they show what the runtime does internally and are not consumer recipes.
 
