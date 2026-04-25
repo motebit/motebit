@@ -7,6 +7,26 @@ Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Nod
 
 The shape is **46 packages · 7 architectural layers · 5 surfaces + 3 supporting apps · 8 services · 21 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
+<DiagramFigure
+  src="protocol-stack"
+  caption="MCP, A2A, and x402/AP2 each define one face of an agent. Motebit fills the layer underneath: identity, trust, governance."
+  cites={[
+    { label: "identity-v1 §1", file: "spec/identity-v1.md", section: 1 },
+  ]}
+/>
+
+MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay. None of those define who an agent is across time and devices, what trust it has accumulated through past work, or what the operator's policy allows it to do today. Motebit is additive — it slots underneath those three protocols, providing the cryptographic identity, signed-receipt trust ledger, and boundary policy gate the others assume but do not specify.
+
+<DiagramFigure
+  src="license-tiers"
+  caption="Three license tiers: Apache-2.0 protocol floor, BSL-1.1 reference implementation, private accumulated state."
+  cites={[
+    { label: "protocol-model doctrine", file: "docs/doctrine/protocol-model.md", section: 1 },
+  ]}
+/>
+
+The protocol floor (specs, types, crypto, SDK, hardware-attestation verifiers) is Apache-2.0 with an explicit patent grant — anyone can implement it in any language without permission. The reference implementation (runtime, engines, services, apps) is BSL-1.1, source-available today and converting to Apache-2.0 four years after each version's release. The state a relay accumulates by running — trust graph, federation routes, signed audit ledger — belongs to whoever runs the relay; it is never licensed, mirrored, or visible. Both license families converge to a single Apache-2.0 posture at the Change Date.
+
 ## Directory tree
 
 The canonical map of the monorepo. Packages are tagged with their enforced layer (`L0`–`L6`) from `scripts/check-deps.ts`. Apps and services are tagged by role.
@@ -248,6 +268,16 @@ The pipeline is streaming end-to-end. Text appears as it arrives. The creature's
 6. **Credential** — successful completions may produce a W3C VC 2.0 credential, Merkle-batched and anchored onchain via `SolanaMemoSubmitter` so reputation survives the relay.
 
 Every step is spec-governed and self-verifiable offline with `@motebit/crypto` and the signer's public key.
+
+<DiagramFigure
+  src="receipt-chain"
+  caption="Each delegation hop produces an independently-signed receipt; nested receipts form a verifiable chain-of-custody tree."
+  cites={[
+    { label: "execution-ledger §11", file: "spec/execution-ledger-v1.md", section: 11 },
+  ]}
+/>
+
+The cryptographic shape is invariant across hops. The executor signs `ExecutionReceipt(body, kE)` with its own keypair and embeds `public_key=kE`. When the executor sub-delegates, the sub-executor signs its own receipt with `kS`; the executor nests it inside `delegation_receipts` and signs the outer body — which now includes the sub-receipt — with `kE`. Verification recurses: each receipt is JCS-canonicalized over body minus signature, then Ed25519-verified against its own embedded public key. Settlement fires only after the outer receipt verifies, with `relay_task_id` signature-bound to prevent cross-task replay (§11.6).
 
 ## Identity flow
 

@@ -5,6 +5,7 @@ import type { MDXComponents } from "mdx/types";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { MDXContent } from "mdx/types";
 import type { TOCItemType } from "fumadocs-core/toc";
+import { DiagramFigure } from "@/components/diagram-figure";
 
 /** Extended page data from fumadocs-mdx — body and toc are compiled by the MDX loader. */
 interface DocsPageData {
@@ -29,7 +30,7 @@ export default async function Page(props: { params: Promise<{ slug?: string[] }>
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
       <DocsBody>
-        <MDX components={{ ...(defaultMdxComponents as MDXComponents) }} />
+        <MDX components={{ ...(defaultMdxComponents as MDXComponents), DiagramFigure }} />
       </DocsBody>
     </DocsPage>
   );

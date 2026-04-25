@@ -97,6 +97,19 @@ The signature covers `relay_id || timestamp` to prevent replay. A suspended peer
 
 Either relay can unilaterally remove a peer via `POST /federation/v1/peer/remove` with a signed removal notice.
 
+## Topology
+
+<DiagramFigure
+  src="federation-topology"
+  caption="Three peer relays, bilateral peering, one cross-relay route highlighted."
+  cites={[
+    { label: "relay-federation §3", file: "spec/relay-federation-v1.md", section: 3 },
+    { label: "relay-federation §5", file: "spec/relay-federation-v1.md", section: 5 },
+  ]}
+/>
+
+Federation is a graph, not a tree. Every peering edge is bilateral and authenticated by mutual Ed25519 challenge — neither relay accepts unilateral discovery (§3.1). When an agent on one relay delegates to an agent on another, the runtime composes trust along the chain `self → relay:local → relay:remote → target_agent` using `RouteWeightSemiring`; trust multiplies, cost and latency add (§5.2). The `optimalPaths` function picks the best path with no special-case code for federation — cross-relay routes compete with local routes in the same graph.
+
 ## Federated discovery
 
 Discovery queries propagate across peered relays. An agent on any relay can find agents on any federated relay.

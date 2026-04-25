@@ -310,6 +310,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every hard CI gate registered in `scripts/check.ts` GATES has a corresponding row in the inventory table in `docs/drift-defenses.md` — accepts npm aliases (a GATES entry named `check-specs` is represented if the inventory mentions its underlying script file `check-spec-references`) and matches at gate-level rather than invariant-level so a gate like `check-deploy-parity` that enforces multiple rules is represented once (invariant #44, added 2026-04-24 as the sibling to #25 `check-claude-md` one layer up: doctrine-index integrity for the drift-defense system itself. First run surfaced `check-changeset-discipline` as a 12-day-silent doctrine gap — landed 2026-04-12 with the 1.0 publisher commit, ran in CI without a single line of inventory description. The meta-principle enforcing itself on its own doctrine).",
     script: "check-drift-defenses-inventory",
   },
+  {
+    name: "check-doc-diagrams",
+    defends:
+      "every `<DiagramFigure cites={[...]}>` entry in apps/docs/content/docs/**/*.mdx resolves to a real file (and a real `## N.` section header for spec/* targets), every committed apps/docs/public/diagrams/*.svg carries populated `<title>` + `<desc>`, and no diagram SVG carries a raw `#hex` color literal (theme-bind enforcement so dark mode tracks). Extends the self-attesting-system doctrine to doc-site visuals — every arrow in a committed diagram cites code or spec by URL-shaped reference, and the gate proves the reference resolves (invariant #49, added 2026-04-26 alongside the four-diagram landing as the diagram-grade analog of #14's permissive-floor citation discipline).",
+    script: "check-doc-diagrams",
+  },
 ];
 
 interface Result {

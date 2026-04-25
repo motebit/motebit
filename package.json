@@ -55,6 +55,7 @@
     "check-deprecation-discipline": "npx tsx scripts/check-deprecation-discipline.ts",
     "check-docs-tree": "npx tsx scripts/check-docs-tree.ts",
     "check-doc-counts": "npx tsx scripts/check-doc-counts.ts",
+    "check-doc-diagrams": "npx tsx scripts/check-doc-diagrams.ts",
     "check-spec-permissive-boundary": "npx tsx scripts/check-spec-permissive-boundary.ts",
     "check-privacy-ring": "npx tsx scripts/check-privacy-ring.ts",
     "check-readme": "npx tsx scripts/check-readme.ts",

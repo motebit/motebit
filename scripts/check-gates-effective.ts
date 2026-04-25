@@ -817,6 +817,24 @@ export const __probeOnlyDeprecationDrift = 1;
         ),
       ),
   },
+  {
+    script: "check-doc-diagrams",
+    proves:
+      "flags a `<DiagramFigure>` cite that names a `## N.` section number not present in the cited spec/*.md — the exact rot shape the gate exists for: spec restructure renumbers headers, the diagram cite quietly 404s",
+    perturb: () =>
+      // Mutate one of the live cites in operator/architecture.mdx — flip
+      // the receipt-chain cite from §11 (real, present in
+      // execution-ledger-v1.md) to §99 (does not exist). The gate's
+      // section-existence check fires on the spec/ branch and exits 1.
+      // Surgical: a single-character replacement, byte-identical
+      // restoration on cleanup.
+      mutateFile("apps/docs/content/docs/operator/architecture.mdx", (src) =>
+        src.replace(
+          'label: "execution-ledger §11", file: "spec/execution-ledger-v1.md", section: 11',
+          'label: "execution-ledger §11", file: "spec/execution-ledger-v1.md", section: 99',
+        ),
+      ),
+  },
 ];
 
 /**
