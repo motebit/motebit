@@ -90,7 +90,8 @@ import {
   loadGovernanceConfig,
   loadProactiveConfig,
   loadSyncUrl,
-} from "./storage";
+} from "./storage.js";
+import { publishHardwareCredentialIfDue } from "./publish-hardware-credential.js";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
 import { createWebGoalsRunner } from "./goals-runner";
@@ -1294,14 +1295,58 @@ export class WebApp {
       );
     }
 
-    // Derive deterministic encryption key, then erase raw key bytes
+    // Derive deterministic encryption key, then erase raw key bytes.
+    // Defensive copy for the hardware-credential publish below, since
+    // the helper signs the credential asynchronously and `secureErase`
+    // would zero the buffer mid-sign. The publish helper erases its
+    // own copy when it finishes (success or failure).
+    const privKeyForHwPublish = new Uint8Array(privKeyBytes);
+    const pubKeyForHwPublish = new Uint8Array(this._publicKeyHex.length / 2);
+    for (let i = 0; i < this._publicKeyHex.length; i += 2) {
+      pubKeyForHwPublish[i / 2] = parseInt(this._publicKeyHex.slice(i, i + 2), 16);
+    }
     const encKey = await deriveSyncEncryptionKey(privKeyBytes);
     secureErase(privKeyBytes);
 
     const token = await this.createSyncToken();
     if (token == null) {
+      secureErase(privKeyForHwPublish);
       this.setSyncStatus("error");
       throw new Error("No device keypair available for sync authentication");
+    }
+
+    // ── Hardware-attestation credential publish ─────────────────────────
+    // Mint via the web cascade (WebAuthn platform authenticator → software
+    // sentinel) and submit to the relay's `/api/v1/agents/:id/credentials/submit`.
+    // Fire-and-forget; rate-limited per-device to once per 30 days; never
+    // blocks the UI; never throws. Sibling of mobile + desktop publish flows.
+    // Spec: spec/credential-v1.md §3.4 (HardwareAttestationClaim) +
+    // packages/semiring/src/hardware-attestation.ts (#37).
+    {
+      const rpId =
+        typeof globalThis !== "undefined" &&
+        (globalThis as { location?: { hostname?: string } }).location?.hostname != null
+          ? (globalThis as unknown as { location: { hostname: string } }).location.hostname
+          : "localhost";
+      void publishHardwareCredentialIfDue({
+        identityPublicKeyHex: this._publicKeyHex,
+        privateKey: privKeyForHwPublish,
+        publicKey: pubKeyForHwPublish,
+        motebitId: this._motebitId,
+        deviceId: this._deviceId,
+        rpId,
+        syncUrl: relayUrl,
+        authToken: token,
+        storage: globalThis.localStorage,
+        logger: console,
+      })
+        .catch(() => {
+          // The helper traps every failure into a typed PublishOutcome;
+          // this catch satisfies floating-promise lint.
+        })
+        .finally(() => {
+          secureErase(privKeyForHwPublish);
+        });
     }
 
     // Build adapter stack: HTTP → Encrypted HTTP → WS → Encrypted WS

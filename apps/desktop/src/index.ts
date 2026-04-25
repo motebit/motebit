@@ -77,6 +77,8 @@ import {
   type InvokeFn,
 } from "./tauri-storage.js";
 import { TauriKeyringAdapter, TauriToolAuditSink } from "./tauri-system-adapters.js";
+import { publishHardwareCredentialIfDue } from "./publish-hardware-credential.js";
+import { bytesToHex } from "@motebit/encryption";
 import * as memoryCommands from "./memory-commands.js";
 import * as rendererCommands from "./renderer-commands.js";
 import { IdentityManager } from "./identity-manager.js";
@@ -1023,6 +1025,46 @@ export class DesktopApp {
     // Register goal-management tools (available during goal execution)
     if (config.isTauri && config.invoke) {
       this.registerGoalTools(config.invoke);
+    }
+
+    // Hardware-attestation credential — mint the desktop cascade
+    // (Secure Enclave on macOS → TPM on Windows / Linux → software)
+    // and publish to the relay's `/api/v1/agents/:id/credentials/submit`.
+    // Fire-and-forget; rate-limited per-device to once per 30 days; never
+    // blocks the UI; never throws. Sibling of mobile's
+    // `apps/mobile/src/publish-hardware-credential.ts`. The relay scores
+    // hardware-attested motebits above software-only ones via
+    // HardwareAttestationSemiring (#37).
+    if (
+      config.isTauri &&
+      config.invoke != null &&
+      signingKeys != null &&
+      config.syncUrl != null &&
+      config.syncUrl !== "" &&
+      config.syncMasterToken != null &&
+      config.syncMasterToken !== ""
+    ) {
+      const invoke = config.invoke;
+      const syncUrl = config.syncUrl;
+      const authToken = config.syncMasterToken;
+      const publicKey = signingKeys.publicKey;
+      const privateKey = signingKeys.privateKey;
+      const publicKeyHex = bytesToHex(publicKey);
+      void publishHardwareCredentialIfDue({
+        invoke,
+        identityPublicKeyHex: publicKeyHex,
+        privateKey,
+        publicKey,
+        motebitId: this.motebitId,
+        deviceId: this.deviceId,
+        syncUrl,
+        authToken,
+        storage: globalThis.localStorage,
+        logger: console,
+      }).catch(() => {
+        // The helper traps every failure into a typed PublishOutcome;
+        // this catch is belt-and-braces to satisfy floating-promise lint.
+      });
     }
 
     return true;
