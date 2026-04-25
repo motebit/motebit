@@ -1,4 +1,13 @@
 {
   "title": "Concepts",
-  "pages": ["identity", "memory", "intelligence", "governance", "the-droplet"]
+  "pages": [
+    "identity",
+    "memory",
+    "receipts",
+    "trust",
+    "intelligence",
+    "governance",
+    "federation",
+    "the-droplet"
+  ]
 }
