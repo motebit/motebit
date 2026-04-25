@@ -1,67 +1,89 @@
 # Motebit
 
-> Cryptographic identity for AI agents. Ed25519 keypairs, signed identity files, governance policy, and portable memory that travel with the agent across devices, providers, and time.
+> Sovereign agent infrastructure. Persistent cryptographic identity that survives across devices, providers, and time. Trust accumulated through signed execution receipts. Governance enforced at the agent's boundary. Verifiable proof of what got done.
 
-Motebit is the missing identity layer for the agentic economy. MCP defines what tools an agent can reach. Motebit defines who the agent is.
+Motebit is the missing layer underneath today's agent protocols. MCP defines what an agent can do. A2A defines how agents talk. x402 and AP2 define how they pay. Motebit defines who the agent is, what it has done, and what it is allowed to do.
 
 A motebit is a persistent, cryptographically-anchored, sovereign agent. The intelligence provider is pluggable. The identity — with its accumulated memory, trust, and governance — is the asset.
 
-## Quick Start
+## Quick start
 
 - `npm create motebit` generates a signed agent identity in 30 seconds
-- `@motebit/crypto` signs and verifies any Motebit artifact (identity files, receipts, credentials)
+- `@motebit/crypto` signs and verifies any motebit artifact (identity files, receipts, credentials)
 - `motebit/identity@1.0` is the open specification (Apache-2.0 licensed)
+
+- [Introduction](https://docs.motebit.com/docs/introduction): What is motebit, and why does it exist.
+- [How I Built This](https://docs.motebit.com/docs/how-we-built-this): One founder, one AI pair programmer, 47 days. The full story of building Motebit from commit one.
+- [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Download the desktop app, create an identity, and meet your motebit.
 
 ## Concepts
 
-- [Introduction](https://docs.motebit.com/docs/introduction): What is motebit, and why does it exist.
 - [Identity](https://docs.motebit.com/docs/concepts/identity): Cryptographic identity that persists across time, devices, and providers.
 - [Memory](https://docs.motebit.com/docs/concepts/memory): Semantic memory that accumulates, decays, and respects sensitivity.
+- [Receipts](https://docs.motebit.com/docs/concepts/receipts): The signed proof of one task — the smallest unit motebit's trust ledger is built from.
+- [Trust](https://docs.motebit.com/docs/concepts/trust): The aggregate of signed receipts — what a motebit has earned by working, expressed as numbers any other agent can compose along a path.
 - [Intelligence](https://docs.motebit.com/docs/concepts/intelligence): Pluggable LLM providers — the intelligence is a commodity, the identity is the asset.
 - [Governance](https://docs.motebit.com/docs/concepts/governance): Surface tension — what crosses the boundary between the agent and the world.
+- [Federation](https://docs.motebit.com/docs/concepts/federation): A network of independent relays that peer bilaterally — discovery, routing, and settlement extend across boundaries without a central authority.
 - [The Droplet](https://docs.motebit.com/docs/concepts/the-droplet): Form thesis — surface tension, glass, breathing, orbital mechanics.
+- [Public surface](https://docs.motebit.com/docs/concepts/public-surface): What motebit promises stability for, what it doesn't, and where the boundary is drawn.
 
-## Getting Started
+## Developer Guide
 
-- [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Download the desktop app, create an identity, and meet your motebit.
-- [Configuration](https://docs.motebit.com/docs/apps/configuration): Config files, environment variables, models, and MCP servers.
+- [Your First Service Agent](https://docs.motebit.com/docs/developer/first-service-agent): Build a service agent that provides a custom tool to other agents via the motebit delegation protocol.
+- [Local Testing](https://docs.motebit.com/docs/developer/local-testing): Run a local relay, register agents, submit tasks, and test the full delegation loop on your machine.
+- [Identity Standard](https://docs.motebit.com/docs/developer/identity-standard): Create and verify motebit.md agent identity files — the motebit/identity@1.0 specification.
+- [Identity & Cryptography](https://docs.motebit.com/docs/developer/identity-crypto): How motebit creates and manages persistent sovereign identity
+- [Verifiable Credentials](https://docs.motebit.com/docs/developer/credentials): W3C VC 2.0 credentials that prove reputation, capability, and trust — without trusting anyone's word for it.
+- [Agent-to-Agent Delegation](https://docs.motebit.com/docs/developer/delegation): Discover, verify, delegate, and prove — the cryptographic protocol for agent collaboration.
+- [Multi-Hop Delegation](https://docs.motebit.com/docs/developer/multi-hop): Chain agents together — receipts nest, budgets propagate, trust accumulates at every hop.
+- [Execution Ledger](https://docs.motebit.com/docs/developer/execution-ledger): A cryptographically signed timeline of goal execution — what happened, in what order, provably.
+- [Budget & Settlement](https://docs.motebit.com/docs/developer/budget-settlement): The economic layer — how agents price work, lock funds, and settle on completion.
+- [Semiring Routing](https://docs.motebit.com/docs/developer/semiring-routing): Algebraic routing over agent networks — one graph, one algorithm, swap the semiring, different answer.
+- [Relay Federation](https://docs.motebit.com/docs/developer/federation): How independent relays peer, discover agents across boundaries, route tasks, and settle payments through the network.
+- [MCP Server Mode](https://docs.motebit.com/docs/developer/mcp-server): Expose your motebit as a callable agent — synthetic tools, signed receipts, and bearer auth.
+- [Tools](https://docs.motebit.com/docs/developer/tools): Built-in tools, MCP integration, and the trust model.
+- [API Reference](https://docs.motebit.com/docs/developer/api-reference): ExecutionReceipt schema, synthetic MCP tools, relay task endpoints, and budget APIs.
 
-## Apps
+## App Reference
 
 - [Desktop App](https://docs.motebit.com/docs/apps/desktop): Setup, operator mode, PIN flow, and the Tauri runtime.
 - [Mobile App](https://docs.motebit.com/docs/apps/mobile): Expo setup, dual providers, voice input, goals, and MCP trust.
 - [CLI](https://docs.motebit.com/docs/apps/cli): The developer REPL — slash commands, streaming, and debugging.
 - [Spatial App](https://docs.motebit.com/docs/apps/spatial): WebXR, orbital mechanics, hand tracking, and flat preview.
-
-## Developer Guide
-
-- [Identity Standard](https://docs.motebit.com/docs/developer/identity-standard): Create and verify motebit.md agent identity files — the motebit/identity@1.0 specification.
-- [Identity & Cryptography](https://docs.motebit.com/docs/developer/identity-crypto): How motebit creates and manages persistent sovereign identity.
-- [Agent-to-Agent Delegation](https://docs.motebit.com/docs/developer/delegation): Discover, verify, delegate, and prove — the cryptographic protocol for agent collaboration.
-- [Tools](https://docs.motebit.com/docs/developer/tools): Built-in tools, MCP integration, and the trust model.
-- [MCP Server Mode](https://docs.motebit.com/docs/developer/mcp-server): Expose your motebit as a callable agent — synthetic tools, signed receipts, and bearer auth.
+- [Configuration](https://docs.motebit.com/docs/apps/configuration): Config files, environment variables, models, and MCP servers.
 
 ## Operator Guide
 
-- [Architecture](https://docs.motebit.com/docs/operator/architecture): Monorepo structure, package layers, and data flow.
+- [Architecture](https://docs.motebit.com/docs/operator/architecture): Monorepo structure, enforced layers, services, specs, and data flow
 - [Daemon Mode & Approvals](https://docs.motebit.com/docs/operator/daemon-approvals): Running motebit as a daemon — scheduled goals, approval queue, and governance enforcement.
-- [Policy & Governance](https://docs.motebit.com/docs/operator/governance): How motebit controls what crosses the surface.
+- [Policy & Governance](https://docs.motebit.com/docs/operator/governance): How motebit controls what crosses the surface
 - [Sync](https://docs.motebit.com/docs/operator/sync): Multi-device sync, the relay server, and conflict detection.
+- [Troubleshooting](https://docs.motebit.com/docs/operator/troubleshooting): Reading relay logs, diagnosing common errors, and debugging delegation and settlement issues.
 
-## Open Specification
+## Reference
 
-- [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md): The open specification for agent identity files. Apache-2.0 licensed.
+- [Changelog](https://docs.motebit.com/docs/changelog): Where to find what changed across motebit's published packages.
 
-## Packages
+## Open specification
 
-- [create-motebit](https://www.npmjs.com/package/create-motebit): CLI scaffolder — `npm create motebit`. Apache-2.0 licensed.
-- [@motebit/crypto](https://www.npmjs.com/package/@motebit/crypto): Sign and verify every Motebit artifact. Cryptosuite-agile for post-quantum. Apache-2.0 licensed.
+- [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md): the open specification for agent identity files. Apache-2.0.
+- [motebit/execution-ledger@1.0](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md): the signed-receipt ledger every motebit emits. Apache-2.0.
+- [motebit/relay-federation@1.0](https://github.com/motebit/motebit/blob/main/spec/relay-federation-v1.md): bilateral peering between independent relays. Apache-2.0.
+- All twenty-one specs are in [`spec/`](https://github.com/motebit/motebit/tree/main/spec).
+
+## Published packages
+
+- [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed identity or runnable agent service. Apache-2.0.
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — types, semirings, routing primitives, crypto-suite registry. Apache-2.0.
+- [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract; stable types, adapter interfaces. Apache-2.0.
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every motebit artifact. Cryptosuite-agile. Apache-2.0.
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier), [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify), [`@motebit/crypto-{appattest,play-integrity,tpm,webauthn}`](https://www.npmjs.com/org/motebit) — verification libraries. Apache-2.0.
+- [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console. BSL-1.1, converging to Apache-2.0 four years after release.
 
 ## Optional
 
-- [GitHub Repository](https://github.com/motebit/motebit): Source code, issue tracker, discussions.
-- [DROPLET.md](https://github.com/motebit/motebit/blob/main/DROPLET.md): Design thesis — the body derived from physics.
-- [THE_SOVEREIGN_INTERIOR.md](https://github.com/motebit/motebit/blob/main/THE_SOVEREIGN_INTERIOR.md): Identity thesis — cryptographic interior.
-- [LIQUESCENTIA.md](https://github.com/motebit/motebit/blob/main/LIQUESCENTIA.md): The world — the medium that permits cohesion.
-- [THE_MUSIC_OF_THE_MEDIUM.md](https://github.com/motebit/motebit/blob/main/THE_MUSIC_OF_THE_MEDIUM.md): Acoustic interface — pressure coupling through surface tension.
-- [THE_METABOLIC_PRINCIPLE.md](https://github.com/motebit/motebit/blob/main/THE_METABOLIC_PRINCIPLE.md): Build enzymes, absorb glucose.
+- [GitHub repository](https://github.com/motebit/motebit) — source, issues, discussions.
+- [DROPLET.md](https://github.com/motebit/motebit/blob/main/DROPLET.md) — design thesis: the body derived from physics.
+- [THE_SOVEREIGN_INTERIOR.md](https://github.com/motebit/motebit/blob/main/THE_SOVEREIGN_INTERIOR.md) — identity thesis.
+- [THE_METABOLIC_PRINCIPLE.md](https://github.com/motebit/motebit/blob/main/THE_METABOLIC_PRINCIPLE.md) — build enzymes, absorb glucose.
