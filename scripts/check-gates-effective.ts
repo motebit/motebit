@@ -981,7 +981,95 @@ function assertProbeCoverage(): void {
   }
 }
 
+/**
+ * Pre-flight: detect and revert leakage from a previously interrupted run.
+ *
+ * The per-probe try/finally and the SIGINT/SIGTERM handlers below cover
+ * graceful interrupts. They cannot cover SIGKILL — when a tool runner or
+ * the OS hard-kills this process, the cleanup closures don't get a chance
+ * to run and the perturbation is left in the working tree. The fix is
+ * asymmetric: we can't catch SIGKILL inside the killed process, but we
+ * can scan for its leakage at the start of the next run.
+ *
+ * Two leakage shapes need draining:
+ *
+ *   1. Orphan fixture files — probes that synthesize new files (their
+ *      basename always carries PROBE_PREFIX). git tracks these as
+ *      untracked; the prefix in the path is the signature.
+ *
+ *   2. Mutated baselines — probes that splice a one-line marker comment
+ *      into an existing tracked file (e.g. an api-extractor baseline).
+ *      git diff reports them as modified; the needle is constructed at
+ *      runtime as `PROBE_PREFIX + "injected"` to avoid having this
+ *      script's own source contain the literal pattern (which would
+ *      cause every drain run to revert this script to HEAD).
+ *
+ * Self-exclusion: this script never drains itself, even if it somehow
+ * matches the needle. Defensive backstop against the same self-trip.
+ *
+ * Idempotent: if drain is itself interrupted, the next run sees the same
+ * leakage and drains again. Quiet on the happy path.
+ */
+function drainStalePerturbations(): void {
+  // Construct the needle at runtime so this source never contains the
+  // literal "__gate_probe__" + "injected" sequence.
+  const INJECTED_NEEDLE = PROBE_PREFIX + "injected";
+  const SELF = "scripts/check-gates-effective.ts";
+
+  // Orphan fixture files — untracked, with the prefix in the path.
+  const untracked = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], {
+    cwd: ROOT,
+    encoding: "utf-8",
+  });
+  const orphanFixtures = untracked.stdout
+    .split("\n")
+    .filter((line) => line && line.includes(PROBE_PREFIX));
+
+  // Mutated baselines — tracked, dirty, containing the injected marker.
+  // Parse `git diff HEAD` once and pluck filenames where an added line
+  // carries the needle.
+  const diff = spawnSync("git", ["diff", "HEAD"], {
+    cwd: ROOT,
+    encoding: "utf-8",
+  });
+  const dirtyFiles = new Set<string>();
+  if (diff.stdout.includes(INJECTED_NEEDLE)) {
+    let currentFile: string | null = null;
+    for (const line of diff.stdout.split("\n")) {
+      if (line.startsWith("+++ b/")) {
+        currentFile = line.slice(6);
+      } else if (
+        currentFile &&
+        currentFile !== SELF &&
+        line.startsWith("+") &&
+        line.includes(INJECTED_NEEDLE)
+      ) {
+        dirtyFiles.add(currentFile);
+      }
+    }
+  }
+
+  if (orphanFixtures.length === 0 && dirtyFiles.size === 0) return;
+
+  console.error(`\nDetected stale gate-probe leakage from a prior interrupted run:`);
+  for (const f of dirtyFiles) console.error(`  • mutated baseline: ${f}`);
+  for (const f of orphanFixtures) console.error(`  • orphan fixture:  ${f}`);
+  console.error(`Draining before starting probes…\n`);
+
+  for (const f of dirtyFiles) {
+    spawnSync("git", ["checkout", "HEAD", "--", f], { cwd: ROOT });
+  }
+  for (const f of orphanFixtures) {
+    try {
+      unlinkSync(resolve(ROOT, f));
+    } catch (err) {
+      console.error(`  (could not unlink ${f}: ${String(err)})`);
+    }
+  }
+}
+
 function main(): void {
+  drainStalePerturbations();
   assertProbeCoverage();
 
   const results: ProbeResult[] = [];
