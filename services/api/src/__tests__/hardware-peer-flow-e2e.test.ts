@@ -267,6 +267,111 @@ describe("Hardware-attestation peer flow — Phase 1 E2E (software sentinel)", (
     expect(aggregate!.platform_breakdown.software).toBeGreaterThanOrEqual(1);
   });
 
+  // ── Hardening negatives — attach endpoint rejects bad inputs ─────────
+
+  it("attach rejects malformed JSON in hardware_attestation_credential", async () => {
+    // Build a syntactically-valid signed envelope with an invalid inner
+    // credential (not JSON at all). The outer envelope signature checks
+    // pass; the inner JSON.parse should fail and the endpoint returns 400.
+    const body = {
+      motebit_id: agentB.motebitId,
+      device_id: agentB.deviceId,
+      hardware_attestation_credential: "this is not json {{{",
+      timestamp: Date.now(),
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+    };
+    const sig = await signBySuite(
+      "motebit-jcs-ed25519-b64-v1",
+      new TextEncoder().encode(canonicalJson(body)),
+      agentB.keypair.privateKey,
+    );
+    const res = await relay.app.request(
+      `/api/v1/agents/${agentB.motebitId}/devices/${agentB.deviceId}/hardware-attestation`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ ...body, signature: toBase64Url(sig) }),
+      },
+    );
+    expect(res.status).toBe(400);
+    // Hono's HTTPException emits the message in the response body as plain
+    // text by default. Read text + match — body shape is implementation
+    // detail of Hono, not motebit; the contract is "400 with the message
+    // somewhere visible to the client."
+    const errText = await res.text();
+    expect(errText).toMatch(/not valid JSON/);
+  });
+
+  it("attach rejects credentials whose identity_public_key doesn't match the device", async () => {
+    // Compose a credential with agentA's keypair as the subject. Submit
+    // through agentB's attach endpoint — relay must reject because the
+    // subject's identity_public_key wouldn't match B's registered key.
+    const wrongKeyVc = await composeHardwareAttestationCredential({
+      publicKey: agentA.keypair.publicKey,
+      publicKeyHex: agentA.publicKeyHex,
+      privateKey: agentA.keypair.privateKey,
+      hardwareAttestation: { platform: "software", key_exported: false },
+      now: Date.now(),
+    });
+    const res = await attachHardwareAttestation(
+      relay,
+      agentB,
+      wrongKeyVc as unknown as VerifiableCredential<unknown>,
+    );
+    expect(res.status).toBe(400);
+    const errBody = (await res.json()) as { code?: string };
+    expect(errBody.code).toBe("IDENTITY_KEY_MISMATCH");
+  });
+
+  it("attach rejects credentials with a tampered VC signature", async () => {
+    // Take a valid credential (B's), flip the proof.proofValue's last
+    // character. The eddsa-jcs-2022 verification fails. Endpoint returns
+    // 400 with code BAD_CREDENTIAL.
+    const tamperedVc = {
+      ...bSelfHardwareVc,
+      proof: {
+        ...bSelfHardwareVc.proof,
+        proofValue:
+          bSelfHardwareVc.proof.proofValue.slice(0, -1) +
+          (bSelfHardwareVc.proof.proofValue.endsWith("a") ? "b" : "a"),
+      },
+    };
+    const res = await attachHardwareAttestation(relay, agentB, tamperedVc);
+    expect(res.status).toBe(400);
+    const errBody = (await res.json()) as { code?: string };
+    expect(errBody.code).toBe("BAD_CREDENTIAL");
+  });
+
+  it("attach rejects expired credentials", async () => {
+    // Compose a credential with a `now` timestamp far in the past so the
+    // default ONE_HOUR_MS validUntil is already expired. The relay's
+    // verifyVerifiableCredential returns false on expiry; endpoint
+    // rejects with BAD_CREDENTIAL.
+    const longAgo = Date.now() - 24 * 60 * 60 * 1000; // 24h ago
+    const expiredVc = await composeHardwareAttestationCredential({
+      publicKey: agentB.keypair.publicKey,
+      publicKeyHex: agentB.publicKeyHex,
+      privateKey: agentB.keypair.privateKey,
+      hardwareAttestation: { platform: "software", key_exported: false },
+      now: longAgo,
+    });
+    // Inject an expired validUntil — composeHardwareAttestationCredential
+    // doesn't set validUntil, so we add it explicitly to trigger the
+    // expiry check inside verifyVerifiableCredential.
+    const withValidUntil = {
+      ...expiredVc,
+      validUntil: new Date(longAgo + 60 * 60 * 1000).toISOString(), // expired 23h ago
+    };
+    const res = await attachHardwareAttestation(
+      relay,
+      agentB,
+      withValidUntil as unknown as VerifiableCredential<unknown>,
+    );
+    expect(res.status).toBe(400);
+    const errBody = (await res.json()) as { code?: string };
+    expect(errBody.code).toBe("BAD_CREDENTIAL");
+  });
+
   // Doctrine-locking negative test: even with the new device-record path
   // for hardware attestation, /credentials/submit STILL rejects self-issued
   // credentials. Confirms the carve-out proposal that was rejected on review

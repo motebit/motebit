@@ -17,7 +17,9 @@ import {
   fromBase64Url,
   hexToBytes,
   verifyDeviceRegistration,
+  verifyVerifiableCredential,
   type SignableDeviceRegistration,
+  type VerifiableCredential,
 } from "@motebit/encryption";
 import { verifyBySuite } from "@motebit/crypto";
 import { isSuiteId } from "@motebit/protocol";
@@ -371,23 +373,47 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       return c.json({ error: "Signature invalid", code: "BAD_SIGNATURE" }, 400);
     }
 
-    // Validate the credential parses as JSON and looks like a VC. Deeper
-    // verification (eddsa-jcs-2022 proof, identity-key binding) is the
-    // peer verifier's job — the relay is a passthrough/CDN per
-    // services/api/CLAUDE.md rule 6.
-    let parsedVc: Record<string, unknown>;
+    // Validate the credential. The relay verifies the OUTER VC envelope
+    // (eddsa-jcs-2022 proof + identity-key binding + freshness) at attach
+    // time so malformed/tampered/expired credentials are caught early
+    // rather than polluting the device record and failing later at
+    // peer-verification time. Per services/api/CLAUDE.md rule 6, the
+    // relay still does NOT verify the inner hardware_attestation claim
+    // (platform-specific verifiers stay out of services/api); that's
+    // the issuer's job. We only verify what every VC has: the wrapping
+    // signature.
+    let parsedVc: VerifiableCredential<{
+      id?: string;
+      identity_public_key?: string;
+      hardware_attestation?: { platform?: string };
+    }>;
     try {
-      parsedVc = JSON.parse(body.hardware_attestation_credential) as Record<string, unknown>;
+      parsedVc = JSON.parse(body.hardware_attestation_credential) as typeof parsedVc;
     } catch {
       throw new HTTPException(400, {
         message: "hardware_attestation_credential is not valid JSON",
       });
     }
-    const subject = parsedVc.credentialSubject as
-      | { id?: string; identity_public_key?: string }
-      | undefined;
+
+    // Shape: must be a VC with a credentialSubject and a proof.
     if (
-      !subject ||
+      typeof parsedVc !== "object" ||
+      parsedVc === null ||
+      typeof parsedVc.credentialSubject !== "object" ||
+      parsedVc.credentialSubject === null ||
+      typeof parsedVc.proof !== "object" ||
+      parsedVc.proof === null
+    ) {
+      throw new HTTPException(400, {
+        message: "hardware_attestation_credential is not a valid VerifiableCredential",
+      });
+    }
+
+    // Identity-key binding: the credential's identity_public_key MUST match
+    // the device's registered public_key. Without this, a peer could attach
+    // a credential about a different device.
+    const subject = parsedVc.credentialSubject;
+    if (
       typeof subject.identity_public_key !== "string" ||
       subject.identity_public_key.toLowerCase() !== device.public_key.toLowerCase()
     ) {
@@ -396,6 +422,32 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
           error:
             "credentialSubject.identity_public_key must match the device's registered public_key",
           code: "IDENTITY_KEY_MISMATCH",
+        },
+        400,
+      );
+    }
+
+    // Inner VC eddsa-jcs-2022 proof verification. The credential is signed
+    // by the device's identity key (self-attestation). A malformed proof
+    // means later peer verifiers will reject the credential — catch it now.
+    // verifyVerifiableCredential ALSO checks `validUntil` expiry and returns
+    // false on expired credentials.
+    let vcSigValid: boolean;
+    try {
+      vcSigValid = await verifyVerifiableCredential(parsedVc);
+    } catch {
+      vcSigValid = false;
+    }
+    if (!vcSigValid) {
+      logger.warn("hardware_attestation.attach.bad_credential", {
+        motebitId,
+        deviceId,
+      });
+      return c.json(
+        {
+          error:
+            "hardware_attestation_credential proof did not verify (malformed, tampered, or expired)",
+          code: "BAD_CREDENTIAL",
         },
         400,
       );
