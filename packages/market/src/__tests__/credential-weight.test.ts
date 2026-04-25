@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { aggregateCredentialReputation, blendCredentialTrust } from "../credential-weight.js";
-import type { CredentialReputation, ReputationVC } from "../credential-weight.js";
+import {
+  aggregateCredentialReputation,
+  aggregateHardwareAttestation,
+  blendCredentialTrust,
+} from "../credential-weight.js";
+import type { CredentialReputation, ReputationVC, TrustVC } from "../credential-weight.js";
+import type { HardwareAttestationClaim } from "@motebit/protocol";
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -380,5 +385,128 @@ describe("Sybil defense — self-attestation filtering", () => {
     // Result should reflect the peer's 0.7, not the self-inflated 1.0
     expect(result!.success_rate).toBeCloseTo(0.7);
     expect(result!.issuer_count).toBe(1); // Only the peer counts
+  });
+});
+
+// ── aggregateHardwareAttestation ──────────────────────────────────────
+
+const SUBJECT_DID = "did:motebit:subject-1";
+const ISSUER_A = "did:motebit:issuer-a";
+const ISSUER_B = "did:motebit:issuer-b";
+
+function makeTrustVC(
+  issuer: string,
+  hwAttestation: HardwareAttestationClaim | undefined,
+  overrides?: { id?: string; subjectId?: string; validFrom?: string },
+): TrustVC {
+  const now = new Date();
+  return {
+    id: overrides?.id,
+    type: ["VerifiableCredential", "AgentTrustCredential"],
+    issuer,
+    credentialSubject: {
+      id: overrides?.subjectId ?? SUBJECT_DID,
+      trust_level: "Verified",
+      interaction_count: 5,
+      successful_tasks: 5,
+      failed_tasks: 0,
+      first_seen_at: now.getTime() - 86_400_000,
+      last_seen_at: now.getTime(),
+      hardware_attestation: hwAttestation,
+    },
+    validFrom: overrides?.validFrom ?? now.toISOString(),
+  };
+}
+
+describe("aggregateHardwareAttestation", () => {
+  it("returns null on empty input", () => {
+    expect(aggregateHardwareAttestation([], highTrust)).toBeNull();
+  });
+
+  it("returns null when no credentials carry a hardware_attestation", () => {
+    const vc = makeTrustVC(ISSUER_A, undefined);
+    expect(aggregateHardwareAttestation([vc], highTrust)).toBeNull();
+  });
+
+  it("scores a single secure_enclave-attested peer credential at HW_ATTESTATION_HARDWARE (1.0)", () => {
+    const vc = makeTrustVC(ISSUER_A, { platform: "secure_enclave", key_exported: false });
+    const result = aggregateHardwareAttestation([vc], highTrust);
+    expect(result).not.toBeNull();
+    expect(result!.attestation_score).toBeCloseTo(1.0);
+    expect(result!.issuer_count).toBe(1);
+    expect(result!.platform_breakdown.secure_enclave).toBe(1);
+  });
+
+  it("scores a software-sentinel claim at HW_ATTESTATION_SOFTWARE (0.1) — the truthful no-hardware case", () => {
+    const vc = makeTrustVC(ISSUER_A, { platform: "software", key_exported: false });
+    const result = aggregateHardwareAttestation([vc], highTrust);
+    expect(result).not.toBeNull();
+    expect(result!.attestation_score).toBeCloseTo(0.1);
+    expect(result!.platform_breakdown.software).toBe(1);
+  });
+
+  it("rejects self-attestation — issuer === subject.id contributes nothing", () => {
+    const selfVC = makeTrustVC(SUBJECT_DID, { platform: "tpm", key_exported: false });
+    const peerVC = makeTrustVC(ISSUER_A, { platform: "software", key_exported: false });
+    const result = aggregateHardwareAttestation([selfVC, peerVC], highTrust);
+    expect(result).not.toBeNull();
+    expect(result!.attestation_score).toBeCloseTo(0.1); // peer's software, not self's tpm
+    expect(result!.issuer_count).toBe(1);
+  });
+
+  it("filters out revoked credentials", () => {
+    const vc = makeTrustVC(ISSUER_A, { platform: "tpm", key_exported: false }, { id: "vc-1" });
+    const checkRevoked = (id: string) => id === "vc-1";
+    const result = aggregateHardwareAttestation([vc], highTrust, { checkRevoked });
+    expect(result).toBeNull();
+  });
+
+  it("filters out low-trust issuers", () => {
+    const vc = makeTrustVC(ISSUER_A, { platform: "secure_enclave", key_exported: false });
+    const result = aggregateHardwareAttestation([vc], () => 0.01, { minIssuerTrust: 0.05 });
+    expect(result).toBeNull();
+  });
+
+  it("decays old credentials via freshness half-life", () => {
+    const oldDate = new Date(Date.now() - 24 * 60 * 60 * 1000); // 24h ago = one half-life
+    const oldVC = makeTrustVC(
+      ISSUER_A,
+      { platform: "secure_enclave", key_exported: false },
+      { validFrom: oldDate.toISOString() },
+    );
+    const result = aggregateHardwareAttestation([oldVC], highTrust);
+    expect(result).not.toBeNull();
+    // The score itself doesn't decay (it's a binary "this hardware exists"),
+    // only the weight does. With one issuer, the score is still 1.0; what
+    // changes is total_weight (≈ 0.45 = 0.9 trust × 0.5 freshness).
+    expect(result!.attestation_score).toBeCloseTo(1.0);
+    expect(result!.total_weight).toBeLessThan(0.5);
+  });
+
+  it("aggregates multiple peer issuers with different platforms", () => {
+    const vcA = makeTrustVC(ISSUER_A, { platform: "secure_enclave", key_exported: false });
+    const vcB = makeTrustVC(ISSUER_B, { platform: "software", key_exported: false });
+    const result = aggregateHardwareAttestation([vcA, vcB], highTrust);
+    expect(result).not.toBeNull();
+    // Weighted average: (1.0 × w + 0.1 × w) / (2w) = 0.55
+    expect(result!.attestation_score).toBeCloseTo(0.55);
+    expect(result!.issuer_count).toBe(2);
+    expect(result!.platform_breakdown.secure_enclave).toBe(1);
+    expect(result!.platform_breakdown.software).toBe(1);
+  });
+
+  it("ignores non-trust credential types", () => {
+    const repVC = makeRepVC(ISSUER_A);
+    // ReputationVC's credentialSubject doesn't have hardware_attestation —
+    // we just confirm the type-filter rejects it before the claim lookup.
+    const result = aggregateHardwareAttestation([repVC as unknown as TrustVC], highTrust);
+    expect(result).toBeNull();
+  });
+
+  it("downgrades exported-key claims via scoreAttestation (HW_ATTESTATION_HARDWARE_EXPORTED = 0.5)", () => {
+    const vc = makeTrustVC(ISSUER_A, { platform: "secure_enclave", key_exported: true });
+    const result = aggregateHardwareAttestation([vc], highTrust);
+    expect(result).not.toBeNull();
+    expect(result!.attestation_score).toBeCloseTo(0.5);
   });
 });

@@ -18,11 +18,17 @@ export type {
   PeerEdge,
 } from "./graph-routing.js";
 export type { CandidateProfile, TaskRequirements } from "./scoring.js";
-export { aggregateCredentialReputation, blendCredentialTrust } from "./credential-weight.js";
+export {
+  aggregateCredentialReputation,
+  aggregateHardwareAttestation,
+  blendCredentialTrust,
+} from "./credential-weight.js";
 export type {
   CredentialReputation,
   CredentialWeightConfig,
+  HardwareAttestationAggregate,
   ReputationVC,
+  TrustVC,
 } from "./credential-weight.js";
 export {
   propagateTrust,

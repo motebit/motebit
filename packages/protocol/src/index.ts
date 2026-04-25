@@ -1899,6 +1899,17 @@ export interface DeviceRegistration {
   public_key: string; // hex-encoded Ed25519 public key
   registered_at: number;
   device_name?: string;
+  /**
+   * Optional self-issued `AgentTrustCredential` (JSON-serialized signed
+   * VC) bearing a `hardware_attestation` claim about this device's
+   * identity key. Identity metadata, not a credential-index entry —
+   * served via `GET /agent/:motebitId/capabilities` so peers can pull,
+   * verify, and issue their own peer credentials about this subject.
+   * The `/credentials/submit` self-issued rejection (spec §23) remains
+   * unchanged. See `spec/identity-v1.md` §3 (device record) and
+   * `docs/doctrine/promoting-private-to-public.md` companion.
+   */
+  hardware_attestation_credential?: string;
 }
 
 export interface IdentityStorage {

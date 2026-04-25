@@ -10,8 +10,13 @@
  * attestation_value × attester_authority × recency × confidence.
  */
 
-import type { ReputationCredentialSubject } from "@motebit/protocol";
-import { VC_TYPE_REPUTATION } from "@motebit/protocol";
+import type {
+  HardwareAttestationClaim,
+  ReputationCredentialSubject,
+  TrustCredentialSubject,
+} from "@motebit/protocol";
+import { VC_TYPE_REPUTATION, VC_TYPE_TRUST } from "@motebit/protocol";
+import { scoreAttestation } from "@motebit/semiring";
 
 /**
  * Minimal VerifiableCredential shape — avoids adding @motebit/crypto dependency.
@@ -23,6 +28,19 @@ export interface ReputationVC {
   issuer: string;
   validFrom?: string;
   credentialSubject: ReputationCredentialSubject & { id: string };
+}
+
+/**
+ * Minimal `AgentTrustCredential` shape for aggregation. The full type lives
+ * in `@motebit/protocol` as `TrustCredentialSubject`; this projection mirrors
+ * `ReputationVC` so the aggregator can stay dep-thin.
+ */
+export interface TrustVC {
+  id?: string;
+  type: string[];
+  issuer: string;
+  validFrom?: string;
+  credentialSubject: TrustCredentialSubject & { id: string };
 }
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -143,6 +161,129 @@ export function aggregateCredentialReputation(
     availability: wAvailability / wSum,
     issuer_count: issuers.size,
     total_weight: wSum,
+  };
+}
+
+// ── Hardware-attestation aggregation ────────────────────────────────────
+
+/**
+ * Aggregated hardware-attestation evidence about a single subject agent.
+ *
+ * Sibling to `CredentialReputation`. Where `CredentialReputation` weights
+ * peer-reported task outcomes, this weights peer-verified hardware claims
+ * (per spec/credential-v1.md §3.4 + the HardwareAttestationSemiring in
+ * @motebit/semiring/hardware-attestation.ts).
+ *
+ * The score itself is the weighted average of `scoreAttestation(claim)`
+ * over all peer-issued AgentTrustCredentials carrying a non-null
+ * `hardware_attestation`. Issuer trust × freshness × confidence are the
+ * same machinery as `aggregateCredentialReputation`; the value being
+ * averaged is what differs (semiring score vs. reputation field).
+ *
+ * Phase 1 doctrine: only peer-issued credentials contribute. Self-issued
+ * credentials (issuer === subject.id) are filtered out; they live on the
+ * device record + capabilities endpoint as identity metadata, never in
+ * the credential index. See docs/doctrine/promoting-private-to-public.md
+ * companion + lesson_hardware_attestation_self_issued_dead_drop.md memory.
+ */
+export interface HardwareAttestationAggregate {
+  /** Weighted average of `scoreAttestation(claim)` across contributing credentials. [0, 1] */
+  attestation_score: number;
+  /** Number of distinct issuers contributing a hardware claim. */
+  issuer_count: number;
+  /** Sum of all credential weights — same definition as `CredentialReputation.total_weight`. */
+  total_weight: number;
+  /**
+   * Per-platform contribution count (e.g. `{ "secure_enclave": 2, "tpm": 1 }`).
+   * Useful for routing-policy decisions like "require at least one tpm-attested issuer."
+   */
+  platform_breakdown: Readonly<Record<string, number>>;
+}
+
+/**
+ * Aggregate peer-issued AgentTrustCredentials carrying `hardware_attestation`
+ * into a single `HardwareAttestationAggregate`. Pure function — no I/O, no
+ * graph access, no side effects.
+ *
+ * Filters and weighting follow `aggregateCredentialReputation` exactly:
+ *   - self-attestation (issuer === subject.id) is filtered out
+ *   - revoked credentials are filtered out (caller-supplied predicate)
+ *   - issuer trust below `minIssuerTrust` is filtered out
+ *   - freshness decays exponentially with `freshnessHalfLifeMs` half-life
+ *
+ * Confidence is fixed at 1.0 per credential (a hardware-attestation claim
+ * is not a sample-size measurement — it's a single binary "this device
+ * has hardware backing" assertion). The shape stays compatible with
+ * `aggregateCredentialReputation`'s weighting.
+ *
+ * Returns null when no credential contributes (no usable trust VCs, all
+ * filtered out, or all weights collapse to zero). Callers MUST treat null
+ * as "no signal" rather than "score 0" — the latter is the meaning of
+ * `HW_ATTESTATION_NONE` *within* a single claim, not the absence of any
+ * claim at all.
+ */
+export function aggregateHardwareAttestation(
+  credentials: ReadonlyArray<TrustVC>,
+  getIssuerTrust: (issuerDid: string) => number,
+  config?: CredentialWeightConfig,
+): HardwareAttestationAggregate | null {
+  const halfLife = config?.freshnessHalfLifeMs ?? DEFAULT_FRESHNESS_HALF_LIFE_MS;
+  const minTrust = config?.minIssuerTrust ?? DEFAULT_MIN_ISSUER_TRUST;
+
+  const now = Date.now();
+
+  let wSum = 0;
+  let wScore = 0;
+  const issuers = new Set<string>();
+  const platforms: Record<string, number> = {};
+
+  for (const vc of credentials) {
+    // Only AgentTrustCredentials contribute to hardware-attestation aggregation.
+    if (!vc.type.includes(VC_TYPE_TRUST)) continue;
+
+    const subject = vc.credentialSubject;
+    const claim: HardwareAttestationClaim | undefined = subject.hardware_attestation;
+    if (claim == null) continue;
+
+    const issuerDid = vc.issuer;
+
+    // Self-attestation filter: same rule as the reputation aggregator.
+    // Self-issued hardware claims live on the device record / capabilities
+    // endpoint as identity metadata, NEVER in routing aggregation.
+    if (issuerDid === subject.id) continue;
+
+    // Revocation filter.
+    if (config?.checkRevoked && vc.id && config.checkRevoked(vc.id)) continue;
+
+    // Issuer authority.
+    const issuerTrust = getIssuerTrust(issuerDid);
+    if (issuerTrust < minTrust) continue;
+
+    // Freshness decay.
+    const issuedAt = vc.validFrom ? new Date(vc.validFrom).getTime() : 0;
+    const age = Math.max(0, now - issuedAt);
+    const freshness = Math.exp((-age * Math.LN2) / halfLife);
+
+    // Combined weight: authority × freshness. (Confidence omitted — see
+    // function-level doc; a single hardware claim is not a sample.)
+    const w = issuerTrust * freshness;
+    if (w <= 0) continue;
+
+    const claimScore = scoreAttestation(claim);
+
+    wSum += w;
+    wScore += w * claimScore;
+    issuers.add(issuerDid);
+    platforms[claim.platform] = (platforms[claim.platform] ?? 0) + 1;
+  }
+
+  if (wSum === 0) return null;
+
+  return {
+    attestation_score: wScore / wSum,
+    issuer_count: issuers.size,
+    total_weight: wSum,
+    platform_breakdown: platforms,
   };
 }
 

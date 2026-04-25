@@ -905,6 +905,7 @@ export interface DeviceRegistration {
     device_name?: string;
     // (undocumented)
     device_token?: string;
+    hardware_attestation_credential?: string;
     // (undocumented)
     motebit_id: string;
     // (undocumented)

@@ -114,7 +114,15 @@ CREATE TABLE IF NOT EXISTS devices (
   device_token TEXT NOT NULL UNIQUE,
   public_key TEXT NOT NULL,
   registered_at INTEGER NOT NULL,
-  device_name TEXT
+  device_name TEXT,
+  -- Self-issued AgentTrustCredential (JSON) bearing a hardware_attestation
+  -- claim about this device. Nullable. Identity metadata, NOT a
+  -- credential-index entry. Served via /agent/:motebitId/capabilities so
+  -- peers can pull, verify, and issue their own peer credentials. The
+  -- /credentials/submit self-issued rejection rule (spec credential-v1
+  -- section 23) is unchanged. See spec/identity-v1.md section 3 and
+  -- the public-surface doctrine.
+  hardware_attestation_credential TEXT
 );
 
 CREATE TABLE IF NOT EXISTS goals (
@@ -665,8 +673,8 @@ export class SqliteIdentityStorage implements IdentityStorage {
     this.stmtLoad = db.prepare(`SELECT * FROM identities WHERE motebit_id = ?`);
     this.stmtLoadByOwner = db.prepare(`SELECT * FROM identities WHERE owner_id = ? LIMIT 1`);
     this.stmtSaveDevice = db.prepare(
-      `INSERT OR REPLACE INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name, hardware_attestation_credential)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtLoadDevice = db.prepare(`SELECT * FROM devices WHERE device_id = ?`);
     this.stmtLoadDeviceByToken = db.prepare(`SELECT * FROM devices WHERE device_token = ?`);
@@ -702,6 +710,7 @@ export class SqliteIdentityStorage implements IdentityStorage {
       device.public_key,
       device.registered_at,
       device.device_name ?? null,
+      device.hardware_attestation_credential ?? null,
     );
   }
 
@@ -746,6 +755,7 @@ interface DeviceRow {
   public_key: string;
   registered_at: number;
   device_name: string | null;
+  hardware_attestation_credential: string | null;
 }
 
 function rowToDevice(row: DeviceRow): DeviceRegistration {
@@ -758,6 +768,9 @@ function rowToDevice(row: DeviceRow): DeviceRegistration {
   };
   if (row.device_name !== null) {
     device.device_name = row.device_name;
+  }
+  if (row.hardware_attestation_credential !== null) {
+    device.hardware_attestation_credential = row.hardware_attestation_credential;
   }
   return device;
 }
@@ -2837,6 +2850,20 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     migrateExec(driver, "ALTER TABLE settlements ADD COLUMN suite TEXT");
     migrateExec(driver, "ALTER TABLE settlements ADD COLUMN signature TEXT");
     driver.pragma("user_version = 32");
+  }
+
+  if (userVersion < 33) {
+    // Hardware-attestation peer flow Phase 1 (spec/identity-v1.md §3):
+    // device record optionally carries a self-issued AgentTrustCredential
+    // bearing a `hardware_attestation` claim. Identity metadata (not a
+    // credential-index entry) — peers pull via /agent/:motebitId/
+    // capabilities, verify the eddsa-jcs-2022 proof, then issue their own
+    // peer AgentTrustCredential about the subject for routing aggregation.
+    // The /credentials/submit doctrine ("rejects self-issued") remains
+    // unchanged. See docs/doctrine/promoting-private-to-public.md companion
+    // + lesson_hardware_attestation_self_issued_dead_drop.md memory.
+    migrateExec(driver, "ALTER TABLE devices ADD COLUMN hardware_attestation_credential TEXT");
+    driver.pragma("user_version = 33");
   }
 
   const eventStore = new SqliteEventStore(driver);
