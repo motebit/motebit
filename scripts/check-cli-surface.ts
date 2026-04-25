@@ -1,16 +1,19 @@
 /**
- * CLI-surface drift gate — locks the operator-facing contract of the
+ * CLI-surface drift gate — locks the operator-ergonomic contract of the
  * `motebit` reference runtime to a committed baseline.
  *
- * The motebit package's stability promise is its bundled operator-facing
- * surface (subcommands, flags, exit codes, `~/.motebit/` layout, relay
- * HTTP routes, MCP server tool list), per `apps/cli/README.md` "How it
- * ships". The Apache-2.0 protocol packages have `check-api-surface` to
- * mechanically enforce the .d.ts side of their 1.0; until 2026-04-24
- * the CLI promise rested on changeset discipline alone — same word,
- * different rigor. This gate closes that asymmetry.
+ * Scope is deliberately narrow: **operator muscle memory**. The things a
+ * user types, the flags they append, the exit codes their shell scripts
+ * branch on, the paths their `~/.motebit` scripts pin to. If a human
+ * sitting at a terminal would notice a change, it belongs here.
  *
- * Six sub-surfaces covered — the full commitment:
+ * The Apache-2.0 protocol packages have `check-api-surface` to
+ * mechanically enforce the .d.ts side of their 1.0. Until 2026-04-24
+ * the CLI's operator-ergonomic promise rested on changeset discipline
+ * alone — same `1.0` word, different rigor. This gate closes that
+ * asymmetry.
+ *
+ * Four sub-surfaces, all operator-ergonomic:
  *
  *   1. Subcommand tree — top-level subcommands and their sub-subcommands,
  *      extracted from `apps/cli/src/index.ts` dispatcher (every
@@ -21,34 +24,29 @@
  *   2. Top-level flag set — name, type, default, short alias — extracted
  *      from `apps/cli/src/args.ts` parseArgs `options:` object.
  *
- *   3. Relay HTTP routes — every `app.<method>("<path>", ...)` declared
- *      across `services/api/src/*.ts`. `motebit relay up` imports
- *      `createSyncRelay` from `@motebit/api`, so the services/api route
- *      tree IS the HTTP surface a `motebit relay up` operator exposes
- *      to their network. Operators pin curl calls and federation peers
- *      against these paths; silent drift breaks their integrations.
- *
- *   4. Exit codes — the sorted set of unique `process.exit(N)` values
+ *   3. Exit codes — the sorted set of unique `process.exit(N)` values
  *      used anywhere under `apps/cli/src/`. Shell scripts wrapping
  *      motebit invocations branch on exit codes; {0, 1, 2, 130} is the
  *      current contract. A new non-zero code is additive but should be
  *      declared; removing 130 would break scripts that check SIGINT.
  *
- *   5. On-disk layout — the `~/.motebit/` paths referenced in the CLI
+ *   4. On-disk layout — the `~/.motebit/` paths referenced in the CLI
  *      source (config, database, identity, relay subdirectory, relay
  *      database). Operators pin scripts against these paths; renaming
  *      `config.json` or moving `relay.db` out of `~/.motebit/relay/`
  *      breaks their integrations. Transient files prefixed with `.` are
  *      intentionally excluded — they're implementation detail.
  *
- *   6. MCP tool list — the canonical set of tools `motebit serve`
- *      registers when called with no `--tools` override. Union of
- *      builtins in `packages/tools/src/builtins/*.ts` (extracted from
- *      `name: "…"` literals) and synthetic tools registered in
- *      `packages/mcp-server/src/index.ts` (extracted from
- *      `server.tool("…", …)` calls). MCP clients calling `motebit serve`
- *      discover this tool set; removing a tool breaks client tool-call
- *      paths pinned against specific tool names.
+ * Explicitly out of scope (tried in 2026-04-24's route + MCP-tool
+ * extractors, removed the same day after a senior review pulled the
+ * thread): relay HTTP routes and MCP server tool list. Those are
+ * implementations of protocol-level promises in `spec/*.md`, not
+ * operator-ergonomic contracts — and the right invariant for them is
+ * "spec declares X, implementation serves X," not "implementation
+ * today matches implementation yesterday." A spec-driven coverage
+ * gate is the architecturally-native home for route and tool drift.
+ * Tracked as a separate follow-up so this gate stays on a single
+ * architectural axis.
  *
  * Strategy:
  *   - Extract the current surface from source.
@@ -74,10 +72,7 @@ const ROOT = resolve(__dirname, "..");
 
 const INDEX_PATH = resolve(ROOT, "apps/cli/src/index.ts");
 const ARGS_PATH = resolve(ROOT, "apps/cli/src/args.ts");
-const SERVICES_API_SRC = resolve(ROOT, "services/api/src");
 const APPS_CLI_SRC = resolve(ROOT, "apps/cli/src");
-const TOOLS_BUILTINS = resolve(ROOT, "packages/tools/src/builtins");
-const MCP_SERVER_SRC = resolve(ROOT, "packages/mcp-server/src/index.ts");
 const BASELINE_PATH = resolve(ROOT, "apps/cli/etc/cli-surface.json");
 
 // ── Surface model ─────────────────────────────────────────────────────
@@ -90,38 +85,21 @@ interface FlagSpec {
   multiple?: boolean;
 }
 
-interface RouteSpec {
-  method: "get" | "post" | "put" | "delete" | "patch";
-  path: string;
-}
-
 interface CliSurface {
   /** Subcommand → list of sub-subcommands (empty array if none). Keys sorted. */
   subcommands: Record<string, string[]>;
   /** Flag definitions, sorted by name for stable diffs. */
   flags: FlagSpec[];
   /**
-   * Relay HTTP routes exposed by `motebit relay up` (via @motebit/api).
-   * Extracted from services/api/src/*.ts. Sorted by path then method.
-   */
-  relayRoutes: RouteSpec[];
-  /**
-   * Sorted unique non-`process.exit(N)` values used across apps/cli/src/.
+   * Sorted unique `process.exit(N)` values used across apps/cli/src/.
    * Shell scripts wrapping motebit invocations branch on these codes.
    */
   exitCodes: number[];
   /**
    * The `~/.motebit/` paths the CLI reads or writes. Stored as literal
-   * relative paths ("config.json", "relay/relay.db", etc.); "." and ""
-   * indicate the directory root. Sorted.
+   * relative paths ("config.json", "relay/relay.db", etc.). Sorted.
    */
   onDiskLayout: string[];
-  /**
-   * Canonical MCP tool names exposed by `motebit serve` — the union of
-   * builtin tools (packages/tools/src/builtins) and synthetic tools
-   * registered in packages/mcp-server. Sorted.
-   */
-  mcpTools: string[];
 }
 
 // ── Subcommand extraction ─────────────────────────────────────────────
@@ -237,51 +215,6 @@ function extractFlags(): FlagSpec[] {
   return flags;
 }
 
-// ── Relay route extraction ────────────────────────────────────────────
-
-/**
- * Walk every .ts file under services/api/src/ (excluding __tests__ and
- * .d.ts), extract `app.<method>("<path>", ...)` calls. The same route
- * declared in two files is de-duplicated. Result sorted by path then
- * method for stable diffs.
- */
-function extractRelayRoutes(): RouteSpec[] {
-  const seen = new Set<string>();
-  const routes: RouteSpec[] = [];
-
-  function walk(dir: string): void {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith(".")) continue;
-      if (entry.name === "__tests__") continue;
-      const full = resolve(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) continue;
-      const src = readFileSync(full, "utf-8");
-      const re = /\bapp\.(get|post|put|delete|patch)\(\s*"([^"]+)"/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(src)) !== null) {
-        const method = m[1] as RouteSpec["method"];
-        const path = m[2]!;
-        const key = `${method} ${path}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        routes.push({ method, path });
-      }
-    }
-  }
-
-  walk(SERVICES_API_SRC);
-
-  routes.sort((a, b) => {
-    const byPath = a.path.localeCompare(b.path);
-    return byPath !== 0 ? byPath : a.method.localeCompare(b.method);
-  });
-  return routes;
-}
-
 // ── Exit code extraction ──────────────────────────────────────────────
 
 /**
@@ -364,56 +297,14 @@ function extractOnDiskLayout(): string[] {
   return [...paths].sort();
 }
 
-// ── MCP tool list extraction ──────────────────────────────────────────
-
-/**
- * Builtin tools: every top-level `name: "<tool_name>"` in a
- * ToolDefinition literal under packages/tools/src/builtins/*.ts.
- * Synthetic tools: every `server.tool("<tool_name>", ...)` call in
- * packages/mcp-server/src/index.ts. Union, sorted.
- */
-function extractMcpTools(): string[] {
-  const tools = new Set<string>();
-
-  // Builtins — each file typically exports one or more ToolDefinition
-  // objects with a top-level `name:` field. goal-tools.ts has three.
-  for (const entry of readdirSync(TOOLS_BUILTINS, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) {
-      continue;
-    }
-    if (entry.name === "index.ts") continue;
-    const src = readFileSync(resolve(TOOLS_BUILTINS, entry.name), "utf-8");
-    // Match `name: "<tool_name>"` at the top level of an object literal.
-    // Conservative: two-space indent (ToolDefinition inside a const
-    // declaration) or start-of-line with whitespace.
-    const re = /^\s{0,4}name:\s*"([a-z][a-z0-9_]*)"/gm;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(src)) !== null) {
-      tools.add(m[1]!);
-    }
-  }
-
-  // Synthetic — registered directly in mcp-server via `server.tool("…", …)`.
-  const mcpSrc = readFileSync(MCP_SERVER_SRC, "utf-8");
-  const synthRe = /\bserver\.tool\(\s*"([a-z][a-z0-9_]*)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = synthRe.exec(mcpSrc)) !== null) {
-    tools.add(m[1]!);
-  }
-
-  return [...tools].sort();
-}
-
 // ── Surface assembly ──────────────────────────────────────────────────
 
 function extractSurface(): CliSurface {
   return {
     subcommands: extractSubcommands(),
     flags: extractFlags(),
-    relayRoutes: extractRelayRoutes(),
     exitCodes: extractExitCodes(),
     onDiskLayout: extractOnDiskLayout(),
-    mcpTools: extractMcpTools(),
   };
 }
 
@@ -453,14 +344,10 @@ interface Diff {
     | "flag-added"
     | "flag-removed"
     | "flag-changed"
-    | "route-added"
-    | "route-removed"
     | "exit-code-added"
     | "exit-code-removed"
     | "path-added"
-    | "path-removed"
-    | "mcp-tool-added"
-    | "mcp-tool-removed";
+    | "path-removed";
   detail: string;
 }
 
@@ -509,17 +396,6 @@ function diffSurfaces(current: CliSurface, baseline: CliSurface): Diff[] {
     if (!curFlags.has(name)) diffs.push({ kind: "flag-removed", detail: `--${name}` });
   }
 
-  // Relay route diff.
-  const routeKey = (r: RouteSpec): string => `${r.method.toUpperCase()} ${r.path}`;
-  const curRoutes = new Set((current.relayRoutes ?? []).map(routeKey));
-  const baseRoutes = new Set((baseline.relayRoutes ?? []).map(routeKey));
-  for (const key of curRoutes) {
-    if (!baseRoutes.has(key)) diffs.push({ kind: "route-added", detail: key });
-  }
-  for (const key of baseRoutes) {
-    if (!curRoutes.has(key)) diffs.push({ kind: "route-removed", detail: key });
-  }
-
   // Exit code diff.
   const curCodes = new Set(current.exitCodes ?? []);
   const baseCodes = new Set(baseline.exitCodes ?? []);
@@ -540,16 +416,6 @@ function diffSurfaces(current: CliSurface, baseline: CliSurface): Diff[] {
     if (!curPaths.has(p)) diffs.push({ kind: "path-removed", detail: `~/.motebit/${p}` });
   }
 
-  // MCP tool list diff.
-  const curTools = new Set(current.mcpTools ?? []);
-  const baseTools = new Set(baseline.mcpTools ?? []);
-  for (const t of curTools) {
-    if (!baseTools.has(t)) diffs.push({ kind: "mcp-tool-added", detail: t });
-  }
-  for (const t of baseTools) {
-    if (!curTools.has(t)) diffs.push({ kind: "mcp-tool-removed", detail: t });
-  }
-
   return diffs;
 }
 
@@ -565,7 +431,7 @@ function main(): void {
   if (writeMode) {
     writeFileSync(BASELINE_PATH, currentJson);
     process.stderr.write(
-      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.relayRoutes.length} relay routes, ${current.exitCodes.length} exit codes, ${current.onDiskLayout.length} on-disk paths, ${current.mcpTools.length} MCP tools) to apps/cli/etc/cli-surface.json\n`,
+      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.exitCodes.length} exit codes, ${current.onDiskLayout.length} on-disk paths) to apps/cli/etc/cli-surface.json\n`,
     );
     return;
   }
@@ -583,7 +449,7 @@ function main(): void {
 
   if (diffs.length === 0) {
     process.stderr.write(
-      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.relayRoutes.length} relay route(s), ${current.exitCodes.length} exit code(s), ${current.onDiskLayout.length} on-disk path(s), ${current.mcpTools.length} MCP tool(s), all match baseline.\n`,
+      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.exitCodes.length} exit code(s), ${current.onDiskLayout.length} on-disk path(s), all match baseline.\n`,
     );
     return;
   }
