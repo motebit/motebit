@@ -321,6 +321,103 @@ jobs:
             /tmp/relay.err
           retention-days: 7
 
+  python-receipt-verifier-conformance:
+    # Smoke-test that the Python reference verifier for
+    # `motebit/execution-ledger@1.0` §11 ExecutionReceipt
+    # (examples/python-receipt-verifier/) still agrees with the TypeScript
+    # relay's verifier on the JCS + Ed25519 + base64url envelope.
+    #
+    # Sibling to python-conformance: same boot recipe, different protocol
+    # surface. This job is the load-bearing automation for the receipt
+    # half of motebit's protocol-portability claim. The Python client signs
+    # a fresh ExecutionReceipt with pynacl, posts it to the relay's
+    # /agent/:motebitId/verify-receipt endpoint, and asserts on the body's
+    # `valid` field — never on `response.ok` alone, per the dead-drop
+    # lesson (memory/lesson_hardware_attestation_self_issued_dead_drop.md).
+    # A successful pass means the spec is what the relay enforces; a failure
+    # localizes the regression to §11.1 / §11.2 / §11.4 / §11.5.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: pip install --quiet --requirement examples/python-receipt-verifier/requirements.txt
+
+      - name: Boot relay in background
+        env:
+          PORT: "3199"
+          X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000000"
+          NODE_ENV: "development"
+          MOTEBIT_DB_PATH: ":memory:"
+        run: |
+          npx tsx services/api/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
+          echo $! > /tmp/relay.pid
+
+      - name: Wait for /health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3199/health > /dev/null 2>&1; then
+              echo "relay healthy after ${i}s"
+              curl -s http://localhost:3199/health
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "relay never became healthy; last log:"
+          tail -50 /tmp/relay.out /tmp/relay.err
+          exit 1
+
+      - name: Run Python receipt-verifier conformance test
+        run: python examples/python-receipt-verifier/conformance_test.py http://localhost:3199
+
+      - name: Verify the committed fixture offline
+        # Sanity check: the fixture under fixtures/ must remain a valid receipt
+        # any third-party Python verifier can re-verify without relay contact.
+        # If a spec drift breaks this, the committed fixture would silently rot.
+        run: python examples/python-receipt-verifier/verify.py examples/python-receipt-verifier/fixtures/example-receipt.json
+
+      - name: Capture relay log lines for the round-trip
+        if: success()
+        run: |
+          echo "==== device.self_register.ok log line (receipt-verifier registration) ===="
+          grep "device.self_register.ok" /tmp/relay.out | tail -1 || echo "(not found)"
+          echo "==== receipt.verified / receipt.verification_failed log lines ===="
+          grep -E "receipt\.(verified|verification_failed)" /tmp/relay.out | tail -5 || echo "(not found)"
+
+      - name: Tear down relay
+        if: always()
+        run: |
+          if [ -f /tmp/relay.pid ]; then
+            kill "$(cat /tmp/relay.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload relay logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: python-receipt-verifier-conformance-relay-logs
+          path: |
+            /tmp/relay.out
+            /tmp/relay.err
+          retention-days: 7
+
   changeset:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
