@@ -150,7 +150,8 @@ const GATES: ReadonlyArray<Gate> = [
   },
   {
     name: "check-changeset-discipline",
-    defends: "every `major` changeset must ship a non-empty ## Migration section",
+    defends:
+      "every changeset has a substantive body (no empty / `auto-generated patch bump` stubs) AND every `major` changeset ships a non-empty `## Migration` section",
     script: "check-changeset-discipline",
   },
   {
@@ -170,6 +171,12 @@ const GATES: ReadonlyArray<Gate> = [
     defends:
       "apps/docs/content/docs/operator/architecture.mdx directory tree mirrors the filesystem and scripts/check-deps.ts LAYER/PERMISSIVE_PACKAGES (invariant #13, added 2026-04-14 after the architecture page was rewritten and 9 packages were previously misplaced across invented tiers)",
     script: "check-docs-tree",
+  },
+  {
+    name: "check-doc-counts",
+    defends:
+      "every numeric count claim in README.md, CLAUDE.md, and apps/docs/content/docs/operator/architecture.mdx (`N packages`, `N specs`, `N apps`, `N services`) matches the filesystem-derived truth (invariant #45, added 2026-04-24 after a presentation cleanup found three doc surfaces drifted independently — README claimed 36/12, root CLAUDE.md claimed 40/14, the docs site claimed 37/12; actual was 46/19. check-docs-tree validated the directory tree but not the prose counts that sit alongside it; this gate closes the prose-count half of the same invariant)",
+    script: "check-doc-counts",
   },
   {
     name: "check-spec-permissive-boundary",

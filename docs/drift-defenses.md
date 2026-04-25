@@ -56,8 +56,9 @@ Forty-four invariants are enforced today. Thirty-five run as hard CI gates via `
 | 40  | Canonical `@motebit/sdk` preset identifiers ↔ surface-app declarations                 | `check-preset-imports.ts`                                      | 2026-04-24 |
 | 41  | Chat-surface tag/marker stripping ↔ `@motebit/ai-core` canonical primitive             | `check-chat-tag-stripping.ts`                                  | 2026-04-24 |
 | 42  | Fly-deployed service ↔ direct `better-sqlite3` declaration (native-driver parity)      | `check-deploy-parity.ts` rule 4                                | 2026-04-24 |
-| 43  | `major` changeset ↔ non-empty `## Migration` section                                   | `check-changeset-discipline.ts`                                | 2026-04-12 |
+| 43  | Changeset bodies (every changeset) + `## Migration` section (every `major` bump)       | `check-changeset-discipline.ts`                                | 2026-04-12 |
 | 44  | `scripts/check.ts` GATES ↔ `docs/drift-defenses.md` inventory table                    | `check-drift-defenses-inventory.ts`                            | 2026-04-24 |
+| 45  | Numeric count claims (packages/specs/apps/services) ↔ filesystem truth across docs     | `check-doc-counts.ts`                                          | 2026-04-24 |
 
 ## Incident histories
 
@@ -192,6 +193,16 @@ Landing audit on 2026-04-24 found two gates registered in GATES but with no corr
 Defense: `check-drift-defenses-inventory.ts` extracts every `script:` entry from the GATES array in `scripts/check.ts`, walks the inventory table rows in `docs/drift-defenses.md` collecting every `check-*` name referenced in any row, and asserts the two sets match. Recognizes npm-script aliasing — a GATES entry named `check-specs` is treated as represented if the inventory mentions `check-spec-references` (the underlying script file), resolved by reading root `package.json`'s scripts section. Matching is at gate-level (any mention in any row counts), not invariant-level — a gate like `check-deploy-parity` that enforces multiple rules under one script file is represented once in the inventory if any of its rules has a row. Finer-grained per-rule inventory coverage is doctrine-level work, not mechanically checkable.
 
 Landing fix: added inventory row #43 for `check-changeset-discipline` with its actual 2026-04-12 landing date (intentionally out of chronological order with #39-42; the meta-gate's incident history is the signal that some rows are retroactive), and #44 for this meta-gate itself. First clean run: 34 hard CI gates, all represented across 44 inventory rows. Strategic prize: the drift-defense documentation can no longer silently drift from the gates it describes — new gates that skip the inventory step now fail CI, the same way the per-directory CLAUDE.md sync was closed at #25. The meta-principle enforcing itself on its own doctrine.
+
+### 45. Numeric count claims ↔ filesystem (across all three doc surfaces)
+
+The classic drift shape: invisible source of truth, sibling copies emerge, copies drift. `README.md`, root `CLAUDE.md`, and `apps/docs/content/docs/operator/architecture.mdx` each enumerate "N packages, N specs, N apps, N services" inline. Until 2026-04-24 nothing enforced those numbers against the filesystem, and they drifted hard: README claimed 36 packages and 12 specs, CLAUDE.md claimed 40 and 14, the docs site claimed 37 and 12 — actual filesystem was 46 and 19. Each surface was internally consistent and externally wrong by 7–10 packages and 5–7 specs. A YC-readiness pass on 2026-04-24 caught the drift only because a principal-engineer review pulled the thread; without that probe, the next contributor would have read one number, copied it onto a marketing page or a pitch deck, and propagated the inconsistency outward.
+
+`check-docs-tree` (#13) already validated the _directory tree_ in `architecture.mdx` against the filesystem — it caught directory-name drift but never inspected the prose count claims sitting alongside the tree, and never inspected README or CLAUDE.md at all. The prose-count half of the same invariant was unguarded.
+
+Defense: `check-doc-counts.ts` derives canonical counts from the filesystem (`apps/`, `packages/`, `services/`, `spec/*.md`) and runs a probe matrix against the three doc surfaces. Each probe is an explicit `(regex, key)` pair — README.md gets six probes (the architecture banner, the packages section, four spec-count locations), CLAUDE.md gets two (architecture line for packages and specs), the docs site gets two (the shape banner). Every claim found must equal the canonical count for its noun. Adding a new claim shape in any of the three docs means adding a probe entry. Probes that fail to match their target file are also a fail-state — silent drift from "the doc rephrased the count" would otherwise let the gate go quiet.
+
+Adversarial test: dropping the `36` back into README's architecture banner and rerunning the gate produces an explicit drift report naming the file, line, claimed count, actual count, and noun. First clean run: 10 count claims across 3 doc surfaces, all matching (46 packages, 19 specs, 9 apps, 8 services). Companion to `check-docs-tree`: that one validates the tree shape, this one validates the prose around it. Same canonical source, two different rendering surfaces.
 
 ### 42. Fly-deployed service ↔ direct `better-sqlite3` declaration (native-driver parity)
 
