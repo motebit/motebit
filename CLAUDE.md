@@ -62,6 +62,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/deprecation-lifecycle.md`](docs/doctrine/deprecation-lifecycle.md) — partner to migration-cleanup; three signals (major / deprecate+sunset / forbidden-silent-compat), four-field `@deprecated` contract (`since`, `removed in`, replacement, reason), minimum windows adapted from Kubernetes
 - [`docs/doctrine/promoting-private-to-public.md`](docs/doctrine/promoting-private-to-public.md) — when to flip `0.0.0-private` → `1.0.0` (real-consumer-shaped trigger, five conditions); 7-step playbook locked to the api-extractor + changeset gates
 - [`docs/doctrine/release-versioning.md`](docs/doctrine/release-versioning.md) — versions are promises; no `fixed`, no `linked`, packages version on their own merit; `updateInternalDependencies: "patch"` handles cascade; major bumps mean a real break in that package's own contract
+- [`docs/doctrine/the-stack-one-layer-up.md`](docs/doctrine/the-stack-one-layer-up.md) — hosted agent platforms and motebit converge on the same five primitives (identity, memory, capability bundle, autonomous execution, governance gate); the difference is who owns the identity layer; the architectural map is not a roadmap
 - [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory (34 today)
 
 ## Principles
