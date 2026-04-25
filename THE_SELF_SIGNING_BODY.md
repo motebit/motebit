@@ -10,7 +10,7 @@ Both documents leave one thing implicit: the interior produces consequences, and
 
 The question this document answers: **what does that proof look like, mechanically, such that anyone can verify it without trusting any motebit-operated system?**
 
-The answer is the moat. Every other proactive AI agent today binds the agent's identity to the operator's billing relationship — Claude Code's KAIROS, OpenAI's autonomous agents, every framework that wraps a model API. The agent's "identity" is the operator's API key. The agent's proof of work is the operator's billing log. There is no portable, durable, third-party-verifiable claim the agent can make about its own activity.
+The answer is the moat. Every other proactive AI agent today binds the agent's identity to the operator's billing relationship — every framework that wraps a model API behind the operator's account. The agent's "identity" is the operator's API key. The agent's proof of work is the operator's billing log. There is no portable, durable, third-party-verifiable claim the agent can make about its own activity.
 
 A motebit signs its own work. The receipt is signed by the motebit's identity key. The Solana transaction that anchors the receipt's Merkle root is signed by the motebit's identity key (the address IS the public key, by Ed25519 curve coincidence). The verifier needs the public key + the receipt + the anchor + the Solana tx hash — nothing from the motebit's operator, nothing from any motebit-operated relay, nothing from any AI vendor. The chain is sovereign top to bottom.
 
