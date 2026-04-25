@@ -102,6 +102,84 @@ jobs:
           echo "previous window. The doctrine prohibits manufacturing"
           echo "low-signal changesets to fill the slot."
 
+      - name: Checkout for version comparison
+        if: steps.find.outputs.found == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          # Need both main and changeset-release/main visible. Fetching
+          # depth 0 is wasteful for a 5-min job; depth 1 with an explicit
+          # follow-up fetch of changeset-release/main is enough.
+          fetch-depth: 1
+
+      - name: Refuse auto-merge on major version bumps
+        # Locks the rule from docs/doctrine/release-versioning.md § Cadence:
+        # "The scheduled train refuses to auto-merge a release containing
+        # major bumps." Major releases must be deliberate human gestures
+        # because npm versions are immutable — a phantom 2.0.0 burns a
+        # number and triggers cascading consumer-coordination overhead
+        # that a cron should never trigger autonomously.
+        #
+        # Comparing actual package.json values across the two refs is
+        # more robust than parsing diff strings, per reviewer pass on
+        # the safeguard design.
+        if: steps.find.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin changeset-release/main:refs/remotes/origin/changeset-release/main
+
+          # Files the PR touched. Filter to package.json under the three
+          # publish-eligible directory roots so workspace lockfiles or
+          # other JSON files don't trip the check.
+          CHANGED=$(git diff --name-only main..origin/changeset-release/main \
+            -- 'packages/*/package.json' 'apps/*/package.json' 'services/*/package.json' || true)
+
+          if [ -z "$CHANGED" ]; then
+            echo "No published-package package.json files changed; safe to auto-merge."
+            exit 0
+          fi
+
+          MAJOR_BUMPS=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            OLD=$(git show "main:$f" 2>/dev/null | jq -r '.version // empty' || true)
+            NEW=$(git show "origin/changeset-release/main:$f" | jq -r '.version // empty')
+            NAME=$(git show "origin/changeset-release/main:$f" | jq -r '.name')
+
+            # New file (no version on base) or version unchanged → skip.
+            [ -z "$OLD" ] && continue
+            [ "$OLD" = "$NEW" ] && continue
+
+            OLD_MAJOR="${OLD%%.*}"
+            NEW_MAJOR="${NEW%%.*}"
+
+            if [ "$NEW_MAJOR" -gt "$OLD_MAJOR" ]; then
+              MAJOR_BUMPS="${MAJOR_BUMPS}  ${NAME}: ${OLD} → ${NEW}"$'\n'
+            fi
+          done <<< "$CHANGED"
+
+          if [ -n "$MAJOR_BUMPS" ]; then
+            {
+              echo "::error title=Major bump detected — auto-merge refused::"
+              echo ""
+              echo "Version Packages PR #${{ steps.find.outputs.number }} contains:"
+              printf '%s' "$MAJOR_BUMPS"
+              echo ""
+              echo "Major releases are deliberate human acts, not cron-driven."
+              echo "Resolution paths:"
+              echo "  1. Accidental — fix the changeset on main, push correction,"
+              echo "     wait for next Tuesday's window."
+              echo "  2. Intentional — merge manually with a named migration path:"
+              echo "       gh pr merge ${{ steps.find.outputs.number }} --squash --delete-branch"
+              echo "  3. Out-of-window emergency major — workflow_dispatch this"
+              echo "     same workflow with reason=other-emergency and a recorded"
+              echo "     justification in the run notes."
+            } >&2
+            exit 1
+          fi
+
+          echo "No major bumps detected; proceeding to auto-merge."
+
       - name: Merge the PR
         if: steps.find.outputs.found == 'true'
         env:

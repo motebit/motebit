@@ -67,6 +67,18 @@ Out-of-window publishes ship via `workflow_dispatch` on `release-train.yml`, whi
 
 The choice is captured in run history. "Other-emergency" is the named-but-discouraged escape hatch; using it should be rare and the reason recorded in commit messages or release notes. Anything else — feature gaps, perf regressions in non-critical paths, ergonomics bugs, doc errors — waits for next Tuesday. The discipline is what makes the version page clean; without it the cron is decoration.
 
+### The cron refuses to auto-merge majors
+
+The release train auto-merges Version Packages PRs containing only `patch` and `minor` bumps (plus the dependency-cascade patches that follow them). **It refuses to auto-merge a release containing any major bump.** Major releases are deliberate human acts, not cron-driven — npm versions are immutable, an unintended `2.0.0` cannot be unburned, and a major in a protocol-shaped package cascades coordination overhead through every downstream consumer.
+
+When the train detects a major in the PR's package.json deltas, the workflow exits with the offending package(s) named and three resolution paths:
+
+1. **Accidental** — fix the offending changeset on `main`, push the correction, wait for next Tuesday.
+2. **Intentional** — the maintainer merges manually (`gh pr merge ... --squash --delete-branch`), pairing the merge with a named migration path in the release notes.
+3. **Out-of-window emergency major** — `workflow_dispatch` on `release-train.yml` with `reason=other-emergency` and a justification in the run notes.
+
+Implementation detail: the check compares actual `package.json` `version` values across the `main` and `changeset-release/main` refs rather than parsing diff strings. The comparison is per-package; a single major in one package is enough to refuse the whole train.
+
 ### Patch storms are a smell
 
 If a release ships and is broken, the fix is **one** release, not six. Six releases in an afternoon is the failure pattern this doctrine exists to prevent. The `0.6.X` storm of 2026-03-23 is the worked example.
