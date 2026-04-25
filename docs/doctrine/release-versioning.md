@@ -37,11 +37,39 @@ The result: a release that changes only `@motebit/protocol` produces one new pro
 
 ## Cadence
 
-The publish trigger remains the `Version Packages` PR. Discipline lives upstream of the trigger:
+A clean version page is a metronome, not a panic. The page Anthropic's `claude-code` shows — same time of day, predictable rhythm, no storm clusters — comes from three disciplines, not from publishing-rate alone: **fixed time-of-day, single-package focus, no reactive same-hour hotfix loops**. We have the second by structure (no-grouping doctrine above) and the third by rule. The first is what this section locks down.
 
-1. **One release train per push to main.** Multiple changesets accumulate in the open `Version Packages` PR; merging it is the release event. Do not merge, find a publish issue, and merge a fix-train ten minutes later. The fix is the next train.
-2. **Hotfix only for security, data loss, broken install, or broken CLI.** All four are real emergencies — anything else waits.
-3. **Patch storms are a smell.** If a release ships and is broken, the fix is one release, not six. Six releases in an afternoon is the failure pattern this doctrine exists to prevent.
+### The window
+
+**Tuesday 23:00 UTC** is the publish window. ≈4 p.m. Pacific, matching the late-afternoon Pacific cluster `claude-code`'s npm history shows. Single window to start; a Thursday window can be added later if Tuesday-only consistently leaves changesets stranded for half a week.
+
+### The mechanism
+
+Two GitHub workflows, single-responsibility each:
+
+- **`release.yml`** — fires on every push to `main`. When changesets are pending, it opens or updates the `Version Packages` PR (branch `changeset-release/main`). When that PR is merged, it publishes to npm. This is the standard `changesets/action` pattern.
+- **`release-train.yml`** — fires on `cron: "0 23 * * 2"`. Its only job is to merge the open `Version Packages` PR. The merge produces a push to `main`, which fires `release.yml`, which publishes.
+
+The publish trigger is therefore the cron, not the merge button. Maintainers do not click Merge on the `Version Packages` PR during normal operation — it accumulates changesets across the week and ships in one Tuesday train.
+
+### What happens when the cron fires into nothing
+
+Skipped silently. If no changesets accumulated since the previous Tuesday, no `Version Packages` PR exists, the workflow logs "no PR" and exits 0. This is the correct outcome — manufacturing low-signal changesets to fill an empty slot is the original sin we corrected by dropping the `fixed` group, in a different shape.
+
+### The four hotfix categories
+
+Out-of-window publishes ship via `workflow_dispatch` on `release-train.yml`, which requires picking one of:
+
+- **`security`** — a vulnerability whose disclosure window is shorter than the wait to next Tuesday.
+- **`data-loss`** — a published package can corrupt or destroy user state on install or run.
+- **`broken-install`** — `npm install` of the latest published version fails for any supported environment.
+- **`broken-cli`** — `motebit` or `motebit-verify` cannot start.
+
+The choice is captured in run history. "Other-emergency" is the named-but-discouraged escape hatch; using it should be rare and the reason recorded in commit messages or release notes. Anything else — feature gaps, perf regressions in non-critical paths, ergonomics bugs, doc errors — waits for next Tuesday. The discipline is what makes the version page clean; without it the cron is decoration.
+
+### Patch storms are a smell
+
+If a release ships and is broken, the fix is **one** release, not six. Six releases in an afternoon is the failure pattern this doctrine exists to prevent. The `0.6.X` storm of 2026-03-23 is the worked example.
 
 ## Major versions
 

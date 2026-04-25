@@ -1,0 +1,134 @@
+name: Release Train
+
+# Locks the publish window. Every Tuesday at 23:00 UTC (≈ 4 p.m. PT,
+# matching the late-afternoon Pacific cluster Anthropic's claude-code
+# uses), find the open "Version Packages" PR — the one changesets/action
+# maintains under refs/heads/changeset-release/main — and merge it. The
+# resulting push to main fires release.yml, which sees no pending
+# changesets and runs `changeset publish`.
+#
+# The discipline this workflow exists to enforce is captured in
+# docs/doctrine/release-versioning.md § Cadence:
+#
+#   - One window per week. The page reads as a metronome, not a panic.
+#   - If no Version Packages PR is open at the window, skip silently.
+#     Cron-firing into nothing is correct behavior, not a failure.
+#   - Bug found Wednesday afternoon? It rides next Tuesday's train.
+#     Hotfix exception narrowly applies to security / data loss /
+#     broken install / broken CLI, and ships via workflow_dispatch on
+#     this same workflow — the named "I am breaking the cadence"
+#     gesture, not an undeclared default.
+#
+# Why a separate workflow rather than a `schedule:` trigger on
+# release.yml: single responsibility. release.yml's job is "react to
+# changes on main" (open/update the Version Packages PR, or publish
+# after merge). This workflow's job is "decide when to merge." Splitting
+# them keeps each workflow's failure surface small and the intent
+# obvious from the file name.
+
+on:
+  schedule:
+    # cron is in UTC. 23:00 UTC = 4 p.m. PT (PDT) / 3 p.m. PT (PST).
+    # Day-of-week 2 = Tuesday. GitHub scheduled workflows can run up
+    # to ~15 min late under load — within a single release window
+    # that is acceptable.
+    - cron: "0 23 * * 2"
+  # Manual trigger is the documented hotfix path. Invoking this outside
+  # the scheduled window is the deliberate "I am breaking the cadence"
+  # gesture; it should be paired with a clear reason in commit history
+  # or a release-notes annotation. See doctrine for the four hotfix
+  # categories (security / data loss / broken install / broken CLI).
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this release is firing outside the Tuesday window"
+        required: true
+        type: choice
+        options:
+          - security
+          - data-loss
+          - broken-install
+          - broken-cli
+          - other-emergency
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  merge-version-packages-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Find the open Version Packages PR
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # changesets/action pushes its draft to changeset-release/main.
+          # Filtering by head branch is more precise than filtering by
+          # title — a maintainer-renamed PR would still be found.
+          PR=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head changeset-release/main \
+            --state open \
+            --json number,title,headRefName,mergeable \
+            --jq '.[0]')
+
+          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+            echo "No open Version Packages PR — release window passes silently."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          NUM=$(echo "$PR" | jq -r .number)
+          TITLE=$(echo "$PR" | jq -r .title)
+          MERGEABLE=$(echo "$PR" | jq -r .mergeable)
+
+          echo "Found PR #${NUM}: ${TITLE} (mergeable=${MERGEABLE})"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "number=${NUM}" >> "$GITHUB_OUTPUT"
+          echo "mergeable=${MERGEABLE}" >> "$GITHUB_OUTPUT"
+
+      - name: Skip — no PR
+        if: steps.find.outputs.found == 'false'
+        run: |
+          echo "Release train fired with nothing to ship. This is the"
+          echo "correct outcome when no changesets accumulated since the"
+          echo "previous window. The doctrine prohibits manufacturing"
+          echo "low-signal changesets to fill the slot."
+
+      - name: Merge the PR
+        if: steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR="${{ steps.find.outputs.number }}"
+          MERGEABLE="${{ steps.find.outputs.mergeable }}"
+
+          if [ "$MERGEABLE" != "MERGEABLE" ]; then
+            echo "PR #${PR} is not mergeable (state: ${MERGEABLE})."
+            echo "Resolve conflicts manually and re-run via workflow_dispatch,"
+            echo "or wait for next Tuesday's window."
+            exit 1
+          fi
+
+          # --squash matches the project's branch protection policy and
+          # keeps the main-branch commit history reading as one release =
+          # one commit, which is what the npm version page mirrors.
+          gh pr merge "$PR" \
+            --repo "$GITHUB_REPOSITORY" \
+            --squash \
+            --delete-branch
+          echo "Merged PR #${PR}. release.yml will fire on the resulting"
+          echo "push to main and publish to npm."
+
+      - name: Annotate hotfix runs
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "::notice title=Out-of-window release::Reason: ${{ inputs.reason }}"
