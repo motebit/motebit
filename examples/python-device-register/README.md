@@ -27,28 +27,63 @@ pip install -r requirements.txt
 
 ## Running against a local relay
 
-In one terminal, start the relay:
+The relay's executable boot path is `services/api/src/server.ts`, not `index.ts` (which is the library entry — side-effect-free at module load so embedders can import without binding ports). Boot it with the minimum env required:
 
 ```bash
-pnpm --filter @motebit/api dev
+env PORT=3199 \
+    X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
+    NODE_ENV=development \
+    MOTEBIT_DB_PATH=":memory:" \
+    npx tsx services/api/src/server.ts
+```
+
+`X402_PAY_TO_ADDRESS` is the only mandatory env var (any 0x-prefixed hex address suffices for local dev — settlement isn't exercised). `MOTEBIT_DB_PATH=":memory:"` keeps each run hermetic; for persistent dev use a path like `./data/relay.db`. Health probe:
+
+```bash
+curl http://localhost:3199/health
+# {"status":"ok","frozen":false,"ws_connections":0,"timestamp":...}
 ```
 
 In another terminal, run the registration:
 
 ```bash
-python register.py http://localhost:3001
+python register.py http://localhost:3199
 ```
 
-A successful 201 response prints something like:
+### Captured request/response (real run, 2026-04-25)
+
+Request body the Python client built (canonical JSON, signed):
 
 ```json
 {
-  "motebit_id": "019d9a7c-...",
-  "device_id": "019d9a7c-...",
-  "registered_at": 1776239454547,
+  "device_id": "019dc34e-fd87-78c4-8714-c031b5ded150",
+  "device_name": "python-reference-impl",
+  "motebit_id": "019dc34e-fd87-744f-a4b1-0320bdef0d27",
+  "public_key": "<64-char lowercase hex Ed25519>",
+  "signature": "<86-char base64url no-padding Ed25519>",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "timestamp": 1777098227054
+}
+```
+
+Response body the relay returned (HTTP 201):
+
+```json
+{
+  "motebit_id": "019dc34e-fd87-744f-a4b1-0320bdef0d27",
+  "device_id": "019dc34e-fd87-78c4-8714-c031b5ded150",
+  "registered_at": 1777098227089,
   "created": true
 }
 ```
+
+Server log line emitted on success (note the spec-conformant event name):
+
+```
+device.self_register.ok  motebitId=019dc34e-... deviceId=019dc34e-... created=true
+```
+
+This is the load-bearing demonstration: a Python client built against the spec alone produced a request the TypeScript relay accepted on first try, with no ad-hoc compatibility shims. The cryptographic step (Ed25519 over JCS-canonicalized bytes) is portable across libraries; the wire format (field names, suite identifier, base64url-no-padding signature encoding, JSON-over-HTTP envelope) is portable across languages.
 
 ## Running against the staging relay
 
