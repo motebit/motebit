@@ -59,6 +59,7 @@ Forty-four invariants are enforced today. Thirty-five run as hard CI gates via `
 | 43  | Changeset bodies (every changeset) + `## Migration` section (every `major` bump)       | `check-changeset-discipline.ts`                                | 2026-04-12 |
 | 44  | `scripts/check.ts` GATES ↔ `docs/drift-defenses.md` inventory table                    | `check-drift-defenses-inventory.ts`                            | 2026-04-24 |
 | 45  | Numeric count claims (packages/specs/apps/services) ↔ filesystem truth across docs     | `check-doc-counts.ts`                                          | 2026-04-24 |
+| 46  | `motebit` CLI operator-facing surface (subcommands + flags) ↔ committed baseline       | `check-cli-surface.ts`                                         | 2026-04-24 |
 
 ## Incident histories
 
@@ -193,6 +194,14 @@ Landing audit on 2026-04-24 found two gates registered in GATES but with no corr
 Defense: `check-drift-defenses-inventory.ts` extracts every `script:` entry from the GATES array in `scripts/check.ts`, walks the inventory table rows in `docs/drift-defenses.md` collecting every `check-*` name referenced in any row, and asserts the two sets match. Recognizes npm-script aliasing — a GATES entry named `check-specs` is treated as represented if the inventory mentions `check-spec-references` (the underlying script file), resolved by reading root `package.json`'s scripts section. Matching is at gate-level (any mention in any row counts), not invariant-level — a gate like `check-deploy-parity` that enforces multiple rules under one script file is represented once in the inventory if any of its rules has a row. Finer-grained per-rule inventory coverage is doctrine-level work, not mechanically checkable.
 
 Landing fix: added inventory row #43 for `check-changeset-discipline` with its actual 2026-04-12 landing date (intentionally out of chronological order with #39-42; the meta-gate's incident history is the signal that some rows are retroactive), and #44 for this meta-gate itself. First clean run: 34 hard CI gates, all represented across 44 inventory rows. Strategic prize: the drift-defense documentation can no longer silently drift from the gates it describes — new gates that skip the inventory step now fail CI, the same way the per-directory CLAUDE.md sync was closed at #25. The meta-principle enforcing itself on its own doctrine.
+
+### 46. `motebit` CLI operator-facing surface ↔ committed baseline
+
+Closes the rigor asymmetry between the Apache-2.0 protocol floor and the BSL-1.1 `motebit` reference runtime. `check-api-surface` (2026-04-12) mechanically enforced the `.d.ts` surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` against a committed baseline — every silent rename, type-tightening, or removal failed CI until the author declared `major` in a changeset. The `motebit` CLI's 1.0 promise (subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — per `apps/cli/README.md` "How it ships") rested on changeset discipline alone for the twelve days between the 1.0 cut and 2026-04-24. Same `1.0` word, different rigor.
+
+Defense: `check-cli-surface.ts` extracts two load-bearing sub-surfaces from source — the subcommand tree from `apps/cli/src/index.ts` (every `if (subcommand === "X")` plus the four known sub-subcommand families `approvalCmd`/`fedCmd`/`relayCmd`/`goalCmd` and the verify→identity special case) and the top-level flag set from `apps/cli/src/args.ts` (name, type, default, short alias) — and compares against the baseline at `apps/cli/etc/cli-surface.json`. Drift fails the gate unless a pending `.changeset/*.md` declares `motebit: major`, exactly matching the protocol-floor escape hatch. `pnpm check-cli-surface --write` regenerates the baseline; the regenerated file must land in the same PR as the `motebit: major` changeset so a reviewer sees the diff.
+
+First clean run: 28 subcommands, 52 flags, all match baseline. Three adversarial probes validated the logic: (a) drop a flag → gate fails with named flag; (b) drop a flag + add `motebit: major` changeset → gate warns with escape-hatch banner and reminds to run `--write`; (c) revert → gate passes. The remaining four sub-surfaces (exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list) are tracked as follow-up extractors that extend the same baseline file without a new gate — each is a real surface but smaller than the subcommand/flag pair.
 
 ### 45. Numeric count claims ↔ filesystem (across all three doc surfaces)
 

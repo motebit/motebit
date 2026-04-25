@@ -1,0 +1,267 @@
+{
+  "subcommands": {
+    "approvals": ["approve", "deny", "list", "show"],
+    "attest": [],
+    "balance": [],
+    "credentials": [],
+    "delegate": [],
+    "discover": [],
+    "doctor": [],
+    "export": [],
+    "federation": ["peer", "peers", "status"],
+    "fund": [],
+    "goal": ["add", "list", "outcomes", "pause", "remove", "resume"],
+    "id": [],
+    "init": [],
+    "ledger": [],
+    "logs": [],
+    "lsp": [],
+    "migrate": [],
+    "ps": [],
+    "register": [],
+    "relay": ["up"],
+    "rotate": [],
+    "run": [],
+    "schema": [],
+    "serve": [],
+    "up": [],
+    "verify": ["identity"],
+    "wallet": [],
+    "withdraw": []
+  },
+  "flags": [
+    {
+      "name": "address-only",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "all",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "allow-commands",
+      "type": "string"
+    },
+    {
+      "name": "allowed-paths",
+      "type": "string"
+    },
+    {
+      "name": "block-commands",
+      "type": "string"
+    },
+    {
+      "name": "budget",
+      "type": "string"
+    },
+    {
+      "name": "capability",
+      "type": "string"
+    },
+    {
+      "name": "db-path",
+      "type": "string"
+    },
+    {
+      "name": "destination",
+      "type": "string"
+    },
+    {
+      "name": "direct",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "dry-run",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "every",
+      "type": "string"
+    },
+    {
+      "name": "facilitator-url",
+      "type": "string"
+    },
+    {
+      "name": "federation-url",
+      "type": "string"
+    },
+    {
+      "name": "file",
+      "type": "string",
+      "short": "f"
+    },
+    {
+      "name": "force",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "help",
+      "type": "boolean",
+      "default": false,
+      "short": "h"
+    },
+    {
+      "name": "identity",
+      "type": "string"
+    },
+    {
+      "name": "json",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "limit",
+      "type": "string"
+    },
+    {
+      "name": "max-tokens",
+      "type": "string"
+    },
+    {
+      "name": "model",
+      "type": "string"
+    },
+    {
+      "name": "network",
+      "type": "string"
+    },
+    {
+      "name": "no-stream",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "once",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "operator",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "output",
+      "type": "string",
+      "short": "o"
+    },
+    {
+      "name": "passphrase",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "pay-to-address",
+      "type": "string"
+    },
+    {
+      "name": "plan",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "port",
+      "type": "string"
+    },
+    {
+      "name": "presentation",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "price",
+      "type": "string"
+    },
+    {
+      "name": "project",
+      "type": "string"
+    },
+    {
+      "name": "provider",
+      "type": "string",
+      "default": "anthropic"
+    },
+    {
+      "name": "prune",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "reason",
+      "type": "string"
+    },
+    {
+      "name": "routing-strategy",
+      "type": "string"
+    },
+    {
+      "name": "self-test",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "serve-port",
+      "type": "string"
+    },
+    {
+      "name": "serve-transport",
+      "type": "string"
+    },
+    {
+      "name": "solana-rpc-url",
+      "type": "string"
+    },
+    {
+      "name": "sovereign",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "sync-token",
+      "type": "string"
+    },
+    {
+      "name": "sync-url",
+      "type": "string"
+    },
+    {
+      "name": "tail",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "target",
+      "type": "string"
+    },
+    {
+      "name": "tools",
+      "type": "string"
+    },
+    {
+      "name": "version",
+      "type": "boolean",
+      "default": false,
+      "short": "v"
+    },
+    {
+      "name": "voice",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "waive",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "wall-clock",
+      "type": "string"
+    }
+  ]
+}

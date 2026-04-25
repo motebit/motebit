@@ -167,6 +167,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-api-surface",
   },
   {
+    name: "check-cli-surface",
+    defends:
+      "`motebit` CLI operator-facing surface (subcommand tree + top-level flag set) must match `apps/cli/etc/cli-surface.json` baseline unless a pending `motebit: major` changeset declares the break (invariant #46, added 2026-04-24 to close the rigor asymmetry between the Apache-2.0 protocol floor gated by check-api-surface and the BSL-1.1 `motebit` reference runtime whose 1.0 promise rested on changeset discipline alone until this gate shipped — first cut covers the two load-bearing sub-surfaces; exit codes, `~/.motebit/` layout, relay HTTP routes, and MCP server tool list are follow-up extractors against the same baseline file)",
+    script: "check-cli-surface",
+  },
+  {
     name: "check-docs-tree",
     defends:
       "apps/docs/content/docs/operator/architecture.mdx directory tree mirrors the filesystem and scripts/check-deps.ts LAYER/PERMISSIVE_PACKAGES (invariant #13, added 2026-04-14 after the architecture page was rewritten and 9 packages were previously misplaced across invented tiers)",

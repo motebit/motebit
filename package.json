@@ -48,6 +48,7 @@
     "check-deploy-parity": "npx tsx scripts/check-deploy-parity.ts",
     "check-gates-effective": "npx tsx scripts/check-gates-effective.ts",
     "check-api-surface": "npx tsx scripts/check-api-surface.ts",
+    "check-cli-surface": "npx tsx scripts/check-cli-surface.ts",
     "check-changeset-discipline": "npx tsx scripts/check-changeset-discipline.ts",
     "check-deprecation-discipline": "npx tsx scripts/check-deprecation-discipline.ts",
     "check-docs-tree": "npx tsx scripts/check-docs-tree.ts",
