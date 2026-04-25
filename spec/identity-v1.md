@@ -236,12 +236,23 @@ The signature covers all frontmatter fields including service fields, so they ar
 
 Array of registered devices. MAY be empty. Each device entry:
 
-| Field           | Type   | Required | Description                                     |
-| --------------- | ------ | -------- | ----------------------------------------------- |
-| `device_id`     | string | yes      | Unique device identifier.                       |
-| `name`          | string | yes      | Human-readable device name.                     |
-| `public_key`    | string | yes      | Hex-encoded Ed25519 public key for this device. |
-| `registered_at` | string | yes      | ISO 8601 timestamp of device registration.      |
+| Field                             | Type   | Required | Description                                                                                                                |
+| --------------------------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `device_id`                       | string | yes      | Unique device identifier.                                                                                                  |
+| `name`                            | string | yes      | Human-readable device name.                                                                                                |
+| `public_key`                      | string | yes      | Hex-encoded Ed25519 public key for this device.                                                                            |
+| `registered_at`                   | string | yes      | ISO 8601 timestamp of device registration.                                                                                 |
+| `hardware_attestation_credential` | string | no       | Self-issued `AgentTrustCredential` (JSON-serialized) bearing this device's `hardware_attestation` claim. See §3.7.1 below. |
+
+#### 3.7.1 — Hardware-attestation credential (identity metadata)
+
+A device record MAY carry a self-issued `AgentTrustCredential` (per `motebit/credential@1.0` §3.4) whose `credentialSubject.hardware_attestation` describes the key-custody posture for this device's identity key (Secure Enclave, TPM, App Attest, Play Integrity, WebAuthn, or `software` sentinel). The credential is signed by the device's own identity key — it is self-attested by definition.
+
+This is **identity metadata**, NOT a credential-index entry. The credential lives on the device record and is served via the identity / capabilities discovery surface (e.g. `GET /agent/:motebitId/capabilities`) for peer verifiers to pull. The `motebit/credential@1.0` rule that `/credentials/submit` rejects self-issued credentials (§9.1.5, §23) remains in force; this field does not introduce a carve-out.
+
+The peer flow that consumes this field: a peer verifier pulls the credential via the discovery surface, parses the embedded `hardware_attestation` claim, runs it through the platform-specific verifier (`@motebit/crypto-{appattest,play-integrity,tpm,webauthn}` adapters bundled in `@motebit/verify`), and — if the claim verifies — issues its own peer `AgentTrustCredential` (issuer ≠ subject) carrying the verified claim. That peer-issued credential is what `/credentials/submit` accepts and what routing aggregation reads.
+
+Implementations MAY omit the field entirely (the device's identity key has no associated hardware-attestation claim). Implementations MUST validate that the credential's `credentialSubject.identity_public_key` matches the device's `public_key` before accepting an attach request; mismatched bindings are a security failure.
 
 ### 3.8 — `succession` (optional)
 
