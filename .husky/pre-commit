@@ -3,36 +3,45 @@ bash scripts/check-secrets.sh
 
 npx lint-staged --no-stash
 
-# Auto-generate changeset if published packages have staged changes and no changeset exists
-PUBLISHED="packages/sdk packages/protocol packages/crypto packages/create-motebit apps/cli"
-NEEDS_CHANGESET=false
+# Require an explicit changeset when published code has staged changes.
+#
+# Scope: paths that actually ship to npm. `apps/cli/etc/` (drift-gate
+# baseline) and `apps/cli/__tests__/` are excluded — they're committed
+# tooling state, not in the motebit package's `files` array, so changes
+# there don't affect published artifacts. Top-level package-meta files
+# (`package.json`, `README.md`, `schema/`) stay in scope because npm
+# consumes them directly.
+#
+# Behavior: fail-closed. The earlier `auto-generated patch bump` stub
+# produced exactly the empty-body noise that check-changeset-discipline
+# (invariant #43, extended 2026-04-24) rejects. Better to block the
+# commit here and force a proper `pnpm changeset` run than to stage
+# noise the next gate removes by hand. See docs/drift-defenses.md §43.
 
-for pkg in $PUBLISHED; do
-  if git diff --cached --name-only | grep -q "^${pkg}/"; then
+PUBLISHED_PATHS="packages/sdk/src packages/protocol/src packages/crypto/src packages/create-motebit/src apps/cli/src apps/cli/README.md apps/cli/package.json apps/cli/schema"
+NEEDS_CHANGESET=false
+MATCHED_PATH=""
+
+for pkg in $PUBLISHED_PATHS; do
+  if git diff --cached --name-only | grep -q "^${pkg}/\|^${pkg}$"; then
     NEEDS_CHANGESET=true
+    MATCHED_PATH="$pkg"
     break
   fi
 done
 
 if [ "$NEEDS_CHANGESET" = true ]; then
-  if ! git diff --cached --name-only | grep -q "^\.changeset/.*\.md$"; then
-    CHANGESET_ID=$(openssl rand -hex 4)
-    CHANGESET_FILE=".changeset/${CHANGESET_ID}.md"
-
-    cat > "$CHANGESET_FILE" << 'EOF'
----
-"@motebit/sdk": patch
-"@motebit/protocol": patch
-"@motebit/crypto": patch
-"create-motebit": patch
-"motebit": patch
----
-
-auto-generated patch bump
-EOF
-
-    git add "$CHANGESET_FILE"
-    echo "Auto-generated changeset: ${CHANGESET_FILE} (patch)"
-    echo "  For minor/major: run 'pnpm changeset' before committing."
+  if ! git diff --cached --name-only | grep -q "^\.changeset/[^/]*\.md$"; then
+    echo ""
+    echo "error: staged changes under a published-package path ($MATCHED_PATH)"
+    echo "       without a companion .changeset/*.md entry."
+    echo ""
+    echo "Run 'pnpm changeset' to describe the change, commit the generated"
+    echo "file alongside this diff, then retry. For docs-only or internal-"
+    echo "only edits that don't ship to npm, commit with --no-verify after"
+    echo "audit — but nine out of ten times the right move is to write"
+    echo "the changeset."
+    echo ""
+    exit 1
   fi
 fi
