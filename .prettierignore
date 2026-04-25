@@ -36,3 +36,12 @@ services/api/PRIVACY.md
 # apps/desktop/src-tauri/.gitignore but Prettier doesn't respect
 # nested .gitignore.
 apps/desktop/src-tauri/gen
+
+# Python virtualenvs and bytecode caches created locally by example
+# clients (e.g. `python -m venv .venv` inside examples/python-*). The
+# example dirs gitignore them per-example, but Prettier walks the tree
+# regardless of nested .gitignore and trips on vendored .js shipped in
+# site-packages (e.g. urllib3's emscripten_fetch_worker.js).
+**/.venv
+**/venv
+**/__pycache__
