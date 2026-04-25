@@ -257,7 +257,7 @@ pnpm run lint          # Lint all packages
 
 Eleven packages publish to npm — ten Apache-2.0 (the permissive floor) and one BSL-1.1 (the `motebit` reference runtime, with the CLI as its primary surface). All eleven are at `1.0.0`. Breaking changes to any of their public surfaces require a major bump.
 
-The 35 workspace-private packages — `@motebit/runtime`, `@motebit/api`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. Their version numbers are changeset bookkeeping artifacts, not stability claims.
+The 51 workspace-private packages — `@motebit/runtime`, `@motebit/api`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the eleven published packages above.
 
 **The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.** The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
 
