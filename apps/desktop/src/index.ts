@@ -77,8 +77,6 @@ import {
   type InvokeFn,
 } from "./tauri-storage.js";
 import { TauriKeyringAdapter, TauriToolAuditSink } from "./tauri-system-adapters.js";
-import { publishHardwareCredentialIfDue } from "./publish-hardware-credential.js";
-import { bytesToHex } from "@motebit/encryption";
 import * as memoryCommands from "./memory-commands.js";
 import * as rendererCommands from "./renderer-commands.js";
 import { IdentityManager } from "./identity-manager.js";
@@ -1027,45 +1025,17 @@ export class DesktopApp {
       this.registerGoalTools(config.invoke);
     }
 
-    // Hardware-attestation credential — mint the desktop cascade
-    // (Secure Enclave on macOS → TPM on Windows / Linux → software)
-    // and publish to the relay's `/api/v1/agents/:id/credentials/submit`.
-    // Fire-and-forget; rate-limited per-device to once per 30 days; never
-    // blocks the UI; never throws. Sibling of mobile's
-    // `apps/mobile/src/publish-hardware-credential.ts`. The relay scores
-    // hardware-attested motebits above software-only ones via
-    // HardwareAttestationSemiring (#37).
-    if (
-      config.isTauri &&
-      config.invoke != null &&
-      signingKeys != null &&
-      config.syncUrl != null &&
-      config.syncUrl !== "" &&
-      config.syncMasterToken != null &&
-      config.syncMasterToken !== ""
-    ) {
-      const invoke = config.invoke;
-      const syncUrl = config.syncUrl;
-      const authToken = config.syncMasterToken;
-      const publicKey = signingKeys.publicKey;
-      const privateKey = signingKeys.privateKey;
-      const publicKeyHex = bytesToHex(publicKey);
-      void publishHardwareCredentialIfDue({
-        invoke,
-        identityPublicKeyHex: publicKeyHex,
-        privateKey,
-        publicKey,
-        motebitId: this.motebitId,
-        deviceId: this.deviceId,
-        syncUrl,
-        authToken,
-        storage: globalThis.localStorage,
-        logger: console,
-      }).catch(() => {
-        // The helper traps every failure into a typed PublishOutcome;
-        // this catch is belt-and-braces to satisfy floating-promise lint.
-      });
-    }
+    // Hardware-attestation cascade is available on demand via
+    // `mint-hardware-credential.ts` (Secure Enclave / TPM / software),
+    // but the bootstrap-time publish-and-submit path was removed:
+    // `composeHardwareAttestationCredential` produces issuer === subject
+    // (self-attestation), and the relay rejects exactly that pattern at
+    // /api/v1/agents/:id/credentials/submit per spec/credential-v1.md
+    // §23. Direct submission was a no-op (200 OK with body
+    // `{accepted: 0, rejected: 1}`) even when the helper reported
+    // success. The correct flow per spec §3.4 is peer-issued
+    // AgentTrustCredentials including the hardware claim, not
+    // direct subject→relay submits — that surface is future work.
 
     return true;
   }

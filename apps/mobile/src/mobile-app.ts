@@ -56,7 +56,6 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 export type { McpServerConfig } from "@motebit/mcp-client";
 export type { MemoryNode } from "@motebit/sdk";
 import { PlanEngine } from "@motebit/planner";
-import { publishHardwareCredentialIfDue } from "./publish-hardware-credential.js";
 import { DeviceCapability, DEFAULT_OLLAMA_MODEL, DEFAULT_MOTEBIT_CLOUD_URL } from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
@@ -944,47 +943,17 @@ export class MobileApp {
       { storage, renderer: this.renderer, ai: provider, keyring: this.keyring },
     );
 
-    // Mobile capabilities: HTTP MCP + secure keyring. Plus SecureEnclave
-    // when the iOS App Attest / Secure Enclave or Android Play Integrity
-    // cascade reaches a hardware tier — relays consume this for routing
-    // weight via the HardwareAttestationSemiring (#37).
-    const baseCaps: DeviceCapability[] = [DeviceCapability.HttpMcp, DeviceCapability.Keyring];
-    if (signingKeys != null) {
-      // The signed cascade requires the device's identity private key; if
-      // we have one in scope here, the runtime can mint a hardware claim.
-      // Advertising SecureEnclave at startup is conservative — relays
-      // will refresh from the published credential's actual platform tier
-      // once `publishHardwareCredentialIfDue` lands.
-      baseCaps.push(DeviceCapability.SecureEnclave);
-    }
-    this.runtime.setLocalCapabilities(baseCaps);
-
-    // Hardware-attestation credential — mint the cascade (App Attest →
-    // Secure Enclave → software on iOS, Play Integrity → software on
-    // Android) and submit to the relay's `/api/v1/agents/:id/credentials/submit`.
-    // Fire-and-forget; rate-limited per-device to once per 30 days; never
-    // blocks the UI; never throws. The relay scores hardware-attested
-    // motebits above software-only ones via HardwareAttestationSemiring.
-    if (signingKeys != null) {
-      const syncUrl = await this.getSyncUrl().catch(() => null);
-      const proxyToken = this._proxyTokenCache?.token;
-      if (syncUrl != null && syncUrl !== "" && proxyToken != null && proxyToken !== "") {
-        void publishHardwareCredentialIfDue({
-          identityPublicKeyHex: this.publicKey,
-          privateKey: signingKeys.privateKey,
-          publicKey: signingKeys.publicKey,
-          motebitId: this.motebitId,
-          deviceId: this.deviceId,
-          syncUrl,
-          authToken: proxyToken,
-          logger: console,
-        }).catch(() => {
-          // The helper traps every failure into a typed PublishOutcome;
-          // this catch is belt-and-braces to satisfy floating-promise
-          // lint, not a real error path.
-        });
-      }
-    }
+    // Mobile capabilities: HTTP MCP + secure keyring. The cascade in
+    // `mint-hardware-credential.ts` is available on demand for future
+    // peer-attestation flows (per spec/credential-v1.md §3.4 — peers
+    // verify the subject's hardware claim and issue their own
+    // AgentTrustCredentials), but the bootstrap-time mint-and-submit
+    // path was removed: the relay rejects self-issued credentials at
+    // /api/v1/agents/:id/credentials/submit per spec §23, so direct
+    // submission was a no-op even when the helper reported success.
+    // SecureEnclave capability advertisement waits until a real peer
+    // flow surfaces an actual hardware-tier mint result.
+    this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp, DeviceCapability.Keyring]);
 
     // Create PlanEngine for multi-step goal execution
     if (storage.planStore != null) {
