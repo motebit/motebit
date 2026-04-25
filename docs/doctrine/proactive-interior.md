@@ -44,7 +44,7 @@ This is sovereign default writ at the tool boundary: the motebit cannot do anyth
 
 Before this work, motebit had two parallel maintenance paths: `runHousekeeping` (timer-scheduled in cli/web/mobile) and `proactiveAction:"reflect"` (idle-tick triggered). They overlapped in scope (both touched memory consolidation), differed in shape, and would have drifted further apart with each new consumer. The cycle is the unification.
 
-The strategic prize: every proactive AI tool today binds the agent's identity to the operator's billing relationship. Motebit binds it to a sovereign Ed25519 identity, with consolidation receipts the agent signs to itself, anchorable on Solana via `spec/credential-anchor-v1`. That asymmetry is the moat.
+Every proactive AI tool today binds the agent's identity to the operator's billing relationship. Motebit binds it to a sovereign Ed25519 identity, with consolidation receipts the agent signs to itself, anchorable on Solana via `spec/credential-anchor-v1`. That asymmetry is the moat.
 
 See [`scripts/check-consolidation-primitives.ts`](../../scripts/check-consolidation-primitives.ts) (drift gate #34) for the canonical-vs-inline test.
 
