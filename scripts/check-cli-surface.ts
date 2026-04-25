@@ -10,7 +10,7 @@
  * the CLI promise rested on changeset discipline alone — same word,
  * different rigor. This gate closes that asymmetry.
  *
- * Three sub-surfaces currently covered:
+ * Five sub-surfaces covered:
  *
  *   1. Subcommand tree — top-level subcommands and their sub-subcommands,
  *      extracted from `apps/cli/src/index.ts` dispatcher (every
@@ -28,9 +28,22 @@
  *      to their network. Operators pin curl calls and federation peers
  *      against these paths; silent drift breaks their integrations.
  *
- * The remaining three sub-surfaces (exit codes per subcommand,
- * `~/.motebit/` on-disk layout, MCP server tool list) are follow-up
- * extractors that will extend this same baseline file.
+ *   4. Exit codes — the sorted set of unique `process.exit(N)` values
+ *      used anywhere under `apps/cli/src/`. Shell scripts wrapping
+ *      motebit invocations branch on exit codes; {0, 1, 2, 130} is the
+ *      current contract. A new non-zero code is additive but should be
+ *      declared; removing 130 would break scripts that check SIGINT.
+ *
+ *   5. On-disk layout — the `~/.motebit/` paths referenced in the CLI
+ *      source (config, database, identity, relay subdirectory, relay
+ *      database). Operators pin scripts against these paths; renaming
+ *      `config.json` or moving `relay.db` out of `~/.motebit/relay/`
+ *      breaks their integrations. Transient files prefixed with `.` are
+ *      intentionally excluded — they're implementation detail.
+ *
+ * The last sub-surface the original commitment named — MCP server tool
+ * list exposed by `motebit serve` — is tracked as a follow-up that
+ * extends this same baseline file.
  *
  * Strategy:
  *   - Extract the current surface from source.
@@ -57,6 +70,7 @@ const ROOT = resolve(__dirname, "..");
 const INDEX_PATH = resolve(ROOT, "apps/cli/src/index.ts");
 const ARGS_PATH = resolve(ROOT, "apps/cli/src/args.ts");
 const SERVICES_API_SRC = resolve(ROOT, "services/api/src");
+const APPS_CLI_SRC = resolve(ROOT, "apps/cli/src");
 const BASELINE_PATH = resolve(ROOT, "apps/cli/etc/cli-surface.json");
 
 // ── Surface model ─────────────────────────────────────────────────────
@@ -84,6 +98,17 @@ interface CliSurface {
    * Extracted from services/api/src/*.ts. Sorted by path then method.
    */
   relayRoutes: RouteSpec[];
+  /**
+   * Sorted unique non-`process.exit(N)` values used across apps/cli/src/.
+   * Shell scripts wrapping motebit invocations branch on these codes.
+   */
+  exitCodes: number[];
+  /**
+   * The `~/.motebit/` paths the CLI reads or writes. Stored as literal
+   * relative paths ("config.json", "relay/relay.db", etc.); "." and ""
+   * indicate the directory root. Sorted.
+   */
+  onDiskLayout: string[];
 }
 
 // ── Subcommand extraction ─────────────────────────────────────────────
@@ -244,6 +269,88 @@ function extractRelayRoutes(): RouteSpec[] {
   return routes;
 }
 
+// ── Exit code extraction ──────────────────────────────────────────────
+
+/**
+ * Extract the sorted unique set of `process.exit(N)` values used under
+ * apps/cli/src/. Literal integer arguments only — dynamic exit codes
+ * (e.g. `process.exit(code)`) are skipped because they're pass-through
+ * to whatever policy called into them.
+ */
+function extractExitCodes(): number[] {
+  const codes = new Set<number>();
+
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.name === "__tests__") continue;
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) continue;
+      const src = readFileSync(full, "utf-8");
+      const re = /\bprocess\.exit\(\s*(\d+)\s*\)/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(src)) !== null) {
+        codes.add(parseInt(m[1]!, 10));
+      }
+    }
+  }
+
+  walk(APPS_CLI_SRC);
+  return [...codes].sort((a, b) => a - b);
+}
+
+// ── On-disk layout extraction ─────────────────────────────────────────
+
+/**
+ * Extract every `path.join(CONFIG_DIR, "…")` and `path.join(RELAY_DIR, "…")`
+ * reference in apps/cli/src/. Literal string arguments are stored as
+ * paths relative to `~/.motebit/`:
+ *
+ *   path.join(CONFIG_DIR, "config.json")       → "config.json"
+ *   path.join(CONFIG_DIR, "relay")             → "relay"  (the directory)
+ *   path.join(RELAY_DIR,  "relay.db")          → "relay/relay.db"
+ *
+ * Transient files prefixed with `.` (e.g. `.doctor-test`) are filtered
+ * out — they're implementation-internal, not operator-pinnable.
+ */
+function extractOnDiskLayout(): string[] {
+  const paths = new Set<string>();
+
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.name === "__tests__") continue;
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) continue;
+      const src = readFileSync(full, "utf-8");
+
+      // path.join(CONFIG_DIR, "<literal>")
+      const configRe = /path\.join\(\s*CONFIG_DIR\s*,\s*"([^"]+)"\s*\)/g;
+      let m: RegExpExecArray | null;
+      while ((m = configRe.exec(src)) !== null) {
+        if (!m[1]!.startsWith(".")) paths.add(m[1]!);
+      }
+
+      // path.join(RELAY_DIR, "<literal>")
+      const relayRe = /path\.join\(\s*RELAY_DIR\s*,\s*"([^"]+)"\s*\)/g;
+      while ((m = relayRe.exec(src)) !== null) {
+        if (!m[1]!.startsWith(".")) paths.add(`relay/${m[1]!}`);
+      }
+    }
+  }
+
+  walk(APPS_CLI_SRC);
+  return [...paths].sort();
+}
+
 // ── Surface assembly ──────────────────────────────────────────────────
 
 function extractSurface(): CliSurface {
@@ -251,6 +358,8 @@ function extractSurface(): CliSurface {
     subcommands: extractSubcommands(),
     flags: extractFlags(),
     relayRoutes: extractRelayRoutes(),
+    exitCodes: extractExitCodes(),
+    onDiskLayout: extractOnDiskLayout(),
   };
 }
 
@@ -291,7 +400,11 @@ interface Diff {
     | "flag-removed"
     | "flag-changed"
     | "route-added"
-    | "route-removed";
+    | "route-removed"
+    | "exit-code-added"
+    | "exit-code-removed"
+    | "path-added"
+    | "path-removed";
   detail: string;
 }
 
@@ -351,6 +464,26 @@ function diffSurfaces(current: CliSurface, baseline: CliSurface): Diff[] {
     if (!curRoutes.has(key)) diffs.push({ kind: "route-removed", detail: key });
   }
 
+  // Exit code diff.
+  const curCodes = new Set(current.exitCodes ?? []);
+  const baseCodes = new Set(baseline.exitCodes ?? []);
+  for (const code of curCodes) {
+    if (!baseCodes.has(code)) diffs.push({ kind: "exit-code-added", detail: String(code) });
+  }
+  for (const code of baseCodes) {
+    if (!curCodes.has(code)) diffs.push({ kind: "exit-code-removed", detail: String(code) });
+  }
+
+  // On-disk layout diff.
+  const curPaths = new Set(current.onDiskLayout ?? []);
+  const basePaths = new Set(baseline.onDiskLayout ?? []);
+  for (const p of curPaths) {
+    if (!basePaths.has(p)) diffs.push({ kind: "path-added", detail: `~/.motebit/${p}` });
+  }
+  for (const p of basePaths) {
+    if (!curPaths.has(p)) diffs.push({ kind: "path-removed", detail: `~/.motebit/${p}` });
+  }
+
   return diffs;
 }
 
@@ -366,7 +499,7 @@ function main(): void {
   if (writeMode) {
     writeFileSync(BASELINE_PATH, currentJson);
     process.stderr.write(
-      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.relayRoutes.length} relay routes) to apps/cli/etc/cli-surface.json\n`,
+      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.relayRoutes.length} relay routes, ${current.exitCodes.length} exit codes, ${current.onDiskLayout.length} on-disk paths) to apps/cli/etc/cli-surface.json\n`,
     );
     return;
   }
@@ -384,7 +517,7 @@ function main(): void {
 
   if (diffs.length === 0) {
     process.stderr.write(
-      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.relayRoutes.length} relay route(s), all match baseline.\n`,
+      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.relayRoutes.length} relay route(s), ${current.exitCodes.length} exit code(s), ${current.onDiskLayout.length} on-disk path(s), all match baseline.\n`,
     );
     return;
   }

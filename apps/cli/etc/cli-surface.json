@@ -885,5 +885,7 @@
       "method": "get",
       "path": "/ws/sync/:motebitId"
     }
-  ]
+  ],
+  "exitCodes": [0, 1, 2, 130],
+  "onDiskLayout": ["config.json", "identity.md", "motebit.db", "relay", "relay/relay.db"]
 }
