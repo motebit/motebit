@@ -10,7 +10,7 @@
  * the CLI promise rested on changeset discipline alone — same word,
  * different rigor. This gate closes that asymmetry.
  *
- * First cut covers two of the six surfaces — the load-bearing pair:
+ * Three sub-surfaces currently covered:
  *
  *   1. Subcommand tree — top-level subcommands and their sub-subcommands,
  *      extracted from `apps/cli/src/index.ts` dispatcher (every
@@ -21,11 +21,16 @@
  *   2. Top-level flag set — name, type, default, short alias — extracted
  *      from `apps/cli/src/args.ts` parseArgs `options:` object.
  *
- * The remaining four surfaces (exit codes, `~/.motebit/` layout, relay
- * HTTP routes, MCP tool list) are tracked as follow-up work — each
- * deserves its own extractor and baseline. Shipping the load-bearing
- * pair first makes "the CLI 1.0 promise is mechanically enforced"
- * structurally true rather than aspirational.
+ *   3. Relay HTTP routes — every `app.<method>("<path>", ...)` declared
+ *      across `services/api/src/*.ts`. `motebit relay up` imports
+ *      `createSyncRelay` from `@motebit/api`, so the services/api route
+ *      tree IS the HTTP surface a `motebit relay up` operator exposes
+ *      to their network. Operators pin curl calls and federation peers
+ *      against these paths; silent drift breaks their integrations.
+ *
+ * The remaining three sub-surfaces (exit codes per subcommand,
+ * `~/.motebit/` on-disk layout, MCP server tool list) are follow-up
+ * extractors that will extend this same baseline file.
  *
  * Strategy:
  *   - Extract the current surface from source.
@@ -51,6 +56,7 @@ const ROOT = resolve(__dirname, "..");
 
 const INDEX_PATH = resolve(ROOT, "apps/cli/src/index.ts");
 const ARGS_PATH = resolve(ROOT, "apps/cli/src/args.ts");
+const SERVICES_API_SRC = resolve(ROOT, "services/api/src");
 const BASELINE_PATH = resolve(ROOT, "apps/cli/etc/cli-surface.json");
 
 // ── Surface model ─────────────────────────────────────────────────────
@@ -63,11 +69,21 @@ interface FlagSpec {
   multiple?: boolean;
 }
 
+interface RouteSpec {
+  method: "get" | "post" | "put" | "delete" | "patch";
+  path: string;
+}
+
 interface CliSurface {
   /** Subcommand → list of sub-subcommands (empty array if none). Keys sorted. */
   subcommands: Record<string, string[]>;
   /** Flag definitions, sorted by name for stable diffs. */
   flags: FlagSpec[];
+  /**
+   * Relay HTTP routes exposed by `motebit relay up` (via @motebit/api).
+   * Extracted from services/api/src/*.ts. Sorted by path then method.
+   */
+  relayRoutes: RouteSpec[];
 }
 
 // ── Subcommand extraction ─────────────────────────────────────────────
@@ -183,12 +199,58 @@ function extractFlags(): FlagSpec[] {
   return flags;
 }
 
+// ── Relay route extraction ────────────────────────────────────────────
+
+/**
+ * Walk every .ts file under services/api/src/ (excluding __tests__ and
+ * .d.ts), extract `app.<method>("<path>", ...)` calls. The same route
+ * declared in two files is de-duplicated. Result sorted by path then
+ * method for stable diffs.
+ */
+function extractRelayRoutes(): RouteSpec[] {
+  const seen = new Set<string>();
+  const routes: RouteSpec[] = [];
+
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.name === "__tests__") continue;
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) continue;
+      const src = readFileSync(full, "utf-8");
+      const re = /\bapp\.(get|post|put|delete|patch)\(\s*"([^"]+)"/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(src)) !== null) {
+        const method = m[1] as RouteSpec["method"];
+        const path = m[2]!;
+        const key = `${method} ${path}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        routes.push({ method, path });
+      }
+    }
+  }
+
+  walk(SERVICES_API_SRC);
+
+  routes.sort((a, b) => {
+    const byPath = a.path.localeCompare(b.path);
+    return byPath !== 0 ? byPath : a.method.localeCompare(b.method);
+  });
+  return routes;
+}
+
 // ── Surface assembly ──────────────────────────────────────────────────
 
 function extractSurface(): CliSurface {
   return {
     subcommands: extractSubcommands(),
     flags: extractFlags(),
+    relayRoutes: extractRelayRoutes(),
   };
 }
 
@@ -227,7 +289,9 @@ interface Diff {
     | "subsubcommand-removed"
     | "flag-added"
     | "flag-removed"
-    | "flag-changed";
+    | "flag-changed"
+    | "route-added"
+    | "route-removed";
   detail: string;
 }
 
@@ -276,6 +340,17 @@ function diffSurfaces(current: CliSurface, baseline: CliSurface): Diff[] {
     if (!curFlags.has(name)) diffs.push({ kind: "flag-removed", detail: `--${name}` });
   }
 
+  // Relay route diff.
+  const routeKey = (r: RouteSpec): string => `${r.method.toUpperCase()} ${r.path}`;
+  const curRoutes = new Set((current.relayRoutes ?? []).map(routeKey));
+  const baseRoutes = new Set((baseline.relayRoutes ?? []).map(routeKey));
+  for (const key of curRoutes) {
+    if (!baseRoutes.has(key)) diffs.push({ kind: "route-added", detail: key });
+  }
+  for (const key of baseRoutes) {
+    if (!curRoutes.has(key)) diffs.push({ kind: "route-removed", detail: key });
+  }
+
   return diffs;
 }
 
@@ -291,7 +366,7 @@ function main(): void {
   if (writeMode) {
     writeFileSync(BASELINE_PATH, currentJson);
     process.stderr.write(
-      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags) to apps/cli/etc/cli-surface.json\n`,
+      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.relayRoutes.length} relay routes) to apps/cli/etc/cli-surface.json\n`,
     );
     return;
   }
@@ -309,7 +384,7 @@ function main(): void {
 
   if (diffs.length === 0) {
     process.stderr.write(
-      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), all match baseline.\n`,
+      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.relayRoutes.length} relay route(s), all match baseline.\n`,
     );
     return;
   }
