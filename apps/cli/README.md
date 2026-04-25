@@ -117,6 +117,14 @@ Run `motebit doctor` to diagnose issues after install.
 
 See [docs.motebit.com](https://docs.motebit.com) for full documentation.
 
+## How it ships
+
+`motebit` is the bundled reference runtime — relay, policy engine, sync engine, MCP server, and wallet adapters all inlined into a single binary at build time. The CLI is its primary operator-facing surface; there are no internal package versions to track.
+
+**The public promise of `motebit@1.0` is that operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.** Breaking changes to that surface require a major bump.
+
+For the wire-format contract third parties build against, see the Apache-2.0 packages: [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol), [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto), [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk), and the [19 open specs](https://github.com/motebit/motebit/tree/main/spec). Those promise stability independently and are gated by `check-api-surface`.
+
 ## Related
 
 - [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (Apache-2.0, zero deps)

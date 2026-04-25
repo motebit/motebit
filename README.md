@@ -177,27 +177,31 @@ if (result.type === "receipt" && result.valid) {
 }
 ```
 
-Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). Seven npm packages ship the permissive floor — Apache-2.0 with an explicit patent grant — and one more ships the reference runtime under BSL-1.1:
+Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). **Eleven npm packages publish at `1.0.0`** — ten Apache-2.0 (the permissive floor, with an explicit patent grant) and one BSL-1.1 (the reference runtime):
 
-| Package                                                                | Description                                                                                         | License    |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------- |
-| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing  | Apache-2.0 |
-| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)     | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow  | Apache-2.0 |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)           | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | Apache-2.0 |
-| [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) | `verifyFile` / `verifyArtifact` / `formatHuman` — dep-thin verification library                     | Apache-2.0 |
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit)       | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | Apache-2.0 |
-| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)     | `motebit-verify` CLI — bundles the four platform-attestation leaves with motebit-canonical defaults | Apache-2.0 |
-| [`motebit`](https://www.npmjs.com/package/motebit)                     | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1    |
+| Package                                                                                          | Description                                                                                         | License    |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ---------- |
+| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol)                           | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing  | Apache-2.0 |
+| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)                               | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow  | Apache-2.0 |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)                                     | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | Apache-2.0 |
+| [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier)                           | `verifyFile` / `verifyArtifact` / `formatHuman` — dep-thin verification library                     | Apache-2.0 |
+| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)                               | `motebit-verify` CLI — bundles the four platform-attestation leaves with motebit-canonical defaults | Apache-2.0 |
+| [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest)           | iOS App Attest chain verifier — pinned Apple root                                                   | Apache-2.0 |
+| [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) | Android Play Integrity JWT verifier — pinned Google JWKS                                            | Apache-2.0 |
+| [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm)                       | Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots                                     | Apache-2.0 |
+| [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn)             | WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO roots                     | Apache-2.0 |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)                                 | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | Apache-2.0 |
+| [`motebit`](https://www.npmjs.com/package/motebit)                                               | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1    |
 
-The four hardware-attestation platform leaves — `@motebit/crypto-appattest`, `@motebit/crypto-play-integrity`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn` — ship Apache-2.0 alongside the core three. They verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) with no motebit-specific judgment. The `@motebit/verify` CLI aggregates them with motebit-canonical defaults (bundle IDs, RP ID, integrity floor), but the defaults are overridable flags — not proprietary judgment — so the CLI stays on the permissive floor too. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring.
+The ten Apache-2.0 packages are the permissive floor: a third party can build an interoperating runtime against them without our permission. The BSL line holds at `motebit` (the operator console) and everything inlined into its bundle below it: daemon, MCP server, delegation routing, market integration, federation wiring. **The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.**
 
 ## Architecture
 
-**36 packages across 7 architectural layers · 5 surfaces + 3 supporting apps · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
+**46 packages across 7 architectural layers · 5 surfaces + 3 supporting apps · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
 
 **The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.
 
-**Packages** ([`packages/`](packages/)) — 36 packages on a strict layer DAG. Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
+**Packages** ([`packages/`](packages/)) — 46 packages on a strict layer DAG. Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
 
 **Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and three supporting (`admin` dashboard, `identity` viewer, `docs` site).
 
@@ -208,14 +212,14 @@ The four hardware-attestation platform leaves — `@motebit/crypto-appattest`, `
 - **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request), `read-url`, `summarize`, `embed`
 - **Glue** — `proxy` (Vercel edge CORS for the web app)
 
-**Protocol** ([`spec/`](spec/)) — 12 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `market`, `credential`, `settlement`, `auth-token`, `credential-anchor`, `delegation`, `discovery`, `migration`, `dispute`. All have a working reference implementation in this repo.
+**Protocol** ([`spec/`](spec/)) — 19 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `market`, `credential`, `settlement`, `auth-token`, `credential-anchor`, `delegation`, `discovery`, `migration`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`. All have a working reference implementation in this repo.
 
 → Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.
 
 ## Specification
 
 > [!NOTE]
-> **Motebit is a protocol first.** All [12 specs](spec/) (Apache-2.0) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
+> **Motebit is a protocol first.** All [19 specs](spec/) (Apache-2.0) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
 
 A `motebit.md` is YAML frontmatter signed with Ed25519:
 
@@ -249,11 +253,19 @@ pnpm run typecheck     # Type-check all packages
 pnpm run lint          # Lint all packages
 ```
 
+## Versioning
+
+Eleven packages publish to npm — ten Apache-2.0 (the permissive floor) and one BSL-1.1 (the `motebit` reference runtime, with the CLI as its primary surface). All eleven are at `1.0.0`. Breaking changes to any of their public surfaces require a major bump.
+
+The 35 workspace-private packages — `@motebit/runtime`, `@motebit/api`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. Their version numbers are changeset bookkeeping artifacts, not stability claims.
+
+**The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.** The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
+
 ## License
 
 The **permissive floor** is Apache-2.0 licensed — use it freely, build on it, implement the spec in any language, with an explicit patent grant from every contributor:
 
-- [`spec/`](spec/) — 12 open specs (full list in [Architecture](#architecture))
+- [`spec/`](spec/) — 19 open specs (full list in [Architecture](#architecture))
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, delegation, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
@@ -273,7 +285,7 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specifications](spec/) — 12 open specs (Apache-2.0)
+- [Specifications](spec/) — 19 open specs (Apache-2.0)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know
