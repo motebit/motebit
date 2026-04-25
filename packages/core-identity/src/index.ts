@@ -265,6 +265,21 @@ export class IdentityManager {
   }
 
   /**
+   * Update a device record. Preserves device_token, registered_at, etc;
+   * the caller passes the FULL DeviceRegistration with whichever fields
+   * have changed. Used by the hardware-attestation attach endpoint to
+   * stamp the optional `hardware_attestation_credential` field onto an
+   * already-registered device without rotating its identity-binding.
+   *
+   * Distinct from `registerDevice`, which mints a fresh device_token
+   * and is the right call only for first registration. For partial
+   * updates, prefer load → mutate → save.
+   */
+  async saveDevice(device: DeviceRegistration): Promise<void> {
+    return this.deviceStore.saveDevice(device);
+  }
+
+  /**
    * Rotate the identity's primary public key.
    * Updates the public key on the specified device (or all devices for the identity)
    * and logs a key rotation event.

@@ -84,6 +84,22 @@ export interface TrustCredentialSubject {
   failed_tasks: number;
   first_seen_at: number;
   last_seen_at: number;
+  /**
+   * Optional hardware-attestation claim. Mirror of the same-named
+   * field on `TrustCredentialSubject` in `@motebit/protocol`. Set when
+   * a peer issuer has verified the subject's self-published
+   * hardware-attestation credential and is folding the verified claim
+   * into a peer credential about the subject. See
+   * `spec/credential-v1.md` §3.4.
+   */
+  hardware_attestation?: HardwareAttestationClaim;
+}
+
+/** Mirror of `HardwareAttestationClaim` in `@motebit/protocol`. */
+export interface HardwareAttestationClaim {
+  platform: "secure_enclave" | "tpm" | "play_integrity" | "device_check" | "webauthn" | "software";
+  key_exported?: boolean;
+  attestation_receipt?: string;
 }
 
 // === Internal helpers ===
@@ -353,6 +369,16 @@ export async function issueTrustCredential(
     failed_tasks?: number;
     first_seen_at: number;
     last_seen_at: number;
+    /**
+     * Optional verified `HardwareAttestationClaim` to embed in the
+     * subject. Phase 1 of the hardware-attestation peer flow: the
+     * issuer (delegator that consumed the worker's receipt) verifies
+     * the worker's self-published claim via
+     * `verifyHardwareAttestationClaim` and includes the verified claim
+     * here. Routing aggregation reads this via
+     * `aggregateHardwareAttestation`. Spec credential-v1 §3.4.
+     */
+    hardware_attestation?: HardwareAttestationClaim;
   },
   privateKey: Uint8Array,
   publicKey: Uint8Array,
@@ -369,6 +395,9 @@ export async function issueTrustCredential(
     failed_tasks: trustRecord.failed_tasks ?? 0,
     first_seen_at: trustRecord.first_seen_at,
     last_seen_at: trustRecord.last_seen_at,
+    ...(trustRecord.hardware_attestation != null
+      ? { hardware_attestation: trustRecord.hardware_attestation }
+      : {}),
   };
 
   const now = new Date();

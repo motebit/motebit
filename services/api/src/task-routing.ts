@@ -7,8 +7,8 @@
  */
 
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
-import { aggregateCredentialReputation } from "@motebit/market";
-import type { ReputationVC } from "@motebit/market";
+import { aggregateCredentialReputation, aggregateHardwareAttestation } from "@motebit/market";
+import type { ReputationVC, TrustVC } from "@motebit/market";
 import type { CapabilityPrice, AgentTrustRecord } from "@motebit/sdk";
 import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
 import { trustLevelToScore } from "@motebit/market";
@@ -230,6 +230,15 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
        WHERE subject_motebit_id = ? AND credential_type = 'AgentReputationCredential'
        ORDER BY issued_at DESC LIMIT 50`,
     );
+    // Hardware-attestation aggregation: peer-issued AgentTrustCredentials carrying
+    // `hardware_attestation` claims. Phase 1 of the hardware-attestation peer flow.
+    // The aggregator filters self-issued claims (issuer === subject.id) by the same
+    // rule the reputation aggregator uses; only peer-verified claims drive routing.
+    const trustCredStmt = db.prepare(
+      `SELECT credential_json FROM relay_credentials
+       WHERE subject_motebit_id = ? AND credential_type = 'AgentTrustCredential'
+       ORDER BY issued_at DESC LIMIT 50`,
+    );
     const issuerTrustStmt = callerMotebitId
       ? db.prepare(
           `SELECT trust_level FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = (
@@ -333,6 +342,31 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         // Best-effort: credential aggregation failure doesn't block routing
       }
 
+      // Aggregate peer-issued AgentTrustCredentials carrying hardware_attestation.
+      // Drives the hardware-attestation dimension of routing edges via
+      // graph-routing.ts:setEdge — peer-verified claims dominate self-attestation.
+      let hardware_attestation_aggregate: CandidateProfile["hardware_attestation_aggregate"];
+      try {
+        const trustRows = trustCredStmt.all(mid) as Array<{ credential_json: string }>;
+        if (trustRows.length > 0) {
+          const vcs = trustRows
+            .map((r) => {
+              try {
+                return JSON.parse(r.credential_json) as TrustVC;
+              } catch {
+                return null;
+              }
+            })
+            .filter((vc): vc is TrustVC => vc != null);
+          if (vcs.length > 0) {
+            hardware_attestation_aggregate =
+              aggregateHardwareAttestation(vcs, getIssuerTrust, { checkRevoked }) ?? undefined;
+          }
+        }
+      } catch {
+        // Best-effort: hardware-attestation aggregation failure doesn't block routing
+      }
+
       return {
         motebit_id: asMotebitId(mid),
         trust_record,
@@ -353,6 +387,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         latency_stats: latencyStats,
         is_online: isOnline,
         credential_reputation,
+        hardware_attestation_aggregate,
         guardian_public_key: (row.guardian_public_key as string | null) ?? undefined,
         endpoint_url: (row.agent_endpoint_url as string | null) ?? undefined,
       } satisfies CandidateProfile;

@@ -12,7 +12,15 @@ import { EventType, asMotebitId } from "@motebit/sdk";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { EventStore } from "@motebit/event-log";
 import type { IdentityManager } from "@motebit/core-identity";
-import { verifyDeviceRegistration, type SignableDeviceRegistration } from "@motebit/encryption";
+import {
+  canonicalJson,
+  fromBase64Url,
+  hexToBytes,
+  verifyDeviceRegistration,
+  type SignableDeviceRegistration,
+} from "@motebit/encryption";
+import { verifyBySuite } from "@motebit/crypto";
+import { isSuiteId } from "@motebit/protocol";
 import { createLogger } from "./logger.js";
 import type { ConnectedDevice } from "./index.js";
 
@@ -282,5 +290,131 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       },
       created ? 201 : 200,
     );
+  });
+
+  // ── POST /api/v1/agents/:motebitId/devices/:deviceId/hardware-attestation ──
+  //
+  // Attach a self-issued AgentTrustCredential carrying a hardware_attestation
+  // claim to an already-registered device. Identity-metadata publication —
+  // the credential is stored on the device record and exposed via
+  // /agent/:motebitId/capabilities so peer verifiers can pull it. NOT a
+  // credential-index entry: /credentials/submit still rejects self-issued
+  // credentials per spec/credential-v1.md §23. See
+  // `lesson_hardware_attestation_self_issued_dead_drop.md` and
+  // `docs/doctrine/promoting-private-to-public.md` companion.
+  //
+  // Auth model: the request body is a signed envelope (same JCS+Ed25519+
+  // base64url suite as register-self). The signing key is the device's
+  // identity key, which the relay already has on file from registration.
+  // Replay window: 5 minutes (DEVICE_REGISTRATION_MAX_AGE_MS, reused).
+  /** @internal */
+  app.post("/api/v1/agents/:motebitId/devices/:deviceId/hardware-attestation", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    const deviceId = c.req.param("deviceId");
+
+    const body = (await c.req.json().catch(() => null)) as {
+      motebit_id?: string;
+      device_id?: string;
+      hardware_attestation_credential?: string;
+      timestamp?: number;
+      suite?: string;
+      signature?: string;
+    } | null;
+
+    if (
+      !body ||
+      typeof body.motebit_id !== "string" ||
+      typeof body.device_id !== "string" ||
+      typeof body.hardware_attestation_credential !== "string" ||
+      typeof body.timestamp !== "number" ||
+      typeof body.suite !== "string" ||
+      typeof body.signature !== "string"
+    ) {
+      throw new HTTPException(400, { message: "Malformed request body" });
+    }
+
+    if (body.motebit_id !== motebitId || body.device_id !== deviceId) {
+      throw new HTTPException(400, {
+        message: "URL params must match body fields",
+      });
+    }
+
+    // Replay window — same 5-minute window as register-self.
+    const now = Date.now();
+    if (Math.abs(now - body.timestamp) > 5 * 60 * 1000) {
+      throw new HTTPException(400, { message: "Request stale" });
+    }
+
+    // Look up the device to find the identity key the request is signed under.
+    const device = await identityManager.loadDeviceById(deviceId, motebitId);
+    if (!device) {
+      return c.json({ error: "Device not found", code: "DEVICE_NOT_FOUND" }, 404);
+    }
+
+    // Verify the request signature against the device's registered public key.
+    if (!isSuiteId(body.suite)) {
+      throw new HTTPException(400, { message: "Unsupported suite" });
+    }
+
+    const { signature: _sig, ...signedBody } = body;
+    const canonical = canonicalJson(signedBody);
+    const messageBytes = new TextEncoder().encode(canonical);
+    const signatureBytes = fromBase64Url(body.signature);
+    const publicKeyBytes = hexToBytes(device.public_key);
+
+    const sigValid = await verifyBySuite(body.suite, messageBytes, signatureBytes, publicKeyBytes);
+    if (!sigValid) {
+      logger.warn("hardware_attestation.attach.bad_signature", {
+        motebitId,
+        deviceId,
+      });
+      return c.json({ error: "Signature invalid", code: "BAD_SIGNATURE" }, 400);
+    }
+
+    // Validate the credential parses as JSON and looks like a VC. Deeper
+    // verification (eddsa-jcs-2022 proof, identity-key binding) is the
+    // peer verifier's job — the relay is a passthrough/CDN per
+    // services/api/CLAUDE.md rule 6.
+    let parsedVc: Record<string, unknown>;
+    try {
+      parsedVc = JSON.parse(body.hardware_attestation_credential) as Record<string, unknown>;
+    } catch {
+      throw new HTTPException(400, {
+        message: "hardware_attestation_credential is not valid JSON",
+      });
+    }
+    const subject = parsedVc.credentialSubject as
+      | { id?: string; identity_public_key?: string }
+      | undefined;
+    if (
+      !subject ||
+      typeof subject.identity_public_key !== "string" ||
+      subject.identity_public_key.toLowerCase() !== device.public_key.toLowerCase()
+    ) {
+      return c.json(
+        {
+          error:
+            "credentialSubject.identity_public_key must match the device's registered public_key",
+          code: "IDENTITY_KEY_MISMATCH",
+        },
+        400,
+      );
+    }
+
+    // Persist on the device record.
+    await identityManager.saveDevice({
+      ...device,
+      hardware_attestation_credential: body.hardware_attestation_credential,
+    });
+
+    logger.info("hardware_attestation.attach.ok", {
+      motebitId,
+      deviceId,
+      platform:
+        (subject as { hardware_attestation?: { platform?: string } }).hardware_attestation
+          ?.platform ?? "unknown",
+    });
+
+    return c.json({ motebit_id: motebitId, device_id: deviceId, attached_at: now });
   });
 }

@@ -171,6 +171,21 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // Non-fatal — public key may be invalid hex
     }
 
+    // Per-device hardware-attestation credentials. Identity-metadata
+    // publication path (NOT a credential index entry — /credentials/submit
+    // still rejects self-issued per spec/credential-v1.md §23). Peers use
+    // this to pull the subject's self-issued AgentTrustCredential, verify
+    // the embedded hardware_attestation claim against the platform-specific
+    // adapter, and then issue their own peer credential about the subject
+    // for routing aggregation.
+    const hardwareAttestations = devices
+      .filter((d) => d.hardware_attestation_credential != null)
+      .map((d) => ({
+        device_id: d.device_id,
+        public_key: d.public_key,
+        hardware_attestation_credential: d.hardware_attestation_credential,
+      }));
+
     return c.json({
       motebit_id: motebitId,
       public_key: publicKey,
@@ -183,6 +198,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         deny_above: 4,
       },
       online_devices: onlineCount,
+      hardware_attestations: hardwareAttestations,
     });
   });
 

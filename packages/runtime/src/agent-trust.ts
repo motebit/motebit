@@ -7,17 +7,47 @@
  */
 
 import { EventType, AgentTrustLevel } from "@motebit/sdk";
-import type { ExecutionReceipt, AgentTrustRecord, AgentTrustStoreAdapter } from "@motebit/sdk";
+import type {
+  ExecutionReceipt,
+  AgentTrustRecord,
+  AgentTrustStoreAdapter,
+  HardwareAttestationClaim,
+} from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import {
   issueTrustCredential,
   issueReputationCredential,
   hexPublicKeyToDidKey,
+  verifyVerifiableCredential,
 } from "@motebit/encryption";
+import { verifyHardwareAttestationClaim } from "@motebit/crypto";
 import { evaluateTrustTransition } from "@motebit/semiring";
 import type { AgentGraphManager } from "./agent-graph.js";
 
 // === Types ===
+
+/**
+ * Callback the runtime injects to resolve a peer's published self-issued
+ * AgentTrustCredential bearing a `hardware_attestation` claim. Returns
+ * the per-device list (one peer may register multiple devices, each with
+ * its own hardware attestation). The hook fires after a successful
+ * delegation interaction; the local motebit verifies one of the returned
+ * credentials and issues a peer AgentTrustCredential about the worker
+ * carrying the verified claim — Phase 1 of the hardware-attestation
+ * peer flow.
+ *
+ * Implementation typically hits `GET /agent/:motebitId/capabilities`
+ * and returns `response.hardware_attestations`. Tests inject in-memory
+ * resolvers. A null return ≡ no claim observed (the truthful absence
+ * case, distinct from `platform: "software"`).
+ */
+export type HardwareAttestationFetcher = (remoteMotebitId: string) => Promise<
+  ReadonlyArray<{
+    device_id: string;
+    public_key: string;
+    hardware_attestation_credential?: string;
+  }>
+>;
 
 export interface AgentTrustDeps {
   motebitId: string;
@@ -29,6 +59,20 @@ export interface AgentTrustDeps {
     vc: import("@motebit/encryption").VerifiableCredential<unknown>,
     subjectMotebitId: string,
   ) => void;
+  /**
+   * Optional fetcher for the peer's self-issued hardware-attestation
+   * credentials. When provided, after the existing reputation-credential
+   * issuance fires, the runtime pulls the peer's claims, verifies them
+   * via `verifyHardwareAttestationClaim`, and issues an
+   * `AgentTrustCredential` carrying the verified claim. Best-effort:
+   * any failure (network, parse, signature, hardware verification) is
+   * swallowed and the trust path proceeds without a hardware credential.
+   * Phase 1 doctrine: no platform-adapter `verifiers` argument is
+   * passed — the unified facade returns truthful `valid: false,
+   * platform: "software"` for the software sentinel, which the issuer
+   * still folds into the credential. Phase 2 wires real verifiers.
+   */
+  getRemoteHardwareAttestations?: HardwareAttestationFetcher;
 }
 
 // === Trust from Receipt ===
@@ -43,7 +87,15 @@ export async function bumpTrustFromReceipt(
   receipt: ExecutionReceipt,
   verified: boolean,
 ): Promise<void> {
-  const { motebitId, agentTrustStore, events, agentGraph, signingKeys, onCredentialIssued } = deps;
+  const {
+    motebitId,
+    agentTrustStore,
+    events,
+    agentGraph,
+    signingKeys,
+    onCredentialIssued,
+    getRemoteHardwareAttestations,
+  } = deps;
 
   if (agentTrustStore == null) return;
   if (!verified) return; // Unverified receipts don't affect trust
@@ -177,6 +229,81 @@ export async function bumpTrustFromReceipt(
           subjectDid,
         );
         onCredentialIssued?.(vc, remoteMotebitId);
+
+        // Hardware-attestation peer flow — Phase 1.
+        //
+        // After issuing the reputation credential, pull the worker's
+        // self-published hardware-attestation credentials, verify, and
+        // issue a peer AgentTrustCredential carrying the verified claim.
+        // This is what makes hardware attestation visible to routing —
+        // the cascade-mint produced self-issued credentials are inert
+        // until a peer (us, here) verifies and re-issues them as peer
+        // credentials. See lesson_hardware_attestation_self_issued_dead_drop.md.
+        //
+        // Best-effort: any failure (network, parse, signature, hardware
+        // claim verification) leaves the reputation credential standing
+        // alone. The trust path doesn't break.
+        if (getRemoteHardwareAttestations && updated.public_key) {
+          try {
+            const remoteAttestations = await getRemoteHardwareAttestations(remoteMotebitId);
+            // Pick the first credential whose subject identity_public_key
+            // matches the worker's identity key. The cascade-mint always
+            // sets identity_public_key to the device's identity Ed25519
+            // public key, so this is the right binding check.
+            const matching = remoteAttestations.find(
+              (entry) =>
+                entry.public_key.toLowerCase() === (updated.public_key ?? "").toLowerCase() &&
+                entry.hardware_attestation_credential != null,
+            );
+            if (matching && matching.hardware_attestation_credential) {
+              let parsedVc: import("@motebit/encryption").VerifiableCredential<{
+                hardware_attestation?: HardwareAttestationClaim;
+              }>;
+              try {
+                parsedVc = JSON.parse(matching.hardware_attestation_credential) as typeof parsedVc;
+              } catch {
+                return; // Best-effort: malformed credential is the no-claim case.
+              }
+              const vcSignatureValid = await verifyVerifiableCredential(parsedVc);
+              if (vcSignatureValid) {
+                const claim = parsedVc.credentialSubject.hardware_attestation;
+                if (claim) {
+                  // Run the platform-aware verifier facade. Phase 1 passes
+                  // no `verifiers` argument — the software sentinel returns
+                  // a truthful `valid: false, platform: "software"` outcome,
+                  // and we still fold it into the issued credential because
+                  // "software-only" IS information the routing graph wants.
+                  // Phase 2 wires real platform adapters and changes the
+                  // accept rule.
+                  const hwResult = await verifyHardwareAttestationClaim(claim, updated.public_key);
+                  // Phase 1 accept rule: any non-throwing verification
+                  // outcome (valid OR truthful software sentinel) gets
+                  // propagated. Phase 2 will tighten to `hwResult.valid`.
+                  const phase1Accept = hwResult.valid || claim.platform === "software";
+                  if (phase1Accept) {
+                    const trustVc = await issueTrustCredential(
+                      {
+                        trust_level: updated.trust_level,
+                        interaction_count: updated.interaction_count,
+                        successful_tasks: updated.successful_tasks ?? 0,
+                        failed_tasks: updated.failed_tasks ?? 0,
+                        first_seen_at: updated.first_seen_at,
+                        last_seen_at: updated.last_seen_at,
+                        hardware_attestation: claim,
+                      },
+                      signingKeys.privateKey,
+                      signingKeys.publicKey,
+                      subjectDid,
+                    );
+                    onCredentialIssued?.(trustVc, remoteMotebitId);
+                  }
+                }
+              }
+            }
+          } catch {
+            // Hardware-attestation peer flow is best-effort.
+          }
+        }
       } catch {
         // Credential issuance is best-effort
       }

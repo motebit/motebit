@@ -331,7 +331,13 @@ function buildTrustAttestationGraph(
     }
 
     const blendedTrust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
-    const hwScore = scoreAttestation(candidate.hardware_attestation);
+    // Prefer peer-verified aggregate when available (Phase 1 of the
+    // hardware-attestation peer flow). Falls back to scoring the
+    // candidate's self-attestation claim when no peer credentials
+    // carrying hardware_attestation have been issued for it.
+    const hwScore =
+      candidate.hardware_attestation_aggregate?.attestation_score ??
+      scoreAttestation(candidate.hardware_attestation);
     graph.setEdge(selfId, candidate.motebit_id, [blendedTrust, hwScore] as const);
   }
 

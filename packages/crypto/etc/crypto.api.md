@@ -440,6 +440,7 @@ export function issueTrustCredential(trustRecord: {
     failed_tasks?: number;
     first_seen_at: number;
     last_seen_at: number;
+    hardware_attestation?: HardwareAttestationClaim_2;
 }, privateKey: Uint8Array, publicKey: Uint8Array, subjectDid: string, validForMs?: number, statusEndpoint?: string): Promise<VerifiableCredential<TrustCredentialSubject>>;
 
 // @public
@@ -939,6 +940,7 @@ export interface TrustCredentialSubject {
     failed_tasks: number;
     // (undocumented)
     first_seen_at: number;
+    hardware_attestation?: HardwareAttestationClaim_2;
     // (undocumented)
     id: string;
     // (undocumented)
@@ -1120,6 +1122,10 @@ export function verifyVerifiablePresentation(vp: VerifiablePresentation): Promis
     valid: boolean;
     errors: string[];
 }>;
+
+// Warnings were encountered during analysis:
+//
+// src/credentials.ts:387:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

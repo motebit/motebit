@@ -33,6 +33,17 @@ export interface CandidateProfile {
    * `HardwareAttestationSemiring`'s scoring.
    */
   hardware_attestation?: HardwareAttestationClaim;
+  /**
+   * Aggregated hardware-attestation evidence from peer-issued
+   * `AgentTrustCredential`s about this candidate. Populated by
+   * `aggregateHardwareAttestation`. When set, the routing path
+   * prefers `attestation_score` over the self-claim path above —
+   * peer-verified evidence dominates self-attestation. Absent when no
+   * peer has issued a trust credential carrying a `hardware_attestation`
+   * claim about this candidate. Phase 1 of the hardware-attestation peer
+   * flow (see docs/doctrine/promoting-private-to-public.md companion).
+   */
+  hardware_attestation_aggregate?: import("./credential-weight.js").HardwareAttestationAggregate;
 }
 
 export interface TaskRequirements {
