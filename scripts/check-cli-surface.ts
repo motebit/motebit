@@ -10,7 +10,7 @@
  * the CLI promise rested on changeset discipline alone — same word,
  * different rigor. This gate closes that asymmetry.
  *
- * Five sub-surfaces covered:
+ * Six sub-surfaces covered — the full commitment:
  *
  *   1. Subcommand tree — top-level subcommands and their sub-subcommands,
  *      extracted from `apps/cli/src/index.ts` dispatcher (every
@@ -41,9 +41,14 @@
  *      breaks their integrations. Transient files prefixed with `.` are
  *      intentionally excluded — they're implementation detail.
  *
- * The last sub-surface the original commitment named — MCP server tool
- * list exposed by `motebit serve` — is tracked as a follow-up that
- * extends this same baseline file.
+ *   6. MCP tool list — the canonical set of tools `motebit serve`
+ *      registers when called with no `--tools` override. Union of
+ *      builtins in `packages/tools/src/builtins/*.ts` (extracted from
+ *      `name: "…"` literals) and synthetic tools registered in
+ *      `packages/mcp-server/src/index.ts` (extracted from
+ *      `server.tool("…", …)` calls). MCP clients calling `motebit serve`
+ *      discover this tool set; removing a tool breaks client tool-call
+ *      paths pinned against specific tool names.
  *
  * Strategy:
  *   - Extract the current surface from source.
@@ -71,6 +76,8 @@ const INDEX_PATH = resolve(ROOT, "apps/cli/src/index.ts");
 const ARGS_PATH = resolve(ROOT, "apps/cli/src/args.ts");
 const SERVICES_API_SRC = resolve(ROOT, "services/api/src");
 const APPS_CLI_SRC = resolve(ROOT, "apps/cli/src");
+const TOOLS_BUILTINS = resolve(ROOT, "packages/tools/src/builtins");
+const MCP_SERVER_SRC = resolve(ROOT, "packages/mcp-server/src/index.ts");
 const BASELINE_PATH = resolve(ROOT, "apps/cli/etc/cli-surface.json");
 
 // ── Surface model ─────────────────────────────────────────────────────
@@ -109,6 +116,12 @@ interface CliSurface {
    * indicate the directory root. Sorted.
    */
   onDiskLayout: string[];
+  /**
+   * Canonical MCP tool names exposed by `motebit serve` — the union of
+   * builtin tools (packages/tools/src/builtins) and synthetic tools
+   * registered in packages/mcp-server. Sorted.
+   */
+  mcpTools: string[];
 }
 
 // ── Subcommand extraction ─────────────────────────────────────────────
@@ -351,6 +364,46 @@ function extractOnDiskLayout(): string[] {
   return [...paths].sort();
 }
 
+// ── MCP tool list extraction ──────────────────────────────────────────
+
+/**
+ * Builtin tools: every top-level `name: "<tool_name>"` in a
+ * ToolDefinition literal under packages/tools/src/builtins/*.ts.
+ * Synthetic tools: every `server.tool("<tool_name>", ...)` call in
+ * packages/mcp-server/src/index.ts. Union, sorted.
+ */
+function extractMcpTools(): string[] {
+  const tools = new Set<string>();
+
+  // Builtins — each file typically exports one or more ToolDefinition
+  // objects with a top-level `name:` field. goal-tools.ts has three.
+  for (const entry of readdirSync(TOOLS_BUILTINS, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) {
+      continue;
+    }
+    if (entry.name === "index.ts") continue;
+    const src = readFileSync(resolve(TOOLS_BUILTINS, entry.name), "utf-8");
+    // Match `name: "<tool_name>"` at the top level of an object literal.
+    // Conservative: two-space indent (ToolDefinition inside a const
+    // declaration) or start-of-line with whitespace.
+    const re = /^\s{0,4}name:\s*"([a-z][a-z0-9_]*)"/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      tools.add(m[1]!);
+    }
+  }
+
+  // Synthetic — registered directly in mcp-server via `server.tool("…", …)`.
+  const mcpSrc = readFileSync(MCP_SERVER_SRC, "utf-8");
+  const synthRe = /\bserver\.tool\(\s*"([a-z][a-z0-9_]*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = synthRe.exec(mcpSrc)) !== null) {
+    tools.add(m[1]!);
+  }
+
+  return [...tools].sort();
+}
+
 // ── Surface assembly ──────────────────────────────────────────────────
 
 function extractSurface(): CliSurface {
@@ -360,6 +413,7 @@ function extractSurface(): CliSurface {
     relayRoutes: extractRelayRoutes(),
     exitCodes: extractExitCodes(),
     onDiskLayout: extractOnDiskLayout(),
+    mcpTools: extractMcpTools(),
   };
 }
 
@@ -404,7 +458,9 @@ interface Diff {
     | "exit-code-added"
     | "exit-code-removed"
     | "path-added"
-    | "path-removed";
+    | "path-removed"
+    | "mcp-tool-added"
+    | "mcp-tool-removed";
   detail: string;
 }
 
@@ -484,6 +540,16 @@ function diffSurfaces(current: CliSurface, baseline: CliSurface): Diff[] {
     if (!curPaths.has(p)) diffs.push({ kind: "path-removed", detail: `~/.motebit/${p}` });
   }
 
+  // MCP tool list diff.
+  const curTools = new Set(current.mcpTools ?? []);
+  const baseTools = new Set(baseline.mcpTools ?? []);
+  for (const t of curTools) {
+    if (!baseTools.has(t)) diffs.push({ kind: "mcp-tool-added", detail: t });
+  }
+  for (const t of baseTools) {
+    if (!curTools.has(t)) diffs.push({ kind: "mcp-tool-removed", detail: t });
+  }
+
   return diffs;
 }
 
@@ -499,7 +565,7 @@ function main(): void {
   if (writeMode) {
     writeFileSync(BASELINE_PATH, currentJson);
     process.stderr.write(
-      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.relayRoutes.length} relay routes, ${current.exitCodes.length} exit codes, ${current.onDiskLayout.length} on-disk paths) to apps/cli/etc/cli-surface.json\n`,
+      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.relayRoutes.length} relay routes, ${current.exitCodes.length} exit codes, ${current.onDiskLayout.length} on-disk paths, ${current.mcpTools.length} MCP tools) to apps/cli/etc/cli-surface.json\n`,
     );
     return;
   }
@@ -517,7 +583,7 @@ function main(): void {
 
   if (diffs.length === 0) {
     process.stderr.write(
-      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.relayRoutes.length} relay route(s), ${current.exitCodes.length} exit code(s), ${current.onDiskLayout.length} on-disk path(s), all match baseline.\n`,
+      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.relayRoutes.length} relay route(s), ${current.exitCodes.length} exit code(s), ${current.onDiskLayout.length} on-disk path(s), ${current.mcpTools.length} MCP tool(s), all match baseline.\n`,
     );
     return;
   }

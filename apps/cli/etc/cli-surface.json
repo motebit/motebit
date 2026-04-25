@@ -887,5 +887,32 @@
     }
   ],
   "exitCodes": [0, 1, 2, 130],
-  "onDiskLayout": ["config.json", "identity.md", "motebit.db", "relay", "relay/relay.db"]
+  "onDiskLayout": ["config.json", "identity.md", "motebit.db", "relay", "relay/relay.db"],
+  "mcpTools": [
+    "complete_goal",
+    "computer",
+    "create_sub_goal",
+    "current_time",
+    "list_events",
+    "motebit_credentials",
+    "motebit_identity",
+    "motebit_query",
+    "motebit_recall",
+    "motebit_remember",
+    "motebit_service_listing",
+    "motebit_task",
+    "motebit_tools",
+    "read_file",
+    "read_url",
+    "recall_memories",
+    "recall_self",
+    "report_progress",
+    "rewrite_memory",
+    "search_conversations",
+    "self_reflect",
+    "shell_exec",
+    "undo_write",
+    "web_search",
+    "write_file"
+  ]
 }
