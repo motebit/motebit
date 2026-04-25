@@ -1,6 +1,11 @@
 {
   "subcommands": {
-    "approvals": ["approve", "deny", "list", "show"],
+    "approvals": [
+      "approve",
+      "deny",
+      "list",
+      "show"
+    ],
     "attest": [],
     "balance": [],
     "credentials": [],
@@ -8,9 +13,20 @@
     "discover": [],
     "doctor": [],
     "export": [],
-    "federation": ["peer", "peers", "status"],
+    "federation": [
+      "peer",
+      "peers",
+      "status"
+    ],
     "fund": [],
-    "goal": ["add", "list", "outcomes", "pause", "remove", "resume"],
+    "goal": [
+      "add",
+      "list",
+      "outcomes",
+      "pause",
+      "remove",
+      "resume"
+    ],
     "id": [],
     "init": [],
     "ledger": [],
@@ -19,13 +35,17 @@
     "migrate": [],
     "ps": [],
     "register": [],
-    "relay": ["up"],
+    "relay": [
+      "up"
+    ],
     "rotate": [],
     "run": [],
     "schema": [],
     "serve": [],
     "up": [],
-    "verify": ["identity"],
+    "verify": [
+      "identity"
+    ],
     "wallet": [],
     "withdraw": []
   },
@@ -264,6 +284,17 @@
       "type": "string"
     }
   ],
-  "exitCodes": [0, 1, 2, 130],
-  "onDiskLayout": ["config.json", "identity.md", "motebit.db", "relay", "relay/relay.db"]
+  "exitCodes": [
+    0,
+    1,
+    2,
+    130
+  ],
+  "onDiskLayout": [
+    "config.json",
+    "identity.md",
+    "motebit.db",
+    "relay",
+    "relay/relay.db"
+  ]
 }
