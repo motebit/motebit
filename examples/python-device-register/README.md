@@ -2,7 +2,7 @@
 
 A non-TypeScript reference implementation of `motebit/device-self-registration@1.0`. Single Python file, two PyPI dependencies (`pynacl` for Ed25519, `requests` for HTTP), no motebit code consumed at any step.
 
-This example exists as proof that motebit's protocol surface is implementable from the published specification alone. If a third party stands up a Python — or Go, or Rust — service that talks to a motebit relay, the work looks structurally identical to `register.py` because the spec, not the TypeScript implementation, is the contract.
+This example exists as a concrete proof — for one endpoint — that the published specification is sufficient to build a working client without consuming any motebit TypeScript code. Scope is deliberately narrow: `POST /api/v1/devices/register-self` exercises the canonical JSON + Ed25519 signing + base64url envelope shared by the rest of motebit's signed-artifact surface, so passing this end-to-end is a load-bearing signal that the spec's description of those primitives is correct. Broader endpoints (`ExecutionReceipt`, `SettlementRecord`, dispute resolution, etc.) are not exercised here; verifying them third-party-implementably is incremental work. A future Python — or Go, or Rust — implementer of any motebit endpoint would write code structurally identical to `register.py` for the cryptographic envelope; the per-endpoint wire shape is what differs.
 
 ## What it does
 
@@ -102,7 +102,7 @@ A successful registration from this script means the relay accepted a request th
 - Was signed with `pynacl`'s Ed25519 — a different library than `@motebit/crypto`'s `@noble/ed25519`.
 - Was encoded with stdlib base64.urlsafe_b64encode + manual padding-strip.
 
-If any of those four steps had a TypeScript-specific assumption (a field name only the TS code knew, a canonicalization quirk only `@motebit/encryption.canonicalJson` produced, a hex-vs-base64url confusion in the suite identifier, a padding mismatch on the signature), the relay would reject the request with HTTP 400. A successful 201 means the published spec is what the relay actually enforces.
+If any of those four steps had a TypeScript-specific assumption (a field name only the TS code knew, a canonicalization quirk only `@motebit/encryption.canonicalJson` produced, a hex-vs-base64url confusion in the suite identifier, a padding mismatch on the signature), the relay would reject the request with HTTP 400. A successful 201 means the published spec is what the relay actually enforces — for this endpoint. Endpoints that share the same canonical-JSON + Ed25519 + base64url envelope (every signed artifact in motebit) inherit the proof at the cryptographic layer; their per-endpoint wire shapes still need their own end-to-end pass when a third party adopts them.
 
 ## Conformance notes
 

@@ -469,6 +469,17 @@ async function phase3() {
     fail(err.message);
   }
 
+  // Note for runbook readers: the test agent's `expires_at` is 90 days,
+  // not 15 minutes. Earlier copies of this script claimed "auto-expire
+  // in 15min" in the cleanup phase below — that was wrong. The agent
+  // accumulates per run on the target relay until either:
+  //   1. A 90-day janitor sweep removes it, OR
+  //   2. The relay operator manually deletes the row, OR
+  //   3. A future revision of this script signs a deregister token
+  //      with the test agent's keypair before discarding it.
+  // For staging runs the accumulation is harmless; for any environment
+  // where it isn't, prefer (3).
+
   // Verify the agent is discoverable locally on Relay B
   test("Test agent discoverable on Relay B locally");
   try {
@@ -777,7 +788,7 @@ async function phase5() {
       });
       if (ok && body?.motebit_id === testAgentId) {
         console.log(
-          `${C.green}PASS${C.reset} ${C.dim}(agent exists, will auto-expire in 15min)${C.reset}`,
+          `${C.green}PASS${C.reset} ${C.dim}(agent exists; expires_at = registered_at + 90 days per relay janitor — accumulates per run on staging)${C.reset}`,
         );
         passed++;
       } else if (!ok && body?.error?.includes("not found")) {
