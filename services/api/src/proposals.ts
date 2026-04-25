@@ -16,13 +16,7 @@ export interface ProposalsDeps {
 export function registerProposalRoutes(deps: ProposalsDeps): void {
   const { app, moteDb, connections } = deps;
 
-  /**
-   * @experimental
-   * @since 1.0.0
-   * @stabilizes_by 2026-07-31
-   * @replacement <none — pin in spec or remove>
-   * @reason proposals.ts is a multi-agent negotiation protocol; no spec covers proposal-message shapes today. By stabilizes_by, land motebit/proposals@1.0 (or fold into plan-lifecycle-v1) and promote to @spec, or remove the surface.
-   */
+  /** @spec motebit/proposals@1.0 */
   app.post("/api/v1/proposals", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     const body = await c.req.json<{
@@ -87,13 +81,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
     return c.json({ proposal_id: body.proposal_id, status: "pending", expires_at: expiresAt }, 201);
   });
 
-  /**
-   * @experimental
-   * @since 1.0.0
-   * @stabilizes_by 2026-07-31
-   * @replacement <none — pin in spec or remove>
-   * @reason proposals.ts is a multi-agent negotiation protocol; no spec covers proposal-message shapes today. By stabilizes_by, land motebit/proposals@1.0 (or fold into plan-lifecycle-v1) and promote to @spec, or remove the surface.
-   */
+  /** @spec motebit/proposals@1.0 */
   app.get("/api/v1/proposals/:proposalId", (c) => {
     const proposalId = c.req.param("proposalId");
     const proposal = moteDb.db
@@ -127,13 +115,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
     });
   });
 
-  /**
-   * @experimental
-   * @since 1.0.0
-   * @stabilizes_by 2026-07-31
-   * @replacement <none — pin in spec or remove>
-   * @reason proposals.ts is a multi-agent negotiation protocol; no spec covers proposal-message shapes today. By stabilizes_by, land motebit/proposals@1.0 (or fold into plan-lifecycle-v1) and promote to @spec, or remove the surface.
-   */
+  /** @spec motebit/proposals@1.0 */
   app.post("/api/v1/proposals/:proposalId/respond", async (c) => {
     const proposalId = c.req.param("proposalId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
@@ -224,13 +206,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
     return c.json({ status: newStatus, all_responded: allResponded });
   });
 
-  /**
-   * @experimental
-   * @since 1.0.0
-   * @stabilizes_by 2026-07-31
-   * @replacement <none — pin in spec or remove>
-   * @reason proposals.ts is a multi-agent negotiation protocol; no spec covers proposal-message shapes today. By stabilizes_by, land motebit/proposals@1.0 (or fold into plan-lifecycle-v1) and promote to @spec, or remove the surface.
-   */
+  /** @spec motebit/proposals@1.0 */
   app.post("/api/v1/proposals/:proposalId/withdraw", (c) => {
     const proposalId = c.req.param("proposalId");
     const proposal = moteDb.db
@@ -253,13 +229,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
     return c.json({ status: "withdrawn" });
   });
 
-  /**
-   * @experimental
-   * @since 1.0.0
-   * @stabilizes_by 2026-07-31
-   * @replacement <none — pin in spec or remove>
-   * @reason proposals.ts is a multi-agent negotiation protocol; no spec covers proposal-message shapes today. By stabilizes_by, land motebit/proposals@1.0 (or fold into plan-lifecycle-v1) and promote to @spec, or remove the surface.
-   */
+  /** @spec motebit/proposals@1.0 */
   app.get("/api/v1/proposals", (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     const status = c.req.query("status");
@@ -293,13 +263,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
     });
   });
 
-  /**
-   * @experimental
-   * @since 1.0.0
-   * @stabilizes_by 2026-07-31
-   * @replacement <none — pin in spec or remove>
-   * @reason proposals.ts is a multi-agent negotiation protocol; no spec covers proposal-message shapes today. By stabilizes_by, land motebit/proposals@1.0 (or fold into plan-lifecycle-v1) and promote to @spec, or remove the surface.
-   */
+  /** @spec motebit/proposals@1.0 */
   app.post("/api/v1/proposals/:proposalId/step-result", async (c) => {
     const proposalId = c.req.param("proposalId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;

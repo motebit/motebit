@@ -440,6 +440,55 @@ P2pPaymentProof {
 - Amount matching MUST be exact (not `>=`). Overpayment or underpayment semantics are not defined and MUST be rejected.
 - The `settlement_address` MUST be explicitly declared by the agent, not inferred from the identity key.
 
+### 11.3 Relay Solvency Proof (Implemented)
+
+As of 2026-04-24, the reference relay exposes a **signed solvency proof** at `GET /api/v1/agents/:motebitId/solvency-proof?amount=<micro-units>`. The proof is the relay attesting that a named motebit has at least a requested amount available for withdrawal. It is the cross-verifiable counterpart to the relay's internal `getAccountBalanceDetailed` — third parties (counterparties, payment processors, auditors) can verify the relay's solvency claim without trusting the transport.
+
+#### Routes (foundation law)
+
+The route below is the binding cross-implementation contract. Renaming or relocating it is a wire break.
+
+- `GET /api/v1/agents/:motebitId/solvency-proof` — return a signed `SolvencyProof` for the named motebit at the requested amount. Public; no bearer auth.
+
+**Endpoint.**
+
+```
+GET /api/v1/agents/:motebitId/solvency-proof?amount=<micro-units>
+```
+
+Public — no bearer auth required, per services/api/CLAUDE.md rule 6 ("every truth the relay asserts is independently verifiable onchain without relay contact"). The query parameter `amount` is required, integer, micro-units, non-negative.
+
+**Wire shape.** The response body every implementation MUST emit:
+
+```
+SolvencyProof {
+  motebit_id:         string      // Subject of the proof
+  balance_available:  number      // Micro-units; respects dispute-window hold
+  amount_requested:   number      // Echoes the `amount` query parameter
+  sufficient:         boolean     // balance_available >= amount_requested
+  relay_id:           string      // motebit_id of the issuing relay (the signer)
+  attested_at:        number      // Unix ms when the proof was signed
+  expires_at:         number      // attested_at + 300_000 ms (5-minute TTL)
+  suite:              string      // Cryptosuite identifier (see @motebit/protocol SUITE_REGISTRY)
+  signature:          string      // Ed25519 hex over canonicalJson(payload without `signature`)
+}
+```
+
+**Verification.** A consumer with the relay's public key (resolvable via `discovery-v1.md` §3) verifies the proof in three steps:
+
+1. Strip `signature`; canonicalize the remaining fields; verify Ed25519 against the relay's identity key.
+2. Check `expires_at > now()` (with a small skew window per §13).
+3. Check `sufficient === true` and `amount_requested >= the amount the consumer cares about`.
+
+A proof is bound to a single `(motebit_id, amount_requested)` pair at a single point in time. Replay against a different amount is detectable: the consumer reads `amount_requested` from the proof and rejects if it doesn't match. Replay across time is detectable: `expires_at` enforces a 5-minute TTL.
+
+**Foundation Law.**
+
+- The relay MUST sign with its Ed25519 identity key declared at `discovery-v1.md` §3.1. A proof signed by a different key fails verification and MUST be rejected.
+- `balance_available` MUST respect the same dispute-window hold the withdrawal path enforces. A proof asserting `sufficient: true` MUST be backed by funds the relay would actually release on `requestWithdrawal` for that amount at that instant.
+- `expires_at` MUST be `attested_at + 300_000` ms exactly. Implementations MAY shorten the TTL but MUST NOT lengthen it without a spec amendment — a longer window weakens replay defense across time.
+- The endpoint MUST be public. Solvency is a thing third parties verify; gating it behind authentication defeats the purpose.
+
 ### 11.2 Aggregated Withdrawal Execution (Implemented)
 
 As of 2026-04-15, the reference relay supports a **withdrawal aggregation layer** on top of `GuestRail.withdraw`. The default sweep (`services/api/src/sweep.ts`) fires one withdrawal per eligible agent per tick — for agents with small balances, each fire pays the rail's fixed cost. Aggregation defers sub-threshold items into a shared queue and fires on a per-rail policy.

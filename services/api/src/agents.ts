@@ -187,13 +187,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   });
 
   // GET /api/v1/agents/:motebitId/solvency-proof — relay-signed balance attestation (public)
-  /**
-   * @experimental
-   * @since 1.0.0
-   * @stabilizes_by 2026-07-31
-   * @replacement <none — pin in spec or remove>
-   * @reason Endpoint emits a signed cross-verifiable solvency proof but the artifact wire format is not pinned by any current spec. By stabilizes_by, either land a spec section (e.g. settlement-v1 §X "Relay Solvency Proof") and promote to @spec, or remove the route. The annotation is the forcing function.
-   */
+  /** @spec motebit/settlement@1.0 */
   app.get("/api/v1/agents/:motebitId/solvency-proof", async (c) => {
     const motebitId = c.req.param("motebitId");
 
@@ -214,7 +208,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const balanceAvailable = detailed.available_for_withdrawal;
     const attestedAt = Date.now();
 
-    // Build proof payload (all fields except signature)
+    // Build proof payload (all fields except signature). `suite` is included
+    // in the signed body per settlement-v1 §11.3 + check-suite-declared #10.
     const payload = {
       motebit_id: motebitId,
       balance_available: balanceAvailable,
@@ -223,6 +218,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       relay_id: relayIdentity.relayMotebitId,
       attested_at: attestedAt,
       expires_at: attestedAt + SOLVENCY_TTL_MS, // 5-minute TTL
+      suite: "motebit-jcs-ed25519-hex-v1" as const,
     };
 
     // Sign with relay's Ed25519 key
