@@ -1,10 +1,10 @@
 /**
- * <ReferenceExample> — wraps a code block whose imports name a
- * workspace-private package (e.g. `@motebit/market`,
- * `@motebit/semiring`, `@motebit/mcp-server`). Names the block as
- * a reference-implementation snippet rather than a consumer
- * recipe, so a reader doesn't think they can `npm install` what
- * the import statement implies.
+ * ReferenceExample — wraps a code block whose imports name a
+ * workspace-private package (e.g. the market, semiring, or
+ * mcp-server packages). Names the block as a reference-
+ * implementation snippet rather than a consumer recipe, so a
+ * reader doesn't think they can npm-install what the import
+ * statement implies.
  *
  * The boundary the wrapper enforces is the same one the sentinel
  * commit (fa5fdfeb) made explicit in the version-doctrine: only
@@ -12,21 +12,15 @@
  * packages exist for source organization and have no version or
  * API surface to claim. See `/docs/concepts/public-surface`.
  *
- * Usage:
- *
- *   <ReferenceExample
- *     pkg="@motebit/market"
- *     source="packages/market/src/budget.ts"
- *     note="The runtime calls this internally; consumers integrate via the spec or the public packages."
- *   >
- *     ```typescript
- *     import { allocateBudget } from "@motebit/market";
- *     ```
+ * Usage in MDX:
+ *   <ReferenceExample pkg="..." source="packages/.../src/...">
+ *     (a fenced typescript code block with the private-package
+ *     import — the wrapper recolors and labels it.)
  *   </ReferenceExample>
  *
- * Drift gate `check-doc-private-imports` enforces that any
- * `import ... from "@motebit/<X>"` where X is "private": true
- * appears inside this wrapper.
+ * Drift gate `check-doc-private-imports` enforces that any docs-
+ * site import naming a private package appears inside this
+ * wrapper. See `scripts/check-doc-private-imports.ts`.
  */
 import type { ReactNode } from "react";
 
