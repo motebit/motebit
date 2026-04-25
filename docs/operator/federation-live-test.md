@@ -1,0 +1,86 @@
+# Federation E2E live test runbook
+
+The `scripts/test-federation-live.mjs` script exercises Phases 1-5 of `motebit/relay-federation@1.0` (Identity / Peering / Discovery / Heartbeat / Cleanup) against two real cross-cloud relays. This runbook documents how to run it and what a clean pass looks like.
+
+## When to run
+
+- After any change to `services/api/src/federation.ts` or `packages/circuit-breaker/`.
+- After any change to the `FEDERATION_SUITE` literal (the cryptosuite identifier used in peering + heartbeat signing).
+- Quarterly as a recurring liveness probe of the staging federation.
+
+## Prerequisites
+
+Two real relay deployments are required. The reference setup uses Fly.io:
+
+| Relay | URL                                  | Config                            |
+| ----- | ------------------------------------ | --------------------------------- |
+| A     | `https://motebit-sync-stg.fly.dev`   | `services/api/fly.staging.toml`   |
+| B     | `https://motebit-sync-stg-b.fly.dev` | `services/api/fly.staging-b.toml` |
+
+Both apps share the **same** `MOTEBIT_API_TOKEN`. The script registers a test agent on B and discovers it from A under that bearer.
+
+To rotate the test token:
+
+```bash
+TOKEN=$(node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')
+fly secrets set MOTEBIT_API_TOKEN="$TOKEN" -a motebit-sync-stg --stage
+fly secrets set MOTEBIT_API_TOKEN="$TOKEN" -a motebit-sync-stg-b --stage
+fly machine restart $(fly machine list -a motebit-sync-stg --json | jq -r '.[0].id') -a motebit-sync-stg
+fly machine restart $(fly machine list -a motebit-sync-stg-b --json | jq -r '.[0].id') -a motebit-sync-stg-b
+```
+
+## Run
+
+```bash
+TOKEN="<paste-token>"
+RELAY_A_URL=https://motebit-sync-stg.fly.dev   RELAY_A_TOKEN="$TOKEN" \
+RELAY_B_URL=https://motebit-sync-stg-b.fly.dev RELAY_B_TOKEN="$TOKEN" \
+node scripts/test-federation-live.mjs
+```
+
+A clean pass returns `20/20 PASSED`. Two tests are SKIP-by-design (the script uses a _synthetic_ peer keypair for cleanliness, so cross-relay-peer discovery between the two real relays isn't exercised; that would require a separate "real two-real-peer" setup).
+
+## What it validates
+
+- **Phase 1 — Identity exchange (4 tests):** `GET /federation/v1/identity` on both relays returns `motebit/relay-federation@1.0`-spec-conformant payloads with distinct Ed25519 keys.
+- **Phase 2 — Peering handshake (4 tests):** Synthetic peer A proposes to relay B; B challenges with a nonce; A signs `${relay_id}:${nonce}:${FEDERATION_SUITE}`; B verifies and activates the peer record. The `:${FEDERATION_SUITE}` suffix is critical — it binds the handshake to a specific cryptosuite (`motebit-concat-ed25519-hex-v1`) so a peer attesting under a different suite is rejected.
+- **Phase 3 — Federated discovery (4 tests):** Test agent registered on relay B is discoverable through `GET /api/v1/agents/discover` (local) and `POST /federation/v1/discover` (the cross-relay path).
+- **Phase 4 — Heartbeat (4 tests):** Heartbeat signs `${relay_id}|${timestamp}|${FEDERATION_SUITE}` (note the `|` separator — distinct from the peering `:` separator); relay verifies the signature, records the timestamp, and rejects payloads with wrong signatures or >5min clock drift.
+- **Phase 5 — Cleanup (4 tests):** The synthetic peer is removed via `POST /federation/v1/peer/remove` (also signature-gated); the test agent is left to auto-expire (15 minutes).
+
+## Common failure modes and fixes
+
+### "Challenge response verification failed" (HTTP 403) on Phase 2 confirm
+
+The script's signing payload doesn't match what the relay verifier expects. Most likely cause: the `FEDERATION_SUITE` constant in `services/api/src/federation.ts` changed and `scripts/test-federation-live.mjs` wasn't updated. Look at lines 1077 and 1125 of `federation.ts` for the canonical signing payload format.
+
+### "Heartbeat signature verification failed" (HTTP 403) on Phase 4
+
+Same root cause as above, applied to `${relay_id}|${timestamp}|${FEDERATION_SUITE}`. See line 605-608 of `federation.ts`.
+
+### Phase 3 test agent register fails with 401
+
+The two relays don't share the same `MOTEBIT_API_TOKEN`. Re-run the rotation block above and verify both apps received the secret + restarted.
+
+### Both relays unreachable
+
+Check `fly status -a motebit-sync-stg` and `fly status -a motebit-sync-stg-b`. If a machine is in `stopped` state, fly's `auto_stop_machines` parked it; the next request will wake it but Phase 1 may time out on the cold start. Wait 10 seconds and re-run.
+
+## What this does NOT validate
+
+- **§6.2 dispute orchestration.** Adjudicator quorum requires ≥3 peers; staging only has 2. Deferred until a third peer is deployed.
+- **Real cross-relay task forwarding under load.** The script registers a test agent and discovers it; it does not submit a real task that gets routed across the federation boundary. That's an additional scenario.
+- **Heartbeat-based peer suspension.** The 3-missed-heartbeat suspension rule is exercised in `federation-chaos.test.ts` against in-memory relays; a real-network test would need a deliberate disconnect (firewall rule, fly machine stop) which this script doesn't do.
+- **Recovery semantics after a peer comes back online.** Same — chaos territory, not a single-pass live test.
+
+## Operational cost
+
+`motebit-sync-stg-b` is a shared-CPU 1x machine on Fly.io with a 1GB volume. Approximately $5/month at current Fly pricing. Auto-stop is enabled, so idle hours don't burn full price.
+
+## Cleanup if not running tests for a while
+
+```bash
+fly apps destroy motebit-sync-stg-b
+```
+
+Removes the second peer cleanly. The first peer (`motebit-sync-stg`) stays — it's federation-peered with prod and serves as the always-on cross-cloud probe.

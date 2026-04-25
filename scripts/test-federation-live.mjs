@@ -224,9 +224,7 @@ async function phase2() {
   console.log("");
 
   if (!identityA || !identityB) {
-    console.log(
-      `  ${C.dim}Skipping — Phase 1 identity exchange required${C.reset}`,
-    );
+    console.log(`  ${C.dim}Skipping — Phase 1 identity exchange required${C.reset}`);
     console.log("");
     return;
   }
@@ -273,19 +271,16 @@ async function phase2() {
   let peerNonce = null;
   try {
     const nonce = crypto.randomUUID();
-    const { ok, body } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/peer/propose`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          relay_id: syntheticRelayId,
-          public_key: syntheticPeer.publicKeyHex,
-          endpoint_url: `https://synthetic-test-peer.invalid`,
-          display_name: "Federation Test Peer",
-          nonce,
-        }),
-      },
-    );
+    const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/propose`, {
+      method: "POST",
+      body: JSON.stringify({
+        relay_id: syntheticRelayId,
+        public_key: syntheticPeer.publicKeyHex,
+        endpoint_url: `https://synthetic-test-peer.invalid`,
+        display_name: "Federation Test Peer",
+        nonce,
+      }),
+    });
 
     if (!ok) {
       // 409 means peer already exists — that's okay for repeated runs
@@ -313,52 +308,46 @@ async function phase2() {
   test("Peering confirmation completes handshake");
   if (peerNonce) {
     try {
-      // Sign: syntheticRelayId + ":" + peerNonce (Relay B's nonce)
-      const confirmMsg = Buffer.from(`${syntheticRelayId}:${peerNonce}`);
+      // Sign: ${relay_id}:${nonce}:${FEDERATION_SUITE}. The suite suffix
+      // binds the handshake to a specific cryptosuite per
+      // services/api/src/federation.ts (FEDERATION_SUITE constant on
+      // line 27). The script was written before the suite-binding
+      // landed during the 2026-04-13 cryptosuite-agility pass; updating
+      // here closes that drift.
+      const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
+      const confirmMsg = Buffer.from(`${syntheticRelayId}:${peerNonce}:${FEDERATION_SUITE}`);
       const challengeResponse = signBytes(confirmMsg, syntheticPrivKey);
 
-      const { ok, body } = await fetchJSON(
-        `${RELAY_B_URL}/federation/v1/peer/confirm`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            relay_id: syntheticRelayId,
-            challenge_response: toHex(challengeResponse),
-          }),
-        },
-      );
+      const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          relay_id: syntheticRelayId,
+          challenge_response: toHex(challengeResponse),
+        }),
+      });
 
       if (!ok) {
         fail(`HTTP ${JSON.stringify(body)}`);
       } else {
-        expect(
-          body.status === "active",
-          `expected status=active, got ${body.status}`,
-        );
+        expect(body.status === "active", `expected status=active, got ${body.status}`);
         peeringEstablished = true;
       }
     } catch (err) {
       fail(err.message);
     }
   } else {
-    console.log(
-      `${C.yellow}SKIP${C.reset} ${C.dim}(no nonce from proposal)${C.reset}`,
-    );
+    console.log(`${C.yellow}SKIP${C.reset} ${C.dim}(no nonce from proposal)${C.reset}`);
     passed++;
   }
 
   // Step 3: Verify peer appears in peer list
   test("Synthetic peer visible in Relay B's peer list");
   try {
-    const { ok, body } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/peers`,
-    );
+    const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peers`);
     if (!ok) {
       fail(`HTTP ${JSON.stringify(body)}`);
     } else {
-      const peer = (body.peers || []).find(
-        (p) => p.peer_relay_id === syntheticRelayId,
-      );
+      const peer = (body.peers || []).find((p) => p.peer_relay_id === syntheticRelayId);
       if (!peer) {
         fail(`peer ${syntheticRelayId} not found in peers list`);
       } else {
@@ -389,25 +378,20 @@ async function phase2() {
   test("Cross-relay proposal: A's identity proposed to B");
   try {
     const nonce = crypto.randomUUID();
-    const { status, body } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/peer/propose`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          relay_id: identityA.relay_motebit_id,
-          public_key: identityA.public_key,
-          endpoint_url: RELAY_A_URL,
-          display_name: "Relay A (live test)",
-          nonce,
-        }),
-      },
-    );
+    const { status, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/propose`, {
+      method: "POST",
+      body: JSON.stringify({
+        relay_id: identityA.relay_motebit_id,
+        public_key: identityA.public_key,
+        endpoint_url: RELAY_A_URL,
+        display_name: "Relay A (live test)",
+        nonce,
+      }),
+    });
 
     if (status === 409) {
       // Already peered — great, that's the expected production state
-      console.log(
-        `${C.green}PASS${C.reset} ${C.dim}(already peered)${C.reset}`,
-      );
+      console.log(`${C.green}PASS${C.reset} ${C.dim}(already peered)${C.reset}`);
       passed++;
     } else if (status === 200 || status === 201) {
       pass(); // Proposal accepted, pending confirm
@@ -462,23 +446,20 @@ async function phase3() {
     }
 
     // Then register with capabilities
-    const { ok, body } = await fetchJSON(
-      `${RELAY_B_URL}/api/v1/agents/register`,
-      {
-        method: "POST",
-        headers: authHeaders(RELAY_B_TOKEN),
-        body: JSON.stringify({
-          motebit_id: testAgentId,
-          endpoint_url: "https://federation-test-agent.invalid/mcp",
-          capabilities: [testCapability, "federation_test"],
-          public_key: testAgentKeypair.publicKeyHex,
-          metadata: {
-            name: "Federation Test Agent",
-            description: "Temporary agent for federation testing",
-          },
-        }),
-      },
-    );
+    const { ok, body } = await fetchJSON(`${RELAY_B_URL}/api/v1/agents/register`, {
+      method: "POST",
+      headers: authHeaders(RELAY_B_TOKEN),
+      body: JSON.stringify({
+        motebit_id: testAgentId,
+        endpoint_url: "https://federation-test-agent.invalid/mcp",
+        capabilities: [testCapability, "federation_test"],
+        public_key: testAgentKeypair.publicKeyHex,
+        metadata: {
+          name: "Federation Test Agent",
+          description: "Temporary agent for federation testing",
+        },
+      }),
+    });
     if (!ok) {
       fail(`register failed: ${JSON.stringify(body)}`);
     } else {
@@ -498,9 +479,7 @@ async function phase3() {
     if (!ok) {
       fail(`discover failed: ${JSON.stringify(body)}`);
     } else {
-      const found = (body.agents || []).some(
-        (a) => a.motebit_id === testAgentId,
-      );
+      const found = (body.agents || []).some((a) => a.motebit_id === testAgentId);
       expect(found, `agent ${testAgentId} not found in B's discover results`);
     }
   } catch (err) {
@@ -520,9 +499,7 @@ async function phase3() {
     if (!ok) {
       fail(`discover failed: ${JSON.stringify(body)}`);
     } else {
-      const found = (body.agents || []).some(
-        (a) => a.motebit_id === testAgentId,
-      );
+      const found = (body.agents || []).some((a) => a.motebit_id === testAgentId);
       if (found) {
         // Full federation working
         const agent = body.agents.find((a) => a.motebit_id === testAgentId);
@@ -532,16 +509,10 @@ async function phase3() {
         passed++;
       } else {
         // Discovery didn't propagate — check if relays are actually peered
-        const { body: peersBody } = await fetchJSON(
-          `${RELAY_A_URL}/federation/v1/peers`,
-        );
-        const activePeers = (peersBody.peers || []).filter(
-          (p) => p.state === "active",
-        );
+        const { body: peersBody } = await fetchJSON(`${RELAY_A_URL}/federation/v1/peers`);
+        const activePeers = (peersBody.peers || []).filter((p) => p.state === "active");
         const bIsPeer = activePeers.some(
-          (p) =>
-            p.peer_relay_id === identityB?.relay_motebit_id ||
-            p.endpoint_url === RELAY_B_URL,
+          (p) => p.peer_relay_id === identityB?.relay_motebit_id || p.endpoint_url === RELAY_B_URL,
         );
         if (!bIsPeer) {
           console.log(
@@ -564,26 +535,21 @@ async function phase3() {
   test("Direct federation discover endpoint on Relay B returns test agent");
   try {
     const queryId = crypto.randomUUID();
-    const { ok, body } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/discover`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          query: { capability: testCapability, limit: 10 },
-          hop_count: 0,
-          max_hops: 1,
-          visited: ["synthetic-test-relay"],
-          query_id: queryId,
-          origin_relay: "synthetic-test-relay",
-        }),
-      },
-    );
+    const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/discover`, {
+      method: "POST",
+      body: JSON.stringify({
+        query: { capability: testCapability, limit: 10 },
+        hop_count: 0,
+        max_hops: 1,
+        visited: ["synthetic-test-relay"],
+        query_id: queryId,
+        origin_relay: "synthetic-test-relay",
+      }),
+    });
     if (!ok) {
       fail(`federation discover failed: ${JSON.stringify(body)}`);
     } else {
-      const found = (body.agents || []).some(
-        (a) => a.motebit_id === testAgentId,
-      );
+      const found = (body.agents || []).some((a) => a.motebit_id === testAgentId);
       expect(found, `agent not found in federation discover response`);
     }
   } catch (err) {
@@ -606,9 +572,7 @@ async function phase4() {
   console.log("");
 
   if (!peeringEstablished || !phase2.syntheticRelayId) {
-    console.log(
-      `  ${C.dim}Skipping — Phase 2 peering required${C.reset}`,
-    );
+    console.log(`  ${C.dim}Skipping — Phase 2 peering required${C.reset}`);
     console.log("");
     return;
   }
@@ -620,21 +584,23 @@ async function phase4() {
   test("Heartbeat from synthetic peer accepted by Relay B");
   try {
     const timestamp = Date.now();
-    const message = Buffer.from(`${syntheticRelayId}${timestamp}`);
+    // Heartbeat signing: ${relay_id}|${timestamp}|${FEDERATION_SUITE}
+    // per services/api/src/federation.ts (uses `|` separator, distinct
+    // from the peering challenge's `:` separator). Suite-bound for the
+    // same cryptosuite-agility reason as the confirm step.
+    const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
+    const message = Buffer.from(`${syntheticRelayId}|${timestamp}|${FEDERATION_SUITE}`);
     const sig = signBytes(message, syntheticPrivKey);
 
-    const { ok, body } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/peer/heartbeat`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          relay_id: syntheticRelayId,
-          timestamp,
-          agent_count: 0,
-          signature: toHex(sig),
-        }),
-      },
-    );
+    const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({
+        relay_id: syntheticRelayId,
+        timestamp,
+        agent_count: 0,
+        signature: toHex(sig),
+      }),
+    });
 
     if (!ok) {
       fail(`heartbeat rejected: ${JSON.stringify(body)}`);
@@ -651,15 +617,11 @@ async function phase4() {
   // Verify last_heartbeat_at updated in peer list
   test("Peer list shows recent heartbeat timestamp");
   try {
-    const { ok, body } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/peers`,
-    );
+    const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peers`);
     if (!ok) {
       fail(`peers fetch failed: ${JSON.stringify(body)}`);
     } else {
-      const peer = (body.peers || []).find(
-        (p) => p.peer_relay_id === syntheticRelayId,
-      );
+      const peer = (body.peers || []).find((p) => p.peer_relay_id === syntheticRelayId);
       if (!peer) {
         fail(`synthetic peer not found in peers list`);
       } else {
@@ -679,23 +641,17 @@ async function phase4() {
   try {
     const timestamp = Date.now();
     // Sign wrong message
-    const badSig = signBytes(
-      Buffer.from("wrong-message"),
-      syntheticPrivKey,
-    );
+    const badSig = signBytes(Buffer.from("wrong-message"), syntheticPrivKey);
 
-    const { status } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/peer/heartbeat`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          relay_id: syntheticRelayId,
-          timestamp,
-          agent_count: 0,
-          signature: toHex(badSig),
-        }),
-      },
-    );
+    const { status } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({
+        relay_id: syntheticRelayId,
+        timestamp,
+        agent_count: 0,
+        signature: toHex(badSig),
+      }),
+    });
 
     expect(status === 403, `expected 403, got ${status}`);
   } catch (err) {
@@ -709,18 +665,15 @@ async function phase4() {
     const message = Buffer.from(`${syntheticRelayId}${timestamp}`);
     const sig = signBytes(message, syntheticPrivKey);
 
-    const { status } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/peer/heartbeat`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          relay_id: syntheticRelayId,
-          timestamp,
-          agent_count: 0,
-          signature: toHex(sig),
-        }),
-      },
-    );
+    const { status } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({
+        relay_id: syntheticRelayId,
+        timestamp,
+        agent_count: 0,
+        signature: toHex(sig),
+      }),
+    });
 
     expect(status === 400, `expected 400 (clock drift), got ${status}`);
   } catch (err) {
@@ -739,9 +692,7 @@ async function phase5() {
   console.log("");
 
   if (SKIP_CLEANUP) {
-    console.log(
-      `  ${C.dim}Skipping cleanup (--skip-cleanup flag)${C.reset}`,
-    );
+    console.log(`  ${C.dim}Skipping cleanup (--skip-cleanup flag)${C.reset}`);
     console.log("");
     return;
   }
@@ -750,29 +701,20 @@ async function phase5() {
   if (phase2.syntheticRelayId && phase2.syntheticPrivKey) {
     test("Remove synthetic peer from Relay B");
     try {
-      const sig = signBytes(
-        Buffer.from(phase2.syntheticRelayId),
-        phase2.syntheticPrivKey,
-      );
+      const sig = signBytes(Buffer.from(phase2.syntheticRelayId), phase2.syntheticPrivKey);
 
-      const { ok, body } = await fetchJSON(
-        `${RELAY_B_URL}/federation/v1/peer/remove`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            relay_id: phase2.syntheticRelayId,
-            signature: toHex(sig),
-          }),
-        },
-      );
+      const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/remove`, {
+        method: "POST",
+        body: JSON.stringify({
+          relay_id: phase2.syntheticRelayId,
+          signature: toHex(sig),
+        }),
+      });
 
       if (!ok) {
         fail(`peer removal failed: ${JSON.stringify(body)}`);
       } else {
-        expect(
-          body.status === "removed",
-          `expected status=removed, got ${body.status}`,
-        );
+        expect(body.status === "removed", `expected status=removed, got ${body.status}`);
       }
     } catch (err) {
       fail(err.message);
@@ -781,16 +723,12 @@ async function phase5() {
     // Verify peer is gone from active list
     test("Synthetic peer no longer active in peer list");
     try {
-      const { ok, body } = await fetchJSON(
-        `${RELAY_B_URL}/federation/v1/peers`,
-      );
+      const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peers`);
       if (!ok) {
         fail(`peers fetch failed`);
       } else {
         const peer = (body.peers || []).find(
-          (p) =>
-            p.peer_relay_id === phase2.syntheticRelayId &&
-            p.state === "active",
+          (p) => p.peer_relay_id === phase2.syntheticRelayId && p.state === "active",
         );
         expect(!peer, `peer still active after removal`);
       }
@@ -805,13 +743,9 @@ async function phase5() {
     try {
       // We can't remove it via the protocol (need A's private key to sign removal).
       // Check if it's pending and note it — this is informational, not a failure.
-      const { body } = await fetchJSON(
-        `${RELAY_B_URL}/federation/v1/peers`,
-      );
+      const { body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peers`);
       const pending = (body.peers || []).find(
-        (p) =>
-          p.peer_relay_id === identityA.relay_motebit_id &&
-          p.state === "pending",
+        (p) => p.peer_relay_id === identityA.relay_motebit_id && p.state === "pending",
       );
       if (pending) {
         console.log(
@@ -838,19 +772,16 @@ async function phase5() {
       // The relay's periodic cleanup deletes expired entries.
       // For immediate cleanup, we'd need the agent's signed token.
       // Instead, verify the agent was registered and note TTL-based cleanup.
-      const { ok, body } = await fetchJSON(
-        `${RELAY_B_URL}/api/v1/agents/${testAgentId}`,
-        { headers: authHeaders(RELAY_B_TOKEN) },
-      );
+      const { ok, body } = await fetchJSON(`${RELAY_B_URL}/api/v1/agents/${testAgentId}`, {
+        headers: authHeaders(RELAY_B_TOKEN),
+      });
       if (ok && body?.motebit_id === testAgentId) {
         console.log(
           `${C.green}PASS${C.reset} ${C.dim}(agent exists, will auto-expire in 15min)${C.reset}`,
         );
         passed++;
       } else if (!ok && body?.error?.includes("not found")) {
-        console.log(
-          `${C.green}PASS${C.reset} ${C.dim}(agent already expired/removed)${C.reset}`,
-        );
+        console.log(`${C.green}PASS${C.reset} ${C.dim}(agent already expired/removed)${C.reset}`);
         passed++;
       } else {
         // Any response is fine for cleanup
