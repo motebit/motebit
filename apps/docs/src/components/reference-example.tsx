@@ -48,9 +48,16 @@ export function ReferenceExample({ pkg, source, note, children }: ReferenceExamp
 
   return (
     <aside
-      className="my-6 rounded-lg border p-4"
+      // Left-edge accent stripe (same pattern as the license-tiers
+      // Private row) makes the boundary visually unmistakable without
+      // adopting a warning-shaped chrome that would fight motebit's
+      // calm aesthetic. The stripe says: this block is in a different
+      // category than the surrounding prose. The header text says
+      // exactly which category.
+      className="my-6 overflow-hidden rounded-lg border border-l-4 p-4"
       style={{
         borderColor: "var(--color-fd-border)",
+        borderLeftColor: "var(--color-fd-primary)",
         background: "var(--color-fd-card)",
       }}
       aria-label={`Reference-implementation example from ${pkg}`}
@@ -59,7 +66,12 @@ export function ReferenceExample({ pkg, source, note, children }: ReferenceExamp
         className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs"
         style={{ color: "var(--color-fd-muted-foreground)" }}
       >
-        <span className="font-semibold uppercase tracking-wide">Reference implementation</span>
+        <span
+          className="font-semibold uppercase tracking-wide"
+          style={{ color: "var(--color-fd-primary)" }}
+        >
+          Reference implementation — not for direct import
+        </span>
         <code
           className="rounded px-1.5 py-0.5 font-mono"
           style={{
@@ -91,8 +103,12 @@ export function ReferenceExample({ pkg, source, note, children }: ReferenceExamp
         style={{ color: "var(--color-fd-muted-foreground)" }}
       >
         {note ? note + " " : null}
-        This example shows what motebit&apos;s reference runtime does internally — the package is
-        not published to npm, and its API is not under semver. Integrate via{" "}
+        This snippet shows what motebit&apos;s reference runtime does internally. The package is
+        workspace-internal —{" "}
+        <strong style={{ color: "var(--color-fd-foreground)" }}>
+          not on npm, not under semver, not a supported import target.
+        </strong>{" "}
+        For external integrations, use{" "}
         <a
           href="/docs/concepts/public-surface"
           className="underline decoration-dotted underline-offset-2"
