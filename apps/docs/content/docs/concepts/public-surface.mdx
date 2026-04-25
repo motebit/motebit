@@ -1,0 +1,55 @@
+---
+title: Public surface
+description: What motebit promises stability for, what it doesn't, and where the boundary is drawn.
+---
+
+Motebit is a protocol-first project. The integration surface is the spec, not any package. Eleven npm packages publish at `1.0.0` as the working reference; everything else in the monorepo exists for source organization and carries no version surface to claim. This page names the boundary explicitly so a reader can tell, at a glance, what they can build against.
+
+## Three layers
+
+| Layer | License | What | Public promise |
+|---|---|---|---|
+| Math / format | Apache-2.0 | Types, primitives, canonical forms, semiring algebra | Yes — third parties build against this |
+| Judgment / engine | BSL-1.1 | The actual algorithms — market, semiring, runtime, mcp-server, memory-graph, … | **No.** Source-available so you can read or fork; not stabilized for direct consumption |
+| Accumulated state | Private | Trust graph, federation routes, signed audit ledger | Never licensed |
+
+The three-layer split is doctrine, not preference. It's what lets the protocol stay open while the implementation stays free to refactor.
+
+## What's published
+
+**Ten Apache-2.0 packages — the permissive floor.** Anyone can implement against these in any language without permission. Each carries an explicit patent grant.
+
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — types, semirings, routing primitives, crypto-suite registry
+- [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract; stable types and adapter interfaces
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every motebit artifact
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — `verifyFile` / `verifyArtifact` / `formatHuman` library
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — `motebit-verify` CLI bundling the four platform leaves
+- [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest) — iOS App Attest chain verifier
+- [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) — Android Play Integrity verifier
+- [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — Windows / Linux TPM 2.0 verifier
+- [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn) — WebAuthn packed-attestation verifier
+- [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed identity or runnable agent service
+
+**One BSL-1.1 package — the reference runtime.** The `motebit` CLI bundle is the operator-facing product, source-available now and converging to Apache-2.0 four years after each version's release.
+
+- [`motebit`](https://www.npmjs.com/package/motebit) — REPL, daemon, delegation, MCP server, relay-mediated marketplace
+
+The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list. Not the internal package graph.
+
+## What's not published
+
+Fifty-one workspace-private packages are pinned to version `0.0.0-private`. The sentinel makes the absence of a semver claim explicit — these packages exist for source organization, get bundled into `motebit`, and have no public API to keep stable. Examples: `@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, `@motebit/memory-graph`, `@motebit/policy`. You can read the source. You can fork the repo. You cannot `npm install` them, and motebit makes no promises about their internal APIs from one release to the next.
+
+This isn't laziness about API design. It's the inverse: every package promoted to public adds a permanent maintenance surface, locks refactoring decisions, and converts internal cleanups into political major-bumps. Motebit promotes private to public only when a real third party needs it — not when a doc page would be tidier with the import statement.
+
+## How to integrate
+
+Three paths, in order of how much motebit you take with you:
+
+1. **Implement the spec.** Twenty-one open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
+
+2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The full type surface is fixed by the api-extractor baselines at [`packages/{protocol,sdk,crypto,verifier,verify}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break requires a `major` changeset.
+
+3. **Run `motebit` and use its operator surface.** Install the bundle via `npm install -g motebit`. The CLI subcommands, flags, exit codes, `~/.motebit/` layout, and relay HTTP routes are stable per the operator-surface check (`check-cli-surface`). The internals can refactor freely; the surface holds.
+
+For the implementation-detail-level documents under [`/docs/developer/`](/docs/developer/identity-standard), assume any code block whose imports name a workspace-private package is a reference-implementation example, not a recipe. Those pages explain what motebit's reference runtime does internally; they're not promises about what you can `npm install`.

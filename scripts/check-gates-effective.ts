@@ -835,6 +835,30 @@ export const __probeOnlyDeprecationDrift = 1;
         ),
       ),
   },
+  {
+    script: "check-doc-private-imports",
+    proves:
+      'flags a `from "@motebit/<private>"` import in docs MDX that is NOT wrapped in `<ReferenceExample>` — exactly the doctrine drift the gate exists for: a developer doc page leaking an unimportable private package as if it were public npm surface',
+    perturb: () =>
+      // Drop a fixture MDX file containing a top-level `from
+      // "@motebit/market"` import outside any wrapper. Distinctive
+      // filename so cleanup can find and remove it cleanly. The
+      // gate's import scanner picks it up as a violation.
+      writeFixture(
+        `apps/docs/content/docs/developer/${PROBE_PREFIX}private_import_violation.mdx`,
+        [
+          "---",
+          "title: Probe fixture",
+          "description: Probe fixture — intentional unwrapped private-package import.",
+          "---",
+          "",
+          "```typescript",
+          'import { allocateBudget } from "@motebit/market";',
+          "```",
+          "",
+        ].join("\n"),
+      ),
+  },
 ];
 
 /**

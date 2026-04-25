@@ -189,6 +189,8 @@ Provenance models derivation as sets of paths:
 
 Combine any value semiring with provenance tracking:
 
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/annotated.ts">
+
 ```typescript
 import {
   annotatedSemiring,
@@ -217,17 +219,23 @@ const carol = paths.get("carol");
 //                 direct      via Bob
 ```
 
+</ReferenceExample>
+
 Every query returns both the optimal value and the derivation paths that produced it.
 
 ### Bounded provenance
 
 Provenance can grow exponentially in graphs with many parallel paths. `boundedProvenanceSemiring(maxPaths)` caps the number of tracked derivations, keeping the shortest paths (fewest hops = simplest explanation):
 
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/annotated.ts">
+
 ```typescript
 import { boundedProvenanceSemiring } from "@motebit/semiring";
 
 const bounded = boundedProvenanceSemiring(10); // keep top 10 shortest derivations
 ```
+
+</ReferenceExample>
 
 The `annotatedSemiring` function uses bounded provenance by default (cap of 100 paths).
 
@@ -253,6 +261,8 @@ interface RouteWeight {
 
 ### Building an agent graph
 
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-graph.ts">
+
 ```typescript
 import { buildAgentGraph, mostTrustedPath, cheapestPath, rankReachableAgents } from "@motebit/semiring";
 
@@ -272,9 +282,13 @@ const ranked = rankReachableAgents(graph, selfId, {
 // [{ motebit_id, score, route }, ...]
 ```
 
+</ReferenceExample>
+
 ### Graph projection
 
 `projectGraph` projects a multi-dimensional graph down to a single semiring dimension — the functorial projection from `RouteWeight` to `T`:
+
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-graph.ts">
 
 ```typescript
 import { projectGraph, TrustSemiring } from "@motebit/semiring";
@@ -282,6 +296,8 @@ import { projectGraph, TrustSemiring } from "@motebit/semiring";
 const trustOnly = projectGraph(graph, TrustSemiring, (w) => w.trust);
 // WeightedDigraph<number> — only trust edges, ready for TrustSemiring traversal
 ```
+
+</ReferenceExample>
 
 ## Market integration: graphRankCandidates
 
@@ -292,6 +308,8 @@ The `@motebit/market` package's `graphRankCandidates` function is the primary ro
 3. Normalizes additive accumulators (cost, latency, risk) to `[0,1]` via sigmoid mapping.
 4. Applies a configurable composite function (default: weighted sum) to produce a single ordering value.
 5. Returns `RouteScore[]` for backward compatibility.
+
+<ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
 ```typescript
 import { graphRankCandidates } from "@motebit/market";
@@ -307,9 +325,13 @@ const scores = graphRankCandidates(selfId, candidates, {
 });
 ```
 
+</ReferenceExample>
+
 ### Explained routing
 
 `explainedRankCandidates` extends `graphRankCandidates` with provenance tracking. Each result includes `routing_paths` — the derivation paths that explain why the agent was chosen:
+
+<ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
 ```typescript
 import { explainedRankCandidates } from "@motebit/market";
@@ -319,11 +341,15 @@ const explained = explainedRankCandidates(selfId, candidates, requirements);
 // explained[0].alternatives_considered → 2
 ```
 
+</ReferenceExample>
+
 This provenance flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — creating an immutable audit trail from semiring algebra to cryptographic proof.
 
 ### Composite functions
 
 The composite function is a policy choice that determines how semiring-computed values are combined for ranking. Two built-in options:
+
+<ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
 ```typescript
 import { weightedSumComposite, lexicographicComposite } from "@motebit/market";
@@ -334,6 +360,8 @@ import { weightedSumComposite, lexicographicComposite } from "@motebit/market";
 // Lexicographic: trust first, then reliability, then cost
 // composite = trust * 1e6 + reliability * 1e3 + costScore
 ```
+
+</ReferenceExample>
 
 Custom composite functions can be passed via the `RoutingPolicy`:
 

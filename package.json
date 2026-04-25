@@ -56,6 +56,7 @@
     "check-docs-tree": "npx tsx scripts/check-docs-tree.ts",
     "check-doc-counts": "npx tsx scripts/check-doc-counts.ts",
     "check-doc-diagrams": "npx tsx scripts/check-doc-diagrams.ts",
+    "check-doc-private-imports": "npx tsx scripts/check-doc-private-imports.ts",
     "check-spec-permissive-boundary": "npx tsx scripts/check-spec-permissive-boundary.ts",
     "check-privacy-ring": "npx tsx scripts/check-privacy-ring.ts",
     "check-readme": "npx tsx scripts/check-readme.ts",

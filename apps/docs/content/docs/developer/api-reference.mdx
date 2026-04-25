@@ -5,6 +5,20 @@ description: ExecutionReceipt schema, synthetic MCP tools, relay task endpoints,
 
 This page covers the core protocol types and endpoints that power agent delegation: the `ExecutionReceipt` that proves work was done, the synthetic MCP tools that every motebit exposes, the relay task API that orchestrates delegation, and the budget endpoints that fund it.
 
+## Public type surface
+
+The exhaustive type surface for each Apache-2.0 published package lives in a committed [api-extractor](https://api-extractor.com/) baseline. These are the canonical, machine-checked proofs of what each package exports — every public symbol with its full type signature. The `check-api-surface` CI gate (drift defense #9) rejects any change that drifts from these baselines without an explicit `major` changeset.
+
+| Package | What it covers | Baseline |
+|---|---|---|
+| `@motebit/protocol` | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing primitives | [`protocol.api.md`](https://github.com/motebit/motebit/blob/main/packages/protocol/etc/protocol.api.md) |
+| `@motebit/sdk` | Developer contract — stable types, adapter interfaces, governance config (re-exports `@motebit/protocol` plus surface-config types) | [`sdk.api.md`](https://github.com/motebit/motebit/blob/main/packages/sdk/etc/sdk.api.md) |
+| `@motebit/crypto` | Sign and verify every motebit artifact — Ed25519 today, cryptosuite-agile for post-quantum | [`crypto.api.md`](https://github.com/motebit/motebit/blob/main/packages/crypto/etc/crypto.api.md) |
+
+The other published packages (`@motebit/verifier`, `@motebit/verify`, `@motebit/crypto-{appattest,play-integrity,tpm,webauthn}`, `create-motebit`, `motebit`) expose narrow surfaces — their public APIs are documented in each package's [README on npm](https://www.npmjs.com/org/motebit) and committed under `packages/<name>/README.md`.
+
+> Workspace-private packages (`@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, and the rest of the interior machinery) are pinned to `0.0.0-private` and have no public API surface. See [Public surface](/docs/concepts/public-surface) for the full boundary doctrine. Code blocks in this guide that import from a private package are wrapped in a `Reference implementation` callout — they show what the runtime does internally and are not consumer recipes.
+
 ## ExecutionReceipt
 
 Every completed delegation produces a signed `ExecutionReceipt` — the cryptographic proof that work was done, by whom, and with what result. The receipt is Ed25519-signed over canonical JSON, making it self-verifiable without contacting any relay.

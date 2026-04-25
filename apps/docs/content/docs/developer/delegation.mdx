@@ -236,6 +236,12 @@ The `@motebit/mcp-server` package provides a scaffold that eliminates most boile
 
 ### Minimal service
 
+<ReferenceExample
+  pkg="@motebit/mcp-server"
+  source="packages/mcp-server/src/index.ts"
+  note="Service authors who want to ship a paid agent without forking motebit run the published `motebit` CLI; the binding shown here is what `motebit serve` calls under the hood."
+>
+
 ```typescript
 import { wireServerDeps, startServiceServer } from "@motebit/mcp-server";
 import { verifySignedToken, signExecutionReceipt } from "@motebit/crypto";
@@ -264,6 +270,8 @@ const handle = await startServiceServer(deps, {
 
 // handle.shutdown() to stop gracefully
 ```
+
+</ReferenceExample>
 
 The `handleAgentTask` function is an async generator that yields `{ type: "task_result", receipt }` after executing the task and signing the receipt. See `services/web-search/src/index.ts` for the reference implementation — a pure tool server (no LLM) that exposes `web_search` and `read_url` with signed execution receipts.
 

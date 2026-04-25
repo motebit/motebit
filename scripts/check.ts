@@ -316,6 +316,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every `<DiagramFigure cites={[...]}>` entry in apps/docs/content/docs/**/*.mdx resolves to a real file (and a real `## N.` section header for spec/* targets), every committed apps/docs/public/diagrams/*.svg carries populated `<title>` + `<desc>`, and no diagram SVG carries a raw `#hex` color literal (theme-bind enforcement so dark mode tracks). Extends the self-attesting-system doctrine to doc-site visuals — every arrow in a committed diagram cites code or spec by URL-shaped reference, and the gate proves the reference resolves (invariant #49, added 2026-04-26 alongside the four-diagram landing as the diagram-grade analog of #14's permissive-floor citation discipline).",
     script: "check-doc-diagrams",
   },
+  {
+    name: "check-doc-private-imports",
+    defends:
+      'any `from "@motebit/<X>"` import in apps/docs/content/docs/**/*.mdx where X is a workspace-private package (`"private": true` in packages/X/package.json) MUST sit inside an explicit `<ReferenceExample>` JSX wrapper. The wrapper component frames the snippet as reference-implementation internal code and links to source on GitHub. Sibling to the changeset config\'s `ignore` list that locks the version-doctrine sentinel (commit fa5fdfeb pinned 51 private packages to 0.0.0-private — only the eleven published packages make stability promises, and private packages have no API surface to claim). This gate is the docs-side enforcement of the same boundary: prevents a developer doc page from showing `import from "@motebit/market"` as if external developers could npm-install it (invariant #50, added 2026-04-26 after the docs.motebit.com audit found three pages — budget-settlement, semiring-routing, mcp-server-via-delegation — leaking 13 private-package imports into the public surface).',
+    script: "check-doc-private-imports",
+  },
 ];
 
 interface Result {

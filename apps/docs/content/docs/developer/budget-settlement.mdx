@@ -48,6 +48,8 @@ Each `CapabilityPrice` specifies the cost per unit of work. The `per` field indi
 
 Given a candidate's pricing and the capabilities needed for a task, `estimateCost` sums the unit costs:
 
+<ReferenceExample pkg="@motebit/market" source="packages/market/src/budget.ts">
+
 ```typescript
 import { estimateCost } from "@motebit/market";
 
@@ -58,11 +60,15 @@ const { amount, currency } = estimateCost(
 // { amount: 0.015, currency: "USD" }
 ```
 
+</ReferenceExample>
+
 If a required capability has no matching price entry, it contributes zero to the estimate. The caller should check that all required capabilities are present in the listing before delegating — the [candidate scoring](/docs/developer/delegation) system handles this via the `capability_match` sub-score.
 
 ## Budget allocation
 
 `allocateBudget` locks funds against an estimated cost with a risk buffer:
+
+<ReferenceExample pkg="@motebit/market" source="packages/market/src/budget.ts">
 
 ```typescript
 import { allocateBudget } from "@motebit/market";
@@ -80,11 +86,15 @@ const allocation = allocateBudget(
 );
 ```
 
+</ReferenceExample>
+
 The locked amount is `estimated_cost * (1 + risk_factor * 0.2)`, capped at the available budget. With the default risk factor of 1.0, this locks 120% of the estimated cost as a buffer. If the capped amount is less than the estimated cost (insufficient funds), the function returns `null` — no allocation, no delegation.
 
 ### Collaborative budgets
 
 For plans that involve multiple agents, `allocateCollaborativeBudget` distributes the budget across participants based on their assigned steps and per-task pricing:
+
+<ReferenceExample pkg="@motebit/market" source="packages/market/src/budget.ts">
 
 ```typescript
 import { allocateCollaborativeBudget } from "@motebit/market";
@@ -97,11 +107,15 @@ const allocations = allocateCollaborativeBudget(
 );
 ```
 
+</ReferenceExample>
+
 Returns one allocation per participant, or an empty array if the total cost exceeds the available budget.
 
 ## Settlement
 
 After execution, `settleOnReceipt` determines the financial outcome:
+
+<ReferenceExample pkg="@motebit/market" source="packages/market/src/settlement.ts">
 
 ```typescript
 import { settleOnReceipt } from "@motebit/market";
@@ -113,6 +127,8 @@ const record = settleOnReceipt(
   settlementId,
 );
 ```
+
+</ReferenceExample>
 
 Three outcomes:
 
@@ -153,6 +169,8 @@ When multiple agents can perform a task, the market scores and ranks them. Six w
 
 Blocked agents and candidates missing required capabilities score zero regardless of other factors.
 
+<ReferenceExample pkg="@motebit/market" source="packages/market/src/scoring.ts">
+
 ```typescript
 import { rankCandidates } from "@motebit/market";
 
@@ -163,6 +181,8 @@ const scores = rankCandidates(candidates, {
 });
 // Sorted by composite score, top N marked as selected
 ```
+
+</ReferenceExample>
 
 ### Exploration vs. exploitation
 
