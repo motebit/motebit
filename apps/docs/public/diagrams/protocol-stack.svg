@@ -1,37 +1,49 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" width="100%" preserveAspectRatio="xMidYMid meet" style="max-width: 100%; height: auto; font-family: ui-sans-serif, system-ui, sans-serif;">
   <title id="protocol-stack-title">Protocol stack — motebit fills the missing layer underneath</title>
-  <desc id="protocol-stack-desc">MCP defines what an agent can do (tool capabilities). A2A defines how agents communicate. x402 and AP2 define how they pay. None of these define who an agent is across time and devices, what trust it has accumulated, or what the operator's policy allows it to do. Motebit is the layer underneath those three: persistent cryptographic identity, signed receipts that compound into trust, and governance enforced at the agent's surface tension.</desc>
+  <desc id="protocol-stack-desc">MCP defines what an agent can do (tool capabilities). A2A defines how agents communicate. x402 and AP2 define how they pay. None of those define who an agent is across time and devices, what trust it has accumulated, or what the operator's policy allows it to do. Motebit is the layer underneath: persistent cryptographic identity, signed receipts that compound into trust, and governance enforced at the agent's surface tension.</desc>
 
-  <g style="color: var(--color-fd-foreground);" font-family="inherit">
-    <!-- Three thin upper-layer rows: capabilities (MCP), comms (A2A), payment (x402/AP2) -->
+  <g style="font-family: inherit;">
+    <!-- Three thin upper-layer rows, each one continuous tspan-typeset line -->
     <g>
-      <rect x="120" y="40" width="480" height="40" fill="none" stroke="currentColor" stroke-width="1" />
-      <text x="138" y="65" font-size="13" font-weight="500" fill="currentColor">MCP</text>
-      <text x="200" y="65" font-size="11" fill="var(--color-fd-muted-foreground)">— what the agent can do (tool capability)</text>
+      <rect x="100" y="30" width="520" height="44" fill="none"
+            stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1" />
+      <text x="120" y="58" font-size="13"
+            fill="var(--color-fd-foreground, #1c1917)">
+        <tspan font-weight="600">MCP</tspan>
+        <tspan font-weight="400" fill="var(--color-fd-muted-foreground, #78716c)"> — what the agent can do (tool capability)</tspan>
+      </text>
     </g>
     <g>
-      <rect x="120" y="92" width="480" height="40" fill="none" stroke="currentColor" stroke-width="1" />
-      <text x="138" y="117" font-size="13" font-weight="500" fill="currentColor">A2A</text>
-      <text x="200" y="117" font-size="11" fill="var(--color-fd-muted-foreground)">— how agents talk to each other</text>
+      <rect x="100" y="84" width="520" height="44" fill="none"
+            stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1" />
+      <text x="120" y="112" font-size="13"
+            fill="var(--color-fd-foreground, #1c1917)">
+        <tspan font-weight="600">A2A</tspan>
+        <tspan font-weight="400" fill="var(--color-fd-muted-foreground, #78716c)"> — how agents talk to each other</tspan>
+      </text>
     </g>
     <g>
-      <rect x="120" y="144" width="480" height="40" fill="none" stroke="currentColor" stroke-width="1" />
-      <text x="138" y="169" font-size="13" font-weight="500" fill="currentColor">x402 · AP2</text>
-      <text x="240" y="169" font-size="11" fill="var(--color-fd-muted-foreground)">— how agents pay</text>
+      <rect x="100" y="138" width="520" height="44" fill="none"
+            stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1" />
+      <text x="120" y="166" font-size="13"
+            fill="var(--color-fd-foreground, #1c1917)">
+        <tspan font-weight="600">x402 · AP2</tspan>
+        <tspan font-weight="400" fill="var(--color-fd-muted-foreground, #78716c)"> — how agents pay</tspan>
+      </text>
     </g>
 
-    <!-- Thicker motebit layer underneath -->
+    <!-- Thicker motebit layer underneath — primary stroke, two stacked text lines -->
     <g>
-      <rect x="120" y="200" width="480" height="68" fill="none" stroke="var(--color-fd-primary)" stroke-width="1.5" />
-      <text x="138" y="226" font-size="14" font-weight="600" fill="var(--color-fd-primary)">motebit</text>
-      <text x="200" y="226" font-size="11" fill="var(--color-fd-muted-foreground)">— who the agent is, what it has done, what it is allowed to do</text>
-      <text x="138" y="250" font-size="11" fill="var(--color-fd-foreground)">identity (Ed25519, did:key)</text>
-      <text x="320" y="250" font-size="11" fill="var(--color-fd-foreground)">trust (signed receipts)</text>
-      <text x="490" y="250" font-size="11" fill="var(--color-fd-foreground)">governance (policy gate)</text>
+      <rect x="100" y="200" width="520" height="68" fill="none"
+            stroke="var(--color-fd-primary, #0369a1)" stroke-width="1.75" />
+      <text x="120" y="228" font-size="14"
+            fill="var(--color-fd-primary, #0369a1)">
+        <tspan font-weight="700">motebit</tspan>
+        <tspan font-weight="400" fill="var(--color-fd-foreground, #1c1917)"> — who the agent is, what it has done, what it is allowed to do</tspan>
+      </text>
+      <text x="120" y="251" font-size="11"
+            fill="var(--color-fd-muted-foreground, #78716c)">identity (Ed25519, did:key)  ·  trust (signed receipts)  ·  governance (policy gate)</text>
     </g>
-
-    <!-- Caption -->
-    <text x="360" y="296" text-anchor="middle" font-size="11" fill="var(--color-fd-muted-foreground)">Motebit is additive: it fills the layer the other three protocols leave open.</text>
   </g>
 </svg>

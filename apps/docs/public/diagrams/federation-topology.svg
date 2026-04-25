@@ -1,81 +1,128 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" width="100%" preserveAspectRatio="xMidYMid meet" style="max-width: 100%; height: auto; font-family: ui-sans-serif, system-ui, sans-serif;">
-  <title id="federation-topology-title">Three peer relays, bilateral peering, cross-relay routing</title>
-  <desc id="federation-topology-desc">Three independent motebit relays form a federation. Each relay hosts agents and trust records. Relay A peers bilaterally with Relay B and Relay C; Relay B peers with Relay C. The semiring graph composes trust across hops, so an agent on Relay A can delegate to a target agent on Relay C via either a one-hop or two-hop path; the optimal route is selected automatically by trust-times-cost composition.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" width="100%" preserveAspectRatio="xMidYMid meet" style="max-width: 100%; height: auto; font-family: ui-sans-serif, system-ui, sans-serif;">
+  <title id="federation-topology-title">Three peer relays, bilateral peering, cross-relay route</title>
+  <desc id="federation-topology-desc">Three independent motebit relays form a federation. Each relay hosts agents and trust records. Each pair of relays is connected by a single bilateral peering edge — both sides authenticated by mutual Ed25519 challenge. An origin agent on Relay A can delegate to a target agent on Relay C; the runtime composes trust along the chain self → relay:local → relay:remote → target_agent using the semiring algebra, and routes selected by trust × cost compete with local routes in the same graph.</desc>
+
+  <!--
+    Geometry:
+      Relay A center (180, 170), Relay B center (540, 170), Relay C center (360, 340).
+      Radius 50. All edge endpoints are computed at the circle boundary so
+      arrowheads land exactly on the edge, never inside the circle.
+
+      A↔B unit vector  (1, 0).
+        A boundary toward B = (230, 170);  B boundary toward A = (490, 170)
+
+      A↔C unit vector  (0.7276, 0.6860)   (dx=180, dy=170, norm √(180²+170²)=247.4)
+        A boundary toward C = (180+50·0.7276, 170+50·0.6860) = (216.4, 204.3)
+        C boundary toward A = (360-50·0.7276, 340-50·0.6860) = (323.6, 305.7)
+
+      B↔C is the mirror (-0.7276, 0.6860):
+        B boundary toward C = (540-50·0.7276, 170+50·0.6860) = (503.6, 204.3)
+        C boundary toward B = (360+50·0.7276, 340-50·0.6860) = (396.4, 305.7)
+  -->
 
   <defs>
-    <marker id="ft-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+    <marker id="ft-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-fd-foreground, #1c1917)" />
     </marker>
-    <marker id="ft-arrow-primary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-fd-primary)" />
+    <marker id="ft-arrow-primary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-fd-primary, #0369a1)" />
     </marker>
   </defs>
 
-  <g style="color: var(--color-fd-foreground);">
-    <!-- Relay A (top-left) -->
-    <g transform="translate(150 110)">
-      <circle r="48" fill="none" stroke="currentColor" stroke-width="1.25" />
-      <text text-anchor="middle" dy="-4" font-size="13" font-weight="500" fill="currentColor">Relay A</text>
-      <text text-anchor="middle" dy="14" font-size="10" fill="var(--color-fd-muted-foreground)">agents · trust</text>
+  <g style="font-family: inherit;">
+    <!-- Legend (top-left) -->
+    <g>
+      <line x1="22" y1="32" x2="58" y2="32"
+            stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1.25" />
+      <text x="66" y="36" font-size="10"
+            fill="var(--color-fd-muted-foreground, #78716c)">peering edge — bilateral, mutually signed</text>
+      <line x1="22" y1="50" x2="58" y2="50"
+            stroke="var(--color-fd-primary, #0369a1)" stroke-width="2"
+            stroke-dasharray="4 3" />
+      <text x="66" y="54" font-size="10"
+            fill="var(--color-fd-primary, #0369a1)">cross-relay route — selected by trust × cost</text>
     </g>
 
-    <!-- Relay B (top-right) -->
-    <g transform="translate(570 110)">
-      <circle r="48" fill="none" stroke="currentColor" stroke-width="1.25" />
-      <text text-anchor="middle" dy="-4" font-size="13" font-weight="500" fill="currentColor">Relay B</text>
-      <text text-anchor="middle" dy="14" font-size="10" fill="var(--color-fd-muted-foreground)">agents · trust</text>
+    <!-- Bilateral peering edges (single double-headed arrows, boundary endpoints) -->
+    <!-- A ↔ B -->
+    <line x1="230" y1="170" x2="490" y2="170"
+          stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1.25"
+          marker-start="url(#ft-arrow)" marker-end="url(#ft-arrow)" />
+    <text x="360" y="160" text-anchor="middle" font-size="10"
+          fill="var(--color-fd-muted-foreground, #78716c)">peer (signed challenge)</text>
+
+    <!-- A ↔ C -->
+    <line x1="216.4" y1="204.3" x2="323.6" y2="305.7"
+          stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1.25"
+          marker-start="url(#ft-arrow)" marker-end="url(#ft-arrow)" />
+
+    <!-- B ↔ C -->
+    <line x1="503.6" y1="204.3" x2="396.4" y2="305.7"
+          stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1.25"
+          marker-start="url(#ft-arrow)" marker-end="url(#ft-arrow)" />
+
+    <!-- Highlighted cross-relay route: a₁ → A → C → a₂.
+         Curves out to the LEFT of the A↔C bilateral so the two visuals don't crowd each other. -->
+    <path d="M 116 170 L 130 170"
+          stroke="var(--color-fd-primary, #0369a1)" stroke-width="2"
+          stroke-dasharray="4 3" fill="none" marker-end="url(#ft-arrow-primary)" />
+    <path d="M 162 196 Q 130 260 320 320"
+          stroke="var(--color-fd-primary, #0369a1)" stroke-width="2"
+          stroke-dasharray="4 3" fill="none" marker-end="url(#ft-arrow-primary)" />
+    <path d="M 360 390 L 360 404"
+          stroke="var(--color-fd-primary, #0369a1)" stroke-width="2"
+          stroke-dasharray="4 3" fill="none" marker-end="url(#ft-arrow-primary)" />
+
+    <!-- Relay circles (drawn AFTER the edges so the circle outline covers any
+         line bleed under arrow markers) -->
+    <g fill="var(--color-fd-background, #faf8f6)">
+      <circle cx="180" cy="170" r="50"
+              stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1.25" />
+      <circle cx="540" cy="170" r="50"
+              stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1.25" />
+      <circle cx="360" cy="340" r="50"
+              stroke="var(--color-fd-foreground, #1c1917)" stroke-width="1.25" />
     </g>
 
-    <!-- Relay C (bottom-center) -->
-    <g transform="translate(360 270)">
-      <circle r="48" fill="none" stroke="currentColor" stroke-width="1.25" />
-      <text text-anchor="middle" dy="-4" font-size="13" font-weight="500" fill="currentColor">Relay C</text>
-      <text text-anchor="middle" dy="14" font-size="10" fill="var(--color-fd-muted-foreground)">agents · trust</text>
+    <!-- Relay labels -->
+    <g>
+      <text x="180" y="166" text-anchor="middle" font-size="13" font-weight="500"
+            fill="var(--color-fd-foreground, #1c1917)">Relay A</text>
+      <text x="180" y="184" text-anchor="middle" font-size="10"
+            fill="var(--color-fd-muted-foreground, #78716c)">agents · trust</text>
+
+      <text x="540" y="166" text-anchor="middle" font-size="13" font-weight="500"
+            fill="var(--color-fd-foreground, #1c1917)">Relay B</text>
+      <text x="540" y="184" text-anchor="middle" font-size="10"
+            fill="var(--color-fd-muted-foreground, #78716c)">agents · trust</text>
+
+      <text x="360" y="336" text-anchor="middle" font-size="13" font-weight="500"
+            fill="var(--color-fd-foreground, #1c1917)">Relay C</text>
+      <text x="360" y="354" text-anchor="middle" font-size="10"
+            fill="var(--color-fd-muted-foreground, #78716c)">agents · trust</text>
     </g>
 
-    <!-- Bilateral peering: A ↔ B -->
-    <g stroke="currentColor" stroke-width="1" fill="none">
-      <line x1="200" y1="98" x2="520" y2="98" marker-end="url(#ft-arrow)" />
-      <line x1="520" y1="122" x2="200" y2="122" marker-end="url(#ft-arrow)" />
-    </g>
-    <text x="360" y="92" text-anchor="middle" font-size="10" fill="var(--color-fd-muted-foreground)">peer (signed challenge)</text>
-
-    <!-- Bilateral peering: A ↔ C -->
-    <g stroke="currentColor" stroke-width="1" fill="none">
-      <line x1="180" y1="158" x2="320" y2="240" marker-end="url(#ft-arrow)" />
-      <line x1="335" y1="232" x2="195" y2="150" marker-end="url(#ft-arrow)" />
+    <!-- Origin agent a₁ (left of A) -->
+    <g>
+      <circle cx="100" cy="170" r="14"
+              fill="var(--color-fd-background, #faf8f6)"
+              stroke="var(--color-fd-primary, #0369a1)" stroke-width="1.25" />
+      <text x="100" y="174" text-anchor="middle" font-size="10" font-weight="500"
+            fill="var(--color-fd-primary, #0369a1)">a₁</text>
+      <text x="100" y="200" text-anchor="middle" font-size="10"
+            fill="var(--color-fd-muted-foreground, #78716c)">origin</text>
     </g>
 
-    <!-- Bilateral peering: B ↔ C -->
-    <g stroke="currentColor" stroke-width="1" fill="none">
-      <line x1="540" y1="158" x2="400" y2="240" marker-end="url(#ft-arrow)" />
-      <line x1="385" y1="232" x2="525" y2="150" marker-end="url(#ft-arrow)" />
+    <!-- Target agent a₂ (below C) -->
+    <g>
+      <circle cx="360" cy="404" r="14"
+              fill="var(--color-fd-background, #faf8f6)"
+              stroke="var(--color-fd-primary, #0369a1)" stroke-width="1.25" />
+      <text x="360" y="408" text-anchor="middle" font-size="10" font-weight="500"
+            fill="var(--color-fd-primary, #0369a1)">a₂</text>
+      <text x="395" y="408" font-size="10"
+            fill="var(--color-fd-muted-foreground, #78716c)">target</text>
     </g>
-
-    <!-- Highlighted cross-relay route: agent on A → relay A → relay C → target agent -->
-    <g stroke="var(--color-fd-primary)" stroke-width="1.75" fill="none" stroke-dasharray="4 3">
-      <path d="M 110 110 Q 130 110 150 110" marker-end="url(#ft-arrow-primary)" />
-      <path d="M 188 152 Q 270 200 322 240" marker-end="url(#ft-arrow-primary)" />
-      <path d="M 360 318 Q 360 340 360 340" marker-end="url(#ft-arrow-primary)" />
-    </g>
-
-    <!-- Origin agent label (left edge, near A) -->
-    <g transform="translate(60 110)">
-      <circle r="12" fill="none" stroke="var(--color-fd-primary)" stroke-width="1.25" />
-      <text text-anchor="middle" dy="3" font-size="9" fill="var(--color-fd-primary)">a₁</text>
-      <text text-anchor="middle" dy="28" font-size="10" fill="var(--color-fd-muted-foreground)">origin</text>
-    </g>
-
-    <!-- Target agent label (below C) -->
-    <g transform="translate(360 350)">
-      <circle r="12" fill="none" stroke="var(--color-fd-primary)" stroke-width="1.25" />
-      <text text-anchor="middle" dy="3" font-size="9" fill="var(--color-fd-primary)">a₂</text>
-    </g>
-    <text x="392" y="355" font-size="10" fill="var(--color-fd-muted-foreground)">target</text>
-
-    <!-- Route legend -->
-    <text x="20" y="20" font-size="10" fill="var(--color-fd-muted-foreground)">— peering edges (bilateral, signed)</text>
-    <text x="20" y="36" font-size="10" fill="var(--color-fd-primary)">┄ optimal route (trust × cost composition)</text>
   </g>
 </svg>

@@ -230,34 +230,61 @@ function validateSvg(diagram: DiagramFile): SvgViolation[] {
     violations.push({ diagram: basename, reason: "missing or empty <desc>" });
   }
 
-  // Raw hex literal detection. We allow `#id` in url(#fragment),
-  // anchor refs, and fragment identifiers (those don't carry a
-  // `#`-followed-by-3-or-6-hex-digits-as-a-color shape). The
-  // regex matches color-shaped hex specifically.
-  const hexLiterals = content.match(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g);
+  // Raw hex literal detection.
+  //
+  // Allowed hex sites (must be filtered out before flagging):
+  //   - `url(#fragmentId)` — id reference, not a color
+  //   - `var(--name, #hex)` — fallback inside a CSS custom-property
+  //     reference. The fallback is only used when the variable is
+  //     unresolved (standalone-SVG render path); the embedded path
+  //     uses the page's CSS var. Both branches still produce a
+  //     theme-bound color.
+  //
+  // Bad hex sites: any `fill=`/`stroke=`/`style=` attribute value
+  // whose top-level color is a hard-coded hex (e.g. `fill="#000"`).
+  //
+  // Strategy: strip every `var(...)` call (with naive nested-paren
+  // handling) from the file content, then scan for color-shaped
+  // hex. The strip removes the legal hex sites; whatever remains is
+  // a violation.
+  const stripped = stripVarCalls(content);
+  const hexLiterals = stripped.match(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g);
   if (hexLiterals) {
-    // Filter out matches that are part of url(#...) ID references.
-    // Color literals appear as standalone `#xxx`/`#xxxxxx` in
-    // attribute values (`fill="#abcdef"`); ID references appear as
-    // `url(#name)`. We take a conservative cut: any hex token that
-    // appears immediately after `url(#` or as a `name="#..."`-like
-    // anchor target is excluded.
     const colorHexes = hexLiterals.filter((token) => {
-      const re = new RegExp(`url\\(${token.replace("#", "#")}\\)|"${token}"|'${token}'`);
-      const isUrl = new RegExp(`url\\(${escapeRegExp(token)}\\)`).test(content);
+      // Still exclude any hex that participates in `url(#id)`.
+      const isUrl = new RegExp(`url\\(${escapeRegExp(token)}\\)`).test(stripped);
       return !isUrl;
     });
     if (colorHexes.length > 0) {
       violations.push({
         diagram: basename,
         reason:
-          `raw hex color literal(s): ${[...new Set(colorHexes)].join(", ")} — ` +
-          `bind to currentColor or var(--color-fd-*) so dark mode tracks`,
+          `raw hex color literal(s) outside var() fallback: ${[...new Set(colorHexes)].join(", ")} — ` +
+          `use var(--color-fd-*, #fallback-hex) so dark mode tracks while standalone render still works`,
       });
     }
   }
 
   return violations;
+}
+
+/**
+ * Strip `var(--name, fallback)` calls from a string. Handles one
+ * level of nesting (a `var()` whose fallback is itself a `var()`).
+ * The output is the input with every `var(...)` token replaced by
+ * an empty string — sufficient to remove legitimate hex literals
+ * carried as fallbacks.
+ */
+function stripVarCalls(input: string): string {
+  // Two passes is enough for `var(--a, var(--b, #hex))`. Adding
+  // more passes is cheap; cap at four for safety.
+  let out = input;
+  for (let i = 0; i < 4; i++) {
+    const next = out.replace(/var\([^()]*\)/g, "");
+    if (next === out) return out;
+    out = next;
+  }
+  return out;
 }
 
 function escapeRegExp(s: string): string {
