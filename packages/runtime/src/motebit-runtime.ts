@@ -2424,6 +2424,24 @@ export class MotebitRuntime {
     };
   }
 
+  private _hardwareAttestationFetcher: AgentTrustDeps["getRemoteHardwareAttestations"];
+
+  /**
+   * Inject a fetcher for peer-published hardware-attestation credentials.
+   * When set, the runtime's `bumpTrustFromReceipt` hook (which fires
+   * after every successful delegation interaction) pulls the worker's
+   * self-published claim, verifies it, and issues a peer
+   * `AgentTrustCredential` carrying the verified claim — Phase 1 of the
+   * hardware-attestation peer flow. Surfaces (or tests) inject the
+   * fetcher after construction; the production wiring is an HTTP call
+   * to `GET /agent/:motebitId/capabilities` on the relay. Best-effort:
+   * any failure leaves the existing reputation-credential issuance
+   * unchanged.
+   */
+  setHardwareAttestationFetcher(fetcher: AgentTrustDeps["getRemoteHardwareAttestations"]): void {
+    this._hardwareAttestationFetcher = fetcher;
+  }
+
   private get trustDeps(): AgentTrustDeps {
     return {
       motebitId: this.motebitId,
@@ -2433,6 +2451,7 @@ export class MotebitRuntime {
       signingKeys: this._signingKeys,
       onCredentialIssued: (vc, subjectMotebitId) =>
         this.credentialManager.persistCredential(vc, subjectMotebitId),
+      getRemoteHardwareAttestations: this._hardwareAttestationFetcher,
     };
   }
 
