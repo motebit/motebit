@@ -71,11 +71,67 @@ The choice is captured in run history. "Other-emergency" is the named-but-discou
 
 If a release ships and is broken, the fix is **one** release, not six. Six releases in an afternoon is the failure pattern this doctrine exists to prevent. The `0.6.X` storm of 2026-03-23 is the worked example.
 
-## Major versions
+## When to bump
 
-A major bump for any published package means **a real breaking change in that package's own public API or wire contract**. Not "the dev contract moved." Not "we wanted to mark a milestone." The contract that the package's `etc/*.api.md` baseline describes either broke or it did not.
+The contributor declares the level in the `.changeset/*.md` frontmatter. Changesets does not auto-detect from the diff — the semver decision is human, captured at PR-write time and verified at review time. When several changesets target the same package, the highest level wins.
 
-Coordinated multi-package majors still happen — the protocol model evolves and several packages ship v2 in the same release train — but each one carries its own changeset declaring its own break. The lockstep falls out of the changesets, not out of `fixed`.
+The decision rule, in order of strictness:
+
+### Major (`x.0.0`)
+
+A real **breaking change** to the package's own public API or wire contract. The `etc/*.api.md` baseline either broke or it did not. Same for any wire format the package emits or accepts. "Breaking" means a previously valid caller becomes invalid: a removed export, a renamed symbol, a parameter that lost a permitted value, a wire field whose meaning changed, a verification rule that tightened so previously accepted artifacts now fail.
+
+Triggers:
+
+- exported symbol removed or renamed without an additive replacement
+- function/method signature change that drops or reorders parameters, narrows a return type, or loosens a parameter type in a way that breaks call sites
+- wire-format field renamed, removed, or repurposed; required field added without a default
+- `motebit-verify` / `motebit` CLI flag removed or its semantics changed incompatibly
+- protocol behavior that was valid is now rejected (e.g., a SuiteId being retired, a credential shape becoming invalid)
+- TypeScript type narrowing that produces new `tsc --strict` errors at consumer call sites — type-only changes count
+
+Not triggers:
+
+- "we want to mark a milestone" — milestones live in changelog prose, not in major numbers
+- "the dev contract moved" — that is at most an additive change; `linked` is precisely what we declined to use
+- a bug fix that aligns behavior with the spec — patch (or minor if a deprecation runway is owed; see the deprecation lifecycle doctrine)
+
+Coordinated multi-package majors still happen when the protocol model legitimately evolves; the lockstep falls out of the per-package changesets, not out of a `fixed` group.
+
+### Minor (`1.x.0`)
+
+**Additive** — the new shape is a superset of the old one. A previously valid caller stays valid; a new caller can opt into something more.
+
+Triggers:
+
+- new exported symbol
+- new optional parameter on an existing function, with a safe default
+- new optional wire field that older clients can ignore
+- new SuiteId entry in `@motebit/protocol` (cryptosuite agility is additive by doctrine)
+- new platform leaf in `HardwareAttestationSemiring` (`platform` union entry + dispatch arm — additive by doctrine)
+- new CLI subcommand, or new optional flag on an existing command
+- a new credential type, capability, or rail registration
+
+The check is mechanical: would consuming code written against the previous version still compile and run unchanged? If yes — minor. If no — major.
+
+### Patch (`1.0.x`)
+
+**Fix or invisible change** — no surface movement. Same as the above test, but additionally: the new version doesn't add capabilities a caller could opt into. If a caller cares about the change at all, it's a minor; if no caller can tell, it's a patch.
+
+Triggers:
+
+- bug fix that aligns behavior with documented spec or test expectations
+- performance improvement with no API or wire impact
+- internal refactor that doesn't change `etc/*.api.md`
+- doc, comment, README, or test changes
+- dependency-only updates (the cascade case — `updateInternalDependencies: "patch"` writes these for you when a workspace dep moves)
+- correcting a previous release's changelog or release-notes prose
+
+### When in doubt, bump higher
+
+The cost of an over-cautious minor is one wasted minor number. The cost of an under-cautious patch that turns out to break a consumer is a CVE-shaped incident report and a paper trail explaining why the new patch broke their pinned `~1.0.5`. **Asymmetric cost favors the higher level.** If two reviewers honestly disagree between `patch` and `minor`, ship `minor`. Between `minor` and `major`, ship `major`.
+
+The `check-changeset-discipline` gate already flags `major` bumps for explicit reviewer attention and rejects empty changesets. Minor-vs-patch is left to human judgment because automating it would require modeling the public surface of every package — a project the api-extractor baselines do for type surface but cannot do for wire-format or behavioral semantics.
 
 ## Transition from pre-1.0
 
