@@ -73,6 +73,44 @@ function saveConfig(config: MotebitConfig): void {
   writeFileSync(configPath(), JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
+/**
+ * Refuse to clobber an existing identity in the non-interactive path.
+ *
+ * `--yes` mode is what CI smokes, automation, and "I just want to try it"
+ * users hit. Without this gate, running `npx create-motebit my-agent --yes`
+ * on a developer machine that already has a motebit silently rewrites
+ * `~/.motebit/config.json` to point at the throwaway scaffold identity —
+ * a data-loss-class bug that the interactive path already prompts about
+ * (see guidedScaffold's "Existing identity found" prompt).
+ *
+ * The gate fires only when:
+ *   - non-interactive mode is in use (interactive prompts the user instead)
+ *   - an existing config has a populated `motebit_id`
+ *   - `--force` was not passed (explicit consent overrides)
+ *
+ * Error message names both escape hatches: `MOTEBIT_CONFIG_DIR` for
+ * isolated smoke tests, and `--force` for explicit replacement.
+ */
+function assertNoExistingIdentity(force: boolean): void {
+  if (force) return;
+  const existing = loadConfig();
+  if (!existing.motebit_id) return;
+
+  console.log();
+  console.log(`  ${red("!")} An existing motebit identity is present at ${dim(configPath())}`);
+  console.log(`    motebit_id: ${dim(existing.motebit_id)}`);
+  console.log();
+  console.log(`    Refusing to overwrite without explicit consent.`);
+  console.log();
+  console.log(`    To run an isolated scaffold (recommended for smoke tests):`);
+  console.log(`      ${dim("MOTEBIT_CONFIG_DIR=/tmp/my-test npx create-motebit ...")}`);
+  console.log();
+  console.log(`    To intentionally replace the existing identity:`);
+  console.log(`      ${dim("npx create-motebit ... --force")}`);
+  console.log();
+  process.exit(1);
+}
+
 // ---------------------------------------------------------------------------
 // Scaffolded file contents
 // ---------------------------------------------------------------------------
@@ -347,7 +385,11 @@ MOTEBIT_PASSPHRASE=
 // agentScaffold — generate a runnable agent project
 // ---------------------------------------------------------------------------
 
-async function agentScaffold(targetDir: string, nonInteractive: boolean): Promise<void> {
+async function agentScaffold(
+  targetDir: string,
+  nonInteractive: boolean,
+  force: boolean,
+): Promise<void> {
   console.log();
   console.log(`  ${bold("create-motebit")} ${dim(`v${VERSION}`)} ${dim("--agent")}`);
   console.log();
@@ -370,6 +412,10 @@ async function agentScaffold(targetDir: string, nonInteractive: boolean): Promis
   let agentDescription: string;
 
   if (nonInteractive) {
+    // Same identity-clobber gate as guidedScaffold. The agent path also
+    // saves config (line ~447) and would silently rewrite an existing
+    // motebit's identity without this check.
+    assertNoExistingIdentity(force);
     passphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
     if (!passphrase) {
       console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
@@ -482,6 +528,7 @@ async function guidedScaffold(
   targetDir: string,
   nonInteractive: boolean,
   serviceMode: boolean,
+  force: boolean,
 ): Promise<void> {
   console.log();
   console.log(`  ${bold("create-motebit")} ${dim(`v${VERSION}`)}`);
@@ -508,6 +555,10 @@ async function guidedScaffold(
   let existingConfig = loadConfig();
 
   if (nonInteractive) {
+    // Identity-clobber gate. Interactive mode prompts; --yes mode must
+    // refuse-or-force to avoid silent data loss when run on a developer
+    // machine with an existing motebit.
+    assertNoExistingIdentity(force);
     provider = "anthropic";
     trustMode = "guarded";
     passphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
@@ -778,8 +829,12 @@ async function guidedScaffold(
     console.log(`    cd ${dirName}`);
   }
   console.log(`    npm install`);
-  console.log(`    node verify.js                     ${dim("# Verify your identity")}`);
-  console.log(`    npx create-motebit verify           ${dim("# Or use the CLI verifier")}`);
+  console.log(
+    `    node verify.js                                          ${dim("# Verify your identity")}`,
+  );
+  console.log(
+    `    npx -p @motebit/verify motebit-verify motebit.md        ${dim("# Same check via the canonical CLI verifier")}`,
+  );
   console.log();
   console.log(`  Full agent:  ${cyan("npm install -g motebit")}`);
   console.log(`  Learn more:  ${dim("https://docs.motebit.com")}`);
@@ -1035,6 +1090,8 @@ function printHelp(): void {
     -y, --yes             Non-interactive mode (requires MOTEBIT_PASSPHRASE env var)
     --agent               Create a runnable agent project (tools.ts + MCP server)
     --service             Create a service motebit identity (prompts for service fields)
+    --force               Replace an existing identity in MOTEBIT_CONFIG_DIR (use with --yes;
+                          interactive mode prompts instead)
     --reason "..."        Reason for key rotation (used with rotate)
     -v, --version         Print version
     -h, --help            Print this help
@@ -1107,12 +1164,13 @@ async function main(): Promise<void> {
   // Default: guided scaffold
   const agentMode = args.includes("--agent");
   const serviceMode = args.includes("--service");
+  const force = args.includes("--force");
   const targetDir = command ?? ".";
 
   if (agentMode) {
-    await agentScaffold(targetDir, nonInteractive);
+    await agentScaffold(targetDir, nonInteractive, force);
   } else {
-    await guidedScaffold(targetDir, nonInteractive, serviceMode);
+    await guidedScaffold(targetDir, nonInteractive, serviceMode, force);
   }
 }
 

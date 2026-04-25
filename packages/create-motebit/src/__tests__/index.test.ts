@@ -228,7 +228,9 @@ describe("create-motebit", () => {
   // -- config merge --
 
   it("preserves existing config fields when writing identity", () => {
-    // Write a config with existing data
+    // Write a config with existing data — but no motebit_id, so the
+    // identity-clobber gate doesn't fire and the default scaffold path
+    // can layer the new identity on top.
     mkdirSync(configDir, { recursive: true });
     writeFileSync(
       join(configDir, "config.json"),
@@ -245,6 +247,89 @@ describe("create-motebit", () => {
     expect(config.some_custom_field).toBe("preserved");
     expect(config.temperature).toBe(0.7);
     expect(config.motebit_id).toBeTruthy();
+  });
+
+  // -- identity-clobber gate --
+  //
+  // Regression: --yes mode must refuse to overwrite an existing motebit
+  // identity unless --force is passed. The interactive path already
+  // prompts; the gap was that automation, CI smokes, and "I just want
+  // to try it" users hit --yes and silently lost their existing
+  // identity. See gap #2 in the 2026-04-25 first-time-user walkthrough.
+
+  it("refuses to overwrite an existing identity with --yes by default", () => {
+    // Seed config with a populated motebit_id (the clobber-prone field).
+    mkdirSync(configDir, { recursive: true });
+    const existingConfig = {
+      motebit_id: "019dc549-0186-7e8f-aba2-72ea76d4a324",
+      device_id: "af9aca7a-1b80-4935-997c-a1c871080cf5",
+      device_public_key: "7625fe64424a83f6a4c5e10dee1f53ae2ff0a08b28594961d7f970abc416ea10",
+      name: "preexisting",
+      some_other_field: "must not be touched",
+    };
+    const configFile = join(configDir, "config.json");
+    writeFileSync(configFile, JSON.stringify(existingConfig, null, 2), "utf-8");
+    const beforeBytes = readFileSync(configFile, "utf-8");
+
+    const { stdout, exitCode } = run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    // Exits non-zero with a message that names both escape hatches.
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toContain("existing motebit identity");
+    expect(stdout).toContain("MOTEBIT_CONFIG_DIR");
+    expect(stdout).toContain("--force");
+
+    // Config file unchanged byte-for-byte. The whole point of the gate.
+    const afterBytes = readFileSync(configFile, "utf-8");
+    expect(afterBytes).toBe(beforeBytes);
+  });
+
+  it("--force overrides the gate and replaces the existing identity", () => {
+    mkdirSync(configDir, { recursive: true });
+    const existingConfig = {
+      motebit_id: "019dc549-0186-7e8f-aba2-72ea76d4a324",
+      device_id: "af9aca7a-1b80-4935-997c-a1c871080cf5",
+      some_other_field: "still preserved",
+    };
+    const configFile = join(configDir, "config.json");
+    writeFileSync(configFile, JSON.stringify(existingConfig), "utf-8");
+
+    const { exitCode } = run(["my-project", "--yes", "--force"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    expect(exitCode).toBe(0);
+
+    const after = JSON.parse(readFileSync(configFile, "utf-8"));
+    // Identity replaced.
+    expect(after.motebit_id).not.toBe(existingConfig.motebit_id);
+    expect(after.motebit_id).toBeTruthy();
+    // Non-identity fields preserved (saveConfig merges, doesn't replace).
+    expect(after.some_other_field).toBe("still preserved");
+  });
+
+  it("--agent --yes also enforces the identity-clobber gate", () => {
+    mkdirSync(configDir, { recursive: true });
+    const existingConfig = {
+      motebit_id: "019dc549-0186-7e8f-aba2-72ea76d4a324",
+    };
+    const configFile = join(configDir, "config.json");
+    writeFileSync(configFile, JSON.stringify(existingConfig), "utf-8");
+    const beforeBytes = readFileSync(configFile, "utf-8");
+
+    const { stdout, exitCode } = run(["my-agent", "--agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toContain("existing motebit identity");
+    const afterBytes = readFileSync(configFile, "utf-8");
+    expect(afterBytes).toBe(beforeBytes);
   });
 
   // -- verify --
