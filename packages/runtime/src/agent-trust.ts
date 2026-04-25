@@ -20,7 +20,7 @@ import {
   hexPublicKeyToDidKey,
   verifyVerifiableCredential,
 } from "@motebit/encryption";
-import { verifyHardwareAttestationClaim } from "@motebit/crypto";
+import { verifyHardwareAttestationClaim, type HardwareAttestationVerifiers } from "@motebit/crypto";
 import { evaluateTrustTransition } from "@motebit/semiring";
 import type { AgentGraphManager } from "./agent-graph.js";
 
@@ -67,12 +67,23 @@ export interface AgentTrustDeps {
    * `AgentTrustCredential` carrying the verified claim. Best-effort:
    * any failure (network, parse, signature, hardware verification) is
    * swallowed and the trust path proceeds without a hardware credential.
-   * Phase 1 doctrine: no platform-adapter `verifiers` argument is
-   * passed — the unified facade returns truthful `valid: false,
-   * platform: "software"` for the software sentinel, which the issuer
-   * still folds into the credential. Phase 2 wires real verifiers.
    */
   getRemoteHardwareAttestations?: HardwareAttestationFetcher;
+  /**
+   * Optional injected platform verifiers. When provided, peer hardware
+   * claims of platform `device_check` / `tpm` / `play_integrity` /
+   * `webauthn` route through the matching adapter (each pinned to a
+   * vendor trust root). Surfaces typically inject this via
+   * `MotebitRuntime.setHardwareAttestationVerifiers(buildHardwareVerifiers())`
+   * from `@motebit/verify` at boot. Without it, only `secure_enclave`
+   * (verified in-package via P-256) and the `software` sentinel produce
+   * valid outcomes; the four external platforms fall through to "verifier
+   * not wired" and are dropped before peer-credential issuance.
+   *
+   * Phase 1 of the hardware-attestation peer flow shipped without this
+   * field. Phase 2 added it to unblock the four external platforms.
+   */
+  hardwareAttestationVerifiers?: HardwareAttestationVerifiers;
 }
 
 // === Trust from Receipt ===
@@ -95,6 +106,7 @@ export async function bumpTrustFromReceipt(
     signingKeys,
     onCredentialIssued,
     getRemoteHardwareAttestations,
+    hardwareAttestationVerifiers,
   } = deps;
 
   if (agentTrustStore == null) return;
@@ -275,12 +287,25 @@ export async function bumpTrustFromReceipt(
                   // "software-only" IS information the routing graph wants.
                   // Phase 2 wires real platform adapters and changes the
                   // accept rule.
-                  const hwResult = await verifyHardwareAttestationClaim(claim, updated.public_key);
-                  // Phase 1 accept rule: any non-throwing verification
-                  // outcome (valid OR truthful software sentinel) gets
-                  // propagated. Phase 2 will tighten to `hwResult.valid`.
-                  const phase1Accept = hwResult.valid || claim.platform === "software";
-                  if (phase1Accept) {
+                  const hwResult = await verifyHardwareAttestationClaim(
+                    claim,
+                    updated.public_key,
+                    hardwareAttestationVerifiers,
+                  );
+                  // Accept rule:
+                  //   - `valid: true` from any platform → real verified hardware claim
+                  //   - `platform: "software"` → truthful no-hardware sentinel
+                  //     (`valid: false` by spec design — the facade's
+                  //      "no hardware verification channel" message is the
+                  //      correct outcome, NOT an error). Issuer still folds
+                  //      it forward; the routing semiring scores it as 0.1.
+                  // Anything else (`device_check`/`tpm`/`play_integrity`/
+                  // `webauthn` with `valid: false`) is dropped — these
+                  // platforms require a verifier, and a falsy result means
+                  // either the verifier wasn't injected or the claim
+                  // failed verification. Both are non-acceptance cases.
+                  const accepted = hwResult.valid || claim.platform === "software";
+                  if (accepted) {
                     const trustVc = await issueTrustCredential(
                       {
                         trust_level: updated.trust_level,

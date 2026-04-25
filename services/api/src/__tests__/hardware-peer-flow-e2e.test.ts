@@ -43,9 +43,10 @@ import {
   bytesToHex,
 } from "@motebit/encryption";
 import type { KeyPair, VerifiableCredential } from "@motebit/encryption";
-import { signBySuite } from "@motebit/crypto";
+import { signBySuite, mintSecureEnclaveReceiptForTest } from "@motebit/crypto";
 import {
   aggregateHardwareAttestation,
+  HW_ATTESTATION_HARDWARE,
   HW_ATTESTATION_SOFTWARE,
   type TrustVC,
 } from "@motebit/market";
@@ -396,5 +397,157 @@ describe("Hardware-attestation peer flow — Phase 1 E2E (software sentinel)", (
     expect(body.accepted).toBe(0);
     expect(body.rejected).toBe(1);
     expect(body.errors).toContain("self-issued credential rejected");
+  });
+});
+
+// ==========================================================================
+// Phase 2 — secure_enclave path
+// ==========================================================================
+//
+// Validates that the same protocol loop works end-to-end with a real
+// (verified) hardware-attestation claim, not just the software sentinel.
+// Uses `mintSecureEnclaveReceiptForTest` from `@motebit/crypto` — a fresh
+// in-process P-256 keypair signs the canonical body bytes; the resulting
+// receipt is byte-identical to what the production Rust SE bridge would
+// emit. The relay's existing verifier (no platform-adapter injection
+// needed for SE) accepts it.
+//
+// Acceptance: peer-issued AgentTrustCredential carrying the verified
+// secure_enclave claim scores at HW_ATTESTATION_HARDWARE (1.0), 10×
+// the software sentinel — proving routing differentiates platforms.
+
+describe("Hardware-attestation peer flow — Phase 2 (secure_enclave)", () => {
+  let relay: SyncRelay;
+  let agentA: BootstrapResult;
+  let agentB: BootstrapResult;
+  const MASTER_TOKEN = "hw-peer-flow-se-test-token";
+
+  beforeAll(async () => {
+    relay = await createSyncRelay({
+      dbPath: ":memory:",
+      apiToken: MASTER_TOKEN,
+      enableDeviceAuth: true,
+      issueCredentials: false,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+    });
+    agentA = await bootstrapAgent(relay);
+    agentB = await bootstrapAgent(relay);
+  });
+
+  afterAll(async () => {
+    if (relay) await relay.close();
+  });
+
+  it("worker mints + attaches a verified secure_enclave hardware credential", async () => {
+    // mintSecureEnclaveReceiptForTest produces the same on-wire shape the
+    // Rust SE bridge emits in production — a fresh P-256 keypair signs
+    // the canonical body bytes; the resulting receipt is verifiable by
+    // verifyHardwareAttestationClaim with no adapter injection needed
+    // (SE is verified in-package via P-256 ECDSA-SHA256).
+    const { claim } = await mintSecureEnclaveReceiptForTest({
+      motebit_id: agentB.motebitId,
+      device_id: agentB.deviceId,
+      identity_public_key: agentB.publicKeyHex,
+      attested_at: Date.now(),
+    });
+
+    const seSelfVc = await composeHardwareAttestationCredential({
+      publicKey: agentB.keypair.publicKey,
+      publicKeyHex: agentB.publicKeyHex,
+      privateKey: agentB.keypair.privateKey,
+      hardwareAttestation: claim,
+      now: Date.now(),
+    });
+
+    const res = await attachHardwareAttestation(relay, agentB, seSelfVc);
+    expect(res.status).toBe(200);
+  });
+
+  it("delegator issues peer trust credential carrying verified secure_enclave claim; aggregator scores at HW_ATTESTATION_HARDWARE (1.0)", async () => {
+    // A simulates the runtime hook: pull B's SE claim, verify (would pass
+    // in-package because SE is synchronous), issue peer trust credential
+    // carrying the verified claim. Submit to /credentials/submit.
+    const capRes = await relay.app.request(`/agent/${agentB.motebitId}/capabilities`);
+    const capBody = (await capRes.json()) as {
+      hardware_attestations: Array<{
+        device_id: string;
+        public_key: string;
+        hardware_attestation_credential: string;
+      }>;
+    };
+    expect(capBody.hardware_attestations).toHaveLength(1);
+    const reparsed = JSON.parse(
+      capBody.hardware_attestations[0]!.hardware_attestation_credential,
+    ) as VerifiableCredential<{
+      hardware_attestation: { platform: string; attestation_receipt?: string };
+    }>;
+    const claim = reparsed.credentialSubject.hardware_attestation;
+    expect(claim.platform).toBe("secure_enclave");
+
+    // A issues peer trust credential carrying the verified SE claim.
+    const subjectDid = hexPublicKeyToDidKey(agentB.publicKeyHex);
+    const issuerDid = hexPublicKeyToDidKey(agentA.publicKeyHex);
+    const now = new Date();
+    const peerTrustVc = await signVerifiableCredential(
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://motebit.com/ns/credentials/v1",
+        ],
+        type: ["VerifiableCredential", "AgentTrustCredential"],
+        issuer: issuerDid,
+        credentialSubject: {
+          id: subjectDid,
+          trust_level: "Verified",
+          interaction_count: 1,
+          successful_tasks: 1,
+          failed_tasks: 0,
+          first_seen_at: now.getTime() - 1000,
+          last_seen_at: now.getTime(),
+          hardware_attestation: claim,
+        },
+        validFrom: now.toISOString(),
+        validUntil: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+      },
+      agentA.keypair.privateKey,
+      agentA.keypair.publicKey,
+    );
+
+    const submitRes = await relay.app.request(
+      `/api/v1/agents/${agentB.motebitId}/credentials/submit`,
+      {
+        method: "POST",
+        headers: { ...JSON_HEADERS, Authorization: `Bearer ${MASTER_TOKEN}` },
+        body: JSON.stringify({ credentials: [peerTrustVc] }),
+      },
+    );
+    expect(submitRes.status).toBe(200);
+    const submitBody = (await submitRes.json()) as {
+      accepted: number;
+      rejected: number;
+    };
+    expect(submitBody.accepted).toBe(1);
+    expect(submitBody.rejected).toBe(0);
+
+    // Aggregator scores at HW_ATTESTATION_HARDWARE = 1.0 (10× the
+    // software sentinel score of 0.1) — proves routing differentiates
+    // platforms.
+    const credsRes = await relay.app.request(`/api/v1/agents/${agentB.motebitId}/credentials`, {
+      headers: { Authorization: `Bearer ${MASTER_TOKEN}` },
+    });
+    const credsBody = (await credsRes.json()) as {
+      credentials: Array<{ credential: TrustVC; credential_type: string }>;
+    };
+    const trustVcs = credsBody.credentials
+      .filter((row) => row.credential_type === "AgentTrustCredential")
+      .map((row) => row.credential);
+    const aggregate = aggregateHardwareAttestation(trustVcs, () => 0.9);
+    expect(aggregate).not.toBeNull();
+    expect(aggregate!.attestation_score).toBeCloseTo(HW_ATTESTATION_HARDWARE);
+    expect(aggregate!.platform_breakdown.secure_enclave).toBeGreaterThanOrEqual(1);
   });
 });

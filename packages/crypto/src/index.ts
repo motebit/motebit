@@ -155,6 +155,7 @@ export {
   verifyHardwareAttestationClaim,
   canonicalSecureEnclaveBodyForTest,
   encodeSecureEnclaveReceiptForTest,
+  mintSecureEnclaveReceiptForTest,
 } from "./hardware-attestation.js";
 export type {
   AttestationPlatform,

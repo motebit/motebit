@@ -546,6 +546,61 @@ export function canonicalSecureEnclaveBodyForTest(body: {
   return new TextEncoder().encode(canonicalJson(full));
 }
 
+/**
+ * Test-only convenience — generate a fresh P-256 keypair, sign the
+ * canonical body bytes with it, and assemble a `HardwareAttestationClaim`
+ * that `verifyHardwareAttestationClaim` accepts. Lets cross-workspace
+ * tests exercise the SE verification path without each caller pulling
+ * `@noble/curves` into their own dep tree.
+ *
+ * Production callers MUST mint receipts via the Rust Secure Enclave
+ * bridge — never through this function.
+ */
+export async function mintSecureEnclaveReceiptForTest(input: {
+  readonly motebit_id: string;
+  readonly device_id: string;
+  readonly identity_public_key: string;
+  readonly attested_at: number;
+}): Promise<{ claim: HardwareAttestationClaim; sePublicKeyHex: string }> {
+  // Lazy import — keeps this helper from being dragged into the
+  // production verifier's import graph any earlier than necessary.
+  const { p256 } = await import("@noble/curves/p256");
+  const privateKey = p256.utils.randomPrivateKey();
+  const sePublicKey = p256.getPublicKey(privateKey, true); // compressed
+  const sePublicKeyHex = bytesToHexLocal(sePublicKey);
+  const bodyBytes = canonicalSecureEnclaveBodyForTest({
+    motebit_id: input.motebit_id,
+    device_id: input.device_id,
+    identity_public_key: input.identity_public_key,
+    se_public_key: sePublicKeyHex,
+    attested_at: input.attested_at,
+  });
+  const digest = await sha256Local(bodyBytes);
+  const sigBytes = p256.sign(digest, privateKey, { prehash: false }).toDERRawBytes();
+  const receipt = encodeSecureEnclaveReceiptForTest(bodyBytes, sigBytes);
+  return {
+    claim: {
+      platform: "secure_enclave",
+      key_exported: false,
+      attestation_receipt: receipt,
+    },
+    sePublicKeyHex,
+  };
+}
+
+function bytesToHexLocal(bytes: Uint8Array): string {
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i]!.toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+async function sha256Local(bytes: Uint8Array): Promise<Uint8Array> {
+  const buf = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return new Uint8Array(buf);
+}
+
 function toBase64Url(bytes: Uint8Array): string {
   // Match the conventions in signing.ts — base64url, no padding.
   let binary = "";

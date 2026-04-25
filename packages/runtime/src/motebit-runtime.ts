@@ -2442,6 +2442,32 @@ export class MotebitRuntime {
     this._hardwareAttestationFetcher = fetcher;
   }
 
+  private _hardwareAttestationVerifiers: AgentTrustDeps["hardwareAttestationVerifiers"];
+
+  /**
+   * Inject the platform-specific hardware-attestation verifiers (Phase 2).
+   *
+   * Without this, only `secure_enclave` (verified in-package via P-256)
+   * and the `software` sentinel produce valid outcomes from
+   * `verifyHardwareAttestationClaim`. The four "external" platforms —
+   * `device_check`, `tpm`, `play_integrity`, `webauthn` — fall through
+   * to "verifier not wired" and are dropped before peer-credential
+   * issuance.
+   *
+   * Production wiring: surfaces call
+   * `runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers())`
+   * from `@motebit/verify` at boot. Tests inject custom verifiers or
+   * leave unset to test the in-package paths.
+   *
+   * `@motebit/verify` is NOT a runtime dep — surfaces own that choice.
+   * This setter takes the canonical `HardwareAttestationVerifiers` map
+   * from `@motebit/crypto` so any consumer (full bundle, single leaf,
+   * custom verifier) can supply it.
+   */
+  setHardwareAttestationVerifiers(verifiers: AgentTrustDeps["hardwareAttestationVerifiers"]): void {
+    this._hardwareAttestationVerifiers = verifiers;
+  }
+
   private get trustDeps(): AgentTrustDeps {
     return {
       motebitId: this.motebitId,
@@ -2452,6 +2478,7 @@ export class MotebitRuntime {
       onCredentialIssued: (vc, subjectMotebitId) =>
         this.credentialManager.persistCredential(vc, subjectMotebitId),
       getRemoteHardwareAttestations: this._hardwareAttestationFetcher,
+      hardwareAttestationVerifiers: this._hardwareAttestationVerifiers,
     };
   }
 

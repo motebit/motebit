@@ -496,6 +496,17 @@ export interface LegacyVerifyResult {
 }
 
 // @public
+export function mintSecureEnclaveReceiptForTest(input: {
+    readonly motebit_id: string;
+    readonly device_id: string;
+    readonly identity_public_key: string;
+    readonly attested_at: number;
+}): Promise<{
+    claim: HardwareAttestationClaim;
+    sePublicKeyHex: string;
+}>;
+
+// @public
 export interface MotebitIdentityFile {
     // (undocumented)
     capabilities?: string[];
@@ -1125,7 +1136,7 @@ export function verifyVerifiablePresentation(vp: VerifiablePresentation): Promis
 
 // Warnings were encountered during analysis:
 //
-// src/credentials.ts:387:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
+// src/credentials.ts:381:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 
