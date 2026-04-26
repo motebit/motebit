@@ -608,10 +608,10 @@ describe("verifyTpmQuote — rejections", () => {
 
 describe("verifyTpmQuote — factory minimal config", () => {
   it("tpmVerifier with no config uses defaults and rejects a pinned-root mismatch cleanly", async () => {
-    // No config → uses the DEFAULT_PINNED_TPM_ROOTS (placeholder PEMs).
-    // Since tests fabricate their own root, the chain won't match the
-    // pins — the verifier should fail-closed with a structured error,
-    // not throw.
+    // No config → uses the DEFAULT_PINNED_TPM_ROOTS (real vendor bytes:
+    // Infineon, Nuvoton, STMicro RSA, STMicro ECC, Intel PTT). Since
+    // tests fabricate their own root, the chain won't match the pins —
+    // the verifier should fail-closed with a structured error, not throw.
     const verifier = tpmVerifier();
     const result = await verifier(
       { platform: "tpm" }, // no receipt — short-circuits before chain

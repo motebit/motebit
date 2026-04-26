@@ -44,6 +44,9 @@ export {
   DEFAULT_PINNED_TPM_ROOTS,
   INFINEON_TPM_EK_ROOT_PEM,
   NUVOTON_TPM_EK_ROOT_PEM,
+  STMICRO_TPM_EK_RSA_ROOT_PEM,
+  STMICRO_TPM_EK_ECC_ROOT_PEM,
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- maintained for one minor cycle; consumers should migrate to the explicit RSA / ECC constants. Removed in 2.0.0.
   STMICRO_TPM_EK_ROOT_PEM,
   INTEL_PTT_EK_ROOT_PEM,
   TPM_PLATFORM,
