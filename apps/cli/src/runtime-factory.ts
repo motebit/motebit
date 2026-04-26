@@ -2,7 +2,13 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { MotebitRuntime, NullRenderer, PLANNING_TASK_ROUTER } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  PLANNING_TASK_ROUTER,
+  createRelayCapabilitiesFetcher,
+} from "@motebit/runtime";
+import { buildHardwareVerifiers } from "@motebit/verify";
 import { embedText } from "@motebit/memory-graph";
 import type { StorageAdapters } from "@motebit/runtime";
 import { AnthropicProvider, OpenAIProvider } from "@motebit/ai-core";
@@ -673,6 +679,20 @@ export async function createRuntime(
     : httpAdapter;
   runtime.connectSync(remoteStore);
   console.log(dim(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`));
+
+  // Hardware-attestation peer flow — production wiring. Without these
+  // two setters the runtime hook in `bumpTrustFromReceipt` is dormant
+  // (it gates on `getRemoteHardwareAttestations && updated.public_key`).
+  // With them, every successful delegation pulls the worker's
+  // self-issued hardware-attestation credential, verifies the embedded
+  // claim against the bundled platform adapters, and issues a peer
+  // AgentTrustCredential carrying the verified claim — which is what
+  // makes the `HW_ATTESTATION_HARDWARE` (1.0) score visible to routing.
+  // See `packages/runtime/src/agent-trust.ts:258` for the hook body and
+  // `services/api/src/__tests__/hardware-peer-flow-e2e.test.ts` for the
+  // protocol-loop assertion.
+  runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
+  runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
   return { runtime, moteDb };
 }

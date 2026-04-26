@@ -103,6 +103,7 @@
     "@motebit/state-vector": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
+    "@motebit/verify": "workspace:*",
     "@motebit/voice": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@motebit/wire-schemas": "workspace:*",

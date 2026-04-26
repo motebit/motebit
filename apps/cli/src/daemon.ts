@@ -8,8 +8,10 @@ import {
   executeCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
+  createRelayCapabilitiesFetcher,
 } from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
+import { buildHardwareVerifiers } from "@motebit/verify";
 import { embedText } from "@motebit/memory-graph";
 
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
@@ -645,6 +647,18 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
     // Also wire sync via the HTTP adapter
     runtime.connectSync(httpAdapter);
+
+    // Hardware-attestation peer flow — production wiring. Without these
+    // two setters the runtime hook in `bumpTrustFromReceipt` is dormant.
+    // With them, every successful delegation pulls the worker's
+    // self-issued hardware-attestation credential from
+    // `/agent/:id/capabilities`, verifies the embedded claim against
+    // the bundled platform adapters, and issues a peer
+    // AgentTrustCredential carrying the verified claim — making the
+    // `HW_ATTESTATION_HARDWARE` (1.0) score visible to routing. See
+    // `packages/runtime/src/agent-trust.ts:258` for the hook body.
+    runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
+    runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Plan sync: push/pull plans every 30s for cross-device visibility
     const { SqlitePlanSyncStoreAdapter } = await import("./runtime-factory.js");

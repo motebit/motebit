@@ -113,6 +113,16 @@ export type {
 export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";
 
+// Hardware-attestation peer flow — production fetcher for the runtime's
+// `setHardwareAttestationFetcher` slot. Surfaces wire it once at runtime
+// construction; without it, the peer-credential issuance hook is
+// dormant. See `hardware-attestation-fetcher.ts` for the contract.
+export {
+  createRelayCapabilitiesFetcher,
+  type RelayCapabilitiesFetcherConfig,
+} from "./hardware-attestation-fetcher.js";
+export type { HardwareAttestationFetcher } from "./agent-trust.js";
+
 // Sovereign receipt exchange — protocol types, transport interface, and
 // an in-memory reference implementation for tests and in-process demos.
 // See sovereign-receipt-exchange.ts for the protocol definition.
