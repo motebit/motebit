@@ -1,8 +1,6 @@
 ---
 "@motebit/protocol": minor
-"@motebit/wire-schemas": minor
 "@motebit/crypto": minor
-"@motebit/semiring": minor
 "@motebit/crypto-android-keystore": minor
 ---
 

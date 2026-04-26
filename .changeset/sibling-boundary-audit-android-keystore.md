@@ -2,7 +2,6 @@
 "@motebit/crypto": patch
 "@motebit/crypto-appattest": patch
 "@motebit/verify": minor
-"@motebit/mobile": patch
 ---
 
 Sibling-boundary audit cleanup after the Android Keystore + Play Integrity deprecation pass. Per `feedback_engineering_patterns`'s rule: when you fix one boundary, audit all siblings in the same pass.
