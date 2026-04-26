@@ -1,0 +1,31 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.androidkeystore'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.androidkeystore"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+    // setAttestationChallenge requires Android 7.0 (API 24, Keymaster 3+).
+    // Older devices fail at mint time with `not_supported` and the
+    // cascade in mint-hardware-credential degrades to software.
+    minSdkVersion 24
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // No external dependencies — `KeyPairGenerator`, `KeyGenParameterSpec`,
+  // and `KeyStore.getInstance("AndroidKeyStore")` are part of the Android
+  // platform. The hardware backing (TEE / StrongBox) is the device's
+  // secure element, not a Gradle dep. The verifier-side library
+  // (@motebit/crypto-android-keystore on Node) consumes the cert chain
+  // this module emits.
+}

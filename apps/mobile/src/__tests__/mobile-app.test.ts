@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // === Module Mocks ===
 
 // expo's `requireNativeModule` — stubbed so the hardware-attestation
-// cascade (App Attest / Play Integrity / Secure Enclave) doesn't try
+// cascade (App Attest / Android Keystore / Secure Enclave) doesn't try
 // to load real native modules at test-time. Each module's tests inject
 // their own fakes; this stub just keeps module-load from throwing.
 vi.mock("expo", () => ({
@@ -11,8 +11,8 @@ vi.mock("expo", () => ({
     if (name === "ExpoAppAttest") {
       return { appAttestAvailable: vi.fn(), appAttestMint: vi.fn() };
     }
-    if (name === "ExpoPlayIntegrity") {
-      return { playIntegrityAvailable: vi.fn(), playIntegrityMint: vi.fn() };
+    if (name === "ExpoAndroidKeystore") {
+      return { androidKeystoreAvailable: vi.fn(), androidKeystoreMint: vi.fn() };
     }
     return { seAvailable: vi.fn(), seMintAttestation: vi.fn() };
   },

@@ -40,8 +40,8 @@ vi.mock("expo", () => ({
     if (name === "ExpoAppAttest") {
       return { appAttestAvailable: vi.fn(), appAttestMint: vi.fn() };
     }
-    if (name === "ExpoPlayIntegrity") {
-      return { playIntegrityAvailable: vi.fn(), playIntegrityMint: vi.fn() };
+    if (name === "ExpoAndroidKeystore") {
+      return { androidKeystoreAvailable: vi.fn(), androidKeystoreMint: vi.fn() };
     }
     return { seAvailable: vi.fn(), seMintAttestation: vi.fn() };
   },
@@ -68,8 +68,8 @@ import type { NativeSecureEnclave } from "../../modules/expo-secure-enclave/src/
 import type { SeMintResult } from "../../modules/expo-secure-enclave/src/ExpoSecureEnclave.types";
 import type { NativeAppAttest } from "../../modules/expo-app-attest/src/ExpoAppAttestModule";
 import type { AppAttestMintResult } from "../../modules/expo-app-attest/src/ExpoAppAttest.types";
-import type { NativePlayIntegrity } from "../../modules/expo-play-integrity/src/ExpoPlayIntegrityModule";
-import type { PlayIntegrityMintResult } from "../../modules/expo-play-integrity/src/ExpoPlayIntegrity.types";
+import type { NativeAndroidKeystore } from "../../modules/expo-android-keystore/src/ExpoAndroidKeystoreModule";
+import type { AndroidKeystoreMintResult } from "../../modules/expo-android-keystore/src/ExpoAndroidKeystore.types";
 
 beforeAll(() => {
   if (!ed.hashes.sha512) {
@@ -204,20 +204,20 @@ function fakeAppAttestMint(): AppAttestMintResult {
   };
 }
 
-/** Build a `NativePlayIntegrity` fake with the given behaviours. */
-function makeNativePlayIntegrity(opts: {
+/** Build a `NativeAndroidKeystore` fake with the given behaviours. */
+function makeNativeAndroidKeystore(opts: {
   available: boolean;
   mint?: (args: {
     motebitId: string;
     deviceId: string;
     identityPublicKeyHex: string;
     attestedAt: number;
-  }) => PlayIntegrityMintResult | Promise<PlayIntegrityMintResult>;
+  }) => AndroidKeystoreMintResult | Promise<AndroidKeystoreMintResult>;
   mintThrows?: unknown;
-}): NativePlayIntegrity {
+}): NativeAndroidKeystore {
   return {
-    playIntegrityAvailable: async () => opts.available,
-    playIntegrityMint: async (args: {
+    androidKeystoreAvailable: async () => opts.available,
+    androidKeystoreMint: async (args: {
       motebitId: string;
       deviceId: string;
       identityPublicKeyHex: string;
@@ -230,30 +230,27 @@ function makeNativePlayIntegrity(opts: {
       if (!opts.mint) throw new Error("no mint impl provided");
       return opts.mint(args);
     },
-  } as unknown as NativePlayIntegrity;
+  } as unknown as NativeAndroidKeystore;
 }
 
-/** A minimal Play Integrity shape — an opaque JWT string + echoed nonce. */
-function fakePlayIntegrityMint(): PlayIntegrityMintResult {
-  const header = toBase64Url(
-    new TextEncoder().encode(JSON.stringify({ alg: "ES256", kid: "kid-fake" })),
-  );
-  const payload = toBase64Url(new TextEncoder().encode(JSON.stringify({ nonce: "fake" })));
-  const sig = toBase64Url(new Uint8Array(64));
+/** A minimal Android Keystore receipt shape — opaque leaf+intermediates. */
+function fakeAndroidKeystoreMint(): AndroidKeystoreMintResult {
+  const leaf = toBase64Url(new TextEncoder().encode("fake-leaf-cert-der"));
+  const intermediate = toBase64Url(new TextEncoder().encode("fake-intermediate-der"));
   return {
-    jwt: `${header}.${payload}.${sig}`,
-    nonce_base64url: "fake",
+    receipt: `${leaf}.${intermediate}`,
+    challenge_base64url: toBase64Url(new Uint8Array(32)),
   };
 }
 
-// ── Android Play Integrity happy path ───────────────────────────────
+// ── Android Keystore happy path ─────────────────────────────────────
 
-describe("mintHardwareCredential — Play Integrity happy path (Android)", () => {
-  it("emits platform:'play_integrity' with the raw JWT as the receipt when PI is available", async () => {
+describe("mintHardwareCredential — Android Keystore happy path (Android)", () => {
+  it("emits platform:'android_keystore' with the cert-chain receipt when Keystore is available", async () => {
     const id = await makeIdentity();
-    const nativePlayIntegrity = makeNativePlayIntegrity({
+    const nativeAndroidKeystore = makeNativeAndroidKeystore({
       available: true,
-      mint: fakePlayIntegrityMint,
+      mint: fakeAndroidKeystoreMint,
     });
     const cred = await mintHardwareCredential({
       identityPublicKeyHex: id.publicKeyHex,
@@ -263,19 +260,19 @@ describe("mintHardwareCredential — Play Integrity happy path (Android)", () =>
       deviceId: "android-dev-1",
       now: () => 1_700_000_000_000,
       platform: "android",
-      nativePlayIntegrity,
+      nativeAndroidKeystore,
     });
-    expect(cred.credentialSubject.hardware_attestation.platform).toBe("play_integrity");
+    expect(cred.credentialSubject.hardware_attestation.platform).toBe("android_keystore");
     const receipt = cred.credentialSubject.hardware_attestation.attestation_receipt;
     expect(receipt).toBeDefined();
-    // The Play Integrity wire format is the raw JWT — 3 segments by
-    // construction.
-    expect(receipt!.split(".").length).toBe(3);
+    // The Android Keystore wire format is `{leafB64}.{intermediatesJoinedB64}`
+    // — 2 segments by construction.
+    expect(receipt!.split(".").length).toBe(2);
   });
 
-  it("falls back to software on Android when Play Integrity is unavailable", async () => {
+  it("falls back to software on Android when Keystore is unavailable", async () => {
     const id = await makeIdentity();
-    const nativePlayIntegrity = makeNativePlayIntegrity({ available: false });
+    const nativeAndroidKeystore = makeNativeAndroidKeystore({ available: false });
     const cred = await mintHardwareCredential({
       identityPublicKeyHex: id.publicKeyHex,
       privateKey: id.privateKey,
@@ -284,16 +281,16 @@ describe("mintHardwareCredential — Play Integrity happy path (Android)", () =>
       deviceId: "android-dev-1",
       now: () => 1_700_000_000_000,
       platform: "android",
-      nativePlayIntegrity,
+      nativeAndroidKeystore,
     });
     expect(cred.credentialSubject.hardware_attestation.platform).toBe("software");
   });
 
-  it("falls back to software on Android when Play Integrity mint throws", async () => {
+  it("falls back to software on Android when Keystore mint throws", async () => {
     const id = await makeIdentity();
-    const nativePlayIntegrity = makeNativePlayIntegrity({
+    const nativeAndroidKeystore = makeNativeAndroidKeystore({
       available: true,
-      mintThrows: Object.assign(new Error("google services unavailable"), {
+      mintThrows: Object.assign(new Error("keystore exception"), {
         code: "platform_blocked",
       }),
     });
@@ -305,7 +302,7 @@ describe("mintHardwareCredential — Play Integrity happy path (Android)", () =>
       deviceId: "android-dev-1",
       now: () => 1_700_000_000_000,
       platform: "android",
-      nativePlayIntegrity,
+      nativeAndroidKeystore,
     });
     expect(cred.credentialSubject.hardware_attestation.platform).toBe("software");
   });
@@ -315,7 +312,7 @@ describe("mintHardwareCredential — Play Integrity happy path (Android)", () =>
     // consulted, regardless of their stub behaviour. This test documents
     // that routing intent.
     const id = await makeIdentity();
-    const nativePlayIntegrity = makeNativePlayIntegrity({ available: false });
+    const nativeAndroidKeystore = makeNativeAndroidKeystore({ available: false });
     const nativeAppAttest = makeNativeAppAttest({ available: true, mint: fakeAppAttestMint });
     const native = makeNative({ available: true, mint: simulateSeMint });
     const cred = await mintHardwareCredential({
@@ -326,7 +323,7 @@ describe("mintHardwareCredential — Play Integrity happy path (Android)", () =>
       deviceId: "android-dev-1",
       now: () => 1_700_000_000_000,
       platform: "android",
-      nativePlayIntegrity,
+      nativeAndroidKeystore,
       nativeAppAttest,
       native,
     });

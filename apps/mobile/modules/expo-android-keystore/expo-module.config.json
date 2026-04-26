@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["ExpoAndroidKeystoreModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.androidkeystore.ExpoAndroidKeystoreModule"]
+  }
+}

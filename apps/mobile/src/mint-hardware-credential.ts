@@ -24,11 +24,18 @@
  *     3. Software (`platform: "software"`) — truthful "no hardware
  *        channel" sentinel. Safe to ship; scored lower by the semiring.
  *   Android:
- *     1. Google Play Integrity (`platform: "play_integrity"`) — JWT
- *        chain-verified against the pinned Google JWKS by
- *        `@motebit/crypto-play-integrity`. The Android analogue of
- *        App Attest — Google signs a verdict binding the motebit nonce
- *        to the APK signing identity and device integrity level.
+ *     1. Android Hardware-Backed Keystore Attestation
+ *        (`platform: "android_keystore"`) — X.509 chain
+ *        chain-verified against the pinned Google Hardware
+ *        Attestation roots (RSA + ECDSA P-384) by
+ *        `@motebit/crypto-android-keystore`. The Android analogue of
+ *        App Attest — Google's CA attests the hardware keypair binding
+ *        on top of the TEE / StrongBox custody. Replaces the old
+ *        Play Integrity path, which Google designed as per-app-key /
+ *        network-mediated and could not satisfy motebit's
+ *        public-anchor third-party-verifiability invariant. See
+ *        `docs/doctrine/hardware-attestation.md` § "Three architectural
+ *        categories".
  *     2. Software — same truthful sentinel.
  *
  * Each step's failure degrades to the next — errors are never
@@ -51,15 +58,15 @@ import type { HardwareAttestationClaim } from "@motebit/sdk";
 import { Platform } from "react-native";
 
 import {
+  androidKeystoreAvailable,
+  androidKeystoreMint,
+  type NativeAndroidKeystore,
+} from "../modules/expo-android-keystore/src/ExpoAndroidKeystoreModule";
+import {
   appAttestAvailable,
   appAttestMint,
   type NativeAppAttest,
 } from "../modules/expo-app-attest/src/ExpoAppAttestModule";
-import {
-  playIntegrityAvailable,
-  playIntegrityMint,
-  type NativePlayIntegrity,
-} from "../modules/expo-play-integrity/src/ExpoPlayIntegrityModule";
 import {
   seAvailable,
   seMintAttestation,
@@ -94,11 +101,11 @@ export interface MintHardwareCredentialOptions {
    */
   readonly nativeAppAttest?: NativeAppAttest;
   /**
-   * Injectable Play Integrity native module. Tests pass a fake
-   * implementing `{ playIntegrityAvailable, playIntegrityMint }`;
+   * Injectable Android Keystore native module. Tests pass a fake
+   * implementing `{ androidKeystoreAvailable, androidKeystoreMint }`;
    * production uses the default-loaded Expo module.
    */
-  readonly nativePlayIntegrity?: NativePlayIntegrity;
+  readonly nativeAndroidKeystore?: NativeAndroidKeystore;
   /**
    * Platform override (defaults to `Platform.OS`). Tests pin
    * `"ios"` / `"android"` explicitly so the cascade branch under test
@@ -142,36 +149,43 @@ export async function mintAttestationClaim(
   const platform = opts.platform ?? Platform.OS;
 
   if (platform === "android") {
-    // Android path: Play Integrity first, then software. Neither App
-    // Attest nor Secure Enclave exists on Android (both are iOS-only);
-    // calling them would waste a round-trip and rely on the stub
-    // rejection path.
-    if (await playIntegrityAvailable(opts.nativePlayIntegrity)) {
+    // Android path: Hardware-Backed Keystore Attestation first, then
+    // software. Neither App Attest nor Secure Enclave exists on
+    // Android (both are iOS-only); calling them would waste a round-
+    // trip and rely on the stub rejection path.
+    //
+    // Replaced the old Play Integrity cascade — Play Integrity is
+    // structurally not third-party verifiable (per-app key,
+    // Google-API-mediated). Android Keystore Attestation is the
+    // sovereign-verifiable Android primitive.
+    if (await androidKeystoreAvailable(opts.nativeAndroidKeystore)) {
       try {
-        const result = await playIntegrityMint(
+        const result = await androidKeystoreMint(
           {
             motebitId: opts.motebitId,
             deviceId: opts.deviceId,
             identityPublicKeyHex: opts.identityPublicKeyHex.toLowerCase(),
             attestedAt,
           },
-          opts.nativePlayIntegrity,
+          opts.nativeAndroidKeystore,
         );
         return {
-          platform: "play_integrity",
+          platform: "android_keystore",
           key_exported: false,
-          // Wire format: the Play Integrity JWT itself (3-segment
-          // `header.payload.signature`). `@motebit/crypto-play-integrity`
-          // splits on `.`, base64url-decodes, verifies against the
-          // pinned Google JWKS, then re-derives the motebit nonce from
-          // the caller's identity fields. The JWT already carries the
-          // platform discriminator inside its payload; the wire
-          // format here is the raw token.
-          attestation_receipt: result.jwt,
+          // Wire format: `{leafCertB64}.{intermediatesJoinedB64}` —
+          // leaf-first DER chain with comma-joined intermediates and
+          // the root cert dropped (the verifier supplies it from
+          // pinned anchors). `@motebit/crypto-android-keystore`
+          // splits on `.`, walks the chain against
+          // `DEFAULT_ANDROID_KEYSTORE_TRUST_ANCHORS`, parses the leaf
+          // KeyDescription extension, and byte-compares the
+          // attestationChallenge against `SHA-256(canonical body)`
+          // re-derived from the caller's identity fields.
+          attestation_receipt: result.receipt,
         };
       } catch {
-        // Every PlayIntegrityError reason degrades to software. Never
-        // surface an error; never emit a false hardware claim.
+        // Every AndroidKeystoreError reason degrades to software.
+        // Never surface an error; never emit a false hardware claim.
       }
     }
     return softwareFallback();

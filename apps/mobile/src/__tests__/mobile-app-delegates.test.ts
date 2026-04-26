@@ -9,8 +9,8 @@ vi.mock("expo", () => ({
     if (name === "ExpoAppAttest") {
       return { appAttestAvailable: vi.fn(), appAttestMint: vi.fn() };
     }
-    if (name === "ExpoPlayIntegrity") {
-      return { playIntegrityAvailable: vi.fn(), playIntegrityMint: vi.fn() };
+    if (name === "ExpoAndroidKeystore") {
+      return { androidKeystoreAvailable: vi.fn(), androidKeystoreMint: vi.fn() };
     }
     return { seAvailable: vi.fn(), seMintAttestation: vi.fn() };
   },
