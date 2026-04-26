@@ -3,7 +3,7 @@
   "displayName": "Motebit",
   "description": "motebit.yaml validation, hover, and completion — backed by the `motebit lsp` language server that ships with the motebit CLI.",
   "version": "0.0.0-private",
-  "license": "BSL-1.1",
+  "license": "BUSL-1.1",
   "private": true,
   "publisher": "motebit",
   "engines": {

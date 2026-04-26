@@ -2,7 +2,7 @@
   "name": "motebit-monorepo",
   "version": "0.1.0",
   "private": true,
-  "license": "BSL-1.1",
+  "license": "BUSL-1.1",
   "description": "Cryptographic identity for AI agents",
   "homepage": "https://motebit.com",
   "repository": {
@@ -62,6 +62,7 @@
     "check-readme": "npx tsx scripts/check-readme.ts",
     "check-claude-md": "npx tsx scripts/check-claude-md.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
+    "check-license-doc-sync": "npx tsx scripts/check-license-doc-sync.ts",
     "check-scene-primitives": "npx tsx scripts/check-scene-primitives.ts",
     "check-retrieval-primitives": "npx tsx scripts/check-retrieval-primitives.ts",
     "check-reputation-primitives": "npx tsx scripts/check-reputation-primitives.ts",

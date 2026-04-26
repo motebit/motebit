@@ -4,6 +4,14 @@ Thank you for your interest in contributing to Motebit. This Contributor License
 
 By submitting a contribution (via pull request, patch, or any other mechanism) to any Motebit repository, you accept and agree to the following terms and conditions for your present and future contributions.
 
+## How to sign
+
+Comment **once** on your first pull request with the following sentence, on its own line, exactly:
+
+> I have read the CLA Document and I hereby sign the CLA.
+
+A maintainer records the GitHub handle that posted the comment; that handle is then covered for all future contributions to any Motebit repository. The phrase matches the [cla-assistant](https://cla-assistant.io) default so a future migration to bot-driven signing is a no-op for already-signed contributors.
+
 ## 1. Definitions
 
 "You" (or "Your") means the individual who submits a contribution.
@@ -34,7 +42,7 @@ You are not expected to provide support for your contributions, except to the ex
 
 This is an inbound = outbound CLA: your contributions are licensed to the project under the same license the project ships under in the directory you are contributing to.
 
-- Contributions to the **permissive floor** — `spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/verify/`, `packages/crypto-appattest/`, `packages/crypto-play-integrity/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, and `packages/github-action/` — are licensed under the **Apache License, Version 2.0**. Apache-2.0 carries an explicit, irrevocable patent grant from every contributor (§3) and a termination clause (§4.2) that strips the license of anyone who litigates patent claims against the project.
+- Contributions to the **permissive floor** — `spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/verify/`, `packages/crypto-appattest/`, `packages/crypto-android-keystore/`, `packages/crypto-play-integrity/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, and `packages/github-action/` — are licensed under the **Apache License, Version 2.0**. Apache-2.0 carries an explicit, irrevocable patent grant from every contributor (§3) and a termination clause (§4.2) that strips the license of anyone who litigates patent claims against the project.
 - All other contributions are licensed under the **Business Source License 1.1**, which converts to the **Apache License, Version 2.0** on the Change Date specified in the LICENSE file. The two license families converge to a single Apache-2.0 posture after each version's Change Date.
 
 ## 7. Relicensing
@@ -42,3 +50,7 @@ This is an inbound = outbound CLA: your contributions are licensed to the projec
 You understand and agree that Motebit may relicense the BSL-covered portions of the project under different terms in the future (e.g., for commercial licensing, or adjusting the Change License). The Apache-2.0-licensed components of the permissive floor will remain Apache-2.0.
 
 This is a key provision. It allows Motebit to offer commercial licenses to enterprises without needing to contact every contributor. This is standard practice for BSL projects (HashiCorp, Sentry, MariaDB, CockroachDB).
+
+---
+
+_Version 1.0 — effective 2026-04-26._

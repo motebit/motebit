@@ -91,7 +91,7 @@ We're in early development. Large architectural changes or new packages will lik
 
 ## Contributor License Agreement
 
-All contributors must sign our [Contributor License Agreement (CLA)](CLA.md) before their first pull request can be merged. This is a one-time process -- comment on your PR with the signing phrase and you're covered for all future contributions.
+All contributors must sign our [Contributor License Agreement (CLA)](CLA.md) before their first pull request can be merged. This is a one-time process — comment on your first PR with the signing phrase defined in [CLA.md § "How to sign"](CLA.md#how-to-sign) and you're covered for all future contributions.
 
 The CLA grants Motebit the rights needed to license contributions under our dual-license model. This is standard practice for BSL projects (HashiCorp, Sentry, CockroachDB).
 
@@ -99,7 +99,7 @@ The CLA grants Motebit the rights needed to license contributions under our dual
 
 Inbound = outbound. Contributions are licensed under the same terms as the directory you are contributing to:
 
-- **Permissive floor** (`spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/verify/`, `packages/crypto-appattest/`, `packages/crypto-play-integrity/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, `packages/github-action/`) -- **Apache-2.0** (explicit patent grant + litigation-termination clause)
+- **Permissive floor** (`spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/verify/`, `packages/crypto-appattest/`, `packages/crypto-android-keystore/`, `packages/crypto-play-integrity/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, `packages/github-action/`) -- **Apache-2.0** (explicit patent grant + litigation-termination clause)
 - **Everything else** -- [BSL 1.1](LICENSE), source-available, converts to Apache-2.0 per-version after 4 years
 
 Both license families converge to Apache-2.0 at the Change Date — one license, one patent posture, one procurement decision in the end state.

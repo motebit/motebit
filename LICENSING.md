@@ -30,6 +30,8 @@ The architectural role is "permissive floor"; the specific license instance is "
 
 Everything else is licensed under BSL-1.1. The source is fully visible — you can read, audit, learn from, and contribute to it.
 
+> **A note on `BSL` vs `BUSL`.** The license is commonly called "BSL" / "BSL-1.1" in prose — MariaDB's own BSL FAQ and major adopters (HashiCorp, CockroachDB, Sentry) all use "BSL." The SPDX-canonical identifier is `BUSL-1.1`; the `U` disambiguates against `BSL-1.0`, the Boost Software License. This codebase uses `BSL` / `BSL-1.1` where humans read prose and `BUSL-1.1` only where tooling parses it as a token (every `package.json` `license` field). `check-license-doc-sync` enforces the token register; the prose register is convention.
+
 **Permitted:**
 
 - Personal, educational, and research use
@@ -101,9 +103,13 @@ After four years, the recipe is free. By then, the network of sovereign agents w
 
 ```
 Apache-2.0 (now, any use):  protocol · sdk · crypto · verifier · verify · crypto-appattest ·
-                            crypto-play-integrity · crypto-tpm · crypto-webauthn · create-motebit ·
-                            spec · github-action
+                            crypto-android-keystore · crypto-play-integrity · crypto-tpm ·
+                            crypto-webauthn · create-motebit · spec · github-action
 BSL-1.1 (source-visible):   runtime · engines · apps · services · everything else
 BSL → Apache-2.0 conversion: 4 years per version, automatic, irrevocable
 End state:                  Apache-2.0 everywhere
 ```
+
+## Trademarks
+
+Apache-2.0 and BSL-1.1 are copyright licenses. Neither grants rights in the **Motebit** name, the **Liquescentia** name, or the glass-droplet trade dress. See [`TRADEMARK.md`](TRADEMARK.md) for permitted uses (descriptive nominative use, accurate compatibility statements) and what requires written permission (project names, logos, modified-build branding).

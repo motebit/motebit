@@ -55,18 +55,19 @@ The following components of this repository are licensed under the Apache
 License, Version 2.0 (see their individual LICENSE files) and are NOT subject
 to the Business Source License:
 
-  spec/                            Protocol specifications
-  packages/protocol/               @motebit/protocol — network protocol types
-  packages/sdk/                    @motebit/sdk — full type vocabulary
-  packages/crypto/                 @motebit/crypto — signing and verification
-  packages/verifier/               @motebit/verifier — verifyFile / verifyArtifact / formatHuman library
-  packages/verify/                 @motebit/verify — motebit-verify CLI (bundles the four platform leaves)
-  packages/crypto-appattest/       @motebit/crypto-appattest — Apple App Attest chain verifier
-  packages/crypto-play-integrity/  @motebit/crypto-play-integrity — Google Play Integrity JWT verifier
-  packages/crypto-tpm/             @motebit/crypto-tpm — TPM 2.0 EK chain verifier
-  packages/crypto-webauthn/        @motebit/crypto-webauthn — WebAuthn packed-attestation verifier
-  packages/create-motebit/         create-motebit — identity scaffolding CLI
-  packages/github-action/          motebit-verify GitHub Action
+  spec/                              Protocol specifications
+  packages/protocol/                 @motebit/protocol — network protocol types
+  packages/sdk/                      @motebit/sdk — full type vocabulary
+  packages/crypto/                   @motebit/crypto — signing and verification
+  packages/verifier/                 @motebit/verifier — verifyFile / verifyArtifact / formatHuman library
+  packages/verify/                   @motebit/verify — motebit-verify CLI (bundles the canonical platform leaves)
+  packages/crypto-appattest/         @motebit/crypto-appattest — Apple App Attest chain verifier
+  packages/crypto-android-keystore/  @motebit/crypto-android-keystore — Android Hardware-Backed Keystore Attestation chain verifier
+  packages/crypto-play-integrity/    @motebit/crypto-play-integrity — Google Play Integrity JWT verifier
+  packages/crypto-tpm/               @motebit/crypto-tpm — TPM 2.0 EK chain verifier
+  packages/crypto-webauthn/          @motebit/crypto-webauthn — WebAuthn packed-attestation verifier
+  packages/create-motebit/           create-motebit — identity scaffolding CLI
+  packages/github-action/            motebit-verify GitHub Action
 
 These components may be used, modified, and distributed for any purpose,
 including commercial use, under the terms of the Apache License, Version 2.0.

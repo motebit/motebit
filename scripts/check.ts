@@ -227,6 +227,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-readme-bin-claims",
   },
   {
+    name: "check-license-doc-sync",
+    defends:
+      "every workspace package.json declares a SPDX-canonical license (Apache-2.0 or BUSL-1.1) and the permissive-floor membership agrees across LICENSING.md (table + quick reference) and CONTRIBUTING.md; the canonical truth is the package.json license field, the prose surfaces are the siblings (invariant #52, full history in docs/drift-defenses.md)",
+    script: "check-license-doc-sync",
+  },
+  {
     name: "check-scene-primitives",
     defends:
       "SpatialExpression renderers live in @motebit/render-engine, not inline in apps (invariant #26, added 2026-04-19 after CredentialSatelliteRenderer moved from apps/spatial to packages/render-engine so apps/web could consume the same renderer; extends the protocol-primitive doctrine to scene primitives — every surface with a 3D creature consumes one implementation)",
