@@ -31,6 +31,7 @@
     "@motebit/mcp-client": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
+    "@motebit/verify": "workspace:*",
     "@motebit/voice": "workspace:*",
     "@ricky0123/vad-web": "^0.0.22",
     "three": "^0.170.0"

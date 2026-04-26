@@ -30,10 +30,21 @@ import type { HardwareAttestationFetcher } from "./agent-trust.js";
 
 export interface RelayCapabilitiesFetcherConfig {
   /**
-   * Relay base URL (e.g. `https://relay.motebit.com`). Trailing slash
-   * tolerated. The fetcher appends `/agent/:motebitId/capabilities`.
+   * Relay base URL — either a static string or a synchronous resolver
+   * that returns the current URL (or `undefined` / empty string if the
+   * relay isn't configured). Trailing slash tolerated. The fetcher
+   * appends `/agent/:motebitId/capabilities`.
+   *
+   * The resolver form fits surfaces whose sync URL is cached in a field
+   * that gets repopulated when config changes (desktop's
+   * `_proxySyncUrlCache`, mobile's same, spatial's
+   * `localStorage.getItem("motebit:sync_url")`). Resolvers MUST be
+   * synchronous — surfaces with async storage (e.g. AsyncStorage) cache
+   * the value in a sync field at bootstrap and have the resolver read
+   * that field. If the resolver returns `undefined` or empty, the
+   * fetcher returns `[]` (no claim observed).
    */
-  readonly baseUrl: string;
+  readonly baseUrl: string | (() => string | undefined | null);
   /**
    * Optional `fetch` override. Defaults to `globalThis.fetch`. Tests
    * inject a stub; surfaces with a non-default fetch (e.g. one routed
@@ -71,10 +82,14 @@ export function createRelayCapabilitiesFetcher(
   config: RelayCapabilitiesFetcherConfig,
 ): HardwareAttestationFetcher {
   const fetchImpl = config.fetch ?? globalThis.fetch;
-  const baseUrl = config.baseUrl.replace(/\/+$/, "");
+  const resolveBaseUrl =
+    typeof config.baseUrl === "function" ? config.baseUrl : () => config.baseUrl as string;
   const logger = config.logger;
 
   return async (remoteMotebitId: string) => {
+    const resolvedUrl = resolveBaseUrl();
+    if (resolvedUrl == null || resolvedUrl === "") return [];
+    const baseUrl = resolvedUrl.replace(/\/+$/, "");
     const url = `${baseUrl}/agent/${encodeURIComponent(remoteMotebitId)}/capabilities`;
     let res: Response;
     try {

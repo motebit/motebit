@@ -141,6 +141,46 @@ describe("createRelayCapabilitiesFetcher", () => {
     expect(out).toEqual([]);
   });
 
+  it("accepts a lazy resolver and reads the URL on each fetch", async () => {
+    let url: string | undefined = "https://relay-1.test";
+    const fetchSpy = vi.fn(async (u: string) => {
+      expect(u.startsWith(url ?? "")).toBe(true);
+      return jsonResponse({ hardware_attestations: [] });
+    });
+    const fetcher = createRelayCapabilitiesFetcher({
+      baseUrl: () => url,
+      fetch: fetchSpy as unknown as typeof globalThis.fetch,
+    });
+    await fetcher("m-1");
+    url = "https://relay-2.test";
+    await fetcher("m-1");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://relay-1.test/agent/m-1/capabilities");
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://relay-2.test/agent/m-1/capabilities");
+  });
+
+  it("returns [] without calling fetch when the lazy resolver yields undefined", async () => {
+    const fetchSpy = vi.fn();
+    const fetcher = createRelayCapabilitiesFetcher({
+      baseUrl: () => undefined,
+      fetch: fetchSpy as unknown as typeof globalThis.fetch,
+    });
+    const out = await fetcher("m-1");
+    expect(out).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns [] without calling fetch when the lazy resolver yields the empty string", async () => {
+    const fetchSpy = vi.fn();
+    const fetcher = createRelayCapabilitiesFetcher({
+      baseUrl: () => "",
+      fetch: fetchSpy as unknown as typeof globalThis.fetch,
+    });
+    const out = await fetcher("m-1");
+    expect(out).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("skips entries with non-string device_id or public_key", async () => {
     const fetcher = createRelayCapabilitiesFetcher({
       baseUrl: "https://relay.test",

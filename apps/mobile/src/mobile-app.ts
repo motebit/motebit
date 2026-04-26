@@ -18,7 +18,9 @@ import {
   ProxySession,
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
+  createRelayCapabilitiesFetcher,
 } from "@motebit/runtime";
+import { buildHardwareVerifiers } from "@motebit/verify";
 import type {
   StreamChunk,
   OperatorModeResult,
@@ -954,6 +956,18 @@ export class MobileApp {
     // SecureEnclave capability advertisement waits until a real peer
     // flow surfaces an actual hardware-tier mint result.
     this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp, DeviceCapability.Keyring]);
+
+    // Hardware-attestation peer flow — production wiring. Without these
+    // setters the runtime hook in `bumpTrustFromReceipt` is dormant.
+    // The fetcher reads the sync URL lazily from `_proxySyncUrlCache`
+    // (cached at bootstrap from AsyncStorage; refreshed when the user
+    // changes relay settings) — so reconfiguring the relay takes effect
+    // on the next delegation without runtime reconstruction. See
+    // `packages/runtime/src/agent-trust.ts:258` for the hook body.
+    this.runtime.setHardwareAttestationFetcher(
+      createRelayCapabilitiesFetcher({ baseUrl: () => this._proxySyncUrlCache ?? undefined }),
+    );
+    this.runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Create PlanEngine for multi-step goal execution
     if (storage.planStore != null) {

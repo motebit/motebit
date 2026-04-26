@@ -6,7 +6,9 @@ import {
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
   bindSlabControllerToRenderer,
+  createRelayCapabilitiesFetcher,
 } from "@motebit/runtime";
+import { buildHardwareVerifiers } from "@motebit/verify";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import {
   renderSlabItem,
@@ -394,6 +396,17 @@ export class WebApp {
 
     // Web surface: HTTP MCP only (no stdio, no filesystem, no secure keyring)
     this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp]);
+
+    // Hardware-attestation peer flow — production wiring. Without these
+    // setters the runtime hook in `bumpTrustFromReceipt` is dormant.
+    // The fetcher reads the sync URL lazily via `loadSyncUrl`, which
+    // hits `localStorage` on each call — so reconfiguring the relay in
+    // Settings takes effect on the next delegation without runtime
+    // reconstruction. See `packages/runtime/src/agent-trust.ts:258`.
+    this.runtime.setHardwareAttestationFetcher(
+      createRelayCapabilitiesFetcher({ baseUrl: () => loadSyncUrl() ?? undefined }),
+    );
+    this.runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Slab ("Motebit Computer") bridge — sibling of DesktopApp's
     // binding (apps/desktop/src/index.ts). runtime.slab emits

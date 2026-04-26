@@ -11,7 +11,9 @@ import {
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
   bindSlabControllerToRenderer,
+  createRelayCapabilitiesFetcher,
 } from "@motebit/runtime";
+import { buildHardwareVerifiers } from "@motebit/verify";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import {
   renderSlabItem,
@@ -972,6 +974,18 @@ export class DesktopApp {
       DeviceCapability.Keyring,
       DeviceCapability.Background,
     ]);
+
+    // Hardware-attestation peer flow — production wiring. Without these
+    // setters the runtime hook in `bumpTrustFromReceipt` is dormant.
+    // The fetcher reads the sync URL lazily from `_proxySyncUrlCache`,
+    // which is populated at bootstrap from Tauri config and refreshed
+    // when the user changes relay settings — so reconfiguring the relay
+    // takes effect on the next delegation without runtime reconstruction.
+    // See `packages/runtime/src/agent-trust.ts:258` for the hook body.
+    this.runtime.setHardwareAttestationFetcher(
+      createRelayCapabilitiesFetcher({ baseUrl: () => this._proxySyncUrlCache ?? undefined }),
+    );
+    this.runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Slab ("Motebit Computer") bridge — wire the runtime's slab
     // controller to the render adapter so tool-call / stream /

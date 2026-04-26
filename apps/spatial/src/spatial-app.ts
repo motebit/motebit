@@ -23,7 +23,13 @@
  * - Token refresh every 4.5 minutes (tokens expire at 5 min)
  */
 
-import { MotebitRuntime, ProxySession, PLANNING_TASK_ROUTER } from "@motebit/runtime";
+import {
+  MotebitRuntime,
+  ProxySession,
+  PLANNING_TASK_ROUTER,
+  createRelayCapabilitiesFetcher,
+} from "@motebit/runtime";
+import { buildHardwareVerifiers } from "@motebit/verify";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
 import type { EventStoreAdapter } from "@motebit/event-log";
@@ -643,6 +649,27 @@ export class SpatialApp {
 
     // Spatial surface: HTTP MCP only (no stdio, no filesystem)
     this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp]);
+
+    // Hardware-attestation peer flow — production wiring. The fetcher
+    // reads the sync URL lazily from localStorage (same accessor the
+    // ProxySessionAdapter uses), so reconfiguring the relay takes
+    // effect on the next delegation without runtime reconstruction.
+    // Spatial is a delegating surface even without panels — the
+    // creature dispatches through the same MotebitRuntime delegation
+    // path the other surfaces use. See
+    // `packages/runtime/src/agent-trust.ts:258` for the hook body.
+    this.runtime.setHardwareAttestationFetcher(
+      createRelayCapabilitiesFetcher({
+        baseUrl: () => {
+          try {
+            return localStorage.getItem("motebit:sync_url") ?? undefined;
+          } catch {
+            return undefined;
+          }
+        },
+      }),
+    );
+    this.runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Subscribe to state changes — feed attention level for orbital dynamics
     this.unsubscribeState = this.runtime.subscribe((state: MotebitState) => {
