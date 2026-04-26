@@ -223,7 +223,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-readme-bin-claims",
     defends:
-      "every `npm i -g <pkg>` / `npx <pkg>` invocation in any README.md or CLAUDE.md targets a workspace package that actually ships a `bin` field — defends against 'code-shaped prose drift' (added 2026-04-26 after a sibling-boundary audit found `@motebit/verifier`'s README still showing `npm i -g @motebit/verifier && motebit-verify motebit.md` for months after the 2026-04-09 verify↔verifier swap removed the bin field; published install snippet was silently broken because no existing gate read prose). Surface drift class: documentation that looks like runnable code but no longer matches the package's actual capabilities — survives typecheck, lint, and tests, only fails when a real human copy-pastes",
+      "every README.md / CLAUDE.md `npm i -g <pkg>` / `npx <pkg>` invocation targets a workspace package whose package.json ships a `bin` field; defends against code-shaped prose drift after package role changes (invariant #51, full history in docs/drift-defenses.md)",
     script: "check-readme-bin-claims",
   },
   {
