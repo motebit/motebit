@@ -439,6 +439,21 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-readme-bin-claims",
+    proves:
+      "flags an `npm i -g @motebit/<pkg>` invocation in any README.md / CLAUDE.md naming a workspace package whose package.json has no `bin` field",
+    perturb: () =>
+      // Write a probe README that tells the reader to globally-install
+      // `@motebit/protocol` — a real workspace package with no `bin`
+      // field. The gate should fire because the prose promises a binary
+      // the package doesn't ship. Same shape as the verifier↔verify
+      // 2026-04-09 swap that produced the original incident.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}README.md`,
+        `# Probe README\n\nInstall: \`npm i -g @motebit/protocol\` and you will have a binary that does not exist.\n`,
+      ),
+  },
+  {
     script: "check-scene-primitives",
     proves:
       "flags an inline scene primitive in an app — imports `three` AND registers a SpatialExpression kind outside @motebit/render-engine",
@@ -801,19 +816,25 @@ export const __probeOnlyDeprecationDrift = 1;
     proves:
       "flags a numeric count claim in README.md / CLAUDE.md / architecture.mdx that disagrees with the filesystem (packages/specs/apps/services)",
     perturb: () =>
-      // Mutate the README architecture banner from "46 packages" to "36
+      // Mutate the README architecture banner from "47 packages" to "37
       // packages" — exactly the drift shape this gate was built for
       // (the 2026-04-24 incident found three doc surfaces drifted to
-      // 36/40/37 against an actual filesystem of 46). Distinctive enough
+      // 36/40/37 against an actual filesystem; same shape resurfaced
+      // 2026-04-26 when crypto-android-keystore landed and four doc
+      // surfaces stayed pinned at "46 packages"). Distinctive enough
       // that grep-and-revert is trivial if cleanup ever fails. Other
       // count claims (specs, the second package mention) stay correct,
       // so only the perturbed line should appear in the gate's
       // findings — proves the gate is per-line precise, not just a
-      // pass/fail of the whole doc.
+      // pass/fail of the whole doc. Probe-literal drift (the count
+      // bumping over time as packages are added) is itself caught by
+      // check-gates-effective: a stale literal makes the perturbation
+      // a no-op and the gate exits 0, surfaced as "did NOT catch the
+      // perturbation" — so the probe self-rots are visible.
       mutateFile("README.md", (src) =>
         src.replace(
-          "**46 packages across 7 architectural layers",
-          "**36 packages across 7 architectural layers",
+          "**47 packages across 7 architectural layers",
+          "**37 packages across 7 architectural layers",
         ),
       ),
   },
