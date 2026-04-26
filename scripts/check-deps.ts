@@ -62,6 +62,7 @@ const LAYER: Record<string, number> = {
   "@motebit/wire-schemas": 1,
 
   // Layer 2 — Engines (depend on Layer 0–1)
+  "@motebit/crypto-android-keystore": 2,
   "@motebit/crypto-appattest": 2,
   "@motebit/crypto-play-integrity": 2,
   "@motebit/crypto-tpm": 2,
@@ -114,6 +115,7 @@ const PERMISSIVE_PACKAGES = new Set([
   "create-motebit",
   "@motebit/verifier",
   "@motebit/verify",
+  "@motebit/crypto-android-keystore",
   "@motebit/crypto-appattest",
   "@motebit/crypto-play-integrity",
   "@motebit/crypto-tpm",
@@ -131,6 +133,7 @@ const PERMISSIVE_IMPORT_ALLOWED = new Set([
   "create-motebit",
   "@motebit/verifier",
   "@motebit/verify",
+  "@motebit/crypto-android-keystore",
   "@motebit/crypto-appattest",
   "@motebit/crypto-play-integrity",
   "@motebit/crypto-tpm",

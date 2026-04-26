@@ -250,6 +250,18 @@ function scan(): Violation[] {
     "packages/crypto-webauthn/src/verify.ts",
     "packages/crypto-webauthn/src/index.ts",
     "packages/crypto-webauthn/src/cbor.ts",
+    // `@motebit/crypto-android-keystore` is the canonical Android
+    // Hardware-Backed Keystore Attestation verifier — the BSL leaf
+    // `@motebit/crypto` delegates to when a
+    // `HardwareAttestationClaim` declares `platform: "android_keystore"`.
+    // `asn1.ts` carries the hand-rolled DER walker for the AOSP
+    // KeyDescription extension that this gate would otherwise flag
+    // under Rule B; per the same per-platform-canonical-home
+    // principle, it is the single authorized caller for Android
+    // KeyDescription parsing.
+    "packages/crypto-android-keystore/src/verify.ts",
+    "packages/crypto-android-keystore/src/index.ts",
+    "packages/crypto-android-keystore/src/asn1.ts",
   ]);
 
   const scanRoots: string[] = [];

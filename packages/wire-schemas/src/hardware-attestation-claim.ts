@@ -53,9 +53,17 @@ export const HARDWARE_ATTESTATION_CLAIM_SCHEMA_ID =
 export const HardwareAttestationClaimSchema = z
   .object({
     platform: z
-      .enum(["secure_enclave", "tpm", "play_integrity", "device_check", "webauthn", "software"])
+      .enum([
+        "secure_enclave",
+        "tpm",
+        "play_integrity",
+        "android_keystore",
+        "device_check",
+        "webauthn",
+        "software",
+      ])
       .describe(
-        "Attestation surface identifier. `secure_enclave` = Apple Secure Enclave / Android StrongBox class; `tpm` = Trusted Platform Module (PC); `play_integrity` = Google Play Integrity attestation; `device_check` = Apple DeviceCheck/App Attest; `webauthn` = W3C WebAuthn platform authenticator (browser-minted, packed attestation format verified against a pinned FIDO root set); `software` is the explicit no-hardware sentinel (truthfully claims 'this key is not hardware-backed', distinct from an absent claim which means 'unknown').",
+        "Attestation surface identifier. `secure_enclave` = Apple Secure Enclave / Android StrongBox class; `tpm` = Trusted Platform Module (PC); `play_integrity` = Google Play Integrity attestation (operator-mediated, deprecated as a sovereign-verifiable leaf — see `android_keystore`); `android_keystore` = Android Hardware-Backed Keystore Attestation (X.509 chain to Google's published Hardware Attestation roots, the canonical sovereign-verifiable Android primitive); `device_check` = Apple DeviceCheck/App Attest; `webauthn` = W3C WebAuthn platform authenticator (browser-minted, packed attestation format verified against a pinned FIDO root set); `software` is the explicit no-hardware sentinel (truthfully claims 'this key is not hardware-backed', distinct from an absent claim which means 'unknown').",
       ),
     key_exported: z
       .boolean()

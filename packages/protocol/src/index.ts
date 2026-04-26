@@ -1727,7 +1727,14 @@ export interface HardwareAttestationClaim {
    * `platform: "software"` is truthfully claiming "this key is not
    * hardware-backed", distinct from an absent claim ("unknown").
    */
-  platform: "secure_enclave" | "tpm" | "play_integrity" | "device_check" | "webauthn" | "software";
+  platform:
+    | "secure_enclave"
+    | "tpm"
+    | "play_integrity"
+    | "android_keystore"
+    | "device_check"
+    | "webauthn"
+    | "software";
   /**
    * True when the private key was exported from hardware to software
    * storage (backup, pairing). Weakens the claim — the hardware no

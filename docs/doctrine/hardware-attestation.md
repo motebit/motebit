@@ -52,14 +52,14 @@ The rank is algebra, not policy-by-switch. `packages/semiring/src/hardware-attes
 
 `scoreAttestation(claim)` encodes the claim:
 
-| Claim                                                                                   | Score                                      |
-| --------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `secure_enclave` / `tpm` / `device_check` / `play_integrity` / `webauthn`, not exported | 1.0                                        |
-| Any hardware platform, `key_exported: true`                                             | 0.5                                        |
-| `platform: "software"` (explicit no-hardware)                                           | 0.1                                        |
-| Absent claim                                                                            | 0.0 (semiring zero, annihilates under `⊗`) |
+| Claim                                                                                                        | Score                                      |
+| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| `secure_enclave` / `tpm` / `device_check` / `play_integrity` / `android_keystore` / `webauthn`, not exported | 1.0                                        |
+| Any hardware platform, `key_exported: true`                                                                  | 0.5                                        |
+| `platform: "software"` (explicit no-hardware)                                                                | 0.1                                        |
+| Absent claim                                                                                                 | 0.0 (semiring zero, annihilates under `⊗`) |
 
-Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Google Play Integrity (Android, Google-JWKS-signed JWT), TPM 2.0 (Windows / Linux, endorsement-key chain against pinned vendor roots). Scoring is identical across every adapter — all collapse to the same `1.0 / 0.5 / 0.1 / 0.0` scalar under the bottleneck semiring. The scalar answers "hardware-backed?" yes/no; the platform identifier answers "which hardware?" for audit, not for rank.
+Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Android Hardware-Backed Keystore Attestation (Android, Google-CA-signed chain via `crypto-android-keystore` — the canonical Android sovereign-verifiable primitive), TPM 2.0 (Windows / Linux, endorsement-key chain against pinned vendor roots), W3C WebAuthn (browsers, FIDO-vendor batch root). Scoring is identical across every adapter — all collapse to the same `1.0 / 0.5 / 0.1 / 0.0` scalar under the bottleneck semiring. The scalar answers "hardware-backed?" yes/no; the platform identifier answers "which hardware?" for audit, not for rank. (Google Play Integrity carries the same `1.0` score for backward compatibility with existing claims, but the verifier is deprecated — see `crypto-play-integrity/CLAUDE.md` for the structural-mismatch explanation.)
 
 Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` lifts a market-local `productSemiring(TrustSemiring, HardwareAttestationSemiring)` over the routing graph — every edge carries a `(trust, hwScore)` tuple, `optimalPaths` bottlenecks HW scores across the whole path in one traversal, and the ranker folds the chain bottleneck into trust via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)` at the scoring boundary. Single-hop candidates recover the prior scalar-at-terminal score; multi-hop chains through a `software` or absent intermediate now score at the weakest link. Swap the encoder for a different policy without touching the algebra.
 
@@ -77,6 +77,39 @@ Hardware is glucose. The math is enzyme.
 
 New platform adapter lands as **one** entry in the `platform` union, **one** new claim-minting path in the relevant surface, **zero** changes to the verifier or the rank. The rank is closed under platform additions.
 
+## Three architectural categories — not all "hardware attestation" is the same
+
+A research pass during the 2026-04-25/26 fixture work surfaced that the four
+"Apache-2.0 platform leaves" had been treated in doctrine as siblings (same
+shape, same contract, same pinned-public-roots model) when they are actually
+in three distinct categories. Naming them is load-bearing — categorization
+errors at this layer manifest as packages whose npm description claims
+something the implementation cannot deliver.
+
+| Category                                                | Examples (motebit packages today)                         | Real-fixture story                                                                                                                                                                                   |
+| ------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. Public-batch-anchor verifier**                     | `@motebit/crypto-webauthn`, `@motebit/crypto-appattest`   | Vendor publishes ONE stable batch attestation root that signs millions of devices. Pin once at v1; any captured ceremony rooted at it validates AND leaks no per-device identity. Achievable.        |
+| **2. Public-vendor-anchor-but-private-leaves verifier** | `@motebit/crypto-tpm`, `@motebit/crypto-android-keystore` | Vendor publishes the root; device leaves uniquely identify chips. Pinning works; real-device fixtures are privacy-sensitive (EK certs / verifiedBootKey can identify individuals). Capture-gated.    |
+| **3. Per-deployer-private-key verifier (NOT a leaf)**   | (formerly scaffolded as `@motebit/crypto-play-integrity`) | No public anchor exists. Verification key is per-app, generated by the platform vendor's developer console, never globally published. Sovereign third-party verification is structurally impossible. |
+
+Categories 1 and 2 are sovereign-verifiable: pin the public root, ship the
+verifier, third parties reach the same yes/no answer. Categories 1 vs 2
+differ on privacy of the leaf (FIDO Yubico-batch vs TPM-EK), not on the
+sovereignty of the verification path. Category 3 is **operator-mediated** —
+useful for relay-side anti-fraud signaling, but not a sovereign credential.
+Conflating it with categories 1 and 2 produced
+`@motebit/crypto-play-integrity@1.0.0` shipping with `GOOGLE_PLAY_INTEGRITY_JWKS = { keys: [] }`,
+because there was no Google JWKS to pin — Google designed the Play Integrity
+verification path to require either a network call to their API or a per-app
+secret. The package was deprecated 2026-04-26 in favour of
+`@motebit/crypto-android-keystore` (category 2 — Google's published
+Hardware Attestation roots, real device-attestation chain).
+
+If a future motebit deployment wants Play Integrity-as-anti-fraud
+(`playProtectVerdict` and friends), it lands at the relay tier as an
+explicitly non-canonical operator signal — not in the permissive-floor
+crypto-leaf set.
+
 ## The three invariants
 
 Every future change to this vertical clears all three:
@@ -89,7 +122,7 @@ Every future change to this vertical clears all three:
 
 ## Non-goals in v1
 
-- **Chain-of-trust verification for Secure Enclave.** The SE public key is the self-asserted root in v1. App Attest, Play Integrity, and TPM adapters already verify the platform's own attestation chain (Apple App Attest root CA; Google Play Integrity JWKS; Infineon, Nuvoton, STMicro, Intel PTT TPM vendor roots via `@motebit/crypto-tpm`'s `DEFAULT_PINNED_TPM_ROOTS`). The SE chain-of-trust landing is tracked alongside persistent-SE keys.
+- **Chain-of-trust verification for Secure Enclave.** The SE public key is the self-asserted root in v1. App Attest, Android Keystore, TPM, and WebAuthn adapters already verify the platform's own attestation chain (Apple App Attest root CA; Google Hardware Attestation roots — RSA + ECDSA P-384 — via `@motebit/crypto-android-keystore`'s `DEFAULT_ANDROID_KEYSTORE_TRUST_ANCHORS`; Infineon, Nuvoton, STMicro, Intel PTT TPM vendor roots via `@motebit/crypto-tpm`'s `DEFAULT_PINNED_TPM_ROOTS`; Apple, Yubico, Microsoft FIDO roots via `@motebit/crypto-webauthn`). The SE chain-of-trust landing is tracked alongside persistent-SE keys.
 
 - **Real TPM fixture coverage.** The TPM verifier currently has synthetic coverage only. Real EK-backed TPM captures are not lifted from third-party fixtures by default because EK certificates can identify individual chips. A real-device fixture should come from owned hardware or a vendor-approved public vector, with privacy reviewed before committing. The same shape worked for `@motebit/crypto-webauthn` because Yubico deliberately reuses one batch attestation root across millions of devices, so a captured ceremony rooted at it leaks no per-device identity; TPM EK chains are the architectural opposite.
 
@@ -110,7 +143,8 @@ Live consumers today:
 - `packages/market/src/scoring.ts` — `CandidateProfile.hardware_attestation?` field.
 - `packages/encryption/src/hardware-attestation-credential.ts` — canonical VC composer; CLI + desktop + mobile + web all delegate.
 - `packages/crypto-appattest/` — Apple App Attest chain verifier (pinned Apple root).
-- `packages/crypto-play-integrity/` — Google Play Integrity JWT verifier (pinned Google JWKS, ES256 / RS256 dispatch).
+- `packages/crypto-android-keystore/` — Android Hardware-Backed Keystore Attestation verifier (pinned Google attestation roots — RSA + ECDSA P-384). The canonical sovereign-verifiable Android primitive.
+- `packages/crypto-play-integrity/` — DEPRECATED. Google Play Integrity JWT verifier (pinned Google JWKS, ES256 / RS256 dispatch). Structurally miscategorized as a sovereign-verifiable leaf — Google publishes no global JWKS; replaced by `crypto-android-keystore`. Removed at 2.0.0.
 - `packages/crypto-tpm/src/verify.ts` — TPM 2.0 quote verifier; pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
 - `packages/crypto-tpm/src/tpm-parse.ts` — minimal `TPMS_ATTEST` marshaling; hand-rolled over dep explosion.
 - `packages/crypto-webauthn/src/verify.ts` — browser-platform-authenticator packed-attestation verifier; pinned FIDO roots (Apple, Yubico, Microsoft) + self-attestation path.

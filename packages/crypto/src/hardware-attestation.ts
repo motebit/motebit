@@ -212,6 +212,18 @@ export interface HardwareAttestationVerifiers {
         readonly valid: boolean;
         readonly errors: ReadonlyArray<{ readonly message: string }>;
       }>;
+  readonly androidKeystore?: (
+    claim: HardwareAttestationClaim,
+    expectedIdentityPublicKeyHex: string,
+    context?: DeviceCheckVerifierContext,
+  ) =>
+    | HardwareAttestationVerifyResult
+    | PromiseLike<HardwareAttestationVerifyResult>
+    | { readonly valid: boolean; readonly errors: ReadonlyArray<{ readonly message: string }> }
+    | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{ readonly message: string }>;
+      }>;
 }
 
 /**
@@ -305,6 +317,17 @@ export function verifyHardwareAttestationClaim(
       }
       errors.push({
         message: `platform \`${platform}\` verifier not wired — pass { webauthn: webauthnVerifier(...) } from @motebit/crypto-webauthn to enable`,
+      });
+      return { valid: false, platform, errors };
+    case "android_keystore":
+      if (verifiers?.androidKeystore) {
+        return dispatchInjected(
+          platform,
+          verifiers.androidKeystore(claim, expectedIdentityPublicKeyHex, deviceCheckContext),
+        );
+      }
+      errors.push({
+        message: `platform \`${platform}\` verifier not wired — pass { androidKeystore: androidKeystoreVerifier(...) } from @motebit/crypto-android-keystore to enable`,
       });
       return { valid: false, platform, errors };
     default:

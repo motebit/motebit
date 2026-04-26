@@ -27,7 +27,8 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 - [`packages/crypto/CLAUDE.md`](packages/crypto/CLAUDE.md) — suite-dispatch is the only Ed25519 caller
 - [`packages/wire-schemas/CLAUDE.md`](packages/wire-schemas/CLAUDE.md) — BSL zod sources; generates committed JSON Schemas into the Apache-2.0 `spec/schemas/` tree
 - [`packages/crypto-appattest/CLAUDE.md`](packages/crypto-appattest/CLAUDE.md) — iOS App Attest chain verifier; pinned Apple root, injected at call site
-- [`packages/crypto-play-integrity/CLAUDE.md`](packages/crypto-play-integrity/CLAUDE.md) — Android Play Integrity JWT verifier; pinned Google JWKS, injected at call site
+- [`packages/crypto-play-integrity/CLAUDE.md`](packages/crypto-play-integrity/CLAUDE.md) — Android Play Integrity JWT verifier (deprecated as a canonical sovereign-verifiable leaf — Google publishes no global JWKS; verification keys are per-app, per-Play-Console-account); replaced by `crypto-android-keystore`
+- [`packages/crypto-android-keystore/CLAUDE.md`](packages/crypto-android-keystore/CLAUDE.md) — Android Hardware-Backed Keystore Attestation verifier; pinned Google roots (RSA + ECDSA P-384); the canonical sovereign-verifiable Android primitive
 - [`packages/crypto-tpm/CLAUDE.md`](packages/crypto-tpm/CLAUDE.md) — Windows / Linux TPM 2.0 EK chain verifier; pinned vendor roots, injected at call site
 - [`packages/crypto-webauthn/CLAUDE.md`](packages/crypto-webauthn/CLAUDE.md) — WebAuthn platform-authenticator packed-attestation verifier; pinned FIDO roots (Apple, Yubico, Microsoft)
 - [`packages/verify/CLAUDE.md`](packages/verify/CLAUDE.md) — canonical `motebit-verify` CLI; Apache-2.0 aggregator that bundles the four Apache-2.0 platform leaves with motebit-canonical defaults
