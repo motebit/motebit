@@ -1,6 +1,6 @@
 # @motebit/verify
 
-The canonical motebit artifact verifier. A single `motebit-verify` command that verifies any signed motebit artifact — identity files, execution receipts, credentials, presentations — including credentials carrying hardware-attestation claims under any of the four platforms (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn).
+The canonical motebit artifact verifier. A single `motebit-verify` command that verifies any signed motebit artifact — identity files, execution receipts, credentials, presentations — including credentials carrying hardware-attestation claims under any of the four canonical sovereign-verifiable platforms (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn) plus the deprecated Play Integrity verifier for backward compat with already-minted credentials.
 
 Network-free. No relay contact, no external service, no cloud dependency. Every trust anchor is pinned in the installed package.
 
@@ -26,15 +26,16 @@ VALID (credential)
 | W3C VerifiableCredentials   | `eddsa-jcs-2022` proof, hardware-attestation channel if present |
 | VerifiablePresentations     | Signed envelope + every embedded credential                     |
 
-Hardware-attestation channel covers all four currently-shipped platforms:
+Hardware-attestation channel covers every currently-shipped platform:
 
-| Platform         | Adapter                          | Trust anchor                                                 |
-| ---------------- | -------------------------------- | ------------------------------------------------------------ |
-| `secure_enclave` | `@motebit/crypto` (built-in)     | ECDSA-P256 signature; self-asserted SE public key            |
-| `device_check`   | `@motebit/crypto-appattest`      | Pinned Apple App Attestation Root CA                         |
-| `tpm`            | `@motebit/crypto-tpm`            | Pinned Infineon / Nuvoton / STMicro / Intel PTT vendor roots |
-| `play_integrity` | `@motebit/crypto-play-integrity` | Pinned Google JWKS                                           |
-| `webauthn`       | `@motebit/crypto-webauthn`       | Pinned Apple / Yubico / Microsoft FIDO roots                 |
+| Platform                        | Adapter                            | Trust anchor                                                                                                                                         |
+| ------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `secure_enclave`                | `@motebit/crypto` (built-in)       | ECDSA-P256 signature; self-asserted SE public key                                                                                                    |
+| `device_check`                  | `@motebit/crypto-appattest`        | Pinned Apple App Attestation Root CA                                                                                                                 |
+| `tpm`                           | `@motebit/crypto-tpm`              | Pinned Infineon / Nuvoton / STMicro / Intel PTT vendor roots                                                                                         |
+| `android_keystore`              | `@motebit/crypto-android-keystore` | Pinned Google Hardware Attestation roots (RSA + ECDSA P-384)                                                                                         |
+| `webauthn`                      | `@motebit/crypto-webauthn`         | Pinned Apple / Yubico / Microsoft FIDO roots                                                                                                         |
+| `play_integrity` _(deprecated)_ | `@motebit/crypto-play-integrity`   | Operator-supplied JWKS (no global Google JWKS exists; bundled for one minor cycle for backward compat — see `docs/doctrine/hardware-attestation.md`) |
 
 Unknown platform → named error, fail-closed. Missing adapter context → named error, fail-closed. Never silent acceptance.
 
@@ -85,7 +86,7 @@ This package sits at the top of a deliberate three-layer split — the same shap
 All three are Apache-2.0 with explicit patent grant — the full verification surface ships under the permissive floor. The BSL line stays at `motebit` (the operator console) and everything below it, where the motebit-proprietary judgment actually lives.
 
 - Install **`@motebit/verify`** when you want the command-line tool with every platform bundled. One install, verify anything offline, no license friction in CI pipelines.
-- Install **`@motebit/verifier`** when you're writing TypeScript code that needs to read + verify motebit artifacts programmatically and want the dep-thin library without the four bundled platform adapters.
+- Install **`@motebit/verifier`** when you're writing TypeScript code that needs to read + verify motebit artifacts programmatically and want the dep-thin library without the bundled platform adapters.
 - Install **`@motebit/crypto`** when you want the primitives — the verify dispatcher, sign APIs, suite registry — to build your own verification tooling from scratch.
 
 ## Superseding the deprecated `@motebit/verify@0.x`

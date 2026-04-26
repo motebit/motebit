@@ -1,7 +1,7 @@
 {
   "name": "@motebit/verify",
   "version": "1.0.0",
-  "description": "The canonical motebit artifact verifier — CLI `motebit-verify` with every hardware-attestation platform bundled (Apple App Attest, Google Play Integrity, TPM 2.0, WebAuthn). One install, offline, self-attesting. Replaces the deprecated @motebit/verify@0.x zero-dep library: library primitives now live in @motebit/crypto; helper utilities in @motebit/verifier; this package is the tool.",
+  "description": "The canonical motebit artifact verifier — CLI `motebit-verify` with every hardware-attestation platform bundled (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn — plus the deprecated Google Play Integrity for one minor cycle). One install, offline, self-attesting. Replaces the deprecated @motebit/verify@0.x zero-dep library: library primitives now live in @motebit/crypto; helper utilities in @motebit/verifier; this package is the tool.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -31,6 +31,8 @@
     "cli",
     "hardware-attestation",
     "app-attest",
+    "android-keystore",
+    "key-attestation",
     "tpm",
     "webauthn",
     "ed25519",
@@ -61,6 +63,7 @@
   },
   "dependencies": {
     "@motebit/crypto": "workspace:*",
+    "@motebit/crypto-android-keystore": "workspace:*",
     "@motebit/crypto-appattest": "workspace:*",
     "@motebit/crypto-play-integrity": "workspace:*",
     "@motebit/crypto-tpm": "workspace:*",

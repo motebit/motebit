@@ -1869,6 +1869,9 @@ importers:
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@motebit/crypto-android-keystore':
+        specifier: workspace:*
+        version: link:../crypto-android-keystore
       '@motebit/crypto-appattest':
         specifier: workspace:*
         version: link:../crypto-appattest

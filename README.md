@@ -179,19 +179,20 @@ if (result.type === "receipt" && result.valid) {
 
 Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). **Eleven npm packages publish at `1.0.0`** — ten Apache-2.0 (the permissive floor, with an explicit patent grant) and one BSL-1.1 (the reference runtime):
 
-| Package                                                                                          | Description                                                                                         | License    |
-| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ---------- |
-| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol)                           | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing  | Apache-2.0 |
-| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)                               | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow  | Apache-2.0 |
-| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)                                     | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents | Apache-2.0 |
-| [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier)                           | `verifyFile` / `verifyArtifact` / `formatHuman` — dep-thin verification library                     | Apache-2.0 |
-| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)                               | `motebit-verify` CLI — bundles the four platform-attestation leaves with motebit-canonical defaults | Apache-2.0 |
-| [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest)           | iOS App Attest chain verifier — pinned Apple root                                                   | Apache-2.0 |
-| [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) | Android Play Integrity JWT verifier — pinned Google JWKS                                            | Apache-2.0 |
-| [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm)                       | Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots                                     | Apache-2.0 |
-| [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn)             | WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO roots                     | Apache-2.0 |
-| [`create-motebit`](https://www.npmjs.com/package/create-motebit)                                 | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`               | Apache-2.0 |
-| [`motebit`](https://www.npmjs.com/package/motebit)                                               | Reference runtime and operator console — REPL, daemon, delegation, MCP server                       | BSL-1.1    |
+| Package                                                                                              | Description                                                                                              | License    |
+| ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- |
+| [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol)                               | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing       | Apache-2.0 |
+| [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)                                   | Sign and verify every Motebit artifact. Ed25519 today, cryptosuite-agile for post-quantum tomorrow       | Apache-2.0 |
+| [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk)                                         | Developer contract — stable types, adapter interfaces, governance config for Motebit-powered agents      | Apache-2.0 |
+| [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier)                               | `verifyFile` / `verifyArtifact` / `formatHuman` — dep-thin verification library                          | Apache-2.0 |
+| [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify)                                   | `motebit-verify` CLI — bundles the canonical platform-attestation leaves with motebit-canonical defaults | Apache-2.0 |
+| [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest)               | iOS App Attest chain verifier — pinned Apple root                                                        | Apache-2.0 |
+| [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) | Android Hardware-Backed Keystore Attestation chain verifier — pinned Google attestation roots            | Apache-2.0 |
+| [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm)                           | Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots                                          | Apache-2.0 |
+| [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn)                 | WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO roots                          | Apache-2.0 |
+| [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity)     | _(deprecated)_ Android Play Integrity JWT verifier — see `@motebit/crypto-android-keystore`              | Apache-2.0 |
+| [`create-motebit`](https://www.npmjs.com/package/create-motebit)                                     | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`                    | Apache-2.0 |
+| [`motebit`](https://www.npmjs.com/package/motebit)                                                   | Reference runtime and operator console — REPL, daemon, delegation, MCP server                            | BSL-1.1    |
 
 The ten Apache-2.0 packages are the permissive floor: a third party can build an interoperating runtime against them without our permission. The BSL line holds at `motebit` (the operator console) and everything inlined into its bundle below it: daemon, MCP server, delegation routing, market integration, federation wiring. **The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.**
 
@@ -270,8 +271,8 @@ The **permissive floor** is Apache-2.0 licensed — use it freely, build on it, 
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
 - [`packages/verifier/`](packages/verifier/) — `verifyFile` / `verifyArtifact` / `formatHuman` helper library
-- [`packages/verify/`](packages/verify/) — `motebit-verify` CLI aggregating the four platform leaves with motebit-canonical defaults
-- [`packages/crypto-appattest/`](packages/crypto-appattest/), [`packages/crypto-play-integrity/`](packages/crypto-play-integrity/), [`packages/crypto-tpm/`](packages/crypto-tpm/), [`packages/crypto-webauthn/`](packages/crypto-webauthn/) — hardware-attestation platform verifiers (pinned public trust anchors)
+- [`packages/verify/`](packages/verify/) — `motebit-verify` CLI aggregating the canonical platform leaves with motebit-canonical defaults
+- [`packages/crypto-appattest/`](packages/crypto-appattest/), [`packages/crypto-android-keystore/`](packages/crypto-android-keystore/), [`packages/crypto-tpm/`](packages/crypto-tpm/), [`packages/crypto-webauthn/`](packages/crypto-webauthn/) — canonical hardware-attestation platform verifiers (pinned public trust anchors); plus [`packages/crypto-play-integrity/`](packages/crypto-play-integrity/) _(deprecated, removed at 2.0.0 — see `crypto-android-keystore` for the canonical Android primitive)_
 - [`packages/create-motebit/`](packages/create-motebit/) — scaffold a signed identity or runnable agent service
 - [`packages/github-action/`](packages/github-action/) — GitHub Action for verifying motebit identity files in CI
 

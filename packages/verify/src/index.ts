@@ -2,13 +2,16 @@
  * @motebit/verify — hardware-attestation-aware companion to
  * `@motebit/verifier`.
  *
- * Bundles the four Apache-2.0 permissive-floor platform verifier leaves
+ * Bundles every Apache-2.0 permissive-floor platform verifier leaf
  * into a single `HardwareAttestationVerifiers` record + a CLI
  * `motebit-verify` that hands them to `@motebit/verifier::verifyFile`.
  * A credential with `hardware_attestation: { platform: "device_check" |
- * "tpm" | "play_integrity" | "webauthn", ... }` verifies end-to-end
+ * "tpm" | "android_keystore" | "webauthn", ... }` verifies end-to-end
  * through this package instead of returning the permissive-floor
- * verifier's `adapter not yet shipped` sentinel.
+ * verifier's `adapter not yet shipped` sentinel. The deprecated
+ * `play_integrity` arm is also wired during the
+ * `@motebit/crypto-play-integrity@1.x` deprecation cycle for backward
+ * compatibility with already-minted credentials.
  *
  * Programmatic use:
  *

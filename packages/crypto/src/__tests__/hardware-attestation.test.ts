@@ -375,6 +375,45 @@ describe("verifyHardwareAttestationClaim — non-SE platforms", () => {
     expect(result.platform).toBe("webauthn");
   });
 
+  it("returns valid:false for android_keystore (no injected adapter)", async () => {
+    const result = await verifyHardwareAttestationClaim(
+      { platform: "android_keystore" },
+      IDENTITY_HEX,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]!.message).toContain("not wired");
+  });
+
+  it("delegates to the injected androidKeystore verifier when wired, threading context", async () => {
+    // Regression: same context-threading gap as the other adapters.
+    // Android Keystore Attestation binds the identity via
+    // `attestationChallenge === SHA256(canonical body)` — without the
+    // threaded motebit_id / device_id / attested_at the verifier cannot
+    // reconstruct the body and identity_bound falls to false.
+    const fakeVerifier = vi.fn(async () => ({
+      valid: true,
+      errors: [],
+    }));
+    const ctx = {
+      expectedMotebitId: MOTEBIT_ID,
+      expectedDeviceId: DEVICE_ID,
+      expectedAttestedAt: 1_700_000_000_000,
+    };
+    const result = await verifyHardwareAttestationClaim(
+      { platform: "android_keystore", attestation_receipt: "fake" },
+      IDENTITY_HEX,
+      { androidKeystore: fakeVerifier },
+      ctx,
+    );
+    expect(fakeVerifier).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: "android_keystore" }),
+      IDENTITY_HEX,
+      ctx,
+    );
+    expect(result.valid).toBe(true);
+    expect(result.platform).toBe("android_keystore");
+  });
+
   it("delegates to the injected tpm verifier when wired, threading context", async () => {
     // Regression: an earlier revision dispatched `tpm` with only two args
     // so the injected verifier never received the per-credential context.

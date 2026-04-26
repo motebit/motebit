@@ -97,7 +97,14 @@ export interface TrustCredentialSubject {
 
 /** Mirror of `HardwareAttestationClaim` in `@motebit/protocol`. */
 export interface HardwareAttestationClaim {
-  platform: "secure_enclave" | "tpm" | "play_integrity" | "device_check" | "webauthn" | "software";
+  platform:
+    | "secure_enclave"
+    | "tpm"
+    | "play_integrity"
+    | "android_keystore"
+    | "device_check"
+    | "webauthn"
+    | "software";
   key_exported?: boolean;
   attestation_receipt?: string;
 }

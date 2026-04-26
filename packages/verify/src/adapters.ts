@@ -2,28 +2,43 @@
  * Bundled-adapter wiring — the core reason this package exists.
  *
  * `@motebit/verifier` (Apache-2.0) accepts an optional
- * `HardwareAttestationVerifiers` record but wires none of the four
- * leaves itself; that keeps it dep-thin. This Apache-2.0 aggregator
- * imports every leaf (`@motebit/crypto-appattest`,
- * `@motebit/crypto-tpm`, `@motebit/crypto-play-integrity`,
- * `@motebit/crypto-webauthn`) and
- * produces a single `HardwareAttestationVerifiers` object the CLI
- * hands to `verifyFile`. Any credential whose subject carries a
- * hardware-attestation claim for any of the four platforms now
- * verifies end-to-end — chain + nonce + bundle + identity — instead
- * of returning the `adapter not yet shipped` sentinel.
+ * `HardwareAttestationVerifiers` record but wires none of the leaves
+ * itself; that keeps it dep-thin. This Apache-2.0 aggregator imports
+ * every leaf (`@motebit/crypto-appattest`,
+ * `@motebit/crypto-android-keystore`, `@motebit/crypto-tpm`,
+ * `@motebit/crypto-webauthn`, plus the deprecated
+ * `@motebit/crypto-play-integrity` for backward compatibility during
+ * its 1.x deprecation cycle) and produces a single
+ * `HardwareAttestationVerifiers` object the CLI hands to `verifyFile`.
+ * Any credential whose subject carries a hardware-attestation claim
+ * for any of the canonical platforms now verifies end-to-end — chain
+ * + nonce + bundle + identity — instead of returning the
+ * `adapter not yet shipped` sentinel.
  *
  * Defaults match motebit's canonical app identifiers:
- *   - App Attest    → bundleId `com.motebit.mobile`
- *   - Play Integrity → packageName `com.motebit.mobile`
- *   - WebAuthn      → rpId `motebit.com`
- *   - TPM           → the pinned vendor roots in `@motebit/crypto-tpm`
+ *   - App Attest      → bundleId `com.motebit.mobile`
+ *   - Android Keystore → caller-supplied attestationApplicationId (no
+ *                       canonical default — the bytes are
+ *                       deterministic from `(packageName, signing-cert
+ *                       SHA-256)` known at the operator's build time;
+ *                       no analogous "magic string" fits)
+ *   - WebAuthn        → rpId `motebit.com`
+ *   - TPM             → the pinned vendor roots in `@motebit/crypto-tpm`
  *
  * Operators verifying credentials from a different motebit deployment
  * can override any of these via the config parameter.
+ *
+ * Play Integrity (deprecated): wired for one minor cycle so
+ * already-minted credentials carrying `platform: "play_integrity"`
+ * continue to verify cleanly through the same CLI invocation. New
+ * mobile builds emit `platform: "android_keystore"` instead — see
+ * `docs/doctrine/hardware-attestation.md` § "Three architectural
+ * categories".
  */
 import type { HardwareAttestationVerifiers } from "@motebit/crypto";
+import { androidKeystoreVerifier } from "@motebit/crypto-android-keystore";
 import { deviceCheckVerifier, APPLE_APPATTEST_ROOT_PEM } from "@motebit/crypto-appattest";
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- consumed for one minor deprecation cycle so already-minted Play Integrity claims continue to verify; removed at @motebit/crypto-play-integrity@2.0.0.
 import { playIntegrityVerifier, type GoogleJwks } from "@motebit/crypto-play-integrity";
 import { tpmVerifier } from "@motebit/crypto-tpm";
 import { webauthnVerifier, DEFAULT_FIDO_ROOTS } from "@motebit/crypto-webauthn";
@@ -43,20 +58,42 @@ export interface HardwareVerifierBundleConfig {
    */
   readonly appAttestRootPem?: string;
   /**
-   * Google Play Integrity — Android package name the attested app was
-   * built with. Defaults to `com.motebit.mobile`.
+   * Android Hardware-Backed Keystore Attestation — `attestationApplicationId`
+   * bytes (raw, captured-from-leaf-cert form) the leaf cert MUST carry.
+   * Required at wiring time when verifying Android-Keystore-attested
+   * credentials. Operators compute this at build time as
+   * `(packageName, signing-cert SHA-256)` and pin the result here; the
+   * verifier byte-compares against the leaf's KeyDescription extension.
+   * Absent → the Android Keystore arm is not wired and the canonical
+   * dispatcher returns "verifier not wired".
+   */
+  readonly androidKeystoreExpectedAttestationApplicationId?: Uint8Array;
+  /**
+   * Android Hardware-Backed Keystore Attestation — override the pinned
+   * Google attestation roots. Defaults to
+   * `DEFAULT_ANDROID_KEYSTORE_TRUST_ANCHORS` (RSA-4096 + ECDSA P-384,
+   * covering both pre- and post-rotation device fleets).
+   */
+  readonly androidKeystoreRootPems?: ReadonlyArray<string>;
+  /**
+   * Google Play Integrity (DEPRECATED) — Android package name the
+   * attested app was built with. Defaults to `com.motebit.mobile`.
+   * Wired during the `@motebit/crypto-play-integrity@1.x`
+   * deprecation cycle so already-minted credentials continue to
+   * verify; new mobile builds emit `platform: "android_keystore"`.
    */
   readonly playIntegrityPackageName?: string;
   /**
-   * Google Play Integrity — override the pinned JWKS. Fail-closed by
-   * default (see `@motebit/crypto-play-integrity` doctrine); operators
-   * pin real keys here once the production key-acquisition path lands.
+   * Google Play Integrity (DEPRECATED) — override the pinned JWKS.
+   * Fail-closed by default — see the structural-mismatch note in
+   * `@motebit/crypto-play-integrity`'s CLAUDE.md (no global Google
+   * JWKS exists; this verifier is operator-key-mediated rather than
+   * sovereign-verifiable, which is why it's been deprecated).
    */
   readonly playIntegrityPinnedJwks?: GoogleJwks;
   /**
-   * Google Play Integrity — relax the device-integrity floor. Defaults
-   * to the strict `"MEETS_DEVICE_INTEGRITY"`. Development / sideloaded
-   * scenarios may lower to `"MEETS_BASIC_INTEGRITY"`.
+   * Google Play Integrity (DEPRECATED) — relax the device-integrity
+   * floor. Defaults to the strict `"MEETS_DEVICE_INTEGRITY"`.
    */
   readonly playIntegrityRequiredDeviceIntegrity?: string;
   /**
@@ -83,20 +120,25 @@ const DEFAULT_BUNDLE_ID = "com.motebit.mobile";
 const DEFAULT_WEBAUTHN_RP_ID = "motebit.com";
 
 /**
- * Build the full `HardwareAttestationVerifiers` object covering all four
- * platform adapters. Pass the result to `verifyFile`:
+ * Build the full `HardwareAttestationVerifiers` object covering every
+ * canonical platform adapter. Pass the result to `verifyFile`:
  *
  * ```ts
  * import { verifyFile } from "@motebit/verifier";
  * import { buildHardwareVerifiers } from "@motebit/verify";
  *
  * const result = await verifyFile("cred.json", {
- *   hardwareAttestation: buildHardwareVerifiers(),
+ *   hardwareAttestation: buildHardwareVerifiers({
+ *     androidKeystoreExpectedAttestationApplicationId: appIdBytes,
+ *   }),
  * });
  * ```
  *
  * Pure function: every dependency is captured at factory time and the
- * returned verifiers are idempotent across calls.
+ * returned verifiers are idempotent across calls. The Android Keystore
+ * arm is wired only when `androidKeystoreExpectedAttestationApplicationId`
+ * is supplied — there is no canonical default for the leaf-cert
+ * package binding, by design.
  */
 export function buildHardwareVerifiers(
   config?: HardwareVerifierBundleConfig,
@@ -105,7 +147,7 @@ export function buildHardwareVerifiers(
   const playIntegrityPackageName = config?.playIntegrityPackageName ?? DEFAULT_BUNDLE_ID;
   const webauthnRpId = config?.webauthnRpId ?? DEFAULT_WEBAUTHN_RP_ID;
 
-  return {
+  const verifiers: Mutable<HardwareAttestationVerifiers> = {
     deviceCheck: deviceCheckVerifier({
       expectedBundleId: appAttestBundleId,
       rootPem: config?.appAttestRootPem ?? APPLE_APPATTEST_ROOT_PEM,
@@ -113,6 +155,7 @@ export function buildHardwareVerifiers(
     tpm: tpmVerifier({
       ...(config?.tpmRootPems !== undefined ? { rootPems: config.tpmRootPems } : {}),
     }),
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- one-minor-cycle backward compat for already-minted Play Integrity credentials; removed at @motebit/crypto-play-integrity@2.0.0.
     playIntegrity: playIntegrityVerifier({
       expectedPackageName: playIntegrityPackageName,
       ...(config?.playIntegrityPinnedJwks !== undefined
@@ -127,4 +170,22 @@ export function buildHardwareVerifiers(
       rootPems: config?.webauthnRootPems ?? DEFAULT_FIDO_ROOTS,
     }),
   };
+
+  // Android Keystore is wired only when the operator has supplied the
+  // expected `attestationApplicationId`. Leaving it unwired makes the
+  // canonical dispatcher report "verifier not wired" with a clear
+  // message — preferable to passing a placeholder that would
+  // false-reject every real claim.
+  if (config?.androidKeystoreExpectedAttestationApplicationId !== undefined) {
+    verifiers.androidKeystore = androidKeystoreVerifier({
+      expectedAttestationApplicationId: config.androidKeystoreExpectedAttestationApplicationId,
+      ...(config.androidKeystoreRootPems !== undefined
+        ? { rootPems: config.androidKeystoreRootPems }
+        : {}),
+    });
+  }
+
+  return verifiers;
 }
+
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };

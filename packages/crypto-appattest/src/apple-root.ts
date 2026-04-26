@@ -26,9 +26,16 @@
  * Apple App Attestation Root CA — the single pinned anchor this package
  * chains App Attest leaves to.
  *
- * Byte-for-byte match of Apple's published certificate. Canonical
- * fingerprint (SHA-256): `bf eb 88 ce 0c 59 eb b8 9e b1 9f ab 8d 8f 6d
- * 2b 6e 83 87 27 4e 71 83 9a 2c a7 9d 43 37 1d 7f d6`.
+ *   Source:     https://www.apple.com/certificateauthority/Apple_App_Attestation_Root_CA.pem
+ *   Subject:    CN=Apple App Attestation Root CA, O=Apple Inc., ST=California
+ *   SHA-256:    1cb9823ba28ba6ad2d33a006941de2ae4f513ef1d4e831b9f7e0fa7b6242c932
+ *   Public key: ECDSA P-384
+ *   Validity:   2020-03-18 → 2045-03-15
+ *
+ * Byte-for-byte match of Apple's published certificate. The fingerprint
+ * is the audit anchor — a third party that fetches the same Apple URL
+ * and computes its own SHA-256 should reach the byte-identical value
+ * above. Drift caught by `__tests__/apple-root.test.ts`.
  */
 export const APPLE_APPATTEST_ROOT_PEM = `-----BEGIN CERTIFICATE-----
 MIICITCCAaegAwIBAgIQC/O+DvHN0uD7jG5yH2IXmDAKBggqhkjOPQQDAzBSMSYw
