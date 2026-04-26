@@ -19,7 +19,11 @@ export async function handleBalance(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
 
   const relayUrl = getRelayUrl(config);
-  const headers = await getRelayAuthHeaders(config);
+  // Aud must match the relay's `dualAuth` binding for /balance.
+  // See `services/api/src/middleware.ts:631` — `account:balance`.
+  // Default `admin:query` is rejected by the agents-virtual-account
+  // routes; each money-path subcommand pins its own aud.
+  const headers = await getRelayAuthHeaders(config, { aud: "account:balance" });
 
   const result = await fetchRelayJson(`${relayUrl}/api/v1/agents/${motebitId}/balance`, headers);
   if (!result.ok) {
@@ -70,7 +74,8 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
   }
 
   const relayUrl = getRelayUrl(config);
-  const headers = await getRelayAuthHeaders(config, { json: true });
+  // `account:withdraw` matches `services/api/src/middleware.ts:635`.
+  const headers = await getRelayAuthHeaders(config, { aud: "account:withdraw", json: true });
 
   const body: Record<string, unknown> = { amount };
   if (config.destination) body["destination"] = config.destination;
@@ -117,19 +122,50 @@ export async function handleFund(config: CliConfig): Promise<void> {
   }
 
   const relayUrl = getRelayUrl(config);
-  const headers = await getRelayAuthHeaders(config, { json: true });
+  // Two distinct relay routes are exercised here. Each is bound to its
+  // own audience by `services/api/src/middleware.ts:631 / :643`:
+  //   POST /checkout → account:checkout
+  //   GET  /balance  → account:balance
+  // A single signed token can only carry one aud, so we mint two.
+  const checkoutHeaders = await getRelayAuthHeaders(config, {
+    aud: "account:checkout",
+    json: true,
+  });
+  const balanceHeaders = await getRelayAuthHeaders(config, { aud: "account:balance" });
 
   // Create Stripe Checkout session
   let checkoutUrl: string;
   try {
     const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/checkout`, {
       method: "POST",
-      headers,
+      headers: checkoutHeaders,
       body: JSON.stringify({ amount }),
     });
     if (!res.ok) {
-      const text = await res.text();
-      console.error(`Checkout failed (${res.status}): ${text.slice(0, 200)}`);
+      // Surface the structured error the relay's mapStripeError emits
+      // (`{ error, message, stripe_type, stripe_code }`) when the
+      // failure comes from the Stripe API itself. Falls back to raw
+      // text for older relay deployments that haven't shipped the
+      // structured-error commit yet.
+      let body: unknown;
+      const rawText = await res.text();
+      try {
+        body = JSON.parse(rawText);
+      } catch {
+        body = null;
+      }
+      if (body !== null && typeof body === "object" && "error" in body) {
+        const e = body as { error: string; message?: string; stripe_code?: string | null };
+        console.error(`Checkout failed (${res.status}): ${e.error}`);
+        if (e.message) console.error(`  ${e.message}`);
+        if (e.error === "STRIPE_ACCOUNT_NOT_ACTIVATED") {
+          console.error(
+            "  → Complete the past-due task at https://dashboard.stripe.com/account/onboarding",
+          );
+        }
+      } else {
+        console.error(`Checkout failed (${res.status}): ${rawText.slice(0, 200)}`);
+      }
       process.exit(1);
     }
     const data = (await res.json()) as { checkout_url: string; session_id: string };
@@ -153,11 +189,11 @@ export async function handleFund(config: CliConfig): Promise<void> {
 
   // Poll for deposit confirmation (120s max, 3s intervals)
   console.log("Waiting for payment confirmation...");
-  const startBalance = await getBalanceAmount(relayUrl, motebitId, headers);
+  const startBalance = await getBalanceAmount(relayUrl, motebitId, balanceHeaders);
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     await new Promise<void>((resolve) => setTimeout(resolve, 3000));
-    const currentBalance = await getBalanceAmount(relayUrl, motebitId, headers);
+    const currentBalance = await getBalanceAmount(relayUrl, motebitId, balanceHeaders);
     if (currentBalance !== null && startBalance !== null && currentBalance > startBalance) {
       console.log(`\nDeposit confirmed! Balance: $${currentBalance.toFixed(2)}`);
       return;

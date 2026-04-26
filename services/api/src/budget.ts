@@ -2,7 +2,7 @@
  * Budget, Virtual Accounts, Withdrawals, Admin & Stripe routes.
  */
 
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
@@ -34,6 +34,88 @@ import Stripe from "stripe";
 import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
 
 const logger = createLogger({ service: "budget" });
+
+/**
+ * Map a thrown error from a Stripe SDK call into a structured 502
+ * response. Stripe's `StripeError` subclasses (`StripeInvalidRequestError`,
+ * `StripeCardError`, `StripeAPIError`, `StripeConnectionError`,
+ * `StripeAuthenticationError`, `StripePermissionError`,
+ * `StripeRateLimitError`, `StripeIdempotencyError`) all carry `type` and
+ * (most) `code` and `message` fields. Surfacing those to the CLI lets
+ * the caller see why their checkout/withdraw failed instead of the
+ * opaque "Internal server error" 500 Hono returns when an exception
+ * leaves a route handler unhandled.
+ *
+ * Error-shape contract per `services/api/CLAUDE.md` rule 14: external
+ * medium plumbing speaks motebit vocabulary. Provider-shaped errors
+ * (Stripe's deep nested raw object) collapse here into a closed
+ * motebit shape: `{ error, code, status }`.
+ */
+function mapStripeError(
+  c: Context,
+  correlationId: string | undefined,
+  motebitId: string,
+  amount: number,
+  err: unknown,
+  via: "settlement-rail" | "direct-sdk",
+): Response {
+  const stripeError = err as {
+    type?: string;
+    code?: string;
+    message?: string;
+    requestId?: string;
+    statusCode?: number;
+  };
+  const stripeType = typeof stripeError?.type === "string" ? stripeError.type : "stripe.unknown";
+  const stripeCode = typeof stripeError?.code === "string" ? stripeError.code : null;
+  const stripeMessage =
+    typeof stripeError?.message === "string"
+      ? stripeError.message
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  // Map a few common Stripe types/states to a motebit-shaped error
+  // code the CLI can pattern-match on. Everything else falls through
+  // to the raw type.
+  let motebitCode = `STRIPE_${stripeType
+    .toUpperCase()
+    .replace(/^STRIPE/, "")
+    .replace(/[^A-Z0-9]+/g, "_")}`;
+  if (stripeMessage.includes("cannot currently make live charges")) {
+    motebitCode = "STRIPE_ACCOUNT_NOT_ACTIVATED";
+  } else if (stripeType === "StripeAuthenticationError") {
+    motebitCode = "STRIPE_API_KEY_INVALID";
+  } else if (stripeType === "StripeRateLimitError") {
+    motebitCode = "STRIPE_RATE_LIMITED";
+  } else if (stripeType === "StripeConnectionError") {
+    motebitCode = "STRIPE_CONNECTION_FAILED";
+  }
+
+  // Log the full error server-side (correlationId tracks request);
+  // return only the motebit-shaped payload to the client. Don't leak
+  // raw Stripe internals (request IDs, header echoes) to callers.
+  logger.warn("stripe.checkout.failed", {
+    correlationId,
+    motebitId,
+    amount,
+    via,
+    stripeType,
+    stripeCode,
+    stripeMessage,
+    requestId: stripeError?.requestId,
+  });
+
+  return c.json(
+    {
+      error: motebitCode,
+      message: stripeMessage,
+      stripe_type: stripeType,
+      stripe_code: stripeCode,
+      status: 502,
+    },
+    502,
+  );
+}
 
 export interface BudgetDeps {
   app: Hono;
@@ -688,57 +770,74 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // Never send users to the relay's JSON balance endpoint.
     const defaultReturnUrl = "https://motebit.com";
 
-    // Use StripeSettlementRail when available
+    // Use StripeSettlementRail when available. Wrap in try/catch so
+    // Stripe errors (account-state, rate limits, network) become a
+    // structured 502 with the Stripe error code in the body — instead
+    // of an opaque "Internal server error" 500 from Hono's default
+    // handler. The CLI surfaces this body verbatim, so users see the
+    // actual problem ("Your account cannot currently make live
+    // charges", "Your card was declined", etc.) rather than a dead
+    // end. Per `services/api/CLAUDE.md` rule 14 (external medium
+    // plumbing speaks motebit vocabulary): provider-shaped errors map
+    // into a closed motebit-shaped result before the consumer sees them.
     if (stripeRail) {
-      const result = await stripeRail.deposit(
-        motebitId,
-        body.amount,
-        stripeConfig?.currency ?? "usd",
-        `checkout:${motebitId}:${Date.now()}`,
-        returnUrl ?? defaultReturnUrl,
-      );
-
-      if ("redirectUrl" in result) {
-        logger.info("stripe.checkout.created", {
-          correlationId,
+      try {
+        const result = await stripeRail.deposit(
           motebitId,
-          amount: body.amount,
-          via: "settlement-rail",
-        });
-        return c.json({ checkout_url: result.redirectUrl, session_id: null });
-      }
+          body.amount,
+          stripeConfig?.currency ?? "usd",
+          `checkout:${motebitId}:${Date.now()}`,
+          returnUrl ?? defaultReturnUrl,
+        );
 
-      // Direct deposit result (not expected for Stripe, but handle for completeness)
-      return c.json({ deposit: result });
+        if ("redirectUrl" in result) {
+          logger.info("stripe.checkout.created", {
+            correlationId,
+            motebitId,
+            amount: body.amount,
+            via: "settlement-rail",
+          });
+          return c.json({ checkout_url: result.redirectUrl, session_id: null });
+        }
+
+        // Direct deposit result (not expected for Stripe, but handle for completeness)
+        return c.json({ deposit: result });
+      } catch (err) {
+        return mapStripeError(c, correlationId, motebitId, body.amount, err, "settlement-rail");
+      }
     }
 
     // Fallback: direct Stripe SDK (backward compatibility during migration)
     const landingUrl = returnUrl ?? defaultReturnUrl;
-    const session = await stripeClient!.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: stripeConfig!.currency ?? "usd",
-            product_data: { name: `Motebit Agent Deposit (${motebitId.slice(0, 8)}...)` },
-            unit_amount: Math.round(body.amount * 100),
+    try {
+      const session = await stripeClient!.checkout.sessions.create({
+        mode: "payment",
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price_data: {
+              currency: stripeConfig!.currency ?? "usd",
+              product_data: { name: `Motebit Agent Deposit (${motebitId.slice(0, 8)}...)` },
+              unit_amount: Math.round(body.amount * 100),
+            },
+            quantity: 1,
           },
-          quantity: 1,
-        },
-      ],
-      metadata: { motebit_id: motebitId, amount: String(body.amount) },
-      success_url: landingUrl,
-      cancel_url: landingUrl,
-    });
+        ],
+        metadata: { motebit_id: motebitId, amount: String(body.amount) },
+        success_url: landingUrl,
+        cancel_url: landingUrl,
+      });
 
-    logger.info("stripe.checkout.created", {
-      correlationId,
-      motebitId,
-      sessionId: session.id,
-      amount: body.amount,
-    });
-    return c.json({ checkout_url: session.url, session_id: session.id });
+      logger.info("stripe.checkout.created", {
+        correlationId,
+        motebitId,
+        sessionId: session.id,
+        amount: body.amount,
+      });
+      return c.json({ checkout_url: session.url, session_id: session.id });
+    } catch (err) {
+      return mapStripeError(c, correlationId, motebitId, body.amount, err, "direct-sdk");
+    }
   });
 
   // --- Stripe webhook ---
