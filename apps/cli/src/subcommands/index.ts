@@ -45,6 +45,7 @@ export { handleLsp } from "./lsp.js";
 export { handlePs } from "./ps.js";
 export { handleUp } from "./up.js";
 export { handleMigrate } from "./migrate.js";
+export { handleMigrateKeyring } from "./migrate-keyring.js";
 export { handleBalance, handleFund, handleWithdraw } from "./market.js";
 export { handleRegister } from "./register.js";
 export { handleRelayUp } from "./relay.js";

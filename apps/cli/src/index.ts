@@ -68,6 +68,7 @@ import {
   handleDelegate,
   handleDiscover,
   handleMigrate,
+  handleMigrateKeyring,
   handleWithdraw,
   handleWallet,
 } from "./subcommands/index.js";
@@ -234,6 +235,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "migrate") {
     await handleMigrate(config);
+    return;
+  }
+
+  if (subcommand === "migrate-keyring") {
+    await handleMigrateKeyring(config);
     return;
   }
 

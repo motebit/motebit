@@ -33,6 +33,7 @@
     "logs": [],
     "lsp": [],
     "migrate": [],
+    "migrate-keyring": [],
     "ps": [],
     "register": [],
     "relay": [
@@ -292,6 +293,7 @@
   ],
   "onDiskLayout": [
     "config.json",
+    "dev-keyring.json",
     "identity.md",
     "motebit.db",
     "relay",

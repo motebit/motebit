@@ -351,6 +351,10 @@ Commands:
                             (+ time window for tokens). [--json]
   register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
+  migrate-keyring [--force] Re-encrypt a plaintext ~/.motebit/dev-keyring.json
+                            under a passphrase (recovery path when
+                            cli_encrypted_key was lost from config but
+                            the private key remains on disk)
   run [--identity <path>]   Start daemon mode (uses exported motebit.md)
     --price <amount>          Set per-task price in USD (enables earning from delegated tasks)
   serve [--identity <path>] Start as MCP server (stdio by default)
