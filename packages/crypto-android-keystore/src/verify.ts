@@ -367,18 +367,25 @@ function applyExtensionConstraints(
     ok = false;
   }
 
-  // attestationApplicationId binding — exact byte match.
+  // attestationApplicationId binding — exact byte match. Per AOSP
+  // convention since Keymaster 4 (2018), the field lives in
+  // `softwareEnforced` because the framework computes the package
+  // signing-cert hash, not the TEE. Older Keymaster 3 chains placed
+  // it in `hardwareEnforced`. Accept either; software-enforcement is
+  // sufficient because the framework binding is not the attack surface
+  // motebit gates on (chain + boot state + identity binding are).
   const expectedAppId = opts.expectedAttestationApplicationId;
-  const actualAppId = kd.hardwareEnforced.attestationApplicationId;
+  const actualAppId =
+    kd.hardwareEnforced.attestationApplicationId ?? kd.softwareEnforced.attestationApplicationId;
   if (!actualAppId) {
     errors.push({
       message:
-        "hardwareEnforced.attestationApplicationId missing — cannot bind to package identity",
+        "attestationApplicationId missing from both hardwareEnforced and softwareEnforced — cannot bind to package identity",
     });
     ok = false;
   } else if (!bytesEq(actualAppId, expectedAppId)) {
     errors.push({
-      message: `hardwareEnforced.attestationApplicationId does not match expected package binding (${actualAppId.length}B leaf vs ${expectedAppId.length}B expected)`,
+      message: `attestationApplicationId does not match expected package binding (${actualAppId.length}B leaf vs ${expectedAppId.length}B expected)`,
     });
     ok = false;
   }
