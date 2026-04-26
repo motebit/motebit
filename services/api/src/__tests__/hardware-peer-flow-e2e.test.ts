@@ -718,3 +718,416 @@ describe("Hardware-attestation peer flow — Phase 2 (android_keystore)", () => 
     expect(aggregate!.platform_breakdown.android_keystore).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ==========================================================================
+// Phase 2 — device_check (Apple App Attest)
+// ==========================================================================
+//
+// Closes one of the four "Phase 2 webauthn / tpm / device_check /
+// android_keystore variants" deferrals named in commit 84057827. Same
+// rationale as the android_keystore variant: the relay-side protocol
+// loop is what this E2E proves (attach → capabilities → peer-issuance
+// → submit → routing aggregation → 10× score gap vs software
+// sentinel); chain verification is the issuer's job and is exhaustively
+// covered in `packages/crypto-appattest/src/__tests__/` (synthetic
+// chain + real ceremony fixtures from Apple). Receipt payload is
+// opaque from the relay's perspective per
+// `services/api/CLAUDE.md` rule 6.
+
+describe("Hardware-attestation peer flow — Phase 2 (device_check)", () => {
+  let relay: SyncRelay;
+  let agentA: BootstrapResult;
+  let agentB: BootstrapResult;
+  const MASTER_TOKEN = "hw-peer-flow-dc-test-token";
+
+  beforeAll(async () => {
+    relay = await createSyncRelay({
+      dbPath: ":memory:",
+      apiToken: MASTER_TOKEN,
+      enableDeviceAuth: true,
+      issueCredentials: false,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+    });
+    agentA = await bootstrapAgent(relay);
+    agentB = await bootstrapAgent(relay);
+  });
+
+  afterAll(async () => {
+    if (relay) await relay.close();
+  });
+
+  it("worker attaches a self-issued device_check hardware credential", async () => {
+    // App Attest receipt format: CBOR-encoded {fmt: "apple-appattest",
+    // attStmt: {x5c, receipt}, authData}. Chain verification is the
+    // issuer's job; the relay only validates the wrapping VC envelope.
+    const claim = {
+      platform: "device_check" as const,
+      key_exported: false,
+      attestation_receipt: "apple-appattest-cbor-placeholder",
+    };
+
+    const dcSelfVc = await composeHardwareAttestationCredential({
+      publicKey: agentB.keypair.publicKey,
+      publicKeyHex: agentB.publicKeyHex,
+      privateKey: agentB.keypair.privateKey,
+      hardwareAttestation: claim,
+      now: Date.now(),
+    });
+
+    const res = await attachHardwareAttestation(relay, agentB, dcSelfVc);
+    expect(res.status).toBe(200);
+  });
+
+  it("delegator issues peer trust credential carrying device_check claim; aggregator scores at HW_ATTESTATION_HARDWARE (1.0)", async () => {
+    const capRes = await relay.app.request(`/agent/${agentB.motebitId}/capabilities`);
+    const capBody = (await capRes.json()) as {
+      hardware_attestations: Array<{
+        device_id: string;
+        public_key: string;
+        hardware_attestation_credential: string;
+      }>;
+    };
+    expect(capBody.hardware_attestations).toHaveLength(1);
+    const reparsed = JSON.parse(
+      capBody.hardware_attestations[0]!.hardware_attestation_credential,
+    ) as VerifiableCredential<{
+      hardware_attestation: { platform: string; attestation_receipt?: string };
+    }>;
+    const claim = reparsed.credentialSubject.hardware_attestation;
+    expect(claim.platform).toBe("device_check");
+
+    const subjectDid = hexPublicKeyToDidKey(agentB.publicKeyHex);
+    const issuerDid = hexPublicKeyToDidKey(agentA.publicKeyHex);
+    const now = new Date();
+    const peerTrustVc = await signVerifiableCredential(
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://motebit.com/ns/credentials/v1",
+        ],
+        type: ["VerifiableCredential", "AgentTrustCredential"],
+        issuer: issuerDid,
+        credentialSubject: {
+          id: subjectDid,
+          trust_level: "Verified",
+          interaction_count: 1,
+          successful_tasks: 1,
+          failed_tasks: 0,
+          first_seen_at: now.getTime() - 1000,
+          last_seen_at: now.getTime(),
+          hardware_attestation: claim,
+        },
+        validFrom: now.toISOString(),
+        validUntil: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+      },
+      agentA.keypair.privateKey,
+      agentA.keypair.publicKey,
+    );
+
+    const submitRes = await relay.app.request(
+      `/api/v1/agents/${agentB.motebitId}/credentials/submit`,
+      {
+        method: "POST",
+        headers: { ...JSON_HEADERS, Authorization: `Bearer ${MASTER_TOKEN}` },
+        body: JSON.stringify({ credentials: [peerTrustVc] }),
+      },
+    );
+    expect(submitRes.status).toBe(200);
+    const submitBody = (await submitRes.json()) as {
+      accepted: number;
+      rejected: number;
+    };
+    expect(submitBody.accepted).toBe(1);
+    expect(submitBody.rejected).toBe(0);
+
+    const credsRes = await relay.app.request(`/api/v1/agents/${agentB.motebitId}/credentials`, {
+      headers: { Authorization: `Bearer ${MASTER_TOKEN}` },
+    });
+    const credsBody = (await credsRes.json()) as {
+      credentials: Array<{ credential: TrustVC; credential_type: string }>;
+    };
+    const trustVcs = credsBody.credentials
+      .filter((row) => row.credential_type === "AgentTrustCredential")
+      .map((row) => row.credential);
+    const aggregate = aggregateHardwareAttestation(trustVcs, () => 0.9);
+    expect(aggregate).not.toBeNull();
+    expect(aggregate!.attestation_score).toBeCloseTo(HW_ATTESTATION_HARDWARE);
+    expect(aggregate!.platform_breakdown.device_check).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ==========================================================================
+// Phase 2 — tpm
+// ==========================================================================
+//
+// Closes the "tpm" Phase 2 deferral. Receipt is the TPMS_ATTEST + EK
+// chain bundle the verifier expects; chain verification (against the
+// pinned vendor roots — Infineon / Nuvoton / STMicro / Intel PTT) lives
+// in `packages/crypto-tpm` and is unit-tested there. Note: the leaf
+// package has no real-device fixture pass — TPM EK certs uniquely
+// identify chips and projects systemically don't publish them (see
+// memory: tpm_real_fixture_structurally_blocked.md). That gap is at
+// the leaf, not here; the relay-side protocol loop is symmetric across
+// all four canonical leaves.
+
+describe("Hardware-attestation peer flow — Phase 2 (tpm)", () => {
+  let relay: SyncRelay;
+  let agentA: BootstrapResult;
+  let agentB: BootstrapResult;
+  const MASTER_TOKEN = "hw-peer-flow-tpm-test-token";
+
+  beforeAll(async () => {
+    relay = await createSyncRelay({
+      dbPath: ":memory:",
+      apiToken: MASTER_TOKEN,
+      enableDeviceAuth: true,
+      issueCredentials: false,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+    });
+    agentA = await bootstrapAgent(relay);
+    agentB = await bootstrapAgent(relay);
+  });
+
+  afterAll(async () => {
+    if (relay) await relay.close();
+  });
+
+  it("worker attaches a self-issued tpm hardware credential", async () => {
+    const claim = {
+      platform: "tpm" as const,
+      key_exported: false,
+      attestation_receipt: "tpm-tpms-attest-ek-chain-placeholder",
+    };
+
+    const tpmSelfVc = await composeHardwareAttestationCredential({
+      publicKey: agentB.keypair.publicKey,
+      publicKeyHex: agentB.publicKeyHex,
+      privateKey: agentB.keypair.privateKey,
+      hardwareAttestation: claim,
+      now: Date.now(),
+    });
+
+    const res = await attachHardwareAttestation(relay, agentB, tpmSelfVc);
+    expect(res.status).toBe(200);
+  });
+
+  it("delegator issues peer trust credential carrying tpm claim; aggregator scores at HW_ATTESTATION_HARDWARE (1.0)", async () => {
+    const capRes = await relay.app.request(`/agent/${agentB.motebitId}/capabilities`);
+    const capBody = (await capRes.json()) as {
+      hardware_attestations: Array<{
+        device_id: string;
+        public_key: string;
+        hardware_attestation_credential: string;
+      }>;
+    };
+    expect(capBody.hardware_attestations).toHaveLength(1);
+    const reparsed = JSON.parse(
+      capBody.hardware_attestations[0]!.hardware_attestation_credential,
+    ) as VerifiableCredential<{
+      hardware_attestation: { platform: string; attestation_receipt?: string };
+    }>;
+    const claim = reparsed.credentialSubject.hardware_attestation;
+    expect(claim.platform).toBe("tpm");
+
+    const subjectDid = hexPublicKeyToDidKey(agentB.publicKeyHex);
+    const issuerDid = hexPublicKeyToDidKey(agentA.publicKeyHex);
+    const now = new Date();
+    const peerTrustVc = await signVerifiableCredential(
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://motebit.com/ns/credentials/v1",
+        ],
+        type: ["VerifiableCredential", "AgentTrustCredential"],
+        issuer: issuerDid,
+        credentialSubject: {
+          id: subjectDid,
+          trust_level: "Verified",
+          interaction_count: 1,
+          successful_tasks: 1,
+          failed_tasks: 0,
+          first_seen_at: now.getTime() - 1000,
+          last_seen_at: now.getTime(),
+          hardware_attestation: claim,
+        },
+        validFrom: now.toISOString(),
+        validUntil: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+      },
+      agentA.keypair.privateKey,
+      agentA.keypair.publicKey,
+    );
+
+    const submitRes = await relay.app.request(
+      `/api/v1/agents/${agentB.motebitId}/credentials/submit`,
+      {
+        method: "POST",
+        headers: { ...JSON_HEADERS, Authorization: `Bearer ${MASTER_TOKEN}` },
+        body: JSON.stringify({ credentials: [peerTrustVc] }),
+      },
+    );
+    expect(submitRes.status).toBe(200);
+    const submitBody = (await submitRes.json()) as {
+      accepted: number;
+      rejected: number;
+    };
+    expect(submitBody.accepted).toBe(1);
+    expect(submitBody.rejected).toBe(0);
+
+    const credsRes = await relay.app.request(`/api/v1/agents/${agentB.motebitId}/credentials`, {
+      headers: { Authorization: `Bearer ${MASTER_TOKEN}` },
+    });
+    const credsBody = (await credsRes.json()) as {
+      credentials: Array<{ credential: TrustVC; credential_type: string }>;
+    };
+    const trustVcs = credsBody.credentials
+      .filter((row) => row.credential_type === "AgentTrustCredential")
+      .map((row) => row.credential);
+    const aggregate = aggregateHardwareAttestation(trustVcs, () => 0.9);
+    expect(aggregate).not.toBeNull();
+    expect(aggregate!.attestation_score).toBeCloseTo(HW_ATTESTATION_HARDWARE);
+    expect(aggregate!.platform_breakdown.tpm).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ==========================================================================
+// Phase 2 — webauthn
+// ==========================================================================
+//
+// Closes the "webauthn" Phase 2 deferral — the last of the four named
+// in commit 84057827. Receipt is the WebAuthn packed-attestation
+// statement (CBOR-encoded clientData + authData + sig + x5c). Chain
+// verification against the pinned FIDO roots (Apple / Yubico /
+// Microsoft) lives in `packages/crypto-webauthn` and ships a real
+// Yubico ceremony fixture. The relay-side loop is identical to the
+// other three leaves.
+
+describe("Hardware-attestation peer flow — Phase 2 (webauthn)", () => {
+  let relay: SyncRelay;
+  let agentA: BootstrapResult;
+  let agentB: BootstrapResult;
+  const MASTER_TOKEN = "hw-peer-flow-wa-test-token";
+
+  beforeAll(async () => {
+    relay = await createSyncRelay({
+      dbPath: ":memory:",
+      apiToken: MASTER_TOKEN,
+      enableDeviceAuth: true,
+      issueCredentials: false,
+      x402: {
+        payToAddress: "0x0000000000000000000000000000000000000000",
+        network: "eip155:84532",
+        testnet: true,
+      },
+    });
+    agentA = await bootstrapAgent(relay);
+    agentB = await bootstrapAgent(relay);
+  });
+
+  afterAll(async () => {
+    if (relay) await relay.close();
+  });
+
+  it("worker attaches a self-issued webauthn hardware credential", async () => {
+    const claim = {
+      platform: "webauthn" as const,
+      key_exported: false,
+      attestation_receipt: "webauthn-packed-cbor-placeholder",
+    };
+
+    const waSelfVc = await composeHardwareAttestationCredential({
+      publicKey: agentB.keypair.publicKey,
+      publicKeyHex: agentB.publicKeyHex,
+      privateKey: agentB.keypair.privateKey,
+      hardwareAttestation: claim,
+      now: Date.now(),
+    });
+
+    const res = await attachHardwareAttestation(relay, agentB, waSelfVc);
+    expect(res.status).toBe(200);
+  });
+
+  it("delegator issues peer trust credential carrying webauthn claim; aggregator scores at HW_ATTESTATION_HARDWARE (1.0)", async () => {
+    const capRes = await relay.app.request(`/agent/${agentB.motebitId}/capabilities`);
+    const capBody = (await capRes.json()) as {
+      hardware_attestations: Array<{
+        device_id: string;
+        public_key: string;
+        hardware_attestation_credential: string;
+      }>;
+    };
+    expect(capBody.hardware_attestations).toHaveLength(1);
+    const reparsed = JSON.parse(
+      capBody.hardware_attestations[0]!.hardware_attestation_credential,
+    ) as VerifiableCredential<{
+      hardware_attestation: { platform: string; attestation_receipt?: string };
+    }>;
+    const claim = reparsed.credentialSubject.hardware_attestation;
+    expect(claim.platform).toBe("webauthn");
+
+    const subjectDid = hexPublicKeyToDidKey(agentB.publicKeyHex);
+    const issuerDid = hexPublicKeyToDidKey(agentA.publicKeyHex);
+    const now = new Date();
+    const peerTrustVc = await signVerifiableCredential(
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://motebit.com/ns/credentials/v1",
+        ],
+        type: ["VerifiableCredential", "AgentTrustCredential"],
+        issuer: issuerDid,
+        credentialSubject: {
+          id: subjectDid,
+          trust_level: "Verified",
+          interaction_count: 1,
+          successful_tasks: 1,
+          failed_tasks: 0,
+          first_seen_at: now.getTime() - 1000,
+          last_seen_at: now.getTime(),
+          hardware_attestation: claim,
+        },
+        validFrom: now.toISOString(),
+        validUntil: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+      },
+      agentA.keypair.privateKey,
+      agentA.keypair.publicKey,
+    );
+
+    const submitRes = await relay.app.request(
+      `/api/v1/agents/${agentB.motebitId}/credentials/submit`,
+      {
+        method: "POST",
+        headers: { ...JSON_HEADERS, Authorization: `Bearer ${MASTER_TOKEN}` },
+        body: JSON.stringify({ credentials: [peerTrustVc] }),
+      },
+    );
+    expect(submitRes.status).toBe(200);
+    const submitBody = (await submitRes.json()) as {
+      accepted: number;
+      rejected: number;
+    };
+    expect(submitBody.accepted).toBe(1);
+    expect(submitBody.rejected).toBe(0);
+
+    const credsRes = await relay.app.request(`/api/v1/agents/${agentB.motebitId}/credentials`, {
+      headers: { Authorization: `Bearer ${MASTER_TOKEN}` },
+    });
+    const credsBody = (await credsRes.json()) as {
+      credentials: Array<{ credential: TrustVC; credential_type: string }>;
+    };
+    const trustVcs = credsBody.credentials
+      .filter((row) => row.credential_type === "AgentTrustCredential")
+      .map((row) => row.credential);
+    const aggregate = aggregateHardwareAttestation(trustVcs, () => 0.9);
+    expect(aggregate).not.toBeNull();
+    expect(aggregate!.attestation_score).toBeCloseTo(HW_ATTESTATION_HARDWARE);
+    expect(aggregate!.platform_breakdown.webauthn).toBeGreaterThanOrEqual(1);
+  });
+});
