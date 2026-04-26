@@ -1,6 +1,6 @@
 # @motebit/verify
 
-The canonical motebit artifact verifier. A single `motebit-verify` command that verifies any signed motebit artifact — identity files, execution receipts, credentials, presentations — including credentials carrying hardware-attestation claims under any of the four canonical sovereign-verifiable platforms (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn) plus the deprecated Play Integrity verifier for backward compat with already-minted credentials.
+The canonical `motebit-verify` command-line tool. A single binary that verifies any signed motebit artifact — identity files, execution receipts, credentials, presentations — including credentials carrying hardware-attestation claims under any of the four canonical sovereign-verifiable platforms (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn) plus the deprecated Play Integrity adapter bundled for one minor cycle for backward compat with already-minted credentials.
 
 Network-free. No relay contact, no external service, no cloud dependency. Every trust anchor is pinned in the installed package.
 

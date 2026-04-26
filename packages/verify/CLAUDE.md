@@ -1,6 +1,8 @@
 # @motebit/verify
 
-The canonical motebit artifact verifier. Apache-2.0 (permissive floor), Layer 6 (Applications). Ships a `motebit-verify` CLI that handles every signed motebit artifact — identity files, execution receipts, credentials, presentations — including credentials carrying hardware-attestation claims under any of the four canonical sovereign-verifiable platforms (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn). The deprecated Google Play Integrity verifier is also bundled for one minor cycle so already-minted credentials continue to verify; new mobile builds emit `platform: "android_keystore"` and Play Integrity will be removed at `@motebit/crypto-play-integrity@2.0.0`. See `docs/doctrine/hardware-attestation.md` § "Three architectural categories" for the structural reason.
+The canonical `motebit-verify` command-line tool. Apache-2.0 (permissive floor), Layer 6 (Applications). Ships the `motebit-verify` binary that handles every signed motebit artifact — identity files, execution receipts, credentials, presentations — including credentials carrying hardware-attestation claims under any of the four canonical sovereign-verifiable platforms (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn). The deprecated Google Play Integrity adapter is also bundled for one minor cycle so already-minted credentials continue to verify; new mobile builds emit `platform: "android_keystore"` and Play Integrity will be removed at `@motebit/crypto-play-integrity@2.0.0`. See `docs/doctrine/hardware-attestation.md` § "Three architectural categories" for the structural reason.
+
+The `-er`-suffixed sibling [`@motebit/verifier`](../verifier/) is the _library_; this package is the _binary_. Same lineage as `git`/`libgit2`, `cargo`/`tokio`, `npm`/`@npm/arborist` — verb = tool a human installs, agent-noun = library code links against.
 
 ## The three-package lineage
 

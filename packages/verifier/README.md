@@ -1,25 +1,31 @@
 # @motebit/verifier
 
-Offline third-party verifier for every signed Motebit artifact.
+Apache-2.0 library for verifying signed Motebit artifacts. The thin file-reading + human-formatting layer on top of [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)'s pure verification primitives.
 
 ```bash
-npm i -g @motebit/verifier
-motebit-verify motebit.md
+npm i @motebit/verifier
 ```
 
-Outputs
+```ts
+import { verifyFile } from "@motebit/verifier";
 
-```
-VALID (identity)
-  did:  did:motebit:01234567-...
-  name: my-agent
+const result = await verifyFile("./receipt.json");
+if (result.valid) {
+  console.log(`receipt signed by ${result.receipt?.signer}`);
+}
 ```
 
 Zero relay contact. Zero network. The signer's public key is embedded in the artifact or derivable from it; verification is pure crypto against committed wire formats.
 
+## Looking for the `motebit-verify` command-line tool?
+
+Install [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) instead. That package ships the `motebit-verify` binary with every hardware-attestation platform bundled. This package (`@motebit/verifier`) is the library it sits on — reach for it when you're writing TypeScript code that consumes signed artifacts programmatically.
+
+The naming follows the verb / agent-noun lineage that survives for decades — `git` / `libgit2`, `cargo` / `tokio`, `npm` / `@npm/arborist`. Verb (`verify`) = the tool a human installs. Agent-noun with `-er` suffix (`verifier`) = the library code links against.
+
 ## Why this exists
 
-Motebit's moat is the **self-signing body**: every action the agent takes emits a signed receipt that any third party can verify without running the motebit. This package is the smallest public surface of that promise — a CLI and a library that together answer _"is this signed artifact authentic, and what does it claim?"_
+Motebit's moat is the **self-signing body**: every action the agent takes emits a signed receipt that any third party can verify without running the motebit. This package is the smallest public surface of that promise — a deterministic verification library that answers _"is this signed artifact authentic, and what does it claim?"_ — exposed for programmatic consumption.
 
 ## What it verifies
 
@@ -30,45 +36,17 @@ The unified `verify()` dispatcher in [`@motebit/crypto`](https://www.npmjs.com/p
 - **credential** — W3C-style Verifiable Credentials
 - **presentation** — W3C-style Verifiable Presentations
 
-## Usage
-
-```
-motebit-verify <file> [options]
-
-  --json                    Print structured JSON instead of human.
-  --expect <type>           Pin expected type: identity | receipt | credential | presentation.
-  --clock-skew <seconds>    Allowance for credential/presentation time bounds.
-  -h, --help
-  -V, --version
-```
-
-### Exit codes
-
-| Code | Meaning                                             |
-| ---- | --------------------------------------------------- |
-| `0`  | Artifact verified                                   |
-| `1`  | Artifact invalid (bad signature, expired, mismatch) |
-| `2`  | Usage or I/O error                                  |
-
-POSIX-friendly — chain into CI gates, `make` targets, `git` hooks.
-
-### Library
-
-```ts
-import { verifyFile } from "@motebit/verifier";
-
-const result = await verifyFile("./receipt.json");
-if (result.valid) console.log(`receipt signed by ${result.receipt?.signer}`);
-```
+This package wraps the dispatcher with `verifyFile` (path → result), `verifyArtifact` (string → result), and `formatHuman` (result → printable banner).
 
 ## Guarantees
 
 - **No network.** Verification runs entirely offline. No relay calls, no DID resolution over the wire.
 - **No dependencies beyond `@motebit/crypto`.** Every dependency is a trust attack surface we'd have to re-audit on every upgrade.
-- **Suite-agile.** New signature suites (post-quantum, future) are registry additions, not CLI changes — `@motebit/crypto`'s `verifyBySuite` dispatches for us.
+- **Suite-agile.** New signature suites (post-quantum, future) are registry additions, not library changes — `@motebit/crypto`'s `verifyBySuite` dispatches for us.
 
 ## Related
 
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — the **`motebit-verify` CLI** that ships with every hardware-attestation platform bundled. Install this if you want the command-line tool.
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — the verification primitives this package wraps (Apache-2.0, zero deps)
 - [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — protocol types for the artifacts being verified (Apache-2.0, zero deps)
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
