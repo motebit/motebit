@@ -93,6 +93,8 @@ Every future change to this vertical clears all three:
 
 - **TPM vendor-root byte-accuracy at landing.** `packages/crypto-tpm/src/tpm-roots.ts` ships with placeholder PEMs that exercise the chain-verification code path end-to-end; the real vendor bytes land as a mechanical operator pass (swap the PEM constants, no code change). Tests fabricate their own roots so they do not depend on the swap.
 
+- **Real TPM fixture coverage.** The TPM verifier currently has synthetic coverage only. Real EK-backed TPM captures are not lifted from third-party fixtures by default because EK certificates can identify individual chips. A real-device fixture should come from owned hardware or a vendor-approved public vector, with privacy reviewed before committing. The same shape worked for `@motebit/crypto-webauthn` because Yubico deliberately reuses one batch attestation root across millions of devices, so a captured ceremony rooted at it leaks no per-device identity; TPM EK chains are the architectural opposite.
+
 - **TPM `tss-esapi` linking in the Rust build graph.** `apps/desktop/src-tauri/src/tpm.rs` ships a `not_supported`-on-every-platform stub until an operator wires the `tss-esapi` crate plus `libtss2-*` system dependencies into the desktop build. The TS cascade treats the `not_supported` reason as expected and falls through to the software sentinel, so the ship is non-regressive.
 
 - **Revocation channel.** Claims expire with their parent credential's `validFrom` + expiry. No separate revocation path.
