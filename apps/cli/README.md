@@ -109,7 +109,7 @@ If `npm install -g motebit` fails with native module errors (`better-sqlite3`):
 
 - **macOS**: Install Xcode command line tools: `xcode-select --install`
 - **Linux**: Install build essentials: `apt install build-essential python3` (Debian/Ubuntu)
-- **Windows**: Install windows-build-tools: `npm install -g windows-build-tools`
+- **Windows**: Install Visual Studio Build Tools — open the Visual Studio Installer (or download from https://visualstudio.microsoft.com/visual-cpp-build-tools/) and select the "Desktop development with C++" workload, plus a recent Windows SDK and Python 3. The legacy `windows-build-tools` npm package was deprecated in 2018 and does not function on Node 20+.
 
 Run `motebit doctor` to diagnose issues after install.
 

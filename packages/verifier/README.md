@@ -10,8 +10,8 @@ npm i @motebit/verifier
 import { verifyFile } from "@motebit/verifier";
 
 const result = await verifyFile("./receipt.json");
-if (result.valid) {
-  console.log(`receipt signed by ${result.receipt?.signer}`);
+if (result.valid && result.type === "receipt") {
+  console.log(`receipt signed by ${result.signer}`);
 }
 ```
 

@@ -5,8 +5,10 @@
  * Verifies identity files, execution receipts, credentials, and
  * presentations against their embedded signatures. When a credential
  * carries a `hardware_attestation` claim for `device_check` / `tpm` /
- * `play_integrity` / `webauthn`, the bundled platform adapters verify
- * the chain, nonce, bundle, and identity binding end-to-end.
+ * `android_keystore` / `webauthn` (plus the deprecated `play_integrity`
+ * for backward compat with already-minted credentials), the bundled
+ * platform adapters verify the chain, extension, package binding, and
+ * identity binding end-to-end.
  *
  * ```
  *   motebit-verify <file>                 # auto-detect, print human
@@ -18,7 +20,7 @@
  *   # motebit's canonical identifiers).
  *   motebit-verify <file> \
  *     --bundle-id com.example.app \
- *     --android-package com.example.app \
+ *     --android-attestation-application-id ./app-id.bin \
  *     --rp-id example.com
  * ```
  *
@@ -64,6 +66,7 @@ interface ParsedArgs {
   readonly clockSkewSeconds?: number;
   readonly bundleId?: string;
   readonly androidPackage?: string;
+  readonly androidAttestationApplicationIdPath?: string;
   readonly rpId?: string;
   readonly usageError?: string;
 }
@@ -75,6 +78,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let clockSkewSeconds: number | undefined;
   let bundleId: string | undefined;
   let androidPackage: string | undefined;
+  let androidAttestationApplicationIdPath: string | undefined;
   let rpId: string | undefined;
   let help = false;
   let version = false;
@@ -133,6 +137,22 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
         i += 2;
         break;
       }
+      case "--android-attestation-application-id": {
+        // Path to a binary file containing the raw bytes of the leaf
+        // cert's `attestationApplicationId` extension value. Operators
+        // capture this once at build time (deterministic from the
+        // package name + signing-cert SHA-256) and pin the result;
+        // the verifier byte-compares against the leaf's KeyDescription
+        // extension. File-only intentionally — typical AAID is 50-200
+        // bytes, unwieldy on the command line as hex.
+        const value = argv[i + 1];
+        if (value === undefined) {
+          return usage("--android-attestation-application-id requires a path to a binary file");
+        }
+        androidAttestationApplicationIdPath = value;
+        i += 2;
+        break;
+      }
       case "--rp-id": {
         const value = argv[i + 1];
         if (value === undefined) return usage("--rp-id requires a value");
@@ -165,6 +185,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     ...(clockSkewSeconds !== undefined && { clockSkewSeconds }),
     ...(bundleId !== undefined && { bundleId }),
     ...(androidPackage !== undefined && { androidPackage }),
+    ...(androidAttestationApplicationIdPath !== undefined && {
+      androidAttestationApplicationIdPath,
+    }),
     ...(rpId !== undefined && { rpId }),
   };
 }
@@ -187,7 +210,18 @@ function renderHelp(): string {
     "  --bundle-id <id>          Override the expected iOS bundle ID for App Attest",
     "                            (default: com.motebit.mobile).",
     "  --android-package <name>  Override the expected Android package name for",
-    "                            Play Integrity (default: com.motebit.mobile).",
+    "                            the deprecated Play Integrity adapter",
+    "                            (default: com.motebit.mobile).",
+    "  --android-attestation-application-id <path>",
+    "                            Path to a binary file containing the raw bytes",
+    "                            of the leaf cert's `attestationApplicationId`",
+    "                            extension value. REQUIRED to verify any",
+    "                            `android_keystore` credential — without it,",
+    "                            the Android Keystore arm is not wired and",
+    "                            the dispatcher reports 'verifier not wired'.",
+    "                            Capture once at build time from the registered",
+    "                            Android package + signing-cert hash; commit",
+    "                            alongside other pinned config.",
     "  --rp-id <id>              Override the expected WebAuthn Relying Party ID",
     "                            (default: motebit.com).",
     "  -h, --help                Show this help.",
@@ -198,11 +232,19 @@ function renderHelp(): string {
     "  1  Artifact invalid (signature, expiry, hardware-channel chain / nonce / bundle).",
     "  2  Usage or I/O error.",
     "",
-    "PLATFORMS WIRED",
-    "  device_check     Apple App Attest (pinned Apple root)",
-    "  tpm              TPM 2.0 (pinned Infineon / Nuvoton / STMicro / Intel PTT roots)",
-    "  play_integrity   Google Play Integrity (fail-closed; operator pins real JWKS)",
-    "  webauthn         WebAuthn packed attestation (pinned Apple / Yubico / Microsoft)",
+    "PLATFORMS WIRED (canonical)",
+    "  device_check       Apple App Attest (pinned Apple root)",
+    "  tpm                TPM 2.0 (pinned Infineon / Nuvoton / STMicro / Intel PTT roots)",
+    "  android_keystore   Android Hardware-Backed Keystore Attestation",
+    "                     (pinned Google attestation roots; requires",
+    "                     --android-attestation-application-id)",
+    "  webauthn           WebAuthn packed attestation (pinned Apple / Yubico / Microsoft)",
+    "",
+    "PLATFORMS WIRED (deprecated, removed at @motebit/crypto-play-integrity@2.0.0)",
+    "  play_integrity     Google Play Integrity (operator-supplied JWKS;",
+    "                     no global Google JWKS exists by Google's design.",
+    "                     See docs/doctrine/hardware-attestation.md § 'Three",
+    "                     architectural categories' for the structural reason.)",
   ].join("\n");
 }
 
@@ -242,9 +284,30 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  let androidKeystoreExpectedAttestationApplicationId: Uint8Array | undefined;
+  if (args.androidAttestationApplicationIdPath !== undefined) {
+    try {
+      const bytes = readFileSync(args.androidAttestationApplicationIdPath);
+      androidKeystoreExpectedAttestationApplicationId = new Uint8Array(
+        bytes.buffer,
+        bytes.byteOffset,
+        bytes.byteLength,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `motebit-verify: cannot read --android-attestation-application-id at ${args.androidAttestationApplicationIdPath}: ${msg}\n`,
+      );
+      return 2;
+    }
+  }
+
   const hardwareAttestation = buildHardwareVerifiers({
     ...(args.bundleId !== undefined && { appAttestBundleId: args.bundleId }),
     ...(args.androidPackage !== undefined && { playIntegrityPackageName: args.androidPackage }),
+    ...(androidKeystoreExpectedAttestationApplicationId !== undefined && {
+      androidKeystoreExpectedAttestationApplicationId,
+    }),
     ...(args.rpId !== undefined && { webauthnRpId: args.rpId }),
   });
 

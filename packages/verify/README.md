@@ -50,9 +50,12 @@ motebit-verify <file> --clock-skew 30     # allow N seconds of clock drift
 # Platform overrides (defaults match motebit's canonical identifiers)
 motebit-verify <file> \
   --bundle-id com.example.app \
+  --android-attestation-application-id ./app-id.bin \
   --android-package com.example.app \
   --rp-id example.com
 ```
+
+**Verifying `android_keystore` credentials requires `--android-attestation-application-id`.** The flag's value is a path to a binary file containing the raw bytes of the leaf cert's `attestationApplicationId` extension — operators capture this once at build time (deterministic from the registered Android package name + signing-cert SHA-256) and commit the file alongside other pinned config. Without the flag, the Android Keystore arm is intentionally unwired (passing a placeholder would false-reject every real claim); the dispatcher reports `"verifier not wired"`. The legacy `--android-package` flag still configures the deprecated Play Integrity adapter for backward-compat with already-minted credentials.
 
 Exit codes:
 
