@@ -23,11 +23,12 @@ The three-layer split is doctrine, not preference. It's what lets the protocol s
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract; stable types and adapter interfaces
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every motebit artifact
 - [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — programmatic verification library: `verifyFile` / `verifyArtifact` / `formatHuman`. The `-er` suffix marks it as the agent-noun ("the thing that performs verification"); reach for it when writing Node code that consumes signed artifacts.
-- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — the `motebit-verify` CLI binary, bundling the four platform leaves with motebit-canonical defaults. Reach for it when running `motebit-verify` from a terminal or CI step.
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — the `motebit-verify` CLI binary, bundling the canonical platform leaves with motebit-canonical defaults. Reach for it when running `motebit-verify` from a terminal or CI step.
 - [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest) — iOS App Attest chain verifier
-- [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) — Android Play Integrity verifier
+- [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) — Android Hardware-Backed Keystore Attestation chain verifier (the canonical sovereign-verifiable Android primitive)
 - [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — Windows / Linux TPM 2.0 verifier
 - [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn) — WebAuthn packed-attestation verifier
+- [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) — _(deprecated, removed at 2.0.0 — see `crypto-android-keystore`)_
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed identity or runnable agent service
 
 **One BSL-1.1 package — the reference runtime.** The `motebit` CLI bundle is the operator-facing product, source-available now and converging to Apache-2.0 four years after each version's release.

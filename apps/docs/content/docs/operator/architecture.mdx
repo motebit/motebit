@@ -70,10 +70,11 @@ motebit/
 │   ├── wire-schemas/          [L1]          Zod schemas for wire-format types. Generates committed JSON Schema artifacts into `spec/schemas/` — the protocol-owned Apache-2.0 tree third parties implement against.
 │   │
 │   │   # Layer 2 — Engines
-│   ├── crypto-appattest/      [L2 · Apache-2.0]    Apple App Attest chain verifier — pinned Apple root, deterministic from Apple's public spec.
-│   ├── crypto-play-integrity/ [L2 · Apache-2.0]    Google Play Integrity JWT verifier — pinned JWKS, ES256/RS256 dispatch.
-│   ├── crypto-tpm/            [L2 · Apache-2.0]    Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
-│   ├── crypto-webauthn/       [L2 · Apache-2.0]    WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO root set (Apple, Yubico, Microsoft).
+│   ├── crypto-appattest/         [L2 · Apache-2.0]    Apple App Attest chain verifier — pinned Apple root, deterministic from Apple's public spec.
+│   ├── crypto-android-keystore/  [L2 · Apache-2.0]    Android Hardware-Backed Keystore Attestation chain verifier — pinned Google attestation roots (RSA-4096 + ECDSA P-384). Canonical sovereign-verifiable Android primitive.
+│   ├── crypto-play-integrity/    [L2 · Apache-2.0]    DEPRECATED. Google Play Integrity JWT verifier — see `crypto-android-keystore`. Removed at 2.0.0.
+│   ├── crypto-tpm/               [L2 · Apache-2.0]    Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
+│   ├── crypto-webauthn/          [L2 · Apache-2.0]    WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO root set (Apple, Yubico, Microsoft).
 │   ├── market/                [L2]          Budget, settlement, reputation, graph routing.
 │   ├── behavior-engine/       [L2]          state → BehaviorCues (deterministic, pure).
 │   ├── state-vector/          [L2]          Tick-based EMA smoothing, hysteresis, 60 FPS interp.
@@ -103,7 +104,7 @@ motebit/
 │   ├── create-motebit/        [L6 · Apache-2.0]    Public scaffolder. npm create motebit.
 │   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
 │   ├── verifier/              [L6 · Apache-2.0]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. Permissive-floor-pure; no bin.
-│   ├── verify/                [L6 · Apache-2.0]    Canonical `motebit-verify` CLI — aggregates the four Apache-2.0 platform leaves (App Attest, TPM, Play Integrity, WebAuthn) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification. The defaults are overridable flags, not proprietary judgment — the permissive-floor line stays here.
+│   ├── verify/                [L6 · Apache-2.0]    Canonical `motebit-verify` CLI — aggregates the canonical Apache-2.0 platform leaves (App Attest, Android Keystore, TPM, WebAuthn; plus deprecated Play Integrity for one minor cycle) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification. The defaults are overridable flags, not proprietary judgment — the permissive-floor line stays here.
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.
@@ -164,14 +165,15 @@ Ten packages sit on the permissive floor — Apache-2.0, with an explicit patent
 | `@motebit/crypto` | How is it signed? How is it verified? | L0 |
 | `@motebit/sdk` | What interface must an implementation satisfy? | L0 |
 | `@motebit/crypto-appattest` | How is an Apple App Attest receipt verified? | L2 |
-| `@motebit/crypto-play-integrity` | How is a Google Play Integrity token verified? | L2 |
+| `@motebit/crypto-android-keystore` | How is an Android Keystore Attestation chain verified? | L2 |
 | `@motebit/crypto-tpm` | How is a TPM 2.0 quote verified? | L2 |
 | `@motebit/crypto-webauthn` | How is a WebAuthn packed attestation verified? | L2 |
+| `@motebit/crypto-play-integrity` _(deprecated)_ | How was a Google Play Integrity token verified? | L2 |
 | `@motebit/verifier` | How does a third party compose offline verification? | L6 |
 | `@motebit/verify` | How does a one-install CLI verify any motebit artifact end-to-end? | L6 |
 | `create-motebit` | How does a third party scaffold against the protocol? | L6 |
 
-The four `crypto-*` platform leaves verify against each platform's published public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) — no motebit-specific judgment. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
+The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) verify against each platform's published public trust anchor (Apple App Attest root, Google Hardware Attestation roots, TPM vendor roots, FIDO roots) — no motebit-specific judgment. The deprecated `crypto-play-integrity` ships alongside for one minor cycle for backward compat with already-minted credentials. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
 
 The remaining 25 packages are BSL-1.1 — the reference implementation that answers *how the system decides, adapts, routes, and governs*. Both license families converge to Apache-2.0 at each version's Change Date (four years after first public release), eliminating the two-license end state. See `LICENSING.md` for the full boundary test, convergence story, and commercial terms.
 

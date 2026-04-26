@@ -38,9 +38,10 @@ A verifier that dynamically fetches the FIDO Metadata Service has no sovereign s
 
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — dispatcher (pure permissive-floor; zero deps)
 - [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest) — iOS sibling
-- [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) — Android sibling
+- [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) — Android sibling (canonical sovereign-verifiable Android primitive)
 - [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — TPM 2.0 sibling
-- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — canonical CLI bundling all four leaves with motebit defaults
+- [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) — _(deprecated — see `crypto-android-keystore`)_
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — canonical CLI bundling the platform leaves with motebit defaults
 
 ## License
 

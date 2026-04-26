@@ -102,7 +102,7 @@ const LAYER: Record<string, number> = {
 const APP_LAYER = 6;
 
 // Permissive-floor packages (Apache-2.0 today) — must not import from BSL packages,
-// must export only types. The four platform-attestation adapters sit on the permissive
+// must export only types. The platform-attestation adapters sit on the permissive
 // floor because each one answers "how is this artifact verified?" against a published
 // public trust anchor (Apple root, Google JWKS, vendor TPM roots, FIDO roots) — the
 // permissive side of the protocol-model boundary test. Motebit-canonical composition
