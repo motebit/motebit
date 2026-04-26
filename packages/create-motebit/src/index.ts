@@ -121,13 +121,65 @@ function makePackageJson(name: string): string {
     private: true,
     type: "module",
     scripts: {
-      verify: "npx create-motebit verify motebit.md",
+      verify: "npx -p @motebit/verify motebit-verify motebit.md",
     },
     dependencies: {
       "@motebit/crypto": `^${__VERIFY_VERSION__}`,
     },
   };
   return JSON.stringify(pkg, null, 2) + "\n";
+}
+
+/**
+ * README for the default (identity-only) scaffold. The next-steps output
+ * also prints these instructions to stdout, but stdout is ephemeral —
+ * a user who closes their terminal has nothing to refer back to. The
+ * committed README is the durable record.
+ */
+function makeReadme(name: string, motebitId: string): string {
+  return `# ${name}
+
+Your sovereign motebit identity, scaffolded by [\`create-motebit\`](https://www.npmjs.com/package/create-motebit).
+
+\`\`\`txt
+motebit_id: ${motebitId}
+\`\`\`
+
+## Verify your identity
+
+Two ways, both produce the same result:
+
+\`\`\`bash
+node verify.js                                          # In-project verifier (uses @motebit/crypto)
+npx -p @motebit/verify motebit-verify motebit.md        # Canonical CLI verifier
+\`\`\`
+
+The motebit.md file is a self-attesting document. Anyone with the file and \`@motebit/crypto\` (or the \`motebit-verify\` CLI) can verify the signature without contacting any server.
+
+## What's in this directory
+
+\`\`\`txt
+motebit.md         Signed identity — who your agent is
+verify.js          Verification example (Node, uses @motebit/crypto)
+package.json       Node project (one runtime dep: @motebit/crypto)
+.env.example       Environment variable template
+.gitignore         Secrets excluded
+\`\`\`
+
+Your identity's encrypted private key lives in \`~/.motebit/config.json\` (or \`$MOTEBIT_CONFIG_DIR/config.json\`), unlocked by the passphrase you set during scaffolding.
+
+## Next steps
+
+- **Run an agent** with this identity: \`npm install -g motebit\`, then \`motebit\` from anywhere
+- **Inspect your credentials** as they accrue: \`motebit credentials\`
+- **Export a verifiable presentation**: \`motebit credentials --presentation\`
+- **Rotate your key** if compromised: \`npx create-motebit rotate motebit.md\`
+
+## Learn more
+
+- [docs.motebit.com](https://docs.motebit.com) — concepts, protocol surface, runtime
+- [\`docs/doctrine/the-stack-one-layer-up.md\`](https://github.com/motebit/motebit/blob/main/docs/doctrine/the-stack-one-layer-up.md) — where motebit fits relative to hosted agent platforms
+`;
 }
 
 function makeVerifyExample(): string {
@@ -183,6 +235,81 @@ const AGENT_GITIGNORE = `node_modules/
 dist/
 `;
 
+/**
+ * README for the agent (runnable) scaffold. Mirrors the default
+ * scaffold's README pattern but documents the agent-specific commands
+ * (dev/start/self-test) and the relay-auth model.
+ */
+function makeAgentReadme(name: string, motebitId: string): string {
+  return `# ${name}
+
+A runnable motebit agent, scaffolded by [\`create-motebit\`](https://www.npmjs.com/package/create-motebit) with \`--agent\`.
+
+\`\`\`txt
+motebit_id: ${motebitId}
+\`\`\`
+
+## First run
+
+\`\`\`bash
+npm install
+cp .env.example .env     # edit relay URL + (optional) API token
+npm run dev              # build + start the agent server
+\`\`\`
+
+## What's in this directory
+
+\`\`\`txt
+motebit.md         Signed identity — who your agent is
+src/index.ts       Entrypoint — starts the agent server (guarded main-module)
+src/tools.ts       Tools — what your agent can do
+tsconfig.json      TypeScript config (Node16, ES2022, strict)
+package.json       Scripts: build, dev, start, self-test, verify
+.env.example       Relay URL + (optional) API token + identity passphrase
+\`\`\`
+
+## Scripts
+
+\`\`\`bash
+npm run build       # tsc → dist/
+npm run dev         # build + start (development loop)
+npm start           # start from dist/ (prestart hook builds first)
+npm run self-test   # build + start in self-delegation mode
+npm run verify      # verify motebit.md signature via @motebit/verify
+\`\`\`
+
+## How tools work
+
+Each entry in \`src/tools.ts\` declares a \`definition\` (name, description, JSON schema for inputs) and a \`handler\` (async function). The relay advertises your tool names as your agent's capabilities; other agents discover them and delegate work via signed task requests. Every completed task earns a signed receipt that becomes part of the agent's trust history.
+
+Add your own tools by extending the \`tools\` array. Remove the \`fetch_url\` and \`echo\` examples when you're ready.
+
+## Verifying your identity
+
+\`\`\`bash
+npm run verify
+# or
+npx -p @motebit/verify motebit-verify motebit.md
+\`\`\`
+
+The motebit.md is self-attesting — anyone can verify the signature without contacting any server.
+
+## Authentication for the relay
+
+Two paths, in priority order:
+
+1. **\`MOTEBIT_API_TOKEN\`** (env var) — a master token issued by the relay operator. Use this for production deployments and CI.
+2. **Signed device token** — derived from the local key encrypted in \`~/.motebit/config.json\`. Requires \`MOTEBIT_PASSPHRASE\` (or interactive prompt) to decrypt the key on each invocation.
+
+The same passphrase you set during \`create-motebit\` unlocks every CLI command (credentials, export, attest). Set \`MOTEBIT_PASSPHRASE\` in your shell or \`.env\` to skip the prompt.
+
+## Learn more
+
+- [docs.motebit.com](https://docs.motebit.com) — concepts, protocol surface, runtime
+- [\`docs/doctrine/the-stack-one-layer-up.md\`](https://github.com/motebit/motebit/blob/main/docs/doctrine/the-stack-one-layer-up.md) — where motebit fits relative to hosted agent platforms
+`;
+}
+
 function makeAgentPackageJson(name: string): string {
   const pkg = {
     name,
@@ -191,10 +318,12 @@ function makeAgentPackageJson(name: string): string {
     type: "module",
     scripts: {
       build: "tsc",
-      // start expects a prior build; the dev / self-test paths build first.
-      // If `npm start` is run on a clean checkout it'll bail with "Cannot
-      // find module dist/index.js" — that's a clear-enough error that a
-      // build-then-start dance isn't worth scripting in here.
+      // `prestart` is npm's canonical hook for "build before start" —
+      // running `npm start` on a clean checkout (no dist/) used to bail
+      // with "Cannot find module dist/index.js"; the prestart hook makes
+      // it just work. Keeps `start` itself a single-line invocation
+      // suitable for production runners that pre-build separately.
+      prestart: "tsc",
       start: "node dist/index.js",
       dev: "tsc && node dist/index.js",
       verify: "npx -p @motebit/verify motebit-verify motebit.md",
@@ -504,6 +633,7 @@ async function agentScaffold(
   writeFileSync(join(absDir, ".env.example"), makeAgentEnvExample(), "utf-8");
   writeFileSync(join(absDir, ".gitignore"), AGENT_GITIGNORE, "utf-8");
   writeFileSync(join(absDir, "motebit.md"), result.identityFileContent, "utf-8");
+  writeFileSync(join(absDir, "README.md"), makeAgentReadme(dirName, result.motebitId), "utf-8");
 
   // Save identity to config
   const config = loadConfig();
@@ -534,6 +664,7 @@ async function agentScaffold(
     console.log(`    cd ${dirName}`);
   }
   console.log(`    npm install`);
+  console.log(`    npm run verify           ${dim("# Verify your agent's identity signature")}`);
   console.log(`    cp .env.example .env     ${dim("# add your relay URL and API token")}`);
   console.log(`    npm run dev              ${dim("# build + start the agent")}`);
   console.log();
@@ -822,6 +953,10 @@ async function guidedScaffold(
     writeFileSync(join(absDir, "motebit.md"), identityFileContent, "utf-8");
   }
   writeFileSync(join(absDir, "verify.js"), makeVerifyExample(), "utf-8");
+  // The motebitId is set on both branches above (existing-identity
+  // reuse path: line ~871; fresh-generation path: line ~930). It's
+  // documentary in the README — never feeds back into runtime.
+  writeFileSync(join(absDir, "README.md"), makeReadme(dirName, motebitId), "utf-8");
 
   // Output
   const relDir = targetDir === "." ? "." : `./${dirName}`;

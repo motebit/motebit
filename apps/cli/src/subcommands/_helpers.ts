@@ -117,10 +117,22 @@ export async function getRelayAuthHeaders(
   }
 
   // 2. Signed device token from encrypted private key
+  //
+  // The passphrase decrypts the same `cli_encrypted_key` every other CLI
+  // command unlocks (see apps/cli/src/index.ts, subcommands/rotate.ts,
+  // subcommands/export.ts, subcommands/attest.ts). It's not a separate
+  // "relay auth" secret — the local Ed25519 key signs a short-lived
+  // bearer token, and the relay verifies that signature. Honor
+  // MOTEBIT_PASSPHRASE consistently so scripted/CI use of `motebit
+  // credentials`, `motebit export`, etc. doesn't hang on a hidden prompt.
+  // Prompt label is "Passphrase: " to match every other unlock prompt;
+  // the previous "(for relay auth)" parenthetical implied a second
+  // passphrase concept that doesn't exist.
   const fullConfig = loadFullConfig();
   if (fullConfig.cli_encrypted_key && fullConfig.motebit_id && fullConfig.device_id) {
     try {
-      const passphrase = await promptPassphrase("Passphrase (for relay auth): ");
+      const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+      const passphrase = envPassphrase ?? (await promptPassphrase("Passphrase: "));
       const privateKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
       const privateKeyBytes = fromHex(privateKeyHex);
       const token = await createSignedToken(

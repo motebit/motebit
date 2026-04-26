@@ -88,7 +88,11 @@ describe("create-motebit", () => {
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.dependencies).toHaveProperty("@motebit/crypto");
     expect(pkg.dependencies["@motebit/crypto"]).toBe(`^${VERSION}`);
-    expect(pkg.scripts.verify).toContain("create-motebit verify");
+    // verify script uses the canonical @motebit/verify CLI invocation
+    // (not the unscoped `npx motebit-verify` which 404s on npm); same
+    // convention as the agent scaffold's verify script.
+    expect(pkg.scripts.verify).toContain("@motebit/verify");
+    expect(pkg.scripts.verify).toContain("motebit-verify");
     expect(pkg.type).toBe("module");
     expect(pkg.private).toBe(true);
     expect(pkg.name).toBe(subDir);
@@ -223,6 +227,60 @@ describe("create-motebit", () => {
     const spawnIdx = indexTs.indexOf("execFileSync");
     expect(guardIdx).toBeGreaterThan(0);
     expect(spawnIdx).toBeGreaterThan(guardIdx);
+  });
+
+  it("default scaffold writes a README documenting verify commands and motebit_id", () => {
+    // Walk gap #5: closing the terminal lost the next-steps. README is
+    // the durable record. Must mention both verify paths and the
+    // motebit_id (so the README is forensic if config.json drifts).
+    const subDir = "default-readme-test";
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-readme",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    const readmePath = join(testDir, subDir, "README.md");
+    expect(existsSync(readmePath)).toBe(true);
+    const readme = readFileSync(readmePath, "utf-8");
+    expect(readme).toContain("node verify.js");
+    expect(readme).toContain("npx -p @motebit/verify motebit-verify motebit.md");
+    expect(readme).toMatch(/motebit_id:\s*[0-9a-f-]+/);
+  });
+
+  it("agent scaffold writes a README and includes prestart for npm start safety", () => {
+    // Walk gaps #A5 and #A6: README durability + npm start without a
+    // prior build used to fail with "Cannot find module dist/index.js".
+    // The prestart hook makes npm start build first automatically.
+    const subDir = "agent-readme-test";
+    run([subDir, "--agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-agent-readme",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    const projectDir = join(testDir, subDir);
+
+    const readmePath = join(projectDir, "README.md");
+    expect(existsSync(readmePath)).toBe(true);
+    const readme = readFileSync(readmePath, "utf-8");
+    expect(readme).toContain("npm run dev");
+    expect(readme).toContain("npm run verify");
+    expect(readme).toContain("MOTEBIT_API_TOKEN");
+    expect(readme).toContain("MOTEBIT_PASSPHRASE");
+
+    const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
+    expect(pkg.scripts.prestart).toBe("tsc");
+    expect(pkg.scripts.start).toBe("node dist/index.js");
+  });
+
+  it("agent scaffold's next-steps output includes a verify step", () => {
+    // Walk gap #A7: the agent next-steps used to drop the verify line
+    // entirely (default scaffold included it; agent didn't). New users
+    // had no canonical pointer to verify their motebit.md before
+    // putting it on the network.
+    const subDir = "agent-nextsteps-test";
+    const { stdout } = run([subDir, "--agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-nextsteps",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(stdout).toContain("npm run verify");
   });
 
   it("agent scaffold's package.json verify script uses the @motebit/verify CLI", () => {
