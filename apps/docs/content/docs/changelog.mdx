@@ -3,7 +3,7 @@ title: Changelog
 description: Where to find what changed across motebit's published packages.
 ---
 
-Motebit ships eleven packages to npm — ten Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and one BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
+Motebit ships 12 packages to npm — 11 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
 
 ## Authoritative sources
 
@@ -18,7 +18,7 @@ The doctrine is **one canonical source per synchronization invariant**. A root C
 
 ## Published packages
 
-The ten Apache-2.0 packages on the permissive floor:
+The 11 Apache-2.0 packages on the permissive floor:
 
 | Package | npm | Changelog |
 |---|---|---|
@@ -48,4 +48,4 @@ The 51 workspace-private packages (everything not in the table above) are pinned
 
 Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. The Apache-2.0 packages use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
 
-The eleven packages all currently sit at `1.0.0` — the coordinated initial release.
+The 12 packages all currently sit at `1.0.0` — the coordinated initial release.

@@ -47,6 +47,14 @@ interface CanonicalCounts {
   packages: number;
   services: number;
   specs: number;
+  /** npm-published packages — every workspace package.json without `private: true`. */
+  publishedTotal: number;
+  /** publishedTotal subset whose `license: "Apache-2.0"` (the permissive floor). */
+  publishedApache: number;
+  /** publishedTotal subset whose `license: "BUSL-1.1"` (the BSL runtime; one today). */
+  publishedBsl: number;
+  /** Workspace package.jsons declared `private: true` (everything internal). */
+  privatePackages: number;
 }
 
 function countDirs(parent: string): number {
@@ -67,12 +75,55 @@ function countSpecMd(): number {
   return readdirSync(dir).filter((f) => f.endsWith(".md") && f !== "README.md").length;
 }
 
+interface PkgInfo {
+  isPrivate: boolean;
+  license: string | null;
+}
+
+function readPkg(absPath: string): PkgInfo | null {
+  try {
+    const raw = JSON.parse(readFileSync(absPath, "utf-8")) as Record<string, unknown>;
+    return {
+      isPrivate: raw.private === true,
+      license: typeof raw.license === "string" ? raw.license : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function walkPackageJsons(): PkgInfo[] {
+  const out: PkgInfo[] = [];
+  for (const parent of ["packages", "apps", "services"]) {
+    const dir = resolve(ROOT, parent);
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const sub of entries) {
+      if (sub.startsWith(".")) continue;
+      const pkgJson = resolve(dir, sub, "package.json");
+      const info = readPkg(pkgJson);
+      if (info) out.push(info);
+    }
+  }
+  return out;
+}
+
 function deriveCanonical(): CanonicalCounts {
+  const pkgs = walkPackageJsons();
+  const published = pkgs.filter((p) => !p.isPrivate);
   return {
     apps: countDirs("apps"),
     packages: countDirs("packages"),
     services: countDirs("services"),
     specs: countSpecMd(),
+    publishedTotal: published.length,
+    publishedApache: published.filter((p) => p.license === "Apache-2.0").length,
+    publishedBsl: published.filter((p) => p.license === "BUSL-1.1").length,
+    privatePackages: pkgs.filter((p) => p.isPrivate).length,
   };
 }
 
@@ -123,6 +174,56 @@ const DOCS: ReadonlyArray<DocFile> = [
         key: "specs",
         label: "Links list",
       },
+      {
+        regex: /\*\*(\d+) npm packages publish at `1\.0\.0`\*\*/,
+        key: "publishedTotal",
+        label: "Verify-and-integrate published-count",
+      },
+      {
+        regex: /— (\d+) Apache-2\.0 \(the permissive floor, with an explicit patent grant\)/,
+        key: "publishedApache",
+        label: "Verify-and-integrate Apache-floor count (inline)",
+      },
+      {
+        regex: /and (\d+) BSL-1\.1 \(the reference runtime\)/,
+        key: "publishedBsl",
+        label: "Verify-and-integrate BSL count (inline)",
+      },
+      {
+        regex: /The (\d+) Apache-2\.0 packages are the permissive floor/,
+        key: "publishedApache",
+        label: "BSL-line section Apache-floor count",
+      },
+      {
+        regex: /^(\d+) packages publish to npm — (?:\d+) Apache-2\.0/m,
+        key: "publishedTotal",
+        label: "Versioning section published-total",
+      },
+      {
+        regex: /publish to npm — (\d+) Apache-2\.0 \(the permissive floor\)/,
+        key: "publishedApache",
+        label: "Versioning section Apache count",
+      },
+      {
+        regex: /\(the permissive floor\) and (\d+) BSL-1\.1/,
+        key: "publishedBsl",
+        label: "Versioning section BSL count",
+      },
+      {
+        regex: /All (\d+) are at `1\.0\.0`/,
+        key: "publishedTotal",
+        label: "Versioning section 'All N at 1.0.0'",
+      },
+      {
+        regex: /^The (\d+) workspace-private packages/m,
+        key: "privatePackages",
+        label: "Versioning section private-count",
+      },
+      {
+        regex: /the (\d+) published packages above/,
+        key: "publishedTotal",
+        label: "Versioning section 'the N published packages above'",
+      },
     ],
   },
   {
@@ -141,6 +242,56 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Shape banner",
       },
       { regex: /(\d+) open specs\*\*/, key: "specs", label: "Shape banner" },
+    ],
+  },
+  {
+    path: "docs/doctrine/promoting-private-to-public.md",
+    probes: [
+      {
+        regex: /Motebit ships (\d+) packages to npm/,
+        key: "publishedTotal",
+        label: "Lead sentence — published total",
+      },
+      {
+        regex: /and keeps (\d+) workspace-internal at `0\.0\.0-private`/,
+        key: "privatePackages",
+        label: "Lead sentence — private count",
+      },
+    ],
+  },
+  {
+    path: "apps/docs/content/docs/changelog.mdx",
+    probes: [
+      {
+        regex: /Motebit ships (\d+) packages to npm/,
+        key: "publishedTotal",
+        label: "Lead — published total",
+      },
+      {
+        regex: /— (\d+) Apache-2\.0 packages on the/,
+        key: "publishedApache",
+        label: "Lead — Apache count",
+      },
+      {
+        regex: /The (\d+) Apache-2\.0 packages on the permissive floor/,
+        key: "publishedApache",
+        label: "Permissive-floor list intro",
+      },
+      {
+        regex: /The (\d+) packages all currently sit at `1\.0\.0`/,
+        key: "publishedTotal",
+        label: "Coordinated-release sentence",
+      },
+    ],
+  },
+  {
+    path: "apps/docs/content/docs/concepts/public-surface.mdx",
+    probes: [
+      {
+        regex: /(\d+) packages publish at `1\.0\.0`/,
+        key: "publishedTotal",
+        label: "Lead — published total",
+      },
     ],
   },
 ];

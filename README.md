@@ -177,7 +177,7 @@ if (result.type === "receipt" && result.valid) {
 }
 ```
 
-Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). **Eleven npm packages publish at `1.0.0`** — ten Apache-2.0 (the permissive floor, with an explicit patent grant) and one BSL-1.1 (the reference runtime):
+Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). **12 npm packages publish at `1.0.0`** — 11 Apache-2.0 (the permissive floor, with an explicit patent grant) and 1 BSL-1.1 (the reference runtime):
 
 | Package                                                                                              | Description                                                                                              | License    |
 | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- |
@@ -194,7 +194,7 @@ Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`,
 | [`create-motebit`](https://www.npmjs.com/package/create-motebit)                                     | Scaffold a signed Motebit identity or a runnable agent service — `npm create motebit`                    | Apache-2.0 |
 | [`motebit`](https://www.npmjs.com/package/motebit)                                                   | Reference runtime and operator console — REPL, daemon, delegation, MCP server                            | BSL-1.1    |
 
-The ten Apache-2.0 packages are the permissive floor: a third party can build an interoperating runtime against them without our permission. The BSL line holds at `motebit` (the operator console) and everything inlined into its bundle below it: daemon, MCP server, delegation routing, market integration, federation wiring. **The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.**
+The 11 Apache-2.0 packages are the permissive floor: a third party can build an interoperating runtime against them without our permission. The BSL line holds at `motebit` (the operator console) and everything inlined into its bundle below it: daemon, MCP server, delegation routing, market integration, federation wiring. **The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.**
 
 ## Architecture
 
@@ -256,9 +256,9 @@ pnpm run lint          # Lint all packages
 
 ## Versioning
 
-Eleven packages publish to npm — ten Apache-2.0 (the permissive floor) and one BSL-1.1 (the `motebit` reference runtime, with the CLI as its primary surface). All eleven are at `1.0.0`. Breaking changes to any of their public surfaces require a major bump.
+12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime, with the CLI as its primary surface). All 12 are at `1.0.0`. Breaking changes to any of their public surfaces require a major bump.
 
-The 51 workspace-private packages — `@motebit/runtime`, `@motebit/api`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the eleven published packages above.
+The 51 workspace-private packages — `@motebit/runtime`, `@motebit/api`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
 
 **The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.** The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
 

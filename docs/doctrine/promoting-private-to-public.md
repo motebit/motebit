@@ -1,6 +1,6 @@
 # Promoting a private package to public
 
-Motebit ships eleven packages to npm and keeps fifty-one workspace-internal at `0.0.0-private`. The boundary is settled by [`docs/doctrine/protocol-model.md`](protocol-model.md) and the sentinel commit `fa5fdfeb` (2026-04-24). This file documents the _process_ — what to do when a real third-party trigger arrives and a private package needs to become public.
+Motebit ships 12 packages to npm and keeps 51 workspace-internal at `0.0.0-private`. The boundary is settled by [`docs/doctrine/protocol-model.md`](protocol-model.md) and the sentinel commit `fa5fdfeb` (2026-04-24). This file documents the _process_ — what to do when a real third-party trigger arrives and a private package needs to become public.
 
 ## The trigger condition
 
@@ -57,7 +57,7 @@ Three doc surfaces drift in step here. All must move:
 
 - [`apps/docs/content/docs/concepts/public-surface.mdx`](../../apps/docs/content/docs/concepts/public-surface.mdx) — add the new package to the published-packages table; subtract from the workspace-private count.
 - [`apps/docs/content/docs/developer/api-reference.mdx`](../../apps/docs/content/docs/developer/api-reference.mdx) — add the new package's row in the api-extractor baseline table, with link to the committed `etc/<name>.api.md`.
-- [`README.md`](../../README.md) — update the "Eleven npm packages publish at 1.0.0" sentence and the package table. Confirm `check-doc-counts` (#45) still passes — it auto-counts published vs private from `package.json`, so the prose count must match the new total.
+- [`README.md`](../../README.md) — update the "N npm packages publish at 1.0.0" sentence and the package table. Confirm `check-doc-counts` (#45) still passes — it derives `publishedTotal` / `publishedApache` / `publishedBsl` / `privatePackages` from `package.json` and compares against probes anchored on this README sentence (and siblings in `changelog.mdx`, `public-surface.mdx`, this doctrine page), so the prose counts must match the new totals.
 
 If wraps in `<ReferenceExample>` referenced this package, unwrap them now. Replace with plain `import` statements naming the now-public package. Run `pnpm check-doc-private-imports` and `pnpm tsx scripts/audit-doc-imports-vs-sdk.ts` to confirm both report clean.
 
