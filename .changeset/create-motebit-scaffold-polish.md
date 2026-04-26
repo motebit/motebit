@@ -1,8 +1,10 @@
 ---
-"create-motebit": minor
+"create-motebit": patch
 ---
 
 `create-motebit` scaffold polish — READMEs, prestart safety, agent verify next-step.
+
+**Bump level**: patch. Each item here is a repair (the `npm start` clean-checkout failure, the agent next-steps inconsistency, the default-scaffold's verify-script invocation pointing at a non-canonical path) plus the README addition which the doctrine explicitly classifies as patch-shaped ("doc, comment, README, or test changes"). The package's eventual published version still becomes `create-motebit@1.1.0` — the `--force` changeset shipped earlier in the same release train is the load-bearing minor; this changeset rides that bump without manufacturing a second one.
 
 Three smaller gaps from the 2026-04-25 first-time-user walkthroughs (default + agent paths) batched into one polish pass:
 

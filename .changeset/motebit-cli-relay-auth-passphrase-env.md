@@ -1,8 +1,10 @@
 ---
-"motebit": minor
+"motebit": patch
 ---
 
 `motebit` CLI now honors `MOTEBIT_PASSPHRASE` for relay-auth token minting.
+
+**Bump level**: patch. This is a repaired promise, not an expanded one — `MOTEBIT_PASSPHRASE` is a generic-sounding env var the user reasonably expects to work everywhere a passphrase is needed. The previous behavior (env var works for `--yes` and rotate/export/attest, silently ignored by relay-auth) was internal inconsistency, not a deliberate restriction. Fixing it brings behavior in line with the env var's documented role.
 
 Gap #6 from the 2026-04-25 first-time-user walkthrough. `getRelayAuthHeaders()` (the function that mints a signed device token when no `MOTEBIT_API_TOKEN` master token is present) called `promptPassphrase()` unconditionally — it didn't read `MOTEBIT_PASSPHRASE` the way every other unlock prompt in the CLI does. Result: any scripted use of `motebit credentials`, `motebit export`, `motebit attest`, etc. silently hung waiting on a hidden TTY prompt. The exact reproduction was running `MOTEBIT_PASSPHRASE=x npx motebit credentials` and watching it block on `Passphrase (for relay auth):` despite the env var being set.
 
