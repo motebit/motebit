@@ -51,7 +51,7 @@ import { applyMotebitYaml, resolveYamlPath } from "./subcommands/up.js";
 import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
-import { fromHex, decryptPrivateKey, promptPassphrase } from "./identity.js";
+import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import {
   getDbPath,
   createProvider,
@@ -339,14 +339,18 @@ export async function handleRun(config: CliConfig): Promise<void> {
     // Derive private key for signing execution receipts
     const deviceId = fullConfig.device_id ?? "unknown";
 
-    if (fullConfig.cli_encrypted_key) {
-      try {
-        // Prompt for passphrase to decrypt private key
-        const passphrase = await promptPassphrase("Passphrase (for agent signing): ");
-        const pkHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
-        privKeyBytes = fromHex(pkHex);
-      } catch {
-        console.log("Warning: could not decrypt private key — agent tasks disabled");
+    try {
+      const loaded = await loadActiveSigningKey(fullConfig, {
+        promptLabel: "Passphrase (for agent signing): ",
+      });
+      privKeyBytes = loaded.privateKey;
+    } catch (err) {
+      if (err instanceof IdentityKeyError) {
+        console.log(`Warning: agent tasks disabled (${err.kind}: ${err.message}). → ${err.remedy}`);
+      } else {
+        console.log(
+          `Warning: could not decrypt private key — agent tasks disabled (${err instanceof Error ? err.message : String(err)})`,
+        );
       }
     }
 
@@ -985,12 +989,23 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const deviceId = fullConfigForServe.device_id ?? "unknown";
   let servePrivateKey: Uint8Array | undefined;
 
-  if (fullConfigForServe.cli_encrypted_key) {
-    try {
-      const passphrase = await promptPassphrase("Passphrase (for agent signing): ");
-      const pkHex = await decryptPrivateKey(fullConfigForServe.cli_encrypted_key, passphrase);
-      const privateKey = fromHex(pkHex);
-      servePrivateKey = privateKey;
+  try {
+    const loaded = await loadActiveSigningKey(fullConfigForServe, {
+      promptLabel: "Passphrase (for agent signing): ",
+    });
+    servePrivateKey = loaded.privateKey;
+  } catch (err) {
+    if (err instanceof IdentityKeyError) {
+      log(`Warning: motebit_task tool disabled (${err.kind}: ${err.message}). → ${err.remedy}`);
+    } else {
+      log(
+        `Warning: could not decrypt private key — motebit_task tool disabled (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+  }
+  if (servePrivateKey) {
+    {
+      const privateKey = servePrivateKey;
 
       if (config.direct) {
         // Direct tool execution mode — bypass AI, execute tools directly
@@ -1101,8 +1116,6 @@ export async function handleServe(config: CliConfig): Promise<void> {
         };
         log("Agent task handler enabled (private key loaded).");
       }
-    } catch {
-      log("Warning: could not decrypt private key — motebit_task tool disabled");
     }
   }
 

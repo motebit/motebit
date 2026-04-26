@@ -13,7 +13,7 @@
 import { createSignedToken, secureErase } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
-import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
+import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
 import { requireMotebitId, NO_IDENTITY_MESSAGE } from "./_helpers.js";
 
 const DEFAULT_SYNC_URL = "https://relay.motebit.com";
@@ -44,21 +44,25 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  // Optionally decrypt private key so we can verify the registration with a signed token
+  // Decrypt the private key so we can sign the registration token. If
+  // unavailable (no key, wrong passphrase, public-key mismatch), fall back
+  // to unsigned registration with a clear warning — the relay's bootstrap
+  // endpoint accepts unsigned bootstrap for fresh identities.
   let privateKeyBytes: Uint8Array | undefined;
-  if (fullConfig.cli_encrypted_key) {
-    try {
-      const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
-      let passphrase: string;
-      if (envPassphrase != null && envPassphrase !== "") {
-        passphrase = envPassphrase;
-      } else {
-        passphrase = await promptPassphrase("Passphrase (to sign registration): ");
-      }
-      const pkHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
-      privateKeyBytes = fromHex(pkHex);
-    } catch {
-      console.warn("Warning: could not decrypt private key — registration proceeds unsigned");
+  try {
+    const loaded = await loadActiveSigningKey(fullConfig, {
+      promptLabel: "Passphrase (to sign registration): ",
+    });
+    privateKeyBytes = loaded.privateKey;
+  } catch (err) {
+    if (err instanceof IdentityKeyError) {
+      console.warn(
+        `Warning: registration proceeds unsigned (${err.kind}: ${err.message}).\n  → ${err.remedy}`,
+      );
+    } else {
+      console.warn(
+        `Warning: could not decrypt private key — registration proceeds unsigned (${err instanceof Error ? err.message : String(err)})`,
+      );
     }
   }
 

@@ -20,7 +20,7 @@
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { secureErase } from "@motebit/encryption";
 import { loadFullConfig } from "../config.js";
-import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
+import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
 import { NO_IDENTITY_MESSAGE } from "./_helpers.js";
 
 interface WalletOptions {
@@ -28,33 +28,6 @@ interface WalletOptions {
   rpcUrl?: string;
   /** Skip the balance query (address-only). Useful for scripts. */
   addressOnly?: boolean;
-}
-
-/**
- * Load the identity private key from CLI config. Returns the raw 32-byte
- * Ed25519 seed (the same one that signs identity assertions, receipts,
- * credentials, and — by curve coincidence — Solana transactions).
- *
- * Prompts for the passphrase when the key is encrypted. Returns null
- * when no key is found (fresh install, no identity bootstrapped yet).
- */
-async function loadIdentityPrivateKey(): Promise<Uint8Array | null> {
-  const config = loadFullConfig();
-
-  // Legacy plaintext path (older configs). Migrated to encrypted on next
-  // launch via the same flow as `motebit run`.
-  if (config.cli_private_key != null && config.cli_private_key !== "") {
-    return fromHex(config.cli_private_key);
-  }
-
-  // Encrypted path (current). Requires passphrase prompt.
-  if (config.cli_encrypted_key) {
-    const passphrase = await promptPassphrase("Passphrase (to read wallet): ");
-    const privateKeyHex = await decryptPrivateKey(config.cli_encrypted_key, passphrase);
-    return fromHex(privateKeyHex);
-  }
-
-  return null;
 }
 
 export async function handleWallet(options: WalletOptions = {}): Promise<void> {
@@ -65,9 +38,19 @@ export async function handleWallet(options: WalletOptions = {}): Promise<void> {
     process.exit(1);
   }
 
-  const privateKey = await loadIdentityPrivateKey();
-  if (privateKey == null) {
-    console.error("No private key found in config. Wallet derivation requires an identity key.");
+  let privateKey: Uint8Array;
+  try {
+    const loaded = await loadActiveSigningKey(config, {
+      promptLabel: "Passphrase (to read wallet): ",
+    });
+    privateKey = loaded.privateKey;
+  } catch (err) {
+    if (err instanceof IdentityKeyError) {
+      console.error(`Wallet unavailable: ${err.message}`);
+      console.error(`  → ${err.remedy}`);
+    } else {
+      console.error(`Wallet unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    }
     process.exit(1);
   }
 

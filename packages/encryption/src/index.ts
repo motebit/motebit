@@ -28,6 +28,13 @@ export {
   hash,
   sha256,
   generateKeypair,
+  // Suite-dispatched public-key derivation. The product-vocabulary
+  // pair to `generateKeypair` for "I have a private seed, give me the
+  // public" — used by apps to verify a stored private key matches a
+  // claimed public key without reaching into Layer-0 protocol primitives
+  // (per `check-app-primitives` doctrine: apps consume product vocabulary,
+  // not `@motebit/crypto` directly).
+  getPublicKeyBySuite,
   createSignedToken,
   verifySignedToken,
   parseScopeSet,

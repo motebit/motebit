@@ -11,7 +11,7 @@
 import { createSignedToken, secureErase } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, type FullConfig } from "../config.js";
-import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
+import { loadActiveSigningKey } from "../identity.js";
 
 /**
  * Canonical empty-state message for any CLI surface that requires an
@@ -129,25 +129,27 @@ export async function getRelayAuthHeaders(
   // the previous "(for relay auth)" parenthetical implied a second
   // passphrase concept that doesn't exist.
   const fullConfig = loadFullConfig();
-  if (fullConfig.cli_encrypted_key && fullConfig.motebit_id && fullConfig.device_id) {
+  if (fullConfig.motebit_id && fullConfig.device_id) {
     try {
-      const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
-      const passphrase = envPassphrase ?? (await promptPassphrase("Passphrase: "));
-      const privateKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
-      const privateKeyBytes = fromHex(privateKeyHex);
-      const token = await createSignedToken(
-        {
-          mid: fullConfig.motebit_id,
-          did: fullConfig.device_id,
-          iat: Date.now(),
-          exp: Date.now() + 5 * 60 * 1000,
-          jti: crypto.randomUUID(),
-          aud: opts?.aud ?? "admin:query",
-        },
-        privateKeyBytes,
-      );
-      secureErase(privateKeyBytes);
-      headers["Authorization"] = `Bearer ${token}`;
+      const { privateKey } = await loadActiveSigningKey(fullConfig, {
+        promptLabel: "Passphrase: ",
+      });
+      try {
+        const token = await createSignedToken(
+          {
+            mid: fullConfig.motebit_id,
+            did: fullConfig.device_id,
+            iat: Date.now(),
+            exp: Date.now() + 5 * 60 * 1000,
+            jti: crypto.randomUUID(),
+            aud: opts?.aud ?? "admin:query",
+          },
+          privateKey,
+        );
+        headers["Authorization"] = `Bearer ${token}`;
+      } finally {
+        secureErase(privateKey);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(

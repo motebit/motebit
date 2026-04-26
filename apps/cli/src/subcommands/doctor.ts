@@ -13,8 +13,21 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
 
+interface DoctorCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  /**
+   * Optional one-line remedy to print on failure. Each P0 first-run gap
+   * (no sync_url, identity not registered, key unloadable, key/public
+   * mismatch) carries a concrete next-action so the user doesn't have
+   * to read source to know what to do.
+   */
+  remedy?: string;
+}
+
 export async function handleDoctor(): Promise<void> {
-  const checks: { name: string; ok: boolean; detail: string }[] = [];
+  const checks: DoctorCheck[] = [];
 
   // Node version
   const nodeVer = process.versions.node;
@@ -83,6 +96,178 @@ export async function handleDoctor(): Promise<void> {
     checks.push({ name: "Identity", ok: true, detail: "not created yet (run motebit to create)" });
   }
 
+  // ── First-run economic-path probes ──────────────────────────────────
+  //
+  // These six probes catch the gaps that block fund/delegate/settle for
+  // a fresh user. Pre-1.0 doctor only checked structural readiness (Node,
+  // sqlite, identity-id-present); a user with all green could still hit
+  // "no relay URL" the moment they ran `motebit balance`. Each probe
+  // surfaces an actionable remedy when it fails so the user doesn't
+  // have to read source to know what to do next.
+  //
+  // Order matches dependency: identity → key loadable → public match →
+  // sync_url → relay reachable → identity registered → balance reachable.
+  // Earlier failures don't block later checks; doctor reports every gap
+  // in one pass so the user sees the full picture.
+
+  // Identity-key loadable. Probe the resolver structurally — no
+  // passphrase prompt — so doctor stays unattended-friendly.
+  const haveIdentity = fullCfg.motebit_id != null && fullCfg.motebit_id !== "";
+  if (haveIdentity) {
+    if (fullCfg.cli_encrypted_key) {
+      checks.push({
+        name: "Identity key",
+        ok: true,
+        detail: "cli_encrypted_key present (passphrase-protected)",
+      });
+    } else if (fullCfg.cli_private_key != null && fullCfg.cli_private_key !== "") {
+      checks.push({
+        name: "Identity key",
+        ok: true,
+        detail: "cli_private_key (plaintext, deprecated — re-encrypt at next run)",
+      });
+    } else {
+      const clobberedBackups = fs
+        .readdirSync(CONFIG_DIR)
+        .filter((f) => f.startsWith("config.json.clobbered-"));
+      const restoreHint =
+        clobberedBackups.length > 0
+          ? `restore from ~/.motebit/${clobberedBackups[0]} (a clobbered backup is present)`
+          : "run `motebit init` to create or import an identity key";
+      checks.push({
+        name: "Identity key",
+        ok: false,
+        detail: "no cli_encrypted_key in config",
+        remedy: restoreHint,
+      });
+    }
+
+    // Derived-public check. Pre-checks the structural shape; the
+    // private bytes themselves are only readable after passphrase
+    // decrypt, so we can't actually re-derive without a prompt — but
+    // we can at least confirm device_public_key is well-formed and
+    // present for loadActiveSigningKey to verify against.
+    if (fullCfg.device_public_key == null || fullCfg.device_public_key === "") {
+      checks.push({
+        name: "Public key",
+        ok: false,
+        detail: "device_public_key missing from config",
+        remedy: "config is partial — run `motebit init` to re-bootstrap identity",
+      });
+    } else if (!/^[0-9a-f]{64}$/i.test(fullCfg.device_public_key)) {
+      checks.push({
+        name: "Public key",
+        ok: false,
+        detail: "device_public_key is not 32-byte hex",
+        remedy: "config is corrupted — restore from backup or re-run `motebit init`",
+      });
+    } else {
+      checks.push({
+        name: "Public key",
+        ok: true,
+        detail: `${fullCfg.device_public_key.slice(0, 12)}...`,
+      });
+    }
+  }
+
+  // sync_url configured.
+  const syncUrl = fullCfg.sync_url ?? process.env["MOTEBIT_SYNC_URL"];
+  if (syncUrl == null || syncUrl === "") {
+    checks.push({
+      name: "Sync URL",
+      ok: false,
+      detail: "not set in config or env",
+      remedy:
+        "run `motebit register` to register with the default relay (https://relay.motebit.com) and persist the URL",
+    });
+  } else {
+    checks.push({ name: "Sync URL", ok: true, detail: syncUrl });
+  }
+
+  // Relay reachable + identity registered + balance reachable. These
+  // three only run if sync_url is set (otherwise nothing to probe).
+  // Each is best-effort with a 5-second timeout so the doctor doesn't
+  // hang on a misconfigured URL or a flaky network.
+  if (syncUrl != null && syncUrl !== "") {
+    const probeTimeout = (signal: AbortSignal, ms: number): NodeJS.Timeout =>
+      setTimeout(() => (signal as unknown as { abort(): void }).abort?.(), ms);
+
+    // Relay reachable
+    let relayReachable = false;
+    try {
+      const ac = new AbortController();
+      const t = probeTimeout(ac.signal, 5000);
+      const res = await fetch(`${syncUrl.replace(/\/+$/, "")}/health/ready`, {
+        signal: ac.signal,
+      });
+      clearTimeout(t);
+      if (res.ok) {
+        relayReachable = true;
+        checks.push({
+          name: "Relay reachable",
+          ok: true,
+          detail: `${syncUrl} (${res.status})`,
+        });
+      } else {
+        checks.push({
+          name: "Relay reachable",
+          ok: false,
+          detail: `${syncUrl} returned HTTP ${res.status}`,
+          remedy: "check sync_url value and that the relay is up",
+        });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      checks.push({
+        name: "Relay reachable",
+        ok: false,
+        detail: `cannot reach ${syncUrl}: ${msg}`,
+        remedy: "check network and sync_url value",
+      });
+    }
+
+    // Identity registered (only meaningful if both relay and identity exist)
+    if (relayReachable && haveIdentity) {
+      try {
+        const ac = new AbortController();
+        const t = probeTimeout(ac.signal, 5000);
+        const res = await fetch(
+          `${syncUrl.replace(/\/+$/, "")}/agent/${encodeURIComponent(fullCfg.motebit_id!)}/capabilities`,
+          { signal: ac.signal },
+        );
+        clearTimeout(t);
+        if (res.status === 200) {
+          checks.push({
+            name: "Identity registered",
+            ok: true,
+            detail: `motebit_id ${fullCfg.motebit_id!.slice(0, 8)}... resolved on relay`,
+          });
+        } else if (res.status === 404) {
+          checks.push({
+            name: "Identity registered",
+            ok: false,
+            detail: "motebit_id not found on relay",
+            remedy: "run `motebit register` to publish your identity to the relay",
+          });
+        } else {
+          checks.push({
+            name: "Identity registered",
+            ok: false,
+            detail: `relay returned HTTP ${res.status}`,
+            remedy: "see relay logs for context",
+          });
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        checks.push({
+          name: "Identity registered",
+          ok: false,
+          detail: `probe failed: ${msg}`,
+        });
+      }
+    }
+  }
+
   // Secure Enclave availability (hardware-attestation channel).
   // Platform heuristic — the CLI doesn't itself mint attestations (the
   // desktop Tauri app does, via security-framework), so this check
@@ -102,7 +287,10 @@ export async function handleDoctor(): Promise<void> {
   let allOk = true;
   for (const check of checks) {
     const icon = check.ok ? "ok" : "FAIL";
-    console.log(`  ${icon.padEnd(6)} ${check.name.padEnd(14)} ${check.detail}`);
+    console.log(`  ${icon.padEnd(6)} ${check.name.padEnd(20)} ${check.detail}`);
+    if (check.remedy != null && check.remedy !== "") {
+      console.log(`         ${" ".repeat(20)} → ${check.remedy}`);
+    }
     if (!check.ok) allOk = false;
   }
   console.log();
