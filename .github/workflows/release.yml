@@ -73,9 +73,14 @@ jobs:
           echo "Waiting for npm registry propagation..."
           sleep 10
 
+          # ── Default scaffold (identity-only) ───────────────────────────
+          # The path most users hit first. Verifies create-motebit can
+          # mint an identity, the example verify.js works against it, and
+          # the motebit CLI can announce its version.
           SMOKE_DIR=$(mktemp -d)
-          echo "Running create-motebit in $SMOKE_DIR"
+          echo "Running create-motebit (default scaffold) in $SMOKE_DIR"
           cd "$SMOKE_DIR"
+          export MOTEBIT_CONFIG_DIR="$SMOKE_DIR/.motebit"
           npx create-motebit@latest test-agent --yes
           cd test-agent
           npm install
@@ -84,4 +89,30 @@ jobs:
           echo "Checking motebit CLI version..."
           npx motebit@latest --version
 
-          echo "Smoke test passed."
+          # ── Agent scaffold (runnable) ──────────────────────────────────
+          # The path users hit when actually deploying an agent. Two
+          # regressions on 2026-04-25 prove this needs its own gate:
+          #   1. Missing @types/node → tsc fails immediately (TS2307 on
+          #      node:fs / node:path / node:child_process).
+          #   2. Missing main-module guard → the entrypoint's spawn block
+          #      fires when motebit serve re-imports it for tools, looping
+          #      forever.
+          # Both reproduce 100% on every install, both were silent in CI
+          # because the default-scaffold smoke above never compiles or
+          # imports the runnable entrypoint.
+          AGENT_DIR=$(mktemp -d)
+          echo "Running create-motebit --agent in $AGENT_DIR"
+          cd "$AGENT_DIR"
+          export MOTEBIT_CONFIG_DIR="$AGENT_DIR/.motebit"
+          npx create-motebit@latest test-runnable-agent --agent --yes
+          cd test-runnable-agent
+          npm install --no-audit --no-fund
+          # The build catches the @types/node regression.
+          npm run build
+          # Importing dist/index.js as a module (not as the main script)
+          # catches the main-module-guard regression: with the guard in
+          # place, the import returns the default tools array. Without
+          # the guard, this would either hang (recursive spawn) or fail.
+          node -e "import('./dist/index.js').then(m => { if (!Array.isArray(m.default) || m.default.length === 0) { console.error('agent import returned no tools'); process.exit(1); } console.log('agent imports clean,', m.default.length, 'tools exported'); }).catch(e => { console.error('agent import failed:', e.message); process.exit(1); })"
+
+          echo "Smoke tests passed."

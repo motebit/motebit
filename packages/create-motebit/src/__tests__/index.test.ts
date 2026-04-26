@@ -175,6 +175,72 @@ describe("create-motebit", () => {
     expect(env).toContain("MOTEBIT_API_TOKEN");
   });
 
+  // -- agent scaffold runnable-shape regressions --
+  //
+  // The following tests guard the two findings from the 2026-04-25 --agent
+  // walkthrough. Both were silent because release.yml's CI smoke only
+  // exercises the default (identity-only) scaffold, never --agent. Either
+  // gap reproduces 100% on every fresh install and prevents the agent
+  // from ever starting.
+
+  it("agent scaffold's package.json includes @types/node in devDependencies", () => {
+    // Without @types/node the TypeScript build immediately fails on the
+    // `node:fs` / `node:path` / `node:child_process` imports in
+    // src/index.ts. tsconfig has no `types` array, so TS auto-includes
+    // any @types/* in node_modules — but that only works if the package
+    // is actually installed.
+    const subDir = "agent-types-test";
+    const { exitCode } = run([subDir, "--agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-types",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+
+    const pkg = JSON.parse(readFileSync(join(testDir, subDir, "package.json"), "utf-8"));
+    expect(pkg.devDependencies["@types/node"]).toBeTruthy();
+  });
+
+  it("agent scaffold's entrypoint guards module-level side effects with isMainModule", () => {
+    // `motebit serve --tools dist/index.js` re-imports the agent's own
+    // entrypoint to discover its tool definitions. Without a main-module
+    // guard, that re-import re-fires the spawn block and recursively
+    // spawns another `motebit serve`, which re-imports, recursive,
+    // forever. The guard makes the spawn block fire only when the file
+    // is executed directly.
+    const subDir = "agent-guard-test";
+    const { exitCode } = run([subDir, "--agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-guard",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+
+    const indexTs = readFileSync(join(testDir, subDir, "src", "index.ts"), "utf-8");
+    expect(indexTs).toContain('import { fileURLToPath } from "node:url";');
+    expect(indexTs).toContain("isMainModule");
+    expect(indexTs).toMatch(/process\.argv\[1\]\s*===\s*fileURLToPath\(import\.meta\.url\)/);
+    // The execFileSync block must be inside the guard, not at top level.
+    const guardIdx = indexTs.indexOf("if (isMainModule)");
+    const spawnIdx = indexTs.indexOf("execFileSync");
+    expect(guardIdx).toBeGreaterThan(0);
+    expect(spawnIdx).toBeGreaterThan(guardIdx);
+  });
+
+  it("agent scaffold's package.json verify script uses the @motebit/verify CLI", () => {
+    // The default scaffold's next-steps were updated in the 2026-04-25
+    // identity-clobber-gate commit to use `npx -p @motebit/verify
+    // motebit-verify motebit.md`; the agent scaffold's package.json
+    // `verify` script must follow the same convention so the unscoped
+    // `npx motebit-verify` (which 404s on npm) is never suggested.
+    const subDir = "agent-verify-test";
+    run([subDir, "--agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-verify",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    const pkg = JSON.parse(readFileSync(join(testDir, subDir, "package.json"), "utf-8"));
+    expect(pkg.scripts.verify).toContain("@motebit/verify");
+    expect(pkg.scripts.verify).toContain("motebit-verify");
+  });
+
   it("--yes without MOTEBIT_PASSPHRASE fails", () => {
     const { exitCode, stdout } = run(["my-agent", "--yes"], testDir, {
       MOTEBIT_PASSPHRASE: "",

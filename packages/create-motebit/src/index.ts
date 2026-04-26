@@ -191,9 +191,13 @@ function makeAgentPackageJson(name: string): string {
     type: "module",
     scripts: {
       build: "tsc",
+      // start expects a prior build; the dev / self-test paths build first.
+      // If `npm start` is run on a clean checkout it'll bail with "Cannot
+      // find module dist/index.js" — that's a clear-enough error that a
+      // build-then-start dance isn't worth scripting in here.
       start: "node dist/index.js",
       dev: "tsc && node dist/index.js",
-      verify: "npx create-motebit verify motebit.md",
+      verify: "npx -p @motebit/verify motebit-verify motebit.md",
       "self-test": "tsc && node dist/index.js --self-test",
     },
     dependencies: {
@@ -201,6 +205,12 @@ function makeAgentPackageJson(name: string): string {
       motebit: `^${__VERIFY_VERSION__}`,
     },
     devDependencies: {
+      // @types/node is required for the `node:fs`/`node:path`/
+      // `node:child_process` imports in src/index.ts. Without it `npm run
+      // build` fails immediately with TS2307 — the scaffold has to bring
+      // its own type packages because workspace-resolution doesn't carry
+      // them across an npx-installed scaffold target.
+      "@types/node": "^22.0.0",
       typescript: "^5.7.0",
     },
   };
@@ -299,6 +309,7 @@ function makeAgentEntrypoint(name: string): string {
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import tools from "./tools.js";
 
 // Load the identity file
@@ -314,30 +325,41 @@ const toolDefs = tools.map((t) => ({
 // Export for motebit serve --tools
 export default toolDefs;
 
-// When run directly, start the server
-const args = process.argv.slice(2);
-const selfTest = args.includes("--self-test");
-const port = process.env["PORT"] ?? "3100";
+// Main-module guard.
+//
+// \`motebit serve --tools <path>\` re-imports this same file to discover
+// the tool definitions. Without this guard, that re-import re-executes
+// the spawn block below and recursively spawns another \`motebit serve\`,
+// which re-imports again, forever. The guard makes module-level side
+// effects fire only when this file is executed directly (npm run dev,
+// node dist/index.js).
+const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
 
-const serveArgs = [
-  "serve",
-  "--identity", identityPath,
-  "--tools", import.meta.url.replace("file://", ""),
-  "--serve-transport", "http",
-  "--serve-port", port,
-  "--direct",
-];
-if (selfTest) serveArgs.push("--self-test");
+if (isMainModule) {
+  const args = process.argv.slice(2);
+  const selfTest = args.includes("--self-test");
+  const port = process.env["PORT"] ?? "3100";
 
-// Dynamic import to avoid bundling the full CLI
-const { execFileSync } = await import("node:child_process");
-try {
-  execFileSync("npx", ["motebit", ...serveArgs], {
-    stdio: "inherit",
-    env: { ...process.env },
-  });
-} catch {
-  process.exit(1);
+  const serveArgs = [
+    "serve",
+    "--identity", identityPath,
+    "--tools", fileURLToPath(import.meta.url),
+    "--serve-transport", "http",
+    "--serve-port", port,
+    "--direct",
+  ];
+  if (selfTest) serveArgs.push("--self-test");
+
+  // Dynamic import to avoid bundling the full CLI.
+  const { execFileSync } = await import("node:child_process");
+  try {
+    execFileSync("npx", ["motebit", ...serveArgs], {
+      stdio: "inherit",
+      env: { ...process.env },
+    });
+  } catch {
+    process.exit(1);
+  }
 }
 `;
 }
