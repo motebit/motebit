@@ -1,0 +1,23 @@
+{
+  "_attribution": {
+    "description": "Real WebAuthn `packed` attestation captured from a YubiKey 5 series authenticator during a registration ceremony against William Brown's webauthn-rs compatibility test site at https://webauthn.firstyear.id.au.",
+    "device_aaguid": "2fc0579f-8113-47ea-b116-bb5a8db9202a",
+    "device_aaguid_meaning": "YubiKey 5 series production AAGUID (FIDO MDS).",
+    "captured_at": "circa 2019",
+    "lifted_from": "kanidm/webauthn-rs — webauthn-rs-core/src/core.rs, fn test_registration_packed_attestaion_works_with_valid_fido_aaguid_extension",
+    "source_url": "https://github.com/kanidm/webauthn-rs/blob/main/webauthn-rs-core/src/core.rs",
+    "source_license": "MPL-2.0 (file-level). Real device-emitted bytes are not subject to the source-file license; cited here for traceability of the captured ceremony.",
+    "why_this_fixture": "Yubico U2F EE leaf chains directly to `Yubico U2F Root CA Serial 457200631` — the production Yubico root motebit already pins as YUBICO_FIDO_ROOT_PEM in fido-roots.ts. The real ceremony exercises every wire-format code path of @motebit/crypto-webauthn (CBOR parse, x5c chain validation against the pinned production root, ECDSA-P256 signature verify over authData||clientDataHash, rpIdHash binding) without needing any test-only root override. Identity-binding (clientDataJSON.challenge === SHA256(motebit canonical body)) is by design unsatisfiable for a third-party-captured ceremony and is asserted false in the test."
+  },
+  "fmt": "packed",
+  "alg": -7,
+  "rp_id": "webauthn.firstyear.id.au",
+  "attestation_object_base64url": "o2NmbXRmcGFja2VkZ2F0dFN0bXSjY2FsZyZjc2lnWEcwRQIgW2gYNWvUDgxl8LB7rflbuJw_zvJCT5ddfDZNROTy0JYCIQDxuy3JLSHDIrEFYqDifFA_ZHttNfRqJAPgH4hedttVIWN4NWOBWQLBMIICvTCCAaWgAwIBAgIEHo-HNDANBgkqhkiG9w0BAQsFADAuMSwwKgYDVQQDEyNZdWJpY28gVTJGIFJvb3QgQ0EgU2VyaWFsIDQ1NzIwMDYzMTAgFw0xNDA4MDEwMDAwMDBaGA8yMDUwMDkwNDAwMDAwMFowbjELMAkGA1UEBhMCU0UxEjAQBgNVBAoMCVl1YmljbyBBQjEiMCAGA1UECwwZQXV0aGVudGljYXRvciBBdHRlc3RhdGlvbjEnMCUGA1UEAwweWXViaWNvIFUyRiBFRSBTZXJpYWwgNTEyNzIyNzQwMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqHn4IzjtFJS6wHBLzH_GY9GycXFZdiQxAcdgURXXwVKeKBwcZzItOEtc1V3T6YGNX9hcIq8ybgxk_CCv4z8jZqNsMGowIgYJKwYBBAGCxAoCBBUxLjMuNi4xLjQuMS40MTQ4Mi4xLjcwEwYLKwYBBAGC5RwCAQEEBAMCBDAwIQYLKwYBBAGC5RwBAQQEEgQQL8BXn4ETR-qxFrtajbkgKjAMBgNVHRMBAf8EAjAAMA0GCSqGSIb3DQEBCwUAA4IBAQCGk_9i3w1XedR0jX_I0QInMYqOWA5qOlfBCOlOA8OFaLNmiU_OViS-Sj79fzQRiz2ZN0P3kqGYkWDI_JrgsE49-e4V4-iMBPyCqNy_WBjhCNzCloV3rnn_ZiuUc0497EWXMF1z5uVe4r65zZZ4ygk15TPrY4-OJvq7gXzaRB--mDGDKuX24q2ZL56720xiI4uPjXq0gdbTJjvNv55KV1UDcJiK1YE0QPoDLK22cjyt2PjXuoCfdbQ8_6Clua3RQjLvnZ4UgSY4IzxMpKhzufismOMroZFnYG4VkJ_N20ot_72uRiAkn5pmRqyB5IMtERn-v6pzGogtolp3gn1G0ZAXaGF1dGhEYXRhWMRqubvw35oW-R27M7uxMvr50Xx4LEgmxuxw7O5Y2X71KkUAAAACL8BXn4ETR-qxFrtajbkgKgBAeKSmfhLUwwmJpuD2IKaTopbbWKFv-qZAE4LXa2FGmTtRpvioMpeFhI8RqdsOGlBoQxJehEQyWyu7ECwPkVL5HqUBAgMmIAEhWCBT_WnxT3SKAIGfnEKUi7xtZmnlcZRV-63N21154_r-xyJYIGuwu6BK1zp6D6EQ94VOcK1DuFWr58xI_PbeP5F1Nfe6",
+  "client_data_json_base64url": "eyJjaGFsbGVuZ2UiOiJxYWJTQ1lXX1BQS0tCQVc1X3FFc1BGM1EzcHJRZVlCT1JmRE1BcnNvS2RnIiwiY2xpZW50RXh0ZW5zaW9ucyI6e30sImhhc2hBbGdvcml0aG0iOiJTSEEtMjU2Iiwib3JpZ2luIjoiaHR0cHM6Ly93ZWJhdXRobi5maXJzdHllYXIuaWQuYXUiLCJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0",
+  "leaf_subject": "C=SE, O=Yubico AB, OU=Authenticator Attestation, CN=Yubico U2F EE Serial 512722740",
+  "leaf_issuer": "CN=Yubico U2F Root CA Serial 457200631",
+  "leaf_validity": {
+    "not_before": "2014-08-01T00:00:00.000Z",
+    "not_after": "2050-09-04T00:00:00.000Z"
+  }
+}
