@@ -201,13 +201,15 @@ VILmTjHwSL7uZBU=
 `;
 
 /**
- * @deprecated since `@motebit/crypto-tpm@1.1.0`. Use the explicit
- * `STMICRO_TPM_EK_RSA_ROOT_PEM` (RSA-PKI) and
- * `STMICRO_TPM_EK_ECC_ROOT_PEM` (ECC-PKI) names instead. ST runs
- * parallel RSA + ECC trust anchors; the single-PEM constant could
- * only ever name one of them. Kept as an alias for the ECC root
- * (the modern default for most ST33 EK templates) for one minor
- * release cycle. Removed in `@motebit/crypto-tpm@2.0.0`.
+ * @deprecated since 1.1.0, removed in 2.0.0. Use {@link STMICRO_TPM_EK_RSA_ROOT_PEM} (RSA-PKI) or {@link STMICRO_TPM_EK_ECC_ROOT_PEM} (ECC-PKI) directly.
+ *
+ *   Reason: ST runs parallel RSA + ECC trust anchors for the
+ *   ST33 / STSAFE-TPM family; the single-PEM constant could only
+ *   ever name one of them, and modern ST33 devices may chain to
+ *   either depending on EK template firmware. Kept as an alias for
+ *   the ECC root (the modern default for most ST33 EK templates) for
+ *   one minor release cycle so existing consumers don't break the
+ *   moment they pull `1.1.0`.
  */
 export const STMICRO_TPM_EK_ROOT_PEM = STMICRO_TPM_EK_ECC_ROOT_PEM;
 

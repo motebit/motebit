@@ -1412,7 +1412,7 @@ export interface GuestRail extends SettlementRail {
 export interface HardwareAttestationClaim {
     attestation_receipt?: string;
     key_exported?: boolean;
-    platform: "secure_enclave" | "tpm" | "play_integrity" | "device_check" | "webauthn" | "software";
+    platform: "secure_enclave" | "tpm" | "play_integrity" | "android_keystore" | "device_check" | "webauthn" | "software";
 }
 
 // @public

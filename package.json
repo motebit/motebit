@@ -61,6 +61,7 @@
     "check-privacy-ring": "npx tsx scripts/check-privacy-ring.ts",
     "check-readme": "npx tsx scripts/check-readme.ts",
     "check-claude-md": "npx tsx scripts/check-claude-md.ts",
+    "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-scene-primitives": "npx tsx scripts/check-scene-primitives.ts",
     "check-retrieval-primitives": "npx tsx scripts/check-retrieval-primitives.ts",
     "check-reputation-primitives": "npx tsx scripts/check-reputation-primitives.ts",

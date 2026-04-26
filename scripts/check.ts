@@ -221,6 +221,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-claude-md",
   },
   {
+    name: "check-readme-bin-claims",
+    defends:
+      "every `npm i -g <pkg>` / `npx <pkg>` invocation in any README.md or CLAUDE.md targets a workspace package that actually ships a `bin` field — defends against 'code-shaped prose drift' (added 2026-04-26 after a sibling-boundary audit found `@motebit/verifier`'s README still showing `npm i -g @motebit/verifier && motebit-verify motebit.md` for months after the 2026-04-09 verify↔verifier swap removed the bin field; published install snippet was silently broken because no existing gate read prose). Surface drift class: documentation that looks like runnable code but no longer matches the package's actual capabilities — survives typecheck, lint, and tests, only fails when a real human copy-pastes",
+    script: "check-readme-bin-claims",
+  },
+  {
     name: "check-scene-primitives",
     defends:
       "SpatialExpression renderers live in @motebit/render-engine, not inline in apps (invariant #26, added 2026-04-19 after CredentialSatelliteRenderer moved from apps/spatial to packages/render-engine so apps/web could consume the same renderer; extends the protocol-primitive doctrine to scene primitives — every surface with a 3D creature consumes one implementation)",

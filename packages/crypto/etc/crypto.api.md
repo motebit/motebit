@@ -314,6 +314,18 @@ export interface HardwareAttestationError {
 // @public
 export interface HardwareAttestationVerifiers {
     // (undocumented)
+    readonly androidKeystore?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
+    // (undocumented)
     readonly deviceCheck?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
         readonly valid: boolean;
         readonly errors: ReadonlyArray<{
@@ -1136,7 +1148,7 @@ export function verifyVerifiablePresentation(vp: VerifiablePresentation): Promis
 
 // Warnings were encountered during analysis:
 //
-// src/credentials.ts:381:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
+// src/credentials.ts:388:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 
