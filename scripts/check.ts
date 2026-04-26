@@ -295,7 +295,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-dom-id-references",
     defends:
-      "every `document.getElementById(literal)` / `document.querySelector('#literal')` call in `apps/{desktop,web,admin}/src` resolves against an `id=\"literal\"` declared either in the same app's index.html or in its TS source (via `.id = \"literal\"`, `setAttribute('id', 'literal')`, or an inline `innerHTML`/template-string HTML fragment). Waivers live in `scripts/check-dom-id-references.allow.json` with a required reason string (invariant #38, added 2026-04-23 after a 37-day dormant `rotate-key-*` id mismatch — commit 6f682fcd (2026-03-17) shipped TS querying `rotate-key-cancel` against HTML ids `rotate-cancel-btn`/etc. The crash sat silent behind an earlier Buffer-polyfill drift that killed module init first; when the Buffer polyfill fix landed the rotate-key crash became reachable and took out the render bootstrap. This gate catches that shape on day one rather than day 37 — extends the sibling-boundary rule to the TS↔HTML pair in surface apps).",
+      "every `document.getElementById(literal)` / `document.querySelector('#literal')` call in `apps/{desktop,web,admin}/src` resolves against an `id=\"literal\"` declared in the same app's index.html or TS source; waivers live in `scripts/check-dom-id-references.allow.json` with required reason strings (invariant #38, full history in docs/drift-defenses.md)",
     script: "check-dom-id-references",
   },
   {
@@ -307,13 +307,13 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-chat-tag-stripping",
     defends:
-      "every inline `.replace(...)` against an internal-tag / prompt-injection-marker pattern (`<thinking>`, `<memory>`, `<state/>`, `[EXTERNAL_DATA]`, `[MEMORY_DATA]`) in apps or services source trees is colocated with an import of `stripInternalTags` or `stripPartialActionTag` from `@motebit/ai-core` — inline regex copies outside the canonical primitive are CI failures (invariant #41, added 2026-04-24 after a chat-surface audit found desktop's `stripPartialActionTag` missed the thinking/external-data token set entirely while web's chat had its own private copy of the full regex set and web's `bootstrap.ts` had a third near-copy of the same stripping pass. Runtime chunks carrying `<thinking>…</thinking>` and `[EXTERNAL_DATA…]…[/EXTERNAL_DATA]` rendered as visible chat content on desktop — a real, user-visible correctness bug. Fix: centralized `stripInternalTags` in `@motebit/ai-core/core.ts`; `stripPartialActionTag` now composes it; every surface routes through one regex set. Extends the protocol-primitive doctrine to chat-surface judgment — the tag set is runtime-emitted state, not a per-surface rendering decision).",
+      "every inline `.replace(...)` against an internal-tag / prompt-injection-marker pattern (`<thinking>`, `<memory>`, `<state/>`, `[EXTERNAL_DATA]`, `[MEMORY_DATA]`) in apps or services must be colocated with an import of `stripInternalTags` / `stripPartialActionTag` from `@motebit/ai-core`; inline regex copies are CI failures (invariant #41, full history in docs/drift-defenses.md)",
     script: "check-chat-tag-stripping",
   },
   {
     name: "check-drift-defenses-inventory",
     defends:
-      "every hard CI gate registered in `scripts/check.ts` GATES has a corresponding row in the inventory table in `docs/drift-defenses.md` — accepts npm aliases (a GATES entry named `check-specs` is represented if the inventory mentions its underlying script file `check-spec-references`) and matches at gate-level rather than invariant-level so a gate like `check-deploy-parity` that enforces multiple rules is represented once (invariant #44, added 2026-04-24 as the sibling to #25 `check-claude-md` one layer up: doctrine-index integrity for the drift-defense system itself. First run surfaced `check-changeset-discipline` as a 12-day-silent doctrine gap — landed 2026-04-12 with the 1.0 publisher commit, ran in CI without a single line of inventory description. The meta-principle enforcing itself on its own doctrine).",
+      "every hard CI gate registered in `scripts/check.ts` GATES has a corresponding row in the inventory table in `docs/drift-defenses.md`; matches at gate-level (one row per script file is enough) and accepts npm aliases (invariant #44, full history in docs/drift-defenses.md)",
     script: "check-drift-defenses-inventory",
   },
   {
