@@ -10,7 +10,7 @@ Pick the one that fits:
 | Path | Command | What you get |
 |------|---------|-------------|
 | **Identity only** | `npm create motebit` | Signed `motebit.md` identity file — create, verify, share |
-| **Service agent** | `npm create motebit my-agent --agent` | Runnable agent project with tools, identity, MCP server — `npm run dev` to join the network |
+| **Service agent** | `npm create motebit my-agent -- --agent` | Runnable agent project with tools, identity, MCP server — `npm run dev` to join the network |
 | **Full agent** | `npm install -g motebit` then `motebit` | Interactive REPL with identity, memory, tools, operator mode |
 
 The identity-only path is lightweight — no runtime, no database, just a cryptographically signed file. The service agent path scaffolds a complete project with `src/tools.ts`, identity, and scripts wired to `motebit serve --direct` — you can go from install to first paid task in under 60 seconds. The full agent gives you the complete operator console with streaming chat, MCP tool connections, goal scheduling, and everything described below.
@@ -74,9 +74,9 @@ The REPL supports streaming, tool use with per-call approval, MCP server connect
 For standalone identity file creation without the full agent, you can also use:
 
 ```bash
-npm create motebit                    # Create a signed identity file
-npm create motebit my-agent --agent   # Scaffold a runnable service agent
-npx create-motebit verify             # Verify the signature
+npm create motebit                       # Create a signed identity file
+npm create motebit my-agent -- --agent   # Scaffold a runnable service agent
+npx create-motebit verify                # Verify the signature
 ```
 
 The `--agent` scaffold creates a project with `src/index.ts` (entrypoint), `src/tools.ts` (fetch_url and echo tools to start), `motebit.md` (signed service identity), and `package.json` with dev/start/self-test scripts. Edit `src/tools.ts`, run `npm run dev`, and your agent registers with the relay and is ready to receive delegated tasks. Run `npm run self-test` to verify the full receipt loop.
@@ -105,13 +105,7 @@ motebit register --sync-url https://your-relay.example.com
 
 ### Multi-device sync
 
-Once registered, your memories, conversations, and goals sync across devices. Pair a new device:
-
-1. Run `motebit pair` on the existing device — it prints a 6-character code
-2. Run `motebit pair --code ABCDEF` on the new device
-3. Both devices sync through the relay with encrypted payloads
-
-Each device has its own keypair. Compromise of one doesn't compromise the other.
+Once registered, your memories, conversations, and goals sync across devices. Pairing is currently driven from the desktop and mobile apps' settings panels — they call the relay's pairing endpoints (`POST /api/v1/pair/initiate` and `POST /api/v1/pair/complete`) to exchange a 6-character code, then sync through the relay with encrypted payloads. Each device generates its own Ed25519 keypair under the same `motebit_id`; compromise of one doesn't compromise the other. A standalone CLI pairing subcommand is not currently exposed.
 
 ### Delegate to other agents
 

@@ -227,6 +227,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-readme-bin-claims",
   },
   {
+    name: "check-docs-cli-claims",
+    defends:
+      'every backtick-anchored `motebit <subcommand>` invocation in any README.md / CLAUDE.md / docs MDX page resolves to a real `if (subcommand === "X")` arm in apps/cli/src/index.ts; defends against fabricated CLI invocations and obsolete flag-vs-subcommand shapes leaking into onboarding pages (invariant #54, full history in docs/drift-defenses.md)',
+    script: "check-docs-cli-claims",
+  },
+  {
     name: "check-license-doc-sync",
     defends:
       "every workspace package.json declares a SPDX-canonical license (Apache-2.0 or BUSL-1.1) and the permissive-floor membership agrees across LICENSING.md (table + quick reference) and CONTRIBUTING.md; the canonical truth is the package.json license field, the prose surfaces are the siblings (invariant #52, full history in docs/drift-defenses.md)",

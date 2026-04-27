@@ -20,7 +20,7 @@ The other published packages expose narrow surfaces, documented in each package'
 - **`@motebit/verifier`** — the programmatic library you `import`. `verifyFile`, `verifyArtifact`, `formatHuman`. Use this in Node code.
 - **`@motebit/verify`** — the package that ships the `motebit-verify` CLI binary. Use this when you want a command-line verifier; install it globally or run it via `npx`.
 
-The other narrow-surface published packages: `@motebit/crypto-{appattest,play-integrity,tpm,webauthn}` (the four hardware-attestation leaves bundled by `@motebit/verify`), `create-motebit` (scaffold), and `motebit` (the BSL-1.1 reference runtime CLI).
+The other narrow-surface published packages: `@motebit/crypto-{appattest,android-keystore,tpm,webauthn,play-integrity}` (the five hardware-attestation leaves bundled by `@motebit/verify` — `crypto-play-integrity` is deprecated and removed at 2.0.0; `crypto-android-keystore` is the canonical sovereign-verifiable Android primitive), `create-motebit` (scaffold), and `motebit` (the BSL-1.1 reference runtime CLI).
 
 > Workspace-private packages (`@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, and the rest of the interior machinery) are pinned to `0.0.0-private` and have no public API surface. See [Public surface](/docs/concepts/public-surface) for the full boundary doctrine. Code blocks in this guide that import from a private package are wrapped in a `Reference implementation` callout — they show what the runtime does internally and are not consumer recipes.
 

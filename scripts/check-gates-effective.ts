@@ -454,6 +454,20 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-docs-cli-claims",
+    proves:
+      'flags a backtick-anchored `motebit <subcommand>` invocation in any in-scope doc whose subcommand has no `if (subcommand === "X")` arm in apps/cli/src/index.ts (the original incident: `motebit pair` in get-your-agent.mdx after the pairing protocol shipped only on desktop/mobile)',
+    perturb: () =>
+      // Write a probe README that tells the reader to run `motebit pair` —
+      // the exact 2026-04-26 fabricated invocation. The CLI dispatcher has
+      // no `pair` arm, so the gate should fire with `pair is not a CLI
+      // subcommand`. writeFixture cleans the file up after the probe.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}README.md`,
+        `# Probe README\n\nRun: \`motebit pair\` to invoke a subcommand that does not exist.\n`,
+      ),
+  },
+  {
     script: "check-license-doc-sync",
     proves:
       "flags a permissive-package directory present in the canonical license-field-derived set but missing from CONTRIBUTING.md's § License permissive-floor list",

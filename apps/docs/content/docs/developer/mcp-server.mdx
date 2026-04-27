@@ -12,19 +12,19 @@ This is the sovereign agentic surface. A dumb tool proxy can expose functions. O
 ### Stdio transport (for MCP host integration)
 
 ```bash
-motebit --serve
+motebit serve
 ```
 
 ### HTTP transport (for remote agents)
 
 ```bash
-motebit --serve --serve-transport http --serve-port 3100
+motebit serve --serve-transport http --serve-port 3100
 ```
 
 With an identity file:
 
 ```bash
-motebit --serve \
+motebit serve \
   --serve-transport http \
   --identity motebit.md
 ```
@@ -34,7 +34,7 @@ motebit --serve \
 For service agents that expose tools without an AI loop — bypasses the LLM entirely and maps the incoming prompt directly to the tool's first required string parameter. Combined with `--tools` to load external tool definitions:
 
 ```bash
-motebit --serve \
+motebit serve \
   --serve-transport http \
   --identity motebit.md \
   --tools ./dist/tools.js \
@@ -42,7 +42,7 @@ motebit --serve \
   --self-test
 ```
 
-The `--self-test` flag submits a task to itself via the relay after registration, proving the full loop works (submit → route → execute → receipt → settle). The `npm create motebit --agent` scaffold includes `--self-test` in the production `start` script (not `dev`, since the relay can't reach localhost).
+The `--self-test` flag submits a task to itself via the relay after registration, proving the full loop works (submit → route → execute → receipt → settle). The `npm create motebit -- --agent` scaffold includes `--self-test` in the production `start` script (not `dev`, since the relay can't reach localhost).
 
 ### Adding AI reasoning
 

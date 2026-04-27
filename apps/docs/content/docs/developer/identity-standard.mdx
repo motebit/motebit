@@ -131,7 +131,7 @@ succession:
     old_key_signature: "d4e5f6..."
     new_key_signature: "e5f6a7..."
 ---
-<!-- motebit:sig:Ed25519:BASE64URL_SIGNATURE -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:HEX_SIGNATURE -->
 ```
 
 ### Key sections
@@ -148,9 +148,9 @@ succession:
 
 ### Signature
 
-The Ed25519 signature covers the exact UTF-8 bytes of the YAML frontmatter (between `---` delimiters, exclusive). Any modification — even a single character — invalidates the signature.
+The Ed25519 signature covers the canonical JCS (RFC 8785) JSON serialization of the parsed YAML frontmatter under the `motebit-jcs-ed25519-hex-v1` cryptosuite. Any modification — even a single character — invalidates the signature.
 
-The signature is stored as a base64url-encoded value in an HTML comment after the closing `---`. This keeps the file human-readable while remaining cryptographically verifiable.
+The signature is stored as a hex-encoded value in an HTML comment after the closing `---`, with the cryptosuite identifier inline (`motebit:sig:motebit-jcs-ed25519-hex-v1:<hex>`). This keeps the file human-readable while making the suite explicit on the wire — post-quantum migration is a registry addition (new `SuiteId` in `@motebit/protocol`, new dispatch arm in `@motebit/crypto`), not a wire-format break.
 
 ## Threat model
 

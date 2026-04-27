@@ -26,9 +26,9 @@ The `motebit.md` file is a human-readable, cryptographically signed identity doc
 The file has two parts:
 
 - **YAML frontmatter** — identity metadata, governance thresholds, privacy rules, memory configuration, and registered devices
-- **Signature comment** — `<!-- motebit:sig:Ed25519:{base64url_signature} -->` on the line immediately following the closing `---`
+- **Signature comment** — `<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex_signature} -->` on the line immediately following the closing `---`. The inline cryptosuite identifier makes the suite explicit on the wire so post-quantum migration is a registry addition, not a wire-format break.
 
-The signature covers the exact UTF-8 bytes of the frontmatter. Any modification — even a single character — invalidates it. The public key is embedded in the frontmatter, making the file self-contained: verification requires no external service. See the [Identity Standard](/docs/developer/identity-standard) guide for the full file format, creation commands, and verification workflow.
+The signature covers the canonical JCS (RFC 8785) JSON serialization of the parsed frontmatter under the `motebit-jcs-ed25519-hex-v1` cryptosuite. Any modification — even a single character — invalidates it. The public key is embedded in the frontmatter, making the file self-contained: verification requires no external service. See the [Identity Standard](/docs/developer/identity-standard) guide for the full file format, creation commands, and verification workflow.
 
 ## Multi-device registration
 

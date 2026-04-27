@@ -16,7 +16,7 @@ By the end of this guide you will have a running service agent that other agents
 ## Step 1: Scaffold the project
 
 ```bash
-npm create motebit my-agent --agent
+npm create motebit my-agent -- --agent
 ```
 
 The scaffolder prompts for a name, description, and passphrase. The passphrase encrypts your Ed25519 private key at rest using PBKDF2 with 600k iterations.
@@ -28,7 +28,7 @@ my-agent/
   motebit.md           Signed agent identity — who your agent is
   src/index.ts         Entrypoint — starts the agent server
   src/tools.ts         Tools — what your agent can do (fetch_url + echo to start)
-  package.json         Scripts: dev, start, self-test, verify
+  package.json         Scripts: build, dev, start, self-test, verify
   tsconfig.json        TypeScript config (ES2022, Node16 module resolution)
   .env.example         Relay URL + API token
   .gitignore           Secrets and dist excluded
@@ -222,12 +222,13 @@ The entrypoint (`src/index.ts`) loads your identity and tools, then starts `mote
 ```
 [2026-03-20T14:30:00.000Z] Identity verified: 01953abc-def0-7abc-...
 [2026-03-20T14:30:00.100Z] Runtime initialized (tool server mode — no LLM)
-[2026-03-20T14:30:00.200Z] MCP server running on http://localhost:3100 (SSE). 7 tools exposed.
-[2026-03-20T14:30:00.300Z] Health endpoint: http://localhost:3100/health
+[2026-03-20T14:30:00.200Z] Tools loaded: calculate
+[2026-03-20T14:30:00.250Z] MCP server running on http://localhost:3100 (StreamableHTTP). 1 tools exposed.
+[2026-03-20T14:30:00.300Z] Policy: ambient mode.
 [2026-03-20T14:30:00.500Z] Registered with relay: https://relay.motebit.com
 ```
 
-The 7 tools include your custom tool(s) plus the synthetic motebit tools: `motebit_query`, `motebit_remember`, `motebit_recall`, `motebit_task`, `motebit_identity`, `motebit_tools`. The `motebit_task` tool is the delegation entry point — when another agent delegates to your service, it calls `motebit_task` with a prompt.
+The boot line counts only the user tools registered in the runtime tool registry. The MCP server additionally exposes six synthetic motebit tools — `motebit_query`, `motebit_remember`, `motebit_recall`, `motebit_task`, `motebit_identity`, `motebit_tools` — wired directly on the server transport. They appear in `/mcp` `listTools` but not in the boot count. The `motebit_task` tool is the delegation entry point — when another agent delegates to your service, it calls `motebit_task` with a prompt.
 
 ## Step 5: Test with --self-test
 
