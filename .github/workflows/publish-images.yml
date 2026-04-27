@@ -1,0 +1,136 @@
+name: Publish Container Images
+
+# Why this exists:
+#
+# Motebit's endgame is "operators run the relay, take the 5% fees" — third-party
+# operators self-hosting the relay are the federation-unblock work. npm packages
+# (the SDK, protocol, crypto verifiers) are not enough; the relay itself ships as
+# a container so an operator can `docker pull ghcr.io/motebit/api:X.Y.Z` and run.
+#
+# Every motebit-shipped image is:
+#  - multi-arch (amd64 + arm64) via docker buildx — Apple Silicon dev,
+#    Graviton/ARM cloud, single-arch is amateur in 2026.
+#  - signed via cosign keyless OIDC + Sigstore — motebit's whole thesis is
+#    verifiability (`docs/doctrine/self-attesting-system.md`); shipping unsigned
+#    containers from a project whose value prop is "verify everything" is
+#    incoherent.
+#  - SBOM-attached (SPDX) — supply-chain audit surface.
+#  - build-provenance attested (SLSA) via actions/attest-build-provenance —
+#    binds the image to this exact workflow run + commit, verifiable by any
+#    operator before pulling.
+#  - tagged by SHA + branch/tag — never `:latest` (drift). Operators pin to
+#    a version they verified.
+#  - base-image pinned by SHA256 digest in the Dockerfile — same supply-chain
+#    discipline motebit applies to FIDO/Apple/TPM trust roots in
+#    `crypto-webauthn` / `crypto-appattest` / `crypto-tpm`.
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "relay-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  relay:
+    name: ghcr.io/motebit/api
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set image tag values
+        id: tags
+        run: |
+          set -eu
+          short_sha="${GITHUB_SHA:0:7}"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+          # Tag list: always sha-<short>, plus :main on main branch, plus :X.Y.Z
+          # if this is a relay-vX.Y.Z tag push.
+          tags="ghcr.io/motebit/api:sha-${short_sha}"
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            tags="${tags}\nghcr.io/motebit/api:main"
+          fi
+          case "${GITHUB_REF}" in
+            refs/tags/relay-v*)
+              version="${GITHUB_REF#refs/tags/relay-v}"
+              tags="${tags}\nghcr.io/motebit/api:${version}"
+              echo "version=${version}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "version=0.0.0+sha.${short_sha}" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+          {
+            echo 'tags<<EOF'
+            printf '%b' "$tags"
+            echo
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU (cross-arch emulation for arm64 builds)
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (amd64 + arm64)
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: services/api/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          # Dynamic labels — Dockerfile carries static metadata; per-build
+          # provenance fields go here so they reflect this exact run.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tags.outputs.version }}
+            org.opencontainers.image.created=${{ steps.tags.outputs.created }}
+          # Provenance + SBOM at build time. buildx writes both as image
+          # attestations attached to the manifest list.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+
+      - name: Sign image (cosign keyless via Sigstore)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          # Sign every published tag. The image digest is identical across tags
+          # (they all point to the same manifest list), so this signs the
+          # underlying artifact once per tag reference.
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            cosign sign --yes "${tag}@${DIGEST}"
+          done <<< "${{ steps.tags.outputs.tags }}"
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ghcr.io/motebit/api
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

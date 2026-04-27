@@ -1,0 +1,47 @@
+# Minimal docker-compose stack for self-hosting a motebit relay.
+#
+# This is a reference operator configuration — not motebit's production setup.
+# Replace `:1.0.0` with the verified release you intend to run (see
+# self-host.md § Verify before you run). Do not use `:main` in production.
+#
+# What this stack runs:
+#   1 motebit-api container — the relay (services/api).
+#   1 named volume motebit-data — persistent SQLite storage.
+#
+# What this stack does NOT do:
+#   - Litestream replication to S3 (set LITESTREAM_REPLICA_BUCKET + AWS creds
+#     to enable; see services/api/litestream.yml).
+#   - TLS termination — put a reverse proxy (Caddy, nginx, Traefik) in front.
+#   - Federation peering — that needs operator identity setup; see self-host.md.
+
+services:
+  motebit-api:
+    image: ghcr.io/motebit/api:1.0.0
+    container_name: motebit-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - motebit-data:/data
+    environment:
+      # Operator-supplied secrets. Generate via `openssl rand -hex 32` for
+      # any token, and a fresh Ed25519 keypair for OPERATOR_IDENTITY.
+      MOTEBIT_DB_PATH: /data/motebit.db
+      NODE_ENV: production
+      # Required for federation; see self-host.md § Federate with motebit.
+      # OPERATOR_IDENTITY_PRIVATE_KEY: ${OPERATOR_IDENTITY_PRIVATE_KEY}
+      # OPERATOR_IDENTITY_PUBLIC_KEY: ${OPERATOR_IDENTITY_PUBLIC_KEY}
+      # Optional: streaming SQLite replication to S3.
+      # LITESTREAM_REPLICA_BUCKET: ${LITESTREAM_REPLICA_BUCKET}
+      # AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      # AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  motebit-data:
+    driver: local
