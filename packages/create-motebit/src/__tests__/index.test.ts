@@ -7,6 +7,14 @@ import { tmpdir } from "node:os";
 const BIN = join(__dirname, "../../dist/index.js");
 const PKG = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf-8"));
 const VERSION = PKG.version as string;
+// The scaffold pins @motebit/crypto to its actual published version, which
+// bumps independently from create-motebit (e.g. crypto 1.1.0 + create-motebit
+// 1.1.1 in this release). Read crypto's package.json directly — same source
+// tsup.config.ts uses to inject __CRYPTO_VERSION__ into the scaffold output.
+const CRYPTO_PKG = JSON.parse(
+  readFileSync(join(__dirname, "../../../crypto/package.json"), "utf-8"),
+);
+const CRYPTO_VERSION = CRYPTO_PKG.version as string;
 
 function run(
   args: string[],
@@ -87,7 +95,7 @@ describe("create-motebit", () => {
     // package.json has correct content
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.dependencies).toHaveProperty("@motebit/crypto");
-    expect(pkg.dependencies["@motebit/crypto"]).toBe(`^${VERSION}`);
+    expect(pkg.dependencies["@motebit/crypto"]).toBe(`^${CRYPTO_VERSION}`);
     // verify script uses the canonical @motebit/verify CLI invocation
     // (not the unscoped `npx motebit-verify` which 404s on npm); same
     // convention as the agent scaffold's verify script.
