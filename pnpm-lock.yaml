@@ -826,9 +826,6 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools
-      '@motebit/verify':
-        specifier: workspace:*
-        version: link:../../packages/verify
       '@motebit/voice':
         specifier: workspace:*
         version: link:../../packages/voice

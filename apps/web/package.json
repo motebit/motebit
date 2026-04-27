@@ -39,7 +39,6 @@
     "@motebit/state-vector": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
-    "@motebit/verify": "workspace:*",
     "@motebit/voice": "workspace:*",
     "buffer": "^6.0.3",
     "three": "^0.170.0"

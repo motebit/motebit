@@ -6,9 +6,7 @@ import {
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
   bindSlabControllerToRenderer,
-  createRelayCapabilitiesFetcher,
 } from "@motebit/runtime";
-import { buildHardwareVerifiers } from "@motebit/verify";
 import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
 import {
   renderSlabItem,
@@ -397,16 +395,15 @@ export class WebApp {
     // Web surface: HTTP MCP only (no stdio, no filesystem, no secure keyring)
     this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp]);
 
-    // Hardware-attestation peer flow — production wiring. Without these
-    // setters the runtime hook in `bumpTrustFromReceipt` is dormant.
-    // The fetcher reads the sync URL lazily via `loadSyncUrl`, which
-    // hits `localStorage` on each call — so reconfiguring the relay in
-    // Settings takes effect on the next delegation without runtime
-    // reconstruction. See `packages/runtime/src/agent-trust.ts:258`.
-    this.runtime.setHardwareAttestationFetcher(
-      createRelayCapabilitiesFetcher({ baseUrl: () => loadSyncUrl() ?? undefined }),
-    );
-    this.runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
+    // Hardware-attestation peer flow deferred on web until @motebit/crypto-
+    // play-integrity is removed at 2.0.0. The verifier bundle from @motebit/
+    // verify transitively imports `node:crypto` via crypto-play-integrity's
+    // JWT path, which breaks the browser bootstrap (web-app.ts module
+    // resolution fails, no event handlers bind). Desktop / mobile / spatial
+    // wire the peer flow normally — they're Node / native runtimes. The
+    // hook in bumpTrustFromReceipt stays dormant on web; routing trust
+    // falls back to the existing reputation-credential path.
+    // See: feat(surfaces) cdfaf18e and the e2e regression on 2026-04-26.
 
     // Slab ("Motebit Computer") bridge — sibling of DesktopApp's
     // binding (apps/desktop/src/index.ts). runtime.slab emits
