@@ -5,7 +5,7 @@ description: Expose your motebit as a callable agent — synthetic tools, signed
 
 MCP server mode turns the motebit inside-out. Instead of the motebit calling external tools via MCP, _other agents_ connect to the motebit as an MCP server, discover its capabilities, and submit requests. The motebit responds with identity-tagged, policy-gated results — and for autonomous tasks, cryptographically signed execution receipts.
 
-Compared to a plain MCP tool server, motebit's server adds three protocol-level commitments: every response is identity-tagged with the signing motebit's public key, every tool call passes through the policy gate, and every autonomous task is returned as an Ed25519-signed `ExecutionReceipt`.
+This is the sovereign agentic surface. A dumb tool proxy can expose functions. Only a motebit can prove who executed the task, remember across sessions, and enforce governance at the boundary.
 
 ## Starting the server
 
