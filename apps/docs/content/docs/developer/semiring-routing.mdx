@@ -29,6 +29,7 @@ Each semiring models a different routing concern over the same graph:
 | `BottleneckSemiring` | `(max, min, 0, Inf)` | Widest bottleneck path (capacity) |
 | `BooleanSemiring` | `(or, and, false, true)` | Reachability |
 | `RegulatoryRiskSemiring` | `(min, +, Inf, 0)` | Lowest regulatory risk path |
+| `MaxProductLogSemiring` | `(max, +, -Inf, 0)` | Most likely path in log space (avoids underflow on long chains) |
 
 Trust and reliability compose multiplicatively — chaining two 80% trust edges yields 64% effective trust. Cost, latency, and regulatory risk compose additively — chaining a $0.01 edge and a $0.02 edge costs $0.03. Bottleneck composes via `min` — the capacity of a chain is its weakest link.
 

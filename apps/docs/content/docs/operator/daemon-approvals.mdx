@@ -138,7 +138,7 @@ Error: approval a1b2c3d4 is already denied.
 
 **Shutdown:** When the daemon stops (SIGINT/SIGTERM), all pending approvals in the suspended map are denied with reason `"daemon_shutdown"`.
 
-**Restart:** After a daemon restart, previously expired or denied approvals are visible in the history but are not resumable. Cross-restart resume of suspended turns is a v0.3 feature — in v0.2, the goal simply runs fresh on its next scheduled tick.
+**Restart:** After a daemon restart, previously expired or denied approvals are visible in the history but are not resumable. The current daemon does not resume suspended turns across restarts — the goal simply runs fresh on its next scheduled tick. Cross-restart resume is on the roadmap; track progress against the `motebit/goal-lifecycle@1.0` spec.
 
 ## Governance enforcement
 

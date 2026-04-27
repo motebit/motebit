@@ -236,7 +236,7 @@ After 5 failed attempts, the settlement requires manual intervention.
 
 ## Trust model
 
-Cross-relay trust uses the same `evaluateTrustTransition` state machine that governs agent trust. Relay peers are trust subjects with their own trust records and follow the same progression: `new -> provisional -> established -> trusted -> verified`.
+Cross-relay trust uses the same `evaluateTrustTransition` state machine that governs agent trust. Relay peers are trust subjects with their own trust records and follow the same `AgentTrustLevel` progression as agents: `Unknown` → `FirstContact` → `Verified` → `Trusted`, with `Blocked` as the terminal demotion state.
 
 Trust accumulates through successful task forwarding (valid receipts increment `successful_tasks`) and degrades on failures (invalid receipts increment `failed_tasks`). The effective trust for a cross-relay agent is the multiplicative product of trust scores along the path — computed automatically by the semiring algebra, not by special-case federation code.
 
