@@ -1,5 +1,122 @@
 # @motebit/crypto Changelog
 
+## 1.1.0
+
+### Minor Changes
+
+- a428cf9: Ship `@motebit/crypto-android-keystore` — the canonical Apache-2.0 verifier for Android Hardware-Backed Keystore Attestation. Sibling of `crypto-appattest` / `crypto-tpm` / `crypto-webauthn` in the permissive-floor crypto-leaf set; replaces `crypto-play-integrity` as the sovereign-verifiable Android primitive.
+
+  ## Why
+
+  Hardware attestation has three architectural categories — see `docs/doctrine/hardware-attestation.md` § "Three architectural categories". `crypto-play-integrity` was scaffolded as a sovereign-verifiable leaf, but Google's Play Integrity API is per-app-key / network-mediated by deliberate design — verification cannot satisfy motebit's invariant of public-anchor third-party verifiability. Android Hardware-Backed Keystore Attestation IS the architecturally-correct Android primitive: device chains terminate at Google's published Hardware Attestation roots, exactly the FIDO/Apple-App-Attest pattern.
+
+  Time-sensitive: Google rotated the attestation root family between Feb 1 and Apr 10, 2026. The legacy RSA-4096 root stays valid for factory-provisioned devices; new RKP-provisioned devices switched exclusively to ECDSA P-384 after 2026-04-10. Verifiers shipping today MUST pin both — `crypto-android-keystore` does.
+
+  ## What shipped
+
+  ```text
+  @motebit/crypto-android-keystore@1.0.0  (initial release)
+    src/google-roots.ts            both Google roots pinned with SHA-256 fingerprints + source attribution
+    src/asn1.ts                    hand-rolled DER walker for the AOSP KeyDescription extension
+    src/verify.ts                  X.509 chain validation + KeyDescription constraint enforcement
+    src/index.ts                   androidKeystoreVerifier(...) factory + public types
+    src/__tests__/google-roots.test.ts   trust-anchor attestation (parse, fingerprint, validity)
+    src/__tests__/verify.test.ts         25 tests covering happy path + every rejection branch
+  ```
+
+  Verification: 28/28 tests pass; coverage 86.01% statements / 74.41% branches / 100% functions / 86.01% lines (thresholds 85/70/100/85); typecheck + lint + build clean; `check-deps`, `check-claude-md`, `check-hardware-attestation-primitives` all pass.
+
+  ## Protocol surface threading
+  - `@motebit/protocol` — adds `"android_keystore"` to `HardwareAttestationClaim.platform` union.
+  - `@motebit/wire-schemas` — adds to the zod enum + regenerates committed JSON schemas.
+  - `@motebit/crypto` — adds `androidKeystore` slot to `HardwareAttestationVerifiers` interface + dispatcher case.
+  - `@motebit/semiring` — adds `android_keystore` to the hardware-platform scoring case (same `1.0` floor as siblings).
+
+  All additive; no breaking changes. Consumers that don't emit or accept the new platform are unaffected.
+
+  ## Real-fixture coverage
+
+  Synthetic chain coverage exercises every verifier branch via in-process fabricated certs with the AOSP KeyDescription extension. A real-device fixture (matching the WebAuthn moat-claim pass) ships in a follow-up — privacy review needed because Android Keystore chains carry `verifiedBootKey` and `attestationApplicationId` data that may be device-identifying.
+
+- 26f38c4: `issueTrustCredential` now accepts an optional `hardware_attestation` field on its `trustRecord` parameter, and `TrustCredentialSubject` carries the optional `hardware_attestation?: HardwareAttestationClaim` field.
+
+  ## Why
+
+  Phase 1 of the hardware-attestation peer flow needs the issuing peer (delegator that consumed the worker's signed receipt) to fold a verified `HardwareAttestationClaim` about the worker into the peer-issued `AgentTrustCredential` it stamps. The cascade-mint primitives have shipped on all five surfaces since 2026-04-19, but the credentials they produce have been inert because `/credentials/submit` rejects self-issued credentials by spec §23. The peer flow lifts the verified claim into a credential the relay accepts (issuer ≠ subject) and the routing aggregator scores via `aggregateHardwareAttestation`.
+
+  ## What shipped
+  - `TrustCredentialSubject` (in `packages/crypto/src/credentials.ts`) gains an optional `hardware_attestation?: HardwareAttestationClaim` field, mirroring the spec/protocol-side definition. Mirror of the same field on `@motebit/protocol`'s `TrustCredentialSubject` (no new wire format).
+  - `issueTrustCredential` accepts an optional `hardware_attestation` on its `trustRecord` parameter and embeds it in the issued credential's subject when present.
+  - New exported type `HardwareAttestationClaim` (mirror of `@motebit/protocol`'s same-named type, kept local to preserve permissive-floor zero-internal-deps purity).
+
+  Additive, optional, backward-compatible. Consumers passing the existing `trustRecord` shape get unchanged behavior. The change is `minor` per semver.
+
+- 8405782: Add `mintSecureEnclaveReceiptForTest` test helper.
+
+  ## Why
+
+  Phase 2 of the hardware-attestation peer flow adds end-to-end coverage for the `secure_enclave` platform — proving the same protocol loop the Phase 1 software-sentinel test exercises also works with a real (verified) hardware claim. The existing test helpers (`canonicalSecureEnclaveBodyForTest`, `encodeSecureEnclaveReceiptForTest`) require the caller to supply a P-256 keypair and run ECDSA-SHA256 signing themselves — meaning every cross-workspace test that exercises the SE path has to pull `@noble/curves` into its own dep tree.
+
+  `mintSecureEnclaveReceiptForTest` packages the keypair-generate + sign + encode steps into one call. The helper lives behind a lazy import of `@noble/curves/p256` so it's not pulled into the production verifier's import graph.
+
+  ## What shipped
+  - New exported test helper `mintSecureEnclaveReceiptForTest({motebit_id, device_id, identity_public_key, attested_at}) => Promise<{claim, sePublicKeyHex}>` produces a `HardwareAttestationClaim` with `platform: "secure_enclave"` whose `attestation_receipt` verifies via `verifyHardwareAttestationClaim` without injected verifiers.
+  - Production callers MUST still mint receipts via the Rust Secure Enclave bridge — the function name carries `ForTest` for that reason.
+
+  Additive; consumers that don't reach for the helper are unaffected. Marked `minor` per semver.
+
+### Patch Changes
+
+- 9923185: Rename `DEFAULT_TRUST_THRESHOLDS` → `REFERENCE_TRUST_THRESHOLDS` (additive + deprecation, no behavior change).
+
+  ## Why
+
+  `DEFAULT_TRUST_THRESHOLDS` is exported from `@motebit/protocol` — the permissive-floor layer whose rule (see `packages/protocol/CLAUDE.md` rule 1) is "types, enums, constants, deterministic math." The values (`promoteToVerified_minTasks: 5`, `demote_belowRate: 0.5`, etc.) are constants, so they technically fit, but the **name** claimed more protocol authority than they carry:
+  - The semiring algebra above (`trustAdd`, `trustMultiply`, `TRUST_LEVEL_SCORES`, `TRUST_ZERO`, `TRUST_ONE`) IS interop law — two motebit implementations MUST compute trust the same way to exchange scores across federation boundaries.
+  - The transition thresholds (when to promote an agent, when to demote) are **motebit product tuning** — a federated implementation can choose stricter or looser values and still interoperate. The scores are compared; the policy that derives them is not.
+
+  The `DEFAULT_` prefix read as "THE value every motebit implementation uses." `REFERENCE_` correctly signals "motebit's reference default; implementers MAY choose their own."
+
+  ## What shipped
+  - New export: `REFERENCE_TRUST_THRESHOLDS` from `@motebit/protocol` (identical values, clearer name)
+  - Deprecation: `DEFAULT_TRUST_THRESHOLDS` marked `@deprecated since 1.0.1, removed in 2.0.0` with pointer to the new name and the reason above
+  - Internal consumers (`@motebit/semiring`, `@motebit/market`, reference tests) migrated to the new name
+  - Parity test in `packages/protocol/src/__tests__/trust-algebra.test.ts` asserts `DEFAULT_TRUST_THRESHOLDS === REFERENCE_TRUST_THRESHOLDS` until the 2.0.0 removal, preventing silent divergence during the deprecation window
+
+  ## Impact
+
+  Zero runtime change. Third-party consumers pinned to `@motebit/protocol@1.x` keep working — the old export is re-exported as an alias. Consumers should migrate to `REFERENCE_TRUST_THRESHOLDS` at their convenience before 2.0.0. The `check-deprecation-discipline` gate (drift-defenses #39) tracks the sunset.
+
+- 9858c14: Sibling-boundary audit cleanup after the Android Keystore + Play Integrity deprecation pass. Per `feedback_engineering_patterns`'s rule: when you fix one boundary, audit all siblings in the same pass.
+
+  ## What this catches
+
+  Six pieces of drift that the previous five commits left behind, all surfaced by a focused audit:
+  1. **`@motebit/crypto`** — `credentials.ts` had a parallel mirror of the `HardwareAttestationClaim.platform` union (permissive-floor crypto can't import from protocol, so it carries its own copy). The mirror was missing `"android_keystore"`. Fixed.
+  2. **`@motebit/crypto`** — `__tests__/hardware-attestation.test.ts` had parity coverage for "verifier not wired" and "delegates to injected verifier" cases for `tpm` / `play_integrity` / `device_check` / `webauthn` but NOT `android_keystore`. Two new test cases added.
+  3. **`@motebit/crypto-appattest`** — the `apple-root.ts` source comment claimed the Apple App Attest Root CA's SHA-256 fingerprint was `bf eb 88 ce…` but the actual fingerprint of the committed PEM is `1c b9 82 3b…`. The bytes were correct (verified against Apple's published cert); the inline-comment fingerprint was wrong from the original commit. The audit-anchor purpose of the fingerprint comment is undermined when it doesn't match the bytes — a third-party auditor following the file's own physics would compute the actual fingerprint, see the mismatch, and not know which is canonical. Fixed.
+  4. **`@motebit/crypto-appattest`** — missing `__tests__/apple-root.test.ts` parity test. `crypto-tpm` (`tpm-roots.test.ts`) and `crypto-android-keystore` (`google-roots.test.ts`) both have a trust-anchor attestation test that asserts parse + fingerprint + validity + self-signed + CA constraints. App Attest had no equivalent — which is why the wrong-fingerprint drift survived. Added now; closes the parity gap and would have caught #3 at commit time.
+  5. **`@motebit/verify`** — the canonical aggregator was not wiring `crypto-android-keystore`. `package.json` deps + tsconfig refs + `adapters.ts` `buildHardwareVerifiers` factory + `index.ts` doc comment all updated. The Play Integrity arm stays wired during its 1.x deprecation cycle for backward compat with already-minted credentials (and is removed at `crypto-play-integrity@2.0.0`). Aggregator now bundles every canonical leaf cleanly. New optional `androidKeystoreExpectedAttestationApplicationId` config field — the operator pins the package binding at deploy time.
+  6. **Doctrine + README + LICENSING + spec drift** — multiple committed artifacts described "the four Apache-2.0 platform leaves" or listed `crypto-{appattest,play-integrity,tpm,webauthn}` enumerated, missing `crypto-android-keystore` and not reflecting the play-integrity deprecation. Updated:
+     - `README.md` — package table + permissive-floor list
+     - `LICENSING.md` — boundary-test table + permissive-floor description + patent-grant rationale
+     - `docs/doctrine/protocol-model.md` — three-layer model package list
+     - `docs/doctrine/the-stack-one-layer-up.md` — primitive-mapping table
+     - `spec/identity-v1.md` — peer-flow verifier-adapter list
+     - `packages/verify/CLAUDE.md` + `README.md` — header description, package-lineage table, hardware-attestation channel table
+     - `packages/github-action/README.md` — verify-CLI bundle description
+     - `packages/self-knowledge/src/corpus-data.ts` — auto-regenerated from updated source docs via `pnpm build-self-knowledge`
+
+  ## Why this matters
+
+  The motebit-canonical doctrine is the answer-engine corpus, the npm descriptions, the doctrine docs, the spec — every committed artifact a third party encounters. When one boundary changes (a new platform shipped, an old one deprecated, a fingerprint corrected), every sibling artifact has to update OR the protocol-first sniff test fails and motebit-as-published lies about its own state. The wrong fingerprint in `apple-root.ts` had been there for months, undetected, because no parity test existed to catch it. The five-package crypto-leaf set had been "four leaves" in committed prose for two days while the code already had five.
+
+  Bump levels:
+  - `@motebit/crypto` patch — internal mirror union update + additive test cases. No public-API change.
+  - `@motebit/crypto-appattest` patch — comment-only correction + new test file. No public-API change. The fingerprint _value_ in the comment was wrong, the fingerprint-as-bytes (the PEM) was always right.
+  - `@motebit/verify` minor — additive `androidKeystoreExpectedAttestationApplicationId` config field, additive `androidKeystore` arm in the bundled verifiers, new dep on `@motebit/crypto-android-keystore`. Existing callers unaffected.
+  - `@motebit/mobile` patch — no behavioral change here; the mint-pivot work that's actually shipped on this surface lives in the previous commit (`07efa3a3`). Bumping to keep `package.json` versions monotonic across the audit's scope.
+
 ## 1.0.0
 
 ### Major Changes

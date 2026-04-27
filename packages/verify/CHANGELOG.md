@@ -1,5 +1,77 @@
 # @motebit/verify
 
+## 1.1.0
+
+### Minor Changes
+
+- 9858c14: Sibling-boundary audit cleanup after the Android Keystore + Play Integrity deprecation pass. Per `feedback_engineering_patterns`'s rule: when you fix one boundary, audit all siblings in the same pass.
+
+  ## What this catches
+
+  Six pieces of drift that the previous five commits left behind, all surfaced by a focused audit:
+  1. **`@motebit/crypto`** — `credentials.ts` had a parallel mirror of the `HardwareAttestationClaim.platform` union (permissive-floor crypto can't import from protocol, so it carries its own copy). The mirror was missing `"android_keystore"`. Fixed.
+  2. **`@motebit/crypto`** — `__tests__/hardware-attestation.test.ts` had parity coverage for "verifier not wired" and "delegates to injected verifier" cases for `tpm` / `play_integrity` / `device_check` / `webauthn` but NOT `android_keystore`. Two new test cases added.
+  3. **`@motebit/crypto-appattest`** — the `apple-root.ts` source comment claimed the Apple App Attest Root CA's SHA-256 fingerprint was `bf eb 88 ce…` but the actual fingerprint of the committed PEM is `1c b9 82 3b…`. The bytes were correct (verified against Apple's published cert); the inline-comment fingerprint was wrong from the original commit. The audit-anchor purpose of the fingerprint comment is undermined when it doesn't match the bytes — a third-party auditor following the file's own physics would compute the actual fingerprint, see the mismatch, and not know which is canonical. Fixed.
+  4. **`@motebit/crypto-appattest`** — missing `__tests__/apple-root.test.ts` parity test. `crypto-tpm` (`tpm-roots.test.ts`) and `crypto-android-keystore` (`google-roots.test.ts`) both have a trust-anchor attestation test that asserts parse + fingerprint + validity + self-signed + CA constraints. App Attest had no equivalent — which is why the wrong-fingerprint drift survived. Added now; closes the parity gap and would have caught #3 at commit time.
+  5. **`@motebit/verify`** — the canonical aggregator was not wiring `crypto-android-keystore`. `package.json` deps + tsconfig refs + `adapters.ts` `buildHardwareVerifiers` factory + `index.ts` doc comment all updated. The Play Integrity arm stays wired during its 1.x deprecation cycle for backward compat with already-minted credentials (and is removed at `crypto-play-integrity@2.0.0`). Aggregator now bundles every canonical leaf cleanly. New optional `androidKeystoreExpectedAttestationApplicationId` config field — the operator pins the package binding at deploy time.
+  6. **Doctrine + README + LICENSING + spec drift** — multiple committed artifacts described "the four Apache-2.0 platform leaves" or listed `crypto-{appattest,play-integrity,tpm,webauthn}` enumerated, missing `crypto-android-keystore` and not reflecting the play-integrity deprecation. Updated:
+     - `README.md` — package table + permissive-floor list
+     - `LICENSING.md` — boundary-test table + permissive-floor description + patent-grant rationale
+     - `docs/doctrine/protocol-model.md` — three-layer model package list
+     - `docs/doctrine/the-stack-one-layer-up.md` — primitive-mapping table
+     - `spec/identity-v1.md` — peer-flow verifier-adapter list
+     - `packages/verify/CLAUDE.md` + `README.md` — header description, package-lineage table, hardware-attestation channel table
+     - `packages/github-action/README.md` — verify-CLI bundle description
+     - `packages/self-knowledge/src/corpus-data.ts` — auto-regenerated from updated source docs via `pnpm build-self-knowledge`
+
+  ## Why this matters
+
+  The motebit-canonical doctrine is the answer-engine corpus, the npm descriptions, the doctrine docs, the spec — every committed artifact a third party encounters. When one boundary changes (a new platform shipped, an old one deprecated, a fingerprint corrected), every sibling artifact has to update OR the protocol-first sniff test fails and motebit-as-published lies about its own state. The wrong fingerprint in `apple-root.ts` had been there for months, undetected, because no parity test existed to catch it. The five-package crypto-leaf set had been "four leaves" in committed prose for two days while the code already had five.
+
+  Bump levels:
+  - `@motebit/crypto` patch — internal mirror union update + additive test cases. No public-API change.
+  - `@motebit/crypto-appattest` patch — comment-only correction + new test file. No public-API change. The fingerprint _value_ in the comment was wrong, the fingerprint-as-bytes (the PEM) was always right.
+  - `@motebit/verify` minor — additive `androidKeystoreExpectedAttestationApplicationId` config field, additive `androidKeystore` arm in the bundled verifiers, new dep on `@motebit/crypto-android-keystore`. Existing callers unaffected.
+  - `@motebit/mobile` patch — no behavioral change here; the mint-pivot work that's actually shipped on this surface lives in the previous commit (`07efa3a3`). Bumping to keep `package.json` versions monotonic across the audit's scope.
+
+- 6e8dba2: Add `--android-attestation-application-id <path>` CLI flag — closes the gap between the README's four-platform parity claim and what `motebit-verify` actually wired.
+
+  ## Why
+
+  Surfaced by a published-READMEs audit on 2026-04-26 (same shape as the `verifier↔verify` 2026-04-09 swap that was caught later in this session): `packages/verify/README.md` advertised CLI parity for the four canonical sovereign-verifiable platforms, but the CLI exposed flags only for App Attest (`--bundle-id`), the deprecated Play Integrity (`--android-package`), and WebAuthn (`--rp-id`). The new canonical Android primitive — `crypto-android-keystore`, shipped 2026-04-26 (commit `a428cf9c`) — requires `androidKeystoreExpectedAttestationApplicationId` (raw bytes) at wiring time, and `buildHardwareVerifiers` only wires the `androidKeystore` arm if those bytes are supplied. So a user verifying an `android_keystore` credential via `motebit-verify` was hitting "verifier not wired" with no flag-level recourse — published-surface claim that the implementation didn't satisfy.
+
+  ## What shipped
+  - `--android-attestation-application-id <path>` flag accepts a path to a binary file containing the raw bytes of the leaf cert's `attestationApplicationId` extension. Operators capture this once at build time (deterministic from the registered Android package name + signing-cert SHA-256) and commit the file alongside other pinned config. File-only intentionally — the typical AAID is 50–200 bytes and unwieldy on the command line as hex.
+  - CLI threads the read bytes through `buildHardwareVerifiers({ androidKeystoreExpectedAttestationApplicationId })`. Without the flag, the Android Keystore arm stays unwired (passing a placeholder would false-reject every real claim); the dispatcher reports `"verifier not wired"`. With the flag, `android_keystore` credentials verify end-to-end against the production-pinned Google Hardware Attestation roots.
+  - I/O errors (missing path, unreadable file) emit a clear stderr message and exit code 2.
+  - Help text reframed: `PLATFORMS WIRED (canonical)` lists App Attest / TPM / Android Keystore / WebAuthn; `PLATFORMS WIRED (deprecated)` lists Play Integrity with the structural-mismatch reason. The `--android-package` flag is documented as configuring the deprecated path.
+  - Updated CLI module-doc comment + README usage example to reflect the new flag and the four-canonical-plus-one-deprecated framing.
+
+  ## Plus two cosmetic README fixes (same audit pass)
+  - `packages/verifier/README.md` — programmatic-usage example showed `result.receipt?.signer`; `signer` is on the top-level `ReceiptVerifyResult`, not nested under `receipt`. Wouldn't typecheck under strict TS. Corrected.
+  - `apps/cli/README.md` — Windows troubleshooting recommended `npm install -g windows-build-tools`; that package was deprecated by its maintainer in 2018 and doesn't function on Node 18+ (motebit requires Node ≥ 20). Replaced with current Microsoft guidance (Visual Studio Build Tools installer + "Desktop development with C++" workload).
+
+  Additive. No public-API surface change beyond the new optional flag. All existing invocations continue to work unchanged.
+
+### Patch Changes
+
+- Updated dependencies [a428cf9]
+- Updated dependencies [745b22f]
+- Updated dependencies [26f38c4]
+- Updated dependencies [8405782]
+- Updated dependencies [a428cf9]
+- Updated dependencies [d3e8163]
+- Updated dependencies [bd51d56]
+- Updated dependencies [9923185]
+- Updated dependencies [9858c14]
+  - @motebit/crypto@1.1.0
+  - @motebit/crypto-android-keystore@1.1.0
+  - @motebit/crypto-play-integrity@1.1.0
+  - @motebit/crypto-tpm@1.1.0
+  - @motebit/crypto-webauthn@1.0.1
+  - @motebit/crypto-appattest@1.0.1
+  - @motebit/verifier@1.0.1
+
 ## 1.0.0
 
 ### Major Changes

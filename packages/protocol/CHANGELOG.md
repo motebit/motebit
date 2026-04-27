@@ -1,5 +1,80 @@
 # @motebit/protocol
 
+## 1.1.0
+
+### Minor Changes
+
+- a428cf9: Ship `@motebit/crypto-android-keystore` — the canonical Apache-2.0 verifier for Android Hardware-Backed Keystore Attestation. Sibling of `crypto-appattest` / `crypto-tpm` / `crypto-webauthn` in the permissive-floor crypto-leaf set; replaces `crypto-play-integrity` as the sovereign-verifiable Android primitive.
+
+  ## Why
+
+  Hardware attestation has three architectural categories — see `docs/doctrine/hardware-attestation.md` § "Three architectural categories". `crypto-play-integrity` was scaffolded as a sovereign-verifiable leaf, but Google's Play Integrity API is per-app-key / network-mediated by deliberate design — verification cannot satisfy motebit's invariant of public-anchor third-party verifiability. Android Hardware-Backed Keystore Attestation IS the architecturally-correct Android primitive: device chains terminate at Google's published Hardware Attestation roots, exactly the FIDO/Apple-App-Attest pattern.
+
+  Time-sensitive: Google rotated the attestation root family between Feb 1 and Apr 10, 2026. The legacy RSA-4096 root stays valid for factory-provisioned devices; new RKP-provisioned devices switched exclusively to ECDSA P-384 after 2026-04-10. Verifiers shipping today MUST pin both — `crypto-android-keystore` does.
+
+  ## What shipped
+
+  ```text
+  @motebit/crypto-android-keystore@1.0.0  (initial release)
+    src/google-roots.ts            both Google roots pinned with SHA-256 fingerprints + source attribution
+    src/asn1.ts                    hand-rolled DER walker for the AOSP KeyDescription extension
+    src/verify.ts                  X.509 chain validation + KeyDescription constraint enforcement
+    src/index.ts                   androidKeystoreVerifier(...) factory + public types
+    src/__tests__/google-roots.test.ts   trust-anchor attestation (parse, fingerprint, validity)
+    src/__tests__/verify.test.ts         25 tests covering happy path + every rejection branch
+  ```
+
+  Verification: 28/28 tests pass; coverage 86.01% statements / 74.41% branches / 100% functions / 86.01% lines (thresholds 85/70/100/85); typecheck + lint + build clean; `check-deps`, `check-claude-md`, `check-hardware-attestation-primitives` all pass.
+
+  ## Protocol surface threading
+  - `@motebit/protocol` — adds `"android_keystore"` to `HardwareAttestationClaim.platform` union.
+  - `@motebit/wire-schemas` — adds to the zod enum + regenerates committed JSON schemas.
+  - `@motebit/crypto` — adds `androidKeystore` slot to `HardwareAttestationVerifiers` interface + dispatcher case.
+  - `@motebit/semiring` — adds `android_keystore` to the hardware-platform scoring case (same `1.0` floor as siblings).
+
+  All additive; no breaking changes. Consumers that don't emit or accept the new platform are unaffected.
+
+  ## Real-fixture coverage
+
+  Synthetic chain coverage exercises every verifier branch via in-process fabricated certs with the AOSP KeyDescription extension. A real-device fixture (matching the WebAuthn moat-claim pass) ships in a follow-up — privacy review needed because Android Keystore chains carry `verifiedBootKey` and `attestationApplicationId` data that may be device-identifying.
+
+- 950555c: Add optional `hardware_attestation_credential` field to `DeviceRegistration`.
+
+  ## Why
+
+  Phase 1 of the hardware-attestation peer flow needs an identity-metadata channel for a worker's self-issued `AgentTrustCredential` (carrying a `hardware_attestation` claim) to be discoverable by peer verifiers. The cascade-mint primitives have shipped on all five surfaces since 2026-04-19, but the credentials they produce have been inert because `/credentials/submit` rejects self-issued credentials by spec §23.
+
+  The peer-flow architecture (per `lesson_hardware_attestation_self_issued_dead_drop.md`) is: subject mints + holds; peers verify + issue. For peers to verify, they need a discovery channel for the subject's self-issued claim. The `/credentials/submit` carve-out approach was rejected on review (it reintroduces the wire shape commit `63fa2199` unwound). The right home is identity metadata: the device record carries the credential; the existing `GET /agent/:motebitId/capabilities` endpoint exposes it.
+
+  ## What shipped
+  - `DeviceRegistration` interface gains `hardware_attestation_credential?: string`. JSON-serialized signed VC. Optional — NULL/omitted preserves the existing wire format and storage shape.
+  - The persistence layer (`@motebit/persistence`) adds a `hardware_attestation_credential TEXT` column to the `devices` table via migration #33. Backwards compatible — existing rows have NULL, behave as before.
+  - The `/credentials/submit` self-issued rejection (`spec/credential-v1.md` §23, §9.1.5) is **unchanged**. The new field lives on the device record, not the credential index.
+
+  Additive optional field; consumers that don't read the field are unaffected. The change is `minor` per semver.
+
+### Patch Changes
+
+- 9923185: Rename `DEFAULT_TRUST_THRESHOLDS` → `REFERENCE_TRUST_THRESHOLDS` (additive + deprecation, no behavior change).
+
+  ## Why
+
+  `DEFAULT_TRUST_THRESHOLDS` is exported from `@motebit/protocol` — the permissive-floor layer whose rule (see `packages/protocol/CLAUDE.md` rule 1) is "types, enums, constants, deterministic math." The values (`promoteToVerified_minTasks: 5`, `demote_belowRate: 0.5`, etc.) are constants, so they technically fit, but the **name** claimed more protocol authority than they carry:
+  - The semiring algebra above (`trustAdd`, `trustMultiply`, `TRUST_LEVEL_SCORES`, `TRUST_ZERO`, `TRUST_ONE`) IS interop law — two motebit implementations MUST compute trust the same way to exchange scores across federation boundaries.
+  - The transition thresholds (when to promote an agent, when to demote) are **motebit product tuning** — a federated implementation can choose stricter or looser values and still interoperate. The scores are compared; the policy that derives them is not.
+
+  The `DEFAULT_` prefix read as "THE value every motebit implementation uses." `REFERENCE_` correctly signals "motebit's reference default; implementers MAY choose their own."
+
+  ## What shipped
+  - New export: `REFERENCE_TRUST_THRESHOLDS` from `@motebit/protocol` (identical values, clearer name)
+  - Deprecation: `DEFAULT_TRUST_THRESHOLDS` marked `@deprecated since 1.0.1, removed in 2.0.0` with pointer to the new name and the reason above
+  - Internal consumers (`@motebit/semiring`, `@motebit/market`, reference tests) migrated to the new name
+  - Parity test in `packages/protocol/src/__tests__/trust-algebra.test.ts` asserts `DEFAULT_TRUST_THRESHOLDS === REFERENCE_TRUST_THRESHOLDS` until the 2.0.0 removal, preventing silent divergence during the deprecation window
+
+  ## Impact
+
+  Zero runtime change. Third-party consumers pinned to `@motebit/protocol@1.x` keep working — the old export is re-exported as an alias. Consumers should migrate to `REFERENCE_TRUST_THRESHOLDS` at their convenience before 2.0.0. The `check-deprecation-discipline` gate (drift-defenses #39) tracks the sunset.
+
 ## 1.0.0
 
 ### Major Changes

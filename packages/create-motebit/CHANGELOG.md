@@ -1,5 +1,66 @@
 # create-motebit Changelog
 
+## 1.1.0
+
+### Minor Changes
+
+- eb843d3: `create-motebit --agent` scaffold is now actually runnable.
+
+  The published `--agent` path was structurally broken in two independent ways, both at 100% reproduction rate, both silent because release.yml's smoke test only exercised the default (identity-only) scaffold. Found in the 2026-04-25 first-time-user walkthrough of the agent path.
+
+  What was broken:
+  1. **`npm run build` failed immediately** with three TypeScript errors: `Cannot find module 'node:fs'`, `'node:path'`, `'node:child_process'`. The agent scaffold's `src/index.ts` imports Node built-ins, but the scaffold's `package.json` did not include `@types/node` in `devDependencies` and the `tsconfig.json` had no `types` array — so TypeScript couldn't resolve the type declarations and bailed before ever producing `dist/`.
+  2. **The entrypoint recursively spawned `motebit serve` forever.** `motebit serve --tools <path>` re-imports the agent's compiled entrypoint to discover tool definitions. Without a main-module guard, that re-import re-executed the spawn block at module top level, spawning another `motebit serve`, which re-imported, spawning another, recursive. 12 spawns in 8 seconds before manual kill. The agent never registered with the relay, never accepted a task, never did anything.
+
+  What changed:
+  - Added `@types/node ^22.0.0` to the agent scaffold's `devDependencies`. Build now compiles cleanly on a fresh checkout.
+  - Added a main-module guard to the rendered `src/index.ts` using `process.argv[1] === fileURLToPath(import.meta.url)`. The spawn block now fires only when the file is executed directly (`npm run dev`, `node dist/index.js`); re-importing the file as a tool source returns the default export without side effects.
+  - Updated the agent scaffold's `package.json` `verify` script to use `npx -p @motebit/verify motebit-verify motebit.md`, matching the next-steps fix already shipped for the default scaffold.
+  - Three new regression tests in `index.test.ts` assert: `@types/node` is in devDependencies, the entrypoint contains the main-module guard pattern with `execFileSync` inside the guard block, and the `verify` script uses the canonical `@motebit/verify` invocation.
+  - Extended `.github/workflows/release.yml`'s post-publish smoke to also exercise the `--agent` path: scaffolds, installs, builds, and imports `dist/index.js` as a module (the import would hang or fail without the main-module guard). The default-scaffold smoke remains as the first stage. Both stages run with isolated `MOTEBIT_CONFIG_DIR`s so the smoke can never affect a real motebit identity.
+
+  Migration: none. Existing agents already running locally are unaffected (they presumably have `@types/node` installed). The fix is purely scaffold-side.
+
+- 85fb31f: `create-motebit` refuses to clobber an existing identity in `--yes` mode without explicit `--force`.
+
+  Previously, `npx create-motebit my-agent --yes` silently overwrote the top-level fields of `~/.motebit/config.json` (`motebit_id`, `device_id`, `device_public_key`, `cli_encrypted_key`) if a motebit identity already existed there. The interactive path prompts about this; the non-interactive path did not. Discovered as gap #2 of the 2026-04-25 first-time-user walkthrough — running the CI-style smoke on a developer machine clobbered the user's real identity.
+
+  What changed:
+  - `--yes` mode now calls `assertNoExistingIdentity()` before generating; if `motebit_id` is populated in the resolved config (`MOTEBIT_CONFIG_DIR` or `~/.motebit/`), it errors with a message naming both escape hatches.
+  - New `--force` flag for explicit replacement.
+  - Error message points at `MOTEBIT_CONFIG_DIR=/tmp/foo` for isolated smoke runs and `--force` for intentional re-scaffolding.
+  - The gate applies to both the default scaffold and `--agent` mode.
+  - Interactive mode is unchanged — it already prompts the user about existing identities and that path was correct.
+
+  Three new regression tests in `index.test.ts` assert: the gate fires and the existing config file is unchanged byte-for-byte; `--force` overrides and merges the new identity over preserved non-identity fields; `--agent --yes` also enforces the gate.
+
+  Migration: automation that relied on `--yes` silently overwriting must add `--force`. CI smokes that run in fresh containers (no pre-existing config) are unaffected — release.yml's smoke test path is one such consumer and continues to work without changes.
+
+  Also: the scaffold's "Next steps" output now points users at `npx -p @motebit/verify motebit-verify motebit.md` (gap #4 from the same walkthrough — the unscoped `npx motebit-verify` returns 404 because the package is published as `@motebit/verify`).
+
+### Patch Changes
+
+- 16e450b: `create-motebit` scaffold polish — READMEs, prestart safety, agent verify next-step.
+
+  **Bump level**: patch. Each item here is a repair (the `npm start` clean-checkout failure, the agent next-steps inconsistency, the default-scaffold's verify-script invocation pointing at a non-canonical path) plus the README addition which the doctrine explicitly classifies as patch-shaped ("doc, comment, README, or test changes"). The package's eventual published version still becomes `create-motebit@1.1.0` — the `--force` changeset shipped earlier in the same release train is the load-bearing minor; this changeset rides that bump without manufacturing a second one.
+
+  Three smaller gaps from the 2026-04-25 first-time-user walkthroughs (default + agent paths) batched into one polish pass:
+
+  **Gap #5 / #A5 — both scaffolds now write a `README.md`.** The "Next steps" output only existed on stdout; closing the terminal lost the instructions. The README is the durable record. Includes the canonical verify commands, the directory contents, the relay-auth model, and pointers to docs + the-stack-one-layer-up doctrine.
+
+  **Gap #A6 — agent scaffold's `package.json` adds a `prestart: "tsc"` hook.** Running `npm start` on a clean checkout used to bail with `Cannot find module dist/index.js`. The prestart hook makes `npm start` build first automatically — npm's canonical pattern for "build before start." `start` itself stays a single-line `node dist/index.js` invocation suitable for production runners that pre-build separately.
+
+  **Gap #A7 — agent scaffold's "Next steps" output adds a `npm run verify` line.** Default scaffold included this; agent scaffold dropped it. New users had no canonical pointer to verify the agent's `motebit.md` signature before putting it on the network. Now both paths are consistent.
+
+  **Default scaffold's `verify` script** also updated to use `npx -p @motebit/verify motebit-verify motebit.md` (matching the agent scaffold and the next-steps output already updated in the previous commit). Replaces the previous `npx create-motebit verify motebit.md` — both work, but the canonical CLI invocation is what users see in next-steps and READMEs everywhere else.
+
+  Three new regression tests:
+  - `default scaffold writes a README documenting verify commands and motebit_id`
+  - `agent scaffold writes a README and includes prestart for npm start safety`
+  - `agent scaffold's next-steps output includes a verify step`
+
+  48/48 create-motebit tests pass. End-to-end verified locally: scaffold, install, build, verify, run all clean.
+
 ## 1.0.0
 
 ### Major Changes
