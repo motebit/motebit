@@ -67,6 +67,25 @@ interface CapabilitiesResponse {
   }>;
 }
 
+interface ValidAttestationEntry {
+  readonly device_id: string;
+  readonly public_key: string;
+  readonly hardware_attestation_credential?: string;
+}
+
+function isValidAttestationEntry(entry: unknown): entry is ValidAttestationEntry {
+  if (entry == null || typeof entry !== "object") return false;
+  const e = entry as Record<string, unknown>;
+  if (typeof e.device_id !== "string" || typeof e.public_key !== "string") return false;
+  if (
+    e.hardware_attestation_credential !== undefined &&
+    typeof e.hardware_attestation_credential !== "string"
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Build a `HardwareAttestationFetcher` that hits `GET /agent/:id/capabilities`
  * on the configured relay and returns the `hardware_attestations` array.
@@ -121,28 +140,13 @@ export function createRelayCapabilitiesFetcher(
     const raw = body.hardware_attestations;
     if (!Array.isArray(raw)) return [];
 
-    const out: Array<{
-      device_id: string;
-      public_key: string;
-      hardware_attestation_credential?: string;
-    }> = [];
-    for (const entry of raw) {
-      if (
-        entry == null ||
-        typeof entry !== "object" ||
-        typeof entry.device_id !== "string" ||
-        typeof entry.public_key !== "string"
-      ) {
-        continue;
-      }
-      const cred =
-        typeof entry.hardware_attestation_credential === "string"
-          ? entry.hardware_attestation_credential
-          : undefined;
+    const out: ValidAttestationEntry[] = [];
+    for (const entry of raw as ReadonlyArray<unknown>) {
+      if (!isValidAttestationEntry(entry)) continue;
       out.push({
         device_id: entry.device_id,
         public_key: entry.public_key,
-        hardware_attestation_credential: cred,
+        hardware_attestation_credential: entry.hardware_attestation_credential,
       });
     }
     return out;
