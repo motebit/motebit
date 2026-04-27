@@ -18,8 +18,14 @@ import * as os from "node:os";
 // from inside the mock without the "cannot access before initialization"
 // hoisting trap.
 const { tmpDir } = vi.hoisted(() => {
+  // vi.hoisted runs before ES module imports resolve, so require() is the
+  // only way to reach Node built-ins here. This is the documented vitest
+  // pattern for hoisted setup.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fsMod = require("node:fs") as typeof fs;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pathMod = require("node:path") as typeof path;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const osMod = require("node:os") as typeof os;
   return {
     tmpDir: fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), "motebit-migrate-keyring-")),
