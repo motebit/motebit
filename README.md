@@ -73,7 +73,8 @@ Create an agent that joins the network and earns from delegated tasks:
 ```bash
 npm create motebit@latest my-agent -- --agent
 cd my-agent && npm install
-# set MOTEBIT_SYNC_URL and MOTEBIT_API_TOKEN in .env
+# set MOTEBIT_PASSPHRASE (required to decrypt the signing key at runtime),
+# plus MOTEBIT_SYNC_URL and MOTEBIT_API_TOKEN, in .env
 npm run dev
 ```
 

@@ -272,7 +272,7 @@ motebit_id: ${motebitId}
 
 \`\`\`bash
 npm install
-cp .env.example .env     # edit relay URL + (optional) API token
+cp .env.example .env     # set MOTEBIT_PASSPHRASE (required) + relay URL + (optional) API token
 npm run dev              # build + start the agent server
 \`\`\`
 
@@ -284,7 +284,7 @@ src/index.ts       Entrypoint — starts the agent server (guarded main-module)
 src/tools.ts       Tools — what your agent can do
 tsconfig.json      TypeScript config (Node16, ES2022, strict)
 package.json       Scripts: build, dev, start, self-test, verify
-.env.example       Relay URL + (optional) API token + identity passphrase
+.env.example       MOTEBIT_PASSPHRASE (required), relay URL, (optional) API token
 \`\`\`
 
 ## Scripts
@@ -343,10 +343,18 @@ function makeAgentPackageJson(name: string): string {
       // it just work. Keeps `start` itself a single-line invocation
       // suitable for production runners that pre-build separately.
       prestart: "tsc",
-      start: "node dist/index.js",
-      dev: "tsc && node dist/index.js",
+      // `--env-file=.env` (Node ≥ 20.6 native, no dependency) is what makes
+      // `cp .env.example .env && npm run dev` actually work end-to-end.
+      // Without it, MOTEBIT_PASSPHRASE in .env would be a wallpaper file —
+      // the runtime never reads it, decrypt fails, motebit_task disabled.
+      // The scaffold's whole onboarding chain (.env.example → .env → runtime
+      // decrypt) hinges on this flag being present. If a user skips the
+      // `cp` step, node errors clearly: "Cannot read /path/.env: no such
+      // file or directory" — informative failure, not silent decrypt-fail.
+      start: "node --env-file=.env dist/index.js",
+      dev: "tsc && node --env-file=.env dist/index.js",
       verify: "npx -p @motebit/verify motebit-verify motebit.md",
-      "self-test": "tsc && node dist/index.js --self-test",
+      "self-test": "tsc && node --env-file=.env dist/index.js --self-test",
     },
     dependencies: {
       "@motebit/sdk": `^${__SDK_VERSION__}`,
@@ -360,6 +368,13 @@ function makeAgentPackageJson(name: string): string {
       // them across an npx-installed scaffold target.
       "@types/node": "^22.0.0",
       typescript: "^5.7.0",
+    },
+    // Node ≥ 20.6 for the native `--env-file=.env` flag the dev/start/
+    // self-test scripts rely on. Older Node lacks the flag and fails with
+    // `unknown or unexpected option`. npm warns the user at install time
+    // when their Node is below this floor — clearer than a runtime error.
+    engines: {
+      node: ">=20.6.0",
     },
   };
   return JSON.stringify(pkg, null, 2) + "\n";
@@ -544,16 +559,19 @@ function makeAgentTsconfig(): string {
 }
 
 function makeAgentEnvExample(): string {
-  return `# Relay URL — defaults to the public relay if unset.
+  return `# REQUIRED — the same passphrase you set during \`npm create motebit\`.
+# Used at runtime to decrypt your agent's signing key. Without it, the
+# agent boots but the \`motebit_task\` tool stays disabled (decrypt-failed).
+# This file is gitignored; never commit a filled-in copy.
+MOTEBIT_PASSPHRASE=
+
+# Relay URL — defaults to the public relay if unset.
 # Override to point at your own relay or a federation peer.
 MOTEBIT_SYNC_URL=https://relay.motebit.com
 
 # API token — only required to accept paid tasks.
 # Anonymous agents can register and serve for free.
 MOTEBIT_API_TOKEN=
-
-# Identity passphrase (set during creation)
-MOTEBIT_PASSPHRASE=
 
 # Optional: AI provider (for non-direct mode)
 # ANTHROPIC_API_KEY=sk-ant-...
@@ -720,7 +738,9 @@ async function agentScaffold(
   }
   console.log(`    npm install`);
   console.log(`    npm run verify           ${dim("# Verify your agent's identity signature")}`);
-  console.log(`    cp .env.example .env     ${dim("# add your relay URL and API token")}`);
+  console.log(
+    `    cp .env.example .env     ${dim("# set MOTEBIT_PASSPHRASE (required), relay URL, API token")}`,
+  );
   console.log(`    npm run dev              ${dim("# build + start the agent")}`);
   console.log();
   console.log(`  ${bold("Your agent is a body, not a document.")}`);

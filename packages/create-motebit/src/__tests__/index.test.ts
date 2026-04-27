@@ -275,7 +275,13 @@ describe("create-motebit", () => {
 
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
     expect(pkg.scripts.prestart).toBe("tsc");
-    expect(pkg.scripts.start).toBe("node dist/index.js");
+    // `--env-file=.env` is what loads MOTEBIT_PASSPHRASE from .env at runtime.
+    // Without it, the scaffolded onboarding chain (.env.example → .env →
+    // decrypt) silently breaks: the file exists, contains the right value,
+    // but the node process never reads it. See package.json template comment.
+    expect(pkg.scripts.start).toBe("node --env-file=.env dist/index.js");
+    expect(pkg.scripts.dev).toBe("tsc && node --env-file=.env dist/index.js");
+    expect(pkg.engines?.node).toBe(">=20.6.0");
   });
 
   it("agent scaffold's next-steps output includes a verify step", () => {
