@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-55 invariants are enforced today. 46 run as hard CI gates via `pnpm check` (proven effective by `check-gates-effective`); one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
+56 invariants are enforced today. 47 run as hard CI gates via `pnpm check` (proven effective by `check-gates-effective`); one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
 
 ## Inventory
 
@@ -69,6 +69,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 | 53  | `__<NAME>_VERSION__` constants in `tsup.config.ts` ↔ workspace package implied by `<NAME>` (catches the misnamed-constant class that broke create-motebit@1.1.0)                                                                                                                                                                                                                                                                 | `check-tsup-define-conventions.ts`                             | 2026-04-27 |
 | 54  | Backtick-anchored `motebit <subcommand> [<sub>]` in any README.md / CLAUDE.md / docs MDX page ↔ real dispatch arm at the top level (apps/cli/src/index.ts) and child level (inline `Xcmd === "Y"` or apps/cli/src/subcommands/\*.ts `subCmd === "Y"`); catches fabricated CLI invocations (`motebit pair`), obsolete flag-vs-subcommand shapes (`motebit --serve`), and fabricated child commands (`motebit federation fakecmd`) | `check-docs-cli-claims.ts`                                     | 2026-04-27 |
 | 55  | Backtick-anchored `/<slash-command>` in any README.md / CLAUDE.md / docs MDX page (excluding apps/{desktop,mobile}.mdx, which document surface-native GUI registries) ↔ real `{ usage: "/X…" }` entry in `apps/cli/src/args.ts` COMMANDS array; sibling to invariant #54 closing the same shape for the REPL slash surface                                                                                                       | `check-docs-slash-claims.ts`                                   | 2026-04-27 |
+| 56  | Default-context Claude model literal in any README.md / CLAUDE.md / docs MDX page (`"default_model": "X"`, `--model X`, `Default model: X`, `Examples: ... \`X\``) ↔ canonical default extracted from the `defaultModel`ternary in`apps/cli/src/args.ts`; catches the stale-default class that drifted four places when sonnet-4-5 → sonnet-4-6                                                                                  | `check-docs-default-models.ts`                                 | 2026-04-27 |
 
 ## Incident histories
 

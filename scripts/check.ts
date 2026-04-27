@@ -239,6 +239,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-docs-slash-claims",
   },
   {
+    name: "check-docs-default-models",
+    defends:
+      'every default-context Claude model literal in any README.md / CLAUDE.md / docs MDX page (`"default_model": "X"` JSON, `--model X` CLI flag, `Default model: X` / `Examples: ... \\`X\\`` prose) matches the canonical default extracted from the `defaultModel` ternary in apps/cli/src/args.ts; defends against the stale-model-literal class that drifted four places after the 2026-04 sonnet-4-5 → sonnet-4-6 bump (invariant #56, full history in docs/drift-defenses.md)',
+    script: "check-docs-default-models",
+  },
+  {
     name: "check-license-doc-sync",
     defends:
       "every workspace package.json declares a SPDX-canonical license (Apache-2.0 or BUSL-1.1) and the permissive-floor membership agrees across LICENSING.md (table + quick reference) and CONTRIBUTING.md; the canonical truth is the package.json license field, the prose surfaces are the siblings (invariant #52, full history in docs/drift-defenses.md)",

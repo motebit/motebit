@@ -482,6 +482,20 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-docs-default-models",
+    proves:
+      "flags a stale Claude default-model literal in any in-scope doc — the exact 2026-04-27 incident where docs pinned `claude-sonnet-4-5-20250929` after the production default in apps/cli/src/args.ts moved to `claude-sonnet-4-6`",
+    perturb: () =>
+      // Write a probe README pinning the previous Sonnet model in a
+      // default-context shape (`default_model: "claude-sonnet-4-5-20250929"`).
+      // The gate should fire with `stale: claude-sonnet-4-5-...; canonical:
+      // claude-sonnet-4-6`. writeFixture cleans the file up after the probe.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}README.md`,
+        `# Probe README\n\nSet \`default_model: "claude-sonnet-4-5-20250929"\` to pin the previous default.\n`,
+      ),
+  },
+  {
     script: "check-license-doc-sync",
     proves:
       "flags a permissive-package directory present in the canonical license-field-derived set but missing from CONTRIBUTING.md's § License permissive-floor list",
