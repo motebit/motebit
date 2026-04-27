@@ -3,15 +3,15 @@ title: Public surface
 description: What motebit promises stability for, what it doesn't, and where the boundary is drawn.
 ---
 
-Motebit is a protocol-first project. The protocol specs are the canonical integration surface; the published npm packages are supported convenience surfaces over that protocol. 12 packages publish at `1.0.0`; everything else in the monorepo is workspace-internal and carries no version surface to claim. This page names the boundary explicitly so a reader can tell, at a glance, what they can build against.
+Motebit is a protocol-first project. The protocol specs are the canonical integration surface; the published npm packages are supported convenience surfaces over that protocol. 12 packages publish from this monorepo and version independently on their own merit; everything else in the monorepo is workspace-internal and carries no version surface to claim. This page names the boundary explicitly so a reader can tell, at a glance, what they can build against.
 
 ## Three layers
 
-| Layer | License | What | Public promise |
-|---|---|---|---|
-| Math / format | Apache-2.0 | Types, primitives, canonical forms, semiring algebra | Yes — third parties build against this |
-| Judgment / engine | BSL-1.1 | The actual algorithms — market, semiring, runtime, mcp-server, memory-graph, … | **No.** Source-available so you can read or fork; not stabilized for direct consumption |
-| Accumulated state | Private | Trust graph, federation routes, signed audit ledger | Never licensed |
+| Layer             | License    | What                                                                           | Public promise                                                                          |
+| ----------------- | ---------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Math / format     | Apache-2.0 | Types, primitives, canonical forms, semiring algebra                           | Yes — third parties build against this                                                  |
+| Judgment / engine | BSL-1.1    | The actual algorithms — market, semiring, runtime, mcp-server, memory-graph, … | **No.** Source-available so you can read or fork; not stabilized for direct consumption |
+| Accumulated state | Private    | Trust graph, federation routes, signed audit ledger                            | Never licensed                                                                          |
 
 The three-layer split is doctrine, not preference. It's what lets the protocol stay open while the implementation stays free to refactor.
 

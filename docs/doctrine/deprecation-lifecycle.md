@@ -89,13 +89,13 @@ When a deprecated symbol reaches its `removed in` version, `migration-cleanup.md
 
 The two doctrines compose: addition writes the contract that future removal relies on.
 
-## Fixed-group coordination
+## Cross-package coordination
 
-Motebit publishes seven packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/verifier`, `@motebit/verify`, `create-motebit`, `motebit`) as a **fixed release group** — they bump together. This shapes deprecation mechanics:
+Motebit publishes 12 packages, each versioning independently on its own merit (see [release-versioning](release-versioning.md)). This shapes deprecation mechanics:
 
-- **Every deprecation within the fixed group sunsets at the same major.** A `removed in 2.0.0` on `@motebit/sdk` means the removal happens when all seven hit 2.0.0 — one coordinated release, not seven independent ones.
-- **Cross-package replacements are valid.** Deprecating `X` in `@motebit/sdk` in favor of `Y` in `@motebit/verifier` works; consumers migrate imports in the same coordinated major.
-- **Non-fixed-group packages deprecate independently.** `@motebit/wire-schemas`, `@motebit/runtime`, etc. can deprecate at any minor; they only cross-coordinate when their API is referenced from a fixed-group package.
+- **`removed in <version>` is scoped to the package it annotates.** A `removed in 2.0.0` on `@motebit/sdk` means the removal happens when `@motebit/sdk` itself reaches 2.0.0 — not when other packages do. Each package's own major is its own commitment.
+- **Cross-package replacements are valid but require explicit synchronization.** Deprecating `X` in `@motebit/sdk` in favor of `Y` in `@motebit/verifier` works, but the migration window depends on **both** packages' release cadences. Document the assumed minimum versions of both replacement and deprecator in the `@deprecated` annotation.
+- **Workspace-private packages deprecate without a public window.** `@motebit/runtime`, `@motebit/wire-schemas`, etc. (the 51 `0.0.0-private` packages) carry no semver claim, so deprecation discipline only applies where their behavior is observable through a published-package surface.
 
 ## BSL Change Date as implicit sunset ceiling
 

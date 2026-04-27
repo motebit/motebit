@@ -132,9 +132,20 @@ function deriveCanonical(): CanonicalCounts {
 type CountKey = keyof CanonicalCounts;
 
 interface Probe {
-  /** Regex must capture exactly one `(\d+)` group. */
+  /**
+   * Regex must capture either:
+   *   - one `(\d+)` group when `kind` is `"single"` or omitted, or
+   *   - two `(\d+)` groups whose **sum** equals the canonical count when `kind` is `"sum"`.
+   *
+   * The `"sum"` shape exists because compositional prose claims of the form
+   * `"5 surfaces + 4 supporting apps"` were the last drift class this gate
+   * could not express: `apps` total drifted from 8 → 9 when `apps/vscode`
+   * landed, and `5 + 3 = 8` stayed legal in prose because neither digit
+   * alone equalled `9`.
+   */
   regex: RegExp;
   key: CountKey;
+  kind?: "single" | "sum";
   /** Optional human label for the failure message. */
   label?: string;
 }
@@ -175,9 +186,15 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Links list",
       },
       {
-        regex: /\*\*(\d+) npm packages publish at `1\.0\.0`\*\*/,
+        regex: /\*\*(\d+) npm packages publish from this monorepo\*\*/,
         key: "publishedTotal",
         label: "Verify-and-integrate published-count",
+      },
+      {
+        regex: /(\d+) surfaces \+ (\d+) supporting apps · 1 relay/,
+        key: "apps",
+        kind: "sum",
+        label: "Architecture banner — surfaces + supporting apps",
       },
       {
         regex: /— (\d+) Apache-2\.0 \(the permissive floor, with an explicit patent grant\)/,
@@ -210,11 +227,6 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Versioning section BSL count",
       },
       {
-        regex: /All (\d+) are at `1\.0\.0`/,
-        key: "publishedTotal",
-        label: "Versioning section 'All N at 1.0.0'",
-      },
-      {
         regex: /^The (\d+) workspace-private packages/m,
         key: "privatePackages",
         label: "Versioning section private-count",
@@ -231,6 +243,12 @@ const DOCS: ReadonlyArray<DocFile> = [
     probes: [
       { regex: /(\d+) packages on a 7-layer DAG/, key: "packages", label: "Architecture line" },
       { regex: /(\d+) open protocol specs/, key: "specs", label: "Architecture line" },
+      {
+        regex: /(\d+) surfaces \+ (\d+) supporting apps, (?:\d+) services/,
+        key: "apps",
+        kind: "sum",
+        label: "Architecture line — surfaces + supporting apps",
+      },
     ],
   },
   {
@@ -242,6 +260,12 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Shape banner",
       },
       { regex: /(\d+) open specs\*\*/, key: "specs", label: "Shape banner" },
+      {
+        regex: /(\d+) surfaces \+ (\d+) supporting apps · (?:\d+) services/,
+        key: "apps",
+        kind: "sum",
+        label: "Shape banner — surfaces + supporting apps",
+      },
     ],
   },
   {
@@ -278,7 +302,7 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Permissive-floor list intro",
       },
       {
-        regex: /The (\d+) packages all currently sit at `1\.0\.0`/,
+        regex: /All (\d+) packages started at `1\.0\.0`/,
         key: "publishedTotal",
         label: "Coordinated-release sentence",
       },
@@ -288,7 +312,7 @@ const DOCS: ReadonlyArray<DocFile> = [
     path: "apps/docs/content/docs/concepts/public-surface.mdx",
     probes: [
       {
-        regex: /(\d+) packages publish at `1\.0\.0`/,
+        regex: /(\d+) packages publish from this monorepo/,
         key: "publishedTotal",
         label: "Lead — published total",
       },
@@ -370,7 +394,11 @@ function main(): void {
         continue;
       }
       probesRun += 1;
-      const claimed = parseInt(m[1] ?? "0", 10);
+      const kind = probe.kind ?? "single";
+      const claimed =
+        kind === "sum"
+          ? parseInt(m[1] ?? "0", 10) + parseInt(m[2] ?? "0", 10)
+          : parseInt(m[1] ?? "0", 10);
       const actual = canonical[probe.key];
       if (claimed !== actual) {
         drifts.push({

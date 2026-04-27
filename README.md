@@ -138,24 +138,27 @@ motebit federation peers               # List active peers
 
 One command peers two relays. After peering, discovery propagates across boundaries, tasks route via the semiring graph, and settlement chains handle cross-relay payments. Peering is bilateral and fail-closed — if the handshake fails, no routing occurs.
 
+Today the only production peer is `relay.motebit.com`. Cross-cloud federation is validated end-to-end against motebit-operated staging peers (`motebit-sync-stg`, `motebit-sync-stg-b`); a third-party operator joining the network is the next milestone, not a shipped fact.
+
 ## Surfaces
 
-| Surface     | Status | Entry point                                             |
-| ----------- | ------ | ------------------------------------------------------- |
-| **Web**     | Live   | [motebit.com](https://motebit.com)                      |
-| **CLI**     | Live   | `npm install -g motebit`                                |
-| **Desktop** | Live   | [Releases](https://github.com/motebit/motebit/releases) |
-| **Mobile**  | Live   | Expo build                                              |
-| **Spatial** | Proto  | WebXR                                                   |
+| Surface     | Status | Entry point                                                    |
+| ----------- | ------ | -------------------------------------------------------------- |
+| **Web**     | Live   | [motebit.com](https://motebit.com)                             |
+| **CLI**     | Live   | `npm install -g motebit`                                       |
+| **Desktop** | Live   | [Releases](https://github.com/motebit/motebit/releases)        |
+| **Mobile**  | Source | Expo (`pnpm --filter @motebit/mobile run ios` / `run android`) |
+| **Spatial** | Proto  | WebXR                                                          |
 
 Each surface maximizes what its platform offers. Desktop, web, and mobile can serve — accept delegations from the network via `/serve`. The CLI operates and serves. Spatial embodies.
 
 ### Supporting apps
 
-Two additional apps ship alongside the five surfaces and play narrower roles:
+Three additional apps ship alongside the five surfaces and play narrower roles:
 
 - **Identity viewer** (`apps/identity`) — static browser tool for dropping a `motebit.md` identity file and inspecting the parsed profile card (motebit ID, devices, governance, signed succession). Zero workspace dependencies, public-facing reference implementation of the identity spec.
 - **Admin dashboard** (`apps/admin`) — React/Vite operator console for monitoring a running relay in real time (state, memory graph, event log, tool audit, gradient, trust ledger). Internal tool — operators run it locally against their relay; not deployed as a public surface.
+- **VS Code / Cursor extension** (`apps/vscode`) — `motebit.yaml` validation, hover, and completion. Thin shim that spawns `motebit lsp` over stdio, so the language server ships with the CLI itself.
 
 ## Verify & integrate
 
@@ -177,7 +180,7 @@ if (result.type === "receipt" && result.valid) {
 }
 ```
 
-Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). **12 npm packages publish at `1.0.0`** — 11 Apache-2.0 (the permissive floor, with an explicit patent grant) and 1 BSL-1.1 (the reference runtime):
+Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). **12 npm packages publish from this monorepo** — 11 Apache-2.0 (the permissive floor, with an explicit patent grant) and 1 BSL-1.1 (the reference runtime). Current versions are the badge values above and on each row's npm link:
 
 | Package                                                                                              | Description                                                                                              | License    |
 | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- |
@@ -198,13 +201,13 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 ## Architecture
 
-**47 packages across 7 architectural layers · 5 surfaces + 3 supporting apps · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
+**47 packages across 7 architectural layers · 5 surfaces + 4 supporting apps · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
 
 **The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.
 
 **Packages** ([`packages/`](packages/)) — 47 packages on a strict layer DAG. Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
 
-**Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and three supporting (`admin` dashboard, `identity` viewer, `docs` site).
+**Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and four supporting (`admin` dashboard, `identity` viewer, `docs` site, `vscode` extension).
 
 **Marketplace** ([`services/`](services/)) — 8 services in four roles:
 
@@ -244,6 +247,19 @@ privacy:
 
 Beyond these fields: registered devices, memory parameters, optional organizational guardian ([spec](spec/identity-v1.md) §3.3), and key succession history ([spec](spec/identity-v1.md) §3.8). Verify any file with `@motebit/crypto`, no relay required.
 
+## Before you adopt
+
+Motebit is a working protocol and a runnable runtime, but it is not a managed service. A few things to know before depending on it:
+
+- **One operator today.** `relay.motebit.com` is the only production federation peer. Cross-cloud federation is validated end-to-end against motebit-operated staging peers — there is no third-party operator yet. If you run your own relay, you are extending the network, not joining a polycentric one.
+- **No consumer key recovery.** Identity is an Ed25519 keypair you hold. Lose the key and lose the identity (succession requires the prior key to sign the rotation). Enterprise key recovery is an opt-in `guardian` field on the identity file ([spec §3.3](spec/identity-v1.md)) — it is not the default.
+- **Ed25519 today, cryptosuite-agile by design.** Every signed artifact carries an explicit `suite` on the wire. Post-quantum migration (ML-DSA, SLH-DSA) is a registry addition in `@motebit/protocol` plus a dispatch arm in `@motebit/crypto` — not a wire-format break. There is no PQ suite shipped today.
+- **BSL boundary on the runtime.** The 11 Apache-2.0 packages can be used for any purpose, including running a hosted service. The BSL-1.1 `motebit` package is free for personal, educational, research, and internal-business use; offering it as a hosted service or bundling it into a commercial product requires a commercial license. Each BSL version converts to Apache-2.0 four years after release ([LICENSING.md](LICENSING.md)).
+- **Settlement is your jurisdiction's problem.** `--pay-to-address` and the Stripe on-ramp move real money. Tax, AML, and consumer-protection compliance are entirely on the operator running the relay or the agent accepting paid tasks.
+- **Federation is bilateral and fail-closed by design.** Peering with another relay is a deliberate handshake; a misconfigured peer does not silently route. That is the design — it also means there is no automatic peer discovery.
+
+The protocol surface (specs + Apache-2.0 packages) makes a stronger stability promise than the runtime surface (BSL `motebit` CLI). Build against the protocol if you can; consume the runtime if you want the operator console without writing one.
+
 ## Development
 
 ```bash
@@ -256,7 +272,7 @@ pnpm run lint          # Lint all packages
 
 ## Versioning
 
-12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime, with the CLI as its primary surface). All 12 are at `1.0.0`. Breaking changes to any of their public surfaces require a major bump.
+12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime, with the CLI as its primary surface). They version independently on their own merit (`updateInternalDependencies: "patch"`, no fixed or linked groups). Breaking changes to a package's public surface require a major bump on that package.
 
 The 51 workspace-private packages — `@motebit/runtime`, `@motebit/api`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
 
