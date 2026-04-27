@@ -454,6 +454,21 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-license-doc-sync",
+    proves:
+      "flags a permissive-package directory present in the canonical license-field-derived set but missing from CONTRIBUTING.md's § License permissive-floor list",
+    perturb: () =>
+      // Drop `packages/crypto-android-keystore/` from CONTRIBUTING.md's
+      // permissive-floor inline list — the exact 2026-04-26 drift the
+      // gate was built to catch. The package's package.json declares
+      // license: "Apache-2.0" so the canonical set still contains it;
+      // the prose siblings should match. Direction: missing-from-prose
+      // fires `missing entry: packages/crypto-android-keystore`.
+      mutateFile("CONTRIBUTING.md", (src) =>
+        src.replace("`packages/crypto-android-keystore/`, ", ""),
+      ),
+  },
+  {
     script: "check-scene-primitives",
     proves:
       "flags an inline scene primitive in an app — imports `three` AND registers a SpatialExpression kind outside @motebit/render-engine",
