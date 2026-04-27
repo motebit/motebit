@@ -29,11 +29,13 @@ pnpm run test
 ### Project structure
 
 ```
-apps/           Desktop (Tauri), CLI, Mobile (Expo), Web, Admin, Spatial
-packages/       Shared libraries (runtime, crypto, identity, persistence, etc.)
-services/       Backend services (sync relay, web-search)
-spec/           Open specifications (identity-v1.md)
+apps/        9 surfaces and supporting apps (web, cli, desktop, mobile, spatial, admin, identity, docs, vscode)
+packages/    47 packages on a 7-layer DAG enforced by `pnpm check-deps`
+services/    8 backend services (1 relay + 2 molecules + 4 atoms + 1 glue)
+spec/        21 open specifications, each `motebit/<name>@1.0`
 ```
+
+Full directory tree, package roles, and layer breakdown live in [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (the canonical source — gated by `check-docs-tree`).
 
 ### Common commands
 
@@ -42,9 +44,17 @@ pnpm run build              # Build all packages
 pnpm run test               # Test all packages
 pnpm run typecheck          # Type-check all packages
 pnpm run lint               # Lint all packages
+pnpm check                  # Run every hard CI gate (43 drift defenses)
 pnpm --filter <pkg> build   # Build a single package
 pnpm --filter <pkg> test    # Test a single package
 ```
+
+### Before submitting a PR
+
+- Run `pnpm check` locally — this is the same set of hard drift defenses CI enforces. If it fails, CI will too.
+- Add a changeset (see below) if your PR touches a published-package path.
+- Read [`CLAUDE.md`](CLAUDE.md) and the relevant per-directory `CLAUDE.md` files. Motebit is doctrine-driven; the `## Principles` section names invariants that, if violated, break CI or the architecture.
+- A pre-commit hook runs `prettier` on staged files and requires a changeset entry for changes under any published-package path. This is normal — write the changeset.
 
 ## Pull requests
 
@@ -56,7 +66,7 @@ pnpm --filter <pkg> test    # Test a single package
 
 ### Changesets
 
-We use [Changesets](https://github.com/changesets/changesets) to manage versions and changelogs for published packages. If your PR affects any published package (`@motebit/sdk`, `@motebit/crypto`, `create-motebit`, or `motebit`), add a changeset:
+We use [Changesets](https://github.com/changesets/changesets) to manage versions and changelogs for published packages. If your PR affects any published package — the canonical list lives in `.changeset/config.json` (the `ignore` field inverts to the published set; today there are 12: 11 Apache-2.0 packages + the `motebit` BSL runtime) — add a changeset:
 
 ```bash
 pnpm changeset
@@ -74,7 +84,7 @@ The tool creates a markdown file in `.changeset/` — commit it with your PR. Wh
 
 ### Commit messages
 
-Write clear, descriptive commit messages. Start with a verb: `Fix`, `Add`, `Update`, `Remove`, `Refactor`. Keep the first line under 72 characters.
+We follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <subject>` on the first line, under 72 characters. Common types: `fix`, `feat`, `docs`, `chore`, `refactor`, `test`. Scope is usually the package or area (`fix(cli):`, `feat(market):`, `docs(trademark):`). Recent commits in `git log` are the working examples.
 
 ## What we're not accepting yet
 
@@ -84,10 +94,13 @@ We're in early development. Large architectural changes or new packages will lik
 
 - TypeScript throughout, strict mode
 - Tests in `src/__tests__/` using vitest
-- Error handling: `catch (err: unknown) { const msg = err instanceof Error ? err.message : String(err); }`
-- No secrets in code -- OS keyring or environment variables only
+- Error rethrows: `throw new Error("description", { cause: err })`
+- Error messages: `err instanceof Error ? err.message : String(err)`
+- No secrets in code — OS keyring or environment variables only
 - Prefer editing existing files over creating new ones
-- No unnecessary abstractions -- three similar lines is better than a premature helper
+- No unnecessary abstractions — three similar lines is better than a premature helper
+
+The full set of conventions lives in [`CLAUDE.md`](CLAUDE.md) § "Conventions".
 
 ## Contributor License Agreement
 

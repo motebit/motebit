@@ -294,6 +294,41 @@ const DOCS: ReadonlyArray<DocFile> = [
       },
     ],
   },
+  {
+    path: "CONTRIBUTING.md",
+    probes: [
+      {
+        regex: /apps\/\s+(\d+) surfaces and supporting apps/,
+        key: "apps",
+        label: "Project structure — apps count",
+      },
+      {
+        regex: /packages\/\s+(\d+) packages on a 7-layer DAG/,
+        key: "packages",
+        label: "Project structure — packages count",
+      },
+      {
+        regex: /services\/\s+(\d+) backend services/,
+        key: "services",
+        label: "Project structure — services count",
+      },
+      {
+        regex: /spec\/\s+(\d+) open specifications/,
+        key: "specs",
+        label: "Project structure — specs count",
+      },
+      {
+        regex: /today there are (\d+): (?:\d+) Apache-2\.0 packages \+ the `motebit` BSL runtime/,
+        key: "publishedTotal",
+        label: "Changesets — published total",
+      },
+      {
+        regex: /there are \d+: (\d+) Apache-2\.0 packages \+ the `motebit` BSL runtime/,
+        key: "publishedApache",
+        label: "Changesets — Apache count",
+      },
+    ],
+  },
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────
