@@ -1,5 +1,16 @@
 # @motebit/verifier
 
+## 1.0.1
+
+### Patch Changes
+
+- Updated dependencies [a428cf9]
+- Updated dependencies [26f38c4]
+- Updated dependencies [8405782]
+- Updated dependencies [9923185]
+- Updated dependencies [9858c14]
+  - @motebit/crypto@1.1.0
+
 ## 1.0.0
 
 ### Major Changes

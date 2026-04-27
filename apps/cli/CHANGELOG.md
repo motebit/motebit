@@ -1,5 +1,267 @@
 # motebit CLI Changelog
 
+## 1.0.1
+
+### Patch Changes
+
+- bda4de1: First-run UX repair: canonical signing-key resolver + actionable doctor probes.
+
+  ## Why
+
+  A live walkthrough of the golden path (`fund → delegate → settle`) on a real install surfaced that the CLI fails silently on every common first-run gap:
+  - `~/.motebit/config.json` with no `cli_encrypted_key` (clobber, partial setup, fresh install) → `motebit balance` errors with "no relay URL", `motebit wallet` errors with "No private key found", `motebit fund` never gets that far. None of these messages tell the user what to do.
+  - Identity not registered with the relay (`/agent/{id}/capabilities` → 404) → discovery, peer-trust pulls, and capability advertisement silently miss the user. Doctor reports all-ok.
+  - `sync_url` missing from config → every economic flow short-circuits before its first network call. Doctor reports all-ok.
+  - The same `if (config.cli_encrypted_key) { try / catch passphrase decrypt }` block was inlined across **five** call sites (register, daemon × 2, \_helpers, wallet) with subtly different error handling and prompt labels. Future contributors had no guard against adding a sixth.
+
+  None of this was hypothetical — it's exactly what a live `motebit doctor; motebit fund 1.00` run produced on a real installed identity that had been through the 2026-04-25 config-clobber-refusal flow (`85fb31f0`).
+
+  ## What ships
+
+  ### `loadActiveSigningKey(config, options?)` — canonical signing-key resolver
+
+  `apps/cli/src/identity.ts`. Single read site for `cli_encrypted_key` and the deprecated `cli_private_key`. Replaces five inline blocks; wires register, daemon (× 2), `getRelayAuthHeaders`, and `motebit wallet` through one helper.
+
+  Resolution order:
+
+  ```text
+  1. cli_encrypted_key — passphrase from MOTEBIT_PASSPHRASE env or interactive prompt
+  2. cli_private_key — legacy plaintext (deprecated since 1.0.0, removed at 2.0.0); warns on use
+  ```
+
+  **Defense the inline copies didn't have:** the helper re-derives the public key from the private bytes and verifies it byte-equals `config.device_public_key`. Fail-closed on mismatch. Inline copies would silently sign under the wrong identity — a downstream verifier rejecting the signature is an obvious failure, but signing as someone else is a silent one. The mismatch case is the load-bearing test.
+
+  Sources NOT supported (deliberate):
+  - **`~/.motebit/dev-keyring.json`.** Written by the desktop Tauri app's Keychain-failure fallback (`apps/desktop/src/identity-manager.ts:124`). Cross-surface keystore unification is a real architectural pass; a silent fallback chain is the wrong shape for it. The right shape is an explicit `IdentityKeyAdapter` per surface, same family as the storage adapter pattern. That's a separate commit.
+  - **Raw private-key bytes from environment variables.** Sovereign identity is not an env-friendly secret — env leaks through shell history, CI logs, process inspection, debug dumps. The passphrase env IS supported because the on-disk ciphertext is the actual secret; the passphrase is a scrypt-stretching factor, not the secret itself.
+
+  `IdentityKeyError` is a structured failure type carrying `kind` (`missing` / `decrypt-failed` / `malformed-private-key` / `public-key-mismatch`) and `remedy` (a one-line actionable next-step). Each call site catches the error and surfaces the remedy — `register` and `daemon` downgrade to unsigned / disabled with a warning that names the kind; `wallet` exits with the remedy printed; `_helpers.getRelayAuthHeaders` proceeds unauthenticated for read-only flows.
+
+  ### `motebit doctor` — first-run actionable probes
+
+  Pre-1.0 doctor checked structural readiness only (Node, sqlite, identity-id-present). All-green doctor + every economic flow failing was the wrong signal. The expanded doctor adds three probes that run unconditionally and three that run when `sync_url` is set:
+
+  ```text
+  Identity key         present + shape (cli_encrypted_key | cli_private_key | missing)
+  Public key           device_public_key present + 32-byte hex
+  Sync URL             configured in config or MOTEBIT_SYNC_URL env
+  Relay reachable      GET /health/ready returns 2xx (5s timeout)
+  Identity registered  GET /agent/:id/capabilities returns 200 (5s timeout)
+  ```
+
+  Each failure carries a concrete remedy: `restore from ~/.motebit/config.json.clobbered-{date}` (when a clobbered backup is detected on disk), `run motebit init`, `run motebit register`, etc. Probes are best-effort with timeouts so doctor stays unattended-friendly — a misconfigured URL or network failure doesn't hang the command.
+
+  ### Promoted `getPublicKeyBySuite` to `@motebit/encryption`
+
+  The helper needed to derive a public key from a private seed to verify the device-public match. Per `check-app-primitives` doctrine, apps consume product vocabulary (`@motebit/encryption`), not Layer-0 protocol primitives (`@motebit/crypto`). `getPublicKeyBySuite` was already exported from `@motebit/crypto`'s `signing.ts` re-exports; this commit re-exports it from `@motebit/encryption`'s barrel as the product-vocabulary pair to `generateKeypair` for "I have a private seed, give me the public."
+
+  ## What's deliberately NOT in this commit
+  - **Cross-surface keystore unification.** `IdentityKeyAdapter` interface across CLI / desktop / mobile / web. The dev-keyring fallback question feeds into this; the right answer is per-surface adapters with explicit type, not a fallback chain at any single read site. Separate architectural pass.
+  - **Restoring Daniel's specific environment.** This commit fixes the code so that future first-run users hit `doctor` and see what to do. Daniel's existing `~/.motebit/config.json` still needs `cli_encrypted_key` restored from the clobbered backup (or a fresh `motebit init`); doctor now points at that exact remedy.
+  - **Running real `motebit fund` / `delegate` / `settle`.** Those require Daniel's Stripe interaction and decrypted signing key; doctor's job is to surface gaps, not move money.
+
+  ## Verification
+  - 9 new unit tests in `identity-load-active-signing-key.test.ts` — happy path, env passphrase, legacy plaintext (with deprecation warn), missing key, wrong passphrase, public-key mismatch (fail-closed), skipped-mismatch escape hatch, malformed bytes, missing-public-key edge.
+  - 3 boundary tests in `relay-auth-passphrase.test.ts` (rewritten to match new helper boundary): resolver invoked when no master token, master token shortcuts resolver entirely, resolver throw downgrades to unauthenticated.
+  - All 199 CLI tests pass; all 42 drift defenses pass.
+  - Live run on a real broken config produced two clear `FAIL` lines with correct remedies pointing at a clobbered backup that exists on disk and at `motebit register`.
+
+  Operator-facing surface unchanged: subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes all preserve their 1.0.0 contract.
+
+- 8c2426a: Add `motebit migrate-keyring` — recovery path that re-encrypts a plaintext `~/.motebit/dev-keyring.json` private key under a passphrase and writes it as `cli_encrypted_key` in `~/.motebit/config.json`.
+
+  ## Why
+
+  A live golden-path walkthrough turned up a class of users with a valid private key on disk under `~/.motebit/dev-keyring.json` (written by the desktop Tauri app's Keychain-failure fallback in `apps/desktop/src/identity-manager.ts:124`, or by older scaffold flows) but no `cli_encrypted_key` in `config.json`. The CLI's only response in this state was "no private key found" — the path of least resistance was to run the interactive setup again, which silently created a brand new identity and abandoned everything signed under the old `motebit_id`. That's the wrong escape valve for a sovereign-identity product whose moat is accumulated trust.
+
+  A check on one real install surfaced **three motebit identities** in `~/.motebit/`, accumulated over a month — each one created because there was no recovery doctrine for "I have the key, I just don't have it where the CLI looks." The CLI was treating identity creation as cheap and recovery as undocumented. Inverted priorities.
+
+  ## What ships
+
+  `motebit migrate-keyring [--force]` does exactly one thing: takes the existing private key on disk, encrypts it under a passphrase you choose, and writes it as `cli_encrypted_key`. The current `motebit_id` is preserved. Nothing else changes.
+
+  The load-bearing defense is **fail-closed on key/public mismatch**. Before encrypting, the subcommand re-derives the public key from the private bytes and verifies it byte-equals `config.device_public_key`. If they don't match, the dev-keyring belongs to a different identity than your config — silently binding it would produce signed artifacts under one motebit_id but with a private key for another (the silent-corruption case `loadActiveSigningKey` already defends against at the read path). The error explains the orphaned-key situation and points at three concrete next moves: remove the orphaned keyring, restore from a `~/.motebit/config.json.clobbered-*` backup, or run a fresh `motebit init`.
+
+  Honors `MOTEBIT_PASSPHRASE` env for unattended / scripted use, matching the convention in `_helpers.getRelayAuthHeaders`, `register`, and `daemon`. Refuses to overwrite an existing `cli_encrypted_key` without `--force` (rotating the passphrase has a separate intent shape).
+
+  After successful migration, the plaintext `dev-keyring.json` is overwritten with zeros and unlinked — leaving plaintext keys on disk after the encrypted version exists is a security regression.
+
+  6 unit tests pin: happy path (migrate + remove plaintext), fail-closed on key/public mismatch (the load-bearing case — refuses to bind an orphaned key), refuses overwrite without --force, requires identity in config, refuses on passphrase mismatch, plus a sanity round-trip on `getPublicKeyBySuite` to catch suite-dispatch regressions that would silently break the match check.
+
+  ## What this leaves on the table
+
+  The deeper architectural smell behind the multi-identity drift — `motebit` (no args) silently creating a new identity when config is partial-but-not-empty, scaffold tools and operator tools sharing `~/.motebit/`, no doctor probe for "you have N orphaned identities" — is named in the original audit but not addressed here. That's a sibling pass.
+
+- edced5e: Fix two production bugs surfaced by a live golden-path run.
+
+  ## 1. CLI signed money-path requests with the wrong audience
+
+  `apps/cli/src/subcommands/market.ts` — `handleBalance`, `handleFund`, `handleWithdraw` all called `getRelayAuthHeaders(config)` which defaults the signed-token audience to `"admin:query"`. The relay's `dualAuth` middleware (`services/api/src/middleware.ts:631-645`) requires per-route audiences:
+
+  ```text
+  GET  /api/v1/agents/:id/balance     → account:balance
+  POST /api/v1/agents/:id/checkout    → account:checkout
+  POST /api/v1/agents/:id/withdraw    → account:withdraw
+  ```
+
+  Result: **every `motebit balance / fund / withdraw` since 1.0.0 has failed with `401 AUTH_INVALID_TOKEN` against any relay running the dual-auth middleware**. The bug was invisible to `motebit doctor` (which doesn't call these routes) and to the published-package CI (which has no live-relay smoke). Caught only when running the full economic flow against a real relay.
+
+  Fix: each call site pins its own aud. `handleFund` mints two tokens (one for `/checkout`, one for the balance-poll loop on `/balance`) since a signed token can only carry one aud.
+
+  ## 2. Relay `/checkout` returned opaque 500 on Stripe errors
+
+  `services/api/src/budget.ts:662` had zero error handling around the Stripe SDK call. Any thrown `StripeError` became `{"error":"Internal server error","status":500}` from Hono's default uncaught-exception handler — the actual Stripe message ("Your account cannot currently make live charges", "Your card was declined", etc.) only existed in fly.io logs. Operators of every motebit relay had to dig logs to debug their own users' fund flows.
+
+  Fix: new `mapStripeError(c, ...)` helper (in `budget.ts`, top of file) catches Stripe SDK exceptions and returns a structured 502:
+
+  ```json
+  {
+    "error": "STRIPE_ACCOUNT_NOT_ACTIVATED",
+    "message": "Your account cannot currently make live charges.",
+    "stripe_type": "StripeInvalidRequestError",
+    "stripe_code": null,
+    "status": 502
+  }
+  ```
+
+  The motebit-shaped `error` code is mapped from common Stripe error patterns:
+
+  ```text
+  "cannot currently make live charges" → STRIPE_ACCOUNT_NOT_ACTIVATED
+  StripeAuthenticationError             → STRIPE_API_KEY_INVALID
+  StripeRateLimitError                  → STRIPE_RATE_LIMITED
+  StripeConnectionError                 → STRIPE_CONNECTION_FAILED
+  (everything else)                     → STRIPE_<TYPE>
+  ```
+
+  Per `services/api/CLAUDE.md` rule 14 — external medium plumbing speaks motebit vocabulary. Provider-shaped errors (Stripe's deep nested raw object) collapse here into a closed motebit shape. Server-side logs still capture the full Stripe response (request ID, headers) for operator debugging; the client never sees raw Stripe internals.
+
+  The CLI side (`market.ts handleFund`) parses the new structured shape and prints both the motebit code and Stripe's human message. For `STRIPE_ACCOUNT_NOT_ACTIVATED` specifically, it adds a one-line pointer at the Stripe onboarding URL — the most common path to recovery.
+
+  ## What this leaves on the table
+
+  A drift defense that catches the audience-mismatch class of bug at lint time would be valuable — `check-aud-binding` could grep middleware aud strings, grep CLI aud strings, and require any motebit-signed POST to a route in the middleware list to use the matching aud. Filed as a follow-up; not in this commit because it requires walking Hono middleware definitions, which is non-trivial.
+
+- 16e450b: `motebit` CLI now honors `MOTEBIT_PASSPHRASE` for relay-auth token minting.
+
+  **Bump level**: patch. This is a repaired promise, not an expanded one — `MOTEBIT_PASSPHRASE` is a generic-sounding env var the user reasonably expects to work everywhere a passphrase is needed. The previous behavior (env var works for `--yes` and rotate/export/attest, silently ignored by relay-auth) was internal inconsistency, not a deliberate restriction. Fixing it brings behavior in line with the env var's documented role.
+
+  Gap #6 from the 2026-04-25 first-time-user walkthrough. `getRelayAuthHeaders()` (the function that mints a signed device token when no `MOTEBIT_API_TOKEN` master token is present) called `promptPassphrase()` unconditionally — it didn't read `MOTEBIT_PASSPHRASE` the way every other unlock prompt in the CLI does. Result: any scripted use of `motebit credentials`, `motebit export`, `motebit attest`, etc. silently hung waiting on a hidden TTY prompt. The exact reproduction was running `MOTEBIT_PASSPHRASE=x npx motebit credentials` and watching it block on `Passphrase (for relay auth):` despite the env var being set.
+
+  What changed:
+  - `apps/cli/src/subcommands/_helpers.ts::getRelayAuthHeaders()` now reads `process.env["MOTEBIT_PASSPHRASE"]` before falling back to the interactive prompt. Same pattern as `apps/cli/src/index.ts:401`, `subcommands/rotate.ts:104`, `subcommands/export.ts:44`, `subcommands/attest.ts:97` — those already honored the env var; only `getRelayAuthHeaders` didn't.
+  - The prompt label drops the `(for relay auth)` parenthetical and is now just `Passphrase: ` to match every other unlock prompt. The previous label implied a separate passphrase concept that doesn't exist — the relay-auth token is signed by the same Ed25519 private key encrypted under `cli_encrypted_key`, unlocked by the same passphrase the user set during `create-motebit`.
+  - New `apps/cli/src/__tests__/relay-auth-passphrase.test.ts` regression test asserts: env var skips the prompt, no env var falls back to prompting with the new `Passphrase: ` label, and `MOTEBIT_API_TOKEN` master token shortcuts the passphrase path entirely (existing behavior preserved).
+
+  Migration: scripts that piped a passphrase via stdin to `motebit` commands as a workaround for the silent prompt no longer need the workaround — set `MOTEBIT_PASSPHRASE` in the environment instead. Interactive use is unchanged except for the simpler prompt text.
+
+  Architectural note for future readers: the auth strategy in `getRelayAuthHeaders` is a 2-tier fallback — `MOTEBIT_API_TOKEN`/`MOTEBIT_SYNC_TOKEN` master token first, signed device token second. The signed device token is JWT-shaped (5-minute expiry, audience-scoped) and minted from the local key. There is no third "relay auth secret" concept; that misimpression was created by the prompt label.
+
+- 6c2f8f5: Add `@hono/node-ws` to runtime dependencies. The `motebit relay up` path imports `@motebit/api` (bundled via `tsup noExternal: [/^@motebit\//]`), which uses `@hono/node-ws` for WebSocket upgrades. The CLI's `tsup.config.ts` correctly marks it `external` (CJS-era init code that doesn't survive ESM bundling), but it was never declared as a runtime dependency of the `motebit` package itself.
+
+  In a workspace dev environment, pnpm's hoisting resolved the transitive dependency through `services/api`'s declaration. On a fresh `npm install motebit`, the package tries to load `@hono/node-ws` and exits with `ERR_MODULE_NOT_FOUND` on first boot.
+
+  Caught by `check-dist-smoke` (drift defense #12) on first push of the relay-up commit (`0e924976`) — exactly the regression class the gate was built for: a build that compiles clean but the dist binary crashes on startup. Same shape as the prior `@noble/hashes × @solana/web3.js` bundling break (2026-04-13).
+
+  Fix: declare `@hono/node-ws@^1.3.0` in `apps/cli/package.json` dependencies, matching the version pin already used by `services/api`.
+
+- 21875ed: Tighten the published-package README so the runtime/CLI distinction is precise, and align spec/package counts with reality.
+
+  ## Why
+
+  The `motebit` package is the bundled reference runtime — relay, policy engine, sync engine, MCP server, and wallet adapters inlined into a single binary. The CLI is its primary operator-facing surface, not the artifact itself. The prior README opener ("the motebit CLI is published as a binary") was an elegant one-sentence framing that read accurately to someone scanning, but understated what the package actually contains and slipped against the package's own description field ("Reference runtime and operator console").
+
+  A reviewer pulling on the framing surfaced the imprecision in two rounds. Fixing it locally without auditing siblings would have left the published-artifact prose drifting from the npm metadata it ships beside, so the cleanup also re-checked counts and package-table coverage at the same time.
+
+  ## What shipped
+  - `apps/cli/README.md` — new "How it ships" section opens with `motebit` as the bundled reference runtime and reframes the CLI as one of its surfaces. Restates the public-promise sentence: subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, and MCP server tool list — not the internal workspace package graph.
+  - Root `README.md` — package table expanded from 7 rows to 11 so all four hardware-attestation Apache-2.0 leaves (`crypto-appattest`, `crypto-play-integrity`, `crypto-tpm`, `crypto-webauthn`) are visible alongside the rest of the published surface in one place. New "Versioning" section adjacent to "Licensing" makes the published-vs-private split explicit.
+  - Spec count: `12` → `19` across root README (×4), `CLAUDE.md`, and `apps/docs/content/docs/operator/architecture.mdx`. The seven specs missing from earlier enumerations (`agent-settlement-anchor`, `consolidation-receipt`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`) are real specs with reference implementations; the prose just hadn't been updated.
+  - Package count: `36` / `40` / `37` → `46` across the same three surfaces. `pnpm check-docs-tree` validates the new numbers.
+  - Five empty `auto-generated patch bump` changeset stubs deleted so they don't pollute the next CHANGELOG entry with content-free lines.
+
+  ## Impact
+
+  Zero runtime change. Zero API change. The `motebit` patch bump exists because `apps/cli/README.md` is in the package's `files` array — the README that ships to npm changes, so the published version should reflect it. Smoke test (`npm install motebit@1.0.0 && motebit doctor` from a clean tmp directory) passes all six checks including Secure Enclave detection on Apple Silicon hosts; the cleanup is purely textual.
+
+  Three follow-ups are tracked separately: a `check-cli-surface` drift gate to bring CLI-surface rigor up to the protocol-floor `check-api-surface` standard, sentinel versioning on the 35 private workspace packages so their `0.x` numbers stop carrying unintended semver social meaning, and a CI gate that rejects empty changeset bodies at the source.
+
+- 53a2783: License metadata correction: `package.json` `license` field flipped from
+  `BSL-1.1` to `BUSL-1.1` — the SPDX-canonical identifier for Business Source
+  License 1.1.
+
+  `BSL-1.1` is not on the SPDX license list and silently collides with `BSL-1.0`
+  (Boost Software License 1.0) in some scanners; npm warns on non-SPDX values.
+  The legal terms are unchanged. This is a metadata-only correction; the
+  published package's license text and obligations are identical.
+
+  Prose continues to use "BSL" / "BSL-1.1" everywhere humans read (the BSL FAQ,
+  HashiCorp, CockroachDB, Sentry all use "BSL"); `BUSL-1.1` appears only in
+  `package.json` `license` fields where tooling parses a token.
+
+- 6e5b1f2: Internal-only: silence `@typescript-eslint/no-require-imports` on three
+  `require()` calls inside `vi.hoisted()` in
+  `src/__tests__/migrate-keyring.test.ts`. The pattern is idiomatic vitest
+  (vi.hoisted runs before ES module imports resolve, so `require()` is the
+  only way to reach Node built-ins from inside the hoisted block). Targeted
+  `eslint-disable-next-line` comments with an explanation; rule remains in
+  force on the rest of the file. No runtime behavior change; tests
+  unaffected.
+- 5e7a192: Wire the hardware-attestation peer flow in the CLI runtime.
+
+  The runtime hook in `packages/runtime/src/agent-trust.ts:258` (Phase 1 + Phase 2, shipped earlier) was dormant in production: `bumpTrustFromReceipt` gates on `if (getRemoteHardwareAttestations && updated.public_key)`, and no surface had ever called `setHardwareAttestationFetcher` or `setHardwareAttestationVerifiers`. The peer-attestation issuance loop existed only in the relay-side E2E tests; in the actual CLI runtime, hardware claims published by workers were never pulled, never verified, never folded into peer trust credentials, and never visible to routing.
+
+  ## What shipped
+  1. **`createRelayCapabilitiesFetcher`** — new export on `@motebit/runtime`. Production fetcher that hits `GET /agent/:motebitId/capabilities`, parses the `hardware_attestations` array, and returns it shaped for the runtime's `HardwareAttestationFetcher` slot. Best-effort: every error surface (network throw, non-2xx, malformed JSON, missing fields, wrong types) returns `[]` so the existing reputation-credential path proceeds unchanged. 8 unit tests pin each error surface plus the success path.
+  2. **CLI wiring** at both runtime construction sites — `apps/cli/src/runtime-factory.ts` (REPL, `motebit delegate`, `motebit serve` paths) and `apps/cli/src/daemon.ts` site 1 (long-running daemon mode where `motebit run --price` workers + delegators accumulate trust). After `runtime.connectSync(...)`:
+
+     ```ts
+     runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
+     runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
+     ```
+
+     Adds `@motebit/verify` (Apache-2.0) as a CLI dep — which is what bundles the four canonical platform adapters (App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn) plus the deprecated Play Integrity adapter into the CLI binary. Per `motebit-runtime.ts:2462`, `@motebit/verify` is intentionally NOT a runtime dep — surfaces own that choice.
+
+  ## Why a patch and not a minor
+
+  Operator-facing surface (subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list) is unchanged. The change is internal: peer trust credentials now carry a hardware-attestation block at delegation time when the worker has published a verifiable claim, which the routing aggregator scores at `HW_ATTESTATION_HARDWARE` (1.0) instead of the software sentinel's `HW_ATTESTATION_SOFTWARE` (0.1). Per `apps/cli/README.md`'s public-promise paragraph, that's not a breaking change.
+
+  ## What's still deferred
+
+  The other four surfaces — `@motebit/desktop`, `@motebit/mobile`, `@motebit/web`, `@motebit/spatial` — construct `MotebitRuntime` and may benefit from the same wiring. Mechanical follow-on (one-pass-delivery candidate); separated from this commit because each surface has its own sync-URL resolution pattern and adding `@motebit/verify` to four more workspaces is best reviewed in its own diff. The runtime hook stays dormant on those surfaces until the same two setters are called there.
+
+- cdfaf18: Same-pass surface wiring for the hardware-attestation peer flow.
+
+  The CLI landed with `5e7a1922` (runtime-hardware-attestation-fetcher-cli-wiring). This commit closes one-pass delivery across the four other surfaces — `@motebit/desktop`, `@motebit/mobile`, `@motebit/web`, `@motebit/spatial` — so peer hardware claims fold into routing trust regardless of which surface the user delegates from.
+
+  ## Why a lazy resolver
+
+  The CLI's sync URL was a constant the moment we constructed `MotebitRuntime`. The other four surfaces resolve it through cached fields that get repopulated on config changes:
+  - **Desktop** — `_proxySyncUrlCache` (cached at bootstrap from Tauri config)
+  - **Mobile** — `_proxySyncUrlCache` (cached at bootstrap from AsyncStorage)
+  - **Web** — `loadSyncUrl()` reads `localStorage` on each call
+  - **Spatial** — same `localStorage` accessor as the ProxySessionAdapter
+
+  Threading the URL into the runtime at construction would have meant runtime reconstruction every time the user changed relay settings. So `createRelayCapabilitiesFetcher` now accepts either a static string OR a synchronous resolver:
+
+  ```text
+  baseUrl: string | (() => string | undefined | null)
+  ```
+
+  If the resolver returns `undefined` / `null` / `""`, the fetcher returns `[]` without touching the network — matches the no-claim-observed semantics the runtime hook already handles. Three new unit tests pin the lazy branch (resolver yields, resolver returns undefined, resolver returns empty string); the static-string path is unchanged.
+
+  ## Surface choice — why spatial gets the wiring
+
+  `apps/spatial/CLAUDE.md` rejects the panel metaphor, but the hardware-attestation peer flow isn't a panel — it's a runtime hook that fires on the same `MotebitRuntime.bumpTrustFromReceipt` path every other surface uses. The creature in spatial dispatches receipts through the same delegation engine; if a worker is running a hardware-backed identity, that should score at `HW_ATTESTATION_HARDWARE` (1.0) regardless of which surface the user delegated from. Skipping spatial would have introduced a routing asymmetry — same workers, same claims, different scores depending on the delegator's surface.
+
+  ## What's now load-bearing
+
+  Each surface's runtime, on every successful delegation, pulls `GET /agent/:remote_motebit_id/capabilities`, parses the worker's self-published `hardware_attestation` credential, runs the embedded claim through the bundled platform adapter (App Attest / Android Hardware-Backed Keystore Attestation / TPM 2.0 / WebAuthn / + the deprecated Play Integrity), and on `valid: true` issues a peer `AgentTrustCredential` carrying the verified claim. The routing aggregator scores the result at `HW_ATTESTATION_HARDWARE` (1.0) — 10× the software sentinel's 0.1 — visible across every routing decision the user's motebit makes from now on.
+
+  ## Why patch
+
+  Operator-facing surface (subcommands, flags, `~/.motebit/` layout, relay HTTP routes, MCP server tool list, web/desktop/mobile/spatial UI) is unchanged. The behavior change is visible only inside the routing semiring's edge weights.
+
 ## 1.0.0
 
 ### Major Changes
