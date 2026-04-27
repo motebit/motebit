@@ -6645,7 +6645,7 @@ This file is the canonical index. The README, [CLAUDE.md](CLAUDE.md), and the do
 
 8. **[THE_ACTOR_PRINCIPLE.md](THE_ACTOR_PRINCIPLE.md)** — what motebits are to each other. Every motebit is an actor; the relay is its broker; the receipt chain is its causal log; the adjudicator is its supervisor. The pattern crystallized the moment two motebits exchanged their first task.
 
-9. **[THE_CONFERENCE.md](THE_CONFERENCE.md)** — many motebits in conversation. The multi-droplet extension of principles that derive a single droplet.
+9. **[THE_CONFERENCE.md](THE_CONFERENCE.md)** — the network as the sovereign. Many droplets in a shared medium do not designate a master; their algebraic composition (semiring routing under signed-receipt trust, budget-gated at every hop) is itself the governing intelligence. Where THE_ACTOR_PRINCIPLE named the engineering pattern (actor / broker / causal log / supervisor), this derives the architectural constraint that makes the pattern coherent across many agents: routing must be algebraic, not procedural — new routing concerns become new semirings, zero new algorithms.
 
 ## How to read it
 
@@ -8326,7 +8326,7 @@ _Motebit, 2026._
 # The Conference of Agents
 Source: https://github.com/motebit/motebit/blob/main/THE_CONFERENCE.md
 
-> many motebits in conversation. The multi-droplet extension of principles that derive a single droplet.
+> the network as the sovereign. Many droplets in a shared medium do not designate a master; their algebraic composition (semiring routing under signed-receipt trust, budget-gated at every hop) is itself the governing intelligence. Where THE_ACTOR_PRINCIPLE named the engineering pattern (actor / broker / causal log / supervisor), this derives the architectural constraint that makes the pattern coherent across many agents: routing must be algebraic, not procedural — new routing concerns become new semirings, zero new algorithms.
 
 ---
 
