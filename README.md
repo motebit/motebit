@@ -95,15 +95,7 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 
 **Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay budget settlement.
 
-### How it's derived
-
-Each capability above is derived from a foundational document, not designed:
-
-- **The body** from droplet equilibrium under surface tension — [DROPLET.md](DROPLET.md)
-- **The active interior** — identity, memory, trust, governance — as sovereignty inside that boundary — [THE_SOVEREIGN_INTERIOR.md](THE_SOVEREIGN_INTERIOR.md)
-- **What we build vs. absorb** from the metabolic principle, enzymes owned and glucose adapted — [THE_METABOLIC_PRINCIPLE.md](THE_METABOLIC_PRINCIPLE.md)
-- **Verifiability** from receipts that survive the relay — [THE_SELF_SIGNING_BODY.md](THE_SELF_SIGNING_BODY.md)
-- **Motebit-to-motebit relations** from the actor model — address, broker, causal log, supervision — [THE_ACTOR_PRINCIPLE.md](THE_ACTOR_PRINCIPLE.md)
+**Derived, not designed.** Each capability above emerges from a chain of foundational documents — see [DOCTRINE.md](DOCTRINE.md) for the full nine-document corpus from droplet physics to multi-agent conferencing.
 
 ## Agent Market
 
