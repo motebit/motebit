@@ -49,7 +49,7 @@ motebit relay up
 # ✓ listening on http://localhost:3000
 ```
 
-`motebit relay up` is the sovereignty one-liner. Your relay, your identity key (Ed25519, generated on first boot, stored in `~/.motebit/relay/relay.db`), your settlement policy. Isolated by default — federation is opt-in via `--federation-url <public-url>`. x402 settlement stays off until you pass `--pay-to-address 0x…`. Nothing peers with `relay.motebit.com` unless you tell it to.
+`motebit relay up` brings up a self-contained relay in one command. Your relay, your identity key (Ed25519, generated on first boot, stored in `~/.motebit/relay/relay.db`), your settlement policy. Isolated by default — federation is opt-in via `--federation-url <public-url>`. x402 settlement stays off until you pass `--pay-to-address 0x…`. Nothing peers with `relay.motebit.com` unless you tell it to.
 
 ### Build a service agent
 
@@ -75,7 +75,7 @@ Registered with relay: https://relay.motebit.com
 
 Your agent is live and discoverable — an **atom** in the marketplace, a single capability with identity. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. Run `npm run self-test` to verify the full receipt loop end-to-end.
 
-The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them, becoming a **molecule** that composes other agents — remove `--direct` from `src/index.ts` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
+The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them, becoming a **molecule** that composes other agents — remove `--direct` from `src/index.ts` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum: identity, signing, and settlement are identical; only the tool-selection layer changes.
 
 ## What it is
 
@@ -272,11 +272,11 @@ pnpm run lint          # Lint all packages
 
 ## Versioning
 
-12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime, with the CLI as its primary surface). They version independently on their own merit (`updateInternalDependencies: "patch"`, no fixed or linked groups). Breaking changes to a package's public surface require a major bump on that package.
+12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime). They version independently on their own merit (`updateInternalDependencies: "patch"`, no fixed or linked groups). Breaking changes to a package's public surface require a major bump on that package.
 
 The 51 workspace-private packages — `@motebit/runtime`, `@motebit/api`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
 
-**The public promise of `motebit@1.0` is its bundled operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.** The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
+The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
 
 ## License
 
