@@ -1272,8 +1272,72 @@ export async function handleServe(config: CliConfig): Promise<void> {
         .list()
         .map((t) => t.name);
 
+      // Self-sovereign registration auth.
+      //
+      // The relay's `/api/v1/agents/*` middleware accepts two auth shapes:
+      //   1. Operator master token (`MOTEBIT_API_TOKEN`) — bypass.
+      //   2. Self-signed device token — verified against the agent's own
+      //      registered public key, audience-bound (`admin:query` for
+      //      register/heartbeat/deregister/info).
+      //
+      // Anonymous registration was always advertised as supported (per
+      // create-motebit's `.env.example`: "Anonymous agents can register and
+      // serve for free") but failed in practice because daemon never minted
+      // shape #2 — it only sent `Bearer ${masterToken}` when a master token
+      // existed. Result: scaffolded agents with empty `MOTEBIT_API_TOKEN`
+      // hit 401 at register time and stayed off the discovery graph.
+      //
+      // The fix is two coordinated steps the relay already supports:
+      //   a. Call `/api/v1/agents/bootstrap` (unauthenticated, rate-limited,
+      //      idempotent) to register `(motebit_id, device_id, public_key)`
+      //      so the relay knows which key to verify our token against.
+      //   b. Mint a `createSignedToken` with `aud: "admin:query"` (5-min
+      //      expiry, signed by `servePrivateKey`) and use it as Bearer.
+      //
+      // Master token, when present, still wins — operators with explicit
+      // tokens skip the self-signing dance.
       const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (masterToken) regHeaders["Authorization"] = `Bearer ${masterToken}`;
+      if (masterToken) {
+        regHeaders["Authorization"] = `Bearer ${masterToken}`;
+      } else if (servePrivateKey && fullConfigForServe.device_id && publicKeyHex) {
+        // Bootstrap is idempotent: if the identity is already registered with
+        // the same public key, returns 200 with `registered: false`; if new,
+        // 201 with `registered: true`. Either is fine for our purposes.
+        // We don't await the response body — only the network round-trip
+        // matters, and any 4xx other than 409 (key conflict) means we'll
+        // hit a clearer error on the subsequent /register call.
+        try {
+          await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              motebit_id: motebitId,
+              device_id: fullConfigForServe.device_id,
+              public_key: publicKeyHex,
+            }),
+          });
+        } catch {
+          // Best-effort. If bootstrap fails, /register's auth check will
+          // surface a clearer error than a generic network failure here.
+        }
+        // 24h expiry instead of the per-call 5-min default. The same token
+        // is reused for the heartbeat setInterval below, which fires every
+        // 5 min — a 5-min token would expire before the second heartbeat.
+        // Agents that run longer than 24h will need to be restarted (or
+        // refactor heartbeat to re-mint on each call). Acceptable for v1.
+        const signedToken = await createSignedToken(
+          {
+            mid: motebitId,
+            did: fullConfigForServe.device_id,
+            iat: Date.now(),
+            exp: Date.now() + 24 * 60 * 60 * 1000,
+            jti: crypto.randomUUID(),
+            aud: "admin:query",
+          },
+          servePrivateKey,
+        );
+        regHeaders["Authorization"] = `Bearer ${signedToken}`;
+      }
 
       const endpointUrl = `http://localhost:${port}`;
       const serveRegBody: Record<string, unknown> = {
