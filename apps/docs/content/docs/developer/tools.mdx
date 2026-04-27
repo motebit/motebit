@@ -18,7 +18,7 @@ Motebit registers six tools by default:
 | `list_events` | Read | Browse the agent's event log |
 | `delegate_to_agent` | Read | Delegate a task to a remote agent via relay |
 
-Additional tools (`write_file`, `shell_exec`) exist in `@motebit/tools` but are not registered by default. They require operator mode and explicit approval — see [Shell Execution](/docs/developer/tools#shell-execution) for the governance requirements before enabling.
+Additional tools (`write_file`, `shell_exec`) exist in `@motebit/tools` but are not registered by default. They require operator mode and explicit per-call approval — see [Daemon Mode & Approvals](/docs/operator/daemon-approvals) for the three-band governance thresholds that gate them.
 
 ## MCP integration
 

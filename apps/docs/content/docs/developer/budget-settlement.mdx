@@ -62,7 +62,7 @@ const { amount, currency } = estimateCost(
 
 </ReferenceExample>
 
-If a required capability has no matching price entry, it contributes zero to the estimate. The caller should check that all required capabilities are present in the listing before delegating — the [candidate scoring](/docs/developer/delegation) system handles this via the `capability_match` sub-score.
+If a required capability has no matching price entry, it contributes zero to the estimate. The caller should check that all required capabilities are present in the listing before delegating — the [candidate scoring](#candidate-scoring) section below handles this via the `capability_match` sub-score.
 
 ## Budget allocation
 

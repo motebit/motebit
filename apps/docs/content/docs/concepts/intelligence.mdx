@@ -23,7 +23,7 @@ The response may include more than just text. The agent can update its internal 
 
 ## Streaming
 
-Responses stream in real-time. You see text as it's generated, tool calls as they're requested, and approval prompts as they arise. The agent doesn't disappear for 30 seconds and return with a wall of text — it thinks in front of you.
+Responses stream in real-time. You see text as it's generated, tool calls as they're requested, and approval prompts as they arise.
 
 ## Tool use
 
@@ -31,6 +31,6 @@ When the agent needs to act — read a file, search the web, execute a command �
 
 If a tool requires explicit approval, the conversation pauses. You decide. The agent resumes only with your consent.
 
-## Body awareness
+## State-conditioned context
 
-The agent knows how it's "feeling." Its current state — attention level, confidence, curiosity, affect — is included in the context sent to the language model. This means the agent's responses are colored by its internal state, not just the conversation content. A curious agent asks follow-up questions. A confident agent gives direct answers. The intelligence adapts to the body.
+The agent's current state — attention, confidence, curiosity, affect — is included in the context sent to the language model. Responses are conditioned on it: a curious agent surfaces follow-up questions; a confident agent shortens its hedging. The intelligence layer reads the agent's interior state, not just the conversation.
