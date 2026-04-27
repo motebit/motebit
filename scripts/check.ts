@@ -265,7 +265,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-claude-md",
     defends:
-      "every per-directory CLAUDE.md is indexed in root CLAUDE.md under 'Per-directory doctrine loads lazily' — sub-doctrine is only discoverable through the root index, so an unindexed CLAUDE.md is invisible to top-down readers (invariant #25, added 2026-04-18 after a birds-eye review found 6 package CLAUDE.md files added Apr 16 silently absent from the root index; extends the self-attesting-system doctrine to the doctrine-index itself)",
+      "every per-directory CLAUDE.md and every docs/doctrine/*.md is indexed in root CLAUDE.md (under 'Per-directory doctrine loads lazily' and 'Cross-cutting doctrine (read on demand)' respectively); same canonical-index drift class for both lists, one gate covers both — sub-doctrine is only discoverable through the root index, so an unindexed file is invisible to top-down readers (invariant #25, added 2026-04-18 after a birds-eye review found 6 package CLAUDE.md files silently absent; doctrine-list scope added 2026-04-27 after the cross-cutting-doctrine audit found hardware-attestation.md on disk but missing from the lazy-load index)",
     script: "check-claude-md",
   },
   {

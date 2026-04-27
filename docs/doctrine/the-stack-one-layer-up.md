@@ -48,7 +48,7 @@ Three rules fall out:
 
 1. **When a hosted platform ships a primitive in this shape, examine motebit's mapping.** The shape is informative; the implementation is not. Hosted platforms' decisions are constrained by their hosting model; motebit's are constrained by the sovereignty model. The right primitive for them is rarely the right primitive for us.
 
-2. **Borrow vocabulary at your peril.** Hosted-platform terminology — "routine," "skill," "classifier" — carries hosting assumptions baked in. Motebit's equivalents are _actor_, _capability_, _surface tension_, not because they sound different, but because they describe what the sovereign version actually is. The motebit-native voice rule (`memory/feedback_motebit_native_voice.md`) applies: external terms in chat, motebit terms in committed artifacts.
+2. **Borrow vocabulary at your peril.** Hosted-platform terminology — "routine," "skill," "classifier" — carries hosting assumptions baked in. Motebit's equivalents are _actor_, _capability_, _surface tension_, not because they sound different, but because they describe what the sovereign version actually is. The motebit-native voice rule applies: external terms in chat, motebit terms in committed artifacts.
 
 3. **The architectural map is not a roadmap.** Identifying that a primitive exists in the hosted stack does not mean motebit needs it now. The promotion doctrine governs when motebit grows new public surface; convergent shape does not override that gate.
 

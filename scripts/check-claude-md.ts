@@ -1,35 +1,39 @@
 #!/usr/bin/env tsx
 /**
- * check-claude-md — drift defense for the per-directory doctrine index in
- * root CLAUDE.md.
+ * check-claude-md — drift defense for the two index lists in root CLAUDE.md.
  *
- * Per the "Per-directory doctrine loads lazily" section of root CLAUDE.md,
- * each package and service may carry its own CLAUDE.md so directory-specific
- * rules don't bloat the root index. But a sub-CLAUDE.md is only discoverable
- * through the root index: a contributor (or coding agent) doing top-down
- * reading sees the index and follows the links. A CLAUDE.md file on disk
- * that is not in the index is silently invisible — it might as well not
- * exist for any new reader.
+ * Root CLAUDE.md carries two filesystem-derived index lists that contributors
+ * (and coding agents) read top-down to discover what doctrine exists:
  *
- * This is the same drift shape every gate in this directory guards: the
- * canonical truth (per-directory doctrine) sits in one place, the sibling
- * copy (root index) drifts. A birds-eye review on 2026-04-18 found six
- * package CLAUDE.md files added Apr 16 that were never indexed in root —
- * the project's own front door doing the exact thing the project's own
- * meta-principle predicts.
+ *   1. **"Per-directory doctrine loads lazily"** — every sub-CLAUDE.md
+ *      under `packages`, `services`, `apps`, and any other directory that
+ *      carries package-specific rules.
+ *   2. **"Cross-cutting doctrine (read on demand)"** — every cross-cutting
+ *      doctrine file under `docs/doctrine/`.
  *
- * What this probe enforces:
+ * In both cases, a file on disk that's not in the corresponding index is
+ * silently invisible — it might as well not exist for any new reader.
+ * Sibling-listing drift is the exact shape every gate in this directory
+ * guards: canonical truth sits on disk, the index copies drift independently.
  *
- *   1. Every CLAUDE.md file in the repo other than the root one is
- *      referenced by a Markdown link in root CLAUDE.md.
- *   2. Every CLAUDE.md path referenced in root resolves to a file on disk
- *      (catches stale links after a package rename or removal).
+ * A birds-eye review on 2026-04-18 found six package CLAUDE.md files added
+ * Apr 16 that were never indexed in root. A 2026-04-27 doctrine audit found
+ * `docs/doctrine/hardware-attestation.md` on disk but missing from the
+ * cross-cutting index. Same shape, different list — so the gate covers both.
+ *
+ * What this probe enforces, for each of the two lists:
+ *
+ *   - Every file on disk in the list's scope is referenced by a Markdown
+ *     link in root CLAUDE.md.
+ *   - Every path referenced in root resolves to a file on disk (catches
+ *     stale links after a rename or removal).
  *
  * Editorial concerns (the one-line description after each link, the
  * grouping headers, the order) are left to humans. This probe only
  * asserts the existence link.
  *
- * This is the twenty-fifth synchronization invariant defense.
+ * This is the twenty-fifth synchronization invariant defense — one gate,
+ * one drift class ("CLAUDE.md indexes ↔ filesystem"), two lists covered.
  *
  * Usage:
  *   tsx scripts/check-claude-md.ts        # exit 1 on drift
@@ -42,6 +46,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const ROOT_CLAUDE = join(ROOT, "CLAUDE.md");
+const DOCTRINE_DIR = join(ROOT, "docs", "doctrine");
 
 // Directories that never participate in repo doctrine. Walk-time skips —
 // keeps the probe deterministic across machines whether or not pnpm has
@@ -94,6 +99,23 @@ function discoverSubClaudeMd(root: string): string[] {
   return found.sort();
 }
 
+/** Walk `docs/doctrine/` and collect every `*.md` path, repo-relative. */
+function discoverDoctrineDocs(): string[] {
+  const found: string[] = [];
+  let entries;
+  try {
+    entries = readdirSync(DOCTRINE_DIR, { withFileTypes: true });
+  } catch {
+    return found; // doctrine dir missing — Direction-1 will surface no findings
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".md")) continue;
+    found.push(relative(ROOT, join(DOCTRINE_DIR, entry.name)));
+  }
+  return found.sort();
+}
+
 // ── Root index parsing ────────────────────────────────────────────────
 
 /**
@@ -119,6 +141,24 @@ function extractReferencedClaudeMdPaths(): Set<string> {
   return refs;
 }
 
+/**
+ * Extract every Markdown link target in root CLAUDE.md that points into
+ * `docs/doctrine/*.md`. Same normalization as the CLAUDE.md extractor —
+ * repo-relative POSIX paths so the disk-walk comparison is exact.
+ */
+function extractReferencedDoctrinePaths(): Set<string> {
+  const src = readFileSync(ROOT_CLAUDE, "utf-8");
+  const refs = new Set<string>();
+  const re = /\]\(\s*(\.?\/?docs\/doctrine\/[^\s)]+?\.md)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    let p = m[1];
+    if (p.startsWith("./")) p = p.slice(2);
+    refs.add(p);
+  }
+  return refs;
+}
+
 // ── Assertions ────────────────────────────────────────────────────────
 
 function main(): void {
@@ -129,12 +169,12 @@ function main(): void {
     process.exit(2);
   }
 
-  const onDisk = discoverSubClaudeMd(ROOT);
-  const referenced = extractReferencedClaudeMdPaths();
+  // ── List 1 — sub-CLAUDE.md files ────────────────────────────────────
+  const claudeOnDisk = discoverSubClaudeMd(ROOT);
+  const claudeReferenced = extractReferencedClaudeMdPaths();
 
-  // Direction 1 — every disk file must be referenced.
-  for (const path of onDisk) {
-    if (!referenced.has(path)) {
+  for (const path of claudeOnDisk) {
+    if (!claudeReferenced.has(path)) {
       findings.push({
         loc: "CLAUDE.md",
         message:
@@ -146,10 +186,38 @@ function main(): void {
     }
   }
 
-  // Direction 2 — every referenced path must exist.
-  const onDiskSet = new Set(onDisk);
-  for (const path of referenced) {
-    if (!onDiskSet.has(path)) {
+  const claudeOnDiskSet = new Set(claudeOnDisk);
+  for (const path of claudeReferenced) {
+    if (!claudeOnDiskSet.has(path)) {
+      findings.push({
+        loc: "CLAUDE.md",
+        message:
+          `root CLAUDE.md links to ${path} but no such file exists on disk. ` +
+          `Either restore the file or remove the link.`,
+      });
+    }
+  }
+
+  // ── List 2 — docs/doctrine/*.md files ───────────────────────────────
+  const doctrineOnDisk = discoverDoctrineDocs();
+  const doctrineReferenced = extractReferencedDoctrinePaths();
+
+  for (const path of doctrineOnDisk) {
+    if (!doctrineReferenced.has(path)) {
+      findings.push({
+        loc: "CLAUDE.md",
+        message:
+          `${path} exists but is not referenced from root CLAUDE.md. ` +
+          `Add a one-line entry under the "Cross-cutting doctrine (read on demand)" section, ` +
+          `or remove ${path} if its rules have moved elsewhere. ` +
+          `Suggested entry: \`- [\`${path}\`](${path}) — <one-line summary of what this doctrine governs>\``,
+      });
+    }
+  }
+
+  const doctrineOnDiskSet = new Set(doctrineOnDisk);
+  for (const path of doctrineReferenced) {
+    if (!doctrineOnDiskSet.has(path)) {
       findings.push({
         loc: "CLAUDE.md",
         message:
@@ -161,7 +229,7 @@ function main(): void {
 
   if (findings.length === 0) {
     process.stderr.write(
-      `✓ check-claude-md: ${onDisk.length} sub-CLAUDE.md file(s) all referenced from root.\n`,
+      `✓ check-claude-md: ${claudeOnDisk.length} sub-CLAUDE.md file(s) and ${doctrineOnDisk.length} doctrine file(s) all referenced from root.\n`,
     );
     return;
   }

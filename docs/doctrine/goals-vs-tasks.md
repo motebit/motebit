@@ -46,5 +46,4 @@ When a feature's naming is ambiguous — "is this a goal or a task?" — ask who
 ## Cross-references
 
 - `packages/panels/CLAUDE.md` — the controller home for the Goals family
-- [`panels-deprecation.md`](panels-deprecation.md) — why the Goals panel is the first absorption into the body
 - [`records-vs-acts.md`](records-vs-acts.md) — the broader category rule; a goal is a record until the motebit pursues it, at which point the pursuit is an act

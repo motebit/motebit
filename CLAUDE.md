@@ -51,6 +51,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/settlement-rails.md`](docs/doctrine/settlement-rails.md) — custody split, rails, withdrawals
 - [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — declared posture vs proven posture
 - [`docs/doctrine/self-attesting-system.md`](docs/doctrine/self-attesting-system.md) — every claim is user-verifiable
+- [`docs/doctrine/hardware-attestation.md`](docs/doctrine/hardware-attestation.md) — software identity is the floor; hardware attestation is additive scoring, never a gate; one canonical body format + one verifier (`@motebit/crypto`) + one `HardwareAttestationSemiring` across Apple SE / App Attest / TPM / Android Keystore / WebAuthn; new platform = one `platform` union entry
 - [`docs/doctrine/surface-determinism.md`](docs/doctrine/surface-determinism.md) — affordances invoke capabilities, not prompts
 - [`docs/doctrine/panels-pattern.md`](docs/doctrine/panels-pattern.md) — four shapes for multi-surface panel state; what's shipped, what's evaluated, what's open
 - [`docs/doctrine/records-vs-acts.md`](docs/doctrine/records-vs-acts.md) — body shows acts; panels hold records; the category test before any new mount
