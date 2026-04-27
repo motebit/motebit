@@ -21,7 +21,9 @@ import { createRL, input, password, select } from "./prompts.js";
 // ---------------------------------------------------------------------------
 
 declare const __PKG_VERSION__: string;
-declare const __VERIFY_VERSION__: string;
+declare const __CRYPTO_VERSION__: string;
+declare const __SDK_VERSION__: string;
+declare const __MOTEBIT_VERSION__: string;
 
 const VERSION = __PKG_VERSION__;
 
@@ -124,7 +126,7 @@ function makePackageJson(name: string): string {
       verify: "npx -p @motebit/verify motebit-verify motebit.md",
     },
     dependencies: {
-      "@motebit/crypto": `^${__VERIFY_VERSION__}`,
+      "@motebit/crypto": `^${__CRYPTO_VERSION__}`,
     },
   };
   return JSON.stringify(pkg, null, 2) + "\n";
@@ -330,8 +332,8 @@ function makeAgentPackageJson(name: string): string {
       "self-test": "tsc && node dist/index.js --self-test",
     },
     dependencies: {
-      "@motebit/sdk": `^${__VERIFY_VERSION__}`,
-      motebit: `^${__VERIFY_VERSION__}`,
+      "@motebit/sdk": `^${__SDK_VERSION__}`,
+      motebit: `^${__MOTEBIT_VERSION__}`,
     },
     devDependencies: {
       // @types/node is required for the `node:fs`/`node:path`/
