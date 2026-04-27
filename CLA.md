@@ -51,6 +51,13 @@ You understand and agree that Motebit may relicense the BSL-covered portions of 
 
 This is a key provision. It allows Motebit to offer commercial licenses to enterprises without needing to contact every contributor. This is standard practice for BSL projects (HashiCorp, Sentry, MariaDB, CockroachDB).
 
+## Related documents
+
+- [LICENSE](LICENSE) — the legal license text covering the BSL-licensed runtime, including the Additional Use Grant and Change Date / Change License terms
+- [LICENSING.md](LICENSING.md) — full license boundary (Apache-2.0 floor + BSL-1.1 runtime), the convergence story, and the BSL/BUSL prose-vs-token register convention
+- [TRADEMARK.md](TRADEMARK.md) — Motebit name, wordmark, and glass-droplet trade dress; this CLA does **not** grant trademark or trade-dress rights
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to submit a contribution, including how to sign this CLA on your first PR
+
 ---
 
 _Version 1.0 — effective 2026-04-26._

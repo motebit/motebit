@@ -18,9 +18,13 @@ The dual-license structure (BSL 1.1 for the platform, Apache-2.0 for the permiss
 
 Changes to the licensing structure are made solely by the maintainer.
 
+## Principles
+
+The principles those decisions serve are articulated in [`CONSTITUTION.md`](CONSTITUTION.md) — one being, consent-first autonomy, open standard / proprietary product, and what compounds. Every architectural call passes through the test it names: _does this serve the one-being model?_
+
 ## Roadmap
 
-The roadmap is driven by the design thesis documents (`DROPLET.md`, `THE_SOVEREIGN_INTERIOR.md`) and the technical architecture in `CLAUDE.md`. Feature requests and community input inform priorities but do not determine them.
+The roadmap is driven by [`CONSTITUTION.md`](CONSTITUTION.md), the design-thesis documents ([`DROPLET.md`](DROPLET.md), [`THE_SOVEREIGN_INTERIOR.md`](THE_SOVEREIGN_INTERIOR.md)), and the technical architecture in [`CLAUDE.md`](CLAUDE.md). Feature requests and community input inform priorities but do not determine them.
 
 ## Code of Conduct
 

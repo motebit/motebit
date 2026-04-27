@@ -113,3 +113,10 @@ End state:                  Apache-2.0 everywhere
 ## Trademarks
 
 Apache-2.0 and BSL-1.1 are copyright licenses. Neither grants rights in the **Motebit** name, the **Liquescentia** name, or the glass-droplet trade dress. See [`TRADEMARK.md`](TRADEMARK.md) for permitted uses (descriptive nominative use, accurate compatibility statements) and what requires written permission (project names, logos, modified-build branding).
+
+## Related documents
+
+- [LICENSE](LICENSE) — the legal license text itself, including the Business Source License Additional Use Grant
+- [CLA.md](CLA.md) — Contributor License Agreement; how contributions flow into the dual-license model
+- [TRADEMARK.md](TRADEMARK.md) — Motebit name, wordmark, glass-droplet trade dress, and modified-build / fork branding rules
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to submit a contribution under these license terms

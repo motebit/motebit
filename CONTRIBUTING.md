@@ -10,6 +10,10 @@ Thank you for your interest in contributing.
 - **Improve docs** -- fix typos, clarify guides, add examples
 - **Add tests** -- test coverage is always welcome
 
+**Security vulnerabilities** — do **not** file a public issue. Email `security@motebit.com` per the [security policy](SECURITY.md).
+
+**Community standards** — all participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
+
 ## Before you code
 
 Open an issue first. We want to discuss the approach before you invest time writing code. This saves everyone effort and keeps the codebase coherent.

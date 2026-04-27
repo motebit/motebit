@@ -282,6 +282,16 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 
 "Motebit" is a trademark of Motebit, Inc. See [TRADEMARK.md](TRADEMARK.md).
 
+## Community
+
+- [Contributing](CONTRIBUTING.md) — how to contribute, including the development setup and PR process
+- [Code of Conduct](CODE_OF_CONDUCT.md) — Contributor Covenant v2.1; reports go to `conduct@motebit.com`
+- [Security](SECURITY.md) — vulnerability disclosure policy; report to `security@motebit.com`, never via public issue
+- [Support](SUPPORT.md) — where to ask questions, file bugs, and reach commercial licensing
+- [Governance](GOVERNANCE.md) — how decisions are made (single-maintainer model today)
+- [Constitution](CONSTITUTION.md) — the principles those decisions serve (one being, consent-first autonomy, open standard / proprietary product)
+- [CLA](CLA.md) — Contributor License Agreement; required before first PR merge
+
 ## Links
 
 - [motebit.com](https://motebit.com) — meet the creature
@@ -290,4 +300,3 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know
-- [Contributing](CONTRIBUTING.md) — how to contribute to motebit
