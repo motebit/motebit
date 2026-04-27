@@ -48,6 +48,67 @@ jobs:
           pnpm --filter create-motebit test
           pnpm --filter motebit test
 
+      # ── Pre-publish smoke test ─────────────────────────────────────
+      # Runs the locally-built `create-motebit` against a tmp dir and
+      # asserts its scaffold-emitted package.json pins versions that
+      # actually satisfy the workspace packages we're about to publish.
+      # This catches the misnamed-constant class of bug at PR / pre-
+      # publish time instead of after a broken artifact reaches npm.
+      #
+      # History: `create-motebit@1.1.0` shipped publicly on 2026-04-27
+      # with a misnamed `__VERIFY_VERSION__` tsup constant that read
+      # `@motebit/crypto`'s version and was reused to pin three packages
+      # on different cadences. The post-publish smoke test caught the
+      # symptom — but only after the broken artifact had already
+      # shipped. Moving the smoke check pre-publish + the static
+      # `check-tsup-define-conventions` gate (#53) close that timing
+      # window. See docs/drift-defenses.md §53.
+      - name: Pre-publish smoke (scaffold pin verification)
+        env:
+          MOTEBIT_PASSPHRASE: smoke-test-ci-passphrase
+        run: |
+          set -euo pipefail
+
+          SMOKE_DIR=$(mktemp -d)
+          export MOTEBIT_CONFIG_DIR="$SMOKE_DIR/.motebit"
+          cd "$SMOKE_DIR"
+
+          # Run the locally-built scaffold (NOT npx@latest — those are
+          # the previously-published versions which can't catch a bug
+          # in the about-to-publish version).
+          echo "Running locally-built create-motebit --agent..."
+          node "$GITHUB_WORKSPACE/packages/create-motebit/dist/index.js" \
+            test-runnable-agent --agent --yes
+
+          cd test-runnable-agent
+          # Assert the scaffold's pinned versions satisfy the workspace
+          # versions the publish step is about to ship. Reads each
+          # workspace package.json, compares against the scaffold's
+          # pin. A mismatch fails before publish.
+          node -e "
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const ws = process.env.GITHUB_WORKSPACE;
+            const generated = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const checks = [
+              ['@motebit/sdk', 'packages/sdk/package.json'],
+              ['motebit', 'apps/cli/package.json'],
+            ];
+            let failed = false;
+            for (const [dep, src] of checks) {
+              const expected = JSON.parse(fs.readFileSync(path.join(ws, src), 'utf8')).version;
+              const actual = generated.dependencies[dep];
+              const expectedRange = '^' + expected;
+              if (actual !== expectedRange) {
+                console.error('FAIL:', dep, 'pinned at', actual, '— workspace is at', expected, '(expected pin', expectedRange + ')');
+                failed = true;
+              } else {
+                console.log('OK:', dep, '=', actual);
+              }
+            }
+            if (failed) process.exit(1);
+          "
+
       # When .changeset/ has pending changesets: creates/updates a "Version Packages" PR
       # When that PR is merged (no changesets left): publishes to npm + creates GitHub releases
       - name: Create release PR or publish
@@ -63,7 +124,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
-      - name: Post-publish smoke test
+      - name: Post-publish smoke test (registry propagation)
         if: steps.changesets.outputs.published == 'true'
         env:
           MOTEBIT_PASSPHRASE: smoke-test-ci-passphrase
@@ -73,12 +134,9 @@ jobs:
           echo "Waiting for npm registry propagation..."
           sleep 10
 
-          # ── Default scaffold (identity-only) ───────────────────────────
-          # The path most users hit first. Verifies create-motebit can
-          # mint an identity, the example verify.js works against it, and
-          # the motebit CLI can announce its version.
+          # ── Default scaffold (identity-only) — exercises the published artifact ──
           SMOKE_DIR=$(mktemp -d)
-          echo "Running create-motebit (default scaffold) in $SMOKE_DIR"
+          echo "Running create-motebit@latest (default scaffold) in $SMOKE_DIR"
           cd "$SMOKE_DIR"
           export MOTEBIT_CONFIG_DIR="$SMOKE_DIR/.motebit"
           npx create-motebit@latest test-agent --yes
@@ -89,30 +147,15 @@ jobs:
           echo "Checking motebit CLI version..."
           npx motebit@latest --version
 
-          # ── Agent scaffold (runnable) ──────────────────────────────────
-          # The path users hit when actually deploying an agent. Two
-          # regressions on 2026-04-25 prove this needs its own gate:
-          #   1. Missing @types/node → tsc fails immediately (TS2307 on
-          #      node:fs / node:path / node:child_process).
-          #   2. Missing main-module guard → the entrypoint's spawn block
-          #      fires when motebit serve re-imports it for tools, looping
-          #      forever.
-          # Both reproduce 100% on every install, both were silent in CI
-          # because the default-scaffold smoke above never compiles or
-          # imports the runnable entrypoint.
+          # ── Agent scaffold (runnable) — catches @types/node + main-module-guard regressions ──
           AGENT_DIR=$(mktemp -d)
-          echo "Running create-motebit --agent in $AGENT_DIR"
+          echo "Running create-motebit@latest --agent in $AGENT_DIR"
           cd "$AGENT_DIR"
           export MOTEBIT_CONFIG_DIR="$AGENT_DIR/.motebit"
           npx create-motebit@latest test-runnable-agent --agent --yes
           cd test-runnable-agent
           npm install --no-audit --no-fund
-          # The build catches the @types/node regression.
           npm run build
-          # Importing dist/index.js as a module (not as the main script)
-          # catches the main-module-guard regression: with the guard in
-          # place, the import returns the default tools array. Without
-          # the guard, this would either hang (recursive spawn) or fail.
           node -e "import('./dist/index.js').then(m => { if (!Array.isArray(m.default) || m.default.length === 0) { console.error('agent import returned no tools'); process.exit(1); } console.log('agent imports clean,', m.default.length, 'tools exported'); }).catch(e => { console.error('agent import failed:', e.message); process.exit(1); })"
 
           echo "Smoke tests passed."

@@ -63,6 +63,7 @@
     "check-claude-md": "npx tsx scripts/check-claude-md.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-license-doc-sync": "npx tsx scripts/check-license-doc-sync.ts",
+    "check-tsup-define-conventions": "npx tsx scripts/check-tsup-define-conventions.ts",
     "check-scene-primitives": "npx tsx scripts/check-scene-primitives.ts",
     "check-retrieval-primitives": "npx tsx scripts/check-retrieval-primitives.ts",
     "check-reputation-primitives": "npx tsx scripts/check-reputation-primitives.ts",

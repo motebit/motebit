@@ -233,6 +233,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-license-doc-sync",
   },
   {
+    name: "check-tsup-define-conventions",
+    defends:
+      "every `__<NAME>_VERSION__` constant in any `tsup.config.ts` reads from the workspace package name implied by `<NAME>`; catches the misnamed-constant class that produced the create-motebit@1.1.0 scaffold-pin bug where `__VERIFY_VERSION__` actually read from `@motebit/crypto` and was reused to pin `@motebit/sdk` and `motebit` (invariant #53, full history in docs/drift-defenses.md)",
+    script: "check-tsup-define-conventions",
+  },
+  {
     name: "check-scene-primitives",
     defends:
       "SpatialExpression renderers live in @motebit/render-engine, not inline in apps (invariant #26, added 2026-04-19 after CredentialSatelliteRenderer moved from apps/spatial to packages/render-engine so apps/web could consume the same renderer; extends the protocol-primitive doctrine to scene primitives — every surface with a 3D creature consumes one implementation)",

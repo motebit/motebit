@@ -469,6 +469,22 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-tsup-define-conventions",
+    proves:
+      "flags a `__<NAME>_VERSION__` constant in any tsup.config.ts whose value reads from a package name that doesn't match the constant name — the exact misnamed-constant pattern that produced the create-motebit@1.1.0 scaffold-pin bug",
+    perturb: () =>
+      // Re-introduce the original bug shape: change __SDK_VERSION__ to
+      // read from "@motebit/crypto" instead of "@motebit/sdk". The gate
+      // should fire with: expected the value to reference "@motebit/sdk".
+      // mutateFile restores byte-identical on cleanup.
+      mutateFile("packages/create-motebit/tsup.config.ts", (src) =>
+        src.replace(
+          'readPkgVersion("@motebit/sdk")',
+          'readPkgVersion("@motebit/crypto-DELIBERATE-PROBE")',
+        ),
+      ),
+  },
+  {
     script: "check-scene-primitives",
     proves:
       "flags an inline scene primitive in an app — imports `three` AND registers a SpatialExpression kind outside @motebit/render-engine",
