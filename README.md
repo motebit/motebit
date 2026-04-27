@@ -49,7 +49,7 @@ motebit relay up
 # ✓ listening on http://localhost:3000
 ```
 
-`motebit relay up` brings up a self-contained relay in one command. Your relay, your identity key (Ed25519, generated on first boot, stored in `~/.motebit/relay/relay.db`), your settlement policy. Isolated by default — federation is opt-in via `--federation-url <public-url>`. x402 settlement stays off until you pass `--pay-to-address 0x…`. Nothing peers with `relay.motebit.com` unless you tell it to.
+`motebit relay up` is the sovereignty one-liner. Your relay, your identity key (Ed25519, generated on first boot, stored in `~/.motebit/relay/relay.db`), your settlement policy. Isolated by default — federation is opt-in via `--federation-url <public-url>`. x402 settlement stays off until you pass `--pay-to-address 0x…`. Nothing peers with `relay.motebit.com` unless you tell it to.
 
 ### Build a service agent
 
@@ -75,7 +75,7 @@ Registered with relay: https://relay.motebit.com
 
 Your agent is live and discoverable — an **atom** in the marketplace, a single capability with identity. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. Run `npm run self-test` to verify the full receipt loop end-to-end.
 
-The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them, becoming a **molecule** that composes other agents — remove `--direct` from `src/index.ts` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum: identity, signing, and settlement are identical; only the tool-selection layer changes.
+The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them, becoming a **molecule** that composes other agents — remove `--direct` from `src/index.ts` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
 
 ## What it is
 
