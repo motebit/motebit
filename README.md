@@ -8,6 +8,7 @@
   <a href="https://github.com/motebit/motebit/actions/workflows/ci.yml"><img src="https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>
   <a href="https://www.npmjs.com/package/@motebit/sdk"><img src="https://img.shields.io/npm/v/@motebit/sdk?label=%40motebit%2Fsdk" alt="@motebit/sdk"></a>
+  <a href="https://github.com/motebit/motebit/pkgs/container/api"><img src="https://img.shields.io/github/v/tag/motebit/motebit?filter=relay-v*&label=ghcr.io%2Fmotebit%2Fapi&logo=docker&logoColor=white" alt="ghcr.io/motebit/api"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/protocol-Apache--2.0-green" alt="Protocol: Apache-2.0"></a>
 </p>
@@ -50,6 +51,20 @@ motebit relay up
 ```
 
 `motebit relay up` is the sovereignty one-liner. Your relay, your identity key (Ed25519, generated on first boot, stored in `~/.motebit/relay/relay.db`), your settlement policy. Isolated by default — federation is opt-in via `--federation-url <public-url>`. x402 settlement stays off until you pass `--pay-to-address 0x…`. Nothing peers with `relay.motebit.com` unless you tell it to.
+
+### Run a signed relay container
+
+For multi-tenant operators who want the relay as a verifiable binary instead of an `npm install`: pull the signed multi-arch container, verify the signature, and run it.
+
+```bash
+docker pull ghcr.io/motebit/api:1.0.0
+
+cosign verify ghcr.io/motebit/api:1.0.0 \
+  --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+Both commands work without authentication. The image is built for `linux/amd64` and `linux/arm64`, signed via Sigstore keyless OIDC, and carries a SLSA build-provenance attestation binding the image digest to this exact source commit. Verifying is mandatory, not optional — verifiability is the protocol's premise. See [`docs/operator/self-host.md`](docs/operator/self-host.md) for the verify-and-run flow, [`docker-compose.example.yml`](docs/operator/docker-compose.example.yml) for a reference operator stack, and the federation peering path. The CLI above is fastest for local-dev experimentation; the container is the right shape for production self-hosting and federation.
 
 ### Build a service agent
 
