@@ -16,7 +16,7 @@ This file is the canonical index. The README, [CLAUDE.md](CLAUDE.md), and the do
 
 5. **[THE_METABOLIC_PRINCIPLE.md](THE_METABOLIC_PRINCIPLE.md)** — what the interior builds vs. what it absorbs. Build the vessel, not the ocean. Enzymes are owned; glucose is adapted. The architectural foundation of every adapter boundary.
 
-6. **[THE_EMERGENT_INTERIOR.md](THE_EMERGENT_INTERIOR.md)** — the interior is not passive substance but ongoing process. The droplet is alive between user prompts: it consolidates memory, prunes phantom beliefs, resolves contradictions on its own.
+6. **[THE_EMERGENT_INTERIOR.md](THE_EMERGENT_INTERIOR.md)** — the interior reaching outward, not just inward. Where the prior chain assumes the interior is reactive (it metabolizes what crosses the boundary), this derives proactive behavior: the droplet consolidates memory, prunes phantom beliefs, and resolves contradictions on its own between prompts.
 
 7. **[THE_SELF_SIGNING_BODY.md](THE_SELF_SIGNING_BODY.md)** — verifiability that survives the relay. The proof of the interior's private work, mechanically constructed so anyone can verify it without trusting any motebit-operated system.
 
@@ -26,6 +26,6 @@ This file is the canonical index. The README, [CLAUDE.md](CLAUDE.md), and the do
 
 ## How to read it
 
-Read in order. Each document cites the prior ones in its own abstract; the chain is a partial order, not a flat list. A capability the README declares is the surface expression of one or more links in this chain — the chain is the depth, the capabilities are what you see.
+Read in order. The numbering above is one valid linearization of the citation DAG; the abstracts cite each other in a partial order, not a flat one. A capability the README declares is the surface expression of one or more links in this chain — the chain is the depth, the capabilities are what you see.
 
 When the chain extends, the new document lands here. The README points to this file; this file points to the documents. That's the synchronization invariant doing its job.
