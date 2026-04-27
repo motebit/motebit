@@ -365,7 +365,20 @@ function emitLlmsFullTxt(sections: Section[]): string {
   return lines.join("\n");
 }
 
-function main(): void {
+/**
+ * Compute the canonical output strings without writing them. Pure
+ * function over the on-disk source — the same inputs produce the
+ * same outputs byte-for-byte. The freshness gate
+ * (`check-llms-txt-fresh`) imports this and compares to committed
+ * state; the CLI entry point writes the result to disk.
+ */
+export function generateLlmsArtifacts(): {
+  llmsTxt: string;
+  llmsFullTxt: string;
+  docsSectionCount: number;
+  docsPageCount: number;
+  foundationalDocCount: number;
+} {
   const docsSections = resolveSections(DOCS_CONTENT_DIR, "/docs");
   const foundational = loadFoundationalDocs();
   const allSections = [...docsSections, foundational];
@@ -377,20 +390,36 @@ function main(): void {
   // (it defines what motebit IS), so it lands as its own H2 section
   // in BOTH llms.txt (links + descriptions) and llms-full.txt (full
   // body), not in "## Optional" and not as a single hidden link.
-  const llmsTxt = emitLlmsTxt(allSections);
-  const llmsFullTxt = emitLlmsFullTxt(allSections);
-
-  writeFileSync(join(PUBLIC_DIR, "llms.txt"), llmsTxt);
-  writeFileSync(join(PUBLIC_DIR, "llms-full.txt"), llmsFullTxt);
-
-  const docsPages = docsSections.reduce((acc, s) => acc + s.pages.length, 0);
-  console.log(
-    `generate-llms-txt: emitted ${docsPages} docs page(s) across ${docsSections.length} section(s) + ${foundational.pages.length} foundational doc(s) →`,
-  );
-  console.log(`  ${relative(REPO_ROOT, join(PUBLIC_DIR, "llms.txt"))} (${llmsTxt.length} bytes)`);
-  console.log(
-    `  ${relative(REPO_ROOT, join(PUBLIC_DIR, "llms-full.txt"))} (${llmsFullTxt.length} bytes)`,
-  );
+  return {
+    llmsTxt: emitLlmsTxt(allSections),
+    llmsFullTxt: emitLlmsFullTxt(allSections),
+    docsSectionCount: docsSections.length,
+    docsPageCount: docsSections.reduce((acc, s) => acc + s.pages.length, 0),
+    foundationalDocCount: foundational.pages.length,
+  };
 }
 
-main();
+export const LLMS_TXT_PATH = join(PUBLIC_DIR, "llms.txt");
+export const LLMS_FULL_TXT_PATH = join(PUBLIC_DIR, "llms-full.txt");
+
+function main(): void {
+  const { llmsTxt, llmsFullTxt, docsSectionCount, docsPageCount, foundationalDocCount } =
+    generateLlmsArtifacts();
+
+  writeFileSync(LLMS_TXT_PATH, llmsTxt);
+  writeFileSync(LLMS_FULL_TXT_PATH, llmsFullTxt);
+
+  console.log(
+    `generate-llms-txt: emitted ${docsPageCount} docs page(s) across ${docsSectionCount} section(s) + ${foundationalDocCount} foundational doc(s) →`,
+  );
+  console.log(`  ${relative(REPO_ROOT, LLMS_TXT_PATH)} (${llmsTxt.length} bytes)`);
+  console.log(`  ${relative(REPO_ROOT, LLMS_FULL_TXT_PATH)} (${llmsFullTxt.length} bytes)`);
+}
+
+// Run main() only when invoked directly, not when imported as a
+// module by `check-llms-txt-fresh`. Comparing the import URL to the
+// argv entry point is the standard ESM-safe replacement for
+// `require.main === module`.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}

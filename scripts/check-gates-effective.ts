@@ -953,6 +953,33 @@ export const __probeOnlyDeprecationDrift = 1;
         ].join("\n"),
       ),
   },
+  {
+    script: "check-llms-txt-fresh",
+    proves:
+      "flags llms.txt drifted from generator output — appending a stale line to the committed artifact makes the freshness gate's byte-comparison fail",
+    perturb: () =>
+      // Mutate the committed llms.txt by appending a marker that the
+      // generator would never produce. The gate regenerates in-process
+      // and compares byte-for-byte; the appended line forces a delta.
+      mutateFile(
+        "apps/docs/public/llms.txt",
+        (src) => `${src}\n<!-- ${PROBE_PREFIX}stale_line — drift gate probe -->\n`,
+      ),
+  },
+  {
+    script: "check-doctrine-format",
+    proves:
+      "flags DOCTRINE.md chain bullet whose canonical bold-link format is broken — dropping the `**` markers reduces the parser's match count below the expected nine and the gate fires",
+    perturb: () =>
+      // Drop the `**…**` bold markers from the first chain bullet.
+      // The parser regex requires the bold link, so removing it
+      // drops parsed-chain-length from 9 to 8 and the
+      // EXPECTED_CHAIN_LENGTH check fires. Reversed cleanly by
+      // mutateFile's restore.
+      mutateFile("DOCTRINE.md", (src) =>
+        src.replace(/^1\. \*\*\[([^\]]+)\]\(([^)]+)\)\*\* — /m, "1. [$1]($2) — "),
+      ),
+  },
 ];
 
 /**

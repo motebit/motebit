@@ -31,14 +31,62 @@
  * gap in the drift-defense system itself.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
-import { readFileSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
+
+/**
+ * Test-fixture marker used by `check-gates-effective`. Probe files
+ * carry this prefix so they're identifiable across the tree.
+ */
+const PROBE_PREFIX = "__gate_probe__";
+
+/**
+ * Drain orphan gate-probe files at the start of every `pnpm check`
+ * run. Probe files are deliberately structured to look like
+ * violations of source-walking gates (e.g.
+ * `check-trust-propagation-primitives`), so a probe that survives an
+ * interrupted `check-gates-effective` run will fail an unrelated
+ * gate the next time it's run on its own.
+ *
+ * `check-gates-effective` already calls `drainStalePerturbations` at
+ * its own startup, but the orphan window between an interrupted
+ * `check-gates-effective` and the next `pnpm check` left the tree
+ * dirty for any source-walking gate. This drain closes that window
+ * — orphan probes get removed before any gate runs.
+ *
+ * Quiet on the happy path: only logs when files are found and
+ * removed, matching the same pattern the canonical drain in
+ * `check-gates-effective` uses.
+ */
+function drainStaleProbes(): void {
+  const result = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], {
+    cwd: ROOT,
+    encoding: "utf-8",
+  });
+  if (result.status !== 0) return;
+  const orphans = result.stdout
+    .split("\n")
+    .filter((line) => line.length > 0 && line.includes(PROBE_PREFIX));
+  if (orphans.length === 0) return;
+  process.stderr.write(
+    `\nDetected ${orphans.length} stale gate-probe fixture(s) from a prior interrupted run; draining before checks…\n`,
+  );
+  for (const f of orphans) {
+    try {
+      unlinkSync(resolve(ROOT, f));
+      process.stderr.write(`  • removed ${f}\n`);
+    } catch (err) {
+      process.stderr.write(`  • could not remove ${f}: ${String(err)}\n`);
+    }
+  }
+  process.stderr.write("\n");
+}
 
 interface Gate {
   name: string;
@@ -243,6 +291,18 @@ const GATES: ReadonlyArray<Gate> = [
     defends:
       'every default-context Claude model literal in any README.md / CLAUDE.md / docs MDX page (`"default_model": "X"` JSON, `--model X` CLI flag, `Default model: X` / `Examples: ... \\`X\\`` prose) matches the canonical default extracted from the `defaultModel` ternary in apps/cli/src/args.ts; defends against the stale-model-literal class that drifted four places after the 2026-04 sonnet-4-5 → sonnet-4-6 bump (invariant #56, full history in docs/drift-defenses.md)',
     script: "check-docs-default-models",
+  },
+  {
+    name: "check-llms-txt-fresh",
+    defends:
+      "apps/docs/public/llms.txt and apps/docs/public/llms-full.txt match exactly what scripts/generate-llms-txt.ts would write from current source (docs MDX + DOCTRINE.md + the nine chain documents); same-shape gate as check-api-surface, applied to the LLM-facing surface, closes the freshness drift class where source MDX or a foundational doc was edited without rerunning the generator (invariant #57, full history in docs/drift-defenses.md)",
+    script: "check-llms-txt-fresh",
+  },
+  {
+    name: "check-doctrine-format",
+    defends:
+      "DOCTRINE.md's chain bullets match the canonical format the llms.txt generator parses (`N. **[FILENAME.md](FILENAME.md)** — derives X.`), the chain length matches the expected nine documents, every cited filename exists at the repo root, and no derives-clause is missing sentence punctuation; moves the failure earlier than the build-time throw in scripts/generate-llms-txt.ts so prose-only edits to DOCTRINE.md can't silently break the LLM-surface generation (invariant #58, full history in docs/drift-defenses.md)",
+    script: "check-doctrine-format",
   },
   {
     name: "check-license-doc-sync",
@@ -467,6 +527,10 @@ function assertRegistryCompleteness(): void {
 }
 
 async function main(): Promise<void> {
+  // Drain any orphan gate-probe files before running production
+  // gates. See `drainStaleProbes` for why this lives here and not
+  // only in `check-gates-effective`.
+  drainStaleProbes();
   assertRegistryCompleteness();
 
   // Concurrency ceiling — match the runner's reported parallelism but
