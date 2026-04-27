@@ -20,27 +20,28 @@
  *
  * What this probe enforces:
  *
- *   For every `\`motebit X\`` (inline code) or line-starting `motebit X`
- *   (fenced code block) in any .md / .mdx file under scope, `X` must be:
+ *   For every `\`motebit X [Y]\`` (inline code) or line-starting `motebit X [Y]`
+ *   (fenced code block) in any .md / .mdx file under scope:
  *
- *     - a real top-level subcommand defined in `apps/cli/src/index.ts`
- *       (`if (subcommand === "X")` dispatch arms), OR
- *     - a CLI flag (`-X` / `--X`), OR
- *     - the bare REPL invocation (no subcommand follows).
+ *     1. `X` must be a real top-level subcommand defined in
+ *        `apps/cli/src/index.ts` (`if (subcommand === "X")` dispatch arm).
+ *     2. If `X` has a child dispatcher (e.g. `federation`, `goal`,
+ *        `approvals`, `relay`, `migrate`) and `Y` is present and looks
+ *        subcommand-shaped, `Y` must be a real child of `X`.
+ *
+ * Sub-subcommand validation extracts children automatically from the
+ * dispatcher source — no hand-maintained child-set table — so adding
+ * a new `if (Xcmd === "Y")` arm to the CLI auto-extends the gate's
+ * acceptable vocabulary.
  *
  * Scope: every README.md / CLAUDE.md in the workspace plus every .mdx
  * under apps/docs/content/.
  *
  * Out of scope:
- *   - Subsubcommand validation (e.g. `motebit federation peer` only
- *     validates `federation`; the `peer` is treated as positional). The
- *     dispatch tree is shallow enough that the first-word check catches
- *     the high-impact drift class without false positives on legitimate
- *     positional args.
+ *   - Three-deep dispatch (none in current CLI).
  *   - Slash commands (`/discover`, `/mcp add`). Those are dispatched by
  *     `apps/cli/src/slash-commands.ts` and live in the `COMMANDS` array
- *     in `args.ts`; a future `check-docs-slash-claims` could mirror this
- *     gate against that source.
+ *     in `args.ts`; covered by `check-docs-slash-claims` (sibling gate).
  *
  * This is the fifty-fourth synchronization invariant defense.
  */
@@ -53,6 +54,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 
 const CLI_INDEX = path.join(REPO_ROOT, "apps/cli/src/index.ts");
+const CLI_SUBCOMMANDS_DIR = path.join(REPO_ROOT, "apps/cli/src/subcommands");
 const DOCS_ROOT = path.join(REPO_ROOT, "apps/docs/content");
 
 const SKIP_DIRS = new Set([
@@ -68,7 +70,9 @@ const SKIP_DIRS = new Set([
 interface Finding {
   readonly doc: string;
   readonly line: number;
+  readonly kind: "unknown-subcommand" | "unknown-subsubcommand";
   readonly subcommand: string;
+  readonly subsubcommand?: string;
   readonly snippet: string;
 }
 
@@ -92,20 +96,102 @@ function findFiles(dir: string, predicate: (p: string) => boolean): string[] {
   return out;
 }
 
+interface DispatchTree {
+  /** Top-level subcommands — every `if (subcommand === "X")` arm in index.ts. */
+  subcommands: Set<string>;
+  /**
+   * Children for each subcommand that has a child dispatcher. A subcommand
+   * absent from this map has no children — `motebit X anything` is allowed
+   * because anything after X is a positional arg, not a dispatch.
+   */
+  children: Map<string, Set<string>>;
+}
+
 /**
- * Extract canonical CLI subcommand set from `apps/cli/src/index.ts`.
- * The dispatcher uses `if (subcommand === "X")` blocks; that grep is
- * the source of truth. If the dispatcher form changes, this regex
- * needs to follow — the inline note above tells the next maintainer.
+ * Parse the CLI dispatcher to extract the full top-level + child-level
+ * subcommand tree. The dispatcher is hand-written nested if/else, so the
+ * extraction is regex-based:
+ *
+ *   1. Top-level: scan index.ts for `if (subcommand === "X")` and capture
+ *      the block body up to the first balanced `return;`.
+ *   2. Child-level: inside each top-level block, scan for `=== "Y"` patterns
+ *      that match the inner-positional-check shape
+ *      (e.g. `approvalCmd === "list"`, `fedCmd === "peer"`).
+ *   3. Subcommands implemented in `apps/cli/src/subcommands/<name>.ts`
+ *      that have their own positional dispatch (currently only `migrate`,
+ *      which handles `status` / `cancel` inline) are merged in by parsing
+ *      `subCmd === "Y"` patterns in those files.
+ *
+ * The parser is intentionally permissive: any `=== "X"` pattern within a
+ * top-level dispatch block is treated as a candidate child. False positives
+ * here are harmless (extra child names accepted) — the gate's job is to
+ * reject *unknown* invocations, so over-accepting in extraction is the safe
+ * direction. False negatives would be the fail mode worth fixing.
  */
-function loadCanonicalSubcommands(): Set<string> {
+function loadDispatchTree(): DispatchTree {
   const text = fs.readFileSync(CLI_INDEX, "utf8");
-  const set = new Set<string>();
-  const pattern = /if\s*\(\s*subcommand\s*===\s*"([a-z][a-z0-9-]*)"\s*\)/g;
-  for (const m of text.matchAll(pattern)) {
-    set.add(m[1]!);
+  const subcommands = new Set<string>();
+  const children = new Map<string, Set<string>>();
+
+  // Top-level dispatch arms.
+  const topPattern =
+    /if\s*\(\s*subcommand\s*===\s*"([a-z][a-z0-9-]*)"\s*\)\s*\{([\s\S]*?)^\s{2}\}/gm;
+  for (const m of text.matchAll(topPattern)) {
+    const sub = m[1]!;
+    const body = m[2]!;
+    subcommands.add(sub);
+
+    // Child-level arms: any other `=== "Y"` inside the block. Filters out
+    // numeric-only and obvious flag tokens by requiring the lowercase-letter
+    // start.
+    const childPattern = /===\s*"([a-z][a-z0-9-]*)"/g;
+    const childSet = new Set<string>();
+    for (const cm of body.matchAll(childPattern)) {
+      childSet.add(cm[1]!);
+    }
+    if (childSet.size > 0) {
+      children.set(sub, childSet);
+    }
   }
-  return set;
+
+  // Subcommand handlers with their own positional dispatch live in
+  // apps/cli/src/subcommands/. Today only `migrate` ships inline subcmds
+  // (status / cancel) — the others are flat. Parsing every file is cheap;
+  // any `subCmd === "Y"` style assignment is folded into the parent's
+  // child set.
+  let subcommandFiles: string[];
+  try {
+    subcommandFiles = fs
+      .readdirSync(CLI_SUBCOMMANDS_DIR)
+      .filter((f) => f.endsWith(".ts") && !f.startsWith("_"));
+  } catch {
+    subcommandFiles = [];
+  }
+  for (const fname of subcommandFiles) {
+    const stem = fname.replace(/\.ts$/, "");
+    if (!subcommands.has(stem)) continue; // only matters if parent is dispatched
+    const filePath = path.join(CLI_SUBCOMMANDS_DIR, fname);
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    // Pattern: `subCmd === "X"` or `subcmd === "X"` — the convention used
+    // inside subcommand files for inline child dispatch.
+    const innerPattern = /sub[Cc]md\s*===\s*"([a-z][a-z0-9-]*)"/g;
+    const inner = new Set<string>();
+    for (const im of content.matchAll(innerPattern)) {
+      inner.add(im[1]!);
+    }
+    if (inner.size > 0) {
+      const existing = children.get(stem) ?? new Set<string>();
+      for (const c of inner) existing.add(c);
+      children.set(stem, existing);
+    }
+  }
+
+  return { subcommands, children };
 }
 
 function lineOf(text: string, charIndex: number): number {
@@ -113,34 +199,56 @@ function lineOf(text: string, charIndex: number): number {
 }
 
 /**
- * Scan a single doc for `motebit <subcommand>` patterns inside code
- * delimiters (inline backticks or line-starting in fenced blocks).
+ * Scan a single doc for `motebit X [Y]` patterns inside code delimiters.
  *
- * The two anchoring shapes:
+ * Anchoring shapes:
  *   - `` `motebit X` ``    → opening backtick before `motebit`
- *   - line-start in code  → newline before `motebit` (catches fenced ```bash blocks)
+ *   - line-start in code  → newline before `motebit` (catches fenced blocks)
  *
- * Bare prose like "the motebit framework" or "as motebit and friends..."
- * is excluded by these anchors, avoiding false positives without hardcoding
- * an English stop-word list.
+ * The optional Y is captured if present and the next character after the
+ * second word is whitespace, end-of-line, end-of-code, or punctuation —
+ * preventing false-positive extraction from bare-prose adjectives.
  */
-function scanDoc(doc: string, canonical: Set<string>): Finding[] {
+function scanDoc(doc: string, tree: DispatchTree): Finding[] {
   const text = fs.readFileSync(doc, "utf8");
   const findings: Finding[] = [];
   const docRel = doc.replace(REPO_ROOT + "/", "");
 
-  // Match `motebit <word>` where the leading char is a backtick or newline,
-  // and <word> starts with a lowercase letter (excludes flags like `--serve`).
-  const pattern = /(?:`|\n)motebit\s+([a-z][a-z0-9-]*)/g;
+  // Two-word capture: `motebit X [Y]`. Y is optional; only a lowercase-letter
+  // word, not a flag. Anchored to backtick-or-newline before `motebit`. The
+  // trailing lookahead on Y requires the following character to be whitespace,
+  // backtick, newline, or end-of-string — this rejects filename-shaped tokens
+  // like `motebit verify motebit.md` (where `motebit` is the filename stem,
+  // not a subsubcommand) without hand-listing exceptions.
+  const pattern = /(?:`|\n)motebit\s+([a-z][a-z0-9-]*)(?:\s+([a-z][a-z0-9-]*)(?=[\s`\n]|$))?/g;
   for (const m of text.matchAll(pattern)) {
     const subcommand = m[1]!;
-    if (canonical.has(subcommand)) continue;
-    findings.push({
-      doc: docRel,
-      line: lineOf(text, m.index ?? 0),
-      subcommand,
-      snippet: m[0].replace(/^\n/, "").slice(0, 80),
-    });
+    const subsub = m[2];
+
+    if (!tree.subcommands.has(subcommand)) {
+      findings.push({
+        doc: docRel,
+        line: lineOf(text, m.index ?? 0),
+        kind: "unknown-subcommand",
+        subcommand,
+        snippet: m[0].replace(/^\n/, "").slice(0, 80),
+      });
+      continue;
+    }
+
+    // If Y is present and X has a child dispatcher, Y must be a known child.
+    // If X has no child dispatcher, Y is a positional arg — pass.
+    const childSet = tree.children.get(subcommand);
+    if (subsub != null && childSet != null && !childSet.has(subsub)) {
+      findings.push({
+        doc: docRel,
+        line: lineOf(text, m.index ?? 0),
+        kind: "unknown-subsubcommand",
+        subcommand,
+        subsubcommand: subsub,
+        snippet: m[0].replace(/^\n/, "").slice(0, 80),
+      });
+    }
   }
 
   return findings;
@@ -148,13 +256,13 @@ function scanDoc(doc: string, canonical: Set<string>): Finding[] {
 
 function main(): void {
   console.log(
-    "▸ check-docs-cli-claims — drift defense against fabricated `motebit <subcommand>` invocations in docs (e.g. `motebit pair` after the device-pairing protocol moved entirely into the desktop/mobile apps and was never CLI-wired). Extracts subcommands from `apps/cli/src/index.ts` and validates every backtick-anchored `motebit X` in scope resolves to a real dispatch arm.",
+    "▸ check-docs-cli-claims — drift defense against fabricated `motebit <subcommand>` invocations in docs (e.g. `motebit pair` after the device-pairing protocol moved entirely into the desktop/mobile apps and was never CLI-wired). Extracts the full dispatch tree (top-level + child-level) from `apps/cli/src/index.ts` and `apps/cli/src/subcommands/*.ts` and validates every backtick-anchored `motebit X [Y]` in scope resolves to a real dispatch arm.",
   );
 
-  const canonical = loadCanonicalSubcommands();
-  if (canonical.size === 0) {
+  const tree = loadDispatchTree();
+  if (tree.subcommands.size === 0) {
     console.error(
-      "✗ check-docs-cli-claims: failed to extract any subcommands from apps/cli/src/index.ts — the dispatcher pattern may have changed; update the regex in loadCanonicalSubcommands.",
+      "✗ check-docs-cli-claims: failed to extract any subcommands from apps/cli/src/index.ts — the dispatcher pattern may have changed; update the regex in loadDispatchTree.",
     );
     process.exit(1);
   }
@@ -166,12 +274,15 @@ function main(): void {
 
   const allFindings: Finding[] = [];
   for (const doc of docs) {
-    allFindings.push(...scanDoc(doc, canonical));
+    allFindings.push(...scanDoc(doc, tree));
   }
+
+  const subcommandCount = tree.subcommands.size;
+  const childTotal = [...tree.children.values()].reduce((n, s) => n + s.size, 0);
 
   if (allFindings.length === 0) {
     console.log(
-      `✓ check-docs-cli-claims: ${docs.length} doc(s) scanned; every \`motebit <subcommand>\` invocation resolves to a real dispatch arm in apps/cli/src/index.ts (${canonical.size} known subcommands).`,
+      `✓ check-docs-cli-claims: ${docs.length} doc(s) scanned; every \`motebit <subcommand> [<sub>]\` invocation resolves to a real dispatch arm (${subcommandCount} top-level subcommands, ${childTotal} child-level subcommands across ${tree.children.size} parents).`,
     );
     return;
   }
@@ -179,14 +290,22 @@ function main(): void {
   console.error(`✗ check-docs-cli-claims: ${allFindings.length} fabricated invocation(s):\n`);
   for (const f of allFindings) {
     console.error(`  ${f.doc}:${f.line}`);
-    console.error(
-      `    \`${f.snippet}\` — \`${f.subcommand}\` is not a CLI subcommand (apps/cli/src/index.ts has no \`if (subcommand === "${f.subcommand}")\` arm)\n`,
-    );
+    if (f.kind === "unknown-subcommand") {
+      console.error(
+        `    \`${f.snippet}\` — \`${f.subcommand}\` is not a CLI subcommand (apps/cli/src/index.ts has no \`if (subcommand === "${f.subcommand}")\` arm)\n`,
+      );
+    } else {
+      const knownChildren = [...(tree.children.get(f.subcommand) ?? [])].sort().join(", ");
+      console.error(
+        `    \`${f.snippet}\` — \`${f.subsubcommand}\` is not a child of \`motebit ${f.subcommand}\` (known children: ${knownChildren || "none"})\n`,
+      );
+    }
   }
   console.error(
-    `Known subcommands: ${[...canonical].sort().join(", ")}\n` +
-      "Either fix the doc invocation, add the missing subcommand to the CLI, or — if the\n" +
-      "dispatcher pattern changed — update the regex in loadCanonicalSubcommands.\n",
+    `Known top-level subcommands: ${[...tree.subcommands].sort().join(", ")}\n` +
+      "Either fix the doc invocation, add the missing dispatch arm in apps/cli/src/index.ts\n" +
+      "(or apps/cli/src/subcommands/*.ts for child arms), or — if the dispatcher pattern\n" +
+      "changed — update the regex in loadDispatchTree.\n",
   );
   process.exit(1);
 }

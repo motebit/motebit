@@ -27,13 +27,14 @@ The body changes. The identity persists.
 
 ## How these docs are organized
 
-Five sections. Pick by what you're trying to do.
+Four sections plus a release log. Pick by what you're trying to do.
 
 - **[Concepts](/docs/concepts/identity)** — the mental model. What identity, memory, receipts, trust, and governance mean in motebit, and how they fit together. Read this first if you've never seen motebit before.
 - **[Developer guide](/docs/developer/identity-standard)** — for people building on motebit. The `motebit.md` identity standard, federation protocol, MCP server scaffolding, delegation and credentials, the routing semiring. The "I want to integrate with motebit, or build a service agent on top of it" section.
 - **[App reference](/docs/apps/cli)** — per-surface reference for the shipped runtime: CLI, desktop, mobile, spatial, and shared configuration. The "what does this surface actually do?" section.
 - **[Operator guide](/docs/operator/architecture)** — for people running motebit. Architecture, daemon mode and approvals, sync between devices, troubleshooting a relay. The "I have it installed; how do I use it?" section.
-- **[Reference](/docs/changelog)** — release history per published package.
+
+Cross-cutting: the [changelog](/docs/changelog) lists what shipped in each published package release.
 
 The sections are not exclusive. A developer building a service agent will read the developer guide (for the integration shape) and the operator guide (for the relay they're connecting to). A reader who only wants to run motebit on their laptop needs concepts and the app reference for their surface. Pick by intent, not by job title.
 

@@ -229,8 +229,14 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-docs-cli-claims",
     defends:
-      'every backtick-anchored `motebit <subcommand>` invocation in any README.md / CLAUDE.md / docs MDX page resolves to a real `if (subcommand === "X")` arm in apps/cli/src/index.ts; defends against fabricated CLI invocations and obsolete flag-vs-subcommand shapes leaking into onboarding pages (invariant #54, full history in docs/drift-defenses.md)',
+      'every backtick-anchored `motebit <subcommand> [<sub>]` invocation in any README.md / CLAUDE.md / docs MDX page resolves to a real dispatch arm at the top level (apps/cli/src/index.ts) and the child level (inline `Xcmd === "Y"` patterns or apps/cli/src/subcommands/<name>.ts `subCmd === "Y"` patterns); defends against fabricated CLI invocations and obsolete flag-vs-subcommand shapes leaking into onboarding pages (invariant #54, full history in docs/drift-defenses.md)',
     script: "check-docs-cli-claims",
+  },
+  {
+    name: "check-docs-slash-claims",
+    defends:
+      "every backtick-anchored `/<slash-command>` invocation in any README.md / CLAUDE.md / docs MDX page (excluding apps/desktop.mdx and apps/mobile.mdx, which describe surface-native GUI registries) resolves to a real entry in the `COMMANDS` array of apps/cli/src/args.ts; sibling to check-docs-cli-claims, closing the same drift class for the REPL slash-command surface (invariant #55, full history in docs/drift-defenses.md)",
+    script: "check-docs-slash-claims",
   },
   {
     name: "check-license-doc-sync",

@@ -468,6 +468,20 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-docs-slash-claims",
+    proves:
+      'flags a backtick-anchored `/<slash-command>` invocation in any in-scope doc whose word has no `{ usage: "/X…" }` entry in apps/cli/src/args.ts COMMANDS array',
+    perturb: () =>
+      // Write a probe README invoking `/fakeslash` — a slash command that
+      // is not in the registry. The gate should fire with `/fakeslash is
+      // not in the COMMANDS array`. writeFixture cleans the file up
+      // after the probe.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}README.md`,
+        `# Probe README\n\nType \`/fakeslash\` to invoke a slash command that does not exist.\n`,
+      ),
+  },
+  {
     script: "check-license-doc-sync",
     proves:
       "flags a permissive-package directory present in the canonical license-field-derived set but missing from CONTRIBUTING.md's § License permissive-floor list",

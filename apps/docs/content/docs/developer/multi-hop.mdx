@@ -202,7 +202,7 @@ Each verified receipt in the chain creates a trust edge in the semiring computat
 
 These trust edges feed the semiring routing algorithm. When Alice later needs `web_search`, the relay's `graphRankCandidates` considers Bob's accumulated trust score — which includes the reliability of Bob's sub-delegates. An agent that delegates to unreliable services produces failed receipts, which decrement trust. An agent that delegates to reliable services produces clean receipt chains, which compound trust.
 
-After enough successful delegations, the relay may auto-promote trust levels through the `AgentTrustLevel` enum: `Unknown` / `FirstContact` → `Verified` (default thresholds: 5 successful tasks at ≥ 80% success rate per `@motebit/protocol`) → `Trusted` (continued reliability). `Blocked` is the terminal demotion state. Failed tasks trigger auto-demotion. The state machine is evaluated on every receipt via `evaluateTrustTransition`.
+After enough successful delegations, the relay may auto-promote trust levels through the `AgentTrustLevel` enum: `Unknown` / `FirstContact` → `Verified` → `Trusted`. The reference defaults live in `REFERENCE_TRUST_THRESHOLDS` (`packages/protocol/src/trust-algebra.ts`): promote to `Verified` at 5 successful tasks with ≥ 80% success rate, promote to `Trusted` at 20 successful tasks with ≥ 90% rate, demote when success rate drops below 50% with at least 3 tasks observed. `Blocked` is the terminal demotion state. The state machine is evaluated on every receipt via `evaluateTrustTransition`; an implementer can override the thresholds by passing a different `TrustTransitionThresholds` config.
 
 ## Building your own multi-hop service
 

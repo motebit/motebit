@@ -55,6 +55,10 @@ interface CanonicalCounts {
   publishedBsl: number;
   /** Workspace package.jsons declared `private: true` (everything internal). */
   privatePackages: number;
+  /** Drift-defense inventory rows in docs/drift-defenses.md (canonical for the prose count). */
+  driftInvariants: number;
+  /** Hard-CI-gate entries in scripts/check.ts GATES (canonical for "X run as hard CI gates"). */
+  hardCiGates: number;
 }
 
 function countDirs(parent: string): number {
@@ -112,6 +116,30 @@ function walkPackageJsons(): PkgInfo[] {
   return out;
 }
 
+/**
+ * Count drift-defense inventory rows. Canonical: every `^| <digit>+ |`
+ * line in the inventory table in `docs/drift-defenses.md`. Matches the
+ * Markdown table cell that begins each row of the invariants list.
+ */
+function countDriftInvariants(): number {
+  const file = resolve(ROOT, "docs/drift-defenses.md");
+  const text = readFileSync(file, "utf-8");
+  const matches = text.match(/^\| \d+\s+\|/gm);
+  return matches ? matches.length : 0;
+}
+
+/**
+ * Count hard CI gates registered in `scripts/check.ts`. Canonical: every
+ * `name: "check-..."` entry in the GATES array. The name is the unique
+ * key — duplicates would have already failed the runner.
+ */
+function countHardCiGates(): number {
+  const file = resolve(ROOT, "scripts/check.ts");
+  const text = readFileSync(file, "utf-8");
+  const matches = text.match(/^\s+name:\s*"check-/gm);
+  return matches ? matches.length : 0;
+}
+
 function deriveCanonical(): CanonicalCounts {
   const pkgs = walkPackageJsons();
   const published = pkgs.filter((p) => !p.isPrivate);
@@ -124,6 +152,8 @@ function deriveCanonical(): CanonicalCounts {
     publishedApache: published.filter((p) => p.license === "Apache-2.0").length,
     publishedBsl: published.filter((p) => p.license === "BUSL-1.1").length,
     privatePackages: pkgs.filter((p) => p.isPrivate).length,
+    driftInvariants: countDriftInvariants(),
+    hardCiGates: countHardCiGates(),
   };
 }
 
@@ -315,6 +345,21 @@ const DOCS: ReadonlyArray<DocFile> = [
         regex: /(\d+) packages publish from this monorepo/,
         key: "publishedTotal",
         label: "Lead — published total",
+      },
+    ],
+  },
+  {
+    path: "docs/drift-defenses.md",
+    probes: [
+      {
+        regex: /^(\d+) invariants are enforced today\./m,
+        key: "driftInvariants",
+        label: "Inventory summary — total invariants",
+      },
+      {
+        regex: /\. (\d+) run as hard CI gates via `pnpm check`/,
+        key: "hardCiGates",
+        label: "Inventory summary — hard CI gates",
       },
     ],
   },
