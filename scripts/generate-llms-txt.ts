@@ -44,6 +44,22 @@ const REPO_ROOT = resolve(__dirname, "..");
 const DOCS_CONTENT_DIR = join(REPO_ROOT, "apps", "docs", "content", "docs");
 const PUBLIC_DIR = join(REPO_ROOT, "apps", "docs", "public");
 const SITE_BASE = "https://docs.motebit.com";
+const GITHUB_BASE = "https://github.com/motebit/motebit/blob/main";
+
+/**
+ * DOCTRINE.md is the canonical index of the foundational derivation
+ * chain. The chain itself (which docs, in what order, with what
+ * one-line description) is parsed out of DOCTRINE.md's bullet list at
+ * generation time — single canonical source, zero sibling-listing
+ * drift between DOCTRINE.md, llms.txt, and llms-full.txt. Adding a
+ * tenth link to the chain means editing DOCTRINE.md only; the
+ * generator picks it up on the next build.
+ *
+ * DOCTRINE.md itself is the index of the index, so it's prepended as
+ * the first foundational entry rather than listed inside DOCTRINE.md's
+ * own chain.
+ */
+const DOCTRINE_FILENAME = "DOCTRINE.md";
 
 // ── Editorial preamble ──────────────────────────────────────────────────
 
@@ -80,10 +96,7 @@ const LLMS_FOOTER = `## Open specification
 
 ## Optional
 
-- [GitHub repository](https://github.com/motebit/motebit) — source, issues, discussions.
-- [DROPLET.md](https://github.com/motebit/motebit/blob/main/DROPLET.md) — design thesis: the body derived from physics.
-- [THE_SOVEREIGN_INTERIOR.md](https://github.com/motebit/motebit/blob/main/THE_SOVEREIGN_INTERIOR.md) — identity thesis.
-- [THE_METABOLIC_PRINCIPLE.md](https://github.com/motebit/motebit/blob/main/THE_METABOLIC_PRINCIPLE.md) — build enzymes, absorb glucose.
+- [GitHub repository](https://github.com/motebit/motebit): source, issues, discussions. Skippable for narrow context — the docs site and foundational documents above carry the load.
 `;
 
 const LLMS_FULL_PREAMBLE = `# Motebit — full documentation
@@ -244,9 +257,76 @@ function resolveSections(rootDir: string, urlPrefix: string): Section[] {
   return sections;
 }
 
+/**
+ * Parse DOCTRINE.md's chain bullets into an ordered list of
+ * { filename, description } entries. The parser expects DOCTRINE.md's
+ * canonical bullet format:
+ *
+ *   N. **[FILENAME.md](FILENAME.md)** — what this doc derives.
+ *
+ * Throws loudly if the parse yields zero entries — that's the signal
+ * DOCTRINE.md's format changed and the generator needs updating.
+ */
+function parseDoctrineChain(): ReadonlyArray<{ filename: string; derives: string }> {
+  const path = join(REPO_ROOT, DOCTRINE_FILENAME);
+  const raw = readFileSync(path, "utf-8");
+  const re = /^\d+\.\s+\*\*\[([^\]]+)\]\([^)]+\)\*\*\s+—\s+(.+)$/gm;
+  const entries: { filename: string; derives: string }[] = [];
+  for (const match of raw.matchAll(re)) {
+    entries.push({ filename: match[1]!, derives: match[2]!.trim() });
+  }
+  if (entries.length === 0) {
+    throw new Error(
+      `parseDoctrineChain: no chain bullets matched in ${DOCTRINE_FILENAME}. ` +
+        "Expected canonical bullet format: `N. **[FILENAME.md](FILENAME.md)** — derives X.`",
+    );
+  }
+  return entries;
+}
+
+/**
+ * Load the foundational chain documents from the repo root as a
+ * synthetic Section. The chain order and per-doc descriptions come
+ * from DOCTRINE.md. Titles come from the first H1 in each file.
+ *
+ * URLs are GitHub blob URLs because these files are not on the docs
+ * site — they're root-level repo content. `makeAbsoluteUrl` short-
+ * circuits already-absolute URLs so the GitHub link passes through.
+ */
+function loadFoundationalDocs(): Section {
+  const pages: PageEntry[] = [];
+
+  // DOCTRINE.md itself goes first as the index of the index.
+  const doctrinePath = join(REPO_ROOT, DOCTRINE_FILENAME);
+  const doctrineRaw = readFileSync(doctrinePath, "utf-8");
+  const doctrineTitle = (doctrineRaw.match(/^#\s+(.+)$/m)?.[1] ?? DOCTRINE_FILENAME).trim();
+  pages.push({
+    url: `${GITHUB_BASE}/${DOCTRINE_FILENAME}`,
+    title: doctrineTitle,
+    description: "the canonical index of the nine-document derivation chain.",
+    body: doctrineRaw.replace(/^#\s+.+\n+/m, "").trim(),
+  });
+
+  // Then each chain doc, parsed from DOCTRINE.md.
+  for (const entry of parseDoctrineChain()) {
+    const path = join(REPO_ROOT, entry.filename);
+    const raw = readFileSync(path, "utf-8");
+    const titleMatch = raw.match(/^#\s+(.+)$/m);
+    const title = titleMatch ? titleMatch[1]!.trim() : entry.filename;
+    pages.push({
+      url: `${GITHUB_BASE}/${entry.filename}`,
+      title,
+      description: entry.derives,
+      body: raw.replace(/^#\s+.+\n+/m, "").trim(),
+    });
+  }
+  return { heading: "Foundational documents", pages };
+}
+
 // ── Emit ────────────────────────────────────────────────────────────────
 
 function makeAbsoluteUrl(url: string): string {
+  if (url.startsWith("https://") || url.startsWith("http://")) return url;
   return `${SITE_BASE}${url}`;
 }
 
@@ -286,16 +366,26 @@ function emitLlmsFullTxt(sections: Section[]): string {
 }
 
 function main(): void {
-  const sections = resolveSections(DOCS_CONTENT_DIR, "/docs");
-  const llmsTxt = emitLlmsTxt(sections);
-  const llmsFullTxt = emitLlmsFullTxt(sections);
+  const docsSections = resolveSections(DOCS_CONTENT_DIR, "/docs");
+  const foundational = loadFoundationalDocs();
+  const allSections = [...docsSections, foundational];
+
+  // Per the llms.txt spec at llmstxt.org: H2-delimited "file list"
+  // sections are the canonical way to surface a corpus, and the
+  // "## Optional" section is reserved for genuinely-skippable
+  // secondary content. The foundational chain is primary content
+  // (it defines what motebit IS), so it lands as its own H2 section
+  // in BOTH llms.txt (links + descriptions) and llms-full.txt (full
+  // body), not in "## Optional" and not as a single hidden link.
+  const llmsTxt = emitLlmsTxt(allSections);
+  const llmsFullTxt = emitLlmsFullTxt(allSections);
 
   writeFileSync(join(PUBLIC_DIR, "llms.txt"), llmsTxt);
   writeFileSync(join(PUBLIC_DIR, "llms-full.txt"), llmsFullTxt);
 
-  const totalPages = sections.reduce((acc, s) => acc + s.pages.length, 0);
+  const docsPages = docsSections.reduce((acc, s) => acc + s.pages.length, 0);
   console.log(
-    `generate-llms-txt: emitted ${totalPages} page(s) across ${sections.length} section(s) →`,
+    `generate-llms-txt: emitted ${docsPages} docs page(s) across ${docsSections.length} section(s) + ${foundational.pages.length} foundational doc(s) →`,
   );
   console.log(`  ${relative(REPO_ROOT, join(PUBLIC_DIR, "llms.txt"))} (${llmsTxt.length} bytes)`);
   console.log(

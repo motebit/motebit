@@ -65,6 +65,19 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 - [Changelog](https://docs.motebit.com/docs/changelog): Where to find what changed across motebit's published packages.
 
+## Foundational documents
+
+- [Motebit Doctrine](https://github.com/motebit/motebit/blob/main/DOCTRINE.md): the canonical index of the nine-document derivation chain.
+- [Motebit: A Droplet of Intelligence Under Surface Tension](https://github.com/motebit/motebit/blob/main/DROPLET.md): the body. From the single premise _a droplet of intelligence under surface tension_, the equilibrium shape is a sphere, the eigenmotions are breathing and gravity sag, and every surface elaboration is a violation. Maximum interiority, minimum display.
+- [Liquescentia: The Medium, the Maker, the System-Holder](https://github.com/motebit/motebit/blob/main/LIQUESCENTIA.md): the world. A droplet cannot form in a vacuum; it requires a medium with different thermodynamic properties. The medium does not create the droplet — it permits it. The conditions of the medium determine what can cohere within it.
+- [The Music of the Medium](https://github.com/motebit/motebit/blob/main/THE_MUSIC_OF_THE_MEDIUM.md): their conversation. Pressure waves propagate through Liquescentia and reach the droplet's surface tension boundary. The boundary transduces. Surface tension becomes an instrument.
+- [Motebit: The Sovereign Interior](https://github.com/motebit/motebit/blob/main/THE_SOVEREIGN_INTERIOR.md): what is inside. The Ed25519 keypair as internal cohesion; identity, memory, trust, governance as interior structures persisting across mediums and providers.
+- [The Metabolic Principle](https://github.com/motebit/motebit/blob/main/THE_METABOLIC_PRINCIPLE.md): what the interior builds vs. what it absorbs. Build the vessel, not the ocean. Enzymes are owned; glucose is adapted. The architectural foundation of every adapter boundary.
+- [The Emergent Interior](https://github.com/motebit/motebit/blob/main/THE_EMERGENT_INTERIOR.md): the interior is not passive substance but ongoing process. The droplet is alive between user prompts: it consolidates memory, prunes phantom beliefs, resolves contradictions on its own.
+- [Motebit: The Self-Signing Body](https://github.com/motebit/motebit/blob/main/THE_SELF_SIGNING_BODY.md): verifiability that survives the relay. The proof of the interior's private work, mechanically constructed so anyone can verify it without trusting any motebit-operated system.
+- [Motebit: The Actor Principle](https://github.com/motebit/motebit/blob/main/THE_ACTOR_PRINCIPLE.md): what motebits are to each other. Every motebit is an actor; the relay is its broker; the receipt chain is its causal log; the adjudicator is its supervisor. The pattern crystallized the moment two motebits exchanged their first task.
+- [The Conference of Agents](https://github.com/motebit/motebit/blob/main/THE_CONFERENCE.md): many motebits in conversation. The multi-droplet extension of principles that derive a single droplet.
+
 ## Open specification
 
 - [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md): the open specification for agent identity files. Apache-2.0.
@@ -83,7 +96,4 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 ## Optional
 
-- [GitHub repository](https://github.com/motebit/motebit) — source, issues, discussions.
-- [DROPLET.md](https://github.com/motebit/motebit/blob/main/DROPLET.md) — design thesis: the body derived from physics.
-- [THE_SOVEREIGN_INTERIOR.md](https://github.com/motebit/motebit/blob/main/THE_SOVEREIGN_INTERIOR.md) — identity thesis.
-- [THE_METABOLIC_PRINCIPLE.md](https://github.com/motebit/motebit/blob/main/THE_METABOLIC_PRINCIPLE.md) — build enzymes, absorb glucose.
+- [GitHub repository](https://github.com/motebit/motebit): source, issues, discussions. Skippable for narrow context — the docs site and foundational documents above carry the load.
