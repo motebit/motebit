@@ -444,23 +444,31 @@ describe("create-motebit", () => {
     expect(after.some_other_field).toBe("still preserved");
   });
 
-  it("--agent --yes also enforces the identity-clobber gate", () => {
-    mkdirSync(configDir, { recursive: true });
+  it("--agent --yes refuses to clobber an existing local agent identity", () => {
+    // Self-contained agent identity lives at `<agent>/.motebit/config.json`,
+    // not the global `~/.motebit/`. The clobber gate guards the local path:
+    // running `--agent --yes` on a directory that already has its own
+    // `.motebit/config.json` must refuse without `--force`.
+    const agentDir = join(testDir, "my-agent");
+    const localConfigDir = join(agentDir, ".motebit");
+    mkdirSync(localConfigDir, { recursive: true });
     const existingConfig = {
       motebit_id: "019dc549-0186-7e8f-aba2-72ea76d4a324",
     };
-    const configFile = join(configDir, "config.json");
-    writeFileSync(configFile, JSON.stringify(existingConfig), "utf-8");
-    const beforeBytes = readFileSync(configFile, "utf-8");
+    const localConfigFile = join(localConfigDir, "config.json");
+    writeFileSync(localConfigFile, JSON.stringify(existingConfig), "utf-8");
+    const beforeBytes = readFileSync(localConfigFile, "utf-8");
 
     const { stdout, exitCode } = run(["my-agent", "--agent", "--yes"], testDir, {
       MOTEBIT_PASSPHRASE: "test-pw",
-      MOTEBIT_CONFIG_DIR: configDir,
+      // Note: NO MOTEBIT_CONFIG_DIR override — global config is irrelevant
+      // to the agent path now. The gate must fire purely from the local
+      // `.motebit/config.json` presence.
     });
 
     expect(exitCode).not.toBe(0);
-    expect(stdout).toContain("existing motebit identity");
-    const afterBytes = readFileSync(configFile, "utf-8");
+    expect(stdout).toContain("existing motebit agent identity");
+    const afterBytes = readFileSync(localConfigFile, "utf-8");
     expect(afterBytes).toBe(beforeBytes);
   });
 

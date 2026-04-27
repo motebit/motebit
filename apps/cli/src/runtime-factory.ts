@@ -286,6 +286,20 @@ export function buildToolRegistry(
 ): InMemoryToolRegistry {
   const registry = new InMemoryToolRegistry();
 
+  // `--direct` is the scaffolded-agent / minimal-mode signal: the user has
+  // declared "no AI loop, run my tools, nothing else." Injecting runtime
+  // builtins (read_file, web_search, recall_memories, etc.) on top of that
+  // breaks the principle of least surprise — a freshly scaffolded agent
+  // would advertise a memory store it can't serve, a filesystem surface
+  // the operator never opted into, and a 12-tool MCP listing where the
+  // README's "What you see:" block claims 2.
+  //
+  // Operator console (`motebit run`, `motebit relay up`) does NOT pass
+  // --direct, so this gate has no effect on the operator path.
+  // External tools loaded via `--tools <path>` are added by the daemon
+  // AFTER this function returns, so the user's tool set is preserved.
+  if (config.direct) return registry;
+
   // Always available (R0/R1): read-only file access, web search, web read
   registry.register(readFileDefinition, createReadFileHandler(config.allowedPaths));
 

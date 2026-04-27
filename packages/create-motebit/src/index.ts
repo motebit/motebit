@@ -76,6 +76,22 @@ function saveConfig(config: MotebitConfig): void {
 }
 
 /**
+ * Write a scaffolded agent's config to its OWN directory (`<agent>/.motebit/`)
+ * instead of the global `~/.motebit/`. This is what makes the agent dir
+ * self-contained and portable: copy the directory to another machine, set
+ * the passphrase, and it runs. The agent's encrypted identity key never
+ * touches the operator's global identity store.
+ *
+ * Pairs with `MOTEBIT_CONFIG_DIR=<agent>/.motebit` in the entrypoint
+ * template, which makes the spawned `motebit serve` resolve the same path.
+ */
+function writeAgentConfig(agentDir: string, config: MotebitConfig): void {
+  const dir = join(agentDir, ".motebit");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
+
+/**
  * Refuse to clobber an existing identity in the non-interactive path.
  *
  * `--yes` mode is what CI smokes, automation, and "I just want to try it"
@@ -235,6 +251,7 @@ const AGENT_GITIGNORE = `node_modules/
 .env
 *.key
 dist/
+.motebit/
 `;
 
 /**
@@ -439,12 +456,20 @@ function makeAgentEntrypoint(name: string): string {
  */
 
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import tools from "./tools.js";
 
+// Self-contained config: the scaffold wrote the encrypted identity to
+// \`<agent>/.motebit/\`. Resolve that path absolutely from this file's
+// location so the spawned \`motebit serve\` (below) reads THIS agent's
+// identity, not whatever happens to be at \`~/.motebit/\`. This is what
+// makes the agent dir portable.
+const agentRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const agentConfigDir = resolve(agentRoot, ".motebit");
+
 // Load the identity file
-const identityPath = resolve("motebit.md");
+const identityPath = resolve(agentRoot, "motebit.md");
 const identity = readFileSync(identityPath, "utf-8");
 
 // Build the tool definitions for the CLI serve command
@@ -486,7 +511,12 @@ if (isMainModule) {
   try {
     execFileSync("npx", ["motebit", ...serveArgs], {
       stdio: "inherit",
-      env: { ...process.env },
+      // Pin MOTEBIT_CONFIG_DIR to this agent's own config dir. Without this,
+      // the spawned \`motebit serve\` falls back to \`~/.motebit\` and tries
+      // to decrypt whatever encrypted key happens to live there — almost
+      // never the one the scaffold generated. Self-containment requires
+      // explicit pinning.
+      env: { ...process.env, MOTEBIT_CONFIG_DIR: agentConfigDir },
     });
   } catch {
     process.exit(1);
@@ -565,10 +595,25 @@ async function agentScaffold(
   let agentDescription: string;
 
   if (nonInteractive) {
-    // Same identity-clobber gate as guidedScaffold. The agent path also
-    // saves config (line ~447) and would silently rewrite an existing
-    // motebit's identity without this check.
-    assertNoExistingIdentity(force);
+    // Local-config-clobber gate. Agent identities live in `<agent>/.motebit/`
+    // (self-contained, see writeAgentConfig). The package.json check above
+    // already catches "scaffolding into an existing project"; this catch
+    // covers the partial-state case where `.motebit/config.json` exists in
+    // an otherwise empty directory. Replaces the previous global ~/.motebit
+    // clobber gate, which became inert once agents stopped writing globally.
+    const localConfigPath = join(absDir, ".motebit", "config.json");
+    if (!force && existsSync(localConfigPath)) {
+      console.log();
+      console.log(
+        `  ${red("!")} An existing motebit agent identity is present at ${dim(localConfigPath)}`,
+      );
+      console.log();
+      console.log(`    Refusing to overwrite without explicit consent.`);
+      console.log();
+      console.log(`    To intentionally replace it: ${dim("npx create-motebit ... --force")}`);
+      console.log();
+      process.exit(1);
+    }
     passphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
     if (!passphrase) {
       console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
@@ -637,14 +682,22 @@ async function agentScaffold(
   writeFileSync(join(absDir, "motebit.md"), result.identityFileContent, "utf-8");
   writeFileSync(join(absDir, "README.md"), makeAgentReadme(dirName, result.motebitId), "utf-8");
 
-  // Save identity to config
-  const config = loadConfig();
-  config.name = dirName;
-  config.motebit_id = result.motebitId;
-  config.device_id = result.deviceId;
-  config.device_public_key = result.publicKeyHex;
-  config.cli_encrypted_key = result.encryptedKey;
-  saveConfig(config);
+  // Save identity to the agent's OWN config dir (`<agent>/.motebit/`), not
+  // the global `~/.motebit/`. This makes the agent self-contained: the
+  // signed identity (motebit.md), the encrypted private key (.motebit/
+  // config.json), the runnable code (src/), and the dependency manifest
+  // (package.json) all live under one directory. Copy that directory to
+  // another machine, set MOTEBIT_PASSPHRASE, run; identity travels with
+  // the agent. The operator's global ~/.motebit/ identity is left untouched
+  // so scaffolding never collides with `motebit relay up`.
+  const agentConfig: MotebitConfig = {
+    name: dirName,
+    motebit_id: result.motebitId,
+    device_id: result.deviceId,
+    device_public_key: result.publicKeyHex,
+    cli_encrypted_key: result.encryptedKey,
+  };
+  writeAgentConfig(absDir, agentConfig);
 
   // Output
   const relDir = targetDir === "." ? "." : `./${dirName}`;

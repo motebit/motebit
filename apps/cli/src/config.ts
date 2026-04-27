@@ -15,7 +15,21 @@ import { type UnifiedProviderConfig, type GovernanceConfig } from "@motebit/sdk"
 declare const __PKG_VERSION__: string;
 export const VERSION: string =
   typeof __PKG_VERSION__ !== "undefined" ? __PKG_VERSION__ : "0.0.0-dev";
-export const CONFIG_DIR = path.join(os.homedir(), ".motebit");
+/**
+ * Config directory — `~/.motebit` by default, overridable via
+ * `MOTEBIT_CONFIG_DIR`. The override is what makes scaffolded agents
+ * self-contained: `create-motebit --agent` writes the encrypted identity
+ * to `<agent>/.motebit/`, and the scaffolded entrypoint sets
+ * `MOTEBIT_CONFIG_DIR=<agent>/.motebit` before spawning `motebit serve`.
+ * Without honouring the env var here, the spawned runtime would silently
+ * fall back to `~/.motebit/` — the operator's identity, not the agent's —
+ * and decrypt with the wrong passphrase. See create-motebit's
+ * writeAgentConfig + agent-entrypoint template for the matching ends.
+ *
+ * Operator usage (`motebit relay up`, `motebit run`, etc.) doesn't set
+ * the env var, so the default still resolves to `~/.motebit/`.
+ */
+export const CONFIG_DIR = process.env["MOTEBIT_CONFIG_DIR"] ?? path.join(os.homedir(), ".motebit");
 export const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 /** Local-relay state lives in a subdir so `motebit relay up` cannot collide with the CLI-agent's own `motebit.db`. */
 export const RELAY_DIR = path.join(CONFIG_DIR, "relay");
