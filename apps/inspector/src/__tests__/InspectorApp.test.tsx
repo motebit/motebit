@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
-import { AdminApp } from "../AdminApp";
+import { InspectorApp } from "../InspectorApp";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
 
 const originalFetch = globalThis.fetch;
@@ -293,16 +293,16 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe("AdminApp", () => {
+describe("InspectorApp", () => {
   it("renders without crashing", () => {
     setupFailingFetch();
-    render(React.createElement(AdminApp));
-    expect(screen.getByText("Motebit Admin")).toBeTruthy();
+    render(React.createElement(InspectorApp));
+    expect(screen.getByText("Motebit Inspector")).toBeTruthy();
   });
 
-  it("shows all 9 navigation buttons", () => {
+  it("shows all 12 navigation buttons (single-agent inspector — no fleet tabs)", () => {
     setupFailingFetch();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
     expect(screen.getByText("state")).toBeTruthy();
     expect(screen.getByText("memory")).toBeTruthy();
     expect(screen.getByText("behavior")).toBeTruthy();
@@ -312,11 +312,18 @@ describe("AdminApp", () => {
     expect(screen.getByText("plans")).toBeTruthy();
     expect(screen.getByText("conversations")).toBeTruthy();
     expect(screen.getByText("devices")).toBeTruthy();
+    expect(screen.getByText("gradient")).toBeTruthy();
+    expect(screen.getByText("trust")).toBeTruthy();
+    expect(screen.getByText("credentials")).toBeTruthy();
+    // Fleet-shape panels (federation, accounts, anchoring) live in apps/operator.
+    expect(screen.queryByText("federation")).toBeNull();
+    expect(screen.queryByText("accounts")).toBeNull();
+    expect(screen.queryByText("anchoring")).toBeNull();
   });
 
   it("shows state panel by default with fetched values", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     await waitFor(() => {
       expect(screen.getByText("State Vector")).toBeTruthy();
@@ -329,7 +336,7 @@ describe("AdminApp", () => {
 
   it("shows Connected when fetch succeeds", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     await waitFor(() => {
       expect(screen.getByText("Connected")).toBeTruthy();
@@ -338,7 +345,7 @@ describe("AdminApp", () => {
 
   it("shows Disconnected when fetch fails", async () => {
     setupFailingFetch();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     await waitFor(() => {
       expect(screen.getByText("Disconnected")).toBeTruthy();
@@ -347,7 +354,7 @@ describe("AdminApp", () => {
 
   it("switches to memory panel on click", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("memory"));
 
@@ -358,7 +365,7 @@ describe("AdminApp", () => {
 
   it("switches to behavior panel on click", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("behavior"));
 
@@ -369,7 +376,7 @@ describe("AdminApp", () => {
 
   it("switches to events panel on click", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("events"));
 
@@ -380,7 +387,7 @@ describe("AdminApp", () => {
 
   it("switches to goals panel on click", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("goals"));
 
@@ -391,7 +398,7 @@ describe("AdminApp", () => {
 
   it("shows goal data in goals panel", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("goals"));
 
@@ -406,7 +413,7 @@ describe("AdminApp", () => {
 
   it("switches to conversations panel on click", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("conversations"));
 
@@ -417,7 +424,7 @@ describe("AdminApp", () => {
 
   it("shows conversation data in conversations panel", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("conversations"));
 
@@ -432,7 +439,7 @@ describe("AdminApp", () => {
 
   it("switches to devices panel on click", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("devices"));
 
@@ -443,7 +450,7 @@ describe("AdminApp", () => {
 
   it("shows device data in devices panel", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("devices"));
 
@@ -458,7 +465,7 @@ describe("AdminApp", () => {
 
   it("switches to plans panel on click", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("plans"));
 
@@ -469,7 +476,7 @@ describe("AdminApp", () => {
 
   it("shows plan data in plans panel", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("plans"));
 
@@ -488,7 +495,7 @@ describe("AdminApp", () => {
 
   it("expands plan to show steps", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("plans"));
 
@@ -508,7 +515,7 @@ describe("AdminApp", () => {
 
   it("shows step status badges and metadata", async () => {
     setupFetchMock();
-    render(React.createElement(AdminApp));
+    render(React.createElement(InspectorApp));
 
     fireEvent.click(screen.getByText("plans"));
 

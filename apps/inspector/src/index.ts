@@ -11,4 +11,4 @@
  * - Event log + tool audit
  */
 
-export { AdminApp } from "./AdminApp";
+export { InspectorApp } from "./InspectorApp";

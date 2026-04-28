@@ -37,7 +37,7 @@ motebit/
 │   ├── desktop/               [surface]     Tauri. Three.js creature, voice, operator mode.
 │   ├── mobile/                [surface]     React Native + Expo. Full parity with desktop.
 │   ├── spatial/               [surface]     AR/VR/WebXR. Creature-as-scene, typed spatial objects.
-│   ├── inspector/             [supporting]  React + Vite single-agent inspector. 15-tab interior view.
+│   ├── inspector/             [supporting]  React + Vite single-agent inspector. 12-tab interior view.
 │   ├── identity/              [supporting]  Static browser tool for inspecting motebit.md files.
 │   ├── vscode/                [supporting]  VS Code/Cursor extension. Thin shim that spawns `motebit lsp`.
 │   └── docs/                  [supporting]  Fumadocs + Next.js. This site.
@@ -186,7 +186,7 @@ The architectural role is "permissive floor"; the specific license instance (`Ap
 | `desktop`  | Surface    | Live     | Tauri glass droplet. Three.js creature, identity, operator mode, voice.                                        |
 | `mobile`   | Surface    | Live     | React Native + Expo. Full parity — expo-gl Three.js, SQLite adapters, plan-based goals.                        |
 | `spatial`  | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                            |
-| `inspector` | Supporting | Internal | React + Vite single-agent inspector. 15-tab real-time view of one motebit's interior via the relay.            |
+| `inspector` | Supporting | Internal | React + Vite single-agent inspector. 12 tabs: state, memory, behavior, events, audit, goals, plans, conversations, devices, gradient, trust, credentials. Reads one motebit's interior via the relay. |
 | `identity` | Supporting | Public   | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile.                               |
 | `docs`     | Supporting | Public   | Fumadocs + Next.js. This site.                                                                                 |
 

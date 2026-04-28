@@ -54,9 +54,6 @@ import { GradientPanel } from "./components/GradientPanel";
 import { TrustPanel } from "./components/TrustPanel";
 import { AgentGraphPanel } from "./components/AgentGraphPanel";
 import { CredentialsPanel } from "./components/CredentialsPanel";
-import { FederationPanel } from "./components/FederationPanel";
-import { AccountsPanel } from "./components/AccountsPanel";
-import { CredentialAnchoringPanel } from "./components/CredentialAnchoringPanel";
 
 const DEFAULT_STATE: MotebitState = {
   attention: 0,
@@ -70,7 +67,7 @@ const DEFAULT_STATE: MotebitState = {
   battery_mode: BatteryMode.Normal,
 };
 
-export function AdminApp(): React.ReactElement {
+export function InspectorApp(): React.ReactElement {
   const [state, setState] = useState<MotebitState>(DEFAULT_STATE);
   const [memories, setMemories] = useState<MemoryNode[]>([]);
   const [edges, setEdges] = useState<MemoryEdge[]>([]);
@@ -261,7 +258,7 @@ export function AdminApp(): React.ReactElement {
 
   const nav = React.createElement(
     "nav",
-    { className: "admin-nav" },
+    { className: "inspector-nav" },
     [
       "state",
       "memory",
@@ -275,9 +272,6 @@ export function AdminApp(): React.ReactElement {
       "gradient",
       "trust",
       "credentials",
-      "federation",
-      "accounts",
-      "anchoring",
     ].map((panel) =>
       React.createElement(
         "button",
@@ -371,15 +365,6 @@ export function AdminApp(): React.ReactElement {
         },
       });
       break;
-    case "federation":
-      content = React.createElement(FederationPanel, null);
-      break;
-    case "accounts":
-      content = React.createElement(AccountsPanel, null);
-      break;
-    case "anchoring":
-      content = React.createElement(CredentialAnchoringPanel, null);
-      break;
     default:
       content = React.createElement(
         "div",
@@ -390,10 +375,10 @@ export function AdminApp(): React.ReactElement {
 
   const header = React.createElement(
     "div",
-    { className: "admin-header" },
-    React.createElement("h1", null, "Motebit Admin"),
+    { className: "inspector-header" },
+    React.createElement("h1", null, "Motebit Inspector"),
     React.createElement(ConnectionStatus, { connected }),
   );
 
-  return React.createElement("div", { className: "admin-app" }, header, nav, content);
+  return React.createElement("div", { className: "inspector-app" }, header, nav, content);
 }

@@ -24,20 +24,20 @@ body {
   line-height: 1.5;
 }
 
-.admin-app {
+.inspector-app {
   max-width: 900px;
   margin: 0 auto;
   padding: 16px;
 }
 
-.admin-header {
+.inspector-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
 }
 
-.admin-header h1 {
+.inspector-header h1 {
   font-size: 16px;
   font-weight: 600;
 }
@@ -63,7 +63,7 @@ body {
   background: var(--red);
 }
 
-.admin-nav {
+.inspector-nav {
   display: flex;
   gap: 4px;
   margin-bottom: 16px;
@@ -71,7 +71,7 @@ body {
   padding-bottom: 8px;
 }
 
-.admin-nav button {
+.inspector-nav button {
   background: none;
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -83,7 +83,7 @@ body {
   text-transform: capitalize;
 }
 
-.admin-nav button.active {
+.inspector-nav button.active {
   background: var(--border);
   color: var(--text);
   border-color: var(--accent);
