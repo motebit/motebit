@@ -21,4 +21,4 @@ Layer 1. BSL-1.1. Takes an injected `EvmRpcAdapter` (type-only dep on `@motebit/
 
 ## Consumers
 
-- `services/api` — the relay. Provides `SqliteDepositDetectorStore`, wires the `onDeposit` callback to `sqliteAccountStoreFor(db).credit`, runs one instance per supported chain.
+- `services/relay` — the relay. Provides `SqliteDepositDetectorStore`, wires the `onDeposit` callback to `sqliteAccountStoreFor(db).credit`, runs one instance per supported chain.

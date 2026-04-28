@@ -108,7 +108,7 @@ module.exports = {
         "**/*.spec.ts",
         // Relay federation generates its own Ed25519 keypair for relay identity,
         // not a user surface — generateKeypair is the correct primitive here.
-        "services/api/src/federation.ts",
+        "services/relay/src/federation.ts",
       ],
       rules: {
         "no-restricted-imports": [

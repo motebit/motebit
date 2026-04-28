@@ -31,8 +31,8 @@ const BOUNDARY_GROUPS: BoundaryGroup[] = [
     name: "auth_boundaries",
     description: "Authentication, token signing/verification, bearer auth",
     files: [
-      "services/api/src/auth.ts",
-      "services/api/src/middleware.ts",
+      "services/relay/src/auth.ts",
+      "services/relay/src/middleware.ts",
       "packages/crypto/src/index.ts",
       "packages/mcp-server/src/index.ts",
     ],
@@ -53,10 +53,10 @@ const BOUNDARY_GROUPS: BoundaryGroup[] = [
     name: "rate_limiting",
     description: "Rate limiting across request tiers, WebSocket, federation",
     files: [
-      "services/api/src/rate-limiter.ts",
-      "services/api/src/middleware.ts",
-      "services/api/src/federation.ts",
-      "services/api/src/websocket.ts",
+      "services/relay/src/rate-limiter.ts",
+      "services/relay/src/middleware.ts",
+      "services/relay/src/federation.ts",
+      "services/relay/src/websocket.ts",
     ],
   },
   {
@@ -76,8 +76,8 @@ const BOUNDARY_GROUPS: BoundaryGroup[] = [
     files: [
       "packages/market/src/settlement.ts",
       "packages/market/src/budget.ts",
-      "services/api/src/accounts.ts",
-      "services/api/src/budget.ts",
+      "services/relay/src/accounts.ts",
+      "services/relay/src/budget.ts",
     ],
   },
   {
@@ -88,14 +88,14 @@ const BOUNDARY_GROUPS: BoundaryGroup[] = [
       "packages/market/src/reputation.ts",
       "packages/market/src/scoring.ts",
       "packages/policy/src/reputation.ts",
-      "services/api/src/credentials.ts",
-      "services/api/src/trust-graph.ts",
+      "services/relay/src/credentials.ts",
+      "services/relay/src/trust-graph.ts",
     ],
   },
   {
     name: "federation_boundaries",
     description: "Federation peering, circuit breaker, callbacks, peer auth",
-    files: ["services/api/src/federation.ts", "services/api/src/federation-callbacks.ts"],
+    files: ["services/relay/src/federation.ts", "services/relay/src/federation-callbacks.ts"],
   },
   {
     name: "sync_encryption_boundaries",
@@ -105,14 +105,14 @@ const BOUNDARY_GROUPS: BoundaryGroup[] = [
       "packages/sync-engine/src/encrypted-conversation-adapter.ts",
       "packages/sync-engine/src/encrypted-plan-adapter.ts",
       "packages/privacy-layer/src/index.ts",
-      "services/api/src/data-sync.ts",
+      "services/relay/src/data-sync.ts",
     ],
   },
   {
     name: "key_rotation_boundaries",
     description: "Key succession, rotation, signed tombstones",
     files: [
-      "services/api/src/key-rotation.ts",
+      "services/relay/src/key-rotation.ts",
       "packages/crypto/src/index.ts",
       "packages/core-identity/src/index.ts",
     ],

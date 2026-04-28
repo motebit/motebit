@@ -79,7 +79,7 @@ function parseEnvExample(path: string): Set<string> {
  * Recognizes three shapes:
  *   - process.env.FOO
  *   - process.env["FOO"]
- *   - parseBoolEnv("FOO", ...) / parseIntEnv / parseFloatEnv (services/api/src/env.ts helpers)
+ *   - parseBoolEnv("FOO", ...) / parseIntEnv / parseFloatEnv (services/relay/src/env.ts helpers)
  *
  * If a service introduces a new env-reading helper, extend the regex — the
  * gate's correctness depends on knowing every shape. Better to false-positive
@@ -160,7 +160,7 @@ function main(): void {
     // (fly-app minus the "motebit-" prefix), not the directory. Most
     // services match both (directory "web-search" → app "motebit-web-search"
     // → workflow "deploy-web-search.yml"), but the sync relay is historically
-    // deployed as "motebit-sync" from services/api, and that shape is preserved.
+    // deployed as "motebit-sync" from services/relay, and that shape is preserved.
     const shortName = appName.replace(/^motebit-/, "");
     const expectedWorkflow = `deploy-${shortName}.yml`;
     if (!workflows.has(expectedWorkflow)) {

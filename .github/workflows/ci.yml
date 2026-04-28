@@ -267,13 +267,13 @@ jobs:
         run: pip install --quiet --requirement examples/python-device-register/requirements.txt
 
       - name: Build relay and its workspace dependencies
-        # services/api depends on workspace packages whose `main` points to
-        # ./dist/index.js. Running `npx tsx services/api/src/server.ts`
+        # services/relay depends on workspace packages whose `main` points to
+        # ./dist/index.js. Running `npx tsx services/relay/src/server.ts`
         # without a prior build fails at module resolution because the dist/
-        # outputs don't exist yet. Filter to `@motebit/api...` so we only
+        # outputs don't exist yet. Filter to `@motebit/relay...` so we only
         # build the relay's transitive workspace deps, not the entire
         # monorepo.
-        run: pnpm --filter @motebit/api... build
+        run: pnpm --filter @motebit/relay... build
 
       - name: Boot relay in background
         # Minimal env: X402_PAY_TO_ADDRESS is the only required var; :memory:
@@ -286,7 +286,7 @@ jobs:
           NODE_ENV: "development"
           MOTEBIT_DB_PATH: ":memory:"
         run: |
-          npx tsx services/api/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
+          npx tsx services/relay/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
           echo $! > /tmp/relay.pid
 
       - name: Wait for /health
@@ -371,7 +371,7 @@ jobs:
       - name: Build relay and its workspace dependencies
         # See sibling python-conformance job for rationale; same boot recipe,
         # same tsx-resolves-dist requirement.
-        run: pnpm --filter @motebit/api... build
+        run: pnpm --filter @motebit/relay... build
 
       - name: Boot relay in background
         env:
@@ -380,7 +380,7 @@ jobs:
           NODE_ENV: "development"
           MOTEBIT_DB_PATH: ":memory:"
         run: |
-          npx tsx services/api/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
+          npx tsx services/relay/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
           echo $! > /tmp/relay.pid
 
       - name: Wait for /health

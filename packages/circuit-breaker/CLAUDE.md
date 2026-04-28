@@ -21,4 +21,4 @@ Layer 1. BSL-1.1. Zero internal deps, zero I/O. The clock is injected; the logge
 
 ## Consumers
 
-- `services/api` — federation forward health (`task-routing.ts`). See Rule 7 of `services/api/CLAUDE.md`.
+- `services/relay` — federation forward health (`task-routing.ts`). See Rule 7 of `services/relay/CLAUDE.md`.

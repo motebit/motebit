@@ -41,7 +41,7 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 - [`packages/self-knowledge/CLAUDE.md`](packages/self-knowledge/CLAUDE.md) — committed BM25 corpus over self-description docs; zero runtime deps
 - [`packages/mcp-client/CLAUDE.md`](packages/mcp-client/CLAUDE.md) — `CredentialSource`, `ServerVerifier`, OAuth
 - [`packages/panels/CLAUDE.md`](packages/panels/CLAUDE.md) — surface-agnostic panel controllers; state+actions here, render per surface
-- [`services/api/CLAUDE.md`](services/api/CLAUDE.md) — the relay
+- [`services/relay/CLAUDE.md`](services/relay/CLAUDE.md) — the relay
 - [`apps/spatial/CLAUDE.md`](apps/spatial/CLAUDE.md) — no panels
 
 Cross-cutting doctrine (read on demand):

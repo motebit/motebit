@@ -103,7 +103,7 @@ function classifyRelayError(
   const retryAfterSeconds = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : undefined;
 
   // Attempt to parse the structured relay error envelope. Relay returns
-  // `{ error, code, status }` (see services/api/src/errors.ts).
+  // `{ error, code, status }` (see services/relay/src/errors.ts).
   let relayCode: string | undefined;
   let relayMessage: string | undefined;
   try {

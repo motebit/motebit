@@ -646,7 +646,7 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
   {
     script: "check-wire-schema-usage",
     proves:
-      "flags a manifest-listed inbound wire handler that drops its wire-schemas import — mutates services/api/src/agents.ts to remove the @motebit/wire-schemas import statement, which Rule B (manifest-missing-import) catches",
+      "flags a manifest-listed inbound wire handler that drops its wire-schemas import — mutates services/relay/src/agents.ts to remove the @motebit/wire-schemas import statement, which Rule B (manifest-missing-import) catches",
     perturb: () =>
       // Strip the @motebit/wire-schemas import line(s) from agents.ts.
       // The gate's manifest requires ExecutionReceiptSchema in agents.ts;
@@ -654,7 +654,7 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
       // requirement and Rule B fires. Rule A would also fire if a call
       // remained without an import, but Rule B is the doctrine-load-bearing
       // rule (it catches handlers that bypass the schema entirely).
-      mutateFile("services/api/src/agents.ts", (src) =>
+      mutateFile("services/relay/src/agents.ts", (src) =>
         src.replace(
           /import\s*\{[^}]*\}\s*from\s*["']@motebit\/wire-schemas["'];?\n/g,
           "/* check-gates-effective probe — wire-schemas import removed */\n",
@@ -708,14 +708,14 @@ export async function fetchCredsInline(id: string): Promise<unknown> {
   {
     script: "check-spec-routes",
     proves:
-      "flags a public Hono route registration under services/api/src that carries none of @spec / @internal / @experimental — the unclassified rule (rule c) is the load-bearing case because it catches a new route shipping without any classification, which is the exact debt the gate exists to surface",
+      "flags a public Hono route registration under services/relay/src that carries none of @spec / @internal / @experimental — the unclassified rule (rule c) is the load-bearing case because it catches a new route shipping without any classification, which is the exact debt the gate exists to surface",
     perturb: () =>
-      // Fixture: a TS file under services/api/src/ that registers a Hono
+      // Fixture: a TS file under services/relay/src/ that registers a Hono
       // route with no preceding annotation. The gate's pending-annotation
       // TTL fires nothing for this declaration, so the route lands in the
       // `unclassified` bucket and the gate exits 1.
       writeFixture(
-        `services/api/src/${PROBE_PREFIX}unclassified_route.ts`,
+        `services/relay/src/${PROBE_PREFIX}unclassified_route.ts`,
         `import type { Hono } from "hono";\nexport function registerProbeRoute(app: Hono): void {\n  app.get("/__probe__/unclassified", (c) => c.text("probe"));\n}\n`,
       ),
   },

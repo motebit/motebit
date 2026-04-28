@@ -96,7 +96,7 @@ export function validateAllocation(allocation: BudgetAllocation): void {
 /**
  * Body of a SettlementRecord — every field except the signing triple
  * (`issuer_relay_id`, `suite`, `signature`). The relay's call site
- * adds those when persisting (see services/api/src/tasks.ts) by
+ * adds those when persisting (see services/relay/src/tasks.ts) by
  * passing this body through `signSettlement` from `@motebit/encryption`.
  *
  * `settleOnReceipt` is a pure-math function in Layer-2 `@motebit/market`

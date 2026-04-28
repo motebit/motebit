@@ -117,7 +117,7 @@ export interface SolanaRpcAdapter {
    * boundary is classification, not retrieval.
    *
    * This method is the only authorized boundary through which relay
-   * code may read Solana transactions. `services/api/src/p2p-verifier.ts`
+   * code may read Solana transactions. `services/relay/src/p2p-verifier.ts`
    * consumes it; do not add a second RPC path.
    */
   getTransaction(signature: string): Promise<TxVerificationResult>;

@@ -56,7 +56,7 @@ Self-attesting via code-is-public plus CI enforcement — verification is "clone
 - License enforcement (`scripts/check-deps.ts` plus root `LICENSE` / `NOTICE` / `LICENSING.md` and per-package `LICENSE` files on the permissive floor)
 - Cryptosuite compliance (`check-suite-declared`, `check-suite-dispatch`)
 - Trust algorithm correctness (`@motebit/protocol` is Apache-2.0, deterministic; any implementation produces identical output from identical input)
-- Custody split at the type level (`services/api/src/__tests__/custody-boundary.test.ts` — `@ts-expect-error` assertion)
+- Custody split at the type level (`services/relay/src/__tests__/custody-boundary.test.ts` — `@ts-expect-error` assertion)
 - Spatial expression doctrine (`apps/spatial/src/__tests__/spatial-expression.neg.test.ts`)
 
 ## How to apply the principle

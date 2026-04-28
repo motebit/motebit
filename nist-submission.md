@@ -44,7 +44,7 @@ Motebit is deployed across six surfaces (`apps/desktop/`, `apps/cli/`, `apps/mob
 
 **Which use-cases are in the near future?**
 
-Agent-to-agent delegation across organizational boundaries is implemented and operational. An agent on one relay can delegate tasks to agents on a peered relay — a procurement agent requesting quotes from a vendor's agent, a compliance agent querying a regulator's agent. This requires cryptographic identity that is portable across trust domains, delegation receipts that prove chain-of-custody, and budget-gated settlement between parties. Motebit's relay federation specification (`motebit/relay-federation@1.0`, stable) defines cross-relay task routing via semiring-algebraic graph traversal and settlement chains with receipt co-signing. The reference implementation (`services/api/src/federation.ts`, `packages/market/src/graph-routing.ts`, `packages/market/src/settlement.ts`) adds circuit breakers for forward-path health monitoring, with end-to-end federation tests.
+Agent-to-agent delegation across organizational boundaries is implemented and operational. An agent on one relay can delegate tasks to agents on a peered relay — a procurement agent requesting quotes from a vendor's agent, a compliance agent querying a regulator's agent. This requires cryptographic identity that is portable across trust domains, delegation receipts that prove chain-of-custody, and budget-gated settlement between parties. Motebit's relay federation specification (`motebit/relay-federation@1.0`, stable) defines cross-relay task routing via semiring-algebraic graph traversal and settlement chains with receipt co-signing. The reference implementation (`services/relay/src/federation.ts`, `packages/market/src/graph-routing.ts`, `packages/market/src/settlement.ts`) adds circuit breakers for forward-path health monitoring, with end-to-end federation tests.
 
 The near-future extension is multi-agent orchestration from a single user command. The CLI's `--plan` flag decomposes a complex task into capability-tagged steps, discovers the best available agent for each step via trust-weighted routing, delegates each step independently, and composes the results — with per-hop budget settlement.
 
@@ -150,7 +150,7 @@ This is analogous to mutual TLS but at the agent identity layer rather than the 
 
 **Enterprise CRL compatibility:** Motebit does not require a central revocation authority, but the architecture is explicitly compatible with enterprise revocation infrastructure. Credential verification accepts `checkRevoked` callbacks (`packages/market/src/credential-weight.ts`), and the relay's credential routes support revocation lists. Organizations can layer OCSP, CRL, or custom revocation policies on top of the agent identity layer without conflict.
 
-**Verification:** Specified in `identity-v1.md` §3.3 and §3.8.3. Implemented in `packages/crypto/src/index.ts` (`signGuardianRecoverySuccession`, `verifyKeySuccession`), `packages/verify/src/index.ts` (succession chain verification handles recovery records), and `services/api/src/key-rotation.ts` (relay accepts guardian recovery). Covered by 19 tests across crypto, verify, and identity-file packages.
+**Verification:** Specified in `identity-v1.md` §3.3 and §3.8.3. Implemented in `packages/crypto/src/index.ts` (`signGuardianRecoverySuccession`, `verifyKeySuccession`), `packages/verify/src/index.ts` (succession chain verification handles recovery records), and `services/relay/src/key-rotation.ts` (relay accepts guardian recovery). Covered by 19 tests across crypto, verify, and identity-file packages.
 
 **Relationship to OAuth 2.0 / OIDC:** Motebit's Ed25519 signed tokens serve a similar role to OAuth 2.0 access tokens but are self-verifiable without a token introspection endpoint. The MCP server's HTTP bearer auth is compatible with OAuth flows — an enterprise could layer OIDC on top for user-to-agent identity binding while the agent-to-agent layer uses Ed25519 signatures directly.
 
@@ -224,7 +224,7 @@ The identity file's `owner_id` field binds the agent to a human identity. The op
 - MemoryGovernor: `packages/policy/src/memory-governance.ts`
 - Governance thresholds: Section 3.3 of `spec/identity-v1.md`
 - Execution receipts: `packages/runtime/src/execution-ledger.ts`
-- Delegation via MCP: `packages/mcp-server/`, `services/api/src/task-routing.ts`
+- Delegation via MCP: `packages/mcp-server/`, `services/relay/src/task-routing.ts`
 - Market specification: `spec/market-v1.md` (budget allocation, settlement, micro-unit precision)
 - Multi-agent orchestration: `packages/planner/` (PlanEngine with delegation adapter)
 - Shell hardening: `packages/tools/src/builtins/shell-exec.ts` (allowlist, blocklist, destructive detection)

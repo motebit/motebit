@@ -27,14 +27,14 @@ pip install -r requirements.txt
 
 ## Running against a local relay
 
-The relay's executable boot path is `services/api/src/server.ts`, not `index.ts` (which is the library entry — side-effect-free at module load so embedders can import without binding ports). Boot it with the minimum env required:
+The relay's executable boot path is `services/relay/src/server.ts`, not `index.ts` (which is the library entry — side-effect-free at module load so embedders can import without binding ports). Boot it with the minimum env required:
 
 ```bash
 env PORT=3199 \
     X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
     NODE_ENV=development \
     MOTEBIT_DB_PATH=":memory:" \
-    npx tsx services/api/src/server.ts
+    npx tsx services/relay/src/server.ts
 ```
 
 `X402_PAY_TO_ADDRESS` is the only mandatory env var (any 0x-prefixed hex address suffices for local dev — settlement isn't exercised). `MOTEBIT_DB_PATH=":memory:"` keeps each run hermetic; for persistent dev use a path like `./data/relay.db`. Health probe:

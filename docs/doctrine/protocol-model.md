@@ -77,7 +77,7 @@ Key revocation events (`agent_revoked`, `key_rotated`) are anchored onchain imme
 
 ### Discovery, migration, dispute code-complete (2026-04-11)
 
-Discovery (`services/api/src/discovery.ts`): `GET /.well-known/motebit.json` signed relay metadata, `GET /api/v1/discover/:motebitId` with federation propagation, hop limits, loop prevention. Migration (`services/api/src/migration.ts`): MigrationToken, DepartureAttestation, CredentialBundle export, accept-migration with signature verification, cancel/depart lifecycle. Dispute (`services/api/src/disputes.ts`): allocation→disputed transition, evidence, signed operator resolution with refund/release/split, appeal (one per dispute), trust-layer disputes for p2p. CLI: `motebit discover`, `motebit migrate`. Protocol types (Apache-2.0) for all three in `@motebit/protocol`.
+Discovery (`services/relay/src/discovery.ts`): `GET /.well-known/motebit.json` signed relay metadata, `GET /api/v1/discover/:motebitId` with federation propagation, hop limits, loop prevention. Migration (`services/relay/src/migration.ts`): MigrationToken, DepartureAttestation, CredentialBundle export, accept-migration with signature verification, cancel/depart lifecycle. Dispute (`services/relay/src/disputes.ts`): allocation→disputed transition, evidence, signed operator resolution with refund/release/split, appeal (one per dispute), trust-layer disputes for p2p. CLI: `motebit discover`, `motebit migrate`. Protocol types (Apache-2.0) for all three in `@motebit/protocol`.
 
 ## The relay is a convenience layer, not a trust root
 

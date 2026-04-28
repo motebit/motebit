@@ -29,7 +29,7 @@
  * services/embed and services/proxy are glucose (stateless adapters),
  * not motebit participants — they're excluded.
  *
- * services/api is the relay — it IS the protocol's canonical implementation
+ * services/relay is the relay — it IS the protocol's canonical implementation
  * and is explicitly allowed to use crypto primitives directly. Not scanned.
  */
 

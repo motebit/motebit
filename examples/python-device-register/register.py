@@ -24,7 +24,7 @@ Dependencies:
     pip install pynacl requests
 
 Usage (against a local relay):
-    pnpm --filter @motebit/api dev   # start the relay in another terminal
+    pnpm --filter @motebit/relay dev   # start the relay in another terminal
     python register.py http://localhost:3001
 
 Usage (against staging):

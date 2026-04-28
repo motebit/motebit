@@ -321,7 +321,7 @@ A allocates budget at a relay, the relay holds the budget in an internal virtual
 | 9.1 pay-forward    | Yes                        | `SovereignDelegationAdapter` in `packages/planner`, CLI `--sovereign` flag | Available via flag    |
 | 9.2 onchain escrow | Yes (as permitted pattern) | No reference implementation                                                | Deferred until demand |
 | 9.3 hybrid         | Yes (as permitted pattern) | No reference implementation                                                | Deferred              |
-| 9.4 relay-mediated | Yes                        | `services/api` task routing + virtual ledger                               | Current default       |
+| 9.4 relay-mediated | Yes                        | `services/relay` task routing + virtual ledger                             | Current default       |
 
 The runtime default is 9.4 (relay-mediated). Pattern 9.1 (pay-forward) is available via `SovereignDelegationAdapter` and the CLI's `--sovereign` flag. The foundation law treats all four patterns as equally valid.
 
@@ -456,7 +456,7 @@ The route below is the binding cross-implementation contract. Renaming or reloca
 GET /api/v1/agents/:motebitId/solvency-proof?amount=<micro-units>
 ```
 
-Public — no bearer auth required, per services/api/CLAUDE.md rule 6 ("every truth the relay asserts is independently verifiable onchain without relay contact"). The query parameter `amount` is required, integer, micro-units, non-negative.
+Public — no bearer auth required, per services/relay/CLAUDE.md rule 6 ("every truth the relay asserts is independently verifiable onchain without relay contact"). The query parameter `amount` is required, integer, micro-units, non-negative.
 
 **Wire shape.** The response body every implementation MUST emit:
 
@@ -491,7 +491,7 @@ A proof is bound to a single `(motebit_id, amount_requested)` pair at a single p
 
 ### 11.2 Aggregated Withdrawal Execution (Implemented)
 
-As of 2026-04-15, the reference relay supports a **withdrawal aggregation layer** on top of `GuestRail.withdraw`. The default sweep (`services/api/src/sweep.ts`) fires one withdrawal per eligible agent per tick — for agents with small balances, each fire pays the rail's fixed cost. Aggregation defers sub-threshold items into a shared queue and fires on a per-rail policy.
+As of 2026-04-15, the reference relay supports a **withdrawal aggregation layer** on top of `GuestRail.withdraw`. The default sweep (`services/relay/src/sweep.ts`) fires one withdrawal per eligible agent per tick — for agents with small balances, each fire pays the rail's fixed cost. Aggregation defers sub-threshold items into a shared queue and fires on a per-rail policy.
 
 **Pending ledger.** Sweep-enqueued withdrawals live in `relay_pending_withdrawals` — keyed by `(pending_id)`, tagged with `rail`, and carrying a state machine `pending → firing → fired|failed` (also `cancelled` for operator intervention). The virtual account is debited at enqueue time; the fire path does not re-debit. A rail failure parks the row as `failed` with the debit still in place — the debit is the audit trail that funds were claimed.
 

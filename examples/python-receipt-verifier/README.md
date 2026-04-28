@@ -46,7 +46,7 @@ env PORT=3199 \
     X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
     NODE_ENV=development \
     MOTEBIT_DB_PATH=":memory:" \
-    npx tsx services/api/src/server.ts
+    npx tsx services/relay/src/server.ts
 
 # Terminal B — run the conformance test
 python conformance_test.py http://localhost:3199
@@ -100,7 +100,7 @@ This is the load-bearing demonstration: a Python verifier built against the spec
 
 ## Verifying a receipt fetched from a relay
 
-The relay archives full canonical receipt JSON under the admin endpoint `/api/v1/admin/receipts/<motebit-id>/<task-id>`; the bytes returned are byte-identical to what the signer signed (per `services/api` rule 11). Any party with admin access can fetch and verify directly:
+The relay archives full canonical receipt JSON under the admin endpoint `/api/v1/admin/receipts/<motebit-id>/<task-id>`; the bytes returned are byte-identical to what the signer signed (per `services/relay` rule 11). Any party with admin access can fetch and verify directly:
 
 ```bash
 python verify.py \

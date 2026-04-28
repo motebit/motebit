@@ -1310,7 +1310,7 @@ export const PLATFORM_FEE_RATE = 0.05;
 /**
  * Per-task settlement bookkeeping artifact.
  *
- * Foundation Law (services/api/CLAUDE.md rule 6):
+ * Foundation Law (services/relay/CLAUDE.md rule 6):
  * - Every truth the relay asserts (credential anchor proofs,
  *   revocation memos, settlement receipts) is independently
  *   verifiable onchain without relay contact.

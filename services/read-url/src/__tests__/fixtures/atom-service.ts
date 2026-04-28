@@ -4,7 +4,7 @@
  * receipt path without touching the network.
  *
  * Kept local to services/read-url; signed-receipt-e2e tests in other services
- * (services/api, services/code-review, services/research) each spin up their
+ * (services/relay, services/code-review, services/research) each spin up their
  * own atom with the shape they need. embed and proxy are skipped — they are
  * utility services that do not sign receipts.
  */

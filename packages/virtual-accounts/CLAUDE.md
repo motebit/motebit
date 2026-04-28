@@ -2,7 +2,7 @@
 
 Per-motebit ledger. Integer micro-units (1 USD = 1,000,000), credit/debit with transaction audit log, withdrawal lifecycle (request → link → complete | fail), dispute-window hold, Ed25519-signed withdrawal receipts.
 
-Layer 1. BSL-1.1. Depends only on `@motebit/crypto` (Layer 0 Apache-2.0 permissive floor — `canonicalJson`, `ed25519Sign`, `toBase64Url` for receipt signing). Persistence is inverted: the package defines an `AccountStore` interface and ships `InMemoryAccountStore` for tests. Consumers (services/api) provide their own `AccountStore` implementation — typically `SqliteAccountStore` over `@motebit/persistence`'s `DatabaseDriver`.
+Layer 1. BSL-1.1. Depends only on `@motebit/crypto` (Layer 0 Apache-2.0 permissive floor — `canonicalJson`, `ed25519Sign`, `toBase64Url` for receipt signing). Persistence is inverted: the package defines an `AccountStore` interface and ships `InMemoryAccountStore` for tests. Consumers (services/relay) provide their own `AccountStore` implementation — typically `SqliteAccountStore` over `@motebit/persistence`'s `DatabaseDriver`.
 
 ## Rules
 
@@ -23,4 +23,4 @@ Layer 1. BSL-1.1. Depends only on `@motebit/crypto` (Layer 0 Apache-2.0 permissi
 
 ## Consumers
 
-- `services/api` — the relay. Provides `SqliteAccountStore` against its `DatabaseDriver` and wires the ledger into deposit, withdrawal, task-settlement, and dispute-refund paths. During the shim-deprecation window, `services/api/src/accounts.ts` re-exports this package's API with a singleton SQLite store to keep legacy imports working.
+- `services/relay` — the relay. Provides `SqliteAccountStore` against its `DatabaseDriver` and wires the ledger into deposit, withdrawal, task-settlement, and dispute-refund paths. During the shim-deprecation window, `services/relay/src/accounts.ts` re-exports this package's API with a singleton SQLite store to keep legacy imports working.

@@ -172,7 +172,7 @@ The relay is open source. Run it with Docker or from source:
 
 ```bash
 # Docker (recommended)
-docker build -t motebit-relay -f services/api/Dockerfile .
+docker build -t motebit-relay -f services/relay/Dockerfile .
 docker run -p 3000:3000 \
   -e MOTEBIT_API_TOKEN=your-secret \
   -e MOTEBIT_DB_PATH=/data/relay.db \
@@ -181,7 +181,7 @@ docker run -p 3000:3000 \
   motebit-relay
 
 # Or from source
-cd services/api
+cd services/relay
 MOTEBIT_API_TOKEN=your-secret \
 MOTEBIT_DB_PATH=./relay.db \
 X402_PAY_TO_ADDRESS=0xYourWallet \

@@ -11,7 +11,7 @@ services:
   relay-a:
     build:
       context: .
-      dockerfile: services/api/Dockerfile
+      dockerfile: services/relay/Dockerfile
     ports:
       - "3000:3000"
     environment:
@@ -39,7 +39,7 @@ services:
   relay-b:
     build:
       context: .
-      dockerfile: services/api/Dockerfile
+      dockerfile: services/relay/Dockerfile
     ports:
       - "3001:3000"
     environment:

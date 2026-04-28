@@ -237,7 +237,7 @@ Signed tokens authenticate the agent — they do not authorize specific operatio
 
 - Token creation: `@motebit/crypto` — `createSignedToken(payload, privateKey)`
 - Token verification: `@motebit/crypto` — `verifySignedToken(token, publicKey)`
-- Device-scoped verification: `services/api/src/auth.ts` — `verifySignedTokenForDevice()`
+- Device-scoped verification: `services/relay/src/auth.ts` — `verifySignedTokenForDevice()`
 - Type definition: `@motebit/crypto` — `SignedTokenPayload` interface
 
 ---

@@ -72,7 +72,7 @@ fly secrets set \
   -a motebit-sync
 
 # Deploy
-fly deploy -a motebit-sync --config services/api/fly.toml --dockerfile services/api/Dockerfile
+fly deploy -a motebit-sync --config services/relay/fly.toml --dockerfile services/relay/Dockerfile
 
 ok "Relay deployed at $RELAY_URL"
 

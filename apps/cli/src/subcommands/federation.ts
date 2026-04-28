@@ -141,7 +141,7 @@ export async function handleFederationPeer(config: CliConfig): Promise<void> {
   //    proposer cannot stand in — the signature must be over the
   //    real relay_id, which only the relay's own propose path will
   //    produce. Mirrors the federation-e2e test's self-propose
-  //    pattern (services/api/src/__tests__/federation-e2e.test.ts).
+  //    pattern (services/relay/src/__tests__/federation-e2e.test.ts).
   const oracle1 = await fetch(`${relayUrl}/federation/v1/peer/propose`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

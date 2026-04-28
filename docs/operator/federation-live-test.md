@@ -4,7 +4,7 @@ The `scripts/test-federation-live.mjs` script exercises Phases 1-5 of `motebit/r
 
 ## When to run
 
-- After any change to `services/api/src/federation.ts` or `packages/circuit-breaker/`.
+- After any change to `services/relay/src/federation.ts` or `packages/circuit-breaker/`.
 - After any change to the `FEDERATION_SUITE` literal (the cryptosuite identifier used in peering + heartbeat signing).
 - Quarterly as a recurring liveness probe of the staging federation.
 
@@ -12,10 +12,10 @@ The `scripts/test-federation-live.mjs` script exercises Phases 1-5 of `motebit/r
 
 Two real relay deployments are required. The reference setup uses Fly.io:
 
-| Relay | URL                                  | Config                            |
-| ----- | ------------------------------------ | --------------------------------- |
-| A     | `https://motebit-sync-stg.fly.dev`   | `services/api/fly.staging.toml`   |
-| B     | `https://motebit-sync-stg-b.fly.dev` | `services/api/fly.staging-b.toml` |
+| Relay | URL                                  | Config                              |
+| ----- | ------------------------------------ | ----------------------------------- |
+| A     | `https://motebit-sync-stg.fly.dev`   | `services/relay/fly.staging.toml`   |
+| B     | `https://motebit-sync-stg-b.fly.dev` | `services/relay/fly.staging-b.toml` |
 
 Both apps share the **same** `MOTEBIT_API_TOKEN`. The script registers a test agent on B and discovers it from A under that bearer.
 
@@ -46,13 +46,13 @@ A clean pass returns `20/20 PASSED`. Two tests are SKIP-by-design (the script us
 - **Phase 2 — Peering handshake (4 tests):** Synthetic peer A proposes to relay B; B challenges with a nonce; A signs `${relay_id}:${nonce}:${FEDERATION_SUITE}`; B verifies and activates the peer record. The `:${FEDERATION_SUITE}` suffix is critical — it binds the handshake to a specific cryptosuite (`motebit-concat-ed25519-hex-v1`) so a peer attesting under a different suite is rejected.
 - **Phase 3 — Federated discovery (4 tests):** Test agent registered on relay B is discoverable through `GET /api/v1/agents/discover` (local) and `POST /federation/v1/discover` (the cross-relay path).
 - **Phase 4 — Heartbeat (4 tests):** Heartbeat signs `${relay_id}|${timestamp}|${FEDERATION_SUITE}` (note the `|` separator — distinct from the peering `:` separator); relay verifies the signature, records the timestamp, and rejects payloads with wrong signatures or >5min clock drift.
-- **Phase 5 — Cleanup (4 tests):** The synthetic peer is removed via `POST /federation/v1/peer/remove` (also signature-gated); the test agent is left registered. **Note:** the test agent's `expires_at` is 90 days (the relay's standard registration TTL per `services/api/src/agents.ts:713`), not 15 minutes — earlier versions of this runbook misstated the TTL. Test agents accumulate on staging across runs until the 90-day janitor sweep removes them. For environments where accumulation matters, sign a deregister token with the test agent's keypair before discarding it (current script doesn't; see the inline comment in `scripts/test-federation-live.mjs` Phase 3).
+- **Phase 5 — Cleanup (4 tests):** The synthetic peer is removed via `POST /federation/v1/peer/remove` (also signature-gated); the test agent is left registered. **Note:** the test agent's `expires_at` is 90 days (the relay's standard registration TTL per `services/relay/src/agents.ts:713`), not 15 minutes — earlier versions of this runbook misstated the TTL. Test agents accumulate on staging across runs until the 90-day janitor sweep removes them. For environments where accumulation matters, sign a deregister token with the test agent's keypair before discarding it (current script doesn't; see the inline comment in `scripts/test-federation-live.mjs` Phase 3).
 
 ## Common failure modes and fixes
 
 ### "Challenge response verification failed" (HTTP 403) on Phase 2 confirm
 
-The script's signing payload doesn't match what the relay verifier expects. Most likely cause: the `FEDERATION_SUITE` constant in `services/api/src/federation.ts` changed and `scripts/test-federation-live.mjs` wasn't updated. Look at lines 1077 and 1125 of `federation.ts` for the canonical signing payload format.
+The script's signing payload doesn't match what the relay verifier expects. Most likely cause: the `FEDERATION_SUITE` constant in `services/relay/src/federation.ts` changed and `scripts/test-federation-live.mjs` wasn't updated. Look at lines 1077 and 1125 of `federation.ts` for the canonical signing payload format.
 
 ### "Heartbeat signature verification failed" (HTTP 403) on Phase 4
 

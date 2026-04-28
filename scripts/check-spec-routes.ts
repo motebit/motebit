@@ -15,7 +15,7 @@
  *       @spec X but spec X does not declare that METHOD/path in any
  *       "#### Routes (foundation law)" block.
  *   (c) unclassified — a public route construct (a `app.<method>("path", ...)`
- *       call inside services/api/src/) carries none of @spec / @internal /
+ *       call inside services/relay/src/) carries none of @spec / @internal /
  *       @experimental.
  *
  * Plus the @experimental temporal-sanity rule (mirrors
@@ -31,7 +31,7 @@ import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const SPEC_DIR = join(REPO_ROOT, "spec");
-const API_SRC_DIR = join(REPO_ROOT, "services", "api", "src");
+const RELAY_SRC_DIR = join(REPO_ROOT, "services", "relay", "src");
 
 const ROUTES_HEADER = /^####\s+Routes\s*\(foundation law\)\s*$/i;
 const SPEC_TITLE = /^#\s+(motebit\/[a-z0-9-]+@\d+\.\d+)/;
@@ -263,7 +263,7 @@ function collectImplAnnotations(): {
   const allAnn: ImplRouteAnnotation[] = [];
   const allUn: ImplRouteUnclassified[] = [];
 
-  // Scan every .ts file under services/api/src/ except __tests__.
+  // Scan every .ts file under services/relay/src/ except __tests__.
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir)) {
       if (entry === "__tests__" || entry === "dist") continue;
@@ -281,7 +281,7 @@ function collectImplAnnotations(): {
       allUn.push(...r.unclassified);
     }
   };
-  walk(API_SRC_DIR);
+  walk(RELAY_SRC_DIR);
 
   return { annotations: allAnn, unclassified: allUn };
 }

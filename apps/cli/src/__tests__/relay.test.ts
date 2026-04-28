@@ -1,7 +1,7 @@
 // --- Tests for `motebit relay up` config assembly ---
 //
 // The boot path (createSyncRelay → serve() → SIGINT handlers) is
-// exercised by services/api's integration tests. Here we test the
+// exercised by services/relay's integration tests. Here we test the
 // thin CLI layer on top:
 //   - buildRelayConfig: pure CLI-options → SyncRelayConfig mapping
 //   - resolveRelayDbPath: precedence flag > env > default subdir
@@ -21,7 +21,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SyncRelayConfig } from "@motebit/api";
+import type { SyncRelayConfig } from "@motebit/relay";
 
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "motebit-relay-test-"));
 const savedHome = process.env["HOME"];
@@ -71,7 +71,7 @@ function baseOptions(overrides: Partial<BaseOpts> = {}): BaseOpts {
 
 describe("buildRelayConfig — design-answer invariants", () => {
   it("answer #2: omitted --pay-to-address maps to empty string (rail silently disabled)", () => {
-    // services/api index.ts:371 — `if (x402Config?.payToAddress)` —
+    // services/relay index.ts:371 — `if (x402Config?.payToAddress)` —
     // falsy skips registration. Empty string is the contract.
     const cfg: SyncRelayConfig = mod.buildRelayConfig(baseOptions({ payToAddress: undefined }));
     expect(cfg.x402.payToAddress).toBe("");

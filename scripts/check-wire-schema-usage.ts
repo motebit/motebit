@@ -1,7 +1,7 @@
 /**
  * Wire-schema usage check.
  *
- * Every inbound wire-format body at `services/api` MUST be validated at the
+ * Every inbound wire-format body at `services/relay` MUST be validated at the
  * relay boundary through its `@motebit/wire-schemas` parser. The three-way
  * pin in `@motebit/wire-schemas` (zod ↔ TypeScript ↔ committed JSON Schema,
  * drift invariant #22) guarantees the schemas *exist*; this gate guarantees
@@ -16,7 +16,7 @@
  * Two rules:
  *
  *   (A) Import-and-use parity. Any `*Schema` symbol imported from
- *       `@motebit/wire-schemas` in `services/api/src/*.ts` MUST have at
+ *       `@motebit/wire-schemas` in `services/relay/src/*.ts` MUST have at
  *       least one `Schema.safeParse(` or `Schema.parse(` call in the same
  *       file. Catches regressions where a handler starts importing a
  *       schema for types only and loses the runtime call during a refactor.
@@ -39,7 +39,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
-const SERVICES_API_SRC = resolve(ROOT, "services", "api", "src");
+const SERVICES_RELAY_SRC = resolve(ROOT, "services", "relay", "src");
 
 // ── Rule B: Required-usage manifest ────────────────────────────────────
 //
@@ -53,22 +53,22 @@ const REQUIRED_USAGE: ReadonlyArray<{
   note?: string;
 }> = [
   {
-    file: "services/api/src/tasks.ts",
+    file: "services/relay/src/tasks.ts",
     schemas: ["ExecutionReceiptSchema"],
     note: "POST /tasks/:id/complete — receipt submission",
   },
   {
-    file: "services/api/src/agents.ts",
+    file: "services/relay/src/agents.ts",
     schemas: ["ExecutionReceiptSchema"],
     note: "POST /agents/:id/receipts — receipt submission (legacy path)",
   },
   {
-    file: "services/api/src/federation.ts",
+    file: "services/relay/src/federation.ts",
     schemas: ["ExecutionReceiptSchema"],
     note: "POST /federation/receipts — nested receipt forwarding",
   },
   {
-    file: "services/api/src/migration.ts",
+    file: "services/relay/src/migration.ts",
     schemas: [
       "MigrationTokenSchema",
       "DepartureAttestationSchema",
@@ -78,7 +78,7 @@ const REQUIRED_USAGE: ReadonlyArray<{
     note: "POST /agents/:id/migrate/* — four signed wire artifacts",
   },
   {
-    file: "services/api/src/disputes.ts",
+    file: "services/relay/src/disputes.ts",
     schemas: ["DisputeRequestSchema", "DisputeEvidenceSchema", "DisputeAppealSchema"],
     note: "POST /allocations/:id/dispute + /:disputeId/evidence + /:disputeId/appeal — three client-signed wire artifacts (DisputeResolution is relay-constructed, not inbound)",
   },
@@ -173,9 +173,9 @@ function main(): void {
   const waived = waivedPairs();
   const violations: Violation[] = [];
 
-  // Build a file → { imported, called } index for every .ts in services/api/src.
+  // Build a file → { imported, called } index for every .ts in services/relay/src.
   const index = new Map<string, { imported: Set<string>; called: Set<string> }>();
-  for (const abs of walkTs(SERVICES_API_SRC)) {
+  for (const abs of walkTs(SERVICES_RELAY_SRC)) {
     const rel = relative(ROOT, abs);
     const src = readFileSync(abs, "utf-8");
     index.set(rel, { imported: importedSchemas(src), called: calledSchemas(src) });
@@ -210,7 +210,7 @@ function main(): void {
           file: entry.file,
           schema: sch,
           kind: "manifest-missing-import",
-          detail: `manifest requires ${sch} usage but the file is missing from services/api/src — update REQUIRED_USAGE`,
+          detail: `manifest requires ${sch} usage but the file is missing from services/relay/src — update REQUIRED_USAGE`,
         });
       }
       continue;

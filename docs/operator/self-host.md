@@ -1,6 +1,6 @@
 # Self-host the motebit relay
 
-The motebit relay (`services/api`) ships as a signed multi-arch container image at `ghcr.io/motebit/relay`. A third-party operator can pull, verify, and run a relay alongside motebit's own — full federation peer, full settlement, full task routing — without any code from this repo.
+The motebit relay (`services/relay`) ships as a signed multi-arch container image at `ghcr.io/motebit/relay`. A third-party operator can pull, verify, and run a relay alongside motebit's own — full federation peer, full settlement, full task routing — without any code from this repo.
 
 This is the federation-unblock path: protocol code is on GitHub, npm packages are on npmjs.com, and the relay binary is at ghcr.io. Three artifacts, three registries, one verifiable system.
 
@@ -22,12 +22,12 @@ Every motebit-published image is signed via cosign keyless OIDC + Sigstore and c
 # Install cosign once: https://docs.sigstore.dev/cosign/installation/
 
 # Verify the keyless signature came from motebit's repo + this exact workflow.
-cosign verify ghcr.io/motebit/relay:1.0.0 \
+cosign verify ghcr.io/motebit/relay:1.0.1 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 
 # Verify the build-provenance attestation (SLSA).
-cosign verify-attestation ghcr.io/motebit/relay:1.0.0 \
+cosign verify-attestation ghcr.io/motebit/relay:1.0.1 \
   --type slsaprovenance \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
@@ -56,7 +56,7 @@ A standalone relay is useful for testing. To act as a peer in the live motebit f
 - A peer registration handshake with at least one existing peer
 - A signed transparency declaration matching the operator's actual processing footprint (see [`docs/doctrine/operator-transparency.md`](../doctrine/operator-transparency.md))
 
-The reference setup that produced motebit's two staging peers (`motebit-sync-stg.fly.dev`, `motebit-sync-stg-b.fly.dev`) is documented at [`federation-live-test.md`](federation-live-test.md) — it covers peer registration, heartbeat signing, and the cross-cloud handshake that proves the federation E2E works. Adapt that for your own operator deployment, and treat the `transparency.ts` declaration in `services/api` as the contract your `/.well-known/motebit-transparency.json` must honour ([`docs/doctrine/operator-transparency.md`](../doctrine/operator-transparency.md)).
+The reference setup that produced motebit's two staging peers (`motebit-sync-stg.fly.dev`, `motebit-sync-stg-b.fly.dev`) is documented at [`federation-live-test.md`](federation-live-test.md) — it covers peer registration, heartbeat signing, and the cross-cloud handshake that proves the federation E2E works. Adapt that for your own operator deployment, and treat the `transparency.ts` declaration in `services/relay` as the contract your `/.well-known/motebit-transparency.json` must honour ([`docs/doctrine/operator-transparency.md`](../doctrine/operator-transparency.md)).
 
 ## Why this exists
 

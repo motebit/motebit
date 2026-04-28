@@ -20,7 +20,7 @@ export async function handleBalance(config: CliConfig): Promise<void> {
 
   const relayUrl = getRelayUrl(config);
   // Aud must match the relay's `dualAuth` binding for /balance.
-  // See `services/api/src/middleware.ts:631` — `account:balance`.
+  // See `services/relay/src/middleware.ts:631` — `account:balance`.
   // Default `admin:query` is rejected by the agents-virtual-account
   // routes; each money-path subcommand pins its own aud.
   const headers = await getRelayAuthHeaders(config, { aud: "account:balance" });
@@ -74,7 +74,7 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
   }
 
   const relayUrl = getRelayUrl(config);
-  // `account:withdraw` matches `services/api/src/middleware.ts:635`.
+  // `account:withdraw` matches `services/relay/src/middleware.ts:635`.
   const headers = await getRelayAuthHeaders(config, { aud: "account:withdraw", json: true });
 
   const body: Record<string, unknown> = { amount };
@@ -123,7 +123,7 @@ export async function handleFund(config: CliConfig): Promise<void> {
 
   const relayUrl = getRelayUrl(config);
   // Two distinct relay routes are exercised here. Each is bound to its
-  // own audience by `services/api/src/middleware.ts:631 / :643`:
+  // own audience by `services/relay/src/middleware.ts:631 / :643`:
   //   POST /checkout → account:checkout
   //   GET  /balance  → account:balance
   // A single signed token can only carry one aud, so we mint two.

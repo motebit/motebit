@@ -35,7 +35,7 @@ const thresholds = {
   // Ring 3 — apps & services (floor thresholds)
   "apps/web": 70,
   "apps/identity": 70,
-  "services/api": 74,
+  "services/relay": 74,
   "services/proxy": 70,
 };
 

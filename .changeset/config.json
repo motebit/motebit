@@ -10,7 +10,6 @@
   "ignore": [
     "@motebit/admin",
     "@motebit/ai-core",
-    "@motebit/api",
     "@motebit/behavior-engine",
     "@motebit/browser-persistence",
     "@motebit/circuit-breaker",
@@ -41,6 +40,7 @@
     "@motebit/proxy",
     "@motebit/read-url",
     "@motebit/reflection",
+    "@motebit/relay",
     "@motebit/render-engine",
     "@motebit/research",
     "@motebit/runtime",

@@ -8,7 +8,7 @@
   <a href="https://github.com/motebit/motebit/actions/workflows/ci.yml"><img src="https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/motebit"><img src="https://img.shields.io/npm/v/motebit?label=motebit" alt="motebit"></a>
   <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>
-  <a href="https://github.com/motebit/motebit/pkgs/container/relay"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Frelay-1.0.0-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/relay"></a>
+  <a href="https://github.com/motebit/motebit/pkgs/container/relay"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Frelay-1.0.1-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/relay"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/protocol-Apache--2.0-green" alt="Protocol: Apache-2.0"></a>
 </p>
@@ -57,9 +57,9 @@ motebit relay up
 For multi-tenant operators who want the relay as a verifiable binary instead of an `npm install`: pull the signed multi-arch container, verify the signature, and run it.
 
 ```bash
-docker pull ghcr.io/motebit/relay:1.0.0
+docker pull ghcr.io/motebit/relay:1.0.1
 
-cosign verify ghcr.io/motebit/relay:1.0.0 \
+cosign verify ghcr.io/motebit/relay:1.0.1 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
@@ -292,7 +292,7 @@ pnpm run lint          # Lint all packages
 
 12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime). They version independently on their own merit (`updateInternalDependencies: "patch"`, no fixed or linked groups). Breaking changes to a package's public surface require a major bump on that package.
 
-The 51 workspace-private packages — `@motebit/runtime`, `@motebit/api`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
+The 51 workspace-private packages — `@motebit/runtime`, `@motebit/relay`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
 
 The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
 

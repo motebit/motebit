@@ -73,7 +73,7 @@ export interface KnownWallet {
 }
 
 /**
- * DB-inverted store. The consumer (services/api) owns persistence of:
+ * DB-inverted store. The consumer (services/relay) owns persistence of:
  *  - the per-chain block cursor
  *  - the known-wallets lookup table
  *  - the per-log dedup record

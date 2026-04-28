@@ -16,7 +16,7 @@ External money movement uses three interfaces in `@motebit/protocol` (Layer 0), 
 
 ## Doctrine enforced at the type level
 
-`SettlementRailRegistry.register()` accepts only `GuestRail`. The compiler rejects attempts to register a `SovereignRail` at the relay — "relay is a convenience layer, not a trust root" stops being prose and becomes a type error. The negative proof lives in `services/api/src/__tests__/custody-boundary.test.ts` with a `@ts-expect-error` assertion; if someone widens the registry, that file stops compiling. The `/health/ready` rail manifest advertises only guest rails — sovereign settlement has no mediator to advertise.
+`SettlementRailRegistry.register()` accepts only `GuestRail`. The compiler rejects attempts to register a `SovereignRail` at the relay — "relay is a convenience layer, not a trust root" stops being prose and becomes a type error. The negative proof lives in `services/relay/src/__tests__/custody-boundary.test.ts` with a `@ts-expect-error` assertion; if someone widens the registry, that file stops compiling. The `/health/ready` rail manifest advertises only guest rails — sovereign settlement has no mediator to advertise.
 
 `PaymentProof.railType` retains `"direct_asset"` since payment proofs span both custody boundaries — only the rail registration is split.
 
@@ -39,7 +39,7 @@ Two withdrawal paths:
 1. **crypto→crypto with wallet destination** — polls briefly for `payment_processed`, returns confirmed `WithdrawalResult` with `destination_tx_hash` as proof.
 2. **crypto→fiat or slow paths** — returns pending `WithdrawalResult` with `confirmedAt: 0` and Bridge transfer ID as reference (same pattern as Stripe pending withdrawals). Completion via webhook.
 
-`BridgeClient` interface is injected (glucose): `createTransfer()`, `getTransfer()`, `isReachable()`. Configurable poll attempts and interval. Lives in `services/api/src/settlement-rails/bridge-rail.ts`. Registered at relay startup when `BRIDGE_API_KEY` + `BRIDGE_CUSTOMER_ID` env vars are set.
+`BridgeClient` interface is injected (glucose): `createTransfer()`, `getTransfer()`, `isReachable()`. Configurable poll attempts and interval. Lives in `services/relay/src/settlement-rails/bridge-rail.ts`. Registered at relay startup when `BRIDGE_API_KEY` + `BRIDGE_CUSTOMER_ID` env vars are set.
 
 Bridge webhook handler at `POST /api/v1/bridge/webhook` auto-completes pending withdrawals when Bridge reports `payment_processed`: looks up by `payout_reference` (`bridge:{transferId}` via `linkWithdrawalTransfer`), signs receipt, calls `attachProof`.
 
@@ -51,7 +51,7 @@ Wraps x402 facilitator behind `GuestRail`. `custody: "relay"`, `railType: "proto
 
 x402 is pay-per-request: deposits happen at the HTTP boundary via x402 middleware, not the rail — the base `GuestRail` interface has no `deposit()` method, so no throwing stub needed. `withdraw()` settles via the facilitator client — constructs payment payload, calls `facilitator.settle()`, returns `WithdrawalResult` with tx hash proof. `isAvailable()` checks facilitator `/supported` endpoint. `attachProof()` records x402 tx hash + CAIP-2 network — called by the task submission handler after x402 auto-deposit succeeds, achieving sibling parity with the Stripe webhook → `stripeRail.attachProof()` flow.
 
-Constructor takes `X402FacilitatorClient` (satisfied by `HTTPFacilitatorClient` from `@x402/core/server`). Lives in `services/api/src/settlement-rails/x402-rail.ts`.
+Constructor takes `X402FacilitatorClient` (satisfied by `HTTPFacilitatorClient` from `@x402/core/server`). Lives in `services/relay/src/settlement-rails/x402-rail.ts`.
 
 ## Settlement proof persistence
 

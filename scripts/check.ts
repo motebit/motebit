@@ -166,7 +166,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-wire-schema-usage",
     defends:
-      "every inbound wire-format body at services/api parses through @motebit/wire-schemas — handlers must call <Name>Schema.safeParse(/.parse( on the body, never accept untyped c.req.json() through inline casts (invariant #35, added 2026-04-20 after a principal-engineer audit found four Dispute* wire types and BalanceWaiver still bypassing the schema layer despite commit 1848d2ea adding the parse calls for the other four types — extends the protocol-primitive doctrine to runtime body validation; complements the static three-way pin in invariant #22)",
+      "every inbound wire-format body at services/relay parses through @motebit/wire-schemas — handlers must call <Name>Schema.safeParse(/.parse( on the body, never accept untyped c.req.json() through inline casts (invariant #35, added 2026-04-20 after a principal-engineer audit found four Dispute* wire types and BalanceWaiver still bypassing the schema layer despite commit 1848d2ea adding the parse calls for the other four types — extends the protocol-primitive doctrine to runtime body validation; complements the static three-way pin in invariant #22)",
     script: "check-wire-schema-usage",
   },
   {

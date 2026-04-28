@@ -5,18 +5,18 @@
 # self-host.md § Verify before you run). Do not use `:main` in production.
 #
 # What this stack runs:
-#   1 motebit-relay container — the relay (services/api).
+#   1 motebit-relay container — the relay (services/relay).
 #   1 named volume motebit-data — persistent SQLite storage.
 #
 # What this stack does NOT do:
 #   - Litestream replication to S3 (set LITESTREAM_REPLICA_BUCKET + AWS creds
-#     to enable; see services/api/litestream.yml).
+#     to enable; see services/relay/litestream.yml).
 #   - TLS termination — put a reverse proxy (Caddy, nginx, Traefik) in front.
 #   - Federation peering — that needs operator identity setup; see self-host.md.
 
 services:
   motebit-relay:
-    image: ghcr.io/motebit/relay:1.0.0
+    image: ghcr.io/motebit/relay:1.0.1
     container_name: motebit-relay
     restart: unless-stopped
     ports:

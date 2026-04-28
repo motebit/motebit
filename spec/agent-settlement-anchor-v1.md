@@ -203,7 +203,7 @@ Returns `AgentSettlementAnchorProof` (§5.1) or:
 - `404` if settlement not found, or settlement is unsigned legacy (cannot be anchored)
 - `202` with `Retry-After: 60` if settlement is signed but not yet batched
 
-This endpoint is **public** — no bearer auth required, per services/api/CLAUDE.md rule 6 ("every truth the relay asserts is independently verifiable onchain without relay contact"). An external auditor will not hold a relay-issued bearer token. Rate-limited at the public tier (same as `/api/v1/credentials/{credentialId}/anchor-proof`).
+This endpoint is **public** — no bearer auth required, per services/relay/CLAUDE.md rule 6 ("every truth the relay asserts is independently verifiable onchain without relay contact"). An external auditor will not hold a relay-issued bearer token. Rate-limited at the public tier (same as `/api/v1/credentials/{credentialId}/anchor-proof`).
 
 ### 7.2 Batch Query
 

@@ -2,7 +2,7 @@
  * In-memory test double for `DepositDetectorStore`.
  *
  * Production implementations (e.g. `SqliteDepositDetectorStore` in
- * `services/api`) back the same interface with real persistence.
+ * `services/relay`) back the same interface with real persistence.
  */
 
 import type { DepositDetectorStore, KnownWallet } from "./types.js";

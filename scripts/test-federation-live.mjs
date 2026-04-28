@@ -310,7 +310,7 @@ async function phase2() {
     try {
       // Sign: ${relay_id}:${nonce}:${FEDERATION_SUITE}. The suite suffix
       // binds the handshake to a specific cryptosuite per
-      // services/api/src/federation.ts (FEDERATION_SUITE constant on
+      // services/relay/src/federation.ts (FEDERATION_SUITE constant on
       // line 27). The script was written before the suite-binding
       // landed during the 2026-04-13 cryptosuite-agility pass; updating
       // here closes that drift.
@@ -596,7 +596,7 @@ async function phase4() {
   try {
     const timestamp = Date.now();
     // Heartbeat signing: ${relay_id}|${timestamp}|${FEDERATION_SUITE}
-    // per services/api/src/federation.ts (uses `|` separator, distinct
+    // per services/relay/src/federation.ts (uses `|` separator, distinct
     // from the peering challenge's `:` separator). Suite-bound for the
     // same cryptosuite-agility reason as the confirm step.
     const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";

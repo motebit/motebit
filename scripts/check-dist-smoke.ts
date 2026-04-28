@@ -20,7 +20,7 @@
  *   - Vite-bundled browser targets (apps/web, apps/spatial, etc.) —
  *     those have their own build/smoke harness at dev server start.
  *   - Mobile Metro bundles — same, run under a separate test runner.
- *   - Service HTTP entrypoints (services/api) — those are booted by
+ *   - Service HTTP entrypoints (services/relay) — those are booted by
  *     the relay integration suite, not a CLI smoke.
  *
  * Rationale for `--help` as the trigger: universally implemented, no

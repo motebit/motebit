@@ -40,7 +40,7 @@
  *
  * The relay does not inspect, verify, authorize, or modify any
  * receipt content. It only routes by motebit ID. See
- * `services/api/src/receipt-exchange.ts` for the authoritative relay
+ * `services/relay/src/receipt-exchange.ts` for the authoritative relay
  * implementation.
  *
  * ## BigInt handling

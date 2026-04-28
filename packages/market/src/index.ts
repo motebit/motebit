@@ -24,7 +24,7 @@ export {
   blendCredentialTrust,
 } from "./credential-weight.js";
 // Re-export the hardware-attestation scoring constants so consumers
-// (e.g. services/api E2E tests, routing introspection) can reference
+// (e.g. services/relay E2E tests, routing introspection) can reference
 // the canonical values without depending on @motebit/semiring directly.
 export {
   HW_ATTESTATION_HARDWARE,

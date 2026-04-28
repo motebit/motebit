@@ -77,7 +77,7 @@ fi
 
 # ── Pre-flight: env files present for services that require them ─────────
 missing=0
-for svc in services/api services/code-review; do
+for svc in services/relay services/code-review; do
   if [ ! -f "$svc/.env" ]; then
     echo "${RED}✗ $svc/.env missing${RESET} — copy from $svc/.env.example"
     missing=1
@@ -150,7 +150,7 @@ trap cleanup INT TERM
 echo "${CYAN}▸ booting dev stack (relay → read-url → code-review → web)${RESET}"
 
 # Relay first — the other services register against it on start.
-launch "relay" "$CYAN" pnpm --filter @motebit/api dev
+launch "relay" "$CYAN" pnpm --filter @motebit/relay dev
 wait_port "$PORT_RELAY" "relay" || { cleanup; exit 1; }
 
 launch "read-url" "$YELLOW" pnpm --filter @motebit/read-url dev
@@ -169,7 +169,7 @@ if curl -fsS "http://localhost:$PORT_RELAY/api/v1/agents/discover?capability=rev
   echo "${GREEN}✓ code-review registered with relay (capability: review_pr)${RESET}"
 else
   echo "${RED}✗ code-review did NOT register with relay — check its log above${RESET}"
-  echo "  Likely cause: MOTEBIT_API_TOKEN mismatch between services/api/.env and services/code-review/.env"
+  echo "  Likely cause: MOTEBIT_API_TOKEN mismatch between services/relay/.env and services/code-review/.env"
 fi
 
 launch "web" "$GREEN" pnpm --filter @motebit/web dev

@@ -703,7 +703,7 @@ export async function createRuntime(
   // AgentTrustCredential carrying the verified claim — which is what
   // makes the `HW_ATTESTATION_HARDWARE` (1.0) score visible to routing.
   // See `packages/runtime/src/agent-trust.ts:258` for the hook body and
-  // `services/api/src/__tests__/hardware-peer-flow-e2e.test.ts` for the
+  // `services/relay/src/__tests__/hardware-peer-flow-e2e.test.ts` for the
   // protocol-loop assertion.
   runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
   runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());

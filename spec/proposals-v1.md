@@ -313,7 +313,7 @@ A motebit implementation is **proposal-conformant** if and only if:
 4. Withdrawal authorization is initiator-only per §3.1.
 5. Expiry is honored per §3.5.
 
-The reference implementation is `services/api/src/proposals.ts` in this repo.
+The reference implementation is `services/relay/src/proposals.ts` in this repo.
 
 ---
 
@@ -330,4 +330,4 @@ The reference implementation is `services/api/src/proposals.ts` in this repo.
 
 ## Change Log
 
-- **1.0 (2026-04-24)** — Initial draft. Pins the proposal-submission, response, withdrawal, and collaborative-step-result wire shapes plus the six relay routes that carry them. Replaces the `@experimental` annotations on `services/api/src/proposals.ts` that named this spec as their forcing function.
+- **1.0 (2026-04-24)** — Initial draft. Pins the proposal-submission, response, withdrawal, and collaborative-step-result wire shapes plus the six relay routes that carry them. Replaces the `@experimental` annotations on `services/relay/src/proposals.ts` that named this spec as their forcing function.

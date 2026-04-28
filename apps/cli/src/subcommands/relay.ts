@@ -6,7 +6,7 @@
  *   # relay listening on http://localhost:3000
  *
  * The wrapper is intentionally thin. All relay semantics live in
- * `@motebit/api` (`createSyncRelay`) — identity, persistence, federation,
+ * `@motebit/relay` (`createSyncRelay`) — identity, persistence, federation,
  * rails, websockets. This command assembles a `SyncRelayConfig` from CLI
  * flags + env, binds Hono via `@hono/node-server`, and installs graceful
  * shutdown. The doctrine below nails the five choices that are not in
@@ -17,7 +17,7 @@
  *
  * 1. **Relay identity lifecycle.** `createSyncRelay` auto-generates an
  *    Ed25519 keypair on first boot and persists it in the
- *    `relay_identity` SQLite row (see `services/api/src/federation.ts`
+ *    `relay_identity` SQLite row (see `services/relay/src/federation.ts`
  *    `initRelayIdentity`). Stable across restarts. We add nothing —
  *    no separate key file, no mnemonic, no "print once" ritual. The
  *    key lives in the DB row; backup guidance is `cp <db> <backup>`,
@@ -28,7 +28,7 @@
  *
  * 2. **x402.payToAddress.** Honest degradation, not placeholder and
  *    not hard-fail. The rail is silently non-registered if
- *    `payToAddress` is falsy (services/api index.ts:371). We preserve
+ *    `payToAddress` is falsy (services/relay index.ts:371). We preserve
  *    that: no flag → relay boots, x402 rail disabled, banner names it.
  *    A burn-address placeholder would write the check the protocol
  *    can't cash. A hard `--wallet`-required failure would kill the
@@ -36,7 +36,7 @@
  *    sync, pairing, federation, free tasks) works unconditionally.
  *
  * 3. **Federation default.** Isolated. Matches the standalone boot
- *    (services/api index.ts:1360 — federation is gated on
+ *    (services/relay index.ts:1360 — federation is gated on
  *    `MOTEBIT_FEDERATION_ENDPOINT_URL`). A relay that peered with
  *    `relay.motebit.com` by default would announce the user's public
  *    key to our server without asking. Sovereignty doctrine says:
@@ -45,7 +45,7 @@
  *    URL; post-boot peering is via the existing
  *    `motebit federation peer <url>` command.
  *
- * 4. **Storage.** Native `better-sqlite3` — per services/api
+ * 4. **Storage.** Native `better-sqlite3` — per services/relay
  *    CLAUDE.md rule 13 the relay is durability-sensitive and the
  *    silent sql.js fallback is forbidden. Default path
  *    `~/.motebit/relay/relay.db` (a new subdir, isolated from the
@@ -64,7 +64,7 @@
 
 import * as fs from "node:fs";
 import { serve } from "@hono/node-server";
-import { createSyncRelay, type SyncRelayConfig } from "@motebit/api";
+import { createSyncRelay, type SyncRelayConfig } from "@motebit/relay";
 import type { CliConfig } from "../args.js";
 import { RELAY_DIR, RELAY_DB_PATH } from "../config.js";
 import { promptPassphrase } from "../identity.js";
@@ -95,7 +95,7 @@ export interface RelayCliOptions {
  * no env reads, no prompts. Exported for tests.
  *
  * - `x402.payToAddress` defaults to `""` so the relay's
- *   truthy-check at the rail-registration site (services/api
+ *   truthy-check at the rail-registration site (services/relay
  *   index.ts:371) skips registration without throwing — that's the
  *   honest-degradation path from design-answer #2.
  * - `federation` is `undefined` unless a federation URL was given —

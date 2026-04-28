@@ -2,7 +2,7 @@
 /**
  * Live round-trip test for the hardware-attestation peer flow Phase 1.
  *
- * Sibling to `services/api/src/__tests__/hardware-peer-flow-e2e.test.ts`
+ * Sibling to `services/relay/src/__tests__/hardware-peer-flow-e2e.test.ts`
  * — same protocol loop, but executed against a real relay subprocess
  * over HTTP. Catches deployment/CI surface issues the in-memory test
  * cannot: route registration, content-type handling, JSON serialization
@@ -110,7 +110,7 @@ async function bootRelay(): Promise<void> {
     return;
   }
   const repoRoot = resolve(new URL(".", import.meta.url).pathname, "..");
-  const serverPath = resolve(repoRoot, "services/api/src/server.ts");
+  const serverPath = resolve(repoRoot, "services/relay/src/server.ts");
 
   console.log(`Booting relay subprocess: tsx ${serverPath} (port ${PORT})`);
   relayProc = spawn("npx", ["tsx", serverPath], {

@@ -252,7 +252,7 @@ Memory events that carry content (§5.1) participate in the sensitivity-aware fo
 
 **Tier 1 — emitter.** The emitter tags each `memory_formed` event with the sensitivity of its content. Tagging is emitter-authored; the emitter MUST NOT redact.
 
-**Tier 2 — sync forwarder.** A sync engine or relay forwarding the event to a peer device consults the forwarder's policy. Default policy: `"none"` and `"personal"` pass through; `"medical"`, `"financial"`, `"secret"` trigger redaction. Redaction replaces `content` with the sentinel string `"[REDACTED]"` and adds `redacted: true` + `redacted_sensitivity: <level>`. The reference implementation lives at `services/api/src/sync-routes.ts:redactSensitiveEvents`.
+**Tier 2 — sync forwarder.** A sync engine or relay forwarding the event to a peer device consults the forwarder's policy. Default policy: `"none"` and `"personal"` pass through; `"medical"`, `"financial"`, `"secret"` trigger redaction. Redaction replaces `content` with the sentinel string `"[REDACTED]"` and adds `redacted: true` + `redacted_sensitivity: <level>`. The reference implementation lives at `services/relay/src/sync-routes.ts:redactSensitiveEvents`.
 
 **Tier 3 — receiver.** The receiver consuming the event stores it verbatim — redacted or not. Display layers MAY request the non-redacted event from the emitter device via a separate authenticated path, but MUST NOT attempt to reconstruct the content from other events.
 
@@ -289,7 +289,7 @@ Non-conformance modes and their consequences:
 
 - **Divergent payload shape** — the receiver's live graph drifts from the emitter's. Detected in practice by cross-device state comparison tests; prevented at CI by `check-spec-coverage` (invariant #9) which asserts every type named here is exported from `@motebit/protocol`.
 - **Missing sensitivity classification** — forwarders default to `"none"`, which MAY leak content above the emitter's intent. Emitters MUST set `sensitivity` on every `memory_formed` event; the type is required, not optional.
-- **`memory_audit` forwarding** — MUST NOT occur. Detectable at the forwarder boundary by the event-type filter; the reference implementation in `services/api/src/sync-routes.ts` does not forward this type.
+- **`memory_audit` forwarding** — MUST NOT occur. Detectable at the forwarder boundary by the event-type filter; the reference implementation in `services/relay/src/sync-routes.ts` does not forward this type.
 
 ---
 

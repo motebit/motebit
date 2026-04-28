@@ -192,5 +192,5 @@ The cryptosuite identifier in the request body (`suite`) is the post-quantum mig
 
 - **Type:** `DeviceRegistrationRequest` in `@motebit/protocol`.
 - **Helper:** `registerDeviceWithRelay({ motebitId, deviceId, publicKey, privateKey, syncUrl })` in `@motebit/core-identity`. Composes §4.1 signing with the §5 POST and surfaces the §5.1 outcome as a typed result.
-- **Endpoint:** `POST /api/v1/devices/register-self` in `services/api/src/sync-routes.ts`.
+- **Endpoint:** `POST /api/v1/devices/register-self` in `services/relay/src/sync-routes.ts`.
 - **Web bootstrap:** `apps/web/src/web-app.ts` invokes `registerDeviceWithRelay` once per page load before `startSync`. Idempotent.

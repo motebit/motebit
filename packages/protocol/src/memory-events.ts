@@ -22,7 +22,7 @@
  * include `sensitivity`; relays MAY redact content above a consented
  * threshold before forwarding, replacing `content` with the sentinel
  * string "[REDACTED]" and flipping `redacted: true`. The reference
- * implementation in `services/api/src/sync-routes.ts:redactSensitiveEvents`
+ * implementation in `services/relay/src/sync-routes.ts:redactSensitiveEvents`
  * is conformant.
  */
 

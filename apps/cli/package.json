@@ -82,7 +82,6 @@
   },
   "devDependencies": {
     "@motebit/ai-core": "workspace:*",
-    "@motebit/api": "workspace:*",
     "@motebit/behavior-engine": "workspace:*",
     "@motebit/core-identity": "workspace:*",
     "@motebit/crypto": "workspace:*",
@@ -97,6 +96,7 @@
     "@motebit/planner": "workspace:*",
     "@motebit/policy": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
+    "@motebit/relay": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/self-knowledge": "workspace:*",

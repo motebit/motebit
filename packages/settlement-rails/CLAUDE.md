@@ -10,7 +10,7 @@ Sibling of `@motebit/wallet-solana` (the sovereign-rail reference). Custody is s
 
 1. **Never reach upstream directly.** Every rail depends on a small client interface (`BridgeClient`, `X402FacilitatorClient`, `Stripe` instance). Tests inject fakes; production wires real SDK instances at the consumer. If you add a method, extend the interface — don't import a provider SDK in the rail body.
 2. **Storage is not the rail's problem.** Every rail takes an optional `onProofAttached(settlementId, proof)` callback. The relay owns persistence; the rail records intent and emits the proof shape. No DB imports allowed.
-3. **Logger is injectable.** Every rail config accepts `logger?: RailLogger`. Default is a silent no-op. The consumer (services/api) injects a structured logger that carries `service: "relay"`, module name, and correlation id. No module-scoped loggers.
+3. **Logger is injectable.** Every rail config accepts `logger?: RailLogger`. Default is a silent no-op. The consumer (services/relay) injects a structured logger that carries `service: "relay"`, module name, and correlation id. No module-scoped loggers.
 4. **Registry accepts only `GuestRail`.** `SettlementRailRegistry.register(rail: GuestRail)` is the sovereignty doctrine as a type signature. Widening to `SettlementRail` would accept `SovereignRail`, which breaks the custody boundary — the `@ts-expect-error` in `custody-boundary.test.ts` guarantees this fails at compile time.
 5. **No runtime `@motebit/sdk` imports.** Every import from `@motebit/sdk` is `import type`. The package participates in the permissive-floor (Apache-2.0) type layer without binding to a BSL runtime surface.
 
@@ -23,4 +23,4 @@ Sibling of `@motebit/wallet-solana` (the sovereign-rail reference). Custody is s
 
 ## Consumers
 
-- `services/api` — the relay. Registers the three rails at boot, dispatches settlement/withdrawal requests, receives proofs and persists them.
+- `services/relay` — the relay. Registers the three rails at boot, dispatches settlement/withdrawal requests, receives proofs and persists them.

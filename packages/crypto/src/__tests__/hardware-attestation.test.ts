@@ -493,7 +493,7 @@ describe("verifyHardwareAttestationClaim — non-SE platforms", () => {
 describe("mintSecureEnclaveReceiptForTest", () => {
   // The helper bundles keypair generation + canonical-body encoding +
   // signing + receipt assembly into one call so cross-workspace tests
-  // (e.g. services/api) can exercise the SE verification path without
+  // (e.g. services/relay) can exercise the SE verification path without
   // pulling @noble/curves into their own dep tree. The contract is:
   // whatever it returns must round-trip through verifyHardwareAttestationClaim
   // with valid:true. If the helper drifts from the verifier's

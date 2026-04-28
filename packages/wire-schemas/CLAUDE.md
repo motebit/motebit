@@ -33,6 +33,6 @@ Splitting physically — source code in a BSL package, generated artifacts in th
 
 ## Consumers
 
-- `services/api` — runtime validation of inbound wire bodies (enforced by `check-wire-schema-usage` #35).
+- `services/relay` — runtime validation of inbound wire bodies (enforced by `check-wire-schema-usage` #35).
 - Third-party validators / verifiers / observability tooling — clone or fetch `spec/schemas/*.json` and validate locally; the JSON files are self-contained under Apache-2.0.
 - Drift gates (`drift.test.ts`, `check-spec-wire-schemas`, `check-wire-schema-usage`) — the canonical sources of truth that detect protocol/implementation divergence.

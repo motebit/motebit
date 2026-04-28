@@ -7,7 +7,7 @@
  * `apps/docs/content/docs/get-your-agent.mdx` told readers to run
  * `motebit pair` and `motebit pair --code ABCDEF` for multi-device sync.
  * Neither subcommand exists. The relay has the pairing protocol
- * (`services/api/src/pairing.ts`) and the desktop / mobile apps consume it,
+ * (`services/relay/src/pairing.ts`) and the desktop / mobile apps consume it,
  * but the CLI never wired a `pair` handler. The same audit pass found
  * `motebit --serve` (should be `motebit serve` — flag vs. subcommand) in
  * five places across `developer/mcp-server.mdx` and `developer/multi-hop.mdx`.

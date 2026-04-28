@@ -27,7 +27,7 @@ export default defineConfig({
     "@solana/web3.js",
     "@solana/spl-token",
     "@noble/curves",
-    // Relay runtime deps (pulled in via @motebit/api for `motebit relay up`).
+    // Relay runtime deps (pulled in via @motebit/relay for `motebit relay up`).
     // @hono/node-server wraps the Node http server + Hono; @hono/node-ws
     // upgrades connections in-place. Both touch Node internals in ways that
     // don't survive being inlined into the esm bundle. Resolve from the
@@ -37,7 +37,7 @@ export default defineConfig({
     "hono",
     // Stripe's SDK pulls in CJS-era URL encoders (qs → side-channel →
     // object-inspect) that use `require("util")` — fatal in an esm
-    // bundle. services/api imports Stripe at the top level (not lazily),
+    // bundle. services/relay imports Stripe at the top level (not lazily),
     // so bundling the deep tree is not optional. Externalize and let
     // node resolve it from the CLI's node_modules at runtime.
     "stripe",

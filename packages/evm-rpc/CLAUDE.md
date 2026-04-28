@@ -22,4 +22,4 @@ Layer 1. BSL-1.1. Zero internal deps, zero I/O outside the injected `fetch`. Sib
 
 ## Consumers
 
-- `services/api` — the deposit detector. `HttpJsonRpcEvmAdapter` polls USDC Transfer logs per supported CAIP-2 chain.
+- `services/relay` — the deposit detector. `HttpJsonRpcEvmAdapter` polls USDC Transfer logs per supported CAIP-2 chain.

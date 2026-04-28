@@ -8,7 +8,7 @@
  * (because the error it expected is gone) and this file stops compiling
  * — the build fails for every contributor, including CI.
  *
- * Mirrors the pattern in services/api/src/__tests__/custody-boundary.test.ts
+ * Mirrors the pattern in services/relay/src/__tests__/custody-boundary.test.ts
  * for the GuestRail / SovereignRail split. The enforcement lives in the
  * type system, not in a linter or doctrine document.
  *

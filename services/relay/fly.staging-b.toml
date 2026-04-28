@@ -1,0 +1,62 @@
+# Staging-B / second federation-peer-test instance of @motebit/relay.
+#
+# Sibling of `fly.staging.toml`. Identical Docker image, identical config —
+# only the app name, endpoint URL, display name, and volume name differ.
+# Purpose: gives federation E2E tests a SECOND staging peer to exercise
+# Phases 1-5 (Identity / Peering / Discovery / Task forwarding / Settlement)
+# without polluting the prod relay's data tables. The existing
+# `motebit-sync-stg` is already peered with prod (see federation_staging_peer
+# memory); this peer pairs with `motebit-sync-stg` for write-side tests
+# (`scripts/test-federation-live.mjs`).
+#
+# §6.2 dispute orchestration's ≥3-peer quorum is deferred — would require
+# a third peer (motebit-sync-stg-c) once the 2-peer flow is validated.
+#
+# Deploy:    fly deploy --config fly.staging-b.toml
+# Status:    fly status --config fly.staging-b.toml
+# Tail logs: fly logs --config fly.staging-b.toml
+# Destroy:   fly apps destroy motebit-sync-stg-b
+#
+# This config intentionally does NOT enable litestream (ephemeral SQLite is
+# fine for a peer-test instance).
+app = "motebit-sync-stg-b"
+primary_region = "sjc"
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  MOTEBIT_DB_PATH = "/data/motebit.db"
+  # Federation: announce this relay at its public fly URL so peer relays
+  # can route heartbeats and forwarded tasks back. Display name is what
+  # shows up in the peer relay's federation/v1/peers list.
+  MOTEBIT_FEDERATION_ENDPOINT_URL = "https://motebit-sync-stg-b.fly.dev"
+  MOTEBIT_FEDERATION_DISPLAY_NAME = "motebit-sync-stg-b (second peer-test relay)"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 250
+    soft_limit = 200
+
+  [[http_service.checks]]
+    interval = "15s"
+    grace_period = "5s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "2s"
+
+[mounts]
+  source = "motebit_sync_stg_b_data"
+  destination = "/data"

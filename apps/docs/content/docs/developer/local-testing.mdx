@@ -20,10 +20,10 @@ Node >= 20 and pnpm 9.15+ are required.
 
 ## Running a local relay
 
-The relay lives in `services/api/`. Two environment variables are required:
+The relay lives in `services/relay/`. Two environment variables are required:
 
 ```bash
-cd services/api
+cd services/relay
 MOTEBIT_API_TOKEN=test-token \
 X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
 pnpm run dev
@@ -202,7 +202,7 @@ This is the complete flow: two sovereign motebits delegating through a local rel
 ### Terminal 1 — Start the relay
 
 ```bash
-cd services/api
+cd services/relay
 MOTEBIT_API_TOKEN=test-token \
 X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
 pnpm run dev
@@ -316,7 +316,7 @@ The dashboard polls the relay API every 2 seconds. Relevant tabs for testing del
 
 ### "Connection refused" on localhost:3000
 
-The relay is not running. Start it with `pnpm run dev` in `services/api/`.
+The relay is not running. Start it with `pnpm run dev` in `services/relay/`.
 
 ### "402 Payment Required"
 

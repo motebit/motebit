@@ -8,7 +8,7 @@
  * consumers stay deterministic.
  *
  * The canonical production implementation is `SqliteAccountStore` in
- * `services/api/src/account-store-sqlite.ts`, wrapping a
+ * `services/relay/src/account-store-sqlite.ts`, wrapping a
  * `@motebit/persistence` DatabaseDriver.
  */
 

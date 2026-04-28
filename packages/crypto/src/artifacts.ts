@@ -1084,7 +1084,7 @@ export const SETTLEMENT_RECORD_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
  * Callers pass the record without `signature` or `suite`; the signer
  * owns both.
  *
- * Foundation Law (services/api/CLAUDE.md rule 6): every truth the
+ * Foundation Law (services/relay/CLAUDE.md rule 6): every truth the
  * relay asserts is independently verifiable. Per-agent settlements
  * deliver this through the signature; federation settlements
  * additionally get Merkle-batched and onchain-anchored.

@@ -777,7 +777,7 @@ Relays SHOULD advertise their supported federation version in the `GET /federati
 
 ## Appendix A. Implementation Deviations
 
-The reference implementation (`services/api/`) deviates from this specification in the following ways. These are intentional design choices, not bugs. They are documented here so that independent implementors can interoperate correctly.
+The reference implementation (`services/relay/`) deviates from this specification in the following ways. These are intentional design choices, not bugs. They are documented here so that independent implementors can interoperate correctly.
 
 ### A.1 — Authentication: JSON Body vs. Headers
 

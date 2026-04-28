@@ -90,11 +90,11 @@ Same staged shape as the rest of motebit: doctrine first, spec when generalizati
 
 Stage 1.5 of this doctrine is live in the canonical relay:
 
-- **Source of truth:** `services/api/src/transparency.ts` — `DECLARATION_CONTENT` is the single object both artifacts derive from.
-- **Human-readable:** [`services/api/PRIVACY.md`](../../services/api/PRIVACY.md) — committed to the repo, generated from the renderer.
+- **Source of truth:** `services/relay/src/transparency.ts` — `DECLARATION_CONTENT` is the single object both artifacts derive from.
+- **Human-readable:** [`services/relay/PRIVACY.md`](../../services/relay/PRIVACY.md) — committed to the repo, generated from the renderer.
 - **Machine-verifiable:** `GET /.well-known/motebit-transparency.json` — Ed25519-signed under `motebit-jcs-ed25519-hex-v1`, suite-tagged for the dispatcher in `@motebit/crypto`.
 - **Operator view:** `GET /api/v1/admin/transparency` — same declaration plus the onchain-anchor placeholder showing the disappearance-test gap that closes when stage 2 lands.
-- **Sibling-boundary defense:** `services/api/src/__tests__/transparency.test.ts` asserts `PRIVACY.md` matches `renderMarkdown()` exactly. Drift between the two artifacts breaks the build.
+- **Sibling-boundary defense:** `services/relay/src/__tests__/transparency.test.ts` asserts `PRIVACY.md` matches `renderMarkdown()` exactly. Drift between the two artifacts breaks the build.
 
 The implementation deliberately stops at stage 1.5: it satisfies the _signed declaration_ and _user-readable form_ halves of the doctrine, and explicitly admits in its own `honest_gaps` field that onchain anchoring lands with stage 2. That admission is the defense against forgetting to close the gap.
 

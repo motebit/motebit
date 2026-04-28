@@ -40,9 +40,9 @@ The keypair never crosses the boundary. The public key that the world uses to re
 
 Messages do not travel motebit-to-motebit directly. They pass through the relay, which resolves addresses, meters rate, enforces custody boundaries, and records that the handoff occurred. This is the broker role in a distributed actor system: it does not execute the work, it does not own the state, it routes and it observes.
 
-`services/api` speaks this role explicitly. `motebit_task` is the message envelope. `task-routing.ts` resolves candidate workers by reputation, price, and freshness. The federation layer extends the broker across relay operators when the addressee lives on a peer. The relay's rate limits, circuit breakers, and allocation reservations are exactly the backpressure mechanisms a broker applies to keep the system from collapsing under bursty delegation.
+`services/relay` speaks this role explicitly. `motebit_task` is the message envelope. `task-routing.ts` resolves candidate workers by reputation, price, and freshness. The federation layer extends the broker across relay operators when the addressee lives on a peer. The relay's rate limits, circuit breakers, and allocation reservations are exactly the backpressure mechanisms a broker applies to keep the system from collapsing under bursty delegation.
 
-A broker is not a trust root. The relay does not vouch for the work — it delivered the message, nothing more. The sovereignty of each interior holds across the broker, by the rule in `services/api/CLAUDE.md` §6: every truth the relay asserts is independently verifiable without the relay's cooperation.
+A broker is not a trust root. The relay does not vouch for the work — it delivered the message, nothing more. The sovereignty of each interior holds across the broker, by the rule in `services/relay/CLAUDE.md` §6: every truth the relay asserts is independently verifiable without the relay's cooperation.
 
 ### 2.3 — Receipts are the causal log
 
@@ -118,11 +118,11 @@ The actor principle is the lens; the primitives are elsewhere.
 
 Identity as address — the Ed25519 keypair in `@motebit/core-identity`, the motebit.md self-publication in `@motebit/identity-file`, derived by THE_SOVEREIGN_INTERIOR.md.
 
-Messages — the `motebit_task` envelope, `McpClientAdapter` in `@motebit/mcp-client`, `startServiceServer` in `@motebit/mcp-server`, brokered through `services/api`'s `task-routing.ts`.
+Messages — the `motebit_task` envelope, `McpClientAdapter` in `@motebit/mcp-client`, `startServiceServer` in `@motebit/mcp-server`, brokered through `services/relay`'s `task-routing.ts`.
 
 Receipts as causal log — the `ExecutionReceipt` type in `@motebit/sdk`, signed via `@motebit/crypto`, persisted byte-identical in `relay_receipts.receipt_json`, walked by any verifier.
 
-Supervision — `spec/dispute-v1.md`, the `AdjudicatorVote` and `DisputeResolution` primitives in `@motebit/protocol`, adjudicated in `services/api/src/disputes`, extended across relays by `spec/relay-federation-v1.md`.
+Supervision — `spec/dispute-v1.md`, the `AdjudicatorVote` and `DisputeResolution` primitives in `@motebit/protocol`, adjudicated in `services/relay/src/disputes`, extended across relays by `spec/relay-federation-v1.md`.
 
 Self-signing of the actor's _interior_ work (as opposed to its delegated work) — the consolidation cycle of THE_SELF_SIGNING_BODY.md. The two chains compose: an execution receipt produced while a motebit is responsive, a consolidation receipt produced while the motebit is tending, both signed by the same identity key, both verifiable by the same `@motebit/crypto` primitives.
 
