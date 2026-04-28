@@ -8,7 +8,6 @@
   <a href="https://github.com/motebit/motebit/actions/workflows/ci.yml"><img src="https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/motebit"><img src="https://img.shields.io/npm/v/motebit?label=motebit" alt="motebit"></a>
   <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>
-  <a href="https://www.npmjs.com/package/@motebit/sdk"><img src="https://img.shields.io/npm/v/@motebit/sdk?label=%40motebit%2Fsdk" alt="@motebit/sdk"></a>
   <a href="https://github.com/motebit/motebit/pkgs/container/api"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Fapi-1.0.0-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/api"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/protocol-Apache--2.0-green" alt="Protocol: Apache-2.0"></a>
