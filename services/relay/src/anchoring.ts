@@ -11,7 +11,6 @@
  *
  * Chain submission is pluggable via ChainAnchorSubmitter (same adapter used by
  * credential anchoring). Default: Solana Memo when SOLANA_RPC_URL is set.
- * Legacy: EVM contract via EvmContractSubmitter when chainRpcUrl + contractAddress are set.
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -49,29 +48,6 @@ export interface AnchoringConfig {
   batchIntervalMs?: number;
   /** Chain anchor submitter. If unset, batches are signed but not submitted on-chain. */
   submitter?: ChainAnchorSubmitter;
-  // --- Legacy EVM config (use submitter instead) ---
-  /**
-   * @deprecated Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
-   *
-   * Reason: submitter-based anchoring generalizes across chains
-   * (Solana memo, EVM contract, future rails) and owns its own RPC wiring.
-   * The three flat `chain*` fields only ever made sense for the EVM path.
-   */
-  chainRpcUrl?: string;
-  /**
-   * @deprecated Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
-   *
-   * Reason: paired with {@link chainRpcUrl} — EVM-specific, superseded by
-   * the submitter interface.
-   */
-  contractAddress?: string;
-  /**
-   * @deprecated Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
-   *
-   * Reason: paired with {@link chainRpcUrl} — EVM-specific, superseded by
-   * the submitter interface. Default was `"eip155:8453"` (Base).
-   */
-  chainNetwork?: string;
 }
 
 const DEFAULT_BATCH_MAX_SIZE = 100;
@@ -287,96 +263,6 @@ export async function submitAnchorOnChain(
   }
 }
 
-// === Legacy EVM Contract Submitter ===
-
-/**
- * EVM contract submitter for SettlementAnchor.sol.
- *
- * @deprecated Use {@link SolanaMemoSubmitter} instead.
- *
- * Reason: the Solana submitter signs with the relay's native Ed25519
- * identity key — no separate secp256k1 key management, no deployed
- * contract address to track, no EVM gas economics. EVM anchoring added
- * operational overhead motebit never needed. Retained through 2.0.0 for
- * operators who specifically want Base/EVM anchoring continuity.
- *
- * Requires: chainRpcUrl with an unlocked account or signing proxy.
- */
-export class EvmContractSubmitter implements ChainAnchorSubmitter {
-  readonly chain = "eip155" as const;
-  readonly network: string;
-  private readonly rpcUrl: string;
-  private readonly contractAddress: string;
-
-  constructor(config: { chainRpcUrl: string; contractAddress: string; chainNetwork?: string }) {
-    this.rpcUrl = config.chainRpcUrl;
-    this.contractAddress = config.contractAddress;
-    this.network = config.chainNetwork ?? "eip155:8453";
-  }
-
-  async submitMerkleRoot(
-    root: string,
-    relayId: string,
-    leafCount: number,
-  ): Promise<{ txHash: string }> {
-    const relayIdHash = await sha256Hex(relayId);
-    const leafCountHex = leafCount.toString(16).padStart(64, "0");
-    const calldata =
-      "0x" +
-      ANCHOR_SELECTOR +
-      root.padStart(64, "0") +
-      relayIdHash.padStart(64, "0") +
-      leafCountHex;
-
-    const txResponse = await fetch(this.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "eth_sendTransaction",
-        params: [{ to: this.contractAddress, data: calldata }],
-      }),
-    });
-
-    const txResult = (await txResponse.json()) as {
-      result?: string;
-      error?: { message: string };
-    };
-
-    if (txResult.error || !txResult.result) {
-      throw new Error(txResult.error?.message ?? "No transaction hash returned");
-    }
-
-    return { txHash: txResult.result };
-  }
-
-  async isAvailable(): Promise<boolean> {
-    try {
-      const res = await fetch(this.rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
-      });
-      const data = (await res.json()) as { result?: string };
-      return !!data.result;
-    } catch {
-      return false;
-    }
-  }
-}
-
-/** SHA-256 hex of a UTF-8 string. */
-async function sha256Hex(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-/** anchor(bytes32,bytes32,uint64) selector, computed offline via keccak256. */
-const ANCHOR_SELECTOR = "2b3c0db3";
-
 // === Batch Anchor Loop ===
 
 /**
@@ -394,16 +280,7 @@ export function startBatchAnchorLoop(
   // Check every 60s — actual batch cutting only happens when triggers are met
   const checkIntervalMs = Math.min(60_000, intervalMs);
 
-  // Resolve submitter: explicit submitter > legacy EVM config > none
-  const submitter =
-    config.submitter ??
-    (config.chainRpcUrl && config.contractAddress
-      ? new EvmContractSubmitter({
-          chainRpcUrl: config.chainRpcUrl,
-          contractAddress: config.contractAddress,
-          chainNetwork: config.chainNetwork,
-        })
-      : undefined);
+  const submitter = config.submitter;
 
   return setInterval(() => {
     if (isFrozen?.()) return;
@@ -908,18 +785,9 @@ export function startAgentSettlementAnchorLoop(
   const intervalMs = config.batchIntervalMs ?? DEFAULT_BATCH_INTERVAL_MS;
   const checkIntervalMs = Math.min(60_000, intervalMs);
 
-  // Same submitter-resolution logic as the federation loop. Both loops
-  // share the same ChainAnchorSubmitter abstraction; configure once at
-  // startup and inject into both.
-  const submitter =
-    config.submitter ??
-    (config.chainRpcUrl && config.contractAddress
-      ? new EvmContractSubmitter({
-          chainRpcUrl: config.chainRpcUrl,
-          contractAddress: config.contractAddress,
-          chainNetwork: config.chainNetwork,
-        })
-      : undefined);
+  // Both loops share the same ChainAnchorSubmitter abstraction; configure
+  // once at startup and inject into both.
+  const submitter = config.submitter;
 
   return setInterval(() => {
     if (isFrozen?.()) return;

@@ -21,10 +21,7 @@ vi.mock("@motebit/memory-graph", async () => {
 import {
   AnthropicProvider,
   type AnthropicProviderConfig,
-  CloudProvider,
-  type CloudProviderConfig,
   detectLocalInference,
-  detectOllama,
   DEFAULT_LOCAL_INFERENCE_PORTS,
   extractMemoryTags,
   extractStateTags,
@@ -1584,28 +1581,6 @@ describe("detectLocalInference", () => {
     const r = await detectLocalInference();
     expect(r.available).toBe(false);
     expect(mockFn).toHaveBeenCalledTimes(DEFAULT_LOCAL_INFERENCE_PORTS.length);
-  });
-
-  it("detectOllama alias works the same as detectLocalInference", async () => {
-    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(
-      new Response(JSON.stringify({ data: [{ id: "qwen" }] }), { status: 200 }),
-    );
-    const r = await detectOllama("http://localhost:11434");
-    expect(r.available).toBe(true);
-    expect(r.bestModel).toBe("qwen");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Re-exports / deprecated aliases
-// ---------------------------------------------------------------------------
-
-describe("Deprecated aliases", () => {
-  it("CloudProvider === AnthropicProvider", () => {
-    expect(CloudProvider).toBe(AnthropicProvider);
-    const p: CloudProviderConfig = { api_key: "k", model: "m" };
-    expect(new CloudProvider(p)).toBeInstanceOf(AnthropicProvider);
   });
 });
 

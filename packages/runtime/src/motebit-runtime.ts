@@ -1898,14 +1898,14 @@ export class MotebitRuntime {
    * supersedes reflection's notability ranking. The one behavior not
    * yet covered by `consolidationCycle()` is curiosity-target
    * computation, which still lives in `runHousekeeping`'s second pass.
-   * Unifying curiosity into the cycle is a separate design question
-   * (does it belong in gather, or stay a separate signal the
-   * gradient manager subscribes to?) — see
-   * `docs/doctrine/proactive-interior.md` § "What's deferred". This
-   * method retires at 1.0.0 with whatever unification shape lands;
-   * the annotation here formalizes the doctrine's existing
-   * "deprecated alias" claim and routes the migration through
-   * drift-defense #39 rather than PR review.
+   *
+   * Deferred-design case (per `docs/doctrine/deprecation-lifecycle.md` §
+   * Private packages): unblock criterion is the curiosity-target
+   * unification design — does curiosity belong in the cycle's gather
+   * phase, or stay a separate signal the gradient manager subscribes to?
+   * See `docs/doctrine/proactive-interior.md` § "What's deferred". The
+   * annotation stays until that decision lands; the symbol retires
+   * with whatever unification shape ships.
    */
   // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional wrapper around the deprecated runHousekeeping; see JSDoc above for the migration path
   async housekeeping(): Promise<void> {

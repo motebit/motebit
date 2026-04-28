@@ -48,7 +48,7 @@ const ALLOWLIST: ReadonlyArray<{ path: string; reason: string }> = [
   {
     path: "packages/runtime/src/housekeeping.ts",
     reason:
-      "deprecated alias for the cycle's prune+consolidate phases. The `runHousekeeping` function and the `MotebitRuntime.housekeeping()` wrapper both carry four-field `@deprecated` annotations (since 0.2.0, removed in 1.0.0) so drift-defense #39 tracks the sunset — PR reviewers and IDEs see the deprecation directly rather than through this allowlist comment. The function stays during the migration window because unifying its curiosity-target computation into the cycle is a separate design conversation; deletion + scheduler migration tracked as the 1.0.0 cutover.",
+      "deprecated alias for the cycle's prune+consolidate phases. The `runHousekeeping` function and the `MotebitRuntime.housekeeping()` wrapper both carry `@deprecated` annotations in the deferred-design shape (per `docs/doctrine/deprecation-lifecycle.md` § Private packages — replacement pointer + Reason naming the design gap, no semver fields since `@motebit/runtime` is `0.0.0-private`). The unblock criterion is the curiosity-target unification design — does curiosity belong inside the cycle's gather phase or stay a separate signal the gradient manager subscribes to? The symbol retires with that decision; drift-defense #59 enforces the no-semver shape.",
   },
 ];
 

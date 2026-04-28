@@ -72,7 +72,19 @@ Forbidden:
 
 Drift defense: `check-private-deprecation-shape` (invariant #59).
 
-The private path is for _intra-workspace_ deprecation: a callsite inside the workspace got renamed or replaced, but you want the IDE/lint signal and a pointer to the new shape so internal callers find their way over. Once every internal caller is migrated, just delete the symbol — there is no deprecation window for the shipped artifact, only for the workspace authoring experience.
+#### When `@deprecated` is the right tag inside a private package
+
+In a workspace where every caller is in the same git tree, `@deprecated` is structurally a TODO. There is no consumer-migration window; you can grep callers in seconds and migrate in the same commit. The legitimate uses split into three cases:
+
+1. **Dead — delete now.** Symbol has no production callers; tests only reference it to test the deprecated alias itself. Migrate the alias-tests if they assert behavior, otherwise delete them with the symbol. The annotation is a TODO that will never get done; finish it.
+
+2. **Active workspace consumer — migrate, then delete.** Symbol is called from elsewhere in the workspace. Migrate the callers in the same commit and delete. The annotation is a half-finished migration; finish it.
+
+3. **Deferred-design legacy — annotation stays, with the unblock criterion in `Reason:`.** Symbol is load-bearing because the replacement doesn't yet cover every behavior the symbol provides, AND the missing behavior is a separate architectural decision (not just labor). The `Reason:` block must name the design gap explicitly — not "tracked as the next minor," but the actual unanswered question. Example: `MotebitRuntime.housekeeping()` and `runHousekeeping()` carry the deprecation while the curiosity-target unification design (does curiosity belong in the cycle's gather phase or stay a separate signal the gradient manager subscribes to?) is settled. The symbol retires when the decision lands.
+
+Cases 1 and 2 should not sit annotated indefinitely. A private-package `@deprecated` that has been in the tree more than ~30 days without progress is almost certainly a category error — either the migration is real (do it) or the symbol is supported (drop the tag, document as alternative API shape if dual-surface). Only case 3 has a legitimate long-tail; it survives by naming the unblock criterion concretely.
+
+For non-deprecation legacy paths — symbols that are simpler/older but actively maintained alongside a newer richer API — drop `@deprecated` and document as an ergonomic alternative (e.g., `authToken: string` alongside `credentialSource: CredentialSource` on `McpClientAdapter`'s config). Dual-API surfaces are a pattern, not a category error.
 
 ### When a private package promotes to public
 

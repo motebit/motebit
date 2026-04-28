@@ -387,17 +387,20 @@ export interface McpServerConfig {
   /**
    * Static Bearer token for non-motebit MCP servers that require auth.
    *
-   * @deprecated Use `credentialSource` (with `StaticCredentialSource` for static tokens) instead.
-   *
-   * Reason: the credential-source interface generalizes — it supports
-   * keyring, vault, OAuth refresh, and per-request resolution patterns
-   * that a static token can't. Existing callers still work: an
-   * `authToken` is transparently wrapped into a `StaticCredentialSource`
-   * at connect time. The wrapper is the documented migration bridge
-   * through the deprecation window.
+   * Ergonomic shorthand for the static-token case (the common shape for
+   * MCP servers configured with a single API key). Internally wrapped into
+   * a `StaticCredentialSource` at connect time. Use {@link credentialSource}
+   * directly for non-static cases — keyring, vault, OAuth refresh, or
+   * per-request resolution patterns that a static token can't express.
+   * `credentialSource` takes precedence when both are set.
    */
   authToken?: string;
-  /** Dynamic credential source for non-motebit MCP servers. Takes precedence over authToken. */
+  /**
+   * Dynamic credential source for non-motebit MCP servers. Use for
+   * non-static auth: OAuth with refresh, keyring lookup, vault resolution,
+   * or any per-request strategy. Takes precedence over {@link authToken}
+   * when both are set.
+   */
   credentialSource?: CredentialSource;
   /** Guardian public key (hex) for verifying guardian recovery succession records. */
   guardianPublicKey?: string;

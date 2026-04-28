@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   packContext,
   AnthropicProvider,
-  CloudProvider,
   stripPartialActionTag,
   stripInternalTags,
   getImpulsesForAction,
@@ -244,25 +243,6 @@ describe("packContext — memory injection defense boundaries", () => {
       }),
     );
     expect(result).toContain("[MEMORY_DATA]User prefers strict mode[/MEMORY_DATA]");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Deprecated alias contract
-// ---------------------------------------------------------------------------
-
-describe("CloudProvider deprecated alias", () => {
-  it("is the same value as AnthropicProvider", () => {
-    expect(CloudProvider).toBe(AnthropicProvider);
-  });
-
-  it("supports `new CloudProvider(...)` and `instanceof` checks", () => {
-    const provider = new CloudProvider({
-      api_key: "test-key",
-      model: "claude-sonnet-4-5-20250929",
-    });
-    expect(provider).toBeInstanceOf(CloudProvider);
-    expect(provider).toBeInstanceOf(AnthropicProvider);
   });
 });
 

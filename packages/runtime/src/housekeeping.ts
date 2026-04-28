@@ -61,14 +61,13 @@ export interface HousekeepingResult {
  * Reason: this function is the pre-unification housekeeping path. The
  * four-phase consolidation cycle (`runConsolidationCycle`) is the canonical
  * maintenance loop per `docs/doctrine/proactive-interior.md` — its prune
- * phase supersedes this function's retention/decay/episodic work. The
- * one remaining asymmetry is curiosity-target computation; resolving
- * that is a separate design conversation before the 1.0.0 removal.
- * The drift-defense allowlist in
- * `scripts/check-consolidation-primitives.ts` already calls this a
- * "deprecated alias"; the annotation here formalizes the claim so the
- * doctrine is visible in every consumer's IDE and enforced by
- * drift-defense #39.
+ * phase supersedes this function's retention/decay/episodic work.
+ *
+ * Deferred-design case (per `docs/doctrine/deprecation-lifecycle.md` §
+ * Private packages): unblock criterion is the curiosity-target unification
+ * design — whether curiosity targets are computed inside the cycle's
+ * gather phase or remain a separate signal the gradient manager subscribes
+ * to. The symbol retires with whatever shape that decision produces.
  */
 export async function runHousekeeping(deps: HousekeepingDeps): Promise<HousekeepingResult> {
   try {

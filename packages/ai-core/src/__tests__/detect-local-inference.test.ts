@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { detectLocalInference, detectOllama } from "../core";
+import { detectLocalInference } from "../core";
 
 // ---------------------------------------------------------------------------
 // detectLocalInference — vendor-agnostic probe for OpenAI-compat local servers
@@ -149,14 +149,5 @@ describe("detectLocalInference", () => {
     const result = await detectLocalInference("http://localhost:11434/v1");
     expect(result.url).toBe("http://localhost:11434/v1");
     expect(mockFn).toHaveBeenCalledWith("http://localhost:11434/v1/models", expect.any(Object));
-  });
-});
-
-describe("detectOllama (deprecated alias)", () => {
-  it("is still callable as an alias for detectLocalInference", async () => {
-    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
-    mockFn.mockResolvedValueOnce(modelsResponse(["llama3.1"]));
-    const result = await detectOllama();
-    expect(result.available).toBe(true);
   });
 });

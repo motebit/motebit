@@ -1051,9 +1051,9 @@ export class AnthropicProvider implements StreamingProvider {
 // OpenAI-format `{data: [{id, ...}]}` list. This function tries a curated
 // list of common ports and returns the first one that responds with models.
 //
-// Previously this was `detectOllama()` probing Ollama's native `/api/tags`
-// endpoint — vendor-specific and invisible to every other local server.
-// The rename is part of the 2026-04-06 Ollama privilege audit.
+// The rename from the original `detectOllama()` (probing Ollama's native
+// `/api/tags`) to vendor-neutral OpenAI-compat probing landed in the
+// 2026-04-06 Ollama privilege audit.
 
 /**
  * Default local-inference endpoints to probe, in priority order.
@@ -1078,15 +1078,6 @@ export interface LocalInferenceDetectionResult {
   /** Best available model based on preference order, or empty string. */
   bestModel: string;
 }
-
-/**
- * @deprecated Use {@link LocalInferenceDetectionResult} instead.
- *
- * Reason: vendor-neutral rename. The detector probes any OpenAI-compat
- * local server (Ollama, LM Studio, llama.cpp, vLLM) — the `Ollama`
- * prefix in the type name was a category error.
- */
-export type OllamaDetectionResult = LocalInferenceDetectionResult;
 
 /**
  * Probe common local-inference ports on 127.0.0.1 via the OpenAI-compat
@@ -1120,14 +1111,6 @@ export async function detectLocalInference(
   }
   return empty;
 }
-
-/**
- * @deprecated Use {@link detectLocalInference} instead.
- *
- * Reason: paired with {@link OllamaDetectionResult} — vendor-neutral rename
- * to match the probe's actual scope (any OpenAI-compat local inference server).
- */
-export const detectOllama = detectLocalInference;
 
 /** Append `/v1` if missing (mirrors sdk's `normalizeLocalServerEndpoint`). */
 function normalizeCandidate(url: string): string {
@@ -1176,21 +1159,3 @@ async function probeOneEndpoint(baseUrl: string): Promise<LocalInferenceDetectio
     return empty;
   }
 }
-
-// === Deprecated aliases ===
-
-/**
- * @deprecated Use {@link AnthropicProvider} instead.
- *
- * Reason: the "Cloud" prefix was a category error. This class has only
- * ever spoken the Anthropic wire protocol — OpenAI and Google live in
- * sibling provider classes. Vendor-accurate naming.
- */
-export const CloudProvider = AnthropicProvider;
-
-/**
- * @deprecated Use {@link AnthropicProviderConfig} instead.
- *
- * Reason: paired with {@link CloudProvider} — vendor-accurate rename.
- */
-export type CloudProviderConfig = AnthropicProviderConfig;

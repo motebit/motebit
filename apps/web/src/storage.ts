@@ -71,21 +71,10 @@ export function clearProviderConfig(): void {
 // The authoritative `AppearanceConfig` shape lives in `@motebit/sdk`. Web
 // persists it as-is; legacy localStorage blobs (with `preset` instead of
 // `colorPreset`) are normalized on load via the canonical
-// `migrateAppearanceConfig` helper. The legacy type alias `SoulColorConfig`
-// is kept as a re-export of `AppearanceConfig` for source-compat with any
-// existing internal callers.
+// `migrateAppearanceConfig` helper.
 
 import { migrateAppearanceConfig, type AppearanceConfig } from "@motebit/sdk";
 export type { AppearanceConfig };
-/**
- * @deprecated Use {@link AppearanceConfig} from `@motebit/sdk` instead.
- *
- * Reason: the "soul color" name was a web-specific artifact of the
- * pre-multi-surface era. Appearance is now a cross-surface concept
- * (desktop, mobile, web, spatial all render from the same config), so
- * the vocabulary moved into `@motebit/sdk` under a surface-neutral name.
- */
-export type SoulColorConfig = AppearanceConfig;
 
 const SOUL_COLOR_KEY = "motebit-soul-color";
 

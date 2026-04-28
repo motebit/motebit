@@ -3,11 +3,8 @@ import type {
   AgentServiceListing,
   MotebitId,
   MarketConfig,
-  RouteScore,
   HardwareAttestationClaim,
 } from "@motebit/protocol";
-import { AgentTrustLevel } from "@motebit/protocol";
-import { trustLevelToScore } from "@motebit/semiring";
 
 export interface CandidateProfile {
   motebit_id: MotebitId;
@@ -65,95 +62,6 @@ const DEFAULT_CONFIG: MarketConfig = {
   settlement_timeout_ms: 30_000,
 };
 
-function computeSuccessRate(record: AgentTrustRecord | null): number {
-  if (!record) return 0.5;
-  const s = record.successful_tasks ?? 0;
-  const f = record.failed_tasks ?? 0;
-  const total = s + f;
-  if (total === 0) return 0.5;
-  return s / total;
-}
-
-function computeLatency(stats: { avg_ms: number } | null, k: number): number {
-  if (!stats) return 0.5;
-  return 1 - stats.avg_ms / (stats.avg_ms + k);
-}
-
-function computePriceEfficiency(
-  listing: AgentServiceListing | null,
-  requirements: TaskRequirements,
-): number {
-  if (!listing || listing.pricing.length === 0 || requirements.max_budget == null) return 0.7;
-  let totalCost = 0;
-  for (const cap of requirements.required_capabilities) {
-    const price = listing.pricing.find((p) => p.capability === cap);
-    if (price) totalCost += price.unit_cost;
-  }
-  if (totalCost === 0) return 0.7;
-  return Math.max(0, 1 - totalCost / requirements.max_budget);
-}
-
-function computeCapabilityMatch(
-  listing: AgentServiceListing | null,
-  requirements: TaskRequirements,
-): number {
-  if (requirements.required_capabilities.length === 0) return 1.0;
-  if (!listing) return 0.0;
-  const matched = requirements.required_capabilities.filter((c) =>
-    listing.capabilities.includes(c),
-  ).length;
-  if (matched < requirements.required_capabilities.length) return 0.0;
-  return matched / requirements.required_capabilities.length;
-}
-
-/**
- * Pure: (candidate, requirements, config?) → RouteScore
- *
- * @deprecated Use `graphRankCandidates` from `./graph-routing.js` instead.
- *
- * Reason: linear weighted sum that ignores multi-hop trust composition,
- * regulatory risk, and provenance. The graph-routing replacement walks
- * the trust digraph via the market semiring, yielding routes that the
- * linear model cannot express. No longer exported from the package entry
- * — reachable only through the direct file path for legacy-reference use.
- */
-export function scoreCandidate(
-  candidate: CandidateProfile,
-  requirements: TaskRequirements,
-  config?: Partial<MarketConfig>,
-): RouteScore {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
-
-  const trust =
-    candidate.chain_trust ??
-    (candidate.trust_record ? trustLevelToScore(candidate.trust_record.trust_level) : 0.1);
-  const success_rate = computeSuccessRate(candidate.trust_record);
-  const latency = computeLatency(candidate.latency_stats, cfg.latency_norm_k);
-  const price_efficiency = computePriceEfficiency(candidate.listing, requirements);
-  const capability_match = computeCapabilityMatch(candidate.listing, requirements);
-  const availability = candidate.is_online ? 1.0 : 0.0;
-
-  // Hard filters: blocked agents and missing capabilities score 0
-  const blocked = candidate.trust_record?.trust_level === AgentTrustLevel.Blocked;
-
-  const composite =
-    blocked || capability_match === 0
-      ? 0
-      : trust * cfg.weight_trust +
-        success_rate * cfg.weight_success_rate +
-        latency * cfg.weight_latency +
-        price_efficiency * cfg.weight_price_efficiency +
-        capability_match * cfg.weight_capability_match +
-        availability * cfg.weight_availability;
-
-  return {
-    motebit_id: candidate.motebit_id,
-    composite,
-    sub_scores: { trust, success_rate, latency, price_efficiency, capability_match, availability },
-    selected: false,
-  };
-}
-
 /**
  * Pure: apply active inference precision to market config.
  *
@@ -182,57 +90,4 @@ export function applyPrecisionToMarketConfig(
     weight_availability: cfg.weight_availability + e * 0.1,
     exploration_weight: e,
   };
-}
-
-/**
- * Pure: (candidates[], requirements, config?) → sorted RouteScore[] with top N selected
- *
- * @deprecated Use `graphRankCandidates` from `./graph-routing.js` instead.
- *
- * Reason: linear weighted sum that ignores multi-hop trust composition,
- * regulatory risk, and provenance. The graph-routing replacement walks
- * the trust digraph via the market semiring. No longer exported from the
- * package entry — reachable only through the direct file path for
- * legacy-reference use.
- */
-export function rankCandidates(
-  candidates: CandidateProfile[],
-  requirements: TaskRequirements,
-  config?: Partial<MarketConfig>,
-): RouteScore[] {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
-  const scores = candidates.map((c) => scoreCandidate(c, requirements, cfg));
-  scores.sort((a, b) => b.composite - a.composite);
-
-  // Epsilon-greedy exploration: when exploration_weight > 0, occasionally
-  // promote a non-top candidate into the selection to reduce uncertainty
-  // about agents the system hasn't tried recently.
-  const epsilon = cfg.exploration_weight ?? 0;
-  if (epsilon > 0 && scores.length > 1) {
-    // Deterministic shuffle seed from scores to keep pure (no Math.random)
-    // Use the fractional part of the top score's composite as a pseudo-random probe
-    const probe = (scores[0]!.composite * 1000) % 1;
-    if (probe < epsilon) {
-      // Swap a non-top candidate into position 1 (promote exploration)
-      const explorationIdx = Math.min(
-        1 + Math.floor(probe * (scores.length - 1)),
-        scores.length - 1,
-      );
-      if (explorationIdx > 1 && scores[explorationIdx]!.composite > 0) {
-        const temp = scores[1]!;
-        scores[1] = scores[explorationIdx]!;
-        scores[explorationIdx] = temp;
-      }
-    }
-  }
-
-  // Mark top N as selected (skip zero-scored)
-  let selected = 0;
-  for (const score of scores) {
-    if (selected >= cfg.max_candidates || score.composite === 0) break;
-    score.selected = true;
-    selected++;
-  }
-
-  return scores;
 }
