@@ -82,9 +82,31 @@ export class InteractiveDelegationManager {
           },
         );
         if (!resp.ok) {
-          logger.warn("credential relay submission rejected", {
+          logger.warn("credential relay submission http_failed", {
             status: resp.status,
             targetMotebitId,
+          });
+          return;
+        }
+        // The relay returns HTTP 200 even when it filters every credential
+        // server-side (spec/credential-v1.md §23 — self-issued / signature-
+        // failed / unknown-subject all collapse to a body-level rejection).
+        // Inspect the body counts so silent server-side filtering surfaces
+        // in the runtime logs, not just at status-code level.
+        const body = (await resp.json().catch(() => null)) as {
+          accepted?: number;
+          rejected?: number;
+          errors?: string[];
+        } | null;
+        if (body == null) return;
+        const accepted = body.accepted ?? 0;
+        const rejected = body.rejected ?? 0;
+        if (rejected > 0) {
+          logger.warn("credential relay submission body_rejected", {
+            targetMotebitId,
+            accepted,
+            rejected,
+            errors: body.errors ?? [],
           });
         }
       } catch (err: unknown) {

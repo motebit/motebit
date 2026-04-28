@@ -227,6 +227,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-private-deprecation-shape",
   },
   {
+    name: "check-credentials-submit-response-shape",
+    defends:
+      "every client-side caller of `POST /api/v1/agents/:id/credentials/submit` inspects the `{accepted, rejected, errors}` response body, not just `response.ok` — the relay returns HTTP 200 even when it server-side-rejects every credential in the batch (spec/credential-v1.md §23: self-issued, signature-failed, unknown-subject) so a status-only check reports success while the index never accepted anything; invariant #60, added 2026-04-28 after the post-mortem on the 2026-04-25 hardware-attestation revert (commit 63fa2199) found the same anti-pattern reincarnated in `packages/runtime/src/interactive-delegation.ts` post-revert (codifies the `lesson_hardware_attestation_self_issued_dead_drop` detector that the original incident named but never landed as code)",
+    script: "check-credentials-submit-response-shape",
+  },
+  {
     name: "check-api-surface",
     defends:
       "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",

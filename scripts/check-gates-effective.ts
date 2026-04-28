@@ -808,6 +808,28 @@ export const __probeOnlyPrivateDeprecation = 1;
       ),
   },
   {
+    script: "check-credentials-submit-response-shape",
+    proves:
+      "flags a client-side fetch(`/credentials/submit`) caller that checks only `response.ok` and never inspects the `{accepted, rejected, errors}` response body — the relay returns HTTP 200 even when it server-side-rejects every credential per spec/credential-v1.md §23",
+    perturb: () =>
+      // Fixture: a packages/runtime src file that POSTs to /credentials/submit
+      // and checks only resp.ok. The gate should fire because neither
+      // `accepted` nor `rejected` appears in the file. Probe shape mirrors
+      // the actual reverted bug (commit 63fa2199) and the post-revert
+      // reincarnation in interactive-delegation.ts.
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}credentials_submit_response.ts`,
+        `export async function __probeOnlyBadSubmit(syncUrl: string, motebitId: string, vc: unknown): Promise<boolean> {
+  const resp = await fetch(\`\${syncUrl}/api/v1/agents/\${motebitId}/credentials/submit\`, {
+    method: "POST",
+    body: JSON.stringify({ credentials: [vc] }),
+  });
+  return resp.ok;
+}
+`,
+      ),
+  },
+  {
     script: "check-preset-imports",
     proves:
       "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",
