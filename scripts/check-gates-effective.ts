@@ -773,15 +773,37 @@ export function rogueLookup(): HTMLElement | null {
     proves:
       "flags a `@deprecated` annotation that lacks a replacement pointer and a `Reason:` block — violates two of the four-field contract rules the deprecation-lifecycle doctrine mandates",
     perturb: () =>
-      // Fixture: a packages/sdk source file with a `@deprecated` annotation
-      // that has since + removed in but no replacement pointer and no
-      // Reason: block. The gate should fire with both violations named.
+      // Fixture: a packages/sdk source file (published, version != 0.0.0-private)
+      // with a `@deprecated` annotation that has since + removed in but no
+      // replacement pointer and no Reason: block. The gate should fire with
+      // both violations named.
       writeFixture(
         `packages/sdk/src/${PROBE_PREFIX}deprecation_drift.ts`,
         `/**
  * @deprecated since 1.0.0, removed in 1.1.0.
  */
 export const __probeOnlyDeprecationDrift = 1;
+`,
+      ),
+  },
+  {
+    script: "check-private-deprecation-shape",
+    proves:
+      "flags a `@deprecated` annotation in a `0.0.0-private` package that carries `since X.Y.Z` and `removed in X.Y.Z` — semver fields are theater inside a workspace with no versioning boundary; the private path requires only a replacement pointer + Reason",
+    perturb: () =>
+      // Fixture: a packages/runtime source file (version "0.0.0-private")
+      // with a four-field `@deprecated` annotation. Should trip the
+      // no-semver rule on both `since` and `removed in`. Replacement
+      // pointer + Reason are present so the only violations are the
+      // two semver fields.
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}private_deprecation_shape.ts`,
+        `/**
+ * @deprecated since 1.0.0, removed in 2.0.0. Use \`newProbeShape\` instead.
+ *
+ * Reason: probe-only fixture for the private-deprecation-shape gate.
+ */
+export const __probeOnlyPrivateDeprecation = 1;
 `,
       ),
   },
