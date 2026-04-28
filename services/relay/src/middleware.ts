@@ -340,6 +340,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   // Admin endpoints — dispute + settlement + credential-anchoring dashboards
   app.use("/api/v1/admin/disputes", rl(expensiveLimiter));
   app.use("/api/v1/admin/settlements", rl(expensiveLimiter));
+  app.use("/api/v1/admin/fees", rl(expensiveLimiter));
   app.use("/api/v1/admin/credential-anchoring", rl(expensiveLimiter));
   app.use("/api/v1/admin/receipts/*", rl(expensiveLimiter));
   app.use("/api/v1/admin/pending-withdrawals", rl(expensiveLimiter));
@@ -653,9 +654,10 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   // Admin emergency freeze — master token only
   app.use("/api/v1/admin/freeze", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/unfreeze", bearerAuth({ token: apiToken }));
-  // Admin dispute + settlement + credential-anchoring dashboards — master token only
+  // Admin dispute + settlement + credential-anchoring + fees dashboards — master token only
   app.use("/api/v1/admin/disputes", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/settlements", bearerAuth({ token: apiToken }));
+  app.use("/api/v1/admin/fees", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/credential-anchoring", bearerAuth({ token: apiToken }));
   // Admin receipt audit — master token only; serves byte-identical
   // canonical JSON so an auditor can re-verify the signature offline.

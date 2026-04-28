@@ -107,6 +107,7 @@ import {
   getCredentialAnchoringStats,
   type CredentialAnchoringConfig,
 } from "./credential-anchoring.js";
+import { aggregateFees } from "./fees.js";
 import { startDepositDetector } from "./deposit-detector.js";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
@@ -897,6 +898,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       recent_p2p: recentP2p,
       p2p_verifier_enabled: !!solanaRpcUrl,
     });
+  });
+
+  // Admin: platform-fee aggregation (5% of relay-mediated settlements).
+  // Total + by-rail + by-period buckets over a `window_days` window
+  // (default 30, capped at 365). Returned in micro-units; the operator
+  // console converts at the boundary.
+  /** @internal */
+  app.get("/api/v1/admin/fees", (c) => {
+    const raw = c.req.query("window_days");
+    const parsed = raw != null ? Number.parseInt(raw, 10) : 30;
+    const windowDays = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 365) : 30;
+    return c.json(aggregateFees(moteDb.db, platformFeeRate, windowDays));
   });
 
   // --- Pairing routes ---
