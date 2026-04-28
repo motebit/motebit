@@ -430,7 +430,10 @@ export async function registerTransparencyRoutes(deps: TransparencyRouteDeps): P
 
   // Admin endpoint — same declaration plus a future-anchor placeholder so
   // operators can see whether the disappearance test is fully satisfied
-  // by this build. Audience-bound at the auth layer (admin:query).
+  // by this build. Master-token gated via bearerAuth in middleware.ts;
+  // the public-facing transparency artifact is the signed JSON at
+  // /.well-known/motebit-transparency.json (above), which non-operator
+  // consumers read without authentication.
   /** @internal */
   app.get("/api/v1/admin/transparency", (c) => {
     return c.json({

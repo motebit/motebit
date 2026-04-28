@@ -119,3 +119,54 @@ Then re-run this test.
     expect(committed).toBe(rendered);
   });
 });
+
+// === HTTP endpoint auth ===
+//
+// `/.well-known/motebit-transparency.json` MUST be public — it's the
+// canonical artifact non-operator consumers verify offline. Its sibling
+// `/api/v1/admin/transparency` MUST be master-token gated; the operator-
+// internal "proven posture" view doesn't need third-party reads.
+
+describe("transparency HTTP endpoints (auth boundary)", () => {
+  it("rejects /api/v1/admin/transparency without bearer", async () => {
+    const { createTestRelay } = await import("./test-helpers.js");
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const res = await relay.app.request("/api/v1/admin/transparency");
+      expect(res.status).toBe(401);
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("returns 200 for /api/v1/admin/transparency with master bearer", async () => {
+    const { AUTH_HEADER, createTestRelay } = await import("./test-helpers.js");
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const res = await relay.app.request("/api/v1/admin/transparency", { headers: AUTH_HEADER });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        declaration: unknown;
+        onchain_anchor: { status: string };
+      };
+      expect(body.declaration).toBeDefined();
+      expect(body.onchain_anchor.status).toBeDefined();
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("keeps /.well-known/motebit-transparency.json public (no bearer)", async () => {
+    const { createTestRelay } = await import("./test-helpers.js");
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const res = await relay.app.request("/.well-known/motebit-transparency.json");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { spec: string; signature: string };
+      expect(body.spec).toContain("motebit-transparency");
+      expect(typeof body.signature).toBe("string");
+    } finally {
+      await relay.close();
+    }
+  });
+});
