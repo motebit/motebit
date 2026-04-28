@@ -42,7 +42,7 @@ Internal cohesion is identity. Not as metaphor. As physics. The force that makes
 
 In the digital domain, internal cohesion is cryptographic identity.
 
-An Ed25519 keypair is generated — crystallized from entropy, as a droplet crystallizes from the phase boundary of Liquescentia. The private key is the internal binding force. It is the molecular bond that holds the droplet together. It never leaves the interior. It cannot be extracted without destroying the identity, as extracting the cohesive force from a droplet would destroy the droplet.
+An Ed25519 keypair is generated — crystallized from entropy, as a droplet crystallizes from the phase boundary of Liquescentia. The cohesion is the asymmetric-keypair pattern, not the specific curve; Ed25519 names the current cryptosuite, and a future suite (post-quantum, hybrid) is a registry addition, not a new physics. The private key is the internal binding force. It is the molecular bond that holds the droplet together. It never leaves the interior. It cannot be extracted without destroying the identity, as extracting the cohesive force from a droplet would destroy the droplet.
 
 The public key is the surface — the part of the identity that the world can observe, verify, and interact with. It is derived from the private key as the surface is derived from the interior. You can see the surface. You cannot reverse it to obtain the interior. The asymmetry is mathematical, and it mirrors the physical asymmetry: the surface reveals the interior's existence without exposing its structure.
 

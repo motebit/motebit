@@ -162,7 +162,11 @@ An agent cannot claim trust without the receipts that prove it. There is no fast
 
 ## VI. Economic Closure
 
-Every delegation is not just a task. It is a capital allocation.
+A delegation between sovereign interiors is metabolically asymmetric. Worker B absorbs the nutrient required to perform the task and metabolizes it into interior structure (THE_METABOLIC_PRINCIPLE.md §II.2). By the incompressibility of the interior (THE_SOVEREIGN_INTERIOR.md §III.3), that structure accrues to B and only B; A cannot reach in to extract it. A receives only what crosses the boundary outward — the surface artifact, the signed receipt. The interior cost lives in B; the interior gain stays in B.
+
+Without compensation crossing the boundary the other way, every delegation pumps metabolic load one-way and the worker silently bears the deficit. With compensation in a fungible medium (THE_SOVEREIGN_INTERIOR.md §VI.1: the calories are fungible), the boundary equilibrates — A's account depletes by the same magnitude B's replenishes, in the same denomination. The receipt is the proof of equilibration: a single artifact recording the causality (who asked whom for what) and the settlement (who paid whom how much). The two are not adjacent facts. They are the same fact.
+
+Every delegation is therefore not just a task. It is a capital allocation.
 
 Budget is locked before execution. Settlement occurs at every hop. Receipts bind work to payment. The relay's internal ledger — virtual accounts denominated in micro-units — is the circulation system. Money enters at the edges through settlement rails (fiat, protocol, stablecoin, orchestration). Money circulates inside through allocation, settlement, and re-delegation. Money exits at the edges through withdrawal. The rails are the membrane. The ledger is the economy.
 
