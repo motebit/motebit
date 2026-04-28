@@ -1,11 +1,13 @@
 /**
  * Graph-based agent routing using semiring algebra.
  *
- * Bridges the existing CandidateProfile type (flat list, linear scoring)
- * with the semiring computation graph (algebraic multi-hop routing).
+ * Bridges the `CandidateProfile` type (a flat list of candidates, defined
+ * in `./scoring.ts` for shared use) with the semiring computation graph
+ * (algebraic multi-hop routing).
  *
- * This is the primary routing module. The deprecated scoring.ts (scoreCandidate,
- * rankCandidates) is retained for reference but no longer exported from the package.
+ * This is the canonical agent-scoring path. The linear-weighted-sum
+ * predecessors (`scoreCandidate`, `rankCandidates`) were deleted on
+ * 2026-04-28 once their final test-only callers were trimmed.
  */
 
 import type { MotebitId, RouteScore, Semiring } from "@motebit/protocol";

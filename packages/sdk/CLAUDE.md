@@ -33,6 +33,6 @@ Separating them means the protocol can evolve internal shapes (rename a field, t
 
 ## Consumers
 
-- Every `apps/*` surface (desktop, mobile, web, spatial, admin, cli) imports from `@motebit/sdk` for developer-contract types.
+- Every `apps/*` surface (desktop, mobile, web, spatial, cli, inspector, operator) imports from `@motebit/sdk` for developer-contract types.
 - Third-party integrators embedding motebit into their own TypeScript apps — the sdk is the stable face of the monorepo they pin to.
 - `create-motebit` scaffolds new projects that depend on `@motebit/sdk` as their single import path for motebit types + config shapes.
