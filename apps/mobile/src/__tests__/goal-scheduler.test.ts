@@ -45,7 +45,7 @@ function makeGoalStore() {
 function makeRuntime(overrides?: Record<string, unknown>) {
   return {
     isProcessing: false,
-    housekeeping: vi.fn(() => Promise.resolve()),
+    consolidationCycle: vi.fn(() => Promise.resolve()),
     resetConversation: vi.fn(),
     getLoopDeps: vi.fn(() => null),
     getToolRegistry: vi.fn(() => ({ list: () => [] })),
@@ -131,12 +131,12 @@ describe("MobileGoalScheduler start/stop", () => {
     sched.stop();
   });
 
-  it("stop calls housekeeping on runtime", () => {
+  it("stop calls consolidationCycle on runtime", () => {
     const deps = makeDeps();
     const sched = new MobileGoalScheduler(deps);
     sched.start();
     sched.stop();
-    expect(deps._runtime.housekeeping).toHaveBeenCalled();
+    expect(deps._runtime.consolidationCycle).toHaveBeenCalled();
   });
 });
 

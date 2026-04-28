@@ -827,7 +827,7 @@ export class SpatialApp {
   }
 
   async housekeeping(): Promise<void> {
-    await this.runtime?.housekeeping();
+    await this.runtime?.consolidationCycle();
   }
 
   /** Delete a memory node by ID. */
@@ -1063,8 +1063,8 @@ export class SpatialApp {
 
     this.activity.clear();
 
-    // Background housekeeping (memory decay, gradient computation)
-    void this.runtime.housekeeping();
+    // Background consolidation (memory decay, gradient computation)
+    void this.runtime.consolidationCycle();
 
     return accumulated;
   }

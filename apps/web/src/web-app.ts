@@ -889,7 +889,7 @@ export class WebApp {
   }
 
   async housekeeping(): Promise<void> {
-    await this.runtime?.housekeeping();
+    await this.runtime?.consolidationCycle();
   }
 
   async exportData(): Promise<string> {

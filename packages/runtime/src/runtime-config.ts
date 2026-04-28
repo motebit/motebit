@@ -138,10 +138,8 @@ export interface RuntimeConfig {
   summarizeAfterMessages?: number;
   /** Auto-deny pending tool approvals after this many ms (0 = disabled, default 600000 = 10 min). */
   approvalTimeoutMs?: number;
-  /** Task router config for routing housekeeping tasks to cheaper/faster models. */
+  /** Task router config for routing low-stakes housekeeping tasks to cheaper/faster models. */
   taskRouter?: TaskRouterConfig;
-  /** Enable episodic memory consolidation during housekeeping. Default false. */
-  episodicConsolidation?: boolean;
   /**
    * When true, the AI loop yields a `memory_formation_deferred` chunk
    * at the end of each turn and skips the inline embedding +

@@ -133,8 +133,8 @@ export class GoalScheduler {
       this.approvalStore.resolve(id, "denied", "daemon_shutdown");
     }
     this.suspended.clear();
-    // Best-effort memory housekeeping on shutdown
-    void this.runtime.housekeeping();
+    // Best-effort memory consolidation on shutdown
+    void this.runtime.consolidationCycle();
   }
 
   /** Run a single scheduler tick. Exposed for deterministic testing. */
@@ -558,10 +558,10 @@ export class GoalScheduler {
           this.unregisterGoalTools();
         }
       }
-      // Phase 5: periodic memory housekeeping (every 10 ticks ≈ 10 min at default 60s)
+      // Phase 5: periodic memory consolidation (every 10 ticks ≈ 10 min at default 60s)
       this.tickCount++;
       if (this.tickCount % 10 === 0) {
-        void this.runtime.housekeeping();
+        void this.runtime.consolidationCycle();
       }
     } catch (err: unknown) {
       console.error("[scheduler] tick failed", err);

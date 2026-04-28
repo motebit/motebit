@@ -37,11 +37,13 @@ import type { StreamingProvider } from "@motebit/ai-core";
 import {
   computeDecayedConfidence,
   clusterBySimilarity,
+  findCuriosityTargets,
   rankNotableMemories,
   scoreNode,
   embedText,
   MemoryGraph,
 } from "@motebit/memory-graph";
+import type { CuriosityTarget } from "@motebit/memory-graph";
 import type { EventStore } from "@motebit/event-log";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import { MemoryClass } from "@motebit/policy";
@@ -66,7 +68,21 @@ export interface ConsolidationCycleDeps {
    *  cycle composes standalone in tests. The runtime supplies
    *  `() => runReflectionSafe(this.reflectionDeps)` at wire-in. */
   performReflection?: () => Promise<void>;
-  /** Structured logger — consistent with HousekeepingDeps + ReflectionDeps. */
+  /** Optional curiosity-target sink. The cycle computes curiosity targets
+   *  during the gather phase (`findCuriosityTargets` over live nodes) and
+   *  pushes them through this callback. Left optional so the cycle composes
+   *  standalone in tests. The runtime supplies
+   *  `(targets) => this.gradientManager.setCuriosityTargets(targets)` at
+   *  wire-in. */
+  setCuriosityTargets?: (targets: CuriosityTarget[]) => void;
+  /** Optional periodic gradient recompute. Invoked once per cycle after
+   *  the phase loop completes, with the post-prune live nodes. Left
+   *  optional so the cycle composes standalone in tests. The runtime
+   *  supplies `(nodes) => this.gradientManager.computeAndStoreGradient(nodes)`
+   *  at wire-in — making the cycle the single proactive path that keeps
+   *  the gradient fresh during long idle periods. */
+  computeAndStoreGradient?: (nodes: MemoryNode[]) => Promise<void>;
+  /** Structured logger — consistent with ReflectionDeps. */
   logger: { warn(message: string, context?: Record<string, unknown>): void };
 }
 
@@ -105,6 +121,7 @@ export interface ConsolidationCycleResult {
     orientNodes?: number;
     gatherClusters?: number;
     gatherNotable?: number;
+    gatherCuriosityTargets?: number;
     consolidateMerged?: number;
     prunedDecay?: number;
     prunedNotability?: number;
@@ -122,6 +139,7 @@ interface PhaseContext {
 interface GatheredState {
   consolidationClusters: MemoryNode[][];
   notableCount: number;
+  curiosityTargets: CuriosityTarget[];
 }
 
 const DEFAULT_PHASE_BUDGET_MS = 15_000;
@@ -160,7 +178,11 @@ export async function runConsolidationCycle(
   };
 
   // Empty memory state passed forward between phases.
-  let gathered: GatheredState = { consolidationClusters: [], notableCount: 0 };
+  let gathered: GatheredState = {
+    consolidationClusters: [],
+    notableCount: 0,
+    curiosityTargets: [],
+  };
 
   for (const phase of phases) {
     if (config.signal?.aborted) break;
@@ -186,6 +208,21 @@ export async function runConsolidationCycle(
           gathered = out;
           result.summary.gatherClusters = out.consolidationClusters.length;
           result.summary.gatherNotable = out.notableCount;
+          result.summary.gatherCuriosityTargets = out.curiosityTargets.length;
+          // Push curiosity targets to the gradient consumer if wired.
+          // Done outside the phase function to keep the phase pure (the
+          // phase computes; the cycle orchestrates side effects), and
+          // outside the phase's try/catch so a sink failure doesn't get
+          // attributed to the gather phase itself.
+          if (deps.setCuriosityTargets) {
+            try {
+              deps.setCuriosityTargets(out.curiosityTargets);
+            } catch (err: unknown) {
+              deps.logger.warn("setCuriosityTargets sink failed", {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
           break;
         }
         case "consolidate": {
@@ -209,6 +246,23 @@ export async function runConsolidationCycle(
       deps.logger.warn("consolidation phase failed", { phase, error: message });
     } finally {
       clear();
+    }
+  }
+
+  // Post-phase: recompute the intelligence gradient with the post-prune
+  // live nodes. This is the only path that keeps the gradient fresh
+  // during long idle periods — interactive turns trigger gradient at
+  // turn-5 reflection + cold start, neither of which fires when the
+  // motebit isn't being talked to. Best-effort; a recompute failure
+  // never throws past the cycle boundary.
+  if (deps.computeAndStoreGradient && !config.signal?.aborted) {
+    try {
+      const { nodes } = await deps.memory.exportAll();
+      await deps.computeAndStoreGradient(nodes);
+    } catch (err: unknown) {
+      deps.logger.warn("gradient recompute failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -268,7 +322,12 @@ async function gatherPhase(
       });
     }
   }
-  if (ctx.signal.aborted) return { consolidationClusters: [], notableCount: 0 };
+  const empty: GatheredState = {
+    consolidationClusters: [],
+    notableCount: 0,
+    curiosityTargets: [],
+  };
+  if (ctx.signal.aborted) return empty;
 
   const { nodes, edges } = await deps.memory.exportAll();
   const live = nodes.filter((n) => !n.tombstoned);
@@ -286,7 +345,17 @@ async function gatherPhase(
       ? clusterBySimilarity(candidates, ctx.consolidationClusterThreshold)
       : [];
 
-  return { consolidationClusters: clusters, notableCount: notable.length };
+  // Curiosity targets — decaying high-value memories worth asking about.
+  // Pure read over the live nodes already in hand; cheap, no I/O. Pinned
+  // and tombstoned nodes filter inside `findCuriosityTargets` itself, so
+  // we hand it the same `live` set the rest of gather uses.
+  const curiosityTargets = findCuriosityTargets(live.filter((n) => !n.pinned));
+
+  return {
+    consolidationClusters: clusters,
+    notableCount: notable.length,
+    curiosityTargets,
+  };
 }
 
 async function consolidatePhase(

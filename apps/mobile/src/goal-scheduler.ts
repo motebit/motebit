@@ -129,8 +129,8 @@ export class MobileGoalScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
-    // Final housekeeping on stop
-    void this.deps.getRuntime()?.housekeeping();
+    // Final consolidation on stop
+    void this.deps.getRuntime()?.consolidationCycle();
   }
 
   /**
@@ -196,10 +196,10 @@ export class MobileGoalScheduler {
     const goalStore = this.deps.getStorage()?.goalStore;
     if (!goalStore) return;
 
-    // Periodic housekeeping (every 10 ticks ≈ 10 min at 60s default)
+    // Periodic consolidation (every 10 ticks ≈ 10 min at 60s default)
     this.tickCount++;
     if (this.tickCount % 10 === 0) {
-      void runtime.housekeeping();
+      void runtime.consolidationCycle();
     }
 
     try {

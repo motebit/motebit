@@ -270,7 +270,7 @@ describe("MobileSyncController onboarding self-test", () => {
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
-      housekeeping: vi.fn(),
+      consolidationCycle: vi.fn(),
       isProcessing: false,
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -294,7 +294,7 @@ describe("MobileSyncController onboarding self-test", () => {
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
-      housekeeping: vi.fn(),
+      consolidationCycle: vi.fn(),
       isProcessing: false,
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -316,7 +316,7 @@ describe("MobileSyncController onboarding self-test", () => {
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
-      housekeeping: vi.fn(),
+      consolidationCycle: vi.fn(),
       isProcessing: false,
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -341,7 +341,7 @@ describe("MobileSyncController.startServing happy path", () => {
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
-      housekeeping: vi.fn(),
+      consolidationCycle: vi.fn(),
       isProcessing: false,
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

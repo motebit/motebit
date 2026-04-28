@@ -82,7 +82,7 @@ describe("Gradient credential issuance during housekeeping", () => {
       { storage: createInMemoryStorage(), renderer: new NullRenderer() },
     );
 
-    await runtime.housekeeping();
+    await runtime.consolidationCycle();
 
     const creds = runtime.getIssuedCredentials();
     expect(creds.length).toBeGreaterThanOrEqual(1);
@@ -103,7 +103,7 @@ describe("Gradient credential issuance during housekeeping", () => {
       { storage: createInMemoryStorage(), renderer: new NullRenderer() },
     );
 
-    await runtime.housekeeping();
+    await runtime.consolidationCycle();
 
     const creds = runtime.getIssuedCredentials();
     expect(creds).toHaveLength(0);
@@ -119,8 +119,8 @@ describe("Gradient credential issuance during housekeeping", () => {
     // Mock issueGradientCredential to throw
     vi.spyOn(runtime, "issueGradientCredential").mockRejectedValue(new Error("crypto failure"));
 
-    // Should not throw — housekeeping is best-effort
-    await expect(runtime.housekeeping()).resolves.toBeUndefined();
+    // Should not throw — the consolidation cycle is best-effort
+    await expect(runtime.consolidationCycle()).resolves.toBeDefined();
   });
 
   it("gradient credential is verifiable", async () => {
@@ -130,7 +130,7 @@ describe("Gradient credential issuance during housekeeping", () => {
       { storage: createInMemoryStorage(), renderer: new NullRenderer() },
     );
 
-    await runtime.housekeeping();
+    await runtime.consolidationCycle();
 
     const creds = runtime.getIssuedCredentials();
     const gradientCred = creds.find((c) => c.type.includes("AgentGradientCredential"));
@@ -392,7 +392,7 @@ describe("Credential cache management", () => {
       { storage: createInMemoryStorage(), renderer: new NullRenderer() },
     );
 
-    await runtime.housekeeping();
+    await runtime.consolidationCycle();
 
     const creds1 = runtime.getIssuedCredentials();
     const creds2 = runtime.getIssuedCredentials();
@@ -407,7 +407,7 @@ describe("Credential cache management", () => {
       { storage: createInMemoryStorage(), renderer: new NullRenderer() },
     );
 
-    await runtime.housekeeping();
+    await runtime.consolidationCycle();
     expect(runtime.getIssuedCredentials().length).toBeGreaterThan(0);
 
     runtime.clearIssuedCredentials();
@@ -421,8 +421,8 @@ describe("Credential cache management", () => {
       { storage: createInMemoryStorage(), renderer: new NullRenderer() },
     );
 
-    await runtime.housekeeping();
-    await runtime.housekeeping();
+    await runtime.consolidationCycle();
+    await runtime.consolidationCycle();
 
     const creds = runtime.getIssuedCredentials();
     const gradientCreds = creds.filter((c) => c.type.includes("AgentGradientCredential"));

@@ -119,9 +119,6 @@ import type { InteractiveDelegationConfig } from "./interactive-delegation.js";
 
 import { performReflection, runReflectionSafe } from "@motebit/reflection";
 import type { ReflectionDeps } from "@motebit/reflection";
-// eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional import of the deprecated runHousekeeping; the runtime's own `housekeeping()` method is deprecated in lockstep and both retire together at 1.0.0 when curiosity-target computation joins the consolidation cycle
-import { runHousekeeping } from "./housekeeping.js";
-import type { HousekeepingDeps } from "./housekeeping.js";
 import { PresenceController } from "./presence.js";
 import { ScopedToolRegistry } from "./scoped-tool-registry.js";
 import {
@@ -278,7 +275,6 @@ export class MotebitRuntime {
   private _localCapabilities: DeviceCapability[] = [];
   private taskRouter: TaskRouter | null;
   private streaming!: StreamingManager;
-  private episodicConsolidation: boolean;
   private gradientStore: GradientStoreAdapter;
   private gradientManager!: GradientManager;
   private agentTrustStore: AgentTrustStoreAdapter | null;
@@ -351,7 +347,6 @@ export class MotebitRuntime {
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
-    this.episodicConsolidation = config.episodicConsolidation ?? false;
     // Take OWNERSHIP of signingKeys by copying the bytes. The caller lends
     // us their keypair; on `runtime.stop()` we zero our copy without
     // affecting the caller's reference. Sibling of the
@@ -770,7 +765,6 @@ export class MotebitRuntime {
       this.stateSnapshot.saveState(this.motebitId, this.state.serialize(), clock);
     }
     void this.autoCompact();
-    void this.housekeeping();
     // Disconnect MCP servers in background
     void Promise.allSettled(this.mcpAdapters.map((a) => a.disconnect()));
     this.slab.dispose();
@@ -1886,34 +1880,6 @@ export class MotebitRuntime {
   }
 
   /**
-   * @deprecated Rework the caller — migrate to {@link consolidationCycle} for
-   * prune + episodic-consolidation and call `findCuriosityTargets` from
-   * `@motebit/memory-graph` directly (then pass the result to
-   * `getGradientManager().setCuriosityTargets`) if curiosity-target
-   * recomputation is still required.
-   *
-   * Reason: `housekeeping()` predates the unified four-phase consolidation
-   * cycle. The cycle's prune phase supersedes housekeeping's
-   * retention/decay/episodic work and the cycle's gather phase
-   * supersedes reflection's notability ranking. The one behavior not
-   * yet covered by `consolidationCycle()` is curiosity-target
-   * computation, which still lives in `runHousekeeping`'s second pass.
-   *
-   * Deferred-design case (per `docs/doctrine/deprecation-lifecycle.md` §
-   * Private packages): unblock criterion is the curiosity-target
-   * unification design — does curiosity belong in the cycle's gather
-   * phase, or stay a separate signal the gradient manager subscribes to?
-   * See `docs/doctrine/proactive-interior.md` § "What's deferred". The
-   * annotation stays until that decision lands; the symbol retires
-   * with whatever unification shape ships.
-   */
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional wrapper around the deprecated runHousekeeping; see JSDoc above for the migration path
-  async housekeeping(): Promise<void> {
-    const result = await runHousekeeping(this.housekeepingDeps);
-    this.gradientManager.setCuriosityTargets(result.curiosityTargets);
-  }
-
-  /**
    * Run the four-phase consolidation cycle (orient → gather → consolidate
    * → prune). Wraps the cycle in `PresenceController.enterTending` /
    * `exitTending` so surfaces can render the in-flight state and the
@@ -1968,6 +1934,9 @@ export class MotebitRuntime {
           privacy: this.privacy,
           getProvider: () => this.provider,
           performReflection: () => runReflectionSafe(this.reflectionDeps),
+          setCuriosityTargets: (targets) => this.gradientManager.setCuriosityTargets(targets),
+          computeAndStoreGradient: (nodes) =>
+            this.gradientManager.computeAndStoreGradient(nodes).then(() => {}),
           logger: this._logger,
         },
         {
@@ -2224,25 +2193,11 @@ export class MotebitRuntime {
     this.presence.enterResponsive();
   }
 
-  private get housekeepingDeps(): HousekeepingDeps {
-    return {
-      motebitId: this.motebitId,
-      memory: this.memory,
-      events: this.events,
-      state: this.state,
-      memoryGovernor: this.memoryGovernor,
-      privacy: this.privacy,
-      episodicConsolidation: this.episodicConsolidation,
-      logger: this._logger,
-      getProvider: () => this.provider,
-      computeAndStoreGradient: (nodes) =>
-        this.gradientManager.computeAndStoreGradient(nodes).then(() => {}),
-    };
-  }
-
   // === Curiosity Targets ===
 
-  /** Get curiosity targets computed during last housekeeping cycle. */
+  /** Get curiosity targets computed during the most recent consolidation
+   *  cycle's gather phase. The cycle pushes them via the
+   *  `setCuriosityTargets` dep callback into the gradient manager. */
   getCuriosityTargets(): CuriosityTarget[] {
     return this.gradientManager.getCuriosityTargets();
   }
