@@ -71,21 +71,22 @@ A semiring is an algebraic structure (S, ⊕, ⊗, 0, 1) where:
 
 The same graph traversal algorithm produces different answers when you change the semiring. Swap Trust for Cost and the "best path" changes from most-trusted to cheapest. Swap Cost for Latency and it changes from cheapest to fastest. The algorithm is invariant. The algebra determines the meaning.
 
-### 3.2 — Seven Semirings
+### 3.2 — Concrete Semirings
 
-The architecture has seven concrete semirings. Attar's poem has seven valleys. The parallel is suggestive, not derived — unlike the physics in the prior documents, the valley-to-semiring mapping is a resonance, not an equation. The semirings were built to solve routing problems. The valleys were written to describe spiritual transformation. They rhyme because both concern the same question: what survives the journey?
+The architecture had seven concrete routing semirings at the time this section was written, and Attar's poem has seven valleys. The parallel is suggestive, not derived — unlike the physics in the prior documents, the valley-to-semiring mapping is a resonance, not an equation. The count is contingent: `HardwareAttestationSemiring` shipped later as the eighth, lifted into routing via `productSemiring(TrustSemiring, HardwareAttestationSemiring)` in `@motebit/market`; each routing concern that arrives adds a row, which is §3.3's claim made tangible. The semirings were built to solve routing problems. The valleys were written to describe spiritual transformation. They rhyme because both concern the same question: what survives the journey?
 
-| Semiring       | ⊕ (choose) | ⊗ (compose) | 0   | 1   | What "best" means         |
-| -------------- | ---------- | ----------- | --- | --- | ------------------------- |
-| Trust          | max        | ×           | 0   | 1   | Most trusted chain        |
-| Cost           | min        | +           | ∞   | 0   | Cheapest path             |
-| Latency        | min        | +           | ∞   | 0   | Fastest path              |
-| Bottleneck     | max        | min         | 0   | ∞   | Widest capacity           |
-| Reliability    | max        | ×           | 0   | 1   | Most reliable chain       |
-| RegulatoryRisk | min        | +           | ∞   | 0   | Least regulatory exposure |
-| Boolean        | ∨          | ∧           | ⊥   | ⊤   | Reachable or not          |
+| Semiring            | ⊕ (choose) | ⊗ (compose) | 0   | 1   | What "best" means               |
+| ------------------- | ---------- | ----------- | --- | --- | ------------------------------- |
+| Trust               | max        | ×           | 0   | 1   | Most trusted chain              |
+| Cost                | min        | +           | ∞   | 0   | Cheapest path                   |
+| Latency             | min        | +           | ∞   | 0   | Fastest path                    |
+| Bottleneck          | max        | min         | 0   | ∞   | Widest capacity                 |
+| Reliability         | max        | ×           | 0   | 1   | Most reliable chain             |
+| RegulatoryRisk      | min        | +           | ∞   | 0   | Least regulatory exposure       |
+| Boolean             | ∨          | ∧           | ⊥   | ⊤   | Reachable or not                |
+| HardwareAttestation | max        | min         | 0   | 1   | Strongest hardware-rooted chain |
 
-The product semiring composes all seven into a single traversal. One algorithm. One graph. Seven dimensions of "best." The birds do not vote on a leader. The algebra determines who arrives.
+The product semiring composes them into a single traversal. One algorithm. One graph. As many dimensions of "best" as routing concerns require. The birds do not vote on a leader. The algebra determines who arrives.
 
 ### 3.3 — The Constraint
 
