@@ -32,7 +32,7 @@ const ROOT = resolve(__dirname, "..");
 
 // ── Scope ─────────────────────────────────────────────────────────────
 
-const APPS = ["admin", "cli", "desktop", "docs", "identity", "mobile", "spatial", "web"];
+const APPS = ["cli", "desktop", "docs", "identity", "inspector", "mobile", "spatial", "web"];
 
 /**
  * A registered panel family. Each entry maps a file-name pattern to

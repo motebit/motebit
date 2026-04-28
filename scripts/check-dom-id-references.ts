@@ -2,7 +2,7 @@
 /**
  * check-dom-id-references — drift defense for surface app HTML / TS pairs.
  *
- * Every surface app (apps/desktop, apps/web, apps/admin) renders DOM from
+ * Every surface app (apps/desktop, apps/web, apps/inspector) renders DOM from
  * TypeScript that queries elements declared in `index.html` — the classic
  * `document.getElementById("foo")` lookup paired with an `<div id="foo">`
  * somewhere in the markup. The pair has no compiler enforcement: TS sees
@@ -63,7 +63,7 @@ const ROOT = resolve(__dirname, "..");
 // spatial canvas-primary) have no index.html and no getElementById
 // lookups to validate. Docs surface is Next.js-rendered — its DOM
 // comes from React components, not static markup.
-const APPS_WITH_HTML: readonly string[] = ["apps/desktop", "apps/web", "apps/admin"];
+const APPS_WITH_HTML: readonly string[] = ["apps/desktop", "apps/web", "apps/inspector"];
 
 const ALLOWLIST_PATH = join(ROOT, "scripts", "check-dom-id-references.allow.json");
 

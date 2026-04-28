@@ -143,7 +143,7 @@ The `aud` field MUST contain exactly one of the canonical audience values. Token
 | `sync`            | WebSocket sync connection, HTTP sync endpoints | Multi-device data synchronization      |
 | `task:submit`     | `POST /agent/{id}/task`                        | Submit a task for delegation           |
 | `task:query`      | `GET /agent/{id}/task/{taskId}`                | Poll for task result                   |
-| `admin:query`     | `GET /api/v1/admin/*`                          | Admin dashboard queries                |
+| `admin:query`     | `GET /api/v1/admin/*`                          | Operator console queries               |
 | `rotate-key`      | `POST /api/v1/agents/{id}/rotate-key`          | Key rotation endpoint                  |
 | `pair`            | `POST /api/v1/pair/*`                          | Multi-device pairing flow              |
 | `register-device` | `POST /api/v1/agents/{id}/register`            | Device registration                    |

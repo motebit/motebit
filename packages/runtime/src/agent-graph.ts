@@ -275,7 +275,7 @@ export class AgentGraphManager {
     return result;
   }
 
-  /** Get the raw graph for external use (admin dashboard, API). */
+  /** Get the raw graph for external use (inspector dashboard, API). */
   async getGraphSnapshot(): Promise<{
     nodes: string[];
     edges: Array<{ from: string; to: string; weight: RouteWeight }>;

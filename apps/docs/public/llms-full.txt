@@ -88,7 +88,7 @@ The git history is public. Every claim on this page is verifiable.
 | **Lines of TypeScript** | ~200,000 |
 | **Tests** | 4,600+ |
 | **Packages** | 45 |
-| **Application surfaces** | 8 — desktop, CLI, mobile, web, spatial, admin, docs, identity |
+| **Application surfaces** | 8 — desktop, CLI, mobile, web, spatial, inspector, docs, identity |
 | **Published npm packages** | 5 — create-motebit, motebit, @motebit/protocol, @motebit/sdk, @motebit/crypto |
 | **Open specifications** | 5 — identity, execution ledger, relay federation, market, credentials |
 
@@ -1763,14 +1763,14 @@ If self-test passes, the agent is correctly wired to the relay. If it fails, the
 
 Every `npm run dev` from a scaffolded agent (`npm create motebit -- --agent`) exercises self-test automatically, so sybil defense regressions are caught by every new developer during onboarding.
 
-## Reading the admin dashboard
+## Reading the inspector dashboard
 
-The admin dashboard gives you a visual window into the relay's state — agent trust graphs, task queues, credentials, and settlement history.
+The inspector dashboard gives you a visual window into one motebit's interior — agent trust graphs, task queues, credentials, and event history.
 
 ### Start the dashboard
 
 ```bash
-cd apps/admin
+cd apps/inspector
 VITE_API_URL=http://localhost:3000 \
 VITE_MOTEBIT_ID=your-motebit-id \
 VITE_API_TOKEN=test-token \
@@ -3101,7 +3101,7 @@ Returns the execution ledger for a specific goal. If the agent submitted a signe
 
 The relay-constructed ledger has the same structure but omits the `signature` field. It can be verified for content integrity (the content hash matches the timeline) but not for authenticity.
 
-### Reconstructed ledger (admin)
+### Reconstructed ledger (inspector)
 
 ```
 GET /api/v1/execution/:motebitId/:goalId
@@ -5525,7 +5525,7 @@ motebit/
 │   ├── desktop/               [surface]     Tauri. Three.js creature, voice, operator mode.
 │   ├── mobile/                [surface]     React Native + Expo. Full parity with desktop.
 │   ├── spatial/               [surface]     AR/VR/WebXR. Creature-as-scene, typed spatial objects.
-│   ├── admin/                 [supporting]  React + Vite dashboard. 15-tab relay monitoring.
+│   ├── inspector/             [supporting]  React + Vite single-agent inspector. 15-tab interior view.
 │   ├── identity/              [supporting]  Static browser tool for inspecting motebit.md files.
 │   ├── vscode/                [supporting]  VS Code/Cursor extension. Thin shim that spawns `motebit lsp`.
 │   └── docs/                  [supporting]  Fumadocs + Next.js. This site.
@@ -5674,7 +5674,7 @@ The architectural role is "permissive floor"; the specific license instance (`Ap
 | `desktop`  | Surface    | Live     | Tauri glass droplet. Three.js creature, identity, operator mode, voice.                                        |
 | `mobile`   | Surface    | Live     | React Native + Expo. Full parity — expo-gl Three.js, SQLite adapters, plan-based goals.                        |
 | `spatial`  | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                            |
-| `admin`    | Supporting | Internal | React + Vite dashboard. 15-tab real-time monitoring of a running relay.                                        |
+| `inspector` | Supporting | Internal | React + Vite single-agent inspector. 15-tab real-time view of one motebit's interior via the relay.            |
 | `identity` | Supporting | Public   | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile.                               |
 | `docs`     | Supporting | Public   | Fumadocs + Next.js. This site.                                                                                 |
 
@@ -6090,7 +6090,7 @@ Every policy decision is recorded to an append-only audit log:
 | `call_id` | Unique identifier for this specific tool call |
 | `timestamp` | When the decision occurred |
 
-The audit log is queryable via the admin dashboard described in [Architecture](/docs/operator/architecture), the CLI (`motebit approvals list`), and programmatically through the `AuditLogger` API. Mode changes (operator mode enable/disable) are also logged as audit entries.
+The audit log is queryable via the inspector dashboard described in [Architecture](/docs/operator/architecture), the CLI (`motebit approvals list`), and programmatically through the `AuditLogger` API. Mode changes (operator mode enable/disable) are also logged as audit entries.
 
 ## Fail-closed everywhere
 
@@ -6499,7 +6499,7 @@ The ledger shows each step in the goal's execution, including:
 - **`content_hash`** — SHA-256 hash covering the full timeline including routing provenance
 - **Ed25519 signature** — verifies the manifest hasn't been tampered with
 
-If routing decisions look wrong, check the agent trust records (`/agents info <motebitId>` in the CLI or the Agent Trust tab in the admin dashboard) and the trust closure (`GET /api/v1/agents/:motebitId/trust-closure`).
+If routing decisions look wrong, check the agent trust records (`/agents info <motebitId>` in the CLI or the Agent Trust tab in the inspector dashboard) and the trust closure (`GET /api/v1/agents/:motebitId/trust-closure`).
 
 ## Key rotation recovery
 

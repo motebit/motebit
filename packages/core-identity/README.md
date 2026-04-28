@@ -18,7 +18,7 @@ Any surface that:
 
 ### Should not use it
 
-Observer/admin surfaces that don't run an agent, don't own keys, and only view an existing motebit via API tokens (e.g. Admin dashboard).
+Observer surfaces that don't run an agent, don't own keys, and only view an existing motebit via API tokens (e.g. Inspector dashboard).
 
 ## The bootstrap protocol
 

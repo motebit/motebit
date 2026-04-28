@@ -123,7 +123,7 @@ const PROBES: ReadonlyArray<Probe> = [
     proves: "flags a forbidden @motebit/protocol import inside an app",
     perturb: () =>
       writeFixture(
-        `apps/admin/src/${PROBE_PREFIX}forbidden_import.ts`,
+        `apps/inspector/src/${PROBE_PREFIX}forbidden_import.ts`,
         // Apps must consume the product vocabulary (@motebit/sdk), not the
         // protocol primitive directly.
         `import type { MotebitId } from "@motebit/protocol";\nexport type _Probe = MotebitId;\n`,
@@ -560,8 +560,8 @@ export async function probeLeak(): Promise<boolean> {
     perturb: () =>
       // Fixture matches the three-condition heuristic: decay signature +
       // volume sub-score + no canonical import. Exactly the shape
-      // apps/admin/TrustPanel had before the fix that precipitated this
-      // gate.
+      // apps/inspector/TrustPanel (then apps/admin) had before the fix
+      // that precipitated this gate.
       writeFixture(
         `apps/web/src/${PROBE_PREFIX}inline_reputation.ts`,
         `export function reputationProbe(r: { interaction_count: number; last_seen_at: number }): number {\n  const volumeScore = Math.min(r.interaction_count / 50, 1.0);\n  const recency = Math.exp(-(Date.now() - r.last_seen_at) / 1000);\n  return (volumeScore + recency) / 2;\n}\n`,
@@ -790,13 +790,13 @@ export const __probeOnlyDeprecationDrift = 1;
     proves:
       "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",
     perturb: () =>
-      // Fixture: an apps/admin src file that redeclares APPROVAL_PRESET_CONFIGS
+      // Fixture: an apps/inspector src file that redeclares APPROVAL_PRESET_CONFIGS
       // locally. The gate scans apps/*/src for top-level
       // const/let/interface/type/enum declarations whose name matches any
       // canonical SDK preset identifier; a re-export trampoline would be
       // accepted, a bare declaration is a violation.
       writeFixture(
-        `apps/admin/src/${PROBE_PREFIX}preset_shadow.ts`,
+        `apps/inspector/src/${PROBE_PREFIX}preset_shadow.ts`,
         `export const APPROVAL_PRESET_CONFIGS = { drifted: { requireApprovalAbove: 99, denyAbove: 100 } };\n`,
       ),
   },
@@ -805,12 +805,12 @@ export const __probeOnlyDeprecationDrift = 1;
     proves:
       "flags a surface file with an inline `.replace(/<thinking>/…)` stripping pass that doesn't import `stripInternalTags` / `stripPartialActionTag` from @motebit/ai-core",
     perturb: () =>
-      // Fixture: an apps/admin src file that strips the <thinking> tag inline
+      // Fixture: an apps/inspector src file that strips the <thinking> tag inline
       // (the runtime-emitted narration token the canonical primitive owns)
       // without importing the primitive. The gate should fire because the
       // file has a .replace against a stripping token AND no canonical import.
       writeFixture(
-        `apps/admin/src/${PROBE_PREFIX}tag_strip_drift.ts`,
+        `apps/inspector/src/${PROBE_PREFIX}tag_strip_drift.ts`,
         `export function clean(text: string): string {\n  return text.replace(/<thinking>[\\s\\S]*?<\\/thinking>/g, "");\n}\n`,
       ),
   },

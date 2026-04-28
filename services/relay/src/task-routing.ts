@@ -718,7 +718,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   }
 
   // Circuit breaker: delegates to the three-state CircuitBreaker class.
-  // Also updates DB counters for observability (admin dashboard).
+  // Also updates DB counters for observability (operator console).
 
   function recordPeerForwardResult(peerEndpoint: string, success: boolean): void {
     const col = success ? "successful_forwards" : "failed_forwards";

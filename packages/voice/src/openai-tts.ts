@@ -36,7 +36,7 @@ export interface OpenAITTSConfig {
  * and plays the returned audio via the Web Audio API (AudioContext).
  *
  * Works in any environment with `fetch` and `AudioContext`:
- *   - Browsers (desktop Tauri webview, admin dashboard, spatial AR/VR)
+ *   - Browsers (desktop Tauri webview, inspector dashboard, spatial AR/VR)
  *   - Node.js with web-audio-api polyfill
  *
  * For React Native / Expo, use the mobile-specific adapter at

@@ -285,7 +285,7 @@ export interface SettlementModeStats {
 
 /**
  * Get settlement statistics grouped by settlement_mode.
- * Used by the admin dashboard.
+ * Used by the operator console.
  */
 export function getSettlementStatsByMode(db: DatabaseDriver): SettlementModeStats[] {
   try {
@@ -311,7 +311,7 @@ export function getSettlementStatsByMode(db: DatabaseDriver): SettlementModeStat
 
 /**
  * Get recent p2p settlements with verification status.
- * Used by the admin dashboard.
+ * Used by the operator console.
  */
 export function getRecentP2pSettlements(
   db: DatabaseDriver,

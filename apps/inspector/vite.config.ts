@@ -18,7 +18,7 @@ export default defineConfig({
       exclude: ["src/__tests__/**", "src/**/*.d.ts", "src/test-setup.ts"],
       // Floor thresholds anchored to the first measured baseline
       // (statements 33.63%, branches 65.76%, functions 52.80%, lines 33.63%).
-      // admin is the operator dashboard — internal tool, React + Vite.
+      // inspector is the single-agent inspector — internal tool, React + Vite.
       // Most uncovered code is the d3-force visualization glue and the
       // 15-tab panel render paths that would need a headless browser with
       // real DOM + recharts to exercise. Floor locks in the current state.

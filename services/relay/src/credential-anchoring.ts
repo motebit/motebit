@@ -521,7 +521,7 @@ export function listCredentialAnchorBatches(
 }
 
 /**
- * Get credential anchoring stats for the admin dashboard.
+ * Get credential anchoring stats for the inspector dashboard.
  */
 export function getCredentialAnchoringStats(db: DatabaseDriver): {
   total_batches: number;

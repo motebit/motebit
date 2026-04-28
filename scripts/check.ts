@@ -331,7 +331,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-reputation-primitives",
     defends:
-      "reputation scoring (continuous 0-1 score from trust-record + recency decay) lives in @motebit/policy (basic) or @motebit/market (receipt-history composite), not inline in apps or services (invariant #28, added 2026-04-19 after apps/admin/TrustPanel was caught with a reinvented formula that diverged from its claimed @motebit/policy source on the Beta-binomial prior — admin panel showed different scores than AI-core computed for the same agent record; extends the protocol-primitive doctrine to reputation judgment)",
+      "reputation scoring (continuous 0-1 score from trust-record + recency decay) lives in @motebit/policy (basic) or @motebit/market (receipt-history composite), not inline in apps or services (invariant #28, added 2026-04-19 after apps/inspector/TrustPanel — then apps/admin — was caught with a reinvented formula that diverged from its claimed @motebit/policy source on the Beta-binomial prior — the surface showed different scores than AI-core computed for the same agent record; extends the protocol-primitive doctrine to reputation judgment)",
     script: "check-reputation-primitives",
   },
   {

@@ -287,14 +287,14 @@ If self-test passes, the agent is correctly wired to the relay. If it fails, the
 
 Every `npm run dev` from a scaffolded agent (`npm create motebit -- --agent`) exercises self-test automatically, so sybil defense regressions are caught by every new developer during onboarding.
 
-## Reading the admin dashboard
+## Reading the inspector dashboard
 
-The admin dashboard gives you a visual window into the relay's state — agent trust graphs, task queues, credentials, and settlement history.
+The inspector dashboard gives you a visual window into one motebit's interior — agent trust graphs, task queues, credentials, and event history.
 
 ### Start the dashboard
 
 ```bash
-cd apps/admin
+cd apps/inspector
 VITE_API_URL=http://localhost:3000 \
 VITE_MOTEBIT_ID=your-motebit-id \
 VITE_API_TOKEN=test-token \

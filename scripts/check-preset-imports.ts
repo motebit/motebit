@@ -39,7 +39,7 @@ const ROOT = resolve(__dirname, "..");
 // ── Scanned apps ─────────────────────────────────────────────────────────
 // Mirrors the APPS list in check-app-primitives. Add a new app here when it
 // joins the monorepo.
-const APPS = ["admin", "cli", "desktop", "docs", "identity", "mobile", "spatial", "web"];
+const APPS = ["cli", "desktop", "docs", "identity", "inspector", "mobile", "spatial", "web"];
 
 // ── Canonical SDK identifiers ────────────────────────────────────────────
 // Names that are exported from `@motebit/sdk` and must only be declared

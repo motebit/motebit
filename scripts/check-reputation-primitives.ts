@@ -6,11 +6,11 @@
  * decay) lives in `@motebit/policy` (basic) or `@motebit/market` (rich
  * composite). Inline reinvention in apps or services is a CI failure.
  *
- * This drift is real: before 2026-04-19, apps/admin/src/components/TrustPanel.ts
- * had a `reputationScore()` whose comment claimed to match @motebit/policy
- * but diverged on the Beta-binomial prior (MLE vs smoothed). Admin showed
- * different scores than AI-core computed for the same agent record. Fixed
- * in the same commit that added this gate.
+ * This drift is real: before 2026-04-19, apps/inspector/src/components/TrustPanel.ts
+ * (then named apps/admin) had a `reputationScore()` whose comment claimed to match
+ * @motebit/policy but diverged on the Beta-binomial prior (MLE vs smoothed). The
+ * surface showed different scores than AI-core computed for the same agent record.
+ * Fixed in the same commit that added this gate.
  *
  * Heuristic (all required in one file):
  *   1. Has `Math.exp(-` or `Math.exp(-(` — the exponential-decay signature
@@ -137,7 +137,7 @@ function scan(): Violation[] {
 
 function main(): void {
   console.log(
-    "▸ check-reputation-primitives — reputation scoring (0-1 continuous score from trust-record + recency decay) lives in @motebit/policy or @motebit/market, not inline in apps/services (invariant #28, added 2026-04-19 after apps/admin/TrustPanel was caught with a reinvented formula that diverged from its claimed @motebit/policy source on the Beta-binomial prior — admin showed different scores than AI-core for the same agent record; extends the protocol-primitive doctrine to reputation judgment)",
+    "▸ check-reputation-primitives — reputation scoring (0-1 continuous score from trust-record + recency decay) lives in @motebit/policy or @motebit/market, not inline in apps/services (invariant #28, added 2026-04-19 after apps/inspector/TrustPanel — then apps/admin — was caught with a reinvented formula that diverged from its claimed @motebit/policy source on the Beta-binomial prior — the surface showed different scores than AI-core for the same agent record; extends the protocol-primitive doctrine to reputation judgment)",
   );
   const violations = scan();
   if (violations.length === 0) {

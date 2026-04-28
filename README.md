@@ -175,7 +175,7 @@ Each surface maximizes what its platform offers. Desktop, web, and mobile can se
 Three additional apps ship alongside the five surfaces and play narrower roles:
 
 - **Identity viewer** (`apps/identity`) — static browser tool for dropping a `motebit.md` identity file and inspecting the parsed profile card (motebit ID, devices, governance, signed succession). Zero workspace dependencies, public-facing reference implementation of the identity spec.
-- **Admin dashboard** (`apps/admin`) — React/Vite operator console for monitoring a running relay in real time (state, memory graph, event log, tool audit, gradient, trust ledger). Internal tool — operators run it locally against their relay; not deployed as a public surface.
+- **Inspector dashboard** (`apps/inspector`) — React/Vite single-agent inspector for examining one motebit's interior in real time (state, memory graph, event log, tool audit, gradient, trust ledger, credentials, anchoring). Internal tool — runs locally against a relay; not deployed as a public surface.
 - **VS Code / Cursor extension** (`apps/vscode`) — `motebit.yaml` validation, hover, and completion. Thin shim that spawns `motebit lsp` over stdio, so the language server ships with the CLI itself.
 
 ## Verify & integrate

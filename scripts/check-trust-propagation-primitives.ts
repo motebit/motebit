@@ -16,7 +16,7 @@
  * semiring pattern collapses into a single primitive. Without a gate, the
  * next surface or service that wants "trust of an agent via the whole
  * credential chain" would write its own loop with slightly different
- * aggregation, and the admin UI would show a different propagated score
+ * aggregation, and the inspector UI would show a different propagated score
  * than AI-core or the market router. Same drift shape as #27/#28/#29:
  * parallel implementations of the same judgment diverging silently.
  *

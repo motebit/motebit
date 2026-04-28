@@ -63,7 +63,7 @@ export interface ElevenLabsTTSConfig {
  * and plays the returned audio via the Web Audio API.
  *
  * Works in any environment with `fetch` and `AudioContext`:
- *   - Browsers (desktop Tauri webview, admin dashboard, spatial AR/VR)
+ *   - Browsers (desktop Tauri webview, inspector dashboard, spatial AR/VR)
  *   - Node.js with web-audio-api polyfill
  *
  * React Native / Expo should wire a surface-specific adapter that uses

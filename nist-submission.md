@@ -40,7 +40,7 @@ This comment responds to the six question categories in the Note to Reviewers an
 
 **What enterprise use cases are organizations currently using agents for?**
 
-Motebit is deployed across six surfaces (`apps/desktop/`, `apps/cli/`, `apps/mobile/`, `apps/web/`, `apps/spatial/`, `apps/admin/`), demonstrating agent architectures applicable to all three use cases identified in the concept paper: workforce efficiency (conversational agents with memory and tool use), security operations (audit-logged tool execution with sensitivity classification), and software development (MCP-integrated tool orchestration with signed execution receipts). Desktop and web surfaces can accept delegated tasks from the network — the same agent that converses with its owner can serve capabilities to other agents.
+Motebit is deployed across six surfaces (`apps/desktop/`, `apps/cli/`, `apps/mobile/`, `apps/web/`, `apps/spatial/`, `apps/inspector/`), demonstrating agent architectures applicable to all three use cases identified in the concept paper: workforce efficiency (conversational agents with memory and tool use), security operations (audit-logged tool execution with sensitivity classification), and software development (MCP-integrated tool orchestration with signed execution receipts). Desktop and web surfaces can accept delegated tasks from the network — the same agent that converses with its owner can serve capabilities to other agents.
 
 **Which use-cases are in the near future?**
 

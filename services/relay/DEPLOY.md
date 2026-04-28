@@ -66,7 +66,7 @@ Device A (desktop)  ──signed JWT──▶  ┌──────────
                                      │  Sync Relay   │
 Device C (mobile)   ──signed JWT──▶  │  (Hono + WS)  │
                                      │  SQLite (WAL)  │
-Admin Dashboard     ──master token─▶ └──────────────┘
+Operator console    ──master token─▶ └──────────────┘
 ```
 
 - **Auth**: Devices authenticate with 5-minute Ed25519 signed JWTs. No passwords, no sessions.

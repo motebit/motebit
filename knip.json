@@ -1,6 +1,12 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreWorkspaces": ["apps/admin", "apps/desktop", "apps/mobile", "apps/spatial", "apps/docs"],
+  "ignoreWorkspaces": [
+    "apps/inspector",
+    "apps/desktop",
+    "apps/mobile",
+    "apps/spatial",
+    "apps/docs"
+  ],
   "ignoreDependencies": ["@motebit/*", "@changesets/changelog-github"],
   "ignoreBinaries": ["tauri"],
   "workspaces": {

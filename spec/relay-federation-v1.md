@@ -690,7 +690,7 @@ Federation is deployed in 5 phases. Each phase is independently deployable and b
 - Extend `evaluateTrustTransition` to relay peers.
 - Implement cross-relay trust accumulation.
 - Relay co-signs `AgentReputationCredential` for cross-relay task completions (when `issueCredentials` is enabled; peer-issued by default).
-- Expose federation trust metrics in admin dashboard.
+- Expose federation trust metrics in operator dashboard.
 
 **Prerequisite:** Phase 4.
 **Impact:** Trust accumulates across relay boundaries. Routing improves over time as trust data compounds.

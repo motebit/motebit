@@ -1,7 +1,7 @@
 /**
  * App-level import boundary check.
  *
- * Surface apps (desktop, mobile, web, spatial, cli, admin, identity, docs) are
+ * Surface apps (desktop, mobile, web, spatial, cli, inspector, operator, identity, docs) are
  * the top of the monorepo's 7-layer stack. Like services, they run the
  * protocol — they do not define it. App-level drift has a distinct shape from
  * service drift:
@@ -21,7 +21,7 @@
  *
  * ── Scope ───────────────────────────────────────────────────────────────
  *
- * Scanned apps: all under apps/*. The admin and identity apps are included
+ * Scanned apps: all under apps/*. The inspector, operator and identity apps are included
  * — even though they don't have creature surfaces, they still should use
  * the product vocabulary.
  *
@@ -42,7 +42,7 @@ const ROOT = resolve(__dirname, "..");
 // ── Scanned apps ─────────────────────────────────────────────────────────
 // Apps scanned by this gate. Each app's src/ (or app/ for Next.js) is walked.
 // Add a new app here when it joins the monorepo.
-const APPS = ["admin", "cli", "desktop", "docs", "identity", "mobile", "spatial", "web"];
+const APPS = ["cli", "desktop", "docs", "identity", "inspector", "mobile", "spatial", "web"];
 
 // ── Forbidden package imports ────────────────────────────────────────────
 // Apps must route protocol-shaped types through the product-layer re-exports.

@@ -8,7 +8,6 @@
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
   "ignore": [
-    "@motebit/admin",
     "@motebit/ai-core",
     "@motebit/behavior-engine",
     "@motebit/browser-persistence",
@@ -25,6 +24,7 @@
     "@motebit/gradient",
     "@motebit/identity",
     "@motebit/identity-file",
+    "@motebit/inspector",
     "@motebit/market",
     "@motebit/mcp-client",
     "@motebit/mcp-server",

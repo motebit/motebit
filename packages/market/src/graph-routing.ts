@@ -586,7 +586,7 @@ export function graphRankCandidates(
  * Returns Map<motebit_id, effective_trust>.
  *
  * This is the "pre-compute the whole trust network" query.
- * Useful for the relay API and admin dashboard.
+ * Useful for the relay API and inspector dashboard.
  */
 export function computeTrustClosure(
   selfId: MotebitId,
