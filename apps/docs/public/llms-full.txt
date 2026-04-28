@@ -5493,7 +5493,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **47 packages · 7 architectural layers · 5 surfaces + 4 supporting apps · 8 services · 21 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **47 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 21 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -5526,6 +5526,7 @@ motebit/
 │   ├── mobile/                [surface]     React Native + Expo. Full parity with desktop.
 │   ├── spatial/               [surface]     AR/VR/WebXR. Creature-as-scene, typed spatial objects.
 │   ├── inspector/             [supporting]  React + Vite single-agent inspector. 12-tab interior view.
+│   ├── operator/              [supporting]  React + Vite relay-operator console. Withdrawals, federation peers, transparency, disputes, fees, anchoring.
 │   ├── identity/              [supporting]  Static browser tool for inspecting motebit.md files.
 │   ├── vscode/                [supporting]  VS Code/Cursor extension. Thin shim that spawns `motebit lsp`.
 │   └── docs/                  [supporting]  Fumadocs + Next.js. This site.
@@ -5675,6 +5676,7 @@ The architectural role is "permissive floor"; the specific license instance (`Ap
 | `mobile`   | Surface    | Live     | React Native + Expo. Full parity — expo-gl Three.js, SQLite adapters, plan-based goals.                        |
 | `spatial`  | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                            |
 | `inspector` | Supporting | Internal | React + Vite single-agent inspector. 12 tabs: state, memory, behavior, events, audit, goals, plans, conversations, devices, gradient, trust, credentials. Reads one motebit's interior via the relay. |
+| `operator`  | Supporting | Internal | React + Vite relay-operator console. 6 tabs: withdrawals, federation peers, transparency, disputes, fees, credential anchoring. Master-token gated; fleet-shaped. |
 | `identity` | Supporting | Public   | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile.                               |
 | `docs`     | Supporting | Public   | Fumadocs + Next.js. This site.                                                                                 |
 

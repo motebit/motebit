@@ -2,6 +2,7 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreWorkspaces": [
     "apps/inspector",
+    "apps/operator",
     "apps/desktop",
     "apps/mobile",
     "apps/spatial",

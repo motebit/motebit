@@ -35,7 +35,17 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
-const APPS = ["cli", "desktop", "docs", "identity", "inspector", "mobile", "spatial", "web"];
+const APPS = [
+  "cli",
+  "desktop",
+  "docs",
+  "identity",
+  "inspector",
+  "mobile",
+  "operator",
+  "spatial",
+  "web",
+];
 const UI_SUBDIRS = ["ui", "commands"];
 
 const FIXTURE_DIR = resolve(__dirname, "__tests__", "affordance-routing-fixture");

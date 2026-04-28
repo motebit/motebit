@@ -1,0 +1,221 @@
+:root {
+  --bg: #0e1525;
+  --surface: #16213e;
+  --border: #243a5e;
+  --text: #e0e0e0;
+  --text-dim: #8888aa;
+  --accent: #f4a261;
+  --green: #4ade80;
+  --red: #f87171;
+  --yellow: #facc15;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.operator-app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.operator-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.operator-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.connected { background: var(--green); }
+.status-dot.disconnected { background: var(--red); }
+
+.operator-nav {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.operator-nav button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.operator-nav button.active {
+  background: var(--border);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.panel h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--accent);
+}
+
+.panel h3 {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 12px 0 8px 0;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.panel .empty,
+.panel .loading {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.count {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stat-card {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+
+.stat-card .label {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-card .value {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+table.fleet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+table.fleet-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+table.fleet-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: monospace;
+}
+
+.peer-state.active { color: var(--green); }
+.peer-state.suspended { color: var(--yellow); }
+.peer-state.pending { color: var(--text-dim); }
+.peer-state.removed { color: var(--red); }
+
+.dispute-status.open { color: var(--yellow); }
+.dispute-status.evidence { color: var(--accent); }
+.dispute-status.resolved { color: var(--green); }
+.dispute-status.appealed { color: var(--red); }
+
+.action-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.action-btn:hover {
+  background: var(--surface);
+}
+
+.action-btn.danger {
+  color: var(--red);
+}
+
+.posture-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.posture-grid > div {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+pre.json-block {
+  font-family: monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+  max-height: 280px;
+  overflow: auto;
+}

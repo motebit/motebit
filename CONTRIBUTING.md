@@ -33,7 +33,7 @@ pnpm run test
 ### Project structure
 
 ```
-apps/        9 surfaces and supporting apps (web, cli, desktop, mobile, spatial, admin, identity, docs, vscode)
+apps/        10 surfaces and supporting apps (web, cli, desktop, mobile, spatial, inspector, operator, identity, docs, vscode)
 packages/    47 packages on a 7-layer DAG enforced by `pnpm check-deps`
 services/    8 backend services (1 relay + 2 molecules + 4 atoms + 1 glue)
 spec/        21 open specifications, each `motebit/<name>@1.0`

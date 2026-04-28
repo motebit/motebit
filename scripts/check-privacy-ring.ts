@@ -16,9 +16,10 @@
  * somewhere in its source so the declaration isn't lint-sugar.
  *
  * Scope: `apps/{web,cli,desktop,mobile,spatial}` — the five user-facing
- * surfaces. Supporting apps (inspector, identity, docs) are explicitly
- * excluded; their doctrine is different (inspector is operator-facing,
- * identity and docs are public static tools).
+ * surfaces. Supporting apps (inspector, operator, identity, docs) are
+ * explicitly excluded; their doctrine is different (inspector is
+ * single-agent introspection, operator is fleet-facing, identity and
+ * docs are public static tools).
  *
  * Adding a new surface means adding it to SURFACES below. Removing one
  * from Ring 2 means a changeset + doctrine update, not a quiet delete.
