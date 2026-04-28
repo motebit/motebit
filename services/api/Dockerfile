@@ -69,7 +69,7 @@ HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:3000/heal
 
 # OCI image labels — static metadata. Dynamic labels (revision, version,
 # created, source) are injected by the publish-images workflow per-build.
-LABEL org.opencontainers.image.title="motebit-api" \
+LABEL org.opencontainers.image.title="motebit-relay" \
       org.opencontainers.image.description="The motebit relay — identity, settlement, federation, discovery, rate limiting, disputes, credential anchoring." \
       org.opencontainers.image.licenses="BUSL-1.1" \
       org.opencontainers.image.url="https://motebit.com" \

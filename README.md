@@ -8,7 +8,7 @@
   <a href="https://github.com/motebit/motebit/actions/workflows/ci.yml"><img src="https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/motebit"><img src="https://img.shields.io/npm/v/motebit?label=motebit" alt="motebit"></a>
   <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>
-  <a href="https://github.com/motebit/motebit/pkgs/container/api"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Fapi-1.0.0-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/api"></a>
+  <a href="https://github.com/motebit/motebit/pkgs/container/relay"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Frelay-1.0.0-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/relay"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/protocol-Apache--2.0-green" alt="Protocol: Apache-2.0"></a>
 </p>
@@ -57,9 +57,9 @@ motebit relay up
 For multi-tenant operators who want the relay as a verifiable binary instead of an `npm install`: pull the signed multi-arch container, verify the signature, and run it.
 
 ```bash
-docker pull ghcr.io/motebit/api:1.0.0
+docker pull ghcr.io/motebit/relay:1.0.0
 
-cosign verify ghcr.io/motebit/api:1.0.0 \
+cosign verify ghcr.io/motebit/relay:1.0.0 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```

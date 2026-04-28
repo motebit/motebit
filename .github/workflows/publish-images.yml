@@ -5,7 +5,7 @@ name: Publish Container Images
 # Motebit's endgame is "operators run the relay, take the 5% fees" — third-party
 # operators self-hosting the relay are the federation-unblock work. npm packages
 # (the SDK, protocol, crypto verifiers) are not enough; the relay itself ships as
-# a container so an operator can `docker pull ghcr.io/motebit/api:X.Y.Z` and run.
+# a container so an operator can `docker pull ghcr.io/motebit/relay:X.Y.Z` and run.
 #
 # Every motebit-shipped image is:
 #  - multi-arch (amd64 + arm64) via docker buildx — Apple Silicon dev,
@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   relay:
-    name: ghcr.io/motebit/api
+    name: ghcr.io/motebit/relay
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -56,14 +56,14 @@ jobs:
 
           # Tag list: always sha-<short>, plus :main on main branch, plus :X.Y.Z
           # if this is a relay-vX.Y.Z tag push.
-          tags="ghcr.io/motebit/api:sha-${short_sha}"
+          tags="ghcr.io/motebit/relay:sha-${short_sha}"
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-            tags="${tags}\nghcr.io/motebit/api:main"
+            tags="${tags}\nghcr.io/motebit/relay:main"
           fi
           case "${GITHUB_REF}" in
             refs/tags/relay-v*)
               version="${GITHUB_REF#refs/tags/relay-v}"
-              tags="${tags}\nghcr.io/motebit/api:${version}"
+              tags="${tags}\nghcr.io/motebit/relay:${version}"
               echo "version=${version}" >> "$GITHUB_OUTPUT"
               ;;
             *)
@@ -131,6 +131,6 @@ jobs:
       - name: Attest build provenance (SLSA)
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ghcr.io/motebit/api
+          subject-name: ghcr.io/motebit/relay
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true

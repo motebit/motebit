@@ -5,7 +5,7 @@
 # self-host.md § Verify before you run). Do not use `:main` in production.
 #
 # What this stack runs:
-#   1 motebit-api container — the relay (services/api).
+#   1 motebit-relay container — the relay (services/api).
 #   1 named volume motebit-data — persistent SQLite storage.
 #
 # What this stack does NOT do:
@@ -15,9 +15,9 @@
 #   - Federation peering — that needs operator identity setup; see self-host.md.
 
 services:
-  motebit-api:
-    image: ghcr.io/motebit/api:1.0.0
-    container_name: motebit-api
+  motebit-relay:
+    image: ghcr.io/motebit/relay:1.0.0
+    container_name: motebit-relay
     restart: unless-stopped
     ports:
       - "3000:3000"

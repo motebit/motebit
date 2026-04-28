@@ -1,16 +1,16 @@
 # Self-host the motebit relay
 
-The motebit relay (`services/api`) ships as a signed multi-arch container image at `ghcr.io/motebit/api`. A third-party operator can pull, verify, and run a relay alongside motebit's own — full federation peer, full settlement, full task routing — without any code from this repo.
+The motebit relay (`services/api`) ships as a signed multi-arch container image at `ghcr.io/motebit/relay`. A third-party operator can pull, verify, and run a relay alongside motebit's own — full federation peer, full settlement, full task routing — without any code from this repo.
 
 This is the federation-unblock path: protocol code is on GitHub, npm packages are on npmjs.com, and the relay binary is at ghcr.io. Three artifacts, three registries, one verifiable system.
 
 ## Image identity
 
-| Tag                               | What it points at                                | When to use                                                      |
-| --------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------- |
-| `ghcr.io/motebit/api:X.Y.Z`       | A specific relay release (cut as `relay-vX.Y.Z`) | Production. Pin a version, verify it, run it.                    |
-| `ghcr.io/motebit/api:sha-<short>` | A specific commit on main                        | Reproducing a specific build, debugging, or pre-release testing. |
-| `ghcr.io/motebit/api:main`        | Floating tag tracking HEAD on main               | Internal dev only. Do not pin in production.                     |
+| Tag                                 | What it points at                                | When to use                                                      |
+| ----------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------- |
+| `ghcr.io/motebit/relay:X.Y.Z`       | A specific relay release (cut as `relay-vX.Y.Z`) | Production. Pin a version, verify it, run it.                    |
+| `ghcr.io/motebit/relay:sha-<short>` | A specific commit on main                        | Reproducing a specific build, debugging, or pre-release testing. |
+| `ghcr.io/motebit/relay:main`        | Floating tag tracking HEAD on main               | Internal dev only. Do not pin in production.                     |
 
 There is no `:latest` tag by design. `:latest` drift is the largest preventable bug class in container distribution; pinning to an explicit version is required of every motebit operator.
 
@@ -22,12 +22,12 @@ Every motebit-published image is signed via cosign keyless OIDC + Sigstore and c
 # Install cosign once: https://docs.sigstore.dev/cosign/installation/
 
 # Verify the keyless signature came from motebit's repo + this exact workflow.
-cosign verify ghcr.io/motebit/api:1.0.0 \
+cosign verify ghcr.io/motebit/relay:1.0.0 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 
 # Verify the build-provenance attestation (SLSA).
-cosign verify-attestation ghcr.io/motebit/api:1.0.0 \
+cosign verify-attestation ghcr.io/motebit/relay:1.0.0 \
   --type slsaprovenance \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
@@ -43,7 +43,7 @@ The minimal docker-compose stack: see [`docker-compose.example.yml`](docker-comp
 curl -L https://raw.githubusercontent.com/motebit/motebit/main/docs/operator/docker-compose.example.yml \
      -o docker-compose.yml
 docker compose up -d
-docker compose logs -f motebit-api
+docker compose logs -f motebit-relay
 ```
 
 The relay listens on port 3000. `GET /health` returns `200 OK` once the database is up; `GET /.well-known/motebit-transparency.json` returns the operator's signed transparency declaration.
