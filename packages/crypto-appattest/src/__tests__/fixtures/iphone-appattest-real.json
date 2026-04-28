@@ -1,0 +1,8 @@
+{
+  "attestation_object_base64url": "",
+  "key_id_base64url": "",
+  "client_data_hash_base64url": "",
+  "bundle_id": "",
+  "verify_as_of_iso": "",
+  "provenance": "PLACEHOLDER — populate via `npx tsx scripts/capture-app-attest-fixture.ts --receipt <base64url.base64url.base64url> --bundle-id <id>` after capturing from a real iPhone. The verify-real-ceremony test suite skips until attestation_object_base64url length > 100. See the capture script's header comment for end-to-end instructions."
+}
