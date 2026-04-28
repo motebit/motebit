@@ -18,10 +18,15 @@ export default defineConfig({
     coverage: {
       include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/__tests__/**", "src/**/*.d.ts", "src/test-setup.ts"],
-      // Floor anchored to first measured baseline; a fresh surface mirrors
-      // the inspector's coverage profile (panel render paths require a
-      // headless browser to fully exercise). Lift after first real probe.
-      thresholds: { statements: 33, branches: 65, functions: 52, lines: 33 },
+      // Floor anchored to operator's first measured baseline (2026-04-28):
+      // statements 44.87%, branches 58.53%, functions 67.64%, lines 44.87%.
+      // The inspector's pre-borrowed defaults (33/65/52/33) didn't fit
+      // operator's panel structure — branch coverage is below inspector's
+      // because operator panels each carry loading/error/data states that
+      // the current shallow render-only tests don't exercise. Floor locks
+      // the current state; lift via coverage-graduation when panel tests
+      // exercise the per-state branches.
+      thresholds: { statements: 44, branches: 58, functions: 67, lines: 44 },
     },
   },
 });

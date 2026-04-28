@@ -109,10 +109,33 @@ jobs:
             if (failed) process.exit(1);
           "
 
-      # When .changeset/ has pending changesets: creates/updates a "Version Packages" PR
-      # When that PR is merged (no changesets left): publishes to npm + creates GitHub releases
+      # Skip the changesets/action when no releases would actually happen.
+      # Every changeset that targets only `ignore`-listed (private)
+      # packages produces a `releases: []` status — `changesets/action`
+      # then force-pushes an empty diff to `changeset-release/main` and
+      # the PR-create step fails with `No commits between main and
+      # changeset-release/main`. The guard reads the JSON `releases`
+      # array directly, since `changeset status` exits 0 even when
+      # nothing bumps.
+      - name: Detect publishable releases
+        id: pending
+        run: |
+          pnpm changeset status --output=/tmp/cs-status.json
+          COUNT=$(jq '.releases | length' /tmp/cs-status.json)
+          echo "publishable=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" = "0" ]; then
+            echo "No publishable changesets pending — every queued changeset targets ignore-listed packages. Skipping the changesets/action step."
+          else
+            echo "$COUNT publishable release(s) pending."
+            jq '.releases[] | "  - \(.name) → \(.type)"' /tmp/cs-status.json
+          fi
+
+      # When .changeset/ has pending changesets for non-ignored packages:
+      # creates/updates a "Version Packages" PR. When that PR is merged
+      # (no changesets left): publishes to npm + creates GitHub releases.
       - name: Create release PR or publish
         id: changesets
+        if: steps.pending.outputs.publishable != '0'
         uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf # v1
         with:
           version: pnpm version-packages
