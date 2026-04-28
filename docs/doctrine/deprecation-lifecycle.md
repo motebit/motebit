@@ -16,7 +16,11 @@ Anonymous compat code — "kept for backward compatibility" with no named sunset
 
 ## The deprecation contract
 
-Every `@deprecated` annotation at motebit MUST carry four fields. No exceptions for "obvious" cases — the drift defense is that every reader sees the same shape.
+The shape depends on whether the package publishes to npm. Two cases, two contracts — the underlying principle (be explicit about what's superseded and why) is the same; what changes is the _addressee_ of the promise.
+
+### Published packages (the four-field contract)
+
+Every `@deprecated` annotation in a package that publishes to npm — `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/wire-schemas`, `@motebit/verify`, the `crypto-*` leaf verifiers, `motebit`, `create-motebit` — MUST carry four fields. The contract is for consumers across a versioning boundary; missing fields break the boundary.
 
 ```ts
 /**
@@ -35,12 +39,46 @@ Required:
 - **`since <version>`** — the release this symbol was first marked deprecated.
 - **`removed in <version>`** — the release slated to strip it. Named explicitly, not "one release cycle" or "soon."
 - **Replacement pointer** — what the caller should use instead. If there is no replacement, say so (`no replacement; rework the caller`).
-
-Optional but strongly encouraged:
-
 - **Reason** — one-line why. Points at the doctrine / incident / design decision that forced the break. Gives future readers context.
 
-Precedent: Rust's `#[deprecated(since, note)]`, JSDoc's `@deprecated` convention, Python's PEP 387, Kubernetes' versioned deprecation markers. Every mature language ecosystem converges on roughly this shape.
+Drift defense: `check-deprecation-discipline` (invariant #39).
+
+### Private packages (no semver, replacement + reason still required)
+
+The 51 internal packages carrying the sentinel `0.0.0-private` version (per `docs/doctrine/release-versioning.md` and the 2026-04-24 sentinel-version flip) bundle into the `motebit` CLI/runtime — they do not publish independently. There is no consumer across a versioning boundary, so the four-field contract has no addressee. A `removed in 1.1.0` promise on a `0.0.0-private` package is theater: there is no v1.1.0, no v1.0.0, no consumer to receive the promise.
+
+The shape inside private packages drops the semver fields but keeps the workspace-internal documentation:
+
+```ts
+/**
+ * @deprecated Use `newThing` instead.
+ *
+ * Reason: three-mode architecture replaces the flat discriminator.
+ */
+export function oldThing() {
+  /* ... */
+}
+```
+
+Required:
+
+- **Replacement pointer** — workspace callers still need to know where to migrate.
+- **Reason** — the WHY survives the absence of the boundary; future readers are still us.
+
+Forbidden:
+
+- **`since X.Y.Z`** — there is no version axis to be `since`-of.
+- **`removed in X.Y.Z`** — there is no consumer to make the promise to, and no future version to fulfill it.
+
+Drift defense: `check-private-deprecation-shape` (invariant #59).
+
+The private path is for _intra-workspace_ deprecation: a callsite inside the workspace got renamed or replaced, but you want the IDE/lint signal and a pointer to the new shape so internal callers find their way over. Once every internal caller is migrated, just delete the symbol — there is no deprecation window for the shipped artifact, only for the workspace authoring experience.
+
+### When a private package promotes to public
+
+Per `docs/doctrine/promoting-private-to-public.md`, a private package becomes public on a real third-party-consumer trigger. At that moment, every `@deprecated` annotation in the package needs to graduate from the private shape to the four-field contract: backfill `since` (the version being cut at promotion), pick a `removed in` (per the minimum-sunset rules below), and the published gate takes over.
+
+Precedent: Rust's `#[deprecated(since, note)]`, JSDoc's `@deprecated` convention, Python's PEP 387, Kubernetes' versioned deprecation markers. Every mature language ecosystem converges on roughly the four-field shape — for the published case. The private case is motebit-specific because the sentinel-version doctrine is motebit-specific.
 
 ## Minimum sunset windows
 
@@ -128,7 +166,11 @@ Each marker gets rewritten to the four-field contract in a dedicated pass. No be
 
 ## Drift defense
 
-`check-deprecation-discipline.ts` (landed 2026-04-24, invariant #39) enforces the four-field contract mechanically. It scans every `.ts` / `.tsx` file under `packages/**`, `apps/**`, `services/**`, extracts the comment block surrounding each `@deprecated` token (walking both backward to the block opener and forward to the closer — motebit's convention places `Reason:` lines AFTER the annotation), and validates five rules:
+Two complementary gates, scoped to the two cases above. Both share the same comment-block parser (walks backward to the block opener and forward to the closer, since motebit's convention places `Reason:` lines AFTER the annotation), then split on the containing package's `package.json` version.
+
+### `check-deprecation-discipline` — invariant #39 (published packages)
+
+Landed 2026-04-24. Scans every `.ts` / `.tsx` under `packages/**`, `apps/**`, `services/**` whose containing package has a non-`0.0.0-private` version. Validates five rules:
 
 - `since <X.Y.Z>` present on the annotation line
 - `removed in <X.Y.Z>` present on the annotation line
@@ -138,7 +180,13 @@ Each marker gets rewritten to the four-field contract in a dedicated pass. No be
 
 Baseline at landing: 19 sites across 8 packages, all passing. The effectiveness probe inserts a deliberately-incomplete `@deprecated` and confirms the gate exits non-zero with specific rule violations.
 
-Together with `check-changeset-discipline` (enforces `## Migration` sections on `major` bumps) and `check-api-surface` (enforces that public-API changes ship a pending changeset), the deprecation pipeline is now mechanically complete: four-field marker → major changeset with migration guide → removal PR that updates api-extractor baselines.
+### `check-private-deprecation-shape` — invariant #59 (private packages)
+
+Landed 2026-04-28 after a bird's-eye audit caught 9 markers across 4 private packages (ai-core, market, runtime, mcp-client) carrying the four-field contract — residue from the 2026-04-23 classification pass made stale 24 hours later by the 2026-04-24 sentinel-version flip on 51 internal packages. The `removed in 1.1.0` promises had no addressee: the packages don't publish, so there is no v1.0.0 to be `since`, no v1.1.0 to be `removed in`, no consumer across a versioning boundary.
+
+The cleanup stripped the residue (kept the replacement pointer + `Reason:` block, dropped the semver fields). The gate codifies the new shape: scans every `.ts` / `.tsx` under `packages/**`, `apps/**`, `services/**` whose containing package has `version === "0.0.0-private"`, and fails if any `@deprecated` annotation carries `since X.Y.Z` or `removed in X.Y.Z`. Replacement pointer + `Reason:` are still required — workspace callers still need them; only the consumer-facing semver promise is theater.
+
+Together with `check-changeset-discipline` (enforces `## Migration` sections on `major` bumps) and `check-api-surface` (enforces that public-API changes ship a pending changeset), the deprecation pipeline is now mechanically complete on both halves of the public/private split: shape gate (this pair) → major changeset with migration guide → removal PR that updates api-extractor baselines.
 
 ## Cross-references
 

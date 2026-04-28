@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-58 invariants are enforced today. 49 run as hard CI gates via `pnpm check` (proven effective by `check-gates-effective`); one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
+59 invariants are enforced today. 50 run as hard CI gates via `pnpm check` (proven effective by `check-gates-effective`); one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
 
 ## Inventory
 
@@ -72,6 +72,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 | 56  | Default-context Claude model literal in any README.md / CLAUDE.md / docs MDX page (`"default_model": "X"`, `--model X`, `Default model: X`, `Examples: ... \`X\``) ↔ canonical default extracted from the `defaultModel`ternary in`apps/cli/src/args.ts`; catches the stale-default class that drifted four places when sonnet-4-5 → sonnet-4-6                                                                                                                  | `check-docs-default-models.ts`                                 | 2026-04-27 |
 | 57  | `apps/docs/public/llms.txt` and `apps/docs/public/llms-full.txt` ↔ output of `scripts/generate-llms-txt.ts` from current source (docs MDX + DOCTRINE.md + the nine chain documents); same-shape gate as `check-api-surface`, applied to the LLM-facing surface — closes the freshness drift class where source MDX or a foundational doc was edited without rerunning the generator                                                                              | `check-llms-txt-fresh.ts`                                      | 2026-04-27 |
 | 58  | `DOCTRINE.md` chain bullets ↔ the canonical format the llms.txt generator parses (`N. **[FILENAME.md](FILENAME.md)** — derives X.`); chain length matches the expected nine documents, every cited filename exists at the repo root, no derives-clause is missing sentence punctuation; moves the failure earlier than the build-time throw in `scripts/generate-llms-txt.ts` so prose-only edits to DOCTRINE.md can't silently break the LLM-surface generation | `check-doctrine-format.ts`                                     | 2026-04-27 |
+| 59  | `@deprecated` annotations in `0.0.0-private` packages ↔ no-semver shape (replacement pointer + Reason kept; `since X.Y.Z` and `removed in X.Y.Z` forbidden — the four-field contract is for npm consumers across a versioning boundary, and there is no boundary inside a private workspace package); sibling to #39, scoped opposite                                                                                                                            | `check-private-deprecation-shape.ts`                           | 2026-04-28 |
 
 ## Incident histories
 

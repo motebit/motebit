@@ -51,7 +51,7 @@ export interface AnchoringConfig {
   submitter?: ChainAnchorSubmitter;
   // --- Legacy EVM config (use submitter instead) ---
   /**
-   * @deprecated since 1.0.0, removed in 1.1.0. Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
+   * @deprecated Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
    *
    * Reason: submitter-based anchoring generalizes across chains
    * (Solana memo, EVM contract, future rails) and owns its own RPC wiring.
@@ -59,14 +59,14 @@ export interface AnchoringConfig {
    */
   chainRpcUrl?: string;
   /**
-   * @deprecated since 1.0.0, removed in 1.1.0. Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
+   * @deprecated Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
    *
    * Reason: paired with {@link chainRpcUrl} — EVM-specific, superseded by
    * the submitter interface.
    */
   contractAddress?: string;
   /**
-   * @deprecated since 1.0.0, removed in 1.1.0. Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
+   * @deprecated Pass a configured {@link ChainAnchorSubmitter} via `submitter` instead.
    *
    * Reason: paired with {@link chainRpcUrl} — EVM-specific, superseded by
    * the submitter interface. Default was `"eip155:8453"` (Base).
@@ -292,7 +292,7 @@ export async function submitAnchorOnChain(
 /**
  * EVM contract submitter for SettlementAnchor.sol.
  *
- * @deprecated since 1.0.0, removed in 2.0.0. Use {@link SolanaMemoSubmitter} instead.
+ * @deprecated Use {@link SolanaMemoSubmitter} instead.
  *
  * Reason: the Solana submitter signs with the relay's native Ed25519
  * identity key — no separate secp256k1 key management, no deployed

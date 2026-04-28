@@ -217,8 +217,14 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-deprecation-discipline",
     defends:
-      "every `@deprecated` annotation carries the four-field contract (since, removed in, replacement, Reason:) and no `removed in` version is past-due (invariant #39, added 2026-04-24 — the gate candidate the deprecation-lifecycle doctrine named but hadn't shipped; locked in against 19 currently-passing sites)",
+      "every `@deprecated` annotation in a *published* package carries the four-field contract (since, removed in, replacement, Reason:) and no `removed in` version is past-due (invariant #39, added 2026-04-24 — the gate candidate the deprecation-lifecycle doctrine named but hadn't shipped; locked in against 19 currently-passing sites; scoped to `version != 0.0.0-private` packages 2026-04-28 when the private sibling gate landed)",
     script: "check-deprecation-discipline",
+  },
+  {
+    name: "check-private-deprecation-shape",
+    defends:
+      "every `@deprecated` annotation in a *private* (`0.0.0-private`) package drops the semver contract (`since`/`removed in` are theater inside a workspace with no versioning boundary) but keeps the replacement pointer + `Reason:` block (workspace callers still need them) — invariant #59, added 2026-04-28 after the bird's-eye audit caught 9 markers across 4 private packages making promises to nobody (residue from the 2026-04-23 four-field pass made stale by the 2026-04-24 sentinel-version flip on 51 internal packages); sibling to check-deprecation-discipline",
+    script: "check-private-deprecation-shape",
   },
   {
     name: "check-api-surface",

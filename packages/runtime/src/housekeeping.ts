@@ -52,11 +52,11 @@ export interface HousekeepingResult {
  *   2. Age exceeds the sensitivity-level retention period
  * Pinned memories are always preserved.
  *
- * @deprecated since 0.2.0, removed in 1.0.0. Use `runConsolidationCycle` from
- * `./consolidation-cycle.ts` for the prune + episodic-consolidation work;
- * curiosity-target computation (the one behavior this function provides that
- * the cycle does not yet cover) should be called separately via
- * `findCuriosityTargets` from `@motebit/memory-graph`.
+ * @deprecated Use `runConsolidationCycle` from `./consolidation-cycle.ts` for
+ * the prune + episodic-consolidation work; curiosity-target computation (the
+ * one behavior this function provides that the cycle does not yet cover)
+ * should be called separately via `findCuriosityTargets` from
+ * `@motebit/memory-graph`.
  *
  * Reason: this function is the pre-unification housekeeping path. The
  * four-phase consolidation cycle (`runConsolidationCycle`) is the canonical

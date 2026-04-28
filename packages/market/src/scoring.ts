@@ -109,7 +109,7 @@ function computeCapabilityMatch(
 /**
  * Pure: (candidate, requirements, config?) → RouteScore
  *
- * @deprecated since 1.0.0, removed in 1.1.0. Use `graphRankCandidates` from `./graph-routing.js` instead.
+ * @deprecated Use `graphRankCandidates` from `./graph-routing.js` instead.
  *
  * Reason: linear weighted sum that ignores multi-hop trust composition,
  * regulatory risk, and provenance. The graph-routing replacement walks
@@ -187,7 +187,7 @@ export function applyPrecisionToMarketConfig(
 /**
  * Pure: (candidates[], requirements, config?) → sorted RouteScore[] with top N selected
  *
- * @deprecated since 1.0.0, removed in 1.1.0. Use `graphRankCandidates` from `./graph-routing.js` instead.
+ * @deprecated Use `graphRankCandidates` from `./graph-routing.js` instead.
  *
  * Reason: linear weighted sum that ignores multi-hop trust composition,
  * regulatory risk, and provenance. The graph-routing replacement walks

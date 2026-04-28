@@ -387,7 +387,7 @@ export interface McpServerConfig {
   /**
    * Static Bearer token for non-motebit MCP servers that require auth.
    *
-   * @deprecated since 1.0.0, removed in 2.0.0. Use `credentialSource` (with `StaticCredentialSource` for static tokens) instead.
+   * @deprecated Use `credentialSource` (with `StaticCredentialSource` for static tokens) instead.
    *
    * Reason: the credential-source interface generalizes — it supports
    * keyring, vault, OAuth refresh, and per-request resolution patterns

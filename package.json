@@ -53,6 +53,7 @@
     "check-cli-surface": "npx tsx scripts/check-cli-surface.ts",
     "check-changeset-discipline": "npx tsx scripts/check-changeset-discipline.ts",
     "check-deprecation-discipline": "npx tsx scripts/check-deprecation-discipline.ts",
+    "check-private-deprecation-shape": "npx tsx scripts/check-private-deprecation-shape.ts",
     "check-docs-tree": "npx tsx scripts/check-docs-tree.ts",
     "check-doc-counts": "npx tsx scripts/check-doc-counts.ts",
     "check-doc-diagrams": "npx tsx scripts/check-doc-diagrams.ts",

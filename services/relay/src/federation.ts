@@ -126,7 +126,7 @@ export interface VerifiedSettlement {
 // Re-export for test consumers that import from federation.ts
 export { bytesToHex, hexToBytes };
 /**
- * @deprecated since 1.0.0, removed in 1.1.0. Use {@link FixedWindowLimiter} directly.
+ * @deprecated Use {@link FixedWindowLimiter} directly.
  *
  * Reason: the "PeerRateLimiter" name hardcoded a single consumer (per-peer
  * federation rate limiting) when the underlying class is a general fixed-

@@ -1080,7 +1080,7 @@ export interface LocalInferenceDetectionResult {
 }
 
 /**
- * @deprecated since 1.0.0, removed in 1.1.0. Use {@link LocalInferenceDetectionResult} instead.
+ * @deprecated Use {@link LocalInferenceDetectionResult} instead.
  *
  * Reason: vendor-neutral rename. The detector probes any OpenAI-compat
  * local server (Ollama, LM Studio, llama.cpp, vLLM) — the `Ollama`
@@ -1122,7 +1122,7 @@ export async function detectLocalInference(
 }
 
 /**
- * @deprecated since 1.0.0, removed in 1.1.0. Use {@link detectLocalInference} instead.
+ * @deprecated Use {@link detectLocalInference} instead.
  *
  * Reason: paired with {@link OllamaDetectionResult} — vendor-neutral rename
  * to match the probe's actual scope (any OpenAI-compat local inference server).
@@ -1180,7 +1180,7 @@ async function probeOneEndpoint(baseUrl: string): Promise<LocalInferenceDetectio
 // === Deprecated aliases ===
 
 /**
- * @deprecated since 1.0.0, removed in 1.1.0. Use {@link AnthropicProvider} instead.
+ * @deprecated Use {@link AnthropicProvider} instead.
  *
  * Reason: the "Cloud" prefix was a category error. This class has only
  * ever spoken the Anthropic wire protocol — OpenAI and Google live in
@@ -1189,7 +1189,7 @@ async function probeOneEndpoint(baseUrl: string): Promise<LocalInferenceDetectio
 export const CloudProvider = AnthropicProvider;
 
 /**
- * @deprecated since 1.0.0, removed in 1.1.0. Use {@link AnthropicProviderConfig} instead.
+ * @deprecated Use {@link AnthropicProviderConfig} instead.
  *
  * Reason: paired with {@link CloudProvider} — vendor-accurate rename.
  */

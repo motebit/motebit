@@ -1886,11 +1886,11 @@ export class MotebitRuntime {
   }
 
   /**
-   * @deprecated since 0.2.0, removed in 1.0.0. Rework the caller — migrate
-   * to {@link consolidationCycle} for prune + episodic-consolidation and
-   * call `findCuriosityTargets` from `@motebit/memory-graph` directly
-   * (then pass the result to `getGradientManager().setCuriosityTargets`)
-   * if curiosity-target recomputation is still required.
+   * @deprecated Rework the caller — migrate to {@link consolidationCycle} for
+   * prune + episodic-consolidation and call `findCuriosityTargets` from
+   * `@motebit/memory-graph` directly (then pass the result to
+   * `getGradientManager().setCuriosityTargets`) if curiosity-target
+   * recomputation is still required.
    *
    * Reason: `housekeeping()` predates the unified four-phase consolidation
    * cycle. The cycle's prune phase supersedes housekeeping's
