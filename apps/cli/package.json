@@ -1,6 +1,6 @@
 {
   "name": "motebit",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "description": "Reference runtime and operator console for sovereign AI agents — REPL, daemon, delegation, MCP server. Persistent Ed25519 identity, signed execution receipts, governance at the boundary.",
   "main": "./dist/index.js",
