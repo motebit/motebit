@@ -96,6 +96,7 @@ import { InMemoryGradientStore } from "./gradient.js";
 import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
+import { readLatestHardwareAttestationClaim } from "./hardware-attestation-projection.js";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
@@ -301,6 +302,7 @@ export class MotebitRuntime {
     | import("./sovereign-receipt-exchange.js").SovereignReceiptExchangeAdapter
     | null = null;
   private credentialManager!: CredentialManager;
+  private credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
   private planExecution!: PlanExecutionManager;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
   private _signingKeysErased = false;
@@ -559,6 +561,7 @@ export class MotebitRuntime {
 
     // Credential manager — issuance, persistence, relay submission
     const credentialStore = adapters.storage.credentialStore ?? null;
+    this.credentialStore = credentialStore;
     this.credentialManager = new CredentialManager({
       motebitId: this.motebitId,
       credentialStore,
@@ -2528,10 +2531,29 @@ export class MotebitRuntime {
     return this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
   }
 
-  /** List all known agent trust records for this motebit. */
+  /**
+   * List all known agent trust records for this motebit, projecting the
+   * most-recent verified hardware-attestation claim onto each record.
+   *
+   * The `agent_trust` row carries no hardware-attestation column —
+   * caching it would invite drift on revocation or re-attestation. The
+   * authoritative source is the latest peer-issued
+   * `AgentTrustCredential` carrying `credentialSubject.hardware_attestation`,
+   * which `bumpTrustFromReceipt` issues after verifying the worker's
+   * self-published claim. See `docs/doctrine/hardware-attestation.md` and
+   * `docs/doctrine/self-attesting-system.md` — a routing-input claim
+   * MUST be visible to the user, which is what the Agents-panel badge
+   * surfaces.
+   */
   async listTrustedAgents(): Promise<AgentTrustRecord[]> {
     if (this.agentTrustStore == null) return [];
-    return this.agentTrustStore.listAgentTrust(this.motebitId);
+    const records = await this.agentTrustStore.listAgentTrust(this.motebitId);
+    if (this.credentialStore == null || records.length === 0) return records;
+    const store = this.credentialStore;
+    return records.map((record) => {
+      const claim = readLatestHardwareAttestationClaim(store, record);
+      return claim == null ? record : { ...record, hardware_attestation: claim };
+    });
   }
 
   /** Update trust level for a remote motebit. */

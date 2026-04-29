@@ -7,6 +7,7 @@ import {
 } from "../index";
 import type { PlatformAdapters } from "../index";
 import { AgentTrustLevel } from "@motebit/sdk";
+import type { CredentialStoreAdapter, StoredCredential } from "@motebit/sdk";
 
 function createAdaptersWithTrust(): {
   adapters: PlatformAdapters;
@@ -102,6 +103,54 @@ describe("MotebitRuntime Agent Trust", () => {
 
     const list = await defaultRuntime.listTrustedAgents();
     expect(list).toHaveLength(1);
+  });
+
+  it("listTrustedAgents projects hardware_attestation from the latest AgentTrustCredential", async () => {
+    const trustStore = new InMemoryAgentTrustStore();
+    class TestCredentialStore implements CredentialStoreAdapter {
+      rows: StoredCredential[] = [];
+      save(c: StoredCredential): void {
+        this.rows.unshift(c);
+      }
+      listBySubject(subjectMotebitId: string): StoredCredential[] {
+        return this.rows.filter((r) => r.subject_motebit_id === subjectMotebitId);
+      }
+      list(): StoredCredential[] {
+        return [];
+      }
+    }
+    const credentialStore = new TestCredentialStore();
+    const storage = createInMemoryStorage();
+    const runtime = new MotebitRuntime(
+      { motebitId: "self", tickRateHz: 0 },
+      {
+        storage: { ...storage, agentTrustStore: trustStore, credentialStore },
+        renderer: new NullRenderer(),
+      },
+    );
+
+    await runtime.recordAgentInteraction("m-peer");
+    const subjectDid = `did:motebit:m-peer`;
+    credentialStore.save({
+      credential_id: "cred-x",
+      subject_motebit_id: subjectDid,
+      issuer_did: "did:key:z-issuer",
+      credential_type: "AgentTrustCredential",
+      credential_json: JSON.stringify({
+        type: ["VerifiableCredential", "AgentTrustCredential"],
+        credentialSubject: {
+          id: subjectDid,
+          hardware_attestation: { platform: "secure_enclave" },
+        },
+      }),
+      issued_at: Date.now(),
+    });
+
+    const list = await runtime.listTrustedAgents();
+    const peer = list.find((r) => r.remote_motebit_id === "m-peer");
+    expect(peer).toBeDefined();
+    expect(peer!.hardware_attestation?.platform).toBe("secure_enclave");
+    expect(peer!.hardware_attestation?.score).toBe(1);
   });
 });
 

@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
-import { enrichWithCallerTrust } from "../agents.js";
+import { enrichWithCallerTrust, enrichWithHardwareAttestation } from "../agents.js";
 
 interface DiscoveredAgent {
   motebit_id: string;
@@ -25,6 +25,47 @@ interface DiscoveredAgent {
   freshness: "awake" | "recently_seen" | "dormant" | "cold";
   trust_level?: string;
   interaction_count?: number;
+  hardware_attestation?: { platform: string; key_exported?: boolean; score: number };
+}
+
+type EnricherInput = Record<string, unknown> & {
+  motebit_id: string;
+  hardware_attestation?: { platform: string; key_exported?: boolean; score: number };
+};
+
+function insertTrustCredential(
+  db: import("@motebit/persistence").DatabaseDriver,
+  opts: {
+    credential_id: string;
+    subject_motebit_id: string;
+    issuer_did?: string;
+    platform: string;
+    key_exported?: boolean;
+    issued_at?: number;
+  },
+): void {
+  const issuedAt = opts.issued_at ?? Date.now();
+  const vc = {
+    "@context": ["https://www.w3.org/ns/credentials/v2"],
+    type: ["VerifiableCredential", "AgentTrustCredential"],
+    issuer: opts.issuer_did ?? "did:key:z-issuer-test",
+    validFrom: new Date(issuedAt).toISOString(),
+    credentialSubject: {
+      id: `did:motebit:${opts.subject_motebit_id}`,
+      hardware_attestation: { platform: opts.platform, key_exported: opts.key_exported },
+    },
+  };
+  db.prepare(
+    `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    opts.credential_id,
+    opts.subject_motebit_id,
+    opts.issuer_did ?? "did:key:z-issuer-test",
+    "AgentTrustCredential",
+    JSON.stringify(vc),
+    issuedAt,
+  );
 }
 
 async function registerAgent(
@@ -330,6 +371,111 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
     const target = agents.find((a) => a.motebit_id === "fresh-agent-freshness");
     expect(target).toBeDefined();
     expect(target!.freshness).toBe("awake");
+  });
+
+  // ── enrichWithHardwareAttestation: per-row hardware-attestation badge data ──
+  // The Agents-panel badge shows the most-recent verified HA claim per peer.
+  // The relay reads from the same `relay_credentials` pool routing aggregates
+  // against; the badge surfaces a single claim, routing aggregates many.
+
+  it("attaches hardware_attestation from the most recent peer-issued AgentTrustCredential", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "ha-agent", bytesToHex(kp.publicKey));
+    insertTrustCredential(relay.moteDb.db, {
+      credential_id: "ha-cred-1",
+      subject_motebit_id: "ha-agent",
+      platform: "secure_enclave",
+    });
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "ha-agent");
+    expect(target).toBeDefined();
+    expect(target!.hardware_attestation).toEqual({
+      platform: "secure_enclave",
+      key_exported: undefined,
+      score: 1,
+    });
+  });
+
+  it("agents with no AgentTrustCredential get no hardware_attestation field", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "no-ha-agent", bytesToHex(kp.publicKey));
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "no-ha-agent");
+    expect(target).toBeDefined();
+    expect(target!.hardware_attestation).toBeUndefined();
+  });
+
+  it("enrichWithHardwareAttestation picks the most recent credential per agent", () => {
+    insertTrustCredential(relay.moteDb.db, {
+      credential_id: "old-cred",
+      subject_motebit_id: "multi-cred-agent",
+      platform: "software",
+      issued_at: 1000,
+    });
+    insertTrustCredential(relay.moteDb.db, {
+      credential_id: "new-cred",
+      subject_motebit_id: "multi-cred-agent",
+      platform: "tpm",
+      issued_at: 2000,
+    });
+
+    const enriched = enrichWithHardwareAttestation(
+      [{ motebit_id: "multi-cred-agent", capabilities: ["x"] } as EnricherInput],
+      relay.moteDb.db,
+    );
+    expect(enriched[0]!.hardware_attestation).toEqual({
+      platform: "tpm",
+      key_exported: undefined,
+      score: 1,
+    });
+  });
+
+  it("enrichWithHardwareAttestation skips revoked credentials", () => {
+    insertTrustCredential(relay.moteDb.db, {
+      credential_id: "revoked-cred",
+      subject_motebit_id: "revoked-ha-agent",
+      platform: "secure_enclave",
+      issued_at: 3000,
+    });
+    insertTrustCredential(relay.moteDb.db, {
+      credential_id: "live-cred",
+      subject_motebit_id: "revoked-ha-agent",
+      platform: "software",
+      issued_at: 1000,
+    });
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_revoked_credentials (credential_id, motebit_id, revoked_by) VALUES (?, ?, ?)",
+      )
+      .run("revoked-cred", "revoked-ha-agent", "did:key:z-issuer-test");
+
+    const enriched = enrichWithHardwareAttestation(
+      [{ motebit_id: "revoked-ha-agent", capabilities: ["x"] } as EnricherInput],
+      relay.moteDb.db,
+    );
+    // Falls through to the live (older) credential after skipping the revoked one.
+    expect(enriched[0]!.hardware_attestation?.platform).toBe("software");
+  });
+
+  it("enrichWithHardwareAttestation preserves peer-provided HA on federated agents", () => {
+    // Federation merge passes through HA from the upstream peer relay. The
+    // local enricher must not overwrite it when we have no local credential —
+    // the peer's HA store is more authoritative for cross-relay agents.
+    const enriched = enrichWithHardwareAttestation(
+      [
+        {
+          motebit_id: "federated-agent",
+          capabilities: ["x"],
+          hardware_attestation: { platform: "android_keystore", score: 1 },
+        } as EnricherInput,
+      ],
+      relay.moteDb.db,
+    );
+    expect(enriched[0]!.hardware_attestation?.platform).toBe("android_keystore");
   });
 
   it("revoked agent is filtered out even if freshness would be awake", async () => {

@@ -177,6 +177,11 @@ export interface AgentTrustRecord {
     failed_tasks?: number;
     // (undocumented)
     first_seen_at: number;
+    hardware_attestation?: {
+        platform: HardwareAttestationClaim["platform"];
+        key_exported?: boolean;
+        score: number;
+    };
     // (undocumented)
     interaction_count: number;
     // (undocumented)

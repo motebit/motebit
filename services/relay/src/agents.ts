@@ -8,7 +8,8 @@ import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventStore } from "@motebit/event-log";
 import { asMotebitId } from "@motebit/sdk";
-import type { ExecutionReceipt } from "@motebit/sdk";
+import type { AgentTrustRecord, ExecutionReceipt, HardwareAttestationClaim } from "@motebit/sdk";
+import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
 import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent } from "./federation.js";
@@ -67,6 +68,79 @@ export function enrichWithCallerTrust<T extends Record<string, unknown> & { mote
     const t = trustByAgent.get(a.motebit_id);
     if (!t) return a;
     return { ...a, trust_level: t.trust_level, interaction_count: t.interaction_count };
+  });
+}
+
+/**
+ * Layer the most-recent verified `hardware_attestation` claim onto each
+ * agent in a discover result list. The claim is read from the relay's
+ * `relay_credentials` index (the same pool `aggregateHardwareAttestation`
+ * routes against in `task-routing.ts`) — most-recent peer-issued
+ * `AgentTrustCredential` per subject, revocation-filtered, self-issued
+ * already filtered at `/credentials/submit`.
+ *
+ * Why surface the latest claim, not the routing aggregate. Routing wants
+ * a weighted score across many peers; the Agents-panel badge wants a
+ * single "what platform attested this peer most recently" — those are
+ * different presentations of the same source. The badge tooltip can
+ * read the per-row claim directly without surfaces having to import
+ * `@motebit/market`.
+ *
+ * Federation merge passes through unchanged — peer relays may already
+ * have populated `hardware_attestation` on their merged-in agents from
+ * THEIR `relay_credentials`. We only attach when we have a local claim
+ * AND the agent has none yet, so peer-provided HA on cross-relay
+ * agents is preserved (that peer's HA store is more authoritative for
+ * agents we've never directly transacted with).
+ */
+export function enrichWithHardwareAttestation<
+  T extends Record<string, unknown> & { motebit_id: string },
+>(agents: T[], db: DatabaseDriver): T[] {
+  if (agents.length === 0) return agents;
+  const placeholders = agents.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT credential_id, subject_motebit_id, credential_json, issued_at
+       FROM relay_credentials
+       WHERE credential_type = 'AgentTrustCredential'
+         AND subject_motebit_id IN (${placeholders})
+       ORDER BY issued_at DESC`,
+    )
+    .all(...agents.map((a) => a.motebit_id)) as Array<{
+    credential_id: string;
+    subject_motebit_id: string;
+    credential_json: string;
+    issued_at: number;
+  }>;
+  if (rows.length === 0) return agents;
+
+  const revokedStmt = db.prepare("SELECT 1 FROM relay_revoked_credentials WHERE credential_id = ?");
+  type Projection = NonNullable<AgentTrustRecord["hardware_attestation"]>;
+  const projectedByAgent = new Map<string, Projection>();
+  for (const row of rows) {
+    if (projectedByAgent.has(row.subject_motebit_id)) continue; // already have a more-recent row
+    if (revokedStmt.get(row.credential_id) != null) continue;
+    let parsed: { credentialSubject?: { hardware_attestation?: HardwareAttestationClaim } };
+    try {
+      parsed = JSON.parse(row.credential_json) as typeof parsed;
+    } catch {
+      continue;
+    }
+    const claim = parsed.credentialSubject?.hardware_attestation;
+    if (claim == null) continue;
+    projectedByAgent.set(row.subject_motebit_id, {
+      platform: claim.platform,
+      key_exported: claim.key_exported,
+      score: scoreAttestation(claim),
+    });
+  }
+  if (projectedByAgent.size === 0) return agents;
+
+  return agents.map((a) => {
+    if (a.hardware_attestation != null) return a; // peer-provided HA wins for federated agents
+    const projection = projectedByAgent.get(a.motebit_id);
+    if (projection == null) return a;
+    return { ...a, hardware_attestation: projection };
   });
 }
 
@@ -1069,7 +1143,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         c.get("callerMotebitId" as never) as string | undefined,
         moteDb.db,
       );
-      return c.json({ agents: enriched });
+      const withHa = enrichWithHardwareAttestation(enriched, moteDb.db);
+      return c.json({ agents: withHa });
     }
 
     // Forward to active peers
@@ -1133,7 +1208,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       c.get("callerMotebitId" as never) as string | undefined,
       moteDb.db,
     );
-    return c.json({ agents: final });
+    const withHa = enrichWithHardwareAttestation(final, moteDb.db);
+    return c.json({ agents: withHa });
   });
 
   // GET /api/v1/agents/:motebitId — get specific agent

@@ -128,6 +128,28 @@ export interface AgentTrustRecord {
   avg_quality?: number;
   /** Number of quality samples collected. */
   quality_sample_count?: number;
+  /**
+   * Most-recent verified hardware-attestation snapshot about the remote
+   * agent. Projected from the latest peer-issued `AgentTrustCredential`
+   * in the credential store at read time — never persisted on
+   * `agent_trust`. The credential is the authoritative source; caching
+   * the claim on the trust row would invite drift on revocation /
+   * re-attestation. Absent when no credential carries a claim.
+   *
+   * Shape mirrors `AgentHardwareAttestation` in `@motebit/panels` so
+   * surfaces can pass `AgentTrustRecord[]` straight to the Agents-panel
+   * adapter without per-field transformation. `score` is computed once
+   * at projection time via `scoreAttestation`
+   * (`packages/semiring/src/hardware-attestation.ts`) — keep both shapes
+   * byte-aligned. The same data flows into `HardwareAttestationSemiring`
+   * for routing — see `docs/doctrine/self-attesting-system.md`: a
+   * routing-input claim MUST be visible to the user.
+   */
+  hardware_attestation?: {
+    platform: HardwareAttestationClaim["platform"];
+    key_exported?: boolean;
+    score: number;
+  };
 }
 
 // ── Trust Level Transitions ──────────────────────────────────────────
