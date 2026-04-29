@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto-play-integrity",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "DEPRECATED — use @motebit/crypto-android-keystore for canonical sovereign-verifiable Android hardware attestation. This package was scaffolded against a pinned-Google-JWKS model that Google's Play Integrity API does not support (verification keys are per-app, not globally published). The architecturally-correct Android primitive is Hardware-Backed Keystore Attestation. Scheduled for removal at 2.0.0.",
   "type": "module",
   "main": "./dist/index.js",

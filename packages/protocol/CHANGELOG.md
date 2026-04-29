@@ -1,5 +1,105 @@
 # @motebit/protocol
 
+## 1.2.0
+
+### Minor Changes
+
+- c8c6312: Hardware-attestation badge ship 2 of 3 — surface the most-recent verified `HardwareAttestationClaim` per peer agent.
+
+  Adds an optional `hardware_attestation?: HardwareAttestationClaim` field to `AgentTrustRecord`. The field is **never persisted** on the `agent_trust` row — it's projected at read time from the latest peer-issued `AgentTrustCredential` carrying the claim. The credential is the authoritative source; caching the claim on the trust row would invite drift on revocation or re-attestation.
+
+  This closes the data-flow half of the doctrine breach documented in `docs/doctrine/self-attesting-system.md`: hardware attestation factors into peer ranking via `HardwareAttestationSemiring` (`packages/semiring/src/hardware-attestation.ts`) but was previously invisible in the Agents panel UI. Ship 1 (`756a38c3`) added the panels-controller types + helpers; this ship lights up runtime + relay forwarding; ship 3 will add per-surface badge rendering and the `check-trust-score-display` drift gate.
+
+  Backwards-compatible. Consumers that don't read the new field are unaffected. The field is optional and absent for peers with no peer-issued `AgentTrustCredential` carrying a `hardware_attestation` claim.
+
+- 2a48142: Skills v1 phase 3: per-skill audit entries in the execution ledger (spec/skills-v1.md §7.4).
+
+  Every skill the runtime's `SkillSelector` pulls into context now produces one `EventType.SkillLoaded` event-log entry, immediately after the selector returns and before the AI loop receives the system prompt. The audit trail lets a user prove later: _"the obsidian skill ran on date X with this exact signature value at session sensitivity Y."_
+
+  **`@motebit/protocol`** — adds the wire-format type and event:
+
+  ```text
+  SkillLoadPayload  { skill_id, skill_name, skill_version, skill_signature,
+                      provenance, score, run_id?, session_sensitivity }
+  EventType.SkillLoaded
+  ```
+
+  **`@motebit/sdk`** — extends `SkillInjection` with two audit-only fields the runtime threads into the ledger entry:
+
+  ```text
+  SkillInjection.score      BM25 relevance — surfaces selection rationale
+  SkillInjection.signature  Envelope signature.value — content-addressed pointer
+                            to the exact bytes loaded; empty for trusted_unsigned
+  ```
+
+  The AI loop's prompt builder ignores both fields (rendering stays unchanged). They ride only into the `SkillLoaded` event payload.
+
+  **`motebit`** (CLI) — runtime-factory's hook now passes `score` + `signature` through from the BSL `SkillSelector` result.
+
+  Best-effort emission: a failed `eventStore.append` is logged via `runtime._logger.warn("skill_load_event_append_failed", ...)` and the AI loop proceeds. Audit absence (skill loaded without matching event) is preferable to a turn blocked on a transient storage error.
+
+  Skill_signature audit utility: a stale ledger entry whose signature does not resolve in the current registry is itself a useful signal — the skill was re-signed (legitimate update) or removed (less common). Both provable from the audit trail without retaining the original bytes.
+
+  Wire-schema artifact: `spec/schemas/skill-load-payload-v1.json` ships under Apache-2.0 alongside the existing skills schemas.
+
+  4 new runtime tests cover: emit-with-payload, empty-selector, selector-throw (loop continues), no-hook-wired. 683/683 runtime, all 54 drift gates green.
+
+- cabf61d: Add `motebit/skills-registry@1.0` wire types — the relay-hosted index of submitted, signature-verified skill envelopes.
+
+  Five new exported types: `SkillRegistryEntry` (one row in the index), `SkillRegistrySubmitRequest` and `SkillRegistrySubmitResponse` (POST /api/v1/skills/submit), `SkillRegistryListing` (GET /api/v1/skills/discover, paginated), `SkillRegistryBundle` (GET /api/v1/skills/:submitter/:name/:version, full payload).
+
+  Spec: [`spec/skills-registry-v1.md`](https://raw.githubusercontent.com/motebit/motebit/main/spec/skills-registry-v1.md). The submitter component of every addressing tuple is canonical — derived from `envelope.signature.public_key` by the relay, never user-provided. Submission is permissive-by-signature; discovery is curated-by-default with full opt-in. The relay stores submitted bundles byte-identical so consumers re-verify offline against the embedded signature key — relay is a convenience surface, not a trust root.
+
+  Why this lands here, not in a new package: registry types are wire format, not runtime logic. They follow the same layering as `SkillEnvelope` and `SkillManifest` — protocol types in `@motebit/protocol`, zod schemas in `@motebit/wire-schemas`, runtime in `services/relay` and `apps/cli`. No new package boundaries.
+
+  Backwards-compatible. Pure additive change.
+
+- 9b4a296: Add agentskills.io-compatible procedural-knowledge runtime per `spec/skills-v1.md`.
+
+  Skills are user-installable markdown files containing procedural knowledge — when to use a tool, in what order, with what verifications. Open standard from Anthropic adopted across Claude Code, Codex, Cursor, GitHub Copilot. This release layers motebit-namespaced extensions on top of the standard frontmatter, ignored by non-motebit runtimes.
+
+  **`@motebit/protocol`** — adds wire types for the new skill artifacts:
+
+  ```text
+  SkillSensitivity            "none" | "personal" | "medical" | "financial" | "secret"
+  SkillPlatform               "macos" | "linux" | "windows" | "ios" | "android"
+  SkillSignature              { suite, public_key, value }
+  SkillHardwareAttestationGate { required?, minimum_score? }
+  SkillManifest               full parsed frontmatter
+  SkillEnvelope               content-addressed signed wrapper
+  SKILL_SENSITIVITY_TIERS, SKILL_AUTO_LOADABLE_TIERS, SKILL_PLATFORMS  frozen const arrays
+  ```
+
+  **`@motebit/crypto`** — adds offline-verifiable sign/verify pipeline using the `motebit-jcs-ed25519-b64-v1` suite (sibling to execution receipts, NOT W3C `eddsa-jcs-2022`):
+
+  ```text
+  canonicalizeSkillManifestBytes(manifest, body)  -> Uint8Array
+  canonicalizeSkillEnvelopeBytes(envelope)        -> Uint8Array
+  signSkillManifest / signSkillEnvelope
+  verifySkillManifest / verifySkillEnvelope (+ Detailed variants)
+  decodeSkillSignaturePublicKey(sig)              -> Uint8Array
+  SKILL_SIGNATURE_SUITE                           const
+  ```
+
+  **`motebit`** (CLI) — adds the user-facing surface:
+
+  ```text
+  motebit skills install <directory>
+  motebit skills list
+  motebit skills enable | disable <name>
+  motebit skills trust | untrust <name>
+  motebit skills verify <name>
+  motebit skills remove <name>
+  /skills                       (REPL slash — list with provenance badges)
+  /skill <name>                 (REPL slash — show full details)
+  ```
+
+  Install is permissive (filesystem record, sibling to `mcp_trusted_servers` add); auto-load is provenance-gated (the act layer). The selector filters by enabled+trusted+platform+sensitivity+hardware-attestation before BM25 ranking on description. Manual trust grants emit signed audit events to `~/.motebit/skills/audit.log` without manufacturing cryptographic provenance.
+
+  Two new drift gates land alongside: `check-skill-corpus` (every committed reference skill verifies offline against its committed signature) and `check-skill-cli-coverage` (every public `SkillRegistry` method has a `motebit skills <verb>` dispatch arm).
+
+  Phase 1 ships frontmatter + envelope + signature scheme + sensitivity tiers + trust gate + the eight subcommands + REPL slashes + drift gates + one signed dogfood reference (`skills/git-commit-motebit-style/`). Phase 2: `SkillSelector` wired into the runtime context-injection path, plus `scripts/` quarantine + per-script approval. Phase 3: signed `SkillLoadReceipt` in `execution-ledger-v1`. Phase 4: sibling-surface skill browsers + curated registry.
+
 ## 1.1.0
 
 ### Minor Changes
