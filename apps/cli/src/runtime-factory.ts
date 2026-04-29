@@ -1,6 +1,7 @@
 // --- Provider creation, tool registry, runtime bootstrap ---
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
   MotebitRuntime,
@@ -638,10 +639,8 @@ export function deriveGovernanceForRuntime(governance: GovernanceConfig | undefi
  * standard gates.
  */
 function buildCliSkillSelectorHook(): SkillSelectorHook {
-  const skillsRoot = path.join(
-    process.env["MOTEBIT_CONFIG_DIR"] ?? path.join(require("node:os").homedir(), ".motebit"),
-    "skills",
-  );
+  const motebitDir = process.env["MOTEBIT_CONFIG_DIR"] ?? path.join(os.homedir(), ".motebit");
+  const skillsRoot = path.join(motebitDir, "skills");
   const platform = mapNodePlatformToSkillPlatform(process.platform);
   return {
     async selectForTurn(turn) {
