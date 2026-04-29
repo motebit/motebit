@@ -56,6 +56,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 ## Operator Guide
 
 - [Architecture](https://docs.motebit.com/docs/operator/architecture): Monorepo structure, enforced layers, services, specs, and data flow
+- [Inspector and Operator](https://docs.motebit.com/docs/operator/inspector-and-operator): How to use the two internal dashboards — when to reach for which, what each tab shows, and the operational rhythm for running a relay
 - [Daemon Mode & Approvals](https://docs.motebit.com/docs/operator/daemon-approvals): Running motebit as a daemon — scheduled goals, approval queue, and governance enforcement.
 - [Policy & Governance](https://docs.motebit.com/docs/operator/governance): How motebit controls what crosses the surface
 - [Sync](https://docs.motebit.com/docs/operator/sync): Multi-device sync, the relay server, and conflict detection.

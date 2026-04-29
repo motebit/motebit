@@ -57,10 +57,15 @@ infra/secrets/
 .claude/worktrees/
 .vercel
 
-# Internal strategy docs (keep local, not public)
-# Internal docs (local only, never public)
-docs/ops/
+# Strategy docs stay local — competitive posture, not operational doctrine.
 docs/strategy/
+
+# docs/ops/RUNBOOK.md is intentionally public (operator-transparency doctrine —
+# the runbook is the procedural half of what /.well-known/motebit-transparency.json
+# declares; see docs/doctrine/operator-transparency.md). docs/ops/SECRETS.md is
+# the secrets-topology inventory — no actual values, but documents the
+# single-point-of-compromise surface for the relay. That belongs locked down.
+docs/ops/SECRETS.md
 .npmrc
 
 # Patent filings (confidential, never public)

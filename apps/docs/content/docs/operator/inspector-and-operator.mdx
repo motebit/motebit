@@ -1,0 +1,113 @@
+---
+title: Inspector and Operator
+description: How to use the two internal dashboards — when to reach for which, what each tab shows, and the operational rhythm for running a relay
+---
+
+Motebit ships two internal dashboards alongside the five user-facing surfaces. Both are React + Vite, both are private (BUSL-1.1), neither talks to the AI loop. They split on a single question: **is this about one motebit, or about the relay's fleet?**
+
+| | `apps/inspector` | `apps/operator` |
+| --- | --- | --- |
+| **Audience** | Developer or motebit owner | Relay operator |
+| **Scope** | One motebit (set via `VITE_MOTEBIT_ID`) | The whole fleet on the relay |
+| **Auth** | Static master bearer (`VITE_API_TOKEN`) | Static master bearer (`VITE_API_TOKEN`) |
+| **Tabs** | 12 | 6 |
+| **Local port** | `5174` | `5175` |
+| **AI loop** | None | None |
+
+Both surfaces invoke typed `fetch()` calls only — never construct prompts, never route through `sendMessageStreaming`. Surface-determinism doctrine applies harder here than anywhere; an operator console that takes user-shaped instructions is the wrong category for the audience.
+
+## Decision tree
+
+The fastest way to pick is to phrase the question:
+
+- **"Why is *this motebit* doing X?"** → Inspector. State, memory, plans, audit trail, conversation history — single-agent introspection.
+- **"What's happening on *my relay*?"** → Operator. Withdrawals to settle, federation peers, transparency posture, disputes, fees collected, anchoring batches.
+
+If the question begins "is this motebit…" it's Inspector. If it begins "is the relay…" it's Operator. There is no overlap by design — fleet-shaped panels were extracted out of the inspector in 2026-04-28 specifically so the audience boundary is sharp.
+
+## Inspector — single-agent introspection
+
+```bash
+cd apps/inspector
+VITE_API_URL=https://relay.motebit.com \
+  VITE_MOTEBIT_ID=<your-motebit-id> \
+  VITE_API_TOKEN=<master-token> \
+  pnpm dev
+# → http://localhost:5174
+```
+
+Polls every 2 seconds. Backs off to 10s on consecutive errors. The connection-state dot in the top-right shows green when the relay round-trips successfully, red otherwise.
+
+| Tab | What it shows | Reach for it when |
+| --- | --- | --- |
+| **State** | Current state vector — attention, processing, confidence, valence, arousal, social_distance, curiosity, trust mode, battery mode | "Why is the agent acting weird right now?" — state vector explains current posture |
+| **Memory** | Memory graph nodes + edges with sensitivity classifications, deletable per-node | "What does this motebit actually remember?" Also: did a decay cycle prune something it shouldn't have? |
+| **Behavior** | Behavior cues derived from the state vector | "What's driving the agent's behavior?" — derived from State, but rendered as a debug overlay |
+| **Events** | Append-only event log (turns, tool calls, syncs, settlements) | "Chronological — what happened in what order?" The audit replay |
+| **Audit** | Tool execution audit trail with the policy decision (allowed / denied / required-approval) | "What did the governance gate decide?" Cross-reference with Approval doctrine in [Governance](/docs/operator/governance) |
+| **Goals** | Recurring + one-shot goals, status, schedule, retry counts | "What is the agent supposed to be doing?" Goals are the user-declared layer above plans |
+| **Plans** | Execution plans + step-by-step status (pending / running / completed / failed / skipped) | "How is the agent decomposing a goal into steps?" |
+| **Conversations** | Chat history per-conversation with messages | "What did user + agent talk about?" |
+| **Devices** | Paired devices on this identity | "Which devices does this motebit span?" — multi-device pairing audit |
+| **Gradient** | Intelligence gradient snapshots over time — knowledge density, retrieval quality, tool efficiency, curiosity pressure | "Is the agent getting smarter, or stalling?" — long-arc trajectory |
+| **Trust** | Agent trust records + cross-agent trust graph (force-directed) | "Who does this agent trust, and who trusts it?" |
+| **Credentials** | Issued VCs, key succession chain, budget allocations, generate-presentation button | "What signed claims does this agent hold?" |
+
+## Operator — relay-fleet console
+
+```bash
+cd apps/operator
+VITE_API_URL=https://relay.motebit.com \
+  VITE_API_TOKEN=<master-token> \
+  pnpm dev
+# → http://localhost:5175
+```
+
+No `VITE_MOTEBIT_ID` — operator is fleet-scoped. Each panel polls on mount; failures surface as state, not throws.
+
+| Tab | What it shows | Reach for it when |
+| --- | --- | --- |
+| **Withdrawals** | Pending withdrawal queue with `complete` / `fail` action buttons | Daily — payouts to settle. `complete` requires a payout reference (rail tx id); `fail` requires a reason and refunds the agent |
+| **Federation** | Peered relays with state machine (active / suspended / pending / removed), heartbeat status, agent counts, trust scores | "Are my federation peers alive?" — heartbeat staleness is the canary |
+| **Transparency** | Declared posture (signed `/.well-known/` JSON) and proven posture (master-token gated) side by side | After any code change that affects what data the relay processes — confirms the doctrine artifact matches reality |
+| **Disputes** | Active disputes + lifecycle stats (opened / evidence / resolved / appealed) | When a peer flags an allocation; lifecycle-resolution work |
+| **Fees** | The 5% platform fee aggregation — total collected, by rail (relay vs p2p), by period (UTC daily buckets) | Revenue check. Window configurable via `?window_days=N` (default 30, max 365) |
+| **Anchoring** | Credential anchoring batches — Merkle root, leaf count, on-chain tx hash if anchored | "Are the credentials I issued making it on-chain?" — anchor lag is normal up to one batch interval |
+
+## Operational rhythm
+
+Suggested cadence for an operator running `relay.motebit.com`:
+
+**Daily (5 minutes)** — Operator only:
+- **Withdrawals** — clear the queue. Each pending row blocks an agent; long-tail withdrawals are operational debt.
+- **Federation** — eyeball peer states. Anything `suspended` warrants a check.
+- **Disputes** — any `opened` or `evidence` rows need attention.
+
+**Weekly (15 minutes)** — Operator + Inspector:
+- **Operator → Fees** — confirm the by-rail mix matches your expectation. A sudden zero on a rail is an integration failure.
+- **Operator → Anchoring** — confirm the on-chain anchor is keeping pace with batches. Persistent unanchored = chain submitter problem.
+- **Operator → Transparency** — confirm declared and proven match. Drift here means doctrine has fallen behind code.
+- **Inspector → Gradient** (per active motebit) — long-arc trajectory check.
+
+**On incident** — both, in order:
+1. **Inspector → Events** for the affected motebit — chronological frame
+2. **Inspector → Audit** — what the policy decided
+3. **Operator → Disputes** — was a dispute filed?
+4. **Operator → Federation** — is the relevant peer alive?
+5. Refer to the [operations runbook](/docs/operator/architecture#operations-runbook) for incident-class procedures (freeze, rehydrate, identity backup, ledger reconciliation)
+
+## How to extend
+
+**New inspector tab** — agent-scoped means: the data is per-motebit (the relay route is `…/:motebitId/…`). Add a relay route, a `fetch*` helper in `apps/inspector/src/api.ts`, a panel component in `apps/inspector/src/components/`, wire into `InspectorApp.tsx` nav + switch.
+
+**New operator tab** — fleet-scoped means: the data is per-relay (`/api/v1/admin/…` or `/federation/v1/…`). Same shape, in `apps/operator/`.
+
+If you find yourself wanting a tab in *both*, it probably belongs in neither — it's a category-confused panel. The records-vs-acts test from [`docs/doctrine/records-vs-acts.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/records-vs-acts.md) usually clarifies which side it belongs on.
+
+## What these surfaces aren't
+
+Neither is a surface for end-users. The five user-facing surfaces (web, desktop, mobile, spatial, cli) talk to a motebit through the creature; that's the medium for end-users. Inspector and operator are debug + administration surfaces, intentionally outside the creature metaphor.
+
+Neither is a deployment target for the public. They run locally against a relay you operate; the relay's `/api/v1/admin/*` routes are master-token gated. If a third-party operator ever needs an operator surface, they run their own copy locally pointed at their own relay — same code, same routes, different operator.
+
+Neither hosts a chat. There is no AI loop in either app, by design — surface-determinism doctrine forbids constructing prompts to drive operational acts. Every action is a typed call.
