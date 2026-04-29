@@ -65,7 +65,7 @@
     "@motebit/protocol": "workspace:*",
     "@motebit/crypto": "workspace:*",
     "@peculiar/asn1-schema": "^2.6.0",
-    "@peculiar/x509": "^1.12.0"
+    "@peculiar/x509": "^2.0.0"
   },
   "devDependencies": {
     "@noble/curves": "~1.9.0",
