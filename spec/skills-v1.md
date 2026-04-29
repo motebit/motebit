@@ -266,20 +266,35 @@ A skill that fails signature verification at load time is not injected. The sele
 
 ### 7.4 Receipt emission (phase 3)
 
-Each skill load emits a `SkillLoadReceipt` in `execution-ledger-v1`:
+#### Wire format (foundation law)
+
+The per-skill audit detail is the `SkillLoadPayload` wire type, exported from `@motebit/protocol`. Each skill the selector pulls into context produces one `EventLogEntry` with `event_type: "skill_loaded"` (`EventType.SkillLoaded`) and the payload below; the load timestamp and signing motebit identity live on the event-log envelope, not the payload.
 
 ```json
 {
-  "type": "skill_load",
   "skill_id": "example-skill@1.0.0",
-  "skill_signature": "z3hY9...",
-  "selected_at": "2026-04-28T12:00:00.000Z",
-  "session_id": "...",
+  "skill_name": "example-skill",
+  "skill_version": "1.0.0",
+  "skill_signature": "SGVsbG8...",
+  "provenance": "verified",
+  "score": 4.27,
+  "run_id": "run-2026-04-28-...",
   "session_sensitivity": "none"
 }
 ```
 
-Phase 1 reserves the field; phase 3 emits.
+| Field                 | Type   | Required | Description                                                                                                                                                                                                                                                                        |
+| --------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `skill_id`            | string | Yes      | `"name@version"` — convenient composite ID for log queries.                                                                                                                                                                                                                        |
+| `skill_name`          | string | Yes      | Slug. Matches `SkillManifest.name`.                                                                                                                                                                                                                                                |
+| `skill_version`       | string | Yes      | SemVer. Matches `SkillManifest.version`.                                                                                                                                                                                                                                           |
+| `skill_signature`     | string | Yes      | Base64url envelope `signature.value`. Empty string when the manifest is `trusted_unsigned`. Pins the audit entry to exact bytes — re-signing produces a new value, so a stale ledger entry's signature failing to resolve in the current registry is itself a useful audit signal. |
+| `provenance`          | enum   | Yes      | `"verified"` or `"trusted_unsigned"`. Display-grade copy of the runtime's `SkillProvenanceStatus`.                                                                                                                                                                                 |
+| `score`               | number | Yes      | BM25 relevance score against the user's turn. Higher = more relevant. The selector's threshold is `0.0001` (§7.2).                                                                                                                                                                 |
+| `run_id`              | string | No       | Run identifier the load was keyed to. Matches `runId` on `runtime.sendMessage`. Optional because future proactive-cycle loads may not have an explicit run context.                                                                                                                |
+| `session_sensitivity` | enum   | Yes      | Session sensitivity tier in effect when the skill loaded.                                                                                                                                                                                                                          |
+
+The event-log envelope (`event_id`, `motebit_id`, `timestamp`, `tombstoned`) follows the existing `EventLogEntry` shape. The runtime emits one event per selected skill, immediately after the selector returns and before the AI loop receives the system prompt. Failure to emit (storage error, signing key absent) is logged and the AI loop proceeds — the audit trail is best-effort, never blocking.
 
 ---
 

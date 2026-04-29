@@ -1,0 +1,111 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/skill-load-payload-v1.json",
+  "title": "SkillLoadPayload (v1)",
+  "description": "Per-skill audit payload for `EventType.SkillLoaded` event-log entries. Emitted by the runtime when the SkillSelector pulls a skill body into the system context. Spec: https://raw.githubusercontent.com/motebit/motebit/main/spec/skills-v1.md",
+  "type": "object",
+  "properties": {
+    "skill_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Composite identifier `\"name@version\"`. Convenient for log queries."
+    },
+    "skill_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Skill slug. Matches `SkillManifest.name`."
+    },
+    "skill_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Skill SemVer. Matches `SkillManifest.version`."
+    },
+    "skill_signature": {
+      "type": "string",
+      "description": "Base64url envelope `signature.value`. Empty string when manifest is `trusted_unsigned` (no cryptographic signature exists). Pins the audit entry to exact bytes — re-signing produces a new value."
+    },
+    "provenance": {
+      "type": "string",
+      "enum": ["verified", "trusted_unsigned"],
+      "description": "Provenance status at load time. Display-grade copy of the runtime's `SkillProvenanceStatus`."
+    },
+    "score": {
+      "type": "number",
+      "description": "BM25 relevance score against the user's turn. Higher = more relevant. Selector threshold is 0.0001 (§7.2)."
+    },
+    "run_id": {
+      "type": "string",
+      "description": "Run identifier the load was keyed to. Matches `runId` on `runtime.sendMessage`. Optional — proactive-cycle loads (future) may have no explicit run context."
+    },
+    "session_sensitivity": {
+      "type": "string",
+      "enum": ["none", "personal", "medical", "financial", "secret"],
+      "description": "Session sensitivity tier in effect when the skill loaded."
+    }
+  },
+  "required": [
+    "skill_id",
+    "skill_name",
+    "skill_version",
+    "skill_signature",
+    "provenance",
+    "score",
+    "session_sensitivity"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "SkillLoadPayload": {
+      "type": "object",
+      "properties": {
+        "skill_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Composite identifier `\"name@version\"`. Convenient for log queries."
+        },
+        "skill_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Skill slug. Matches `SkillManifest.name`."
+        },
+        "skill_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Skill SemVer. Matches `SkillManifest.version`."
+        },
+        "skill_signature": {
+          "type": "string",
+          "description": "Base64url envelope `signature.value`. Empty string when manifest is `trusted_unsigned` (no cryptographic signature exists). Pins the audit entry to exact bytes — re-signing produces a new value."
+        },
+        "provenance": {
+          "type": "string",
+          "enum": ["verified", "trusted_unsigned"],
+          "description": "Provenance status at load time. Display-grade copy of the runtime's `SkillProvenanceStatus`."
+        },
+        "score": {
+          "type": "number",
+          "description": "BM25 relevance score against the user's turn. Higher = more relevant. Selector threshold is 0.0001 (§7.2)."
+        },
+        "run_id": {
+          "type": "string",
+          "description": "Run identifier the load was keyed to. Matches `runId` on `runtime.sendMessage`. Optional — proactive-cycle loads (future) may have no explicit run context."
+        },
+        "session_sensitivity": {
+          "type": "string",
+          "enum": ["none", "personal", "medical", "financial", "secret"],
+          "description": "Session sensitivity tier in effect when the skill loaded."
+        }
+      },
+      "required": [
+        "skill_id",
+        "skill_name",
+        "skill_version",
+        "skill_signature",
+        "provenance",
+        "score",
+        "session_sensitivity"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

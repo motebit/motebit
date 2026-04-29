@@ -1919,3 +1919,130 @@ describe("streaming boundary sanitization", () => {
     expect(toolDone.result).toBe(cleanResult);
   });
 });
+
+// === SkillLoaded event emission (spec/skills-v1.md §7.4) ===
+
+describe("SkillLoaded event emission — phase 3", () => {
+  let provider: StreamingProvider;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    provider = createMockProvider();
+    const result = makeTurnResult("Response");
+    mockRunTurnStreaming.mockReturnValue(yieldChunks({ type: "result", result }));
+  });
+
+  it("emits one SkillLoaded event per selected skill with full payload", async () => {
+    const motebitId = "skill-load-emit";
+    const selectorMock = vi.fn().mockResolvedValue([
+      {
+        name: "git-commit-motebit-style",
+        version: "1.0.0",
+        body: "# Procedure\n",
+        provenance: "verified" as const,
+        score: 4.27,
+        signature: "SGVsbG8tc2lnbmF0dXJl",
+      },
+      {
+        name: "lint-fix",
+        version: "0.2.0",
+        body: "# Lint\n",
+        provenance: "trusted_unsigned" as const,
+        score: 1.85,
+        signature: "",
+      },
+    ]);
+    const runtime = new MotebitRuntime(
+      { motebitId, tickRateHz: 0, skillSelector: { selectForTurn: selectorMock } },
+      createAdapters(provider),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("help me with a commit message", "run-42"));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const events = await runtime.events.query({
+      motebit_id: motebitId,
+      event_types: [EventType.SkillLoaded],
+    });
+
+    expect(events).toHaveLength(2);
+    expect(selectorMock).toHaveBeenCalledWith("help me with a commit message");
+
+    const verified = events.find((e) => e.payload.skill_name === "git-commit-motebit-style")!;
+    expect(verified.payload).toMatchObject({
+      skill_id: "git-commit-motebit-style@1.0.0",
+      skill_name: "git-commit-motebit-style",
+      skill_version: "1.0.0",
+      skill_signature: "SGVsbG8tc2lnbmF0dXJl",
+      provenance: "verified",
+      score: 4.27,
+      run_id: "run-42",
+      session_sensitivity: "none",
+    });
+
+    const trusted = events.find((e) => e.payload.skill_name === "lint-fix")!;
+    expect(trusted.payload).toMatchObject({
+      skill_id: "lint-fix@0.2.0",
+      provenance: "trusted_unsigned",
+      skill_signature: "", // empty when no cryptographic signature exists
+    });
+  });
+
+  it("emits no events when the selector returns an empty array", async () => {
+    const motebitId = "skill-load-empty";
+    const runtime = new MotebitRuntime(
+      {
+        motebitId,
+        tickRateHz: 0,
+        skillSelector: { selectForTurn: () => Promise.resolve([]) },
+      },
+      createAdapters(provider),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("hello"));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const events = await runtime.events.query({
+      motebit_id: motebitId,
+      event_types: [EventType.SkillLoaded],
+    });
+    expect(events).toHaveLength(0);
+  });
+
+  it("does not block the AI loop when the selector throws", async () => {
+    const motebitId = "skill-load-throw";
+    const runtime = new MotebitRuntime(
+      {
+        motebitId,
+        tickRateHz: 0,
+        skillSelector: {
+          selectForTurn: () => Promise.reject(new Error("registry storage corrupt")),
+        },
+      },
+      createAdapters(provider),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("hello"));
+    expect(chunks.find((c) => c.type === "result")).toBeDefined();
+
+    const events = await runtime.events.query({
+      motebit_id: motebitId,
+      event_types: [EventType.SkillLoaded],
+    });
+    expect(events).toHaveLength(0);
+  });
+
+  it("emits no events when no skillSelector is wired (default config)", async () => {
+    const motebitId = "skill-load-noop";
+    const runtime = new MotebitRuntime({ motebitId, tickRateHz: 0 }, createAdapters(provider));
+
+    await collectChunks(runtime.sendMessageStreaming("hello"));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const events = await runtime.events.query({
+      motebit_id: motebitId,
+      event_types: [EventType.SkillLoaded],
+    });
+    expect(events).toHaveLength(0);
+  });
+});

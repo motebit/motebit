@@ -1196,6 +1196,49 @@ export class MotebitRuntime {
     }
   }
 
+  /**
+   * Emit one `EventType.SkillLoaded` event per selected skill into the
+   * execution ledger (spec/skills-v1.md §7.4). Best-effort: a failed
+   * append is logged but never blocks the AI loop. Audit absence (a
+   * skill loaded without a matching event) is preferable to a turn
+   * blocked on a transient storage error.
+   */
+  private async emitSkillLoadEvents(
+    skills: import("@motebit/sdk").SkillInjection[] | undefined,
+    runId: string | undefined,
+  ): Promise<void> {
+    if (!skills || skills.length === 0) return;
+    for (const skill of skills) {
+      try {
+        await this.events.appendWithClock({
+          event_id: crypto.randomUUID(),
+          motebit_id: this.motebitId,
+          timestamp: Date.now(),
+          event_type: EventType.SkillLoaded,
+          payload: {
+            skill_id: `${skill.name}@${skill.version}`,
+            skill_name: skill.name,
+            skill_version: skill.version,
+            skill_signature: skill.signature,
+            provenance: skill.provenance,
+            score: skill.score,
+            ...(runId != null ? { run_id: runId } : {}),
+            // Sensitivity tier the runtime resolved against. Future:
+            // pull from a session-tier register on the runtime when
+            // sensitivity-elevation lands. CLI defaults to "none".
+            session_sensitivity: "none" as const,
+          },
+          tombstoned: false,
+        });
+      } catch (err: unknown) {
+        this._logger.warn("skill_load_event_append_failed", {
+          skill_id: `${skill.name}@${skill.version}`,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
   async sendMessage(text: string, runId?: string): Promise<TurnResult> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
@@ -1212,6 +1255,7 @@ export class MotebitRuntime {
       const { knownAgents, agentCapabilities } = await this.buildAgentContext();
       const selfAwareness = this.buildSelfAwareness();
       const selectedSkills = await this.resolveSkillsForTurn(text);
+      await this.emitSkillLoadEvents(selectedSkills, runId);
       const result = await runTurn(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -1467,6 +1511,7 @@ export class MotebitRuntime {
       }
 
       const selectedSkills = await this.resolveSkillsForTurn(text);
+      await this.emitSkillLoadEvents(selectedSkills, runId);
 
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,

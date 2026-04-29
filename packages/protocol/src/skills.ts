@@ -229,3 +229,53 @@ export interface SkillEnvelope {
   /** Envelope signature — same suite as the manifest signature. */
   signature: SkillSignature;
 }
+
+// === Skill Load Receipt (event-log payload) ===
+
+/**
+ * Per-skill audit payload emitted by the runtime when the `SkillSelector`
+ * pulls a skill body into the agent's system context. One event per
+ * selected skill per turn, written to the agent's execution ledger as
+ * `EventType.SkillLoaded` (spec/skills-v1.md §7.4).
+ *
+ * The audit trail lets a user prove later: "the obsidian skill ran on
+ * date X with this exact signature value at session sensitivity Y." The
+ * `skill_signature` field is the envelope's `signature.value` — a
+ * content-addressed pointer to the exact bytes injected, recoverable by
+ * looking up the installed skill at `~/.motebit/skills/<name>/`.
+ *
+ * Wire-level event-envelope (timestamp, event_id, motebit_id) lives at
+ * `EventLogEntry`; the per-skill detail is here.
+ */
+export interface SkillLoadPayload {
+  /** Composite identifier `"name@version"` — convenient for log queries. */
+  skill_id: string;
+  /** Skill slug (matches `SkillManifest.name`). */
+  skill_name: string;
+  /** Skill SemVer (matches `SkillManifest.version`). */
+  skill_version: string;
+  /**
+   * Base64url-encoded envelope signature value. Pins the audit entry to
+   * the exact bytes that were on disk at load time — re-signing the skill
+   * (e.g., via `pnpm --filter @motebit/skills build-reference-skill`)
+   * produces a different value, so a stale ledger entry whose signature
+   * doesn't resolve in the current registry is itself a useful audit
+   * signal. Empty string when the manifest is `trusted_unsigned` (operator-
+   * attested but no cryptographic signature exists to record).
+   */
+  skill_signature: string;
+  /** Provenance status at load time. Display-grade copy of `SkillProvenanceStatus`. */
+  provenance: "verified" | "trusted_unsigned";
+  /** BM25 relevance score against the user's turn. Higher = more relevant. */
+  score: number;
+  /**
+   * Run identifier the load is keyed to. Matches the `runId` passed to
+   * `runtime.sendMessage` / `sendMessageStreaming` — pairs every skill
+   * load with the turn that triggered it. Optional because the runtime
+   * may emit loads outside an explicit run context (e.g., proactive
+   * cycles, future).
+   */
+  run_id?: string;
+  /** Session sensitivity tier in effect when the skill loaded. */
+  session_sensitivity: SkillSensitivity;
+}

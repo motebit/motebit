@@ -254,6 +254,11 @@ export enum EventType {
   // via the session_id → observation-action sequence binding.
   ComputerSessionOpened = "computer_session_opened",
   ComputerSessionClosed = "computer_session_closed",
+  // Skill load — per-skill audit entry emitted by the runtime when the
+  // SkillSelector pulls a skill body into the system context. One event
+  // per selected skill, keyed to the run that triggered the load. See
+  // spec/skills-v1.md §7.4 and SkillLoadPayload in skills.ts.
+  SkillLoaded = "skill_loaded",
 }
 
 export enum MemoryType {
@@ -2197,5 +2202,6 @@ export type {
   SkillEnvelopeFile,
   SkillEnvelopeSkillRef,
   SkillEnvelope,
+  SkillLoadPayload,
 } from "./skills.js";
 export { SKILL_SENSITIVITY_TIERS, SKILL_AUTO_LOADABLE_TIERS, SKILL_PLATFORMS } from "./skills.js";

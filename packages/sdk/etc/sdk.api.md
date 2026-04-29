@@ -672,6 +672,8 @@ export interface SkillInjection {
     body: string;
     name: string;
     provenance: "verified" | "trusted_unsigned";
+    score: number;
+    signature: string;
     version: string;
 }
 

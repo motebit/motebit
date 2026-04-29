@@ -215,6 +215,10 @@ export interface ContextPack {
  * `provenance` field drives the display badge: `verified` means the
  * envelope signature passed; `trusted_unsigned` means the operator
  * manually attested via `motebit skills trust <name>`.
+ *
+ * The `score` and `signature` fields are audit-only — they ride into the
+ * runtime's `SkillLoaded` event-log emission (§7.4) and are ignored by
+ * the AI loop's prompt builder.
  */
 export interface SkillInjection {
   /** Skill slug (e.g., `"git-commit-motebit-style"`). */
@@ -225,6 +229,16 @@ export interface SkillInjection {
   body: string;
   /** Display-grade provenance status. */
   provenance: "verified" | "trusted_unsigned";
+  /** BM25 relevance score from the selector. Audit-only; ignored by the prompt builder. */
+  score: number;
+  /**
+   * Base64url envelope `signature.value`. Empty string when manifest is
+   * `trusted_unsigned`. Audit-only; ignored by the prompt builder. The
+   * runtime emits this on the `SkillLoaded` event-log entry so a stale
+   * audit row whose signature no longer resolves in the registry remains
+   * a useful audit signal.
+   */
+  signature: string;
 }
 
 /**

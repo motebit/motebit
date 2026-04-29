@@ -1190,6 +1190,8 @@ export enum EventType {
     // (undocumented)
     ReflectionCompleted = "reflection_completed",
     // (undocumented)
+    SkillLoaded = "skill_loaded",
+    // (undocumented)
     StateUpdated = "state_updated",
     // (undocumented)
     SyncCompleted = "sync_completed",
@@ -2318,6 +2320,18 @@ export interface SkillEnvelopeSkillRef {
 export interface SkillHardwareAttestationGate {
     minimum_score?: number;
     required?: boolean;
+}
+
+// @public
+export interface SkillLoadPayload {
+    provenance: "verified" | "trusted_unsigned";
+    run_id?: string;
+    score: number;
+    session_sensitivity: SkillSensitivity;
+    skill_id: string;
+    skill_name: string;
+    skill_signature: string;
+    skill_version: string;
 }
 
 // @public

@@ -659,12 +659,17 @@ function buildCliSkillSelectorHook(): SkillSelectorHook {
         hardwareAttestationScore: 0,
         platform,
       });
-      return result.selected.map((s) => ({
-        name: s.name,
-        version: s.version,
-        body: s.body,
-        provenance: s.provenance_status,
-      }));
+      return result.selected.map((s) => {
+        const record = records.find((r) => r.manifest.name === s.name);
+        return {
+          name: s.name,
+          version: s.version,
+          body: s.body,
+          provenance: s.provenance_status,
+          score: s.score,
+          signature: record?.manifest.motebit.signature?.value ?? "",
+        };
+      });
     },
   };
 }

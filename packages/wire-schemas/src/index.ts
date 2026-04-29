@@ -228,3 +228,8 @@ export {
   SKILL_ENVELOPE_SCHEMA_ID,
   buildSkillEnvelopeJsonSchema,
 } from "./skill-envelope.js";
+export {
+  SkillLoadPayloadSchema,
+  SKILL_LOAD_PAYLOAD_SCHEMA_ID,
+  buildSkillLoadPayloadJsonSchema,
+} from "./skill-load-payload.js";
