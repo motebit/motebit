@@ -248,3 +248,62 @@ export interface AnchoringResponse {
 export function fetchAnchoring(signal?: AbortSignal): Promise<AnchoringResponse> {
   return apiFetch<AnchoringResponse>(`/api/v1/admin/credential-anchoring`, { signal });
 }
+
+// === Reconciliation ===
+
+export interface ReconciliationResult {
+  consistent: boolean;
+  errors: string[];
+}
+
+export function fetchReconciliation(signal?: AbortSignal): Promise<ReconciliationResult> {
+  return apiFetch<ReconciliationResult>(`/api/v1/admin/reconciliation`, { signal });
+}
+
+// === Receipts ===
+//
+// The relay returns the byte-identical canonical JSON of the stored
+// ExecutionReceipt — same bytes that were signed at ingestion. Consumers
+// can re-canonicalize and re-verify the signature offline; the operator
+// console renders the raw JSON for inspection.
+
+export async function fetchReceipt(
+  motebitId: string,
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const url = `${config.apiUrl}/api/v1/admin/receipts/${encodeURIComponent(motebitId)}/${encodeURIComponent(taskId)}`;
+  const headers = new Headers();
+  if (config.apiToken) headers.set("Authorization", `Bearer ${config.apiToken}`);
+  const res = await fetch(url, { signal, headers });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, res.statusText, body);
+  }
+  return res.text();
+}
+
+// === Freeze / Unfreeze ===
+
+export interface FreezeStatus {
+  frozen: boolean;
+  reason: string | null;
+}
+
+export function fetchFreezeStatus(signal?: AbortSignal): Promise<FreezeStatus> {
+  return apiFetch<FreezeStatus>(`/api/v1/admin/freeze-status`, { signal });
+}
+
+export function triggerFreeze(
+  reason: string,
+): Promise<{ status: string; message: string; reason: string }> {
+  return apiFetch(`/api/v1/admin/freeze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function triggerUnfreeze(): Promise<{ status: string; message: string }> {
+  return apiFetch(`/api/v1/admin/unfreeze`, { method: "POST" });
+}

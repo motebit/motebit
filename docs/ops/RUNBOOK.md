@@ -340,7 +340,9 @@ Located at `apps/operator/`. Fleet-scoped views for the operator who runs the re
 cd apps/operator && pnpm dev
 ```
 
-6 tabs: Withdrawals, Federation Peers, Transparency posture, Disputes, Fees, Credential Anchoring. The Fees tab depends on `/api/v1/admin/fees` — renders an explicit "endpoint pending" state while the route is being added. No agent-shape introspection (state, memory, gradient, etc.); use the Inspector for that.
+9 tabs: Withdrawals, Federation Peers, Transparency posture, Disputes, Fees, Credential Anchoring, Reconciliation, Receipts, Freeze. The Reconciliation tab is the daily-health signal (5-rule ledger invariant check); Receipts is the byte-identical canonical-JSON lookup for re-verifying a stored ExecutionReceipt offline; Freeze is the incident-response kill switch (covers §7 below). No agent-shape introspection (state, memory, gradient, etc.); use the Inspector for that.
+
+See [the inspector-and-operator manual](https://docs.motebit.com/docs/operator/inspector-and-operator) for the full tab guide and operational rhythm.
 
 ---
 

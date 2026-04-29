@@ -295,6 +295,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/admin/reconciliation", rl(expensiveLimiter));
   app.use("/api/v1/admin/freeze", rl(writeLimiter));
   app.use("/api/v1/admin/unfreeze", rl(writeLimiter));
+  app.use("/api/v1/admin/freeze-status", rl(readLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rl(writeLimiter));
@@ -655,6 +656,7 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   // Admin emergency freeze — master token only
   app.use("/api/v1/admin/freeze", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/unfreeze", bearerAuth({ token: apiToken }));
+  app.use("/api/v1/admin/freeze-status", bearerAuth({ token: apiToken }));
   // Admin dispute + settlement + credential-anchoring + fees + transparency dashboards — master token only
   app.use("/api/v1/admin/disputes", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/settlements", bearerAuth({ token: apiToken }));

@@ -10,6 +10,11 @@ import {
   fetchDisputes,
   fetchFees,
   fetchAnchoring,
+  fetchReconciliation,
+  fetchReceipt,
+  fetchFreezeStatus,
+  triggerFreeze,
+  triggerUnfreeze,
   ApiError,
   config,
 } from "../api";
@@ -185,6 +190,109 @@ describe("fetchAnchoring", () => {
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/api/v1/admin/credential-anchoring`);
+  });
+});
+
+describe("fetchReconciliation", () => {
+  it("hits /api/v1/admin/reconciliation with bearer", async () => {
+    mockFetch({ consistent: true, errors: [] });
+    const result = await fetchReconciliation();
+    expect(result.consistent).toBe(true);
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/admin/reconciliation`);
+    expectAuthHeader(call);
+  });
+
+  it("returns the inconsistent shape verbatim", async () => {
+    mockFetch({
+      consistent: false,
+      errors: ["Balance equation violated: net 100 != balance sum 99"],
+    });
+    const result = await fetchReconciliation();
+    expect(result.consistent).toBe(false);
+    expect(result.errors.length).toBe(1);
+  });
+});
+
+describe("fetchReceipt", () => {
+  it("hits /api/v1/admin/receipts/:motebitId/:taskId and returns the body as text", async () => {
+    const canonical = '{"motebit_id":"m1","task_id":"t1"}';
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: () => Promise.resolve(JSON.parse(canonical)),
+      text: () => Promise.resolve(canonical),
+    } as Response);
+    const body = await fetchReceipt("m1", "t1");
+    expect(body).toBe(canonical);
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/admin/receipts/m1/t1`);
+  });
+
+  it("URL-encodes motebit and task ids", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: () => Promise.resolve({}),
+      text: () => Promise.resolve("{}"),
+    } as Response);
+    await fetchReceipt("did:key:abc/123", "task#1");
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toContain("did%3Akey%3Aabc%2F123");
+    expect(call[0]).toContain("task%231");
+  });
+
+  it("throws ApiError on non-200", async () => {
+    mockFetch({ error: "not_found" }, 404);
+    await expect(fetchReceipt("m", "t")).rejects.toThrow(ApiError);
+  });
+});
+
+describe("fetchFreezeStatus", () => {
+  it("hits /api/v1/admin/freeze-status", async () => {
+    mockFetch({ frozen: false, reason: null });
+    const status = await fetchFreezeStatus();
+    expect(status.frozen).toBe(false);
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/admin/freeze-status`);
+  });
+
+  it("returns the frozen shape with reason", async () => {
+    mockFetch({ frozen: true, reason: "incident-2026-04-28" });
+    const status = await fetchFreezeStatus();
+    expect(status.frozen).toBe(true);
+    expect(status.reason).toBe("incident-2026-04-28");
+  });
+});
+
+describe("triggerFreeze", () => {
+  it("POSTs the reason body", async () => {
+    mockFetch({ status: "frozen", message: "All write operations suspended", reason: "test" });
+    await triggerFreeze("test");
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/admin/freeze`);
+    const init = call[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({ reason: "test" }));
+  });
+});
+
+describe("triggerUnfreeze", () => {
+  it("POSTs to /api/v1/admin/unfreeze", async () => {
+    mockFetch({ status: "active", message: "Write operations resumed" });
+    await triggerUnfreeze();
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/admin/unfreeze`);
+    const init = call[1] as RequestInit;
+    expect(init.method).toBe("POST");
   });
 });
 

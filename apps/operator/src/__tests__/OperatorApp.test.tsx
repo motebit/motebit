@@ -21,7 +21,7 @@ describe("OperatorApp", () => {
     expect(screen.getByText("Motebit Operator")).toBeTruthy();
   });
 
-  it("shows all 6 fleet-shaped tabs (no agent-shape tabs)", () => {
+  it("shows all 9 fleet-shaped tabs (no agent-shape tabs)", () => {
     setupFailingFetch();
     render(React.createElement(OperatorApp));
     expect(screen.getByText("withdrawals")).toBeTruthy();
@@ -30,6 +30,9 @@ describe("OperatorApp", () => {
     expect(screen.getByText("disputes")).toBeTruthy();
     expect(screen.getByText("fees")).toBeTruthy();
     expect(screen.getByText("anchoring")).toBeTruthy();
+    expect(screen.getByText("reconciliation")).toBeTruthy();
+    expect(screen.getByText("receipts")).toBeTruthy();
+    expect(screen.getByText("freeze")).toBeTruthy();
     // Inspector-shape tabs (state, memory, gradient, etc.) MUST NOT appear here.
     expect(screen.queryByText("state")).toBeNull();
     expect(screen.queryByText("memory")).toBeNull();
@@ -76,5 +79,26 @@ describe("OperatorApp", () => {
     render(React.createElement(OperatorApp));
     fireEvent.click(screen.getByText("anchoring"));
     expect(screen.getByRole("heading", { name: "Credential Anchoring" })).toBeTruthy();
+  });
+
+  it("switches to reconciliation tab on click", () => {
+    setupFailingFetch();
+    render(React.createElement(OperatorApp));
+    fireEvent.click(screen.getByText("reconciliation"));
+    expect(screen.getByRole("heading", { name: "Reconciliation" })).toBeTruthy();
+  });
+
+  it("switches to receipts tab on click", () => {
+    setupFailingFetch();
+    render(React.createElement(OperatorApp));
+    fireEvent.click(screen.getByText("receipts"));
+    expect(screen.getByRole("heading", { name: "Receipts" })).toBeTruthy();
+  });
+
+  it("switches to freeze tab on click", () => {
+    setupFailingFetch();
+    render(React.createElement(OperatorApp));
+    fireEvent.click(screen.getByText("freeze"));
+    expect(screen.getByRole("heading", { name: "Freeze" })).toBeTruthy();
   });
 });

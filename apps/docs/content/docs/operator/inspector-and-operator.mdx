@@ -10,7 +10,7 @@ Motebit ships two internal dashboards alongside the five user-facing surfaces. B
 | **Audience** | Developer or motebit owner | Relay operator |
 | **Scope** | One motebit (set via `VITE_MOTEBIT_ID`) | The whole fleet on the relay |
 | **Auth** | Static master bearer (`VITE_API_TOKEN`) | Static master bearer (`VITE_API_TOKEN`) |
-| **Tabs** | 12 | 6 |
+| **Tabs** | 12 | 9 |
 | **Local port** | `5174` | `5175` |
 | **AI loop** | None | None |
 
@@ -73,12 +73,16 @@ No `VITE_MOTEBIT_ID` — operator is fleet-scoped. Each panel polls on mount; fa
 | **Disputes** | Active disputes + lifecycle stats (opened / evidence / resolved / appealed) | When a peer flags an allocation; lifecycle-resolution work |
 | **Fees** | The 5% platform fee aggregation — total collected, by rail (relay vs p2p), by period (UTC daily buckets) | Revenue check. Window configurable via `?window_days=N` (default 30, max 365) |
 | **Anchoring** | Credential anchoring batches — Merkle root, leaf count, on-chain tx hash if anchored | "Are the credentials I issued making it on-chain?" — anchor lag is normal up to one batch interval |
+| **Reconciliation** | The 5-rule ledger consistency check — balance equation, no negative balances, settled-allocation ↔ settlement match, no double-settled allocations, no orphaned settlements. Green if all hold; red list of violations otherwise | Daily-health signal. The single most useful tab — answers "is the relay's money state consistent right now?" |
+| **Receipts** | Lookup form (motebit_id + task_id) returning the byte-identical canonical JSON of a stored ExecutionReceipt | Auditing a specific receipt — re-canonicalize and re-verify offline against the receipt's `public_key` to confirm the chain |
+| **Freeze** | Current relay state (active / FROZEN with reason) + a confirm-twice red button that toggles between freeze (suspends every write endpoint) and unfreeze | Incident response — the kill switch. See [RUNBOOK §7](https://github.com/motebit/motebit/blob/main/docs/ops/RUNBOOK.md#7-emergency-freeze-kill-switch) for the full procedure |
 
 ## Operational rhythm
 
 Suggested cadence for an operator running `relay.motebit.com`:
 
 **Daily (5 minutes)** — Operator only:
+- **Reconciliation** — first thing to check. Green = ledger consistent, red = an invariant broke and money state needs investigation.
 - **Withdrawals** — clear the queue. Each pending row blocks an agent; long-tail withdrawals are operational debt.
 - **Federation** — eyeball peer states. Anything `suspended` warrants a check.
 - **Disputes** — any `opened` or `evidence` rows need attention.
@@ -90,11 +94,14 @@ Suggested cadence for an operator running `relay.motebit.com`:
 - **Inspector → Gradient** (per active motebit) — long-arc trajectory check.
 
 **On incident** — both, in order:
-1. **Inspector → Events** for the affected motebit — chronological frame
-2. **Inspector → Audit** — what the policy decided
-3. **Operator → Disputes** — was a dispute filed?
-4. **Operator → Federation** — is the relevant peer alive?
-5. Refer to the [operations runbook](/docs/operator/architecture#operations-runbook) for incident-class procedures (freeze, rehydrate, identity backup, ledger reconciliation)
+1. **Operator → Reconciliation** — is the money state consistent? If no, that's the lead.
+2. **Operator → Freeze** — if the lead suggests writes are corrupting state, hit the kill switch first; investigate after.
+3. **Inspector → Events** for the affected motebit — chronological frame
+4. **Inspector → Audit** — what the policy decided
+5. **Operator → Disputes** — was a dispute filed?
+6. **Operator → Federation** — is the relevant peer alive?
+7. **Operator → Receipts** — for any contested settlement, look up the byte-identical canonical JSON and re-verify offline.
+8. Refer to the [operations runbook](https://github.com/motebit/motebit/blob/main/docs/ops/RUNBOOK.md) for the full incident-class procedures (rehydrate, identity backup, full reconciliation flow).
 
 ## How to extend
 

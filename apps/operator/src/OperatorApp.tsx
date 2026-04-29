@@ -6,6 +6,9 @@ import { TransparencyPanel } from "./components/TransparencyPanel";
 import { DisputesPanel } from "./components/DisputesPanel";
 import { FeesPanel } from "./components/FeesPanel";
 import { CredentialAnchoringPanel } from "./components/CredentialAnchoringPanel";
+import { ReconciliationPanel } from "./components/ReconciliationPanel";
+import { ReceiptsPanel } from "./components/ReceiptsPanel";
+import { FreezePanel } from "./components/FreezePanel";
 import { config } from "./api";
 
 const TABS = [
@@ -15,6 +18,9 @@ const TABS = [
   "disputes",
   "fees",
   "anchoring",
+  "reconciliation",
+  "receipts",
+  "freeze",
 ] as const;
 
 type Tab = (typeof TABS)[number];
@@ -62,6 +68,15 @@ export function OperatorApp(): React.ReactElement {
       break;
     case "anchoring":
       content = React.createElement(CredentialAnchoringPanel, null);
+      break;
+    case "reconciliation":
+      content = React.createElement(ReconciliationPanel, null);
+      break;
+    case "receipts":
+      content = React.createElement(ReceiptsPanel, null);
+      break;
+    case "freeze":
+      content = React.createElement(FreezePanel, null);
       break;
     default:
       content = React.createElement(

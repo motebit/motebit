@@ -707,6 +707,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
   // --- Admin: emergency freeze ---
   /** @internal */
+  app.get("/api/v1/admin/freeze-status", (c) => {
+    return c.json({ frozen: freezeState.frozen, reason: freezeState.reason });
+  });
+
+  /** @internal */
   app.post("/api/v1/admin/freeze", async (c) => {
     const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as { reason?: string });
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
