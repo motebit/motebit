@@ -1070,6 +1070,19 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
         ),
       ),
   },
+  {
+    script: "check-trust-score-display",
+    proves:
+      "flags an Agents-panel renderer that no longer surfaces the verifier name via `formatHardwarePlatform` — the doctrine breach where the runtime ranks peers on hardware attestation but the user can't see WHICH verifier attested the peer",
+    perturb: () =>
+      // Strip the formatHardwarePlatform import + use from the desktop
+      // renderer. The gate's two-condition check (field reference AND
+      // verifier-formatter import) should fire on the missing helper.
+      // mutateFile's restore reverses cleanly.
+      mutateFile("apps/desktop/src/ui/agents.ts", (src) =>
+        src.replace(/\bformatHardwarePlatform\b/g, "_disabledFormatHardwarePlatform"),
+      ),
+  },
 ];
 
 /**
