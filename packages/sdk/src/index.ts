@@ -199,6 +199,51 @@ export interface ContextPack {
    * mid-turn) and absent on surfaces that haven't opted in yet.
    */
   memoryIndex?: string;
+  /**
+   * Skills selected by the runtime's `SkillSelectorHook` for this turn
+   * (spec/skills-v1.md §7). Absent when no hook is wired or no skill
+   * passed every gate (provenance + platform + sensitivity + HA + relevance).
+   * First iteration only — same pattern as `memoryIndex` and
+   * `curiosityHints`.
+   */
+  selectedSkills?: SkillInjection[];
+}
+
+/**
+ * One skill body the runtime resolved as relevant for the current turn,
+ * passed verbatim into the system prompt (spec/skills-v1.md §7.3). The
+ * `provenance` field drives the display badge: `verified` means the
+ * envelope signature passed; `trusted_unsigned` means the operator
+ * manually attested via `motebit skills trust <name>`.
+ */
+export interface SkillInjection {
+  /** Skill slug (e.g., `"git-commit-motebit-style"`). */
+  name: string;
+  /** Skill SemVer (e.g., `"1.0.0"`). */
+  version: string;
+  /** SKILL.md body bytes decoded as UTF-8 — injected into system context verbatim. */
+  body: string;
+  /** Display-grade provenance status. */
+  provenance: "verified" | "trusted_unsigned";
+}
+
+/**
+ * Per-turn hook the runtime calls to resolve relevant skills for the
+ * current user message. Implementations bind to a SkillRegistry +
+ * SkillSelector (in `@motebit/skills`) and return at most top-K skills
+ * that pass every gate (§7.2). Returning an empty array is normal
+ * (no skills installed, all filtered, or no relevance match).
+ *
+ * The runtime calls this once per turn at the entry of
+ * `sendMessageStreaming` / `sendMessage`. Throws are caught and treated
+ * as an empty result — selector failures must never block the AI loop.
+ *
+ * Adapter pattern: the runtime is unaware of the BSL `@motebit/skills`
+ * package; surfaces (CLI / desktop / mobile) wire the concrete impl
+ * behind this interface.
+ */
+export interface SkillSelectorHook {
+  selectForTurn(turn: string): Promise<SkillInjection[]>;
 }
 
 export type ConversationMessage =

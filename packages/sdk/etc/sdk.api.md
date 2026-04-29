@@ -180,6 +180,7 @@ export interface ContextPack {
     recent_events: EventLogEntry[];
     // (undocumented)
     relevant_memories: MemoryContent[];
+    selectedSkills?: SkillInjection[];
     sessionInfo?: {
         continued: boolean;
         lastActiveAt: number;
@@ -664,6 +665,20 @@ export interface ServerVerifier {
         trusted?: boolean;
         tlsCertFingerprint?: string;
     }, tools: ToolDefinition[]): Promise<VerificationResult>;
+}
+
+// @public
+export interface SkillInjection {
+    body: string;
+    name: string;
+    provenance: "verified" | "trusted_unsigned";
+    version: string;
+}
+
+// @public
+export interface SkillSelectorHook {
+    // (undocumented)
+    selectForTurn(turn: string): Promise<SkillInjection[]>;
 }
 
 // @public (undocumented)

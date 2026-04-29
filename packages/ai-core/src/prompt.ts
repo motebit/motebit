@@ -277,6 +277,22 @@ function buildDynamicSuffix(contextPack: ContextPack, config?: MotebitPersonalit
     );
   }
 
+  // Skills — procedural knowledge the runtime selected for this turn
+  // (spec/skills-v1.md §7.3). Each block is the SKILL.md body verbatim,
+  // preceded by an origin line indicating provenance status. Bodies are
+  // capped at 50 KB at install time (§9), the selector emits at most
+  // top-K (default 3), and the trust gate (§7.1) ensures untrusted
+  // unsigned skills never reach this point. Untrusted-but-trusted-by-
+  // operator skills are tagged so the agent can still factor authorship
+  // posture into its reasoning.
+  if (contextPack.selectedSkills && contextPack.selectedSkills.length > 0) {
+    for (const skill of contextPack.selectedSkills) {
+      const provenanceTag =
+        skill.provenance === "verified" ? "verified" : "operator-trusted (unsigned)";
+      sections.push(`[skill: ${skill.name}@${skill.version} — ${provenanceTag}]\n${skill.body}`);
+    }
+  }
+
   // Session awareness — continuing a persisted conversation
   if (contextPack.sessionInfo?.continued === true) {
     const elapsed = Date.now() - contextPack.sessionInfo.lastActiveAt;

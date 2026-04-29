@@ -201,6 +201,7 @@ export class MotebitRuntime {
    */
   readonly memoryFormation: MemoryFormationQueue;
   private _deferMemoryFormation: boolean;
+  private _skillSelector: import("@motebit/sdk").SkillSelectorHook | null = null;
   /**
    * Proactive idle-tick scheduler. Non-null only when
    * `RuntimeConfig.proactiveTickMs` was set at construction time.
@@ -439,6 +440,7 @@ export class MotebitRuntime {
       logger: this._logger,
     });
     this._deferMemoryFormation = config.deferMemoryFormation ?? false;
+    this._skillSelector = config.skillSelector ?? null;
     this.memoryFormation = createMemoryFormationQueue({ logger: this._logger });
     // Slab ("Motebit Computer") lifecycle controller — see
     // docs/doctrine/motebit-computer.md. Surfaces bind this to their
@@ -1173,6 +1175,27 @@ export class MotebitRuntime {
     return this.gradientManager.buildSelfAwareness();
   }
 
+  /**
+   * Resolve relevant skills for the current turn via the configured
+   * `SkillSelectorHook` (spec/skills-v1.md §7). Returns an empty array
+   * when no hook is wired or when the hook throws — selector failures
+   * MUST NOT block the AI loop.
+   */
+  private async resolveSkillsForTurn(
+    turn: string,
+  ): Promise<import("@motebit/sdk").SkillInjection[] | undefined> {
+    if (!this._skillSelector) return undefined;
+    try {
+      const skills = await this._skillSelector.selectForTurn(turn);
+      return skills.length > 0 ? skills : undefined;
+    } catch (err: unknown) {
+      this._logger.warn("skill_selector_failed", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
   async sendMessage(text: string, runId?: string): Promise<TurnResult> {
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
@@ -1188,6 +1211,7 @@ export class MotebitRuntime {
       const trimmed = this.conversation.trimmed();
       const { knownAgents, agentCapabilities } = await this.buildAgentContext();
       const selfAwareness = this.buildSelfAwareness();
+      const selectedSkills = await this.resolveSkillsForTurn(text);
       const result = await runTurn(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -1198,6 +1222,7 @@ export class MotebitRuntime {
         agentCapabilities,
         precisionContext: selfAwareness || undefined,
         firstConversation: this._isFirstConversation || undefined,
+        selectedSkills,
       });
       this.conversation.pushExchange(text, result.response);
       // First-conversation guidance fades after a few exchanges
@@ -1441,6 +1466,8 @@ export class MotebitRuntime {
         await this.memoryFormation.idle();
       }
 
+      const selectedSkills = await this.resolveSkillsForTurn(text);
+
       const stream = runTurnStreaming(this.loopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -1453,6 +1480,7 @@ export class MotebitRuntime {
         delegationScope: options?.delegationScope,
         firstConversation: this._isFirstConversation || undefined,
         deferMemoryFormation: this._deferMemoryFormation,
+        selectedSkills,
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();

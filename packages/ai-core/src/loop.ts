@@ -205,6 +205,13 @@ export interface TurnOptions {
    * this to `true` when `RuntimeConfig.deferMemoryFormation === true`.
    */
   deferMemoryFormation?: boolean;
+  /**
+   * Skills resolved by the runtime's `SkillSelectorHook` for this turn
+   * (spec/skills-v1.md §7). First iteration only — re-injecting on
+   * tool-loop continuations would bloat context and break prompt-cache
+   * matching, same shape as `memoryIndex` / `curiosityHints`.
+   */
+  selectedSkills?: import("@motebit/sdk").SkillInjection[];
 }
 
 export type AgenticChunk =
@@ -454,6 +461,9 @@ export async function* runTurnStreaming(
       // would bloat the conversation without benefit and break
       // prompt-cache matching across iterations.
       memoryIndex: iteration === 1 ? memoryIndex : undefined,
+      // Skills selected for this turn — first iteration only, same
+      // rationale as memoryIndex.
+      selectedSkills: iteration === 1 ? options?.selectedSkills : undefined,
     };
 
     // On continuation turns, the conversation history carries the context

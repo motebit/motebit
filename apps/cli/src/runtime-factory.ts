@@ -22,6 +22,8 @@ import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
 } from "@motebit/sync-engine";
+import { NodeFsSkillStorageAdapter, SkillRegistry, SkillSelector } from "@motebit/skills";
+import type { SkillSelectorHook } from "@motebit/sdk";
 import type { ConversationSyncStoreAdapter, PlanSyncStoreAdapter } from "@motebit/sync-engine";
 import type {
   SyncConversation,
@@ -619,6 +621,74 @@ export function deriveGovernanceForRuntime(governance: GovernanceConfig | undefi
   };
 }
 
+/**
+ * Build the runtime's `SkillSelectorHook` for the Node CLI surface.
+ *
+ * Per spec/skills-v1.md §7: each turn the runtime invokes
+ * `selectForTurn(turn)`. This implementation builds a fresh registry
+ * read against `~/.motebit/skills/` (so install/remove/trust mid-session
+ * propagate without runtime restart), runs the BM25-ranked selector with
+ * platform/sensitivity/HA defaults appropriate to the CLI today, and
+ * maps the BSL SkillSelection result to the SkillInjection shape the
+ * runtime + ai-core consume.
+ *
+ * Defaults today: `sessionSensitivity = "none"` (CLI sessions don't
+ * elevate yet — phase 4 work), `hardwareAttestationScore = 0` (CLI has
+ * no HA). Skills with stricter requirements skip per the selector's
+ * standard gates.
+ */
+function buildCliSkillSelectorHook(): SkillSelectorHook {
+  const skillsRoot = path.join(
+    process.env["MOTEBIT_CONFIG_DIR"] ?? path.join(require("node:os").homedir(), ".motebit"),
+    "skills",
+  );
+  const platform = mapNodePlatformToSkillPlatform(process.platform);
+  return {
+    async selectForTurn(turn) {
+      // Lazy registry construction: cheap (mkdir + index file ensure-exists),
+      // and re-reading per turn means install/trust/remove changes propagate
+      // without a runtime restart. The fs adapter's atomic-rename writes mean
+      // we never observe a partially-written index.
+      const adapter = new NodeFsSkillStorageAdapter({ root: skillsRoot });
+      const registry = new SkillRegistry(adapter);
+      const records = await registry.list();
+      if (records.length === 0) return [];
+      const selector = new SkillSelector();
+      const result = selector.select(records, {
+        turn,
+        sessionSensitivity: "none",
+        hardwareAttestationScore: 0,
+        platform,
+      });
+      return result.selected.map((s) => ({
+        name: s.name,
+        version: s.version,
+        body: s.body,
+        provenance: s.provenance_status,
+      }));
+    },
+  };
+}
+
+/** Map Node's `process.platform` to the SkillPlatform union (spec §3.1). */
+function mapNodePlatformToSkillPlatform(
+  nodePlatform: NodeJS.Platform,
+): import("@motebit/sdk").SkillPlatform {
+  switch (nodePlatform) {
+    case "darwin":
+      return "macos";
+    case "linux":
+      return "linux";
+    case "win32":
+      return "windows";
+    default:
+      // freebsd / openbsd / sunos / aix etc. — treat as linux for skill
+      // gating since their interaction model is closer than to macos/windows.
+      // Skills with stricter platform requirements still gate correctly.
+      return "linux";
+  }
+}
+
 export async function createRuntime(
   config: CliConfig,
   motebitId: string,
@@ -658,6 +728,7 @@ export async function createRuntime(
       },
       memoryGovernance: governance.memoryGovernance,
       taskRouter: PLANNING_TASK_ROUTER,
+      skillSelector: buildCliSkillSelectorHook(),
     },
     {
       storage,

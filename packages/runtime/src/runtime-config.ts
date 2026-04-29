@@ -156,6 +156,20 @@ export interface RuntimeConfig {
    */
   deferMemoryFormation?: boolean;
   /**
+   * Per-turn skill resolver (spec/skills-v1.md §7). When wired, the
+   * runtime calls this hook at the start of each user turn to pull
+   * relevant signed-or-trusted skill bodies into the system context.
+   *
+   * Adapter pattern: the runtime stays unaware of the BSL
+   * `@motebit/skills` package; surfaces (CLI / desktop / mobile) wire
+   * a concrete `NodeFsSkillStorageAdapter + SkillRegistry +
+   * SkillSelector` (or platform-equivalent) behind this interface.
+   *
+   * Fail-closed: a hook that throws is logged and treated as an empty
+   * result — selector failures must never block the AI loop.
+   */
+  skillSelector?: import("@motebit/sdk").SkillSelectorHook;
+  /**
    * Interval for the proactive idle-tick heartbeat (KAIROS-shape
    * scheduler). Undefined / 0 = disabled. When set, the runtime
    * starts an interval that fires when:
