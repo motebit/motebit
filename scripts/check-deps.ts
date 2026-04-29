@@ -76,6 +76,7 @@ const LAYER: Record<string, number> = {
   "@motebit/sync-engine": 2,
   "@motebit/mcp-client": 2,
   "@motebit/identity-file": 2,
+  "@motebit/skills": 2,
 
   // Layer 3 — Lower composites (depend on Layer 0–2)
   "@motebit/privacy-layer": 3,
@@ -233,6 +234,16 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // Credential anchoring (credential-anchor-v1.md §3, §5.2)
     "computeCredentialLeaf",
     "verifyCredentialAnchor",
+    // Skill signing + verification (skills-v1.md §5)
+    "canonicalizeSkillManifestBytes",
+    "canonicalizeSkillEnvelopeBytes",
+    "signSkillManifest",
+    "signSkillEnvelope",
+    "verifySkillManifest",
+    "verifySkillManifestDetailed",
+    "verifySkillEnvelope",
+    "verifySkillEnvelopeDetailed",
+    "decodeSkillSignaturePublicKey",
   ]),
 };
 

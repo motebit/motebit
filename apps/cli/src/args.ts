@@ -321,6 +321,8 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/receipt <task-id>", desc: "Re-render an archived receipt (offline-verified)" },
   { usage: "/voice [on|off]", desc: "Toggle TTS voice output (opt-in, off by default)" },
   { usage: "/say <text>", desc: "Speak text via TTS (requires voice provider)" },
+  { usage: "/skills", desc: "List installed skills with provenance badges" },
+  { usage: "/skill <name>", desc: "Show full details + provenance for one skill" },
 ];
 
 export function printHelp(): void {

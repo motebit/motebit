@@ -51,6 +51,16 @@ export { handleRegister } from "./register.js";
 export { handleRelayUp } from "./relay.js";
 export { handleRotate } from "./rotate.js";
 export { handleSchema } from "./schema.js";
+export {
+  handleSkillsDisable,
+  handleSkillsEnable,
+  handleSkillsInstall,
+  handleSkillsList,
+  handleSkillsRemove,
+  handleSkillsTrust,
+  handleSkillsUntrust,
+  handleSkillsVerify,
+} from "./skills.js";
 export { handleVerify } from "./verify.js";
 export { handleVerifyWire, isVerifyKind } from "./verify-wire.js";
 export { handleWallet } from "./wallet.js";

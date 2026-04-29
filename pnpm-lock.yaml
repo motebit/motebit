@@ -211,6 +211,9 @@ importers:
       '@motebit/self-knowledge':
         specifier: workspace:*
         version: link:../../packages/self-knowledge
+      '@motebit/skills':
+        specifier: workspace:*
+        version: link:../../packages/skills
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
@@ -1821,6 +1824,43 @@ importers:
       stripe:
         specifier: ^17.0.0
         version: 17.7.0
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
+  packages/skills:
+    dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@motebit/wire-schemas':
+        specifier: workspace:*
+        version: link:../wire-schemas
+      yaml:
+        specifier: ^2.6.0
+        version: 2.8.3
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      '@noble/ed25519':
+        specifier: ~3.0.1
+        version: 3.0.1
+      '@noble/hashes':
+        specifier: ~1.8.0
+        version: 1.8.0
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
       typescript:
         specifier: ^5.6.0
         version: 5.9.3

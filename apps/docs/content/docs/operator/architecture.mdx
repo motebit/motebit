@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **47 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 21 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **48 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 22 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -66,6 +66,7 @@ motebit/
 │   ├── virtual-accounts/      [L1]          Per-motebit ledger: atomic credit/debit, withdrawal lifecycle, signed receipts. AccountStore inversion.
 │   ├── deposit-detector/      [L1]          EVM Transfer-event scanner. Injected EvmRpcAdapter + DepositDetectorStore + onDeposit callback.
 │   ├── self-knowledge/        [L1]          Committed BM25 corpus over motebit's public docs. Interior tier of the answer engine.
+│   ├── skills/                [L2]          User-installable procedural-knowledge runtime — registry, selector, trust gate, fs adapter. agentskills.io-compatible with motebit-signed extensions.
 │   ├── wire-schemas/          [L1]          Zod schemas for wire-format types. Generates committed JSON Schema artifacts into `spec/schemas/` — the protocol-owned Apache-2.0 tree third parties implement against.
 │   │
 │   │   # Layer 2 — Engines
@@ -118,7 +119,7 @@ motebit/
 │   ├── embed/                 [atom]        ONNX embedding service.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 21 open specifications, each motebit/<name>@1.0
+├── spec/                      # 22 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -139,7 +140,8 @@ motebit/
 │   ├── consolidation-receipt-v1.md          Signed proactive-cycle proof + Merkle-batched Solana anchor — self-attesting interior work.
 │   ├── computer-use-v1.md                   Full-fidelity Workstation viewport — screen observation + input actions, signed, governance-gated.
 │   ├── agent-mcp-surface-v1.md              Canonical motebit_* MCP tool vocabulary — eight tool names every motebit MCP server uses, profile-based conformance.
-│   └── proposals-v1.md                      Multi-agent plan negotiation — proposal submission, acceptance, withdrawal, and collaborative-step-result reporting.
+│   ├── proposals-v1.md                      Multi-agent plan negotiation — proposal submission, acceptance, withdrawal, and collaborative-step-result reporting.
+│   └── skills-v1.md                         agentskills.io-compatible procedural-knowledge files with motebit-namespaced extensions for cryptographic provenance, sensitivity-tiered loading, and HA gating.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.

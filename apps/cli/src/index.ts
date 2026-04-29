@@ -71,6 +71,14 @@ import {
   handleMigrateKeyring,
   handleWithdraw,
   handleWallet,
+  handleSkillsInstall,
+  handleSkillsList,
+  handleSkillsEnable,
+  handleSkillsDisable,
+  handleSkillsRemove,
+  handleSkillsVerify,
+  handleSkillsTrust,
+  handleSkillsUntrust,
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -315,6 +323,33 @@ async function main(): Promise<void> {
       await handleGoalSetEnabled(config, true);
     } else {
       console.error("Usage: motebit goal [add|list|outcomes|remove|pause|resume]");
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === "skills") {
+    const skillsCmd = config.positionals[1];
+    if (skillsCmd === "install") {
+      await handleSkillsInstall(config);
+    } else if (skillsCmd === "list" || skillsCmd === undefined) {
+      await handleSkillsList(config);
+    } else if (skillsCmd === "enable") {
+      await handleSkillsEnable(config);
+    } else if (skillsCmd === "disable") {
+      await handleSkillsDisable(config);
+    } else if (skillsCmd === "remove") {
+      await handleSkillsRemove(config);
+    } else if (skillsCmd === "verify") {
+      await handleSkillsVerify(config);
+    } else if (skillsCmd === "trust") {
+      await handleSkillsTrust(config);
+    } else if (skillsCmd === "untrust") {
+      await handleSkillsUntrust(config);
+    } else {
+      console.error(
+        "Usage: motebit skills [list|install <dir>|enable <name>|disable <name>|remove <name>|verify <name>|trust <name>|untrust <name>]",
+      );
       process.exit(1);
     }
     return;

@@ -218,3 +218,13 @@ export {
   COMPUTER_SESSION_CLOSED_SCHEMA_ID,
   buildComputerSessionClosedJsonSchema,
 } from "./computer-use.js";
+export {
+  SkillManifestSchema,
+  SKILL_MANIFEST_SCHEMA_ID,
+  buildSkillManifestJsonSchema,
+} from "./skill-manifest.js";
+export {
+  SkillEnvelopeSchema,
+  SKILL_ENVELOPE_SCHEMA_ID,
+  buildSkillEnvelopeJsonSchema,
+} from "./skill-envelope.js";

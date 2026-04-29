@@ -84,6 +84,29 @@ motebit federation peers             # List active peers
 motebit federation peer <url>        # Peer with another relay
 ```
 
+## Skills
+
+User-installable procedural-knowledge files (agentskills.io-compatible) with
+motebit's sovereign extensions: cryptographic provenance, sensitivity-tiered
+loading, hardware-attestation gating. Install is permissive; auto-load is
+provenance-gated. See `spec/skills-v1.md`.
+
+```bash
+motebit skills list                       # List installed skills with status badges
+motebit skills install <directory>        # Install from a local skill directory
+  --force                                 #   Overwrite existing version
+motebit skills enable <name>              # Enable for selection (default after install)
+motebit skills disable <name>             # Skip in selection without removing
+motebit skills trust <name>               # Operator-attest an unsigned skill — auto-load eligible
+motebit skills untrust <name>             # Revoke operator-attested trust
+motebit skills verify <name>              # Re-verify the envelope signature
+motebit skills remove <name>              # Delete + emit audit event
+```
+
+Storage: `~/.motebit/skills/` — `installed.json` index plus per-skill
+subdirectories. Audit events (trust grants, removals) append to
+`~/.motebit/skills/audit.log` as JSONL.
+
 ## Features
 
 - **REPL** — Interactive chat with streaming, tool use, and approval flow

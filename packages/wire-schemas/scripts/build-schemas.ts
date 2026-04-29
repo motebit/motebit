@@ -86,6 +86,8 @@ import {
 } from "../src/computer-use.js";
 import { buildRouteScoreJsonSchema } from "../src/route-score.js";
 import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
+import { buildSkillManifestJsonSchema } from "../src/skill-manifest.js";
+import { buildSkillEnvelopeJsonSchema } from "../src/skill-envelope.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Schemas live in `spec/schemas/` alongside the Markdown protocol
@@ -179,6 +181,8 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "computer-session-opened-v1.json", build: buildComputerSessionOpenedJsonSchema },
   { filename: "computer-session-closed-v1.json", build: buildComputerSessionClosedJsonSchema },
+  { filename: "skill-manifest-v1.json", build: buildSkillManifestJsonSchema },
+  { filename: "skill-envelope-v1.json", build: buildSkillEnvelopeJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

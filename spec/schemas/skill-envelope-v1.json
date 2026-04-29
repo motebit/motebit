@@ -1,0 +1,397 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/skill-envelope-v1.json",
+  "title": "SkillEnvelope (v1)",
+  "description": "Content-addressed signed wrapper for skill distribution and install. Pins manifest, LF-normalized body bytes, and per-file SHA-256 hashes; signature is over JCS-canonicalized envelope with signature.value removed. Spec: https://raw.githubusercontent.com/motebit/motebit/main/spec/skills-v1.md",
+  "type": "object",
+  "properties": {
+    "spec_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Spec version. v1: `\"1.0\"`."
+    },
+    "skill": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Skill name. Matches `manifest.name`."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Skill version. Matches `manifest.version`."
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex-encoded SHA-256 over `JCS(manifest) || 0x0A || lf_body`. Content-addressed identifier for this version."
+        }
+      },
+      "required": ["name", "version", "content_hash"],
+      "additionalProperties": false
+    },
+    "manifest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Globally unique slug within an installation. Slug form: `[a-z0-9-]+`."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line description. Read by the loader to decide skill relevance for a given turn."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SemVer string."
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["macos", "linux", "windows", "ios", "android"],
+            "description": "OS gate per agentskills.io `platforms` field. Empty/omitted array = all platforms."
+          },
+          "description": "OS gate. Empty/omitted = all platforms."
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "author": {
+              "type": "string",
+              "description": "Free-form display string per agentskills.io. NOT cryptographically verified. The cryptographic author is `motebit.signature.public_key`. SDKs SHOULD lint-warn (not reject) when a `did:key`-shaped value here disagrees with the signature key."
+            },
+            "category": {
+              "type": "string",
+              "description": "Free-form category for UI grouping. Never load-bearing."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Free-form tags. UI filtering only."
+            },
+            "config": {
+              "type": "object",
+              "additionalProperties": {},
+              "description": "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions."
+            }
+          },
+          "additionalProperties": false
+        },
+        "motebit": {
+          "type": "object",
+          "properties": {
+            "spec_version": {
+              "type": "string",
+              "const": "1.0",
+              "description": "Spec version. v1: `\"1.0\"`. Gates compatibility for future bumps."
+            },
+            "sensitivity": {
+              "type": "string",
+              "enum": ["none", "personal", "medical", "financial", "secret"],
+              "description": "Sensitivity tier of the data the skill's procedure causes the agent to touch. `medical | financial | secret` are NEVER auto-loaded by the SkillSelector regardless of session tier (spec/skills-v1.md §4). Sensitivity describes data, not provenance — provenance is a separate axis (§7.1)."
+            },
+            "hardware_attestation": {
+              "type": "object",
+              "properties": {
+                "required": {
+                  "type": "boolean",
+                  "description": "If `true`, the loading agent must present an HA credential. Default `false`."
+                },
+                "minimum_score": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "Minimum HA score in `[0, 1]` required for load. Default `0`."
+                }
+              },
+              "additionalProperties": false
+            },
+            "signature": {
+              "type": "object",
+              "properties": {
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Pinned to `motebit-jcs-ed25519-b64-v1` for skills v1 — JCS canonicalization (RFC 8785), Ed25519 primitive, hex-encoded public key, base64url-encoded signature. Same suite used for execution receipts, tool invocation receipts, settlement anchors, and migration artifacts. Future suites (incl. PQ) widen the closed SuiteId union."
+                },
+                "public_key": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$",
+                  "description": "Hex-encoded Ed25519 public key (32 bytes → 64 lowercase hex chars)."
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature over the canonical bytes. See spec/skills-v1.md §5.1 for the byte form."
+                }
+              },
+              "required": ["suite", "public_key", "value"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["spec_version"],
+          "additionalProperties": false,
+          "description": "Motebit-namespaced extension block. Non-motebit agentskills.io runtimes ignore this object entirely."
+        }
+      },
+      "required": ["name", "description", "version", "motebit"],
+      "additionalProperties": false
+    },
+    "body_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hex-encoded SHA-256 of the LF-normalized SKILL.md body bytes (everything after the closing `---`)."
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path relative to the skill directory (e.g., `\"scripts/run.sh\"`). Forward slashes only."
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Hex-encoded SHA-256 hash of the file bytes."
+          }
+        },
+        "required": ["path", "hash"],
+        "additionalProperties": false
+      },
+      "description": "Pinned hashes of every file in the skill directory beyond SKILL.md and skill-envelope.json."
+    },
+    "signature": {
+      "type": "object",
+      "properties": {
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Pinned to `motebit-jcs-ed25519-b64-v1` — same suite as the manifest signature."
+        },
+        "public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex-encoded Ed25519 public key."
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `JCS(envelope_without_signature_value)`."
+        }
+      },
+      "required": ["suite", "public_key", "value"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["spec_version", "skill", "manifest", "body_hash", "files", "signature"],
+  "additionalProperties": false,
+  "definitions": {
+    "SkillEnvelope": {
+      "type": "object",
+      "properties": {
+        "spec_version": {
+          "type": "string",
+          "const": "1.0",
+          "description": "Spec version. v1: `\"1.0\"`."
+        },
+        "skill": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$",
+              "description": "Skill name. Matches `manifest.name`."
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Skill version. Matches `manifest.version`."
+            },
+            "content_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "Hex-encoded SHA-256 over `JCS(manifest) || 0x0A || lf_body`. Content-addressed identifier for this version."
+            }
+          },
+          "required": ["name", "version", "content_hash"],
+          "additionalProperties": false
+        },
+        "manifest": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$",
+              "description": "Globally unique slug within an installation. Slug form: `[a-z0-9-]+`."
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One-line description. Read by the loader to decide skill relevance for a given turn."
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "description": "SemVer string."
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["macos", "linux", "windows", "ios", "android"],
+                "description": "OS gate per agentskills.io `platforms` field. Empty/omitted array = all platforms."
+              },
+              "description": "OS gate. Empty/omitted = all platforms."
+            },
+            "metadata": {
+              "type": "object",
+              "properties": {
+                "author": {
+                  "type": "string",
+                  "description": "Free-form display string per agentskills.io. NOT cryptographically verified. The cryptographic author is `motebit.signature.public_key`. SDKs SHOULD lint-warn (not reject) when a `did:key`-shaped value here disagrees with the signature key."
+                },
+                "category": {
+                  "type": "string",
+                  "description": "Free-form category for UI grouping. Never load-bearing."
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Free-form tags. UI filtering only."
+                },
+                "config": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "description": "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions."
+                }
+              },
+              "additionalProperties": false
+            },
+            "motebit": {
+              "type": "object",
+              "properties": {
+                "spec_version": {
+                  "type": "string",
+                  "const": "1.0",
+                  "description": "Spec version. v1: `\"1.0\"`. Gates compatibility for future bumps."
+                },
+                "sensitivity": {
+                  "type": "string",
+                  "enum": ["none", "personal", "medical", "financial", "secret"],
+                  "description": "Sensitivity tier of the data the skill's procedure causes the agent to touch. `medical | financial | secret` are NEVER auto-loaded by the SkillSelector regardless of session tier (spec/skills-v1.md §4). Sensitivity describes data, not provenance — provenance is a separate axis (§7.1)."
+                },
+                "hardware_attestation": {
+                  "type": "object",
+                  "properties": {
+                    "required": {
+                      "type": "boolean",
+                      "description": "If `true`, the loading agent must present an HA credential. Default `false`."
+                    },
+                    "minimum_score": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1,
+                      "description": "Minimum HA score in `[0, 1]` required for load. Default `0`."
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "signature": {
+                  "type": "object",
+                  "properties": {
+                    "suite": {
+                      "type": "string",
+                      "const": "motebit-jcs-ed25519-b64-v1",
+                      "description": "Cryptosuite identifier. Pinned to `motebit-jcs-ed25519-b64-v1` for skills v1 — JCS canonicalization (RFC 8785), Ed25519 primitive, hex-encoded public key, base64url-encoded signature. Same suite used for execution receipts, tool invocation receipts, settlement anchors, and migration artifacts. Future suites (incl. PQ) widen the closed SuiteId union."
+                    },
+                    "public_key": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$",
+                      "description": "Hex-encoded Ed25519 public key (32 bytes → 64 lowercase hex chars)."
+                    },
+                    "value": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Base64url-encoded Ed25519 signature over the canonical bytes. See spec/skills-v1.md §5.1 for the byte form."
+                    }
+                  },
+                  "required": ["suite", "public_key", "value"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["spec_version"],
+              "additionalProperties": false,
+              "description": "Motebit-namespaced extension block. Non-motebit agentskills.io runtimes ignore this object entirely."
+            }
+          },
+          "required": ["name", "description", "version", "motebit"],
+          "additionalProperties": false
+        },
+        "body_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex-encoded SHA-256 of the LF-normalized SKILL.md body bytes (everything after the closing `---`)."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Path relative to the skill directory (e.g., `\"scripts/run.sh\"`). Forward slashes only."
+              },
+              "hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "Hex-encoded SHA-256 hash of the file bytes."
+              }
+            },
+            "required": ["path", "hash"],
+            "additionalProperties": false
+          },
+          "description": "Pinned hashes of every file in the skill directory beyond SKILL.md and skill-envelope.json."
+        },
+        "signature": {
+          "type": "object",
+          "properties": {
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Pinned to `motebit-jcs-ed25519-b64-v1` — same suite as the manifest signature."
+            },
+            "public_key": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "Hex-encoded Ed25519 public key."
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature over `JCS(envelope_without_signature_value)`."
+            }
+          },
+          "required": ["suite", "public_key", "value"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["spec_version", "skill", "manifest", "body_hash", "files", "signature"],
+      "additionalProperties": false
+    }
+  }
+}

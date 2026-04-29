@@ -287,6 +287,18 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-claude-md",
   },
   {
+    name: "check-skill-corpus",
+    defends:
+      "every committed reference skill under `skills/*` carries a body_hash, content_hash, and envelope signature that match what `pnpm --filter @motebit/skills build-reference-skill` would produce — closes the drift class where a contributor edits SKILL.md without re-signing and ships a tampered-looking artifact users would only catch at install time on their machine (added 2026-04-28 alongside spec/skills-v1.md ship)",
+    script: "check-skill-corpus",
+  },
+  {
+    name: "check-skill-cli-coverage",
+    defends:
+      "every public method on `SkillRegistry` (in `@motebit/skills`) is reachable through a `motebit skills <verb>` CLI subcommand — closes the drift class where a registry method ships but isn't wired into dispatch, leaving the registry surface unreachable from the user-facing CLI (added 2026-04-28 alongside spec/skills-v1.md ship)",
+    script: "check-skill-cli-coverage",
+  },
+  {
     name: "check-readme-bin-claims",
     defends:
       "every README.md / CLAUDE.md `npm i -g <pkg>` / `npx <pkg>` invocation targets a workspace package whose package.json ships a `bin` field; defends against code-shaped prose drift after package role changes (invariant #51, full history in docs/drift-defenses.md)",

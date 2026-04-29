@@ -19,7 +19,9 @@ import { McpServerAdapter, wireServerDeps } from "@motebit/mcp-server";
 import type { McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
 import { type CliConfig, COMMANDS } from "./args.js";
 import type { FullConfig } from "./config.js";
-import { saveFullConfig } from "./config.js";
+import { CONFIG_DIR, saveFullConfig } from "./config.js";
+import { join } from "node:path";
+import { NodeFsSkillStorageAdapter, SkillRegistry, type SkillRecord } from "@motebit/skills";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import { green, yellow, red, dim, cyan, command, success, warn } from "./colors.js";
 import {
@@ -58,6 +60,19 @@ export function parseSlashCommand(input: string): { command: string; args: strin
     return { command: input.slice(1), args: "" };
   }
   return { command: input.slice(1, spaceIdx), args: input.slice(spaceIdx + 1).trim() };
+}
+
+function renderProvenanceBadge(record: SkillRecord): string {
+  switch (record.provenance_status) {
+    case "verified":
+      return success("[verified]");
+    case "trusted_unsigned":
+      return warn("[trusted-unsigned]");
+    case "unsigned":
+      return dim("[unsigned]");
+    case "unverified":
+      return red("[unverified]");
+  }
 }
 
 function formatState(state: Record<string, unknown>): string {
@@ -2270,6 +2285,64 @@ export async function handleSlashCommand(
       if (!result.spoke && result.error) {
         console.log(red(`  [voice: ${result.error}]`));
       }
+      break;
+    }
+
+    case "skills": {
+      const registry = new SkillRegistry(
+        new NodeFsSkillStorageAdapter({ root: join(CONFIG_DIR, "skills") }),
+      );
+      const records = await registry.list();
+      if (records.length === 0) {
+        console.log();
+        console.log(dim("  No skills installed."));
+        console.log(`  ${dim("Install:")} ${command("motebit skills install <directory>")}`);
+        console.log();
+        break;
+      }
+      console.log();
+      for (const r of records) {
+        const badge = renderProvenanceBadge(r);
+        const enabledTag = r.index.enabled ? "" : dim(" [disabled]");
+        const sensitivity = r.manifest.motebit.sensitivity ?? "none";
+        const sensTag = sensitivity === "none" ? "" : dim(` [${sensitivity}]`);
+        console.log(
+          `  ${cyan(r.manifest.name)} ${dim(`v${r.manifest.version}`)} ${badge}${sensTag}${enabledTag}`,
+        );
+        console.log(`    ${dim(r.manifest.description)}`);
+      }
+      console.log();
+      break;
+    }
+
+    case "skill": {
+      const name = args.trim();
+      if (!name) {
+        console.log(warn("Usage: /skill <name>"));
+        break;
+      }
+      const registry = new SkillRegistry(
+        new NodeFsSkillStorageAdapter({ root: join(CONFIG_DIR, "skills") }),
+      );
+      const record = await registry.get(name);
+      if (!record) {
+        console.log(red(`  Skill not installed: ${name}`));
+        break;
+      }
+      const badge = renderProvenanceBadge(record);
+      console.log();
+      console.log(`  ${cyan(record.manifest.name)} ${dim(`v${record.manifest.version}`)} ${badge}`);
+      console.log(`    ${dim(record.manifest.description)}`);
+      console.log(`    ${dim("sensitivity:")} ${record.manifest.motebit.sensitivity ?? "none"}`);
+      if (record.manifest.platforms && record.manifest.platforms.length > 0) {
+        console.log(`    ${dim("platforms:")} ${record.manifest.platforms.join(", ")}`);
+      }
+      console.log(`    ${dim("installed:")} ${record.index.installed_at}`);
+      console.log(`    ${dim("enabled:")} ${record.index.enabled ? "yes" : "no"}`);
+      console.log(
+        `    ${dim("trusted:")} ${record.index.trusted ? "yes (operator-attested)" : "no"}`,
+      );
+      console.log();
       break;
     }
 

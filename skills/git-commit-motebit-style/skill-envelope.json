@@ -1,0 +1,39 @@
+{
+  "spec_version": "1.0",
+  "skill": {
+    "name": "git-commit-motebit-style",
+    "version": "1.0.0",
+    "content_hash": "952ba67c42332d90d5f3d3c03ba1faa87d62b82c0d9ae827b792355499e64124"
+  },
+  "manifest": {
+    "name": "git-commit-motebit-style",
+    "description": "Craft commit messages that match motebit's Conventional Commits + co-author + HEREDOC conventions. Read the diff, lead with the architectural why, never skip hooks.",
+    "version": "1.0.0",
+    "platforms": ["macos", "linux", "windows"],
+    "metadata": {
+      "author": "motebit dogfood",
+      "category": "software-development",
+      "tags": ["git", "commit", "conventional-commits"]
+    },
+    "motebit": {
+      "spec_version": "1.0",
+      "sensitivity": "none",
+      "hardware_attestation": {
+        "required": false,
+        "minimum_score": 0
+      },
+      "signature": {
+        "suite": "motebit-jcs-ed25519-b64-v1",
+        "public_key": "d286e0d14b99b7f66aacc3504ce22b4ac5566d9788199198d292130c5dfc588d",
+        "value": "odBpA6KK2xcHGB_l9X9OkT6aF7nYomTidfa6Y9sNvRsDuktiTYyZ2vL-0HEZxnRJN_iWovvF56vM20sdUOzhDw"
+      }
+    }
+  },
+  "body_hash": "34d2dd6439f309cd4a27723ea6763059c3227573a851d7f225f56570f6754f8f",
+  "files": [],
+  "signature": {
+    "suite": "motebit-jcs-ed25519-b64-v1",
+    "public_key": "d286e0d14b99b7f66aacc3504ce22b4ac5566d9788199198d292130c5dfc588d",
+    "value": "49KEmB-4WYfzUh9C8UuzHO62u_8dF62B0z0Yu_lV14tjrENATq3krNTXNVI2a-tiaTgQCPNFclTCx2rR5ZlzDQ"
+  }
+}

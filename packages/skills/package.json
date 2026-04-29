@@ -1,0 +1,33 @@
+{
+  "name": "@motebit/skills",
+  "version": "0.0.0-private",
+  "license": "BUSL-1.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "build-reference-skill": "tsx scripts/build-reference-skill.ts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@motebit/crypto": "workspace:*",
+    "@motebit/protocol": "workspace:*",
+    "@motebit/wire-schemas": "workspace:*",
+    "yaml": "^2.6.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@noble/ed25519": "~3.0.1",
+    "@noble/hashes": "~1.8.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

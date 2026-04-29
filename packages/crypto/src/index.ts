@@ -1363,3 +1363,17 @@ export {
   type RevocationAnchorVerifyResult,
   type RevocationAnchorProof,
 } from "./credential-anchor.js";
+export {
+  SKILL_SIGNATURE_SUITE,
+  canonicalizeSkillManifestBytes,
+  canonicalizeSkillEnvelopeBytes,
+  signSkillManifest,
+  signSkillEnvelope,
+  verifySkillManifest,
+  verifySkillManifestDetailed,
+  verifySkillEnvelope,
+  verifySkillEnvelopeDetailed,
+  decodeSkillSignaturePublicKey,
+  type SkillVerifyReason,
+  type SkillVerifyDetail,
+} from "./skills.js";

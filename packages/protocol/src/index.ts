@@ -2184,3 +2184,18 @@ export { COMPUTER_ACTION_KINDS, COMPUTER_FAILURE_REASONS } from "./computer-use.
 export type { ToolMode } from "./tool-mode.js";
 export { TOOL_MODES, toolModePriority } from "./tool-mode.js";
 import type { ToolMode } from "./tool-mode.js";
+
+// ── Skill manifest + envelope (spec/skills-v1.md) ────────────────
+export type {
+  SkillSensitivity,
+  SkillPlatform,
+  SkillHardwareAttestationGate,
+  SkillSignature,
+  SkillManifestMetadata,
+  SkillManifestMotebit,
+  SkillManifest,
+  SkillEnvelopeFile,
+  SkillEnvelopeSkillRef,
+  SkillEnvelope,
+} from "./skills.js";
+export { SKILL_SENSITIVITY_TIERS, SKILL_AUTO_LOADABLE_TIERS, SKILL_PLATFORMS } from "./skills.js";

@@ -16,7 +16,7 @@ MCP defines capability but not identity. A2A defines communication but has no tr
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 47 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 5 supporting apps, 8 services, 21 open protocol specs.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 48 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 5 supporting apps, 8 services, 22 open protocol specs.
 
 Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
@@ -39,6 +39,7 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 - [`packages/settlement-rails/CLAUDE.md`](packages/settlement-rails/CLAUDE.md) — three guest rails + registry; custody split at the type level
 - [`packages/wallet-solana/CLAUDE.md`](packages/wallet-solana/CLAUDE.md) — sovereign rail, identity key = address
 - [`packages/self-knowledge/CLAUDE.md`](packages/self-knowledge/CLAUDE.md) — committed BM25 corpus over self-description docs; zero runtime deps
+- [`packages/skills/CLAUDE.md`](packages/skills/CLAUDE.md) — agentskills.io-compatible procedural-knowledge runtime; install permissive, auto-load provenance-gated, sensitivity orthogonal to provenance
 - [`packages/mcp-client/CLAUDE.md`](packages/mcp-client/CLAUDE.md) — `CredentialSource`, `ServerVerifier`, OAuth
 - [`packages/panels/CLAUDE.md`](packages/panels/CLAUDE.md) — surface-agnostic panel controllers; state+actions here, render per surface
 - [`services/relay/CLAUDE.md`](services/relay/CLAUDE.md) — the relay

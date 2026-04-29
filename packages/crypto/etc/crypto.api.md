@@ -14,6 +14,9 @@ import type { DisputeRequest } from '@motebit/protocol';
 import type { DisputeResolution } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
+import type { SkillEnvelope } from '@motebit/protocol';
+import type { SkillManifest } from '@motebit/protocol';
+import type { SkillSignature } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
 
 // @public
@@ -40,6 +43,12 @@ export function base58btcEncode(bytes: Uint8Array): string;
 
 // @public (undocumented)
 export function bytesToHex(bytes: Uint8Array): string;
+
+// @public
+export function canonicalizeSkillEnvelopeBytes(envelope: SkillEnvelope): Uint8Array;
+
+// @public
+export function canonicalizeSkillManifestBytes(manifest: SkillManifest, body: Uint8Array): Uint8Array;
 
 // @public
 export function canonicalJson(obj: unknown): string;
@@ -163,6 +172,9 @@ export interface DataIntegrityProof {
     // (undocumented)
     verificationMethod: string;
 }
+
+// @public
+export function decodeSkillSignaturePublicKey(sig: SkillSignature): Uint8Array;
 
 // @public
 export const DELEGATION_TOKEN_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -883,6 +895,14 @@ export function signKeySuccession(oldPrivateKey: Uint8Array, newPrivateKey: Uint
 export function signSettlement(settlement: Omit<SettlementRecord, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<SettlementRecord>;
 
 // @public
+export function signSkillEnvelope(unsigned: Omit<SkillEnvelope, "signature">, privateKey: Uint8Array, publicKey: Uint8Array): Promise<SkillEnvelope>;
+
+// @public
+export function signSkillManifest(unsigned: Omit<SkillManifest, "motebit"> & {
+    motebit: Omit<SkillManifest["motebit"], "signature">;
+}, privateKey: Uint8Array, publicKey: Uint8Array, body: Uint8Array): Promise<SkillManifest>;
+
+// @public
 export function signSovereignPaymentReceipt(input: SovereignPaymentReceiptInput, privateKey: Uint8Array, publicKey: Uint8Array): Promise<SignableReceipt>;
 
 // @public
@@ -896,6 +916,20 @@ export function signVerifiableCredential<T = Record<string, unknown>>(unsignedVC
 
 // @public (undocumented)
 export function signVerifiablePresentation(unsignedVP: Omit<VerifiablePresentation, "proof">, privateKey: Uint8Array, publicKey: Uint8Array): Promise<VerifiablePresentation>;
+
+// @public
+export const SKILL_SIGNATURE_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public (undocumented)
+export interface SkillVerifyDetail {
+    // (undocumented)
+    reason: SkillVerifyReason;
+    // (undocumented)
+    valid: boolean;
+}
+
+// @public
+export type SkillVerifyReason = "ok" | "no_signature" | "wrong_suite" | "bad_public_key" | "bad_signature_value" | "ed25519_mismatch";
 
 // @public
 export interface SovereignPaymentReceiptInput {
@@ -1130,6 +1164,18 @@ export function verifySettlement(settlement: SettlementRecord, issuerPublicKey: 
 
 // @public
 export function verifySignedToken(token: string, publicKey: Uint8Array): Promise<SignedTokenPayload | null>;
+
+// @public
+export function verifySkillEnvelope(envelope: SkillEnvelope, publicKey: Uint8Array): Promise<boolean>;
+
+// @public (undocumented)
+export function verifySkillEnvelopeDetailed(envelope: SkillEnvelope, publicKey: Uint8Array): Promise<SkillVerifyDetail>;
+
+// @public
+export function verifySkillManifest(manifest: SkillManifest, body: Uint8Array, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifySkillManifestDetailed(manifest: SkillManifest, body: Uint8Array, publicKey: Uint8Array): Promise<SkillVerifyDetail>;
 
 // @public
 export function verifySuccessionChain(chain: KeySuccessionRecord[], guardianPublicKeyHex?: string): Promise<SuccessionChainResult>;

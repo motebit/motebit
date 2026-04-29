@@ -2283,6 +2283,83 @@ export enum SideEffect {
 }
 
 // @public
+export const SKILL_AUTO_LOADABLE_TIERS: readonly SkillSensitivity[];
+
+// @public
+export const SKILL_PLATFORMS: readonly SkillPlatform[];
+
+// @public
+export const SKILL_SENSITIVITY_TIERS: readonly SkillSensitivity[];
+
+// @public
+export interface SkillEnvelope {
+    body_hash: string;
+    files: SkillEnvelopeFile[];
+    manifest: SkillManifest;
+    signature: SkillSignature;
+    skill: SkillEnvelopeSkillRef;
+    spec_version: "1.0";
+}
+
+// @public
+export interface SkillEnvelopeFile {
+    hash: string;
+    path: string;
+}
+
+// @public
+export interface SkillEnvelopeSkillRef {
+    content_hash: string;
+    name: string;
+    version: string;
+}
+
+// @public
+export interface SkillHardwareAttestationGate {
+    minimum_score?: number;
+    required?: boolean;
+}
+
+// @public
+export interface SkillManifest {
+    description: string;
+    metadata?: SkillManifestMetadata;
+    motebit: SkillManifestMotebit;
+    name: string;
+    platforms?: SkillPlatform[];
+    version: string;
+}
+
+// @public
+export interface SkillManifestMetadata {
+    author?: string;
+    category?: string;
+    config?: Record<string, unknown>;
+    tags?: string[];
+}
+
+// @public
+export interface SkillManifestMotebit {
+    hardware_attestation?: SkillHardwareAttestationGate;
+    sensitivity?: SkillSensitivity;
+    signature?: SkillSignature;
+    spec_version: "1.0";
+}
+
+// @public
+export type SkillPlatform = "macos" | "linux" | "windows" | "ios" | "android";
+
+// @public
+export type SkillSensitivity = "none" | "personal" | "medical" | "financial" | "secret";
+
+// @public
+export interface SkillSignature {
+    public_key: string;
+    suite: SuiteId;
+    value: string;
+}
+
+// @public
 export interface SolvencyProof {
     amount_requested: number;
     attested_at: number;
