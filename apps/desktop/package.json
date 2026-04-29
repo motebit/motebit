@@ -37,6 +37,7 @@
     "@motebit/render-engine": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",
+    "@motebit/skills": "workspace:*",
     "@motebit/state-vector": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",

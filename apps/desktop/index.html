@@ -44,6 +44,7 @@
       #goals-panel,
       #agents-panel,
       #sovereign-panel,
+      #skills-panel,
       #settings-modal {
         user-select: none;
         -webkit-user-select: none;
@@ -53,6 +54,7 @@
       #goals-panel.open,
       #agents-panel.open,
       #sovereign-panel.open,
+      #skills-panel.open,
       #settings-modal.open {
         user-select: text;
         -webkit-user-select: text;
@@ -4901,6 +4903,280 @@
         background: rgba(248, 113, 113, 0.1);
         color: #f87171;
       }
+
+      /* Skills panel — slide-in from left, mirrors memory panel layout */
+      #skills-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 24;
+        background: rgba(0, 0, 0, 0.18);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.18s ease;
+      }
+      #skills-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      #skills-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 360px;
+        z-index: 25;
+        background: var(--bg-glass-strong);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-right: 1px solid var(--border);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: var(--text-primary);
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        display: flex;
+        flex-direction: column;
+      }
+      #skills-panel.open {
+        transform: translateX(0);
+      }
+      .skills-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+      .skills-panel-title {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .skills-count-badge {
+        font-size: 11px;
+        padding: 1px 7px;
+        border-radius: 10px;
+        background: var(--bg-btn);
+        color: var(--text-muted);
+        margin-left: 6px;
+      }
+      .skills-panel-close {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 18px;
+        padding: 2px 6px;
+      }
+      .skills-panel-close:hover {
+        color: var(--text-secondary);
+      }
+      .skills-search-wrap {
+        padding: 8px 12px;
+        flex-shrink: 0;
+      }
+      #skills-search {
+        width: 100%;
+        padding: 7px 10px;
+        border: 1px solid var(--border-input);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--text-input);
+        font-size: 12px;
+        outline: none;
+        font-family: inherit;
+      }
+      #skills-search:focus {
+        border-color: var(--accent-border);
+      }
+      .skills-install-bar {
+        display: flex;
+        gap: 6px;
+        padding: 4px 12px 8px;
+        flex-shrink: 0;
+      }
+      #skills-install-input {
+        flex: 1;
+        padding: 6px 10px;
+        border: 1px solid var(--border-input);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--text-input);
+        font-size: 11px;
+        outline: none;
+        font-family: inherit;
+      }
+      #skills-install-input:focus {
+        border-color: var(--accent-border);
+      }
+      #skills-install-btn {
+        padding: 6px 12px;
+        border: 1px solid var(--accent-border);
+        border-radius: 8px;
+        background: var(--accent-bg);
+        color: var(--accent-text);
+        font-size: 11px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      #skills-install-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .skills-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 8px;
+      }
+      .skill-item {
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--border-light);
+        margin-bottom: 6px;
+        cursor: pointer;
+      }
+      .skill-item:hover {
+        background: var(--bg-glass-hover);
+      }
+      .skill-item.skill-disabled {
+        opacity: 0.55;
+      }
+      .skill-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 4px;
+      }
+      .skill-name {
+        font-weight: 600;
+        font-size: 12px;
+      }
+      .skill-version {
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+      .skill-prov {
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 8px;
+      }
+      .skill-prov-verified {
+        background: rgba(74, 222, 128, 0.15);
+        color: #22c55e;
+      }
+      .skill-prov-trusted_unsigned {
+        background: rgba(245, 158, 11, 0.15);
+        color: #d97706;
+      }
+      .skill-prov-unsigned {
+        background: var(--bg-btn);
+        color: var(--text-muted);
+      }
+      .skill-prov-unverified {
+        background: rgba(248, 113, 113, 0.15);
+        color: #f87171;
+      }
+      .skill-sens {
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 8px;
+        background: var(--bg-btn);
+        color: var(--text-muted);
+      }
+      .skill-sens-medical,
+      .skill-sens-financial,
+      .skill-sens-secret {
+        background: rgba(168, 85, 247, 0.15);
+        color: #a855f7;
+      }
+      .skill-description {
+        font-size: 11px;
+        color: var(--text-secondary);
+        margin-bottom: 4px;
+      }
+      .skill-meta {
+        display: flex;
+        gap: 8px;
+        font-size: 10px;
+        color: var(--text-muted);
+        margin-bottom: 6px;
+      }
+      .skill-actions {
+        display: flex;
+        gap: 6px;
+      }
+      .skill-action-btn {
+        padding: 3px 9px;
+        border: 1px solid var(--border-input);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 10px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .skill-action-btn:hover {
+        background: var(--bg-glass-hover);
+      }
+      .skill-action-remove {
+        color: #f87171;
+        border-color: rgba(248, 113, 113, 0.3);
+      }
+      .skills-empty {
+        padding: 24px 12px;
+        text-align: center;
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+      #skills-detail-wrap {
+        position: absolute;
+        inset: 0;
+        background: var(--bg-glass-strong);
+        display: none;
+        flex-direction: column;
+        z-index: 1;
+      }
+      .skills-detail-header {
+        display: flex;
+        justify-content: flex-end;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-light);
+        flex-shrink: 0;
+      }
+      #skills-detail-close {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 14px;
+        padding: 2px 6px;
+      }
+      #skills-detail-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 16px;
+      }
+      .skill-detail-title {
+        margin: 0 0 4px 0;
+        font-size: 14px;
+      }
+      .skill-detail-author {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+      }
+      .skill-detail-description {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin: 0 0 12px 0;
+      }
+      .skill-detail-body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        white-space: pre-wrap;
+        color: var(--text-primary);
+        margin: 0;
+      }
     </style>
   </head>
   <body>
@@ -5058,6 +5334,47 @@
       <div class="mem-graph-wrap" id="memory-graph-wrap" style="display: none">
         <canvas id="memory-graph-canvas"></canvas>
         <div class="mem-graph-tooltip" id="memory-graph-tooltip"></div>
+      </div>
+    </div>
+    <button id="skills-btn" title="Skills" aria-label="Skills">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+      </svg>
+    </button>
+    <div id="skills-backdrop"></div>
+    <div id="skills-panel" aria-label="Skills panel">
+      <div class="skills-panel-header">
+        <span class="skills-panel-title"
+          >Skills <span class="skills-count-badge" id="skills-count">0</span></span
+        >
+        <button class="skills-panel-close" id="skills-close-btn">&times;</button>
+      </div>
+      <div class="skills-search-wrap">
+        <input id="skills-search" type="text" placeholder="Search skills..." autocomplete="off" />
+      </div>
+      <div class="skills-install-bar">
+        <input
+          id="skills-install-input"
+          type="text"
+          placeholder="Path to skill directory…"
+          autocomplete="off"
+        />
+        <button id="skills-install-btn">Install</button>
+      </div>
+      <div class="skills-list" id="skills-list"></div>
+      <div id="skills-detail-wrap">
+        <div class="skills-detail-header">
+          <button id="skills-detail-close" title="Close detail">&times;</button>
+        </div>
+        <div id="skills-detail-body"></div>
       </div>
     </div>
     <button id="sovereign-btn" title="Credentials & Ledger" aria-label="Credentials and Ledger">

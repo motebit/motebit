@@ -14,4 +14,5 @@ User-installable procedural-knowledge layer per `spec/skills-v1.md`. BSL-1.1, La
 ## Consumers
 
 - `apps/cli` — `motebit skills install/list/enable/disable/remove/trust/untrust/verify` subcommands and `/skills` + `/skill <name>` REPL slashes.
+- `apps/desktop` — phase 4.2 wraps the registry inside a Node sidecar (`src-tauri/sidecar/skills.js`). The Chromium webview never touches envelope bytes, fs writes, or signature material — see `feedback_privilege_boundary_probe`.
 - `services/relay` — phase 4 only, when `motebit/awesome-skills` discovery lands.

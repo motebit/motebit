@@ -307,6 +307,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@motebit/skills':
+        specifier: workspace:*
+        version: link:../../packages/skills
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector

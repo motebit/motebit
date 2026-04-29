@@ -2,10 +2,15 @@
 
 mod computer_use;
 mod secure_enclave;
+mod skills;
 mod tpm;
 
 use computer_use::{computer_execute, computer_query_display};
 use secure_enclave::{se_available, se_mint_attestation};
+use skills::{
+    skills_disable, skills_enable, skills_install_directory, skills_list, skills_read_detail,
+    skills_remove, skills_trust, skills_untrust, skills_verify, SkillsState,
+};
 use tpm::{tpm_available, tpm_mint_quote};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde_json::Value as JsonValue;
@@ -1010,6 +1015,7 @@ fn main() {
         .manage(AppState {
             db: Mutex::new(db),
         })
+        .manage(SkillsState::new())
         .invoke_handler(tauri::generate_handler![
             db_query,
             db_execute,
@@ -1036,6 +1042,15 @@ fn main() {
             se_mint_attestation,
             tpm_available,
             tpm_mint_quote,
+            skills_list,
+            skills_read_detail,
+            skills_install_directory,
+            skills_enable,
+            skills_disable,
+            skills_trust,
+            skills_untrust,
+            skills_remove,
+            skills_verify,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

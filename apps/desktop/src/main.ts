@@ -29,6 +29,7 @@ import { initAgents } from "./ui/agents";
 import { initGoals } from "./ui/goals";
 import { initMemory } from "./ui/memory";
 import { initPairing } from "./ui/pairing";
+import { initSkills } from "./ui/skills";
 import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
 import {
@@ -77,6 +78,7 @@ const conversations = initConversations(ctx);
 const goals = initGoals(ctx);
 const memory = initMemory(ctx);
 const pairing = initPairing(ctx);
+const skills = initSkills(ctx);
 const sovereign = initSovereign(ctx);
 
 const voice = initVoice(ctx, {
@@ -124,6 +126,7 @@ const agentsPanel = document.getElementById("agents-panel") as HTMLDivElement;
 const sovereignPanel = document.getElementById("sovereign-panel") as HTMLDivElement;
 const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
 const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
+const skillsPanel = document.getElementById("skills-panel") as HTMLDivElement;
 const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
 const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
 const inputBarWrapper = document.getElementById("input-bar-wrapper") as HTMLDivElement;
@@ -159,6 +162,8 @@ document.addEventListener("keydown", (e) => {
       goals.close();
     } else if (memoryPanel.classList.contains("open")) {
       memory.close();
+    } else if (skillsPanel.classList.contains("open")) {
+      skills.close();
     } else if (conversationsPanel.classList.contains("open")) {
       conversations.close();
     } else if (settingsModal.classList.contains("open")) {
