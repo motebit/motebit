@@ -97,14 +97,14 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
       '@noble/curves':
-        specifier: ^1.9.0
-        version: 1.9.7
+        specifier: ^2.2.0
+        version: 2.2.0
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.8.0
-        version: 1.8.0
+        specifier: ~2.2.0
+        version: 2.2.0
       '@solana/spl-token':
         specifier: ^0.4.9
         version: 0.4.14(@solana/web3.js@1.98.4(bufferutil@4.1.0)(encoding@0.1.13)(typescript@5.9.3)(utf-8-validate@6.0.6))(bufferutil@4.1.0)(encoding@0.1.13)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
@@ -342,14 +342,14 @@ importers:
         version: 0.170.0
     devDependencies:
       '@noble/curves':
-        specifier: ^1.9.0
-        version: 1.9.7
+        specifier: ^2.2.0
+        version: 2.2.0
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.8.0
-        version: 1.8.0
+        specifier: ~2.2.0
+        version: 2.2.0
       '@tauri-apps/cli':
         specifier: ^2.10.1
         version: 2.10.1
@@ -657,14 +657,14 @@ importers:
         specifier: workspace:*
         version: link:../../packages/crypto
       '@noble/curves':
-        specifier: ^1.9.0
-        version: 1.9.7
+        specifier: ^2.2.0
+        version: 2.2.0
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.8.0
-        version: 1.8.0
+        specifier: ~2.2.0
+        version: 2.2.0
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14
@@ -874,14 +874,14 @@ importers:
         version: 0.170.0
     devDependencies:
       '@noble/curves':
-        specifier: ^1.9.0
-        version: 1.9.7
+        specifier: ^2.2.0
+        version: 2.2.0
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.8.0
-        version: 1.8.0
+        specifier: ~2.2.0
+        version: 2.2.0
       '@playwright/test':
         specifier: ^1.59.1
         version: 1.59.1
@@ -1028,11 +1028,11 @@ importers:
         specifier: workspace:*
         version: link:../sdk
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -1055,14 +1055,14 @@ importers:
         specifier: workspace:*
         version: link:../protocol
       '@noble/curves':
-        specifier: ~1.7.0
-        version: 1.7.0
+        specifier: ~2.2.0
+        version: 2.2.0
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -1092,11 +1092,11 @@ importers:
         version: 1.14.3
     devDependencies:
       '@noble/curves':
-        specifier: ~1.9.0
-        version: 1.9.7
+        specifier: ~2.2.0
+        version: 2.2.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
       '@peculiar/webcrypto':
         specifier: ^1.5.0
         version: 1.5.0
@@ -1126,11 +1126,11 @@ importers:
         version: 1.12.0
     devDependencies:
       '@noble/curves':
-        specifier: ~1.9.0
-        version: 1.9.7
+        specifier: ~2.2.0
+        version: 2.2.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
       '@peculiar/webcrypto':
         specifier: ^1.5.0
         version: 1.5.0
@@ -1153,11 +1153,11 @@ importers:
         specifier: workspace:*
         version: link:../protocol
       '@noble/curves':
-        specifier: ~1.9.0
-        version: 1.9.7
+        specifier: ~2.2.0
+        version: 2.2.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1182,11 +1182,11 @@ importers:
         version: 1.14.3
     devDependencies:
       '@noble/curves':
-        specifier: ~1.9.0
-        version: 1.9.7
+        specifier: ~2.2.0
+        version: 2.2.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
       '@peculiar/webcrypto':
         specifier: ^1.5.0
         version: 1.5.0
@@ -1216,11 +1216,11 @@ importers:
         version: 1.12.0
     devDependencies:
       '@noble/curves':
-        specifier: ~1.9.0
-        version: 1.9.7
+        specifier: ~2.2.0
+        version: 2.2.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
       '@peculiar/webcrypto':
         specifier: ^1.5.0
         version: 1.5.0
@@ -1258,14 +1258,14 @@ importers:
         specifier: workspace:*
         version: link:../protocol
       '@noble/curves':
-        specifier: ~1.9.0
-        version: 1.9.7
+        specifier: ~2.2.0
+        version: 2.2.0
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1850,11 +1850,11 @@ importers:
         version: 3.25.76
     devDependencies:
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.8.0
-        version: 1.8.0
+        specifier: ~2.2.0
+        version: 2.2.0
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -1941,11 +1941,11 @@ importers:
         version: link:../crypto
     devDependencies:
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -1981,14 +1981,14 @@ importers:
         version: link:../verifier
     devDependencies:
       '@noble/curves':
-        specifier: ^1.9.0
-        version: 1.9.7
+        specifier: ^2.2.0
+        version: 2.2.0
       '@noble/ed25519':
-        specifier: ~3.0.1
-        version: 3.0.1
+        specifier: ~3.1.0
+        version: 3.1.0
       '@noble/hashes':
-        specifier: ~1.6.0
-        version: 1.6.1
+        specifier: ~2.2.0
+        version: 2.2.0
       '@peculiar/webcrypto':
         specifier: ^1.5.0
         version: 1.5.0
@@ -3776,6 +3776,7 @@ packages:
   '@hono/node-ws@1.3.0':
     resolution: {integrity: sha512-ju25YbbvLuXdqBCmLZLqnNYu1nbHIQjoyUqA8ApZOeL1k4skuiTcw5SW77/5SUYo2Xi2NVBJoVlfQurnKEp03Q==}
     engines: {node: '>=18.14.1'}
+    deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
     peerDependencies:
       '@hono/node-server': '>=1.19.10 <2.0.0'
       hono: '>=4.12.4 <5.0.0'
@@ -4104,10 +4105,6 @@ packages:
   '@noble/curves@1.2.0':
     resolution: {integrity: sha512-oYclrNgRaM9SsBUBVbb8M6DTV7ZHRTKugureoYEncY5c65HOmRzvSiTE3y5CYaPYJA/GVkrhXEoF0M3Ya9PMnw==}
 
-  '@noble/curves@1.7.0':
-    resolution: {integrity: sha512-UTMhXK9SeDhFJVrHeUJ5uZlI6ajXg10O6Ddocf9S6GjbSBVZsJo88HzKwXznNfGpMTRDyJkqMjNDPYgf0qFWnw==}
-    engines: {node: ^14.21.3 || >=16}
-
   '@noble/curves@1.9.1':
     resolution: {integrity: sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA==}
     engines: {node: ^14.21.3 || >=16}
@@ -4116,24 +4113,24 @@ packages:
     resolution: {integrity: sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@noble/ed25519@3.0.1':
-    resolution: {integrity: sha512-t/T8LuK0ym8ALQudCCQCtrRdMSxBnRgHXw+wg+YsSlE6d+on7sX3flqlSJ2mOs9xEuchM36kj9SuX5MG7pXQMA==}
+  '@noble/curves@2.2.0':
+    resolution: {integrity: sha512-T/BoHgFXirb0ENSPBquzX0rcjXeM6Lo892a2jlYJkqk83LqZx0l1Of7DzlKJ6jkpvMrkHSnAcgb5JegL8SeIkQ==}
+    engines: {node: '>= 20.19.0'}
+
+  '@noble/ed25519@3.1.0':
+    resolution: {integrity: sha512-pfcObRY3CtvwfaG9Mt5XqZdKmAQppl37tHUeuBhDUbiwJBCVY4/A4lbMvb1xKhMDx96AqAqZpMWuBX1HulhX4g==}
 
   '@noble/hashes@1.3.2':
     resolution: {integrity: sha512-MVC8EAQp7MvEcm30KWENFjgR+Mkmf+D189XJTkFIlwohU5hcBbn1ZkKq7KVTi2Hme3PMGF390DaL52beVrIihQ==}
     engines: {node: '>= 16'}
 
-  '@noble/hashes@1.6.0':
-    resolution: {integrity: sha512-YUULf0Uk4/mAA89w+k3+yUYh6NrEvxZa5T6SY3wlMvE2chHkxFUUIDI8/XW1QSC357iA5pSnqt7XEhvFOqmDyQ==}
-    engines: {node: ^14.21.3 || >=16}
-
-  '@noble/hashes@1.6.1':
-    resolution: {integrity: sha512-pq5D8h10hHBjyqX+cfBm0i8JUXJ0UhczFc4r74zbuT9XgewFo2E3J1cOaGtdZynILNmQ685YWGzGE1Zv6io50w==}
-    engines: {node: ^14.21.3 || >=16}
-
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
+
+  '@noble/hashes@2.2.0':
+    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
+    engines: {node: '>= 20.19.0'}
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -12961,10 +12958,6 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.3.2
 
-  '@noble/curves@1.7.0':
-    dependencies:
-      '@noble/hashes': 1.6.0
-
   '@noble/curves@1.9.1':
     dependencies:
       '@noble/hashes': 1.8.0
@@ -12973,15 +12966,17 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
 
-  '@noble/ed25519@3.0.1': {}
+  '@noble/curves@2.2.0':
+    dependencies:
+      '@noble/hashes': 2.2.0
+
+  '@noble/ed25519@3.1.0': {}
 
   '@noble/hashes@1.3.2': {}
 
-  '@noble/hashes@1.6.0': {}
-
-  '@noble/hashes@1.6.1': {}
-
   '@noble/hashes@1.8.0': {}
+
+  '@noble/hashes@2.2.0': {}
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
