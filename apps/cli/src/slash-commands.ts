@@ -63,16 +63,14 @@ export function parseSlashCommand(input: string): { command: string; args: strin
 }
 
 function renderProvenanceBadge(record: SkillRecord): string {
-  switch (record.provenance_status) {
-    case "verified":
-      return success("[verified]");
-    case "trusted_unsigned":
-      return warn("[trusted-unsigned]");
-    case "unsigned":
-      return dim("[unsigned]");
-    case "unverified":
-      return red("[unverified]");
-  }
+  // if/else chain rather than switch — the `command-registry.test.ts` regex
+  // scans `case "X":` patterns to enforce slash↔COMMANDS coverage, and these
+  // are provenance-status branches, not slash commands.
+  const status = record.provenance_status;
+  if (status === "verified") return success("[verified]");
+  if (status === "trusted_unsigned") return warn("[trusted-unsigned]");
+  if (status === "unsigned") return dim("[unsigned]");
+  return red("[unverified]");
 }
 
 function formatState(state: Record<string, unknown>): string {
