@@ -233,3 +233,20 @@ export {
   SKILL_LOAD_PAYLOAD_SCHEMA_ID,
   buildSkillLoadPayloadJsonSchema,
 } from "./skill-load-payload.js";
+export {
+  SkillRegistryEntrySchema,
+  SkillRegistrySubmitRequestSchema,
+  SkillRegistrySubmitResponseSchema,
+  SkillRegistryListingSchema,
+  SkillRegistryBundleSchema,
+  SKILL_REGISTRY_ENTRY_SCHEMA_ID,
+  SKILL_REGISTRY_SUBMIT_REQUEST_SCHEMA_ID,
+  SKILL_REGISTRY_SUBMIT_RESPONSE_SCHEMA_ID,
+  SKILL_REGISTRY_LISTING_SCHEMA_ID,
+  SKILL_REGISTRY_BUNDLE_SCHEMA_ID,
+  buildSkillRegistryEntryJsonSchema,
+  buildSkillRegistrySubmitRequestJsonSchema,
+  buildSkillRegistrySubmitResponseJsonSchema,
+  buildSkillRegistryListingJsonSchema,
+  buildSkillRegistryBundleJsonSchema,
+} from "./skill-registry.js";

@@ -18,13 +18,57 @@ import {
   SkillRegistry,
   resolveDirectorySkillSource,
   type SkillAuditSink,
+  type SkillInstallSource,
   type SkillRecord,
   type SkillTrustGrantEvent,
 } from "@motebit/skills";
+import {
+  decodeSkillSignaturePublicKey,
+  publicKeyToDidKey,
+  hexToBytes,
+  verifySkillEnvelope,
+} from "@motebit/encryption";
+import type { SkillRegistryBundle } from "@motebit/sdk";
 
 import type { CliConfig } from "../args.js";
-import { CONFIG_DIR } from "../config.js";
+import { CONFIG_DIR, loadFullConfig } from "../config.js";
 import { bold, cyan, dim, error as errorColor, success, warn } from "../colors.js";
+
+const DEFAULT_RELAY_URL = "https://relay.motebit.com";
+
+/**
+ * Pattern for the registry addressing tuple: `did:key:z…/<name>@<version>`.
+ * The `did:key:` prefix is the unambiguous discriminator that lets us
+ * tell a relay address apart from a filesystem path without statting it
+ * first — no path on a sane host starts with `did:key:`.
+ */
+const REGISTRY_ADDRESS_RE = /^did:key:z[1-9A-HJ-NP-Za-km-z]+\/[a-z0-9-]+@[^/]+$/;
+
+interface ParsedRegistryAddress {
+  submitter_motebit_id: string;
+  name: string;
+  version: string;
+}
+
+function tryParseRegistryAddress(input: string): ParsedRegistryAddress | null {
+  if (!REGISTRY_ADDRESS_RE.test(input)) return null;
+  const slash = input.indexOf("/");
+  const at = input.lastIndexOf("@");
+  return {
+    submitter_motebit_id: input.slice(0, slash),
+    name: input.slice(slash + 1, at),
+    version: input.slice(at + 1),
+  };
+}
+
+function resolveRelayUrl(): string {
+  return (
+    process.env["MOTEBIT_RELAY_URL"] ??
+    process.env["MOTEBIT_SYNC_URL"] ??
+    loadFullConfig().sync_url ??
+    DEFAULT_RELAY_URL
+  );
+}
 
 const SKILLS_DIR_NAME = "skills";
 const AUDIT_LOG_NAME = "audit.log";
@@ -77,9 +121,18 @@ function requirePositional(config: CliConfig, idx: number, label: string): strin
 // ---------------------------------------------------------------------------
 
 export async function handleSkillsInstall(config: CliConfig): Promise<void> {
-  const sourceArg = requirePositional(config, 2, "<directory-path>");
+  const sourceArg = requirePositional(config, 2, "<directory-path | did:key:…/name@version>");
 
-  // v1 only supports directory sources. git/url install land in phase 2.
+  const registryAddress = tryParseRegistryAddress(sourceArg);
+  if (registryAddress !== null) {
+    await installFromRelay(config, sourceArg, registryAddress);
+    return;
+  }
+
+  await installFromDirectory(config, sourceArg);
+}
+
+async function installFromDirectory(config: CliConfig, sourceArg: string): Promise<void> {
   const path = isAbsolute(sourceArg) ? sourceArg : resolve(process.cwd(), sourceArg);
 
   let stat;
@@ -95,7 +148,7 @@ export async function handleSkillsInstall(config: CliConfig): Promise<void> {
         `Source must be a directory containing SKILL.md and skill-envelope.json. Got: ${path}`,
       ),
     );
-    console.error(dim("(git+ssh and https:// install sources land in phase 2.)"));
+    console.error(dim("(git+ssh install sources land in phase 2.)"));
     process.exit(1);
   }
 
@@ -108,16 +161,140 @@ export async function handleSkillsInstall(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
+  await runInstall(config, installSource, `directory:${path}`, path);
+}
+
+async function installFromRelay(
+  config: CliConfig,
+  rawAddress: string,
+  parsed: ParsedRegistryAddress,
+): Promise<void> {
+  const relayUrl = resolveRelayUrl().replace(/\/$/, "");
+  const submitterPath = encodeURIComponent(parsed.submitter_motebit_id);
+  const namePath = encodeURIComponent(parsed.name);
+  const versionPath = encodeURIComponent(parsed.version);
+  const url = `${relayUrl}/api/v1/skills/${submitterPath}/${namePath}/${versionPath}`;
+
+  console.log(dim(`  Resolving ${rawAddress} from ${relayUrl}…`));
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err: unknown) {
+    console.error(
+      errorColor(`  Relay request failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+    process.exit(1);
+  }
+
+  if (resp.status === 404) {
+    console.error(errorColor(`  Not found on relay: ${rawAddress}`));
+    process.exit(1);
+  }
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    console.error(errorColor(`  Relay returned ${resp.status}: ${body || resp.statusText}`));
+    process.exit(1);
+  }
+
+  let bundle: SkillRegistryBundle;
+  try {
+    bundle = (await resp.json()) as SkillRegistryBundle;
+  } catch (err: unknown) {
+    console.error(
+      errorColor(
+        `  Relay returned malformed JSON: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    );
+    process.exit(1);
+  }
+
+  // Re-verify everything the relay claimed. The relay is a convenience
+  // surface, never a trust root (services/relay/CLAUDE.md rule 6) —
+  // re-verifying here is what makes that doctrine real.
+  try {
+    const publicKey = decodeSkillSignaturePublicKey(bundle.envelope.signature);
+    const ok = await verifySkillEnvelope(bundle.envelope, publicKey);
+    if (!ok) {
+      console.error(
+        errorColor("  Envelope signature failed local verification — refusing to install."),
+      );
+      process.exit(1);
+    }
+    const derivedSubmitter = publicKeyToDidKey(hexToBytes(bundle.envelope.signature.public_key));
+    if (derivedSubmitter !== parsed.submitter_motebit_id) {
+      console.error(
+        errorColor(
+          `  Relay returned a bundle whose signer (${derivedSubmitter}) does not match the requested submitter (${parsed.submitter_motebit_id}). Refusing to install.`,
+        ),
+      );
+      process.exit(1);
+    }
+    if (
+      bundle.envelope.skill.name !== parsed.name ||
+      bundle.envelope.skill.version !== parsed.version
+    ) {
+      console.error(
+        errorColor(
+          `  Relay returned ${bundle.envelope.skill.name}@${bundle.envelope.skill.version}, expected ${parsed.name}@${parsed.version}.`,
+        ),
+      );
+      process.exit(1);
+    }
+  } catch (err: unknown) {
+    console.error(
+      errorColor(`  Local verification threw: ${err instanceof Error ? err.message : String(err)}`),
+    );
+    process.exit(1);
+  }
+
+  const bodyBytes = base64Decode(bundle.body);
+  const fileBytes: Record<string, Uint8Array> = {};
+  if (bundle.files) {
+    for (const [path, b64] of Object.entries(bundle.files)) {
+      fileBytes[path] = base64Decode(b64);
+    }
+  }
+
+  const installSource: SkillInstallSource = {
+    kind: "in_memory",
+    manifest: bundle.envelope.manifest,
+    envelope: bundle.envelope,
+    body: bodyBytes,
+    files: fileBytes,
+  };
+
+  await runInstall(config, installSource, `registry:${rawAddress}`, rawAddress);
+}
+
+function base64Decode(s: string): Uint8Array {
+  const normalized = s.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+  const binary = atob(padded);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+async function runInstall(
+  config: CliConfig,
+  installSource: SkillInstallSource,
+  sourceLabel: string,
+  displaySource: string,
+): Promise<void> {
   const registry = buildRegistry();
   try {
     const result = await registry.install(installSource, {
       force: config.force === true,
-      source_label: `directory:${path}`,
+      source_label: sourceLabel,
     });
     console.log();
     console.log(`  ${bold(result.name)} ${dim(`v${result.version}`)}`);
     console.log(`  ${dim("provenance:")} ${provenanceStatusText(result.provenance_status)}`);
-    console.log(`  ${dim("from:")} ${path}`);
+    console.log(`  ${dim("from:")} ${displaySource}`);
     if (result.provenance_status !== "verified") {
       console.log();
       console.log(dim("  This skill is unsigned. The selector will NOT auto-load it"));

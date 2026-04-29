@@ -307,6 +307,13 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/credentials/:credentialId/status", rl(publicLimiter));
   app.use("/api/v1/credentials/batch-status", rl(readLimiter));
 
+  // Skills registry (spec/skills-registry-v1.md): submit is write-tier
+  // (signature verification + sha256 over body + per-file hashes is the
+  // expensive part), discover/resolve are read-tier.
+  app.use("/api/v1/skills/submit", rl(writeLimiter));
+  app.use("/api/v1/skills/discover", rl(readLimiter));
+  app.use("/api/v1/skills/:submitter/:name/:version", rl(readLimiter));
+
   // Public anchor proof endpoints — auditor flood protection without auth
   // gating (CLAUDE.md rule 6). Same publicLimiter tier as credential status.
   app.use("/api/v1/credentials/:credentialId/anchor-proof", rl(publicLimiter));
@@ -461,7 +468,12 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         c.req.path.startsWith("/api/v1/onramp/") ||
         c.req.path.startsWith("/api/v1/discover/") ||
         c.req.path.startsWith("/api/v1/allocations/") ||
-        c.req.path.startsWith("/api/v1/disputes/")
+        c.req.path.startsWith("/api/v1/disputes/") ||
+        // Skills registry (spec/skills-registry-v1.md §5): permissive-by-
+        // signature on submit, public-read on discover/resolve. The submit
+        // handler verifies the envelope signature itself — that IS the auth
+        // (mirrors /api/v1/devices/register-self above).
+        c.req.path.startsWith("/api/v1/skills/")
       ) {
         await next();
         return;

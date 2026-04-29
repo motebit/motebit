@@ -279,3 +279,106 @@ export interface SkillLoadPayload {
   /** Session sensitivity tier in effect when the skill loaded. */
   session_sensitivity: SkillSensitivity;
 }
+
+// === Registry (skills-registry-v1.md) ===
+
+/**
+ * One row in the relay-hosted skills registry. Returned in `discover`
+ * listings; one entry per submitted skill version.
+ *
+ * The display fields (`description`, `sensitivity`, `platforms`,
+ * `category`, `tags`, `author`) are denormalized from the embedded
+ * manifest so the discover query does not need to round-trip the full
+ * bundle for each row.
+ *
+ * `submitter_motebit_id` is canonical: derived from `envelope.signature.public_key`
+ * by the relay, never user-provided. Submitter spoofing is impossible.
+ */
+export interface SkillRegistryEntry {
+  /** `did:key` derived from `envelope.signature.public_key`. */
+  submitter_motebit_id: string;
+  /** Slug. Matches `manifest.name`. */
+  name: string;
+  /** SemVer. Matches `manifest.version`. */
+  version: string;
+  /** 64 hex chars; SHA-256 over `JCS(manifest) || 0x0A || lf_body`. */
+  content_hash: string;
+  description: string;
+  sensitivity: SkillSensitivity;
+  platforms?: SkillPlatform[];
+  category?: string;
+  tags?: string[];
+  author?: string;
+  /** 64 hex chars; mirrors `envelope.signature.public_key`. */
+  signature_public_key: string;
+  /** True iff the submitter is in the relay's featured-submitters allowlist. */
+  featured: boolean;
+  /** Unix ms. */
+  submitted_at: number;
+}
+
+/**
+ * Body of `POST /api/v1/skills/submit`. Carries the full signed
+ * envelope plus body and aux files as base64 strings. The relay
+ * re-derives `body_hash` and per-file hashes and asserts they match
+ * the envelope before persisting.
+ *
+ * The submitter is NOT named in this payload — the relay computes it
+ * canonically from `envelope.signature.public_key`.
+ */
+export interface SkillRegistrySubmitRequest {
+  envelope: SkillEnvelope;
+  /** Base64-encoded LF-normalized SKILL.md body bytes. */
+  body: string;
+  /** Base64-encoded auxiliary file bytes. Keys are the same paths as `envelope.files[].path`. */
+  files?: Record<string, string>;
+}
+
+/**
+ * Response body of `POST /api/v1/skills/submit` on success. Returns
+ * the canonical addressing tuple plus the relay-computed
+ * `submitter_motebit_id` so the caller can confirm the relay derived
+ * the same `did:key` it expected.
+ */
+export interface SkillRegistrySubmitResponse {
+  /** `<submitter_motebit_id>/<name>@<version>`. */
+  skill_id: string;
+  submitter_motebit_id: string;
+  name: string;
+  version: string;
+  content_hash: string;
+  submitted_at: number;
+}
+
+/**
+ * Response body of `GET /api/v1/skills/discover`. A paginated page of
+ * `SkillRegistryEntry` rows plus pagination metadata.
+ */
+export interface SkillRegistryListing {
+  entries: SkillRegistryEntry[];
+  /** Total rows matching the filter — not just this page. */
+  total: number;
+  /** Page size used (default 50, max 200). */
+  limit: number;
+  /** Page offset used (default 0). */
+  offset: number;
+}
+
+/**
+ * Response body of `GET /api/v1/skills/:submitter/:name/:version`.
+ * Carries the full signed envelope, body, and any auxiliary files as
+ * base64 strings. Same shape as `SkillRegistrySubmitRequest` plus a
+ * `submitter_motebit_id` echo so consumers can confirm the resolved
+ * address before re-verifying.
+ */
+export interface SkillRegistryBundle {
+  /** Echoed from the route param; equals `publicKeyToDidKey(envelope.signature.public_key)`. */
+  submitter_motebit_id: string;
+  envelope: SkillEnvelope;
+  /** Base64-encoded LF-normalized SKILL.md body bytes. */
+  body: string;
+  /** Base64-encoded auxiliary file bytes. */
+  files?: Record<string, string>;
+  submitted_at: number;
+  featured: boolean;
+}

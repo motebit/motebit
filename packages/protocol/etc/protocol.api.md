@@ -2364,6 +2364,74 @@ export interface SkillManifestMotebit {
 export type SkillPlatform = "macos" | "linux" | "windows" | "ios" | "android";
 
 // @public
+export interface SkillRegistryBundle {
+    body: string;
+    // (undocumented)
+    envelope: SkillEnvelope;
+    // (undocumented)
+    featured: boolean;
+    files?: Record<string, string>;
+    // (undocumented)
+    submitted_at: number;
+    submitter_motebit_id: string;
+}
+
+// @public
+export interface SkillRegistryEntry {
+    // (undocumented)
+    author?: string;
+    // (undocumented)
+    category?: string;
+    content_hash: string;
+    // (undocumented)
+    description: string;
+    featured: boolean;
+    name: string;
+    // (undocumented)
+    platforms?: SkillPlatform[];
+    // (undocumented)
+    sensitivity: SkillSensitivity;
+    signature_public_key: string;
+    submitted_at: number;
+    submitter_motebit_id: string;
+    // (undocumented)
+    tags?: string[];
+    version: string;
+}
+
+// @public
+export interface SkillRegistryListing {
+    // (undocumented)
+    entries: SkillRegistryEntry[];
+    limit: number;
+    offset: number;
+    total: number;
+}
+
+// @public
+export interface SkillRegistrySubmitRequest {
+    body: string;
+    // (undocumented)
+    envelope: SkillEnvelope;
+    files?: Record<string, string>;
+}
+
+// @public
+export interface SkillRegistrySubmitResponse {
+    // (undocumented)
+    content_hash: string;
+    // (undocumented)
+    name: string;
+    skill_id: string;
+    // (undocumented)
+    submitted_at: number;
+    // (undocumented)
+    submitter_motebit_id: string;
+    // (undocumented)
+    version: string;
+}
+
+// @public
 export type SkillSensitivity = "none" | "personal" | "medical" | "financial" | "secret";
 
 // @public

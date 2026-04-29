@@ -107,6 +107,19 @@ export {
   type KeySuccessionRecord,
   type SignableCollaborativeReceipt,
   type SuccessionChainResult,
+  // Skill envelope signing/verification (spec/skills-v1.md §5).
+  signSkillEnvelope,
+  verifySkillEnvelope,
+  verifySkillEnvelopeDetailed,
+  decodeSkillSignaturePublicKey,
+  signSkillManifest,
+  verifySkillManifest,
+  verifySkillManifestDetailed,
+  canonicalizeSkillManifestBytes,
+  canonicalizeSkillEnvelopeBytes,
+  SKILL_SIGNATURE_SUITE,
+  type SkillVerifyReason,
+  type SkillVerifyDetail,
 } from "@motebit/crypto";
 
 // ── Re-export credential signing from @motebit/crypto ───────────────

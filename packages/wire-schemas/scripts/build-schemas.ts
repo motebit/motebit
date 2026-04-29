@@ -89,6 +89,13 @@ import { buildSettlementRecordJsonSchema } from "../src/settlement-record.js";
 import { buildSkillManifestJsonSchema } from "../src/skill-manifest.js";
 import { buildSkillEnvelopeJsonSchema } from "../src/skill-envelope.js";
 import { buildSkillLoadPayloadJsonSchema } from "../src/skill-load-payload.js";
+import {
+  buildSkillRegistryBundleJsonSchema,
+  buildSkillRegistryEntryJsonSchema,
+  buildSkillRegistryListingJsonSchema,
+  buildSkillRegistrySubmitRequestJsonSchema,
+  buildSkillRegistrySubmitResponseJsonSchema,
+} from "../src/skill-registry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Schemas live in `spec/schemas/` alongside the Markdown protocol
@@ -185,6 +192,17 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "skill-manifest-v1.json", build: buildSkillManifestJsonSchema },
   { filename: "skill-envelope-v1.json", build: buildSkillEnvelopeJsonSchema },
   { filename: "skill-load-payload-v1.json", build: buildSkillLoadPayloadJsonSchema },
+  { filename: "skill-registry-entry-v1.json", build: buildSkillRegistryEntryJsonSchema },
+  {
+    filename: "skill-registry-submit-request-v1.json",
+    build: buildSkillRegistrySubmitRequestJsonSchema,
+  },
+  {
+    filename: "skill-registry-submit-response-v1.json",
+    build: buildSkillRegistrySubmitResponseJsonSchema,
+  },
+  { filename: "skill-registry-listing-v1.json", build: buildSkillRegistryListingJsonSchema },
+  { filename: "skill-registry-bundle-v1.json", build: buildSkillRegistryBundleJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

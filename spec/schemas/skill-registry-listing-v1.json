@@ -1,0 +1,209 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/skill-registry-listing-v1.json",
+  "title": "SkillRegistryListing (v1)",
+  "description": "Paginated response of GET /api/v1/skills/discover. Spec: https://raw.githubusercontent.com/motebit/motebit/main/spec/skills-registry-v1.md",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "submitter_motebit_id": {
+            "type": "string",
+            "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$",
+            "description": "did:key derived from envelope.signature.public_key by the relay."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$",
+            "description": "Slug. Matches manifest.name."
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "description": "SemVer. Matches manifest.version."
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Hex-encoded SHA-256 over JCS(manifest) || 0x0A || lf_body. Matches envelope.skill.content_hash."
+          },
+          "description": {
+            "type": "string",
+            "description": "Mirrors manifest.description."
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": ["none", "personal", "medical", "financial", "secret"],
+            "description": "Mirrors manifest.motebit.sensitivity."
+          },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["macos", "linux", "windows", "ios", "android"]
+            }
+          },
+          "category": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "author": {
+            "type": "string"
+          },
+          "signature_public_key": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Hex-encoded Ed25519 public key. Mirrors envelope.signature.public_key."
+          },
+          "featured": {
+            "type": "boolean",
+            "description": "True iff the submitter is in the relay's featured-submitters allowlist."
+          },
+          "submitted_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix milliseconds."
+          }
+        },
+        "required": [
+          "submitter_motebit_id",
+          "name",
+          "version",
+          "content_hash",
+          "description",
+          "sensitivity",
+          "signature_public_key",
+          "featured",
+          "submitted_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "limit": {
+      "type": "integer",
+      "exclusiveMinimum": 0
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": ["entries", "total", "limit", "offset"],
+  "additionalProperties": false,
+  "definitions": {
+    "SkillRegistryListing": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "submitter_motebit_id": {
+                "type": "string",
+                "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$",
+                "description": "did:key derived from envelope.signature.public_key by the relay."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$",
+                "description": "Slug. Matches manifest.name."
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SemVer. Matches manifest.version."
+              },
+              "content_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "Hex-encoded SHA-256 over JCS(manifest) || 0x0A || lf_body. Matches envelope.skill.content_hash."
+              },
+              "description": {
+                "type": "string",
+                "description": "Mirrors manifest.description."
+              },
+              "sensitivity": {
+                "type": "string",
+                "enum": ["none", "personal", "medical", "financial", "secret"],
+                "description": "Mirrors manifest.motebit.sensitivity."
+              },
+              "platforms": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["macos", "linux", "windows", "ios", "android"]
+                }
+              },
+              "category": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "author": {
+                "type": "string"
+              },
+              "signature_public_key": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "Hex-encoded Ed25519 public key. Mirrors envelope.signature.public_key."
+              },
+              "featured": {
+                "type": "boolean",
+                "description": "True iff the submitter is in the relay's featured-submitters allowlist."
+              },
+              "submitted_at": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Unix milliseconds."
+              }
+            },
+            "required": [
+              "submitter_motebit_id",
+              "name",
+              "version",
+              "content_hash",
+              "description",
+              "sensitivity",
+              "signature_public_key",
+              "featured",
+              "submitted_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["entries", "total", "limit", "offset"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -5493,7 +5493,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **48 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 22 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **48 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -5607,7 +5607,7 @@ motebit/
 │   ├── embed/                 [atom]        ONNX embedding service.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 22 open specifications, each motebit/<name>@1.0
+├── spec/                      # 23 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -5629,7 +5629,8 @@ motebit/
 │   ├── computer-use-v1.md                   Full-fidelity Workstation viewport — screen observation + input actions, signed, governance-gated.
 │   ├── agent-mcp-surface-v1.md              Canonical motebit_* MCP tool vocabulary — eight tool names every motebit MCP server uses, profile-based conformance.
 │   ├── proposals-v1.md                      Multi-agent plan negotiation — proposal submission, acceptance, withdrawal, and collaborative-step-result reporting.
-│   └── skills-v1.md                         agentskills.io-compatible procedural-knowledge files with motebit-namespaced extensions for cryptographic provenance, sensitivity-tiered loading, and HA gating.
+│   ├── skills-v1.md                         agentskills.io-compatible procedural-knowledge files with motebit-namespaced extensions for cryptographic provenance, sensitivity-tiered loading, and HA gating.
+│   └── skills-registry-v1.md                Relay-hosted index of submitted skill envelopes. Permissive submit, curated discovery, content-addressed identity, consumer-side re-verification.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.

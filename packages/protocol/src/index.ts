@@ -2205,3 +2205,12 @@ export type {
   SkillLoadPayload,
 } from "./skills.js";
 export { SKILL_SENSITIVITY_TIERS, SKILL_AUTO_LOADABLE_TIERS, SKILL_PLATFORMS } from "./skills.js";
+
+// ── Skills registry (spec/skills-registry-v1.md) ────────────────
+export type {
+  SkillRegistryEntry,
+  SkillRegistrySubmitRequest,
+  SkillRegistrySubmitResponse,
+  SkillRegistryListing,
+  SkillRegistryBundle,
+} from "./skills.js";

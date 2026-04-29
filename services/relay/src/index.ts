@@ -765,6 +765,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { registerTransparencyRoutes } = await import("./transparency.js");
   await registerTransparencyRoutes({ app, relayIdentity });
 
+  // --- Skills registry routes (skills-registry-v1.md) ---
+  const { registerSkillRegistryRoutes, createSkillRegistryTables, parseFeaturedSubmitters } =
+    await import("./skill-registry.js");
+  createSkillRegistryTables(moteDb.db);
+  registerSkillRegistryRoutes({
+    db: moteDb.db,
+    app,
+    featuredSubmitters: parseFeaturedSubmitters(process.env.FEATURED_SKILL_SUBMITTERS),
+  });
+
   // --- Proxy token + balance routes ---
   registerProxyTokenRoutes(app, moteDb.db, relayIdentity, subscriptionEventAdapter);
 
