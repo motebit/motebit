@@ -233,6 +233,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-credentials-submit-response-shape",
   },
   {
+    name: "check-admin-route-auth",
+    defends:
+      "every `/api/v1/admin/*` route registered in `services/relay/src/` is covered by a matching `app.use(\"...\", bearerAuth({ token: apiToken }))` registration in `middleware.ts` — the admin surface's only access control is the master bearer, so a route registered without the matching middleware ships as a wide-open endpoint; invariant #61, added 2026-04-28 after the post-mortem on the same wave that produced #60 found `GET /api/v1/admin/transparency` had been wide open since 2026-04-14 with a JSDoc claim that contradicted reality (`audience-bound at the auth layer (admin:query)`), fixed manually in commit 2560472b — manual audits expire, gates don't",
+    script: "check-admin-route-auth",
+  },
+  {
     name: "check-api-surface",
     defends:
       "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",

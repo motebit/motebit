@@ -830,6 +830,25 @@ export const __probeOnlyPrivateDeprecation = 1;
       ),
   },
   {
+    script: "check-admin-route-auth",
+    proves:
+      'flags an `/api/v1/admin/*` route registered in services/relay/src/ that has no matching `app.use("...", bearerAuth(...))` registration in middleware.ts — the route would ship wide open, same shape as the /api/v1/admin/transparency seam fixed manually in 2560472b',
+    perturb: () =>
+      // Fixture: a services/relay/src file that registers a fresh admin
+      // route. The gate runs after this is dropped in; middleware.ts has
+      // no entry for `/api/v1/admin/__effective_probe`, so the gate must
+      // exit non-zero with the missing-coverage message.
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}admin_unauth_route.ts`,
+        `import type { Hono } from "hono";
+
+export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
+  app.get("/api/v1/admin/__effective_probe", (c) => c.json({ probe: true }));
+}
+`,
+      ),
+  },
+  {
     script: "check-preset-imports",
     proves:
       "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",
