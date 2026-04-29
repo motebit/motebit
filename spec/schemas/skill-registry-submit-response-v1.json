@@ -12,23 +12,28 @@
     },
     "submitter_motebit_id": {
       "type": "string",
-      "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$"
+      "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$",
+      "description": "did:key derived from envelope.signature.public_key by the relay. Returned so the caller can confirm the relay derived the same did:key it expected."
     },
     "name": {
       "type": "string",
-      "pattern": "^[a-z0-9-]+$"
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Slug. Echoes manifest.name."
     },
     "version": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "SemVer. Echoes manifest.version."
     },
     "content_hash": {
       "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Echoes envelope.skill.content_hash."
     },
     "submitted_at": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Unix milliseconds."
     }
   },
   "required": [
@@ -50,23 +55,28 @@
         },
         "submitter_motebit_id": {
           "type": "string",
-          "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$"
+          "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$",
+          "description": "did:key derived from envelope.signature.public_key by the relay. Returned so the caller can confirm the relay derived the same did:key it expected."
         },
         "name": {
           "type": "string",
-          "pattern": "^[a-z0-9-]+$"
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Slug. Echoes manifest.name."
         },
         "version": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "SemVer. Echoes manifest.version."
         },
         "content_hash": {
           "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Echoes envelope.skill.content_hash."
         },
         "submitted_at": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Unix milliseconds."
         }
       },
       "required": [

@@ -89,8 +89,12 @@ const SkillSignatureSchema = z
 export const SkillEnvelopeSchema = z
   .object({
     spec_version: z.literal("1.0").describe('Spec version. v1: `"1.0"`.'),
-    skill: SkillEnvelopeSkillRefSchema,
-    manifest: SkillManifestSchema,
+    skill: SkillEnvelopeSkillRefSchema.describe(
+      "Compact addressing tuple: name, version, and content_hash. Used for indexing and addressing without parsing the full manifest.",
+    ),
+    manifest: SkillManifestSchema.describe(
+      "The parsed SKILL.md frontmatter (`SkillManifest`). Embedded so the envelope is self-contained — third-party verifiers and registries validate name, version, sensitivity, and provenance without reading SKILL.md.",
+    ),
     body_hash: HexSha256Schema.describe(
       "Hex-encoded SHA-256 of the LF-normalized SKILL.md body bytes (everything after the closing `---`).",
     ),
@@ -99,7 +103,9 @@ export const SkillEnvelopeSchema = z
       .describe(
         "Pinned hashes of every file in the skill directory beyond SKILL.md and skill-envelope.json.",
       ),
-    signature: SkillSignatureSchema,
+    signature: SkillSignatureSchema.describe(
+      "Ed25519 signature over the JCS-canonicalized envelope with `signature.value` removed. Suite is pinned to `motebit-jcs-ed25519-b64-v1`. Verification: re-canonicalize, verify against `signature.public_key`.",
+    ),
   })
   .strict();
 

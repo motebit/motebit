@@ -8,7 +8,8 @@
   "properties": {
     "submitter_motebit_id": {
       "type": "string",
-      "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$"
+      "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$",
+      "description": "did:key, echoed from the route param. Equals `publicKeyToDidKey(envelope.signature.public_key)`. Consumers re-derive and assert before installing."
     },
     "envelope": {
       "type": "object",
@@ -38,7 +39,8 @@
             }
           },
           "required": ["name", "version", "content_hash"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Compact addressing tuple: name, version, and content_hash. Used for indexing and addressing without parsing the full manifest."
         },
         "manifest": {
           "type": "object",
@@ -91,7 +93,8 @@
                   "description": "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions."
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Free-form display metadata per agentskills.io: author, category, tags. UI-only — never load-bearing. The cryptographic author is `motebit.signature.public_key`."
             },
             "motebit": {
               "type": "object",
@@ -151,7 +154,8 @@
             }
           },
           "required": ["name", "description", "version", "motebit"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "The parsed SKILL.md frontmatter (`SkillManifest`). Embedded so the envelope is self-contained — third-party verifiers and registries validate name, version, sensitivity, and provenance without reading SKILL.md."
         },
         "body_hash": {
           "type": "string",
@@ -199,28 +203,35 @@
             }
           },
           "required": ["suite", "public_key", "value"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Ed25519 signature over the JCS-canonicalized envelope with `signature.value` removed. Suite is pinned to `motebit-jcs-ed25519-b64-v1`. Verification: re-canonicalize, verify against `signature.public_key`."
         }
       },
       "required": ["spec_version", "skill", "manifest", "body_hash", "files", "signature"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Full signed envelope, byte-identical to what was submitted. Consumers MUST re-verify against `envelope.signature.public_key` before installing — relay is a convenience surface, not a trust root."
     },
     "body": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_+/=-]*$"
+      "pattern": "^[A-Za-z0-9_+/=-]*$",
+      "description": "Base64-encoded LF-normalized SKILL.md body bytes."
     },
     "files": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/definitions/SkillRegistryBundle/properties/body"
-      }
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_+/=-]*$"
+      },
+      "description": "Map of relative path → base64-encoded file bytes. Keys match envelope.files[].path."
     },
     "submitted_at": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Unix milliseconds."
     },
     "featured": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True iff the submitter is in the relay's featured-submitters allowlist."
     }
   },
   "required": ["submitter_motebit_id", "envelope", "body", "submitted_at", "featured"],
@@ -231,7 +242,8 @@
       "properties": {
         "submitter_motebit_id": {
           "type": "string",
-          "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$"
+          "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$",
+          "description": "did:key, echoed from the route param. Equals `publicKeyToDidKey(envelope.signature.public_key)`. Consumers re-derive and assert before installing."
         },
         "envelope": {
           "type": "object",
@@ -261,7 +273,8 @@
                 }
               },
               "required": ["name", "version", "content_hash"],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Compact addressing tuple: name, version, and content_hash. Used for indexing and addressing without parsing the full manifest."
             },
             "manifest": {
               "type": "object",
@@ -314,7 +327,8 @@
                       "description": "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions."
                     }
                   },
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "description": "Free-form display metadata per agentskills.io: author, category, tags. UI-only — never load-bearing. The cryptographic author is `motebit.signature.public_key`."
                 },
                 "motebit": {
                   "type": "object",
@@ -374,7 +388,8 @@
                 }
               },
               "required": ["name", "description", "version", "motebit"],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "The parsed SKILL.md frontmatter (`SkillManifest`). Embedded so the envelope is self-contained — third-party verifiers and registries validate name, version, sensitivity, and provenance without reading SKILL.md."
             },
             "body_hash": {
               "type": "string",
@@ -422,28 +437,35 @@
                 }
               },
               "required": ["suite", "public_key", "value"],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Ed25519 signature over the JCS-canonicalized envelope with `signature.value` removed. Suite is pinned to `motebit-jcs-ed25519-b64-v1`. Verification: re-canonicalize, verify against `signature.public_key`."
             }
           },
           "required": ["spec_version", "skill", "manifest", "body_hash", "files", "signature"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Full signed envelope, byte-identical to what was submitted. Consumers MUST re-verify against `envelope.signature.public_key` before installing — relay is a convenience surface, not a trust root."
         },
         "body": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9_+/=-]*$"
+          "pattern": "^[A-Za-z0-9_+/=-]*$",
+          "description": "Base64-encoded LF-normalized SKILL.md body bytes."
         },
         "files": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/SkillRegistryBundle/properties/body"
-          }
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_+/=-]*$"
+          },
+          "description": "Map of relative path → base64-encoded file bytes. Keys match envelope.files[].path."
         },
         "submitted_at": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Unix milliseconds."
         },
         "featured": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "True iff the submitter is in the relay's featured-submitters allowlist."
         }
       },
       "required": ["submitter_motebit_id", "envelope", "body", "submitted_at", "featured"],

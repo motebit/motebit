@@ -88,10 +88,24 @@ export const SkillRegistryEntrySchema = z
     ),
     description: z.string().describe("Mirrors manifest.description."),
     sensitivity: SkillSensitivityEnumSchema.describe("Mirrors manifest.motebit.sensitivity."),
-    platforms: z.array(SkillPlatformEnumSchema).optional(),
-    category: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-    author: z.string().optional(),
+    platforms: z
+      .array(SkillPlatformEnumSchema)
+      .optional()
+      .describe("Mirrors manifest.platforms. Empty/omitted = all platforms."),
+    category: z
+      .string()
+      .optional()
+      .describe("Mirrors manifest.metadata.category. UI grouping only."),
+    tags: z
+      .array(z.string())
+      .optional()
+      .describe("Mirrors manifest.metadata.tags. UI filtering only."),
+    author: z
+      .string()
+      .optional()
+      .describe(
+        "Mirrors manifest.metadata.author. Display only — not cryptographically verified. The cryptographic author is `signature_public_key` (and the derived `submitter_motebit_id`).",
+      ),
     signature_public_key: HexEd25519PublicKeySchema.describe(
       "Hex-encoded Ed25519 public key. Mirrors envelope.signature.public_key.",
     ),
@@ -108,7 +122,9 @@ export const SkillRegistryEntrySchema = z
 
 export const SkillRegistrySubmitRequestSchema = z
   .object({
-    envelope: SkillEnvelopeSchema,
+    envelope: SkillEnvelopeSchema.describe(
+      "Full signed envelope from `skill-envelope.json` (spec/skills-v1.md §6). The relay re-derives body_hash + per-file hashes from the bundled body+files and asserts they match this envelope before persisting.",
+    ),
     body: Base64StringSchema.describe("Base64-encoded LF-normalized SKILL.md body bytes."),
     files: z
       .record(z.string(), Base64StringSchema)
@@ -128,11 +144,13 @@ export const SkillRegistrySubmitResponseSchema = z
     skill_id: z
       .string()
       .describe("`<submitter_motebit_id>/<name>@<version>` — canonical addressing tuple."),
-    submitter_motebit_id: DidKeySchema,
-    name: SkillSlugSchema,
-    version: SemverSchema,
-    content_hash: HexSha256Schema,
-    submitted_at: z.number().int().nonnegative(),
+    submitter_motebit_id: DidKeySchema.describe(
+      "did:key derived from envelope.signature.public_key by the relay. Returned so the caller can confirm the relay derived the same did:key it expected.",
+    ),
+    name: SkillSlugSchema.describe("Slug. Echoes manifest.name."),
+    version: SemverSchema.describe("SemVer. Echoes manifest.version."),
+    content_hash: HexSha256Schema.describe("Echoes envelope.skill.content_hash."),
+    submitted_at: z.number().int().nonnegative().describe("Unix milliseconds."),
   })
   .strict();
 
@@ -142,10 +160,16 @@ export const SkillRegistrySubmitResponseSchema = z
 
 export const SkillRegistryListingSchema = z
   .object({
-    entries: z.array(SkillRegistryEntrySchema),
-    total: z.number().int().nonnegative(),
-    limit: z.number().int().positive(),
-    offset: z.number().int().nonnegative(),
+    entries: z
+      .array(SkillRegistryEntrySchema)
+      .describe("Page of registry entries. Sorted alphabetically by name, then version DESC."),
+    total: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe("Total rows matching the filter — not just this page."),
+    limit: z.number().int().positive().describe("Page size used (default 50, max 200)."),
+    offset: z.number().int().nonnegative().describe("Page offset used (default 0)."),
   })
   .strict();
 
@@ -155,12 +179,23 @@ export const SkillRegistryListingSchema = z
 
 export const SkillRegistryBundleSchema = z
   .object({
-    submitter_motebit_id: DidKeySchema,
-    envelope: SkillEnvelopeSchema,
-    body: Base64StringSchema,
-    files: z.record(z.string(), Base64StringSchema).optional(),
-    submitted_at: z.number().int().nonnegative(),
-    featured: z.boolean(),
+    submitter_motebit_id: DidKeySchema.describe(
+      "did:key, echoed from the route param. Equals `publicKeyToDidKey(envelope.signature.public_key)`. Consumers re-derive and assert before installing.",
+    ),
+    envelope: SkillEnvelopeSchema.describe(
+      "Full signed envelope, byte-identical to what was submitted. Consumers MUST re-verify against `envelope.signature.public_key` before installing — relay is a convenience surface, not a trust root.",
+    ),
+    body: Base64StringSchema.describe("Base64-encoded LF-normalized SKILL.md body bytes."),
+    files: z
+      .record(z.string(), Base64StringSchema)
+      .optional()
+      .describe(
+        "Map of relative path → base64-encoded file bytes. Keys match envelope.files[].path.",
+      ),
+    submitted_at: z.number().int().nonnegative().describe("Unix milliseconds."),
+    featured: z
+      .boolean()
+      .describe("True iff the submitter is in the relay's featured-submitters allowlist."),
   })
   .strict();
 

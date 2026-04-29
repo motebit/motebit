@@ -139,7 +139,9 @@ export const SkillManifestSchema = z
       .array(SkillPlatformSchema)
       .optional()
       .describe("OS gate. Empty/omitted = all platforms."),
-    metadata: SkillManifestMetadataSchema.optional(),
+    metadata: SkillManifestMetadataSchema.optional().describe(
+      "Free-form display metadata per agentskills.io: author, category, tags. UI-only — never load-bearing. The cryptographic author is `motebit.signature.public_key`.",
+    ),
     motebit: SkillManifestMotebitSchema,
   })
   .strict();

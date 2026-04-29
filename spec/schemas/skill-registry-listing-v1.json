@@ -45,19 +45,23 @@
             "items": {
               "type": "string",
               "enum": ["macos", "linux", "windows", "ios", "android"]
-            }
+            },
+            "description": "Mirrors manifest.platforms. Empty/omitted = all platforms."
           },
           "category": {
-            "type": "string"
+            "type": "string",
+            "description": "Mirrors manifest.metadata.category. UI grouping only."
           },
           "tags": {
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Mirrors manifest.metadata.tags. UI filtering only."
           },
           "author": {
-            "type": "string"
+            "type": "string",
+            "description": "Mirrors manifest.metadata.author. Display only — not cryptographically verified. The cryptographic author is `signature_public_key` (and the derived `submitter_motebit_id`)."
           },
           "signature_public_key": {
             "type": "string",
@@ -86,19 +90,23 @@
           "submitted_at"
         ],
         "additionalProperties": false
-      }
+      },
+      "description": "Page of registry entries. Sorted alphabetically by name, then version DESC."
     },
     "total": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Total rows matching the filter — not just this page."
     },
     "limit": {
       "type": "integer",
-      "exclusiveMinimum": 0
+      "exclusiveMinimum": 0,
+      "description": "Page size used (default 50, max 200)."
     },
     "offset": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Page offset used (default 0)."
     }
   },
   "required": ["entries", "total", "limit", "offset"],
@@ -146,19 +154,23 @@
                 "items": {
                   "type": "string",
                   "enum": ["macos", "linux", "windows", "ios", "android"]
-                }
+                },
+                "description": "Mirrors manifest.platforms. Empty/omitted = all platforms."
               },
               "category": {
-                "type": "string"
+                "type": "string",
+                "description": "Mirrors manifest.metadata.category. UI grouping only."
               },
               "tags": {
                 "type": "array",
                 "items": {
                   "type": "string"
-                }
+                },
+                "description": "Mirrors manifest.metadata.tags. UI filtering only."
               },
               "author": {
-                "type": "string"
+                "type": "string",
+                "description": "Mirrors manifest.metadata.author. Display only — not cryptographically verified. The cryptographic author is `signature_public_key` (and the derived `submitter_motebit_id`)."
               },
               "signature_public_key": {
                 "type": "string",
@@ -187,19 +199,23 @@
               "submitted_at"
             ],
             "additionalProperties": false
-          }
+          },
+          "description": "Page of registry entries. Sorted alphabetically by name, then version DESC."
         },
         "total": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Total rows matching the filter — not just this page."
         },
         "limit": {
           "type": "integer",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "description": "Page size used (default 50, max 200)."
         },
         "offset": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Page offset used (default 0)."
         }
       },
       "required": ["entries", "total", "limit", "offset"],

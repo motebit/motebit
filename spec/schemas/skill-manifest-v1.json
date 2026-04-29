@@ -54,7 +54,8 @@
           "description": "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Free-form display metadata per agentskills.io: author, category, tags. UI-only — never load-bearing. The cryptographic author is `motebit.signature.public_key`."
     },
     "motebit": {
       "type": "object",
@@ -167,7 +168,8 @@
               "description": "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions."
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Free-form display metadata per agentskills.io: author, category, tags. UI-only — never load-bearing. The cryptographic author is `motebit.signature.public_key`."
         },
         "motebit": {
           "type": "object",

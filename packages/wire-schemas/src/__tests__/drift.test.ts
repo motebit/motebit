@@ -155,6 +155,24 @@ import {
   buildComputerSessionOpenedJsonSchema,
   buildComputerSessionClosedJsonSchema,
 } from "../computer-use.js";
+import { SKILL_MANIFEST_SCHEMA_ID, buildSkillManifestJsonSchema } from "../skill-manifest.js";
+import { SKILL_ENVELOPE_SCHEMA_ID, buildSkillEnvelopeJsonSchema } from "../skill-envelope.js";
+import {
+  SKILL_LOAD_PAYLOAD_SCHEMA_ID,
+  buildSkillLoadPayloadJsonSchema,
+} from "../skill-load-payload.js";
+import {
+  SKILL_REGISTRY_BUNDLE_SCHEMA_ID,
+  SKILL_REGISTRY_ENTRY_SCHEMA_ID,
+  SKILL_REGISTRY_LISTING_SCHEMA_ID,
+  SKILL_REGISTRY_SUBMIT_REQUEST_SCHEMA_ID,
+  SKILL_REGISTRY_SUBMIT_RESPONSE_SCHEMA_ID,
+  buildSkillRegistryBundleJsonSchema,
+  buildSkillRegistryEntryJsonSchema,
+  buildSkillRegistryListingJsonSchema,
+  buildSkillRegistrySubmitRequestJsonSchema,
+  buildSkillRegistrySubmitResponseJsonSchema,
+} from "../skill-registry.js";
 
 interface SchemaCase {
   name: string;
@@ -480,6 +498,54 @@ const CASES: SchemaCase[] = [
     filename: "computer-session-closed-v1.json",
     expectedId: COMPUTER_SESSION_CLOSED_SCHEMA_ID,
     build: buildComputerSessionClosedJsonSchema,
+  },
+  {
+    name: "skill-manifest-v1",
+    filename: "skill-manifest-v1.json",
+    expectedId: SKILL_MANIFEST_SCHEMA_ID,
+    build: buildSkillManifestJsonSchema,
+  },
+  {
+    name: "skill-envelope-v1",
+    filename: "skill-envelope-v1.json",
+    expectedId: SKILL_ENVELOPE_SCHEMA_ID,
+    build: buildSkillEnvelopeJsonSchema,
+  },
+  {
+    name: "skill-load-payload-v1",
+    filename: "skill-load-payload-v1.json",
+    expectedId: SKILL_LOAD_PAYLOAD_SCHEMA_ID,
+    build: buildSkillLoadPayloadJsonSchema,
+  },
+  {
+    name: "skill-registry-entry-v1",
+    filename: "skill-registry-entry-v1.json",
+    expectedId: SKILL_REGISTRY_ENTRY_SCHEMA_ID,
+    build: buildSkillRegistryEntryJsonSchema,
+  },
+  {
+    name: "skill-registry-submit-request-v1",
+    filename: "skill-registry-submit-request-v1.json",
+    expectedId: SKILL_REGISTRY_SUBMIT_REQUEST_SCHEMA_ID,
+    build: buildSkillRegistrySubmitRequestJsonSchema,
+  },
+  {
+    name: "skill-registry-submit-response-v1",
+    filename: "skill-registry-submit-response-v1.json",
+    expectedId: SKILL_REGISTRY_SUBMIT_RESPONSE_SCHEMA_ID,
+    build: buildSkillRegistrySubmitResponseJsonSchema,
+  },
+  {
+    name: "skill-registry-listing-v1",
+    filename: "skill-registry-listing-v1.json",
+    expectedId: SKILL_REGISTRY_LISTING_SCHEMA_ID,
+    build: buildSkillRegistryListingJsonSchema,
+  },
+  {
+    name: "skill-registry-bundle-v1",
+    filename: "skill-registry-bundle-v1.json",
+    expectedId: SKILL_REGISTRY_BUNDLE_SCHEMA_ID,
+    build: buildSkillRegistryBundleJsonSchema,
   },
 ];
 

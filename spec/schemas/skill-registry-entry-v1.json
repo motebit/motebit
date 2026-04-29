@@ -40,19 +40,23 @@
       "items": {
         "type": "string",
         "enum": ["macos", "linux", "windows", "ios", "android"]
-      }
+      },
+      "description": "Mirrors manifest.platforms. Empty/omitted = all platforms."
     },
     "category": {
-      "type": "string"
+      "type": "string",
+      "description": "Mirrors manifest.metadata.category. UI grouping only."
     },
     "tags": {
       "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "description": "Mirrors manifest.metadata.tags. UI filtering only."
     },
     "author": {
-      "type": "string"
+      "type": "string",
+      "description": "Mirrors manifest.metadata.author. Display only — not cryptographically verified. The cryptographic author is `signature_public_key` (and the derived `submitter_motebit_id`)."
     },
     "signature_public_key": {
       "type": "string",
@@ -119,19 +123,23 @@
           "items": {
             "type": "string",
             "enum": ["macos", "linux", "windows", "ios", "android"]
-          }
+          },
+          "description": "Mirrors manifest.platforms. Empty/omitted = all platforms."
         },
         "category": {
-          "type": "string"
+          "type": "string",
+          "description": "Mirrors manifest.metadata.category. UI grouping only."
         },
         "tags": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Mirrors manifest.metadata.tags. UI filtering only."
         },
         "author": {
-          "type": "string"
+          "type": "string",
+          "description": "Mirrors manifest.metadata.author. Display only — not cryptographically verified. The cryptographic author is `signature_public_key` (and the derived `submitter_motebit_id`)."
         },
         "signature_public_key": {
           "type": "string",

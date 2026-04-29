@@ -34,7 +34,8 @@
             }
           },
           "required": ["name", "version", "content_hash"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Compact addressing tuple: name, version, and content_hash. Used for indexing and addressing without parsing the full manifest."
         },
         "manifest": {
           "type": "object",
@@ -87,7 +88,8 @@
                   "description": "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions."
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Free-form display metadata per agentskills.io: author, category, tags. UI-only — never load-bearing. The cryptographic author is `motebit.signature.public_key`."
             },
             "motebit": {
               "type": "object",
@@ -147,7 +149,8 @@
             }
           },
           "required": ["name", "description", "version", "motebit"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "The parsed SKILL.md frontmatter (`SkillManifest`). Embedded so the envelope is self-contained — third-party verifiers and registries validate name, version, sensitivity, and provenance without reading SKILL.md."
         },
         "body_hash": {
           "type": "string",
@@ -195,11 +198,13 @@
             }
           },
           "required": ["suite", "public_key", "value"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Ed25519 signature over the JCS-canonicalized envelope with `signature.value` removed. Suite is pinned to `motebit-jcs-ed25519-b64-v1`. Verification: re-canonicalize, verify against `signature.public_key`."
         }
       },
       "required": ["spec_version", "skill", "manifest", "body_hash", "files", "signature"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Full signed envelope from `skill-envelope.json` (spec/skills-v1.md §6). The relay re-derives body_hash + per-file hashes from the bundled body+files and asserts they match this envelope before persisting."
     },
     "body": {
       "type": "string",
@@ -249,7 +254,8 @@
                 }
               },
               "required": ["name", "version", "content_hash"],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Compact addressing tuple: name, version, and content_hash. Used for indexing and addressing without parsing the full manifest."
             },
             "manifest": {
               "type": "object",
@@ -302,7 +308,8 @@
                       "description": "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions."
                     }
                   },
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "description": "Free-form display metadata per agentskills.io: author, category, tags. UI-only — never load-bearing. The cryptographic author is `motebit.signature.public_key`."
                 },
                 "motebit": {
                   "type": "object",
@@ -362,7 +369,8 @@
                 }
               },
               "required": ["name", "description", "version", "motebit"],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "The parsed SKILL.md frontmatter (`SkillManifest`). Embedded so the envelope is self-contained — third-party verifiers and registries validate name, version, sensitivity, and provenance without reading SKILL.md."
             },
             "body_hash": {
               "type": "string",
@@ -410,11 +418,13 @@
                 }
               },
               "required": ["suite", "public_key", "value"],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Ed25519 signature over the JCS-canonicalized envelope with `signature.value` removed. Suite is pinned to `motebit-jcs-ed25519-b64-v1`. Verification: re-canonicalize, verify against `signature.public_key`."
             }
           },
           "required": ["spec_version", "skill", "manifest", "body_hash", "files", "signature"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Full signed envelope from `skill-envelope.json` (spec/skills-v1.md §6). The relay re-derives body_hash + per-file hashes from the bundled body+files and asserts they match this envelope before persisting."
         },
         "body": {
           "type": "string",

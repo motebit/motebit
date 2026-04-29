@@ -1,11 +1,10 @@
 ---
 "@motebit/relay": patch
-"motebit": patch
 ---
 
-Skills v1 phase 4.5a — relay-hosted curated skills registry + CLI install path.
+Skills v1 phase 4.5a — relay-hosted curated skills registry.
 
-**Relay** ([`services/relay/src/skill-registry.ts`](https://raw.githubusercontent.com/motebit/motebit/main/services/relay/src/skill-registry.ts), spec [`skills-registry-v1.md`](https://raw.githubusercontent.com/motebit/motebit/main/spec/skills-registry-v1.md)) — three endpoints under `/api/v1/skills/`:
+Three endpoints under `/api/v1/skills/`:
 
 - `POST /submit` — verify envelope signature, re-derive `body_hash` and per-file hashes, persist byte-identical bundle plus indexed projection. Submitter is canonically derived from `envelope.signature.public_key` (no spoofing). Re-submitting the same `(submitter, name, version)` with different bytes returns 409 `version_immutable`; identical bytes are idempotent.
 - `GET /discover` — paginated, default view filters by featured-submitters allowlist (env: `FEATURED_SKILL_SUBMITTERS`). Filters by `q` (name/description/tags substring), `submitter`, `sensitivity`, `platform`. `include_unfeatured=true` opens the full set.
@@ -13,12 +12,6 @@ Skills v1 phase 4.5a — relay-hosted curated skills registry + CLI install path
 
 Submit is permissive-by-signature (no bearer token); discover and resolve are public-read. Standard rate-limit tiers apply (write/read).
 
-**CLI** ([`apps/cli/src/subcommands/skills.ts`](https://raw.githubusercontent.com/motebit/motebit/main/apps/cli/src/subcommands/skills.ts)) — `motebit skills install` now accepts a relay address shape:
-
-```text
-motebit skills install did:key:z6Mk…/example-skill@1.0.0
-```
-
-The CLI fetches the bundle, re-verifies the envelope signature locally, asserts the relay-returned submitter matches the requested DID, then installs via the existing in-memory source path. Existing directory installs (`motebit skills install /path/to/skill`) are unchanged.
-
 Tests: 16 new relay tests covering submit happy path + 7 rejection cases + idempotency, discover (curated default, include_unfeatured, pagination, search, submitter filter), resolve (404 + byte-identical round-trip).
+
+Spec: `spec/skills-registry-v1.md`.
