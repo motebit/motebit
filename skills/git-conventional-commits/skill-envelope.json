@@ -1,0 +1,48 @@
+{
+  "spec_version": "1.0",
+  "skill": {
+    "name": "git-conventional-commits",
+    "version": "1.0.0",
+    "content_hash": "50667c176742dbcbab63e9abf81c9ec399ee092be82e0d5002e477441514832d"
+  },
+  "manifest": {
+    "name": "git-conventional-commits",
+    "description": "Compose Conventional Commits 1.0.0 messages — `type(scope): subject`, body explains the why, breaking changes flagged. Read the diff first, match the project's prior types and scopes, never bundle unrelated changes.",
+    "version": "1.0.0",
+    "platforms": [
+      "macos",
+      "linux",
+      "windows"
+    ],
+    "metadata": {
+      "author": "agentskills.io carrier-demo",
+      "category": "software-development",
+      "tags": [
+        "git",
+        "commit",
+        "conventional-commits",
+        "semver"
+      ]
+    },
+    "motebit": {
+      "spec_version": "1.0",
+      "sensitivity": "none",
+      "hardware_attestation": {
+        "required": false,
+        "minimum_score": 0
+      },
+      "signature": {
+        "suite": "motebit-jcs-ed25519-b64-v1",
+        "public_key": "858996cc58abe51870bd48c5a46ea5c8d5341293648455c1712866006ede2c13",
+        "value": "V3u9sMKRafU9eMR_s2V2jgEq5BPMz-mPh-Dp8HcmzTiaytisWgJOFijfnrhcIOINrEQWMW1Wv83Ku1CflcS7CQ"
+      }
+    }
+  },
+  "body_hash": "2bbff39e5083f9460fe4e666409e246f401d358437a795364f9a48403ece3b77",
+  "files": [],
+  "signature": {
+    "suite": "motebit-jcs-ed25519-b64-v1",
+    "public_key": "858996cc58abe51870bd48c5a46ea5c8d5341293648455c1712866006ede2c13",
+    "value": "novDk5dHO973mLV0m_TsIZV9G0GLulsM7Masn5PtDPvFALe0CwzQW4c731rPUgAvm5qFWLvD3zbiCQ0E1wdWBQ"
+  }
+}
