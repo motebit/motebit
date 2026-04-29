@@ -23,10 +23,9 @@ motebit:
     minimum_score: 0
   signature:
     suite: motebit-jcs-ed25519-b64-v1
-    public_key: d286e0d14b99b7f66aacc3504ce22b4ac5566d9788199198d292130c5dfc588d
-    value: odBpA6KK2xcHGB_l9X9OkT6aF7nYomTidfa6Y9sNvRsDuktiTYyZ2vL-0HEZxnRJN_iWovvF56vM20sdUOzhDw
+    public_key: ed5337823240b4bdd52e5e83dfdd4cc0f175222be4ab34b7707414cfa714adc2
+    value: ZmEx7_5yQqCpGjuxR3X1TFL8ea92O3u7Rr60wqNW0ZrwCTc655SkIqKcZl6c9dqIuTOH4qIwaDxdcPsH92mCBg
 ---
-
 # Git Commit Motebit-Style
 
 ## When to Use
@@ -37,40 +36,39 @@ and the work being captured lives in the motebit monorepo. Also fires on
 
 ## Procedure
 
-1.  **Read the diff first.** `git status` for untracked, `git diff --staged`
-    for staged, `git diff` for unstaged. Check `git log` for the project's
-    recent commit style — every motebit commit uses Conventional Commits.
-2.  **Compose the subject line in Conventional Commits form** —
-    `type(scope): summary`. Types observed in motebit history:
-    `feat`, `fix`, `refactor`, `docs`, `chore`, `test`, plus motebit-
-    specific scopes like `operator(scope):`, `gate(check-X):`, `ci:`.
-    Subject is imperative mood, ≤ 70 chars.
-3.  **Body explains the why, not the what.** The diff already shows what
-    changed. Lead with the architectural reason (e.g., "permissive-floor
-    purity required types-only at this layer"). Reference doctrine docs and
-    spec sections by path when they justify the change.
-4.  **Co-author trailer.** End commit messages authored in collaboration
-    with Claude with:
+1. **Read the diff first.** `git status` for untracked, `git diff --staged`
+   for staged, `git diff` for unstaged. Check `git log` for the project's
+   recent commit style — every motebit commit uses Conventional Commits.
+2. **Compose the subject line in Conventional Commits form** —
+   `type(scope): summary`. Types observed in motebit history:
+   `feat`, `fix`, `refactor`, `docs`, `chore`, `test`, plus motebit-
+   specific scopes like `operator(scope):`, `gate(check-X):`, `ci:`.
+   Subject is imperative mood, ≤ 70 chars.
+3. **Body explains the why, not the what.** The diff already shows what
+   changed. Lead with the architectural reason (e.g., "permissive-floor
+   purity required types-only at this layer"). Reference doctrine docs and
+   spec sections by path when they justify the change.
+4. **Co-author trailer.** End commit messages authored in collaboration
+   with Claude with:
 
-        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+       Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 
-    Adjust the model name to match the model that did the work. The trailer
-    is required for any AI-collaborated commit.
+   Adjust the model name to match the model that did the work. The trailer
+   is required for any AI-collaborated commit.
+5. **Use a HEREDOC for commit messages with multiple lines.** This avoids
+   shell escaping landmines:
 
-5.  **Use a HEREDOC for commit messages with multiple lines.** This avoids
-    shell escaping landmines:
+       git commit -m "$(cat <<'EOF'
+       feat(skills): add agentskills.io-compatible runtime
 
-        git commit -m "$(cat <<'EOF'
-        feat(skills): add agentskills.io-compatible runtime
+       Why: ride the open standard, add sovereign primitives on top.
+       Carrier thesis (memory: strategy_openclaw_hermes_carrier_thesis)
+       converges on motebit becoming the only agentskills.io runtime where
+       every skill carries cryptographic provenance.
 
-        Why: ride the open standard, add sovereign primitives on top.
-        Carrier thesis (memory: strategy_openclaw_hermes_carrier_thesis)
-        converges on motebit becoming the only agentskills.io runtime where
-        every skill carries cryptographic provenance.
-
-        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
-        EOF
-        )"
+       Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+       EOF
+       )"
 
 ## Pitfalls
 

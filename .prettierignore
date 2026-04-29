@@ -25,6 +25,15 @@ packages/*/etc/*.api.md
 # forever. Same shape as #api.md above.
 apps/cli/etc/cli-surface.json
 
+# Reference skills under skills/* ship as content-addressed signed
+# artifacts: skill-envelope.json carries body_hash and content_hash
+# computed from the EXACT bytes of SKILL.md. Prettier reformatting the
+# body after signing invalidates the hashes and the envelope signature
+# — exactly the drift class check-skill-corpus exists to catch. Re-sign
+# via `pnpm --filter @motebit/skills build-reference-skill` if the
+# content needs to change.
+skills/**
+
 # Generated from services/relay/src/transparency.ts renderer; the
 # transparency sibling-boundary test asserts byte-for-byte equality
 # between the committed file and renderMarkdown() output. Prettier
