@@ -59,19 +59,19 @@ export class NodeFsSkillStorageAdapter implements SkillStorageAdapter {
     }
   }
 
-  async list(): Promise<InstalledSkillIndexEntry[]> {
-    return this.readIndex();
+  list(): Promise<InstalledSkillIndexEntry[]> {
+    return Promise.resolve(this.readIndex());
   }
 
-  async read(name: string): Promise<StoredSkill | null> {
+  read(name: string): Promise<StoredSkill | null> {
     const index = this.readIndex();
     const entry = index.find((e) => e.name === name);
-    if (!entry) return null;
+    if (!entry) return Promise.resolve(null);
 
     const dir = this.skillDir(name);
     const skillMdPath = join(dir, SKILL_MD);
     const envPath = join(dir, SKILL_ENVELOPE_JSON);
-    if (!existsFile(skillMdPath) || !existsFile(envPath)) return null;
+    if (!existsFile(skillMdPath) || !existsFile(envPath)) return Promise.resolve(null);
 
     let parsed: ReturnType<typeof parseSkillFile>;
     try {
@@ -95,16 +95,16 @@ export class NodeFsSkillStorageAdapter implements SkillStorageAdapter {
 
     const files = collectAuxFiles(dir);
 
-    return {
+    return Promise.resolve({
       index: entry,
       manifest: parsed.manifest,
       envelope,
       body: parsed.body,
       files,
-    };
+    });
   }
 
-  async write(skill: StoredSkill): Promise<void> {
+  write(skill: StoredSkill): Promise<void> {
     const dir = this.skillDir(skill.index.name);
     mkdirSync(dir, { recursive: true });
 
@@ -139,31 +139,37 @@ export class NodeFsSkillStorageAdapter implements SkillStorageAdapter {
       index.push(skill.index);
     }
     this.writeIndex(index);
+    return Promise.resolve();
   }
 
-  async remove(name: string): Promise<void> {
+  remove(name: string): Promise<void> {
     const dir = this.skillDir(name);
     if (existsFile(dir)) {
       rmSync(dir, { recursive: true, force: true });
     }
     const index = this.readIndex().filter((e) => e.name !== name);
     this.writeIndex(index);
+    return Promise.resolve();
   }
 
-  async setEnabled(name: string, enabled: boolean): Promise<void> {
+  setEnabled(name: string, enabled: boolean): Promise<void> {
     const index = this.readIndex();
     const entry = index.find((e) => e.name === name);
-    if (!entry) return;
-    entry.enabled = enabled;
-    this.writeIndex(index);
+    if (entry) {
+      entry.enabled = enabled;
+      this.writeIndex(index);
+    }
+    return Promise.resolve();
   }
 
-  async setTrusted(name: string, trusted: boolean): Promise<void> {
+  setTrusted(name: string, trusted: boolean): Promise<void> {
     const index = this.readIndex();
     const entry = index.find((e) => e.name === name);
-    if (!entry) return;
-    entry.trusted = trusted;
-    this.writeIndex(index);
+    if (entry) {
+      entry.trusted = trusted;
+      this.writeIndex(index);
+    }
+    return Promise.resolve();
   }
 
   // ------------------------------------------------------------------
@@ -183,7 +189,7 @@ export class NodeFsSkillStorageAdapter implements SkillStorageAdapter {
     const raw = readFileSync(path, "utf-8");
     if (raw.trim() === "") return [];
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed)) return [];
       return parsed as InstalledSkillIndexEntry[];
     } catch (err: unknown) {

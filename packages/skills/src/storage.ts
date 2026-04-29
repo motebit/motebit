@@ -38,38 +38,45 @@ export interface SkillStorageAdapter {
  * In-memory adapter — the registry's reference test target. Pure, no I/O.
  * Preserves insertion order for `list()` to match the fs adapter's
  * `installed.json` array semantics.
+ *
+ * Methods return `Promise<T>` (never `async`) — the interface is async-shaped
+ * to admit real-fs / network-backed future adapters, but this in-memory impl
+ * is synchronous internally and explicit `Promise.resolve` keeps the body
+ * lint-clean against `@typescript-eslint/require-await`.
  */
 export class InMemorySkillStorageAdapter implements SkillStorageAdapter {
   private readonly skills = new Map<string, StoredSkill>();
 
-  async list(): Promise<InstalledSkillIndexEntry[]> {
-    return Array.from(this.skills.values()).map((s) => ({ ...s.index }));
+  list(): Promise<InstalledSkillIndexEntry[]> {
+    return Promise.resolve(Array.from(this.skills.values()).map((s) => ({ ...s.index })));
   }
 
-  async read(name: string): Promise<StoredSkill | null> {
+  read(name: string): Promise<StoredSkill | null> {
     const entry = this.skills.get(name);
-    if (!entry) return null;
-    return cloneStoredSkill(entry);
+    if (!entry) return Promise.resolve(null);
+    return Promise.resolve(cloneStoredSkill(entry));
   }
 
-  async write(skill: StoredSkill): Promise<void> {
+  write(skill: StoredSkill): Promise<void> {
     this.skills.set(skill.index.name, cloneStoredSkill(skill));
+    return Promise.resolve();
   }
 
-  async remove(name: string): Promise<void> {
+  remove(name: string): Promise<void> {
     this.skills.delete(name);
+    return Promise.resolve();
   }
 
-  async setEnabled(name: string, enabled: boolean): Promise<void> {
+  setEnabled(name: string, enabled: boolean): Promise<void> {
     const existing = this.skills.get(name);
-    if (!existing) return;
-    existing.index = { ...existing.index, enabled };
+    if (existing) existing.index = { ...existing.index, enabled };
+    return Promise.resolve();
   }
 
-  async setTrusted(name: string, trusted: boolean): Promise<void> {
+  setTrusted(name: string, trusted: boolean): Promise<void> {
     const existing = this.skills.get(name);
-    if (!existing) return;
-    existing.index = { ...existing.index, trusted };
+    if (existing) existing.index = { ...existing.index, trusted };
+    return Promise.resolve();
   }
 }
 
