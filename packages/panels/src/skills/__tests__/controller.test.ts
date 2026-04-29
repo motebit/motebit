@@ -27,7 +27,6 @@ import {
 
 function makeSummary(overrides: Partial<SkillSummary> & { name: string }): SkillSummary {
   return {
-    name: "placeholder",
     version: "1.0.0",
     description: "placeholder skill",
     enabled: true,
