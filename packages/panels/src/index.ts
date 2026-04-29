@@ -72,3 +72,18 @@ export {
 } from "./goals/runner";
 
 export { formatCountdownUntil } from "./goals/format";
+
+export {
+  createSkillsController,
+  filterSkillsView,
+  type SkillsController,
+  type SkillsPanelAdapter,
+  type SkillsPanelState,
+  type SkillsInstallSource,
+  type SkillSummary,
+  type SkillDetail,
+  type SkillInstallResult,
+  type SkillProvenanceStatus,
+  type SkillSensitivity,
+  type SkillPlatform,
+} from "./skills/controller";
