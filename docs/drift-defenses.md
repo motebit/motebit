@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-63 invariants are enforced today. 54 run as hard CI gates via `pnpm check` (proven effective by `check-gates-effective`); one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
+64 invariants are enforced today. 55 run as hard CI gates via `pnpm check` (proven effective by `check-gates-effective`); one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
 
 ## Inventory
 
@@ -77,6 +77,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 | 61  | Every `/api/v1/admin/*` route registered in `services/relay/src/` ↔ matching `app.use("...", bearerAuth({ token: apiToken }))` registration in `middleware.ts` (the admin surface's only access control is the master bearer; a route registered without matching middleware ships wide open — same shape as `/api/v1/admin/transparency` which was unauth'd from 2026-04-14 to 2026-04-28 despite a JSDoc claim that contradicted reality)                      | `check-admin-route-auth.ts`                                    | 2026-04-28 |
 | 62  | Every committed reference skill under `skills/*` ↔ its committed `body_hash`, `content_hash`, and envelope signature — closes the drift class where a contributor edits SKILL.md without re-running `pnpm --filter @motebit/skills build-reference-skill` and ships a tampered-looking artifact users would only catch at install-time on their machines                                                                                                         | `check-skill-corpus.ts`                                        | 2026-04-28 |
 | 63  | Every public method on `SkillRegistry` (in `@motebit/skills`) ↔ a `motebit skills <verb>` CLI subcommand — closes the drift class where a registry method ships but isn't wired into the dispatch block, leaving registry surface unreachable from the user-facing CLI                                                                                                                                                                                           | `check-skill-cli-coverage.ts`                                  | 2026-04-28 |
+| 64  | Every Agents-panel renderer (`apps/{desktop,web,mobile}` agents UI) ↔ reads the projected `hardware_attestation` field AND surfaces the verifier name via `formatHardwarePlatform` from `@motebit/panels` — closes the self-attesting-system doctrine breach (`ha_surface_badge_agents_panel_gap`) where routing scored peers on hardware attestation but the user couldn't see WHICH peer was attested or by what verifier                                      | `check-trust-score-display.ts`                                 | 2026-04-29 |
 
 ## Incident histories
 

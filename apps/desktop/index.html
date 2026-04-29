@@ -3571,6 +3571,23 @@
         color: #9ca3af;
       }
 
+      /* Hardware-attestation badge — additive routing-input visibility per
+         docs/doctrine/self-attesting-system.md. Visually adjacent to the
+         trust badge (same row), distinct color so it doesn't read as a
+         second trust level. Verbatim "hardware-attested" text — see
+         spec/skills-v1.md §7.1 for the naming-collision rationale. */
+      .agent-ha-badge {
+        font-size: 9px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        background: rgba(20, 184, 166, 0.15);
+        color: #14b8a6;
+        cursor: help;
+      }
+
       /* Balance bar — subtle, monospace, the marketplace orientation */
       #agents-balance-bar {
         display: flex;

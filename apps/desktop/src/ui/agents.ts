@@ -3,6 +3,8 @@ import { formatTimeAgo } from "../types";
 import {
   createAgentsController,
   collectCapabilities,
+  formatHardwarePlatform,
+  type AgentHardwareAttestation,
   type AgentRecord,
   type AgentsFetchAdapter,
   type AgentsState,
@@ -53,6 +55,30 @@ const TRUST_BADGE_CLASS: Record<string, string> = {
   trusted: "trusted",
   blocked: "blocked",
 };
+
+/**
+ * Render the hardware-attested badge for a peer when the relay/runtime
+ * forwarded a verified `hardware_attestation` claim. Renders nothing when
+ * absent — rows without a claim stay visually unchanged. Tooltip carries
+ * the verifier name + score so a user can answer "why did motebit prefer
+ * that peer" (the doctrine-completeness probe `ha_surface_badge_agents_panel_gap`
+ * was deferred for). Badge text is verbatim "hardware-attested" — never
+ * "secure" or "verified" (those collide with the skills provenance
+ * vocabulary in `spec/skills-v1.md` §7.1).
+ */
+function appendHardwareBadge(
+  meta: HTMLElement,
+  attestation: AgentHardwareAttestation | undefined,
+): void {
+  if (attestation == null) return;
+  const badge = document.createElement("span");
+  badge.className = "agent-ha-badge";
+  badge.textContent = "hardware-attested";
+  const verifier = formatHardwarePlatform(attestation.platform);
+  const exportedSuffix = attestation.key_exported === true ? " · exported" : "";
+  badge.title = `${verifier} (score ${attestation.score.toFixed(2)})${exportedSuffix}`;
+  meta.appendChild(badge);
+}
 
 interface BalanceSnapshot {
   balance: number;
@@ -148,6 +174,8 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
       badge.textContent = agent.trust_level.replace(/_/g, " ");
       meta.appendChild(badge);
+
+      appendHardwareBadge(meta, agent.hardware_attestation);
 
       const tasks = document.createElement("span");
       const ok = agent.successful_tasks ?? 0;
@@ -302,6 +330,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
         badge.textContent = agent.trust_level.replace(/_/g, " ") + interactionSuffix;
         meta.appendChild(badge);
       }
+      appendHardwareBadge(meta, agent.hardware_attestation);
       if (typeof agent.last_seen_at === "number" && agent.last_seen_at > 0) {
         if (agent.freshness) {
           const dot = document.createElement("span");

@@ -20,6 +20,8 @@ import {
   createAgentsController,
   createMemoryController,
   classifyCertainty,
+  formatHardwarePlatform,
+  type AgentHardwareAttestation,
   type AgentRecord,
   type AgentsFetchAdapter,
   formatCountdownUntil,
@@ -497,6 +499,26 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     blocked: "blocked",
   };
 
+  // Render the hardware-attested badge when the relay forwarded a verified
+  // claim. Renders nothing when absent — rows without a claim stay
+  // visually unchanged. Badge text is verbatim "hardware-attested" to
+  // avoid colliding with skills provenance vocabulary (`spec/skills-v1.md`
+  // §7.1). Tooltip carries verifier name + score for "why did motebit
+  // prefer that peer".
+  function appendHardwareBadge(
+    meta: HTMLElement,
+    attestation: AgentHardwareAttestation | undefined,
+  ): void {
+    if (attestation == null) return;
+    const badge = document.createElement("span");
+    badge.className = "agent-ha-badge";
+    badge.textContent = "hardware-attested";
+    const verifier = formatHardwarePlatform(attestation.platform);
+    const exportedSuffix = attestation.key_exported === true ? " · exported" : "";
+    badge.title = `${verifier} (score ${attestation.score.toFixed(2)})${exportedSuffix}`;
+    meta.appendChild(badge);
+  }
+
   const agentsAdapter: AgentsFetchAdapter = {
     get syncUrl() {
       return loadSyncUrl();
@@ -549,6 +571,8 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
       badge.textContent = agent.trust_level.replace(/_/g, " ");
       meta.appendChild(badge);
+
+      appendHardwareBadge(meta, agent.hardware_attestation);
 
       const tasks = document.createElement("span");
       const ok = agent.successful_tasks ?? 0;
@@ -659,6 +683,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         badge.textContent = agent.trust_level.replace(/_/g, " ") + interactionSuffix;
         meta.appendChild(badge);
       }
+      appendHardwareBadge(meta, agent.hardware_attestation);
       if (typeof agent.last_seen_at === "number" && agent.last_seen_at > 0) {
         if (agent.freshness) {
           const dot = document.createElement("span");

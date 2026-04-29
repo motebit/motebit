@@ -66,6 +66,7 @@
     "check-claude-md": "npx tsx scripts/check-claude-md.ts",
     "check-skill-corpus": "npx tsx scripts/check-skill-corpus.ts",
     "check-skill-cli-coverage": "npx tsx scripts/check-skill-cli-coverage.ts",
+    "check-trust-score-display": "npx tsx scripts/check-trust-score-display.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",
     "check-docs-slash-claims": "npx tsx scripts/check-docs-slash-claims.ts",

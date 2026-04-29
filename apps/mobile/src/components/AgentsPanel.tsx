@@ -13,7 +13,9 @@ import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 import {
   createAgentsController,
+  formatHardwarePlatform,
   type AgentFreshness,
+  type AgentHardwareAttestation,
   type AgentRecord,
   type AgentsFetchAdapter,
   type AgentsState,
@@ -47,6 +49,34 @@ function formatTimeAgo(ts: number): string {
 function truncateId(id: string): string {
   if (id.length <= 16) return id;
   return id.slice(0, 8) + "..." + id.slice(-4);
+}
+
+/**
+ * Render the hardware-attested badge when a peer-issued claim has been
+ * forwarded by relay/runtime. Renders nothing when absent so rows
+ * without a claim stay visually unchanged. Verbatim "hardware-attested"
+ * text — collides with skills provenance vocabulary if anything else is
+ * used (`spec/skills-v1.md` §7.1). Verifier name + score travel via
+ * `accessibilityLabel` since RN has no hover-tooltip primitive.
+ */
+function HardwareBadge({
+  attestation,
+  styles,
+}: {
+  attestation: AgentHardwareAttestation | undefined;
+  styles: ReturnType<typeof createStyles>;
+}): React.ReactElement | null {
+  if (attestation == null) return null;
+  const verifier = formatHardwarePlatform(attestation.platform);
+  const exportedSuffix = attestation.key_exported === true ? " · key exported" : "";
+  return (
+    <View
+      style={styles.haBadge}
+      accessibilityLabel={`hardware-attested by ${verifier}, score ${attestation.score.toFixed(2)}${exportedSuffix}`}
+    >
+      <Text style={styles.haText}>hardware-attested</Text>
+    </View>
+  );
 }
 
 interface AgentsPanelProps {
@@ -167,10 +197,13 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                 <View style={styles.agentItem}>
                   <View style={styles.agentHeader}>
                     <Text style={styles.agentId}>{truncateId(item.remote_motebit_id)}</Text>
-                    <View style={[styles.trustBadge, { borderColor: trustColor }]}>
-                      <Text style={[styles.trustText, { color: trustColor }]}>
-                        {item.trust_level}
-                      </Text>
+                    <View style={styles.badgeRow}>
+                      <View style={[styles.trustBadge, { borderColor: trustColor }]}>
+                        <Text style={[styles.trustText, { color: trustColor }]}>
+                          {item.trust_level}
+                        </Text>
+                      </View>
+                      <HardwareBadge attestation={item.hardware_attestation} styles={styles} />
                     </View>
                   </View>
                   <View style={styles.statsRow}>
@@ -224,14 +257,17 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                 <View style={styles.agentItem}>
                   <View style={styles.agentHeader}>
                     <Text style={styles.agentId}>{truncateId(item.motebit_id)}</Text>
-                    {item.trust_level && (
-                      <View style={[styles.trustBadge, { borderColor: trustColor }]}>
-                        <Text style={[styles.trustText, { color: trustColor }]}>
-                          {item.trust_level}
-                          {interactionSuffix}
-                        </Text>
-                      </View>
-                    )}
+                    <View style={styles.badgeRow}>
+                      {item.trust_level && (
+                        <View style={[styles.trustBadge, { borderColor: trustColor }]}>
+                          <Text style={[styles.trustText, { color: trustColor }]}>
+                            {item.trust_level}
+                            {interactionSuffix}
+                          </Text>
+                        </View>
+                      )}
+                      <HardwareBadge attestation={item.hardware_attestation} styles={styles} />
+                    </View>
                   </View>
                   {item.capabilities.length > 0 && (
                     <View style={styles.capsRow}>
@@ -340,6 +376,20 @@ function createStyles(c: ThemeColors) {
       paddingVertical: 1,
     },
     trustText: { fontSize: 11, fontWeight: "700" },
+    badgeRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+    haBadge: {
+      borderRadius: 3,
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      backgroundColor: "rgba(20,184,166,0.15)",
+    },
+    haText: {
+      fontSize: 9,
+      fontWeight: "700",
+      color: "#14b8a6",
+      textTransform: "uppercase",
+      letterSpacing: 0.3,
+    },
     capsRow: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 4 },
     capTag: {
       backgroundColor: "rgba(126,184,218,0.1)",

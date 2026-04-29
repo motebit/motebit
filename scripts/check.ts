@@ -448,6 +448,12 @@ const GATES: ReadonlyArray<Gate> = [
       'any `from "@motebit/<X>"` import in apps/docs/content/docs/**/*.mdx where X is a workspace-private package (`"private": true` in packages/X/package.json) MUST sit inside an explicit `<ReferenceExample>` JSX wrapper. The wrapper component frames the snippet as reference-implementation internal code and links to source on GitHub. Sibling to the changeset config\'s `ignore` list that locks the version-doctrine sentinel (commit fa5fdfeb pinned 51 private packages to 0.0.0-private — only the eleven published packages make stability promises, and private packages have no API surface to claim). This gate is the docs-side enforcement of the same boundary: prevents a developer doc page from showing `import from "@motebit/market"` as if external developers could npm-install it (invariant #50, added 2026-04-26 after the docs.motebit.com audit found three pages — budget-settlement, semiring-routing, mcp-server-via-delegation — leaking 13 private-package imports into the public surface).',
     script: "check-doc-private-imports",
   },
+  {
+    name: "check-trust-score-display",
+    defends:
+      "every Agents-panel renderer (apps/desktop/src/ui/agents.ts, apps/web/src/ui/gated-panels.ts, apps/mobile/src/components/AgentsPanel.tsx) reads the `hardware_attestation` field projected onto AgentRecord/DiscoveredAgent AND surfaces the verifier name via `formatHardwarePlatform` from `@motebit/panels` (invariant #64, added 2026-04-29 alongside HA badge ship 3 — closes the doctrine breach documented in `ha_surface_badge_agents_panel_gap` project memory: routing factors HA via `HardwareAttestationSemiring` but the user couldn't see WHICH peer was hardware-attested or by what verifier; ship 1 added panel types + helpers, ship 2 lit up the data flow, ship 3 + this gate lock in the surface render so a fourth surface or a regression on the badge can't reopen the gap).",
+    script: "check-trust-score-display",
+  },
 ];
 
 interface Result {
