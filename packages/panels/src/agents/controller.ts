@@ -40,6 +40,56 @@ export interface PricingEntry {
 // ── Response shapes ───────────────────────────────────────────────────
 
 /**
+ * Hardware-attestation surface a peer's identity key was minted on. Mirrors
+ * `HardwareAttestationClaim.platform` from `@motebit/protocol` exactly so a
+ * downgrade to the protocol-level value is one cast. `software` is the
+ * explicit "no hardware-backed key" sentinel; absence of `hw_platform`
+ * means "no claim received from this agent" (also software-equivalent for
+ * scoring, but display-wise rendered as "—").
+ *
+ * Names are inlined per the panels CLAUDE.md rule 2 (no @motebit/protocol
+ * imports). Drift between this union and the protocol's
+ * `HardwareAttestationClaim["platform"]` would surface at the relay-wire
+ * boundary, where the AgentsFetchAdapter populates the field.
+ */
+export type AgentHardwarePlatform =
+  | "secure_enclave"
+  | "tpm"
+  | "play_integrity"
+  | "android_keystore"
+  | "device_check"
+  | "webauthn"
+  | "software";
+
+/**
+ * Hardware-attestation snapshot per agent row. Non-null iff the relay
+ * forwarded a verified `HardwareAttestationClaim` from the agent's most
+ * recent `TrustCredential` (`spec/credential-v1.md` §3.4). Surfaces render
+ * a per-row "hardware-attested" badge from this; absence shows "—".
+ *
+ * `score` is precomputed by the controller (or the adapter) so surfaces
+ * never need to import `@motebit/semiring`. Range [0, 1] per
+ * `HardwareAttestationSemiring` (`packages/semiring/src/hardware-attestation.ts`).
+ *
+ * Per `docs/doctrine/self-attesting-system.md`: every routing-input claim
+ * MUST be visible to the user. HA factored into peer ranking silently
+ * before this; the badge closes the gap.
+ */
+export interface AgentHardwareAttestation {
+  /** Attestation surface. `software` is the explicit "no hardware key" sentinel. */
+  platform: AgentHardwarePlatform;
+  /** True when the private key was exported from hardware (weakens the claim). */
+  key_exported?: boolean;
+  /**
+   * Score in [0, 1] under `HardwareAttestationSemiring`. Surfaces sort or
+   * tie-break on this; the score is also surfaced via the badge tooltip so
+   * a user can verify "why did motebit prefer that peer" — the
+   * doctrine-completeness probe this gap was deferred for.
+   */
+  score: number;
+}
+
+/**
  * An agent the local motebit has interacted with before. The shape mirrors
  * the relay's `/api/v1/agents/{id}/trusted` response and the runtime's
  * `listTrustedAgents()` return type.
@@ -55,6 +105,8 @@ export interface AgentRecord {
   successful_tasks?: number;
   failed_tasks?: number;
   notes?: string;
+  /** Hardware-attestation snapshot. Absent when the relay forwarded no claim. */
+  hardware_attestation?: AgentHardwareAttestation;
 }
 
 /**
@@ -71,6 +123,65 @@ export interface DiscoveredAgent {
   last_seen_at?: number;
   endpoint_url?: string;
   freshness?: AgentFreshness;
+  /** Hardware-attestation snapshot. Absent when the relay forwarded no claim. */
+  hardware_attestation?: AgentHardwareAttestation;
+}
+
+/**
+ * Pure scoring helper — accepts the wire-level `platform` + optional
+ * `key_exported` flag and returns the [0, 1] score under
+ * `HardwareAttestationSemiring`. Inlined here (rather than imported from
+ * `@motebit/semiring`) for the same reason `AgentHardwarePlatform` is
+ * inlined: panels package stays at zero internal deps. The adapter
+ * imports the canonical implementation; this helper exists for surfaces
+ * that have a raw claim and want a score without hitting the relay.
+ *
+ * Drift defense: the four constants below MUST stay byte-aligned with
+ * `packages/semiring/src/hardware-attestation.ts` HW_ATTESTATION_*. A
+ * sibling-boundary audit on any change to either side.
+ */
+export function scoreHardwareAttestation(
+  platform: AgentHardwarePlatform | undefined,
+  keyExported?: boolean,
+): number {
+  if (platform === undefined) return 0; // HW_ATTESTATION_NONE
+  switch (platform) {
+    case "secure_enclave":
+    case "tpm":
+    case "device_check":
+    case "play_integrity":
+    case "android_keystore":
+    case "webauthn":
+      return keyExported === true ? 0.5 : 1; // HW_ATTESTATION_HARDWARE_EXPORTED / HARDWARE
+    case "software":
+      return 0.1; // HW_ATTESTATION_SOFTWARE
+  }
+}
+
+/**
+ * Display label for an attestation platform. Names match the platforms
+ * users actually understand on each surface ("Secure Enclave", not
+ * "secure_enclave"); the verbatim doctrine-anchored term
+ * "hardware-attested" is the badge text, this is the verifier name shown
+ * inside the tooltip.
+ */
+export function formatHardwarePlatform(platform: AgentHardwarePlatform): string {
+  switch (platform) {
+    case "secure_enclave":
+      return "Secure Enclave";
+    case "tpm":
+      return "TPM";
+    case "play_integrity":
+      return "Play Integrity";
+    case "android_keystore":
+      return "Android Keystore";
+    case "device_check":
+      return "DeviceCheck";
+    case "webauthn":
+      return "WebAuthn";
+    case "software":
+      return "software";
+  }
 }
 
 // ── Adapter ──────────────────────────────────────────────────────────
