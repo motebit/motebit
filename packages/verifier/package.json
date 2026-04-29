@@ -1,6 +1,6 @@
 {
   "name": "@motebit/verifier",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Apache-2.0 library for verifying signed Motebit artifacts (identity files, execution receipts, credentials, presentations) — file-reading and human-formatting helpers on top of @motebit/crypto. The canonical `motebit-verify` CLI now lives at @motebit/verify; this package is the Apache-2.0 library it sits on.",
   "type": "module",
   "main": "./dist/index.js",

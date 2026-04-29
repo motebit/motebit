@@ -1,5 +1,190 @@
 # motebit CLI Changelog
 
+## 1.2.0
+
+### Minor Changes
+
+- 9b4a296: Add agentskills.io-compatible procedural-knowledge runtime per `spec/skills-v1.md`.
+
+  Skills are user-installable markdown files containing procedural knowledge — when to use a tool, in what order, with what verifications. Open standard from Anthropic adopted across Claude Code, Codex, Cursor, GitHub Copilot. This release layers motebit-namespaced extensions on top of the standard frontmatter, ignored by non-motebit runtimes.
+
+  **`@motebit/protocol`** — adds wire types for the new skill artifacts:
+
+  ```text
+  SkillSensitivity            "none" | "personal" | "medical" | "financial" | "secret"
+  SkillPlatform               "macos" | "linux" | "windows" | "ios" | "android"
+  SkillSignature              { suite, public_key, value }
+  SkillHardwareAttestationGate { required?, minimum_score? }
+  SkillManifest               full parsed frontmatter
+  SkillEnvelope               content-addressed signed wrapper
+  SKILL_SENSITIVITY_TIERS, SKILL_AUTO_LOADABLE_TIERS, SKILL_PLATFORMS  frozen const arrays
+  ```
+
+  **`@motebit/crypto`** — adds offline-verifiable sign/verify pipeline using the `motebit-jcs-ed25519-b64-v1` suite (sibling to execution receipts, NOT W3C `eddsa-jcs-2022`):
+
+  ```text
+  canonicalizeSkillManifestBytes(manifest, body)  -> Uint8Array
+  canonicalizeSkillEnvelopeBytes(envelope)        -> Uint8Array
+  signSkillManifest / signSkillEnvelope
+  verifySkillManifest / verifySkillEnvelope (+ Detailed variants)
+  decodeSkillSignaturePublicKey(sig)              -> Uint8Array
+  SKILL_SIGNATURE_SUITE                           const
+  ```
+
+  **`motebit`** (CLI) — adds the user-facing surface:
+
+  ```text
+  motebit skills install <directory>
+  motebit skills list
+  motebit skills enable | disable <name>
+  motebit skills trust | untrust <name>
+  motebit skills verify <name>
+  motebit skills remove <name>
+  /skills                       (REPL slash — list with provenance badges)
+  /skill <name>                 (REPL slash — show full details)
+  ```
+
+  Install is permissive (filesystem record, sibling to `mcp_trusted_servers` add); auto-load is provenance-gated (the act layer). The selector filters by enabled+trusted+platform+sensitivity+hardware-attestation before BM25 ranking on description. Manual trust grants emit signed audit events to `~/.motebit/skills/audit.log` without manufacturing cryptographic provenance.
+
+  Two new drift gates land alongside: `check-skill-corpus` (every committed reference skill verifies offline against its committed signature) and `check-skill-cli-coverage` (every public `SkillRegistry` method has a `motebit skills <verb>` dispatch arm).
+
+  Phase 1 ships frontmatter + envelope + signature scheme + sensitivity tiers + trust gate + the eight subcommands + REPL slashes + drift gates + one signed dogfood reference (`skills/git-commit-motebit-style/`). Phase 2: `SkillSelector` wired into the runtime context-injection path, plus `scripts/` quarantine + per-script approval. Phase 3: signed `SkillLoadReceipt` in `execution-ledger-v1`. Phase 4: sibling-surface skill browsers + curated registry.
+
+### Patch Changes
+
+- 34c73ca: Replace inline `require("node:os")` with a top-of-file `import * as os from "node:os"` in `runtime-factory.ts`. Pre-push lint surfaced four errors (`no-require-imports` + `no-unsafe-*`) on the CommonJS-style require — ESM imports keep the type info and pass the published-package-source eslint preset.
+- 57c0e45: Skills v1 phase 2: wire `SkillSelector` into the runtime context-injection path so installed skills actually inject per-turn (spec/skills-v1.md §7).
+
+  **`@motebit/sdk`** — adds the developer-contract surface for the runtime ↔ skill-runtime adapter boundary:
+
+  ```text
+  SkillInjection         { name, version, body, provenance }
+  SkillSelectorHook      { selectForTurn(turn) -> Promise<SkillInjection[]> }
+  ContextPack            new optional `selectedSkills` field
+  ```
+
+  The `SkillSelectorHook` is the abstraction the runtime binds to. Surfaces (CLI / desktop / mobile) provide concrete implementations behind this interface; the runtime stays unaware of the BSL `@motebit/skills` package per the adapter-pattern doctrine.
+
+  **`motebit`** (CLI) — wires `NodeFsSkillStorageAdapter + SkillRegistry + SkillSelector` behind the `SkillSelectorHook` interface. Each turn the runtime calls `selectForTurn(text)`; the hook reads `~/.motebit/skills/` fresh (so `install`/`trust`/`remove` propagate without restart), runs the BM25-ranked selector with `sessionSensitivity: "none"` and `hardwareAttestationScore: 0` defaults appropriate to the CLI today, maps the result to `SkillInjection[]`, and returns top-K. `process.platform` maps to `SkillPlatform` for the OS gate.
+
+  Selected skill bodies inject into the system prompt as labeled blocks per spec §7.3:
+
+  ```text
+  [skill: git-commit-motebit-style@1.0.0 — verified]
+  <body>
+  ```
+
+  Verified skills get `verified` tag; operator-attested unsigned skills get `operator-trusted (unsigned)` tag — the agent sees provenance posture and can factor it into reasoning.
+
+  Fail-closed: a hook that throws is logged via `runtime._logger.warn("skill_selector_failed", ...)` and treated as an empty result. Selector failures never block the AI loop.
+
+  Phase 2 remaining work: `scripts/` quarantine + per-script approval (deferred until a skill bearing scripts/ ships; will use the existing tool-approval gate per the saved project memory). Phase 3: signed `SkillLoadReceipt` in `execution-ledger-v1`.
+
+- 3dd5c54: Update phase 2 ai-core prompt-test fixtures to include the new `score` and `signature` fields on `SkillInjection` (added in phase 3). No behavior change — the prompt builder still ignores both fields, the renderings asserted by the tests are unchanged.
+- 2a48142: Skills v1 phase 3: per-skill audit entries in the execution ledger (spec/skills-v1.md §7.4).
+
+  Every skill the runtime's `SkillSelector` pulls into context now produces one `EventType.SkillLoaded` event-log entry, immediately after the selector returns and before the AI loop receives the system prompt. The audit trail lets a user prove later: _"the obsidian skill ran on date X with this exact signature value at session sensitivity Y."_
+
+  **`@motebit/protocol`** — adds the wire-format type and event:
+
+  ```text
+  SkillLoadPayload  { skill_id, skill_name, skill_version, skill_signature,
+                      provenance, score, run_id?, session_sensitivity }
+  EventType.SkillLoaded
+  ```
+
+  **`@motebit/sdk`** — extends `SkillInjection` with two audit-only fields the runtime threads into the ledger entry:
+
+  ```text
+  SkillInjection.score      BM25 relevance — surfaces selection rationale
+  SkillInjection.signature  Envelope signature.value — content-addressed pointer
+                            to the exact bytes loaded; empty for trusted_unsigned
+  ```
+
+  The AI loop's prompt builder ignores both fields (rendering stays unchanged). They ride only into the `SkillLoaded` event payload.
+
+  **`motebit`** (CLI) — runtime-factory's hook now passes `score` + `signature` through from the BSL `SkillSelector` result.
+
+  Best-effort emission: a failed `eventStore.append` is logged via `runtime._logger.warn("skill_load_event_append_failed", ...)` and the AI loop proceeds. Audit absence (skill loaded without matching event) is preferable to a turn blocked on a transient storage error.
+
+  Skill_signature audit utility: a stale ledger entry whose signature does not resolve in the current registry is itself a useful signal — the skill was re-signed (legitimate update) or removed (less common). Both provable from the audit trail without retaining the original bytes.
+
+  Wire-schema artifact: `spec/schemas/skill-load-payload-v1.json` ships under Apache-2.0 alongside the existing skills schemas.
+
+  4 new runtime tests cover: emit-with-payload, empty-selector, selector-throw (loop continues), no-hook-wired. 683/683 runtime, all 54 drift gates green.
+
+- a1077e9: Drop the redundant default `name` field in the `makeSummary` test helper for the new SkillsController test suite. The helper signature already requires `overrides.name`, so the inline default `name: "placeholder"` was unreachable and tripped TS2783 ("'name' is specified more than once, so this usage will be overwritten") under tsc — runtime semantics unchanged, tsc-strict was the only rejector.
+- 4d6dd80: Skills v1 phase 4.1: surface-agnostic `SkillsController` in `@motebit/panels`. State + actions for the cross-surface skills panel (browse / install / enable-disable / trust-untrust / verify / remove / search / detail-view) — the foundation for desktop / mobile / web renderers in subsequent slices (4.2 / 4.3 / 4.4).
+
+  The controller follows the established `@motebit/panels` pattern: one adapter the host implements, one state shape, one controller exposing `subscribe + actions + getState + dispose`. Zero internal deps preserved — wire-format types (`SkillSensitivity`, `SkillPlatform`, `SkillProvenanceStatus`) are inlined to avoid layer promotion against `@motebit/protocol`. The host wires its `SkillRegistry` instance into the adapter; the controller is registry-unaware.
+
+  ```text
+  SkillsPanelAdapter      listSkills | readSkillDetail | installFromSource |
+                          enableSkill | disableSkill | trustSkill | untrustSkill |
+                          removeSkill | verifySkill
+  SkillsController        refresh | install | enable-disable | trust-untrust |
+                          removeSkill | verifySkill | selectSkill | setSearch |
+                          filteredSkills | dispose
+  SkillSummary            list-row payload (frontmatter + state, no body bytes)
+  SkillDetail             detail-view payload (summary + body + author/category/tags)
+  ```
+
+  Optimistic state mutations:
+  - `enable / disable` flip `enabled` locally without a full refresh (cheap, immediate UX feedback).
+  - `trust / untrust / remove` trigger a full refresh — provenance status recompute lives on the registry side, not the panel.
+  - `verifySkill` mutates only the affected row's `provenance_status` (no full refresh).
+  - Removing the currently-selected skill clears `selectedSkill` automatically.
+
+  Errors surface in `state.error` and leave previous-good state intact; the renderer decides toast vs system-message per surface doctrine. 21 new tests cover refresh / install / enable-disable / trust-untrust / remove / verify / selectSkill / setSearch / dispose / error paths. 132/132 panels tests green.
+
+  Phase 4 remaining: 4.2 (desktop renderer), 4.3 (mobile renderer + ExpoFsSkillStorageAdapter), 4.4 (web renderer + IndexedDBSkillStorageAdapter or relay-mediated browse), 4.5 (`motebit/awesome-skills` curated registry).
+
+- 2ae06ab: Add `motebit skills publish <directory>` — sign a skill with the user's CLI identity key, write back the signed `SKILL.md` + `skill-envelope.json` byte-stable, and POST the bundle to the relay-hosted registry's `/api/v1/skills/submit` endpoint. Closes the author-side loop opened by phase 4.5a (`spec/skills-registry-v1.md`).
+
+  The publish flow is fail-closed in two places before going to the network:
+  1. **Local re-verify after sign.** A tampered private key or a dependency drift in the signing chain surfaces as `Local re-verify failed after signing` rather than at the relay's 400.
+  2. **Idempotent re-publish.** Re-running `publish` on the same directory with the same identity key produces byte-identical envelope + body, so the relay returns 200 (idempotent) instead of 409 `version_immutable`. Authors can re-run the command without bumping SemVer.
+
+  Usage:
+
+  ```text
+  motebit skills publish skills/git-commit-motebit-style
+  ```
+
+  Output names the resolved address so the author can immediately install elsewhere:
+
+  ```text
+    published
+    git-commit-motebit-style v1.0.0
+    address:    did:key:z6Mk…/git-commit-motebit-style@1.0.0
+    submitter:  did:key:z6Mk…
+    content:    7f313f44…
+
+    Install elsewhere with: motebit skills install did:key:z6Mk…/git-commit-motebit-style@1.0.0
+  ```
+
+  Also seeds a second motebit-canonical skill, `motebit-spec-writer`, at `skills/motebit-spec-writer/`. Procedural knowledge for drafting `motebit/<name>@<version>` specifications: header conventions, foundation-law markers, wire-format triple-sync (protocol type → zod schema → JSON Schema), drift-gate discipline. Build via `pnpm --filter @motebit/skills build-spec-writer-skill`.
+
+  The reference corpus now ships two signed skills (`git-commit-motebit-style`, `motebit-spec-writer`) — operators can `motebit skills publish skills/<name>` against any deployed relay to seed the curated index.
+
+  Drift gate `check-skill-cli-coverage` learns about network-side verbs: `publish` is intentionally not backed by a `SkillRegistry` method (it's a relay-client operation, not a local-disk one). Future network-side verbs add a one-line waiver in the gate's `INTENTIONAL_NON_REGISTRY_VERBS` set.
+
+- 8bab218: Skills v1 phase 4.5a — CLI install via the relay-hosted registry.
+
+  `motebit skills install` now accepts a relay address shape:
+
+  ```text
+  motebit skills install did:key:z6Mk…/example-skill@1.0.0
+  ```
+
+  The CLI fetches the bundle from the relay's `GET /api/v1/skills/:submitter/:name/:version` endpoint, re-verifies the envelope signature locally, asserts the relay-returned submitter matches the requested DID, then installs via the existing in-memory source path. Existing directory installs (`motebit skills install /path/to/skill`) are unchanged.
+
+  The local re-verify is the trust boundary — the relay is a convenience surface, never a trust root. A tampering relay returns bytes that fail verification on the consumer.
+
+  Spec: `spec/skills-registry-v1.md`.
+
+- 556468d: Replace inner `switch (provenance_status)` with an if/else chain in `slash-commands.ts`. The provenance-status branches were being misclassified as fake slash commands by `command-registry.test.ts`, whose regex scans every `^\s+case "X":` pattern in the handler source. No behavior change — identical badges returned for the same statuses.
+
 ## 1.1.1
 
 ### Patch Changes

@@ -1,5 +1,16 @@
 # @motebit/crypto-play-integrity
 
+## 1.1.1
+
+### Patch Changes
+
+- Updated dependencies [c8c6312]
+- Updated dependencies [2a48142]
+- Updated dependencies [cabf61d]
+- Updated dependencies [9b4a296]
+  - @motebit/protocol@1.2.0
+  - @motebit/crypto@1.2.0
+
 ## 1.1.0
 
 ### Minor Changes
