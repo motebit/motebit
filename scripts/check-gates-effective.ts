@@ -969,7 +969,7 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
       // perturbation" — so the probe self-rots are visible.
       mutateFile("README.md", (src) =>
         src.replace(
-          "**47 packages across 7 architectural layers",
+          "**48 packages across 7 architectural layers",
           "**37 packages across 7 architectural layers",
         ),
       ),
@@ -1041,6 +1041,33 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
       // mutateFile's restore.
       mutateFile("DOCTRINE.md", (src) =>
         src.replace(/^1\. \*\*\[([^\]]+)\]\(([^)]+)\)\*\* — /m, "1. [$1]($2) — "),
+      ),
+  },
+  {
+    script: "check-skill-corpus",
+    proves:
+      "flags a committed reference skill whose SKILL.md body bytes have drifted away from the body_hash committed in skill-envelope.json (the exact pre-push incident this gate caught when prettier reformatted SKILL.md after signing)",
+    perturb: () =>
+      // Append a stray byte to the reference SKILL.md body so its SHA-256
+      // diverges from the envelope's committed body_hash. The signed
+      // envelope has not been re-derived, so the gate should fire on the
+      // body_hash mismatch. mutateFile's restore reverses it byte-for-byte.
+      mutateFile("skills/git-commit-motebit-style/SKILL.md", (src) => src + "\n# probe drift\n"),
+  },
+  {
+    script: "check-skill-cli-coverage",
+    proves:
+      'flags a public method on SkillRegistry that has no matching `skillsCmd === "<verb>"` dispatch arm in apps/cli/src/index.ts — the drift class where a registry method ships unreachable from the CLI',
+    perturb: () =>
+      // Add a fake public method to the SkillRegistry class. The CLI's
+      // skills dispatch block has no arm for it, so the gate's
+      // method↔verb crosscheck should fire. mutateFile's restore
+      // reverses cleanly.
+      mutateFile("packages/skills/src/registry.ts", (src) =>
+        src.replace(
+          /  async verify\(/,
+          "  async fooBar(): Promise<void> { return; }\n\n  async verify(",
+        ),
       ),
   },
 ];
