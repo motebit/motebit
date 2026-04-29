@@ -10,7 +10,7 @@ Motebit ships two internal dashboards alongside the five user-facing surfaces. B
 | **Audience** | Developer or motebit owner | Relay operator |
 | **Scope** | One motebit (set via `VITE_MOTEBIT_ID`) | The whole fleet on the relay |
 | **Auth** | Static master bearer (`VITE_API_TOKEN`) | Static master bearer (`VITE_API_TOKEN`) |
-| **Tabs** | 12 | 9 |
+| **Tabs** | 12 | 10 |
 | **Local port** | `5174` | `5175` |
 | **AI loop** | None | None |
 
@@ -67,6 +67,7 @@ No `VITE_MOTEBIT_ID` — operator is fleet-scoped. Each panel polls on mount; fa
 
 | Tab | What it shows | Reach for it when |
 | --- | --- | --- |
+| **Health** _(default tab)_ | One-page snapshot from a single SQL aggregation pass: motebits registered + active in 24h/7d/30d, federation peer state + 7d cross-relay settlement volume, task settlements + volume + 5% fees over 7d/30d. Headline numbers turn yellow/red when activity is below thresholds; an explicit "partnership-not-code" signal renders when 30d activity is zero on a relay with ≤2 peers | Open every session. Answers "is the relay being used, and by whom?" — the load-bearing question for whether the next year's roadmap is "ship more architecture" or "outreach for real third-party operators" |
 | **Withdrawals** | Pending withdrawal queue with `complete` / `fail` action buttons | Daily — payouts to settle. `complete` requires a payout reference (rail tx id); `fail` requires a reason and refunds the agent |
 | **Federation** | Peered relays with state machine (active / suspended / pending / removed), heartbeat status, agent counts, trust scores | "Are my federation peers alive?" — heartbeat staleness is the canary |
 | **Transparency** | Declared posture (signed `/.well-known/` JSON) and proven posture (master-token gated) side by side | After any code change that affects what data the relay processes — confirms the doctrine artifact matches reality |
@@ -82,7 +83,8 @@ No `VITE_MOTEBIT_ID` — operator is fleet-scoped. Each panel polls on mount; fa
 Suggested cadence for an operator running `relay.motebit.com`:
 
 **Daily (5 minutes)** — Operator only:
-- **Reconciliation** — first thing to check. Green = ledger consistent, red = an invariant broke and money state needs investigation.
+- **Health** — open the operator console; the Health panel is the default tab. The headline numbers tell you whether the relay is being used at all, and the partnership-vs-code signal tells you whether the next architectural pick is more code or more outreach.
+- **Reconciliation** — second check. Green = ledger consistent, red = an invariant broke and money state needs investigation.
 - **Withdrawals** — clear the queue. Each pending row blocks an agent; long-tail withdrawals are operational debt.
 - **Federation** — eyeball peer states. Anything `suspended` warrants a check.
 - **Disputes** — any `opened` or `evidence` rows need attention.

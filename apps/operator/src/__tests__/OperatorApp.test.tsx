@@ -21,9 +21,10 @@ describe("OperatorApp", () => {
     expect(screen.getByText("Motebit Operator")).toBeTruthy();
   });
 
-  it("shows all 9 fleet-shaped tabs (no agent-shape tabs)", () => {
+  it("shows all 10 fleet-shaped tabs (no agent-shape tabs)", () => {
     setupFailingFetch();
     render(React.createElement(OperatorApp));
+    expect(screen.getByText("health")).toBeTruthy();
     expect(screen.getByText("withdrawals")).toBeTruthy();
     expect(screen.getByText("federation")).toBeTruthy();
     expect(screen.getByText("transparency")).toBeTruthy();
@@ -40,9 +41,16 @@ describe("OperatorApp", () => {
     expect(screen.queryByText("trust")).toBeNull();
   });
 
-  it("defaults to withdrawals tab", () => {
+  it("defaults to health tab", () => {
     setupFailingFetch();
     render(React.createElement(OperatorApp));
+    expect(screen.getByRole("heading", { name: "Health" })).toBeTruthy();
+  });
+
+  it("switches to withdrawals tab on click", () => {
+    setupFailingFetch();
+    render(React.createElement(OperatorApp));
+    fireEvent.click(screen.getByText("withdrawals"));
     expect(screen.getByRole("heading", { name: "Withdrawals" })).toBeTruthy();
   });
 

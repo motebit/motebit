@@ -9,9 +9,11 @@ import { CredentialAnchoringPanel } from "./components/CredentialAnchoringPanel"
 import { ReconciliationPanel } from "./components/ReconciliationPanel";
 import { ReceiptsPanel } from "./components/ReceiptsPanel";
 import { FreezePanel } from "./components/FreezePanel";
+import { HealthPanel } from "./components/HealthPanel";
 import { config } from "./api";
 
 const TABS = [
+  "health",
   "withdrawals",
   "federation",
   "transparency",
@@ -26,7 +28,7 @@ const TABS = [
 type Tab = (typeof TABS)[number];
 
 export function OperatorApp(): React.ReactElement {
-  const [activePanel, setActivePanel] = useState<Tab>("withdrawals");
+  const [activePanel, setActivePanel] = useState<Tab>("health");
 
   // Connection presence is implicit — every panel does its own fetch and
   // surfaces failures as state. Top-level dot reflects "is the relay URL
@@ -77,6 +79,9 @@ export function OperatorApp(): React.ReactElement {
       break;
     case "freeze":
       content = React.createElement(FreezePanel, null);
+      break;
+    case "health":
+      content = React.createElement(HealthPanel, null);
       break;
     default:
       content = React.createElement(

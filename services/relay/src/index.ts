@@ -108,6 +108,7 @@ import {
   type CredentialAnchoringConfig,
 } from "./credential-anchoring.js";
 import { aggregateFees } from "./fees.js";
+import { aggregateHealthSummary } from "./health-summary.js";
 import { startDepositDetector } from "./deposit-detector.js";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
@@ -898,6 +899,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       recent_p2p: recentP2p,
       p2p_verifier_enabled: !!solanaRpcUrl,
     });
+  });
+
+  // Admin: operator health summary — registered motebits + activity
+  // windows, federation peer state + cross-relay settlement volume,
+  // task settlements + fees over 7d/30d. Single SQL aggregation pass;
+  // returns honest zeros where the data is genuinely zero. The
+  // operator console's Health panel reads this verbatim — answers
+  // "is the relay being used, and by whom" without needing log-shipping
+  // or external analytics infrastructure.
+  /** @internal */
+  app.get("/api/v1/admin/health", (c) => {
+    return c.json(aggregateHealthSummary(moteDb.db));
   });
 
   // Admin: platform-fee aggregation (5% of relay-mediated settlements).

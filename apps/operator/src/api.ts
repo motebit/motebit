@@ -307,3 +307,40 @@ export function triggerFreeze(
 export function triggerUnfreeze(): Promise<{ status: string; message: string }> {
   return apiFetch(`/api/v1/admin/unfreeze`, { method: "POST" });
 }
+
+// === Health ===
+
+export interface HealthMotebits {
+  total_registered: number;
+  active_24h: number;
+  active_7d: number;
+  active_30d: number;
+}
+
+export interface HealthFederation {
+  peer_count: number;
+  active_peers: number;
+  suspended_peers: number;
+  federation_settlements_7d: number;
+  federation_volume_7d_micro: number;
+}
+
+export interface HealthTasks {
+  settlements_7d: number;
+  settlements_30d: number;
+  volume_7d_micro: number;
+  volume_30d_micro: number;
+  fees_7d_micro: number;
+  fees_30d_micro: number;
+}
+
+export interface HealthSummary {
+  motebits: HealthMotebits;
+  federation: HealthFederation;
+  tasks: HealthTasks;
+  generated_at: number;
+}
+
+export function fetchHealthSummary(signal?: AbortSignal): Promise<HealthSummary> {
+  return apiFetch<HealthSummary>(`/api/v1/admin/health`, { signal });
+}
