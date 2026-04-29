@@ -39,6 +39,18 @@ const CLI_DISPATCH_FILE = join(ROOT, "apps", "cli", "src", "index.ts");
 const INTENTIONAL_NON_CLI_METHODS = new Set<string>(["get"]);
 
 /**
+ * CLI verbs that are intentionally NOT registry methods — they are network-
+ * side operations against the relay-hosted registry (spec/skills-registry-v1.md),
+ * not the local-disk SkillRegistry surface this gate cross-checks. Adding a new
+ * verb here is a one-line waiver; adding a new local-disk verb without a
+ * registry method behind it should still fail.
+ *
+ *   - `publish` — POSTs a signed envelope to the relay's
+ *     /api/v1/skills/submit endpoint. The local SkillRegistry never sees it.
+ */
+const INTENTIONAL_NON_REGISTRY_VERBS = new Set<string>(["publish"]);
+
+/**
  * Map from registry method name → expected CLI subcommand verb. The default
  * mapping is identity (kebab-case lowering); this object overrides where the
  * names diverge.
@@ -163,6 +175,7 @@ function main(): void {
 
   // Reverse: every CLI verb should map to a registry method (catches typos).
   for (const verb of verbs) {
+    if (INTENTIONAL_NON_REGISTRY_VERBS.has(verb)) continue;
     if (!methods.has(verb) && !Object.values(METHOD_TO_VERB_OVERRIDE).includes(verb)) {
       fail(
         "apps/cli/src/index.ts",

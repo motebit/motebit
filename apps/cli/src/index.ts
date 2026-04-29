@@ -79,6 +79,7 @@ import {
   handleSkillsVerify,
   handleSkillsTrust,
   handleSkillsUntrust,
+  handleSkillsPublish,
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
@@ -346,9 +347,11 @@ async function main(): Promise<void> {
       await handleSkillsTrust(config);
     } else if (skillsCmd === "untrust") {
       await handleSkillsUntrust(config);
+    } else if (skillsCmd === "publish") {
+      await handleSkillsPublish(config);
     } else {
       console.error(
-        "Usage: motebit skills [list|install <dir>|enable <name>|disable <name>|remove <name>|verify <name>|trust <name>|untrust <name>]",
+        "Usage: motebit skills [list|install <dir|did:key:…/name@version>|publish <dir>|enable <name>|disable <name>|remove <name>|verify <name>|trust <name>|untrust <name>]",
       );
       process.exit(1);
     }

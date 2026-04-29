@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -b",
     "build-reference-skill": "tsx scripts/build-reference-skill.ts",
+    "build-spec-writer-skill": "tsx scripts/build-spec-writer-skill.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",

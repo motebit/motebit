@@ -56,6 +56,7 @@ export {
   handleSkillsEnable,
   handleSkillsInstall,
   handleSkillsList,
+  handleSkillsPublish,
   handleSkillsRemove,
   handleSkillsTrust,
   handleSkillsUntrust,

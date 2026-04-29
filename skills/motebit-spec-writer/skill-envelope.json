@@ -1,0 +1,48 @@
+{
+  "spec_version": "1.0",
+  "skill": {
+    "name": "motebit-spec-writer",
+    "version": "1.0.0",
+    "content_hash": "637d3f88bdf637e333368884788355c7ad5894a284a37874de78b85be69d8561"
+  },
+  "manifest": {
+    "name": "motebit-spec-writer",
+    "description": "Draft motebit/<name>@<version> specifications with the foundation-law markers, wire-format triple-sync, and drift-gate discipline the repo already uses. Read existing specs, mirror the template, ship the protocol type + zod schema + JSON Schema in one pass.",
+    "version": "1.0.0",
+    "platforms": [
+      "macos",
+      "linux",
+      "windows"
+    ],
+    "metadata": {
+      "author": "motebit dogfood",
+      "category": "protocol-engineering",
+      "tags": [
+        "spec",
+        "protocol",
+        "motebit",
+        "drift-defense"
+      ]
+    },
+    "motebit": {
+      "spec_version": "1.0",
+      "sensitivity": "none",
+      "hardware_attestation": {
+        "required": false,
+        "minimum_score": 0
+      },
+      "signature": {
+        "suite": "motebit-jcs-ed25519-b64-v1",
+        "public_key": "06d8b0b2d5a9776b1d650197fe6aa59da68050b8296ec2c0ff8da499217fd9e5",
+        "value": "68jvbaFsouSbB0uElurmtfmVxCiFDPpKEpwy1EFo4kJPIeJFq-rgwGvHdsmmNQLNF6Il8zYA6-1Xb3tExUbtDg"
+      }
+    }
+  },
+  "body_hash": "753c77574961ee65304351ec089f7208d94b834a67a536dcba37a0773263966b",
+  "files": [],
+  "signature": {
+    "suite": "motebit-jcs-ed25519-b64-v1",
+    "public_key": "06d8b0b2d5a9776b1d650197fe6aa59da68050b8296ec2c0ff8da499217fd9e5",
+    "value": "Ld4aFft5LLhgMxdOoskMlv3ssBhNYPdiaSg3RDQF_3rbGssvfWVpMorNwGwk1c2FSjMTTFB2Q5dCFYkuoGMTBQ"
+  }
+}

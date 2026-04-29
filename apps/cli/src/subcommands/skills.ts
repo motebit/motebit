@@ -9,29 +9,51 @@
  * mis-attributed artifact, not honestly-unsigned.
  */
 
-import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import * as readline from "node:readline";
 
 import {
   NodeFsSkillStorageAdapter,
   SkillInstallError,
   SkillRegistry,
+  parseSkillFile,
   resolveDirectorySkillSource,
+  serializeSkillFile,
   type SkillAuditSink,
   type SkillInstallSource,
   type SkillRecord,
   type SkillTrustGrantEvent,
 } from "@motebit/skills";
 import {
+  canonicalJson,
   decodeSkillSignaturePublicKey,
-  publicKeyToDidKey,
+  hash as sha256Hex,
   hexToBytes,
+  publicKeyToDidKey,
+  signSkillEnvelope,
+  signSkillManifest,
   verifySkillEnvelope,
 } from "@motebit/encryption";
-import type { SkillRegistryBundle } from "@motebit/sdk";
+import type {
+  SkillEnvelope,
+  SkillManifest,
+  SkillRegistryBundle,
+  SkillRegistrySubmitRequest,
+  SkillRegistrySubmitResponse,
+} from "@motebit/sdk";
 
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
+import { decryptPrivateKey, fromHex, promptPassphrase } from "../identity.js";
 import { bold, cyan, dim, error as errorColor, success, warn } from "../colors.js";
 
 const DEFAULT_RELAY_URL = "https://relay.motebit.com";
@@ -475,4 +497,266 @@ export async function handleSkillsUntrust(config: CliConfig): Promise<void> {
   }
   await registry.untrust(name);
   console.log(`  ${dim("untrusted")} ${bold(name)}`);
+}
+
+// ---------------------------------------------------------------------------
+// publish — sign + submit to the relay-hosted registry
+// ---------------------------------------------------------------------------
+
+const SKILL_MD_NAME = "SKILL.md";
+const SKILL_ENVELOPE_JSON_NAME = "skill-envelope.json";
+const AUX_DIRS = ["scripts", "references", "templates", "assets"] as const;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+/**
+ * Walk the four conventional aux-file directories and return a flat
+ * map of relative paths → bytes. Mirrors the fs-adapter's collector
+ * but stays local because we only need it for one CLI flow and
+ * pulling it from the BSL package would re-expose internals.
+ */
+function collectAuxFiles(skillDir: string): Record<string, Uint8Array> {
+  const out: Record<string, Uint8Array> = {};
+  function walk(current: string, base: string): void {
+    const entries = readdirSync(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, base);
+      } else if (entry.isFile()) {
+        const rel = full
+          .slice(base.length + 1)
+          .split(/[\\/]+/)
+          .join("/");
+        out[rel] = readFileSync(full);
+      }
+    }
+  }
+  for (const subdir of AUX_DIRS) {
+    const subdirPath = join(skillDir, subdir);
+    if (existsSync(subdirPath)) walk(subdirPath, skillDir);
+  }
+  return out;
+}
+
+/**
+ * Decrypt the user's CLI identity key. Mirrors the resolution order in
+ * `attest.ts` so operators see the same passphrase prompt across
+ * commands that need to sign.
+ */
+async function loadIdentityKey(): Promise<{ privateKey: Uint8Array; publicKey: Uint8Array }> {
+  const fullConfig = loadFullConfig();
+  if (!fullConfig.cli_encrypted_key) {
+    console.error(
+      errorColor("  No CLI identity key found. Run `motebit attest` to bootstrap one."),
+    );
+    process.exit(1);
+  }
+  if (fullConfig.device_public_key === undefined || fullConfig.device_public_key === "") {
+    console.error(
+      errorColor("  device_public_key missing from config — bootstrap an identity first."),
+    );
+    process.exit(1);
+  }
+
+  const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
+  let passphrase: string;
+  if (envPassphrase !== undefined && envPassphrase !== "") {
+    passphrase = envPassphrase;
+  } else {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      escapeCodeTimeout: 50,
+    });
+    try {
+      passphrase = await promptPassphrase(rl, "Passphrase: ");
+    } finally {
+      rl.close();
+    }
+  }
+
+  let privateKeyHex: string;
+  try {
+    privateKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+  } catch {
+    console.error(errorColor("  Incorrect passphrase."));
+    process.exit(1);
+  }
+
+  return {
+    privateKey: fromHex(privateKeyHex),
+    publicKey: fromHex(fullConfig.device_public_key),
+  };
+}
+
+/**
+ * Sign (or re-sign) a skill directory. Reads SKILL.md, optionally an
+ * existing envelope; produces a fresh signed manifest + envelope using
+ * the supplied keypair, and writes both back to disk byte-stable. The
+ * directory becomes self-contained for re-distribution.
+ */
+async function signSkillDirectory(
+  skillDir: string,
+  privateKey: Uint8Array,
+  publicKey: Uint8Array,
+): Promise<{ envelope: SkillEnvelope; manifest: SkillManifest; body: Uint8Array }> {
+  const skillMdPath = join(skillDir, SKILL_MD_NAME);
+  if (!existsSync(skillMdPath)) {
+    console.error(errorColor(`  No SKILL.md at ${skillMdPath}`));
+    process.exit(1);
+  }
+  const text = readFileSync(skillMdPath, "utf-8");
+  const parsed = parseSkillFile(text);
+  const body = parsed.body;
+
+  // Strip any pre-existing manifest signature so we always re-derive
+  // canonically against the supplied keypair. Idempotent re-publishes
+  // produce identical bytes when the body and keypair are unchanged.
+  const motebitNoSig = { ...parsed.manifest.motebit };
+  delete motebitNoSig.signature;
+  const unsignedManifest: Omit<SkillManifest, "motebit"> & {
+    motebit: Omit<SkillManifest["motebit"], "signature">;
+  } = {
+    ...parsed.manifest,
+    motebit: motebitNoSig,
+  };
+
+  const signedManifest = await signSkillManifest(unsignedManifest, privateKey, publicKey, body);
+
+  // content_hash = SHA-256 over JCS(manifest) || 0x0A || lf_body.
+  const manifestBytes = new TextEncoder().encode(canonicalJson(signedManifest));
+  const fullContent = new Uint8Array(manifestBytes.length + 1 + body.length);
+  fullContent.set(manifestBytes, 0);
+  fullContent[manifestBytes.length] = 0x0a;
+  fullContent.set(body, manifestBytes.length + 1);
+  const contentHash = await sha256Hex(fullContent);
+  const bodyHash = await sha256Hex(body);
+
+  // Per-file hashes for any aux files. The envelope must pin every
+  // byte the directory ships; the relay re-derives and asserts on
+  // submit (skills-registry-v1.md §6.1).
+  const auxFiles = collectAuxFiles(skillDir);
+  const filesEntries = await Promise.all(
+    Object.entries(auxFiles)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(async ([path, bytes]) => ({ path, hash: await sha256Hex(bytes) })),
+  );
+
+  const signedEnvelope = await signSkillEnvelope(
+    {
+      spec_version: "1.0",
+      skill: {
+        name: signedManifest.name,
+        version: signedManifest.version,
+        content_hash: contentHash,
+      },
+      manifest: signedManifest,
+      body_hash: bodyHash,
+      files: filesEntries,
+    },
+    privateKey,
+    publicKey,
+  );
+
+  // Write back the signed artifacts so the directory is self-contained
+  // for re-distribution. SKILL.md gets the in-band manifest signature;
+  // skill-envelope.json gets the canonical envelope. Both paths are
+  // verifiable offline against the embedded public_key (skills-v1.md §5.3).
+  const skillMdContent = serializeSkillFile(signedManifest, body);
+  writeFileSync(skillMdPath, skillMdContent);
+  writeFileSync(
+    join(skillDir, SKILL_ENVELOPE_JSON_NAME),
+    JSON.stringify(signedEnvelope, null, 2) + "\n",
+  );
+
+  return { envelope: signedEnvelope, manifest: signedManifest, body };
+}
+
+export async function handleSkillsPublish(config: CliConfig): Promise<void> {
+  const sourceArg = requirePositional(config, 2, "<directory-path>");
+  const skillDir = isAbsolute(sourceArg) ? sourceArg : resolve(process.cwd(), sourceArg);
+
+  let stat;
+  try {
+    stat = statSync(skillDir);
+  } catch {
+    console.error(errorColor(`  No such path: ${skillDir}`));
+    process.exit(1);
+  }
+  if (!stat.isDirectory()) {
+    console.error(errorColor(`  Source must be a directory containing SKILL.md. Got: ${skillDir}`));
+    process.exit(1);
+  }
+
+  const { privateKey, publicKey } = await loadIdentityKey();
+  const submitterMotebitId = publicKeyToDidKey(publicKey);
+
+  console.log(dim(`  Signing ${skillDir} with ${submitterMotebitId}…`));
+
+  const { envelope, manifest, body } = await signSkillDirectory(skillDir, privateKey, publicKey);
+
+  // Local re-verify before going to the network. A tampered private
+  // key (or a dependency drift in the signing chain) would surface
+  // here, not at the relay 400.
+  const ok = await verifySkillEnvelope(envelope, decodeSkillSignaturePublicKey(envelope.signature));
+  if (!ok) {
+    console.error(errorColor("  Local re-verify failed after signing — refusing to publish."));
+    process.exit(1);
+  }
+
+  // Build the submission payload.
+  const auxFiles = collectAuxFiles(skillDir);
+  const filesPayload: Record<string, string> = {};
+  for (const [path, bytes] of Object.entries(auxFiles)) {
+    filesPayload[path] = bytesToBase64(bytes);
+  }
+  const submission: SkillRegistrySubmitRequest = {
+    envelope,
+    body: bytesToBase64(body),
+    ...(Object.keys(filesPayload).length > 0 ? { files: filesPayload } : {}),
+  };
+
+  const relayUrl = resolveRelayUrl().replace(/\/$/, "");
+  const submitUrl = `${relayUrl}/api/v1/skills/submit`;
+
+  console.log(dim(`  Submitting to ${submitUrl}…`));
+
+  let resp: Response;
+  try {
+    resp = await fetch(submitUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(submission),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err: unknown) {
+    console.error(
+      errorColor(`  Relay request failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+    process.exit(1);
+  }
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    console.error(errorColor(`  Relay returned ${resp.status}: ${text || resp.statusText}`));
+    process.exit(1);
+  }
+
+  const out = (await resp.json()) as SkillRegistrySubmitResponse;
+  const isUpdate = resp.status === 200;
+
+  console.log();
+  console.log(`  ${success(isUpdate ? "republished (idempotent)" : "published")}`);
+  console.log(`  ${bold(manifest.name)} ${dim(`v${manifest.version}`)}`);
+  console.log(`  ${dim("address:")} ${cyan(out.skill_id)}`);
+  console.log(`  ${dim("submitter:")} ${out.submitter_motebit_id}`);
+  console.log(`  ${dim("content:")}   ${out.content_hash}`);
+  console.log();
+  console.log(dim(`  Install elsewhere with: motebit skills install ${out.skill_id}`));
+  console.log();
 }
