@@ -1,13 +1,14 @@
 /**
  * Changeset discipline gate — enforces migration-guide authorship on
- * breaking changes AND non-empty bodies on every changeset.
+ * breaking changes, non-empty bodies on every changeset, AND no mixed
+ * ignored/published bumps in a single changeset.
  *
  * Changesets lets each contributor pick patch/minor/major on the honor
  * system. Once motebit has external consumers of `@motebit/*` packages on
  * npm, a `major` changeset without migration guidance is a broken promise:
  * someone's build breaks and they have no documented upgrade path.
  *
- * Two enforcements, both running over every pending `.changeset/*.md`:
+ * Three enforcements, all running over every pending `.changeset/*.md`:
  *
  *   1. Empty-body check (all changesets) — body must contain at least
  *      one substantive sentence after the frontmatter, and must not
@@ -20,6 +21,18 @@
  *      entry declares `major`, the body must contain a non-empty
  *      `## Migration` section. Motebit's `.changeset/README.md` documents
  *      the required template (what-before, what-after, why).
+ *
+ *   3. Mixed-bump check (all changesets) — a single changeset must not
+ *      bump both an ignored package (per `.changeset/config.json::ignore`)
+ *      and a non-ignored (published) package. The changesets release CLI
+ *      hard-rejects mixed bumps at publish time — without this local
+ *      gate, the rejection only surfaces on the Release workflow, which
+ *      then stays red for every subsequent commit until someone notices.
+ *      Caught on 2026-04-30 after four mixed changesets across the
+ *      sensitivity-routing arc + local-HA-score ship reddened Release on
+ *      every commit since `d7dd9111`. Pattern: split into sibling
+ *      `<name>.md` (published bumps) + `<name>-ignored.md` (ignored
+ *      bumps) — see `.changeset/ha-badge-runtime-relay-{ignored,published}.md`.
  *
  * Companion: check-api-surface.ts is the other half — it fails when the
  * public API surface changes but no `major` changeset was filed. Together
@@ -111,6 +124,37 @@ function isEmptyOrStub(body: string): { empty: boolean; reason: string } {
   return { empty: false, reason: "" };
 }
 
+interface ChangesetConfig {
+  ignore?: ReadonlyArray<string>;
+}
+
+function loadIgnoredPackages(): ReadonlySet<string> {
+  const configPath = resolve(ROOT, ".changeset", "config.json");
+  if (!existsSync(configPath)) return new Set();
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as ChangesetConfig;
+  return new Set(config.ignore ?? []);
+}
+
+/**
+ * A mixed changeset bumps at least one ignored package AND at least one
+ * non-ignored (published) package. The changesets CLI rejects these at
+ * release time with `Mixed changesets that contain both ignored and not
+ * ignored packages are not allowed`. We mirror the rejection here so the
+ * failure surfaces locally on `pnpm check`, not on the Release workflow.
+ */
+function partitionByIgnore(
+  bumps: ParsedChangeset["bumps"],
+  ignored: ReadonlySet<string>,
+): { ignored: ReadonlyArray<string>; published: ReadonlyArray<string> } {
+  const ign: string[] = [];
+  const pub: string[] = [];
+  for (const { pkg } of bumps) {
+    if (ignored.has(pkg)) ign.push(pkg);
+    else pub.push(pkg);
+  }
+  return { ignored: ign, published: pub };
+}
+
 function main(): void {
   const dir = resolve(ROOT, ".changeset");
   if (!existsSync(dir)) {
@@ -127,9 +171,11 @@ function main(): void {
     return;
   }
 
-  const failures: Array<{ changeset: ParsedChangeset; reason: string }> = [];
+  const ignoredPackages = loadIgnoredPackages();
+  const failures: Array<{ changeset: ParsedChangeset; reason: string; detail?: string }> = [];
   let majorCount = 0;
   let emptyCount = 0;
+  let mixedCount = 0;
 
   for (const filename of files) {
     const content = readFileSync(resolve(dir, filename), "utf-8");
@@ -146,7 +192,22 @@ function main(): void {
       continue;
     }
 
-    // Check 2 — major bumps must include a migration section.
+    // Check 2 — no mixed ignored/published bumps. Mirrors the changesets
+    // CLI's release-time rejection so the failure surfaces locally.
+    const partition = partitionByIgnore(parsed.bumps, ignoredPackages);
+    if (partition.ignored.length > 0 && partition.published.length > 0) {
+      failures.push({
+        changeset: parsed,
+        reason: "mixed changeset: bumps both ignored and published packages",
+        detail:
+          `    ignored:   ${partition.ignored.join(", ")}\n` +
+          `    published: ${partition.published.join(", ")}`,
+      });
+      mixedCount += 1;
+      continue;
+    }
+
+    // Check 3 — major bumps must include a migration section.
     const majors = parsed.bumps.filter((b) => b.level === "major");
     if (majors.length === 0) continue;
     majorCount += 1;
@@ -162,10 +223,12 @@ function main(): void {
 
   if (failures.length > 0) {
     process.stderr.write(`\nerror: ${failures.length} changeset(s) failed discipline check:\n\n`);
-    for (const { changeset, reason } of failures) {
+    for (const { changeset, reason, detail } of failures) {
       process.stderr.write(`  .changeset/${changeset.file}\n`);
       process.stderr.write(`    ${reason}\n`);
-      if (reason.startsWith("empty")) {
+      if (detail) {
+        process.stderr.write(`${detail}\n\n`);
+      } else if (reason.startsWith("empty")) {
         const pkgs = changeset.bumps.map((b) => `${b.pkg}@${b.level}`);
         process.stderr.write(`    bumps: ${pkgs.join(", ") || "(none parsed)"}\n\n`);
       } else {
@@ -175,15 +238,17 @@ function main(): void {
     }
     process.stderr.write(
       "Every changeset must describe what changed in its body (≥30 chars of substance,\n" +
-        "no `auto-generated patch bump` stubs). Every `major` changeset must additionally\n" +
-        "include a `## Migration` section with before/after examples and a one-paragraph\n" +
-        "rationale. See .changeset/README.md for the template.\n",
+        "no `auto-generated patch bump` stubs). No changeset may bump both an ignored\n" +
+        "package and a published package — split into sibling `<name>.md` (published) +\n" +
+        "`<name>-ignored.md` (ignored). Every `major` changeset must additionally include\n" +
+        "a `## Migration` section with before/after examples and a one-paragraph rationale.\n" +
+        "See .changeset/README.md for the template.\n",
     );
     process.exit(1);
   }
 
   process.stderr.write(
-    `  ✓ ${files.length} pending changeset(s), ${majorCount} with \`major\` bumps, ${emptyCount} empty — all disciplined\n`,
+    `  ✓ ${files.length} pending changeset(s), ${majorCount} with \`major\` bumps, ${emptyCount} empty, ${mixedCount} mixed — all disciplined\n`,
   );
 }
 

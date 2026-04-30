@@ -208,6 +208,22 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-changeset-discipline",
+    proves: "flags a changeset that mixes ignored and published package bumps",
+    perturb: () =>
+      writeFixture(
+        // Same .changeset/*.md scan path as the major-bump probe above. This
+        // probe asserts the third invariant the gate added 2026-04-30: a
+        // single changeset must not bump an ignored package
+        // (e.g. @motebit/runtime) alongside a published one (e.g. motebit).
+        // The release CLI rejects mixed bumps at publish time; without this
+        // probe the local gate could regress and we wouldn't know until the
+        // Release workflow went red on the next ship.
+        `.changeset/${PROBE_PREFIX}mixed-ignored-published.md`,
+        `---\n"@motebit/runtime": patch\n"motebit": patch\n---\n\nProbe-only mixed changeset bumping both an ignored and a published package.\n`,
+      ),
+  },
+  {
     script: "check-spec-coverage",
     // --strict is the gate's production mode (scripts/check.ts GATES). Probe
     // must match or we'd be proving the wrong mode.
