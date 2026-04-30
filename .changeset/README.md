@@ -82,12 +82,23 @@ const result = newThing(config);
 
 List **only** the packages whose own public surface broke. `updateInternalDependencies: "patch"` will patch-bump downstream consumers automatically; do not coordinate-bump siblings whose contracts didn't change. If multiple packages broke in the same PR, declare each one explicitly with its own bump level.
 
+## Mixed bumps and the split-sibling pattern
+
+Most workspace packages are not published — they sit in `.changeset/config.json`'s `ignore` array (every `@motebit/*` workspace package other than the 12 published ones above). Including ignored packages in a changeset is fine and often necessary, because internal-dep cascades need to be acknowledged. What you **cannot** do is bump an ignored package and a published package in the same `.changeset/*.md` frontmatter — the release CLI rejects mixed changesets, and the Release workflow goes red on every commit until the changeset is split. The local `check-changeset-discipline` gate now catches this before push, but the cleanest fix is to author them split from the start.
+
+The natural authoring shape that produces a mixed changeset: one ship adds an API to a non-published workspace package (e.g. `@motebit/runtime`, the runtime engine) and wires it into the published `motebit` reference runtime as the in-bundle consumer. Both halves live in the same commit, both want to share one prose body — but `motebit` is published and `@motebit/runtime` sits in `.changeset/config.json::ignore`, so the release CLI rejects them together. Split into two files:
+
+- `<name>.md` — frontmatter lists only the published package(s); body describes the published-surface contribution and points at the sibling for the ignored-side context.
+- `<name>-ignored.md` — frontmatter lists only the ignored package(s); body describes the runtime/internal contribution and points back at the sibling for the published-surface consumer.
+
+Cross-reference the two filenames in each body. Precedents in the tree: `ha-badge-runtime-relay-{ignored,published}.md` (2026-04-29), `local-hardware-attestation-score{,-ignored}.md`, the three sensitivity-routing pairs (all 2026-04-30).
+
 ## Drift gates enforcing discipline
 
 Two CI gates watch the published surface:
 
 - **`check-api-surface`** — extracts the public API from `.d.ts` files and diffs against `packages/*/etc/*.api.md`. If the surface changed and no pending changeset declares the package as `major`, CI fails.
-- **`check-changeset-discipline`** — parses every pending `.changeset/*.md`. If any declares `major`, the body must contain a non-empty `## Migration` section.
+- **`check-changeset-discipline`** — parses every pending `.changeset/*.md`. Three invariants: (1) body has substantive content (≥30 chars, no `auto-generated patch bump` stubs); (2) every `major` bump ships a non-empty `## Migration` section; (3) no single changeset bumps both an ignored package and a published one.
 
 When you break the API on purpose, the flow is:
 
