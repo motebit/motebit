@@ -213,7 +213,7 @@ export { createInMemoryStorage } from "./in-memory-storage.js";
 
 // === MotebitRuntime ===
 
-export { MotebitRuntime } from "./motebit-runtime.js";
+export { MotebitRuntime, SovereignTierRequiredError } from "./motebit-runtime.js";
 
 // === Activity Tracking (Ring 1) ===
 // Surface-agnostic derivation of what the agent is currently doing, as

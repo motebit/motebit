@@ -1083,6 +1083,19 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
         src.replace(/\bformatHardwarePlatform\b/g, "_disabledFormatHardwarePlatform"),
       ),
   },
+  {
+    script: "check-sensitivity-routing",
+    proves:
+      "flags a runtime AI-call entry that skips the sensitivity gate — the doctrine breach where the user elevates session sensitivity to medical and the runtime ships bytes to an external provider anyway",
+    perturb: () =>
+      // Disable every gate call in the runtime. The check should fire
+      // because every runTurn / runTurnStreaming call site no longer has
+      // the sentinel earlier in the same method body. mutateFile's
+      // restore reverses cleanly.
+      mutateFile("packages/runtime/src/motebit-runtime.ts", (src) =>
+        src.replace(/this\.assertSensitivityPermitsAiCall\(\)/g, "/* probe-disabled */ void 0"),
+      ),
+  },
 ];
 
 /**

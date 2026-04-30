@@ -809,6 +809,17 @@ export async function createRuntime(
   runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
   runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
+  // Declare the provider mode so the runtime's privacy gate can fail-
+  // closed BEFORE any external-AI call when the user elevates session
+  // sensitivity to medical/financial/secret. The unified config classifies
+  // the user's `--provider` choice; surfacing it on the runtime is just
+  // plumbing. CLAUDE.md doctrine: "Medical/financial/secret never reach
+  // external AI." Without this declaration the gate fail-closes on every
+  // elevated turn (treating the unset provider as external) — correct,
+  // but this assignment lets users with `--provider local-server`
+  // actually use elevated sensitivity.
+  runtime.setProviderMode(cliConfigToUnified(config).mode);
+
   // Wire up the late-bound runtime reference for the skillSelector
   // hook's closure (declared above the runtime construction).
   runtimeRef = runtime;

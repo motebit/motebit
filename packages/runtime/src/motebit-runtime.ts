@@ -25,7 +25,35 @@ import type {
   IntentOrigin,
 } from "@motebit/sdk";
 import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
-import { EventType, AgentTrustLevel } from "@motebit/sdk";
+import { EventType, AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
+import type { ProviderMode } from "@motebit/sdk";
+
+/**
+ * Thrown by the runtime's sensitivity gate when an AI call would
+ * cross the `external AI` boundary while the session is tagged at
+ * `medical | financial | secret`. CLAUDE.md privacy doctrine:
+ * "Medical/financial/secret never reach external AI." The error fires
+ * BEFORE any provider call, so no bytes leak — surfaces catch and
+ * surface a "this turn requires on-device" UI affordance.
+ *
+ * The `code` field is the stable contract surfaces match against; the
+ * `message` carries the human-readable form. `sessionSensitivity`
+ * and `providerMode` are populated for telemetry / structured-error
+ * displays. `providerMode === "unset"` means the surface didn't
+ * declare via `setProviderMode` — fail-closed.
+ */
+export class SovereignTierRequiredError extends Error {
+  readonly code = "SOVEREIGN_TIER_REQUIRED" as const;
+  constructor(
+    readonly sessionSensitivity: SensitivityLevel,
+    readonly providerMode: ProviderMode | "unset",
+  ) {
+    super(
+      `Session sensitivity "${sessionSensitivity}" requires sovereign (on-device) provider; current provider is "${providerMode}". Switch to an on-device provider or de-escalate session sensitivity to continue.`,
+    );
+    this.name = "SovereignTierRequiredError";
+  }
+}
 import { EventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import {
@@ -1244,6 +1272,14 @@ export class MotebitRuntime {
   }
 
   async sendMessage(text: string, runId?: string): Promise<TurnResult> {
+    // Privacy doctrine gate (CLAUDE.md): "Medical/financial/secret never
+    // reach external AI." Fires BEFORE the loopDeps check so a runtime
+    // with elevated session sensitivity + non-sovereign provider
+    // fail-closes regardless of init state. Default session_sensitivity
+    // is `none` — this is a no-op for the common path.
+    // See `check-sensitivity-routing` drift gate.
+    this.assertSensitivityPermitsAiCall();
+
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
@@ -1470,6 +1506,11 @@ export class MotebitRuntime {
     runId?: string,
     options?: { delegationScope?: string; suppressHistory?: boolean },
   ): AsyncGenerator<StreamChunk> {
+    // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
+    // `SovereignTierRequiredError` for the contract. Fires before the
+    // loopDeps check so the gate is independent of init state.
+    this.assertSensitivityPermitsAiCall();
+
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
@@ -1580,6 +1621,13 @@ export class MotebitRuntime {
    * Only the assistant's response is recorded in history.
    */
   async *generateActivation(activationPrompt: string, runId?: string): AsyncGenerator<StreamChunk> {
+    // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
+    // `SovereignTierRequiredError` for the contract. Activation prompts
+    // are system-generated, but they're injected into the same provider
+    // call path as user messages — same gate applies. Fires before
+    // loopDeps check so the gate is independent of init state.
+    this.assertSensitivityPermitsAiCall();
+
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
@@ -2558,6 +2606,98 @@ export class MotebitRuntime {
    */
   getLocalHardwareAttestationScore(): number {
     return scoreAttestation(this._localHardwareAttestationClaim ?? undefined);
+  }
+
+  // ── Sensitivity-aware AI routing ─────────────────────────────────────
+  //
+  // CLAUDE.md privacy doctrine: "Medical/financial/secret never reach
+  // external AI." The runtime's session-sensitivity tier + provider-mode
+  // tier are the two inputs to that gate; failing-closed before any
+  // network call is what makes the doctrine load-bearing rather than
+  // theoretical. See `docs/doctrine/security-boundaries.md` for the
+  // policy-gate framing and the audit that exposed the prior gap (CLI
+  // hardcoded session_sensitivity = "none", provider-resolver had zero
+  // sensitivity references — same shape as the HA score gap that landed
+  // 2026-04-30 in commit d7dd9111).
+
+  /**
+   * Current session sensitivity tier. Default `none`; surfaces escalate
+   * via `setSessionSensitivity` when the user toggles a "medical mode"
+   * UI affordance, types `/sensitivity medical`, or otherwise marks the
+   * session as carrying high-sensitivity content. Auto-classification
+   * (LLM-driven detection of medical/financial/secret signals in user
+   * text) is intentionally NOT v1 — explicit elevation is honest about
+   * what the runtime knows; auto-classification is a UX decision that
+   * deserves its own deliberation pass.
+   */
+  private _sessionSensitivity: SensitivityLevel = SensitivityLevel.None;
+
+  /**
+   * Provider mode the surface used when constructing this runtime's
+   * provider. Mapped to a tier (`sovereign` for `on-device`,
+   * `external` for `motebit-cloud` / `byok`) at gate time. Default is
+   * the unset sentinel `null` which the gate treats as `external` —
+   * fail-closed so a surface that forgets to declare its provider mode
+   * cannot silently leak high-sensitivity content. Surfaces declare
+   * via `setProviderMode` immediately after constructing the provider.
+   */
+  private _providerMode: ProviderMode | null = null;
+
+  /**
+   * Update the session's sensitivity tier. Called by surfaces when the
+   * user elevates (e.g., chat slash-command, settings toggle, explicit
+   * medical-mode button). The change takes effect on the NEXT AI call
+   * — in-flight calls already past the gate continue. Pass a lower
+   * tier to de-escalate.
+   */
+  setSessionSensitivity(level: SensitivityLevel): void {
+    this._sessionSensitivity = level;
+  }
+
+  getSessionSensitivity(): SensitivityLevel {
+    return this._sessionSensitivity;
+  }
+
+  /**
+   * Declare the runtime's provider mode. Called by the surface after
+   * constructing the provider (the surface is the layer that knows
+   * what mode it built). Maps `on-device` to the `sovereign` tier
+   * (no external network for AI calls) and `motebit-cloud` / `byok`
+   * to `external`. Re-call when the surface swaps providers mid-
+   * session.
+   */
+  setProviderMode(mode: ProviderMode | null): void {
+    this._providerMode = mode;
+  }
+
+  /**
+   * Returns true when the configured provider is one whose AI calls
+   * never leave the device — currently `on-device` only. `null`
+   * (provider mode unset) returns false, fail-closed: a surface that
+   * forgets to declare its mode cannot silently bypass the sensitivity
+   * gate.
+   */
+  private providerIsSovereign(): boolean {
+    return this._providerMode === "on-device";
+  }
+
+  /**
+   * Sensitivity-aware AI routing gate. Throws
+   * `SovereignTierRequiredError` when the session is at `medical`,
+   * `financial`, or `secret` tier AND the configured provider is not
+   * sovereign. Called at every runtime AI-call entry before any
+   * network bytes leave; enforced by the `check-sensitivity-routing`
+   * drift gate. Default `none` sensitivity makes this a no-op for the
+   * common path — only callers that elevated sensitivity hit the gate.
+   */
+  private assertSensitivityPermitsAiCall(): void {
+    const sensitive =
+      this._sessionSensitivity === SensitivityLevel.Medical ||
+      this._sessionSensitivity === SensitivityLevel.Financial ||
+      this._sessionSensitivity === SensitivityLevel.Secret;
+    if (sensitive && !this.providerIsSovereign()) {
+      throw new SovereignTierRequiredError(this._sessionSensitivity, this._providerMode ?? "unset");
+    }
   }
 
   private get trustDeps(): AgentTrustDeps {
