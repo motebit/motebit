@@ -628,17 +628,27 @@ export function deriveGovernanceForRuntime(governance: GovernanceConfig | undefi
  * Per spec/skills-v1.md §7: each turn the runtime invokes
  * `selectForTurn(turn)`. This implementation builds a fresh registry
  * read against `~/.motebit/skills/` (so install/remove/trust mid-session
- * propagate without runtime restart), runs the BM25-ranked selector with
- * platform/sensitivity/HA defaults appropriate to the CLI today, and
+ * propagate without runtime restart), runs the BM25-ranked selector
+ * with platform/sensitivity/HA defaults appropriate to the CLI, and
  * maps the BSL SkillSelection result to the SkillInjection shape the
  * runtime + ai-core consume.
  *
- * Defaults today: `sessionSensitivity = "none"` (CLI sessions don't
- * elevate yet — phase 4 work), `hardwareAttestationScore = 0` (CLI has
- * no HA). Skills with stricter requirements skip per the selector's
- * standard gates.
+ * `getHardwareAttestationScore` is a per-turn callback so the hook
+ * can read the runtime's current local-attestation claim each turn —
+ * a surface that swaps platforms or escalates sensitivity (e.g.,
+ * pairs to a hardware-backed device mid-session) sees the new score
+ * without rebuilding the hook. The CLI surface always reads from
+ * `runtime.getLocalHardwareAttestationScore()`, which is set to the
+ * `software` sentinel (score 0.1) below — Node has no hardware-
+ * attestation channel, but declaring `software` is the truthful
+ * stance per `docs/doctrine/hardware-attestation.md` and unlocks
+ * skills declaring `minimum_score <= 0.1`.
+ *
+ * `sessionSensitivity = "none"` today — CLI sessions don't elevate
+ * yet (phase 4 work). Skills with stricter requirements skip per the
+ * selector's standard gates.
  */
-function buildCliSkillSelectorHook(): SkillSelectorHook {
+function buildCliSkillSelectorHook(getHardwareAttestationScore: () => number): SkillSelectorHook {
   const motebitDir = process.env["MOTEBIT_CONFIG_DIR"] ?? path.join(os.homedir(), ".motebit");
   const skillsRoot = path.join(motebitDir, "skills");
   const platform = mapNodePlatformToSkillPlatform(process.platform);
@@ -656,7 +666,7 @@ function buildCliSkillSelectorHook(): SkillSelectorHook {
       const result = selector.select(records, {
         turn,
         sessionSensitivity: "none",
-        hardwareAttestationScore: 0,
+        hardwareAttestationScore: getHardwareAttestationScore(),
         platform,
       });
       return result.selected.map((s) => {
@@ -718,6 +728,11 @@ export async function createRuntime(
   // Absent → DEFAULT_GOVERNANCE_CONFIG, preserving prior behavior.
   const governance = deriveGovernanceForRuntime(loadFullConfig().governance);
 
+  // Late-binding holder so the skillSelector hook can resolve the
+  // local-attestation score at turn time. The closure below captures
+  // `runtimeRef`; the assignment after construction wires it up. The
+  // closure only fires per-turn, well after construction — no TDZ.
+  let runtimeRef: MotebitRuntime | null = null;
   const runtime = new MotebitRuntime(
     {
       motebitId,
@@ -732,7 +747,18 @@ export async function createRuntime(
       },
       memoryGovernance: governance.memoryGovernance,
       taskRouter: PLANNING_TASK_ROUTER,
-      skillSelector: buildCliSkillSelectorHook(),
+      // Late-bound runtime reference: the skillSelector hook fires
+      // per-turn (after construction completes), so the closure here
+      // resolves through `runtimeRef` cleanly. Without this indirection
+      // the CLI would have to hardcode the score, defeating the
+      // architectural contract that surfaces with real attestation
+      // channels (desktop, mobile) override via
+      // `runtime.setLocalHardwareAttestationClaim`. Default `0`
+      // (semiring zero) before the assignment lands; in practice the
+      // hook never fires before construction completes.
+      skillSelector: buildCliSkillSelectorHook(
+        () => runtimeRef?.getLocalHardwareAttestationScore() ?? 0,
+      ),
     },
     {
       storage,
@@ -782,6 +808,25 @@ export async function createRuntime(
   // protocol-loop assertion.
   runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
   runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
+
+  // Wire up the late-bound runtime reference for the skillSelector
+  // hook's closure (declared above the runtime construction).
+  runtimeRef = runtime;
+
+  // Truthful sentinel for the local CLI's own attestation surface. Node
+  // has no hardware-attestation channel; declaring `software` is honest
+  // (per `docs/doctrine/hardware-attestation.md` and the
+  // `HW_ATTESTATION_SOFTWARE` constant in `@motebit/semiring`). Score
+  // resolves to 0.1 — distinguishes "agent honestly declared
+  // no-hardware" from "agent made no claim at all". Skills declaring
+  // `hardware_attestation: { required: true, minimum_score: 0.5 }` still
+  // skip on this CLI; skills declaring `0.1` (a software-OK gate) now
+  // load. Closes the documented-feature-doesn't-work gap where every
+  // hardware-gated skill silently failed under the old hardcoded 0.
+  // Desktop / mobile surfaces with real attestation channels override
+  // by calling `setLocalHardwareAttestationClaim` with the verified
+  // platform claim from their attestor at boot.
+  runtime.setLocalHardwareAttestationClaim({ platform: "software" });
 
   return { runtime, moteDb };
 }

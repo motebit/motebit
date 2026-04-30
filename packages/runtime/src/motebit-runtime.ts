@@ -97,6 +97,7 @@ import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { readLatestHardwareAttestationClaim } from "./hardware-attestation-projection.js";
+import { scoreAttestation } from "@motebit/semiring";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
@@ -2497,6 +2498,66 @@ export class MotebitRuntime {
    */
   setHardwareAttestationVerifiers(verifiers: AgentTrustDeps["hardwareAttestationVerifiers"]): void {
     this._hardwareAttestationVerifiers = verifiers;
+  }
+
+  /**
+   * The local motebit's own hardware-attestation claim. Distinct from
+   * the per-peer claims that flow through `_hardwareAttestationFetcher`
+   * (those are about OTHER motebits) — this is the runtime's
+   * self-knowledge of its own attestation surface, threaded into
+   * decisions that gate on the local platform's binding strength.
+   *
+   * Today the only consumer is the SkillSelector's `minimum_score`
+   * gate (skills declaring `hardware_attestation: { required: true,
+   * minimum_score: X }` won't load if the local score is below X).
+   * Future consumers may include sensitivity-aware delegation
+   * decisions, governance presets, or per-tier capability gating.
+   *
+   * Default `null` means "no claim" — the SkillSelector treats this
+   * as score 0, so any skill with `required: true` skips. Surfaces
+   * with a real attestation channel (desktop sidecar verifying
+   * Secure Enclave, mobile via App Attest, server-side TPM) inject
+   * the verified claim at boot. Surfaces without (Node CLI, web
+   * browser) inject `{ platform: "software" }` as the truthful
+   * sentinel — score 0.1, distinguishing "honest no-hardware" from
+   * "no claim made".
+   */
+  private _localHardwareAttestationClaim: import("@motebit/sdk").HardwareAttestationClaim | null =
+    null;
+
+  /**
+   * Set the local motebit's own hardware-attestation claim. Surfaces
+   * call this once at boot after their attestation primitives have
+   * minted (or read from disk) the truthful claim about the platform
+   * the runtime is running on. Pass `null` to clear.
+   *
+   * Sibling to `setHardwareAttestationFetcher` (peer claims) and
+   * `setHardwareAttestationVerifiers` (peer-claim verifiers); the
+   * three together cover the runtime's full HA-aware decision
+   * surface.
+   */
+  setLocalHardwareAttestationClaim(
+    claim: import("@motebit/sdk").HardwareAttestationClaim | null,
+  ): void {
+    this._localHardwareAttestationClaim = claim;
+  }
+
+  /**
+   * The local motebit's hardware-attestation score in [0, 1] under
+   * `HardwareAttestationSemiring`. Returns `0` (semiring zero) when no
+   * claim has been set, `0.1` for the truthful `software` sentinel,
+   * `0.5` for hardware-but-key-exported, and `1.0` for hardware with
+   * a non-exported key — the canonical mapping in
+   * `packages/semiring/src/hardware-attestation.ts::scoreAttestation`.
+   *
+   * Consumers (SkillSelector today, sensitivity-aware delegation
+   * tomorrow) call this per-decision rather than caching, so the
+   * score reflects the current claim — including the absence case
+   * (`null` claim → 0) without surfacing a separate "no claim" branch
+   * in the consumer.
+   */
+  getLocalHardwareAttestationScore(): number {
+    return scoreAttestation(this._localHardwareAttestationClaim ?? undefined);
   }
 
   private get trustDeps(): AgentTrustDeps {

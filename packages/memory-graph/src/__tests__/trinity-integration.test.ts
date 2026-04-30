@@ -86,88 +86,106 @@ describe("Memory Trinity — end-to-end composition", () => {
     );
   }
 
-  it("forms → reinforces → promotes → indexes absolute → rewrites → supersedes cleanly", async () => {
-    // 1. Form two memories. Use a baseline confidence safely below the
-    //    0.95 threshold so we can observe the crossing.
-    const nodeA = await graph.formMemory(
-      { content: "User prefers TypeScript", confidence: 0.75, sensitivity: SensitivityLevel.None },
-      [0.1, 0.2, 0.3],
-    );
-    const nodeB = await graph.formMemory(
-      { content: "User lives in SF", confidence: 0.75, sensitivity: SensitivityLevel.None },
-      [0.4, 0.5, 0.6],
-    );
+  // Wider timeout than the vitest 5s default — this test composes seven
+  // graph operations end-to-end (form / reinforce / promote / index /
+  // rewrite / supersede / verify) plus several embedding round-trips.
+  // Local runs land in ~500ms, but CI runners under turbo's concurrency
+  // 4 occasionally cross the 5s default while the embedding worker is
+  // contended (saw timeouts on commit 87e2f174's CI run despite local
+  // green). Same shape as `feedback_prepush_hardware_flake` — under
+  // resource contention, behaviorally-correct tests false-fail at the
+  // default timeout. Raising to 15s gives headroom without masking a
+  // real regression (a real regression would blow past 15s too).
+  it(
+    "forms → reinforces → promotes → indexes absolute → rewrites → supersedes cleanly",
+    { timeout: 15000 },
+    async () => {
+      // 1. Form two memories. Use a baseline confidence safely below the
+      //    0.95 threshold so we can observe the crossing.
+      const nodeA = await graph.formMemory(
+        {
+          content: "User prefers TypeScript",
+          confidence: 0.75,
+          sensitivity: SensitivityLevel.None,
+        },
+        [0.1, 0.2, 0.3],
+      );
+      const nodeB = await graph.formMemory(
+        { content: "User lives in SF", confidence: 0.75, sensitivity: SensitivityLevel.None },
+        [0.4, 0.5, 0.6],
+      );
 
-    // Sanity check: neither is above the threshold yet.
-    const after0 = await storage.getNode(nodeA.node_id);
-    expect(after0!.confidence).toBeLessThan(PROMOTION_CONFIDENCE_THRESHOLD);
+      // Sanity check: neither is above the threshold yet.
+      const after0 = await storage.getNode(nodeA.node_id);
+      expect(after0!.confidence).toBeLessThan(PROMOTION_CONFIDENCE_THRESHOLD);
 
-    // 2. Reinforce A three times. Motebit boosts confidence by +0.1
-    //    per reinforcement: 0.75 → 0.85 → 0.95 → 1.0. Promotion crosses
-    //    the threshold on the second reinforcement.
-    await reinforceOnto(nodeA.node_id, "Once more, TypeScript preference");
-    await reinforceOnto(nodeA.node_id, "Again, TypeScript");
-    await reinforceOnto(nodeA.node_id, "Yet again");
+      // 2. Reinforce A three times. Motebit boosts confidence by +0.1
+      //    per reinforcement: 0.75 → 0.85 → 0.95 → 1.0. Promotion crosses
+      //    the threshold on the second reinforcement.
+      await reinforceOnto(nodeA.node_id, "Once more, TypeScript preference");
+      await reinforceOnto(nodeA.node_id, "Again, TypeScript");
+      await reinforceOnto(nodeA.node_id, "Yet again");
 
-    // 3. memory_promoted emitted exactly once — idempotent past threshold.
-    const promotions = await countEventsOfType(eventStore, EventType.MemoryPromoted);
-    expect(promotions).toHaveLength(1);
-    expect(promotions[0]!.payload).toMatchObject({
-      node_id: nodeA.node_id,
-      to_confidence: expect.any(Number),
-    });
-    expect(promotions[0]!.payload.to_confidence).toBeGreaterThanOrEqual(
-      PROMOTION_CONFIDENCE_THRESHOLD,
-    );
+      // 3. memory_promoted emitted exactly once — idempotent past threshold.
+      const promotions = await countEventsOfType(eventStore, EventType.MemoryPromoted);
+      expect(promotions).toHaveLength(1);
+      expect(promotions[0]!.payload).toMatchObject({
+        node_id: nodeA.node_id,
+        to_confidence: expect.any(Number),
+      });
+      expect(promotions[0]!.payload.to_confidence).toBeGreaterThanOrEqual(
+        PROMOTION_CONFIDENCE_THRESHOLD,
+      );
 
-    // 4. Index reflects the absolute certainty label.
-    //    Build directly with current storage snapshot.
-    const nodes = await storage.getAllNodes(MOTEBIT_ID);
-    const edges = await storage.getAllEdges(MOTEBIT_ID);
-    const indexV1 = buildMemoryIndex(nodes, edges);
+      // 4. Index reflects the absolute certainty label.
+      //    Build directly with current storage snapshot.
+      const nodes = await storage.getAllNodes(MOTEBIT_ID);
+      const edges = await storage.getAllEdges(MOTEBIT_ID);
+      const indexV1 = buildMemoryIndex(nodes, edges);
 
-    expect(indexV1).toContain("User prefers TypeScript");
-    expect(indexV1).toContain("User lives in SF");
-    expect(indexV1).toMatch(/User prefers TypeScript.*\(absolute\)/);
-    expect(indexV1).toMatch(/User lives in SF.*\(confident\)/);
+      expect(indexV1).toContain("User prefers TypeScript");
+      expect(indexV1).toContain("User lives in SF");
+      expect(indexV1).toMatch(/User prefers TypeScript.*\(absolute\)/);
+      expect(indexV1).toMatch(/User lives in SF.*\(confident\)/);
 
-    // 5. Agent decides the memory was wrong and rewrites via the
-    //    tool path.
-    const newNodeId = await graph.supersedeMemoryByNodeId(
-      nodeA.node_id,
-      "User actually prefers Rust now",
-      "user correction mid-conversation",
-    );
+      // 5. Agent decides the memory was wrong and rewrites via the
+      //    tool path.
+      const newNodeId = await graph.supersedeMemoryByNodeId(
+        nodeA.node_id,
+        "User actually prefers Rust now",
+        "user correction mid-conversation",
+      );
 
-    // 6. Event-log audit — original, replacement, and supersede bridge.
-    const formed = await countEventsOfType(eventStore, EventType.MemoryFormed);
-    // Two original formations + one from the supersede path = 3 total.
-    // Every reinforcement skips the formMemory call (REINFORCE boosts
-    // in place, no new node), so only the supersede adds.
-    expect(formed).toHaveLength(3);
-    const formedIds = formed.map((e) => e.payload.node_id);
-    expect(formedIds).toContain(nodeA.node_id); // original preserved (append-only)
-    expect(formedIds).toContain(nodeB.node_id);
-    expect(formedIds).toContain(newNodeId);
+      // 6. Event-log audit — original, replacement, and supersede bridge.
+      const formed = await countEventsOfType(eventStore, EventType.MemoryFormed);
+      // Two original formations + one from the supersede path = 3 total.
+      // Every reinforcement skips the formMemory call (REINFORCE boosts
+      // in place, no new node), so only the supersede adds.
+      expect(formed).toHaveLength(3);
+      const formedIds = formed.map((e) => e.payload.node_id);
+      expect(formedIds).toContain(nodeA.node_id); // original preserved (append-only)
+      expect(formedIds).toContain(nodeB.node_id);
+      expect(formedIds).toContain(newNodeId);
 
-    const consolidations = await countEventsOfType(eventStore, EventType.MemoryConsolidated);
-    const supersedeEvent = consolidations.find((e) => e.payload.action === "supersede");
-    expect(supersedeEvent).toBeDefined();
-    expect(supersedeEvent!.payload).toMatchObject({
-      action: "supersede",
-      existing_node_id: nodeA.node_id,
-      new_node_id: newNodeId,
-    });
+      const consolidations = await countEventsOfType(eventStore, EventType.MemoryConsolidated);
+      const supersedeEvent = consolidations.find((e) => e.payload.action === "supersede");
+      expect(supersedeEvent).toBeDefined();
+      expect(supersedeEvent!.payload).toMatchObject({
+        action: "supersede",
+        existing_node_id: nodeA.node_id,
+        new_node_id: newNodeId,
+      });
 
-    // 7. Index rebuilds with the new content; old is gone from live view.
-    const nodes2 = await storage.getAllNodes(MOTEBIT_ID);
-    const edges2 = await storage.getAllEdges(MOTEBIT_ID);
-    const indexV2 = buildMemoryIndex(nodes2, edges2);
-    expect(indexV2).not.toContain("User prefers TypeScript");
-    expect(indexV2).toContain("User actually prefers Rust now");
-    // User lives in SF remains untouched.
-    expect(indexV2).toContain("User lives in SF");
-  });
+      // 7. Index rebuilds with the new content; old is gone from live view.
+      const nodes2 = await storage.getAllNodes(MOTEBIT_ID);
+      const edges2 = await storage.getAllEdges(MOTEBIT_ID);
+      const indexV2 = buildMemoryIndex(nodes2, edges2);
+      expect(indexV2).not.toContain("User prefers TypeScript");
+      expect(indexV2).toContain("User actually prefers Rust now");
+      // User lives in SF remains untouched.
+      expect(indexV2).toContain("User lives in SF");
+    },
+  );
 
   it("MemoryGraph.getMemoryIndex wraps buildMemoryIndex over live storage", async () => {
     // Empty graph produces the empty-state string.
