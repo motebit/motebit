@@ -2344,6 +2344,60 @@ export async function handleSlashCommand(
       break;
     }
 
+    case "sensitivity": {
+      // Session-sensitivity tier control. The runtime's gate
+      // (`assertSensitivityPermitsAiCall` / `assertSensitivityPermitsOutboundTool`)
+      // fail-closes external AI + outbound tool calls when the tier is
+      // medical/financial/secret AND the configured provider is not
+      // sovereign. Without this affordance the gate is unreachable from
+      // any user action — the v1+v2 plumbing landed but session_sensitivity
+      // stayed pinned at "none". This command is the user-facing entry point.
+      const arg = args.trim().toLowerCase();
+      if (arg === "" || arg === "status") {
+        console.log(`session sensitivity: ${cyan(runtime.getSessionSensitivity())}`);
+        break;
+      }
+      const VALID: ReadonlyArray<SensitivityLevel> = [
+        SensitivityLevel.None,
+        SensitivityLevel.Personal,
+        SensitivityLevel.Medical,
+        SensitivityLevel.Financial,
+        SensitivityLevel.Secret,
+      ];
+      // SensitivityLevel is a string-valued enum; comparing the
+      // user's lowercase input against the enum value is structurally
+      // safe — but eslint's no-unsafe-enum-comparison flags the
+      // direct comparison. Cast to string on both sides so the check
+      // is on the string-value axis, which is the actual contract
+      // (enum members carry the same string values as wire format).
+      const argStr = arg;
+      const match = VALID.find((v) => (v as string) === argStr);
+      if (!match) {
+        console.log(
+          warn(
+            `Usage: /sensitivity [<level>] — level ∈ {${VALID.join(", ")}} (current: ${runtime.getSessionSensitivity()})`,
+          ),
+        );
+        break;
+      }
+      runtime.setSessionSensitivity(match);
+      const elevated =
+        match === SensitivityLevel.Medical ||
+        match === SensitivityLevel.Financial ||
+        match === SensitivityLevel.Secret;
+      if (elevated) {
+        console.log(
+          green(`session elevated to ${match}`) +
+            dim(
+              " — outbound tools and external AI will fail-close until you run a sovereign (on-device) provider.",
+            ),
+        );
+      } else {
+        console.log(green(`session sensitivity: ${match}`));
+      }
+      break;
+    }
+
     default: {
       // Try the shared command layer before giving up
       const handled = await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);

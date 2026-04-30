@@ -1332,6 +1332,16 @@ export class MobileApp {
     return this.runtime.listTrustedAgents();
   }
 
+  /** See `MotebitRuntime.getSessionSensitivity` — surface mirror. */
+  getSessionSensitivity(): import("@motebit/sdk").SensitivityLevel | null {
+    return this.runtime?.getSessionSensitivity() ?? null;
+  }
+
+  /** See `MotebitRuntime.setSessionSensitivity` — surface mirror. */
+  setSessionSensitivity(level: import("@motebit/sdk").SensitivityLevel): void {
+    this.runtime?.setSessionSensitivity(level);
+  }
+
   get hasPendingApproval(): boolean {
     return this.runtime?.hasPendingApproval ?? false;
   }

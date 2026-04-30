@@ -48,6 +48,13 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "withdraw", description: "Request withdrawal" },
   { name: "mcp", description: "MCP server management" },
   { name: "serve", description: "Toggle accepting delegations from network" },
+  {
+    name: "sensitivity",
+    description:
+      "Show or set session sensitivity (none|personal|medical|financial|secret) — high tiers fail-close external AI + outbound tools",
+    hasArgs: true,
+    argHint: "[<level>]",
+  },
 ];
 
 /** Map of command name to definition for O(1) lookup. */

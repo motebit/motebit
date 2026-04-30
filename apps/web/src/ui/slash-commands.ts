@@ -94,6 +94,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "propose", description: "Propose collaborative plan" },
   { name: "proposals", description: "List active proposals" },
   { name: "serve", description: "Toggle accepting delegations" },
+  { name: "sensitivity", description: "Show or set session sensitivity tier" },
 ];
 
 function filterCommands(partial: string): SlashCommandDef[] {
@@ -343,6 +344,43 @@ export function initSlashCommands(
       const name = text.slice(1).split(/\s/)[0]!.toLowerCase();
       const cmd = SLASH_COMMANDS.find((c) => c.name === name);
       if (!cmd) return false;
+
+      // Sensitivity is the first slash command on the web surface that
+      // takes an inline arg. Handle it before the autocomplete-select
+      // indirection (which discards args by overwriting chatInput.value).
+      // User-facing entry point for the runtime sensitivity gate
+      // shipped in 4ed47f42 (AI calls) + 98c12730 (outbound tools).
+      if (name === "sensitivity") {
+        chatInput.value = "";
+        const arg = text.slice("/sensitivity".length).trim().toLowerCase();
+        const VALID = ["none", "personal", "medical", "financial", "secret"] as const;
+        const runtime = ctx.app.getRuntime();
+        if (!runtime) {
+          addMessage("system", "Runtime not initialized.");
+          return true;
+        }
+        if (arg === "" || arg === "status") {
+          addMessage("system", `Session sensitivity: ${runtime.getSessionSensitivity()}`);
+          return true;
+        }
+        if (!(VALID as ReadonlyArray<string>).includes(arg)) {
+          addMessage(
+            "system",
+            `Usage: /sensitivity [<level>] — level ∈ {${VALID.join(", ")}} (current: ${runtime.getSessionSensitivity()})`,
+          );
+          return true;
+        }
+        runtime.setSessionSensitivity(arg as import("@motebit/sdk").SensitivityLevel);
+        const elevated = arg === "medical" || arg === "financial" || arg === "secret";
+        addMessage(
+          "system",
+          elevated
+            ? `Session elevated to ${arg} — outbound tools and external AI will fail-close until you switch to a sovereign (on-device) provider.`
+            : `Session sensitivity: ${arg}`,
+        );
+        return true;
+      }
+
       chatInput.value = "/" + cmd.name;
       selectCommand(cmd);
       return true;

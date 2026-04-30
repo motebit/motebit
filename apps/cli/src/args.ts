@@ -322,6 +322,10 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/voice [on|off]", desc: "Toggle TTS voice output (opt-in, off by default)" },
   { usage: "/say <text>", desc: "Speak text via TTS (requires voice provider)" },
   { usage: "/skills", desc: "List installed skills with provenance badges" },
+  {
+    usage: "/sensitivity [<level>]",
+    desc: "Show or set session sensitivity tier (none|personal|medical|financial|secret) — high tiers fail-close external AI + outbound tools when provider is not on-device",
+  },
   { usage: "/skill <name>", desc: "Show full details + provenance for one skill" },
 ];
 

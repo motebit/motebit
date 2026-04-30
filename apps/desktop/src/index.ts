@@ -1311,6 +1311,22 @@ export class DesktopApp {
     return this.runtime.listTrustedAgents();
   }
 
+  /**
+   * Session sensitivity tier. Default `none`. Surfaces elevate via the
+   * `/sensitivity` slash command (or future settings affordance) when
+   * the user marks the session as carrying medical/financial/secret
+   * content. The runtime's gate fail-closes external AI + outbound
+   * tool calls at high tiers when the configured provider is not
+   * sovereign — see `SovereignTierRequiredError`.
+   */
+  getSessionSensitivity(): import("@motebit/sdk").SensitivityLevel | null {
+    return this.runtime?.getSessionSensitivity() ?? null;
+  }
+
+  setSessionSensitivity(level: import("@motebit/sdk").SensitivityLevel): void {
+    this.runtime?.setSessionSensitivity(level);
+  }
+
   hasPendingApproval(): boolean {
     return this.runtime?.hasPendingApproval ?? false;
   }

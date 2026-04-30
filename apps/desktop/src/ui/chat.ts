@@ -971,6 +971,37 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           })();
         }
         return;
+      case "sensitivity": {
+        // User-facing entry point for the runtime sensitivity gate
+        // shipped in 4ed47f42 (AI calls) + 98c12730 (outbound tools).
+        // Without this affordance the gate is unreachable from any user
+        // action — the plumbing exists, but session_sensitivity stays
+        // pinned at "none". This command surfaces the runtime API
+        // calmly: no toast for status, system-message line on elevation
+        // explaining the consequence (calm-software doctrine).
+        const arg = args.trim().toLowerCase();
+        const VALID = ["none", "personal", "medical", "financial", "secret"] as const;
+        if (arg === "" || arg === "status") {
+          addMessage("system", `Session sensitivity: ${ctx.app.getSessionSensitivity() ?? "none"}`);
+          return;
+        }
+        if (!(VALID as ReadonlyArray<string>).includes(arg)) {
+          addMessage(
+            "system",
+            `Usage: /sensitivity [<level>] — level ∈ {${VALID.join(", ")}} (current: ${ctx.app.getSessionSensitivity() ?? "none"})`,
+          );
+          return;
+        }
+        ctx.app.setSessionSensitivity(arg as import("@motebit/sdk").SensitivityLevel);
+        const elevated = arg === "medical" || arg === "financial" || arg === "secret";
+        addMessage(
+          "system",
+          elevated
+            ? `Session elevated to ${arg} — outbound tools and external AI will fail-close until you switch to a sovereign (on-device) provider.`
+            : `Session sensitivity: ${arg}`,
+        );
+        return;
+      }
     }
 
     // Shared commands — same data extraction and formatting as all surfaces

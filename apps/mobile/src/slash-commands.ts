@@ -609,6 +609,32 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     case "propose":
       addSystemMessage("Collaborative proposals use CLI: motebit propose <agent-ids> <goal>");
       break;
+    case "sensitivity": {
+      // User-facing entry point for the runtime sensitivity gate.
+      // Mirrors apps/cli + apps/desktop semantics: /sensitivity with
+      // no arg shows current; with an arg, sets the tier and reports
+      // the consequence on elevation.
+      const arg = args.trim().toLowerCase();
+      const VALID = ["none", "personal", "medical", "financial", "secret"] as const;
+      if (arg === "" || arg === "status") {
+        addSystemMessage(`Session sensitivity: ${a.getSessionSensitivity() ?? "none"}`);
+        break;
+      }
+      if (!(VALID as ReadonlyArray<string>).includes(arg)) {
+        addSystemMessage(
+          `Usage: /sensitivity [<level>] — level ∈ {${VALID.join(", ")}} (current: ${a.getSessionSensitivity() ?? "none"})`,
+        );
+        break;
+      }
+      a.setSessionSensitivity(arg as import("@motebit/sdk").SensitivityLevel);
+      const elevated = arg === "medical" || arg === "financial" || arg === "secret";
+      addSystemMessage(
+        elevated
+          ? `Session elevated to ${arg} — outbound tools and external AI will fail-close until you switch to a sovereign (on-device) provider.`
+          : `Session sensitivity: ${arg}`,
+      );
+      break;
+    }
     case "help":
       addSystemMessage(
         "Available commands:\n" +
@@ -642,6 +668,7 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
           "/delegate — delegate to agent (CLI)\n" +
           "/propose — propose collab plan (CLI)\n" +
           "/withdraw — request withdrawal (CLI)\n" +
+          "/sensitivity [<level>] — show or set session sensitivity\n" +
           "/help — show this message",
       );
       break;
