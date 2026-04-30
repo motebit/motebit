@@ -609,6 +609,14 @@ export class McpClientAdapter {
       // prefers MCP-delegated work over the pixel fallback when both
       // could answer.
       mode: "api" as const,
+      // MCP tools execute against a remote server by definition — args
+      // cross the device boundary on every call. The runtime's
+      // sensitivity gate refuses to dispatch any outbound tool when
+      // session_sensitivity is medical/financial/secret AND the
+      // configured provider is not sovereign. Same fail-closed contract
+      // that gates external AI calls (CLAUDE.md privacy doctrine
+      // generalized to outbound surfaces).
+      outbound: true,
       ...(this.config.trusted ? {} : { requiresApproval: true }),
     }));
   }

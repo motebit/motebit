@@ -150,6 +150,13 @@ export class InteractiveDelegationManager {
           },
           required: ["prompt"],
         },
+        // Cross-motebit delegation sends the prompt + arguments to a
+        // remote agent via the relay. Same outbound boundary as
+        // web_search / read_url; the runtime's sensitivity gate
+        // refuses to dispatch this tool when session_sensitivity is
+        // medical/financial/secret AND the configured provider is not
+        // sovereign.
+        outbound: true,
       },
       async (args: Record<string, unknown>) => {
         const prompt = args.prompt as string;

@@ -434,6 +434,27 @@ export interface ToolDefinition {
    * last. See `@motebit/protocol/tool-mode`.
    */
   mode?: ToolMode;
+  /**
+   * Outbound axis — true when execution sends bytes outside the device
+   * (HTTP fetch, search-engine query, MCP server call,
+   * cross-motebit delegation). Independent of `riskHint` (which
+   * captures local risk: file overwrite, irreversible side effect).
+   *
+   * Consumed by the runtime's sensitivity-routing gate: an outbound
+   * tool refuses to execute when session sensitivity is
+   * medical/financial/secret AND the configured provider is not
+   * sovereign — the same fail-closed contract that gates AI provider
+   * calls (CLAUDE.md privacy doctrine: "Medical/financial/secret never
+   * reach external AI"; the principle generalizes to any outbound
+   * surface). Default `false`/absent ≡ local — matches the
+   * pre-existing builtin set (read_file, recall_memories, current_time).
+   *
+   * Tools added through `@motebit/mcp-client` always set this to
+   * `true` (MCP tools execute against a remote server by definition).
+   * See `check-tool-modes` for the cost-tier sibling and
+   * `check-sensitivity-routing` for the outbound enforcement gate.
+   */
+  outbound?: boolean;
 }
 
 export interface ToolResult {

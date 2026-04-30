@@ -15,6 +15,13 @@ export const webSearchDefinition: ToolDefinition = {
     },
     required: ["query"],
   },
+  // Sends the query string to an external search engine
+  // (Brave / DuckDuckGo). The runtime's sensitivity gate refuses to
+  // execute this tool when session_sensitivity is medical/financial/
+  // secret AND provider is not sovereign — the same fail-closed
+  // contract that gates external AI calls (CLAUDE.md privacy
+  // doctrine, generalized to any outbound surface).
+  outbound: true,
 };
 
 const MAX_RESULT_SIZE = 8000;

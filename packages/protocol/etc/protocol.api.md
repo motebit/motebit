@@ -2711,6 +2711,7 @@ export interface ToolDefinition {
     mode?: ToolMode;
     // (undocumented)
     name: string;
+    outbound?: boolean;
     // (undocumented)
     requiresApproval?: boolean;
     riskHint?: {

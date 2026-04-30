@@ -2451,15 +2451,68 @@ export class MotebitRuntime {
         stateEngine: this.state,
         behaviorEngine: this.behavior,
         provider: this.provider,
-        // Always pass the scoped registry — its predicate is presence-aware
-        // and returns full passthrough during responsive/idle turns. Tending
-        // turns see only the proactive-allowlisted memory tools.
-        tools: this.scopedToolRegistry.size > 0 ? this.scopedToolRegistry : undefined,
+        // Wrap the scoped registry in the sensitivity-aware proxy so
+        // outbound tools (web_search, read_url, delegate_to_agent, MCP
+        // tools — anything with `outbound: true`) fail-close before
+        // dispatch when session_sensitivity is medical/financial/secret
+        // AND provider is not sovereign. Same gate semantics as
+        // `assertSensitivityPermitsAiCall`, applied at the tool-call
+        // boundary. Local-only tools (read_file, recall_memories, etc.)
+        // dispatch unchanged. The scoped registry's presence-aware
+        // predicate continues to apply through the wrapper.
+        tools:
+          this.scopedToolRegistry.size > 0
+            ? this.wrapToolRegistryForSensitivity(this.scopedToolRegistry)
+            : undefined,
         policyGate: this.policy,
         memoryGovernor: this.memoryGovernor,
         consolidationProvider,
       };
     }
+  }
+
+  /**
+   * Wrap a tool registry so `execute(name, args)` fail-closes on
+   * outbound tools when session sensitivity is high and the provider
+   * is not sovereign. Pure forwarding for every other method
+   * (`list`, `register`, `replace`, `unregister`) — the wrapper only
+   * intercepts the boundary that crosses the network.
+   */
+  private wrapToolRegistryForSensitivity(
+    inner: import("@motebit/sdk").ToolRegistry,
+  ): import("@motebit/sdk").ToolRegistry {
+    const assertGate = (name: string): void => this.assertSensitivityPermitsOutboundTool(name);
+    return {
+      list: () => inner.list(),
+      register: (tool, handler) => inner.register(tool, handler),
+      replace: inner.replace?.bind(inner),
+      unregister: inner.unregister?.bind(inner),
+      async execute(name, args) {
+        const tool = inner.list().find((t) => t.name === name);
+        if (tool?.outbound === true) {
+          assertGate(name);
+        }
+        return inner.execute(name, args);
+      },
+    };
+  }
+
+  /**
+   * Sensitivity-aware gate at the outbound-tool boundary. Throws
+   * `SovereignTierRequiredError` when session sensitivity is
+   * medical/financial/secret AND the configured provider is not
+   * sovereign — fail-closed before any bytes leave the device. Mirror
+   * of `assertSensitivityPermitsAiCall` for tools tagged
+   * `outbound: true` per the protocol-level `ToolDefinition.outbound`
+   * flag. Enforced at the tool-execute boundary by the registry
+   * wrapper above; verified for completeness by the
+   * `check-sensitivity-routing` drift gate.
+   */
+  private assertSensitivityPermitsOutboundTool(_toolName: string): void {
+    // Same predicate as the AI-call gate — keeps both boundaries
+    // honoring the same contract. The toolName parameter is reserved
+    // for future structured logging / per-tool waivers.
+    this.assertSensitivityPermitsAiCall();
   }
 
   private async logToolUsed(toolName: string, result: unknown): Promise<void> {

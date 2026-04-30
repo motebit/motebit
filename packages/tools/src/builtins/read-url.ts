@@ -13,6 +13,12 @@ export const readUrlDefinition: ToolDefinition = {
     },
     required: ["url"],
   },
+  // Issues an HTTP fetch to an arbitrary external host. The URL plus
+  // any auth headers (when surfaces inject a native fetcher) cross
+  // the device boundary. Same outbound axis as web_search; the
+  // runtime's sensitivity gate fail-closes on medical/financial/
+  // secret session sensitivity unless provider is sovereign.
+  outbound: true,
 };
 
 /**

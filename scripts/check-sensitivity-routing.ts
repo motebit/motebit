@@ -155,6 +155,45 @@ function checkMethod(slice: MethodSlice): string | null {
   return null;
 }
 
+/**
+ * Tool-call-boundary check. Verifies that the runtime wraps the tool
+ * registry through `wrapToolRegistryForSensitivity` when populating
+ * `loopDeps.tools`. The wrapper is what enforces the sensitivity gate
+ * at outbound tool dispatch (web_search, read_url,
+ * delegate_to_agent, MCP tools — any tool tagged `outbound: true`).
+ *
+ * Without the wrap, ai-core invokes the underlying registry directly
+ * and the gate silently no-ops. Same drift shape as the AI-call gate
+ * above: a refactor that "simplifies" by removing the wrap re-opens
+ * the privacy hole.
+ *
+ * Pattern enforced: the assignment to `tools:` in loopDeps must
+ * either be `undefined` OR routed through `wrapToolRegistryForSensitivity`.
+ * Anything else (raw assignment of `this.scopedToolRegistry`, a new
+ * registry without the wrap) is flagged.
+ */
+function checkToolWrapPresent(src: string): string | null {
+  // The wrap method must be defined on the runtime class.
+  if (!/\bwrapToolRegistryForSensitivity\s*\(/g.test(src)) {
+    return "missing `wrapToolRegistryForSensitivity` method on MotebitRuntime — the runtime must own a registry wrapper that gates outbound tools on session sensitivity";
+  }
+  // The loopDeps `tools:` assignment must route through the wrapper.
+  // Locate the `this.loopDeps = { ... }` block (the outermost `{...}`
+  // following the assignment) and confirm its `tools:` line references
+  // the wrapper. Multi-line ternaries are common; matching from
+  // `tools:` to the next top-level comma would miss the wrapper call
+  // when it sits inside the ternary body. Simpler + correct: match the
+  // entire block and verify both keywords coexist within it.
+  const blockMatch = src.match(/this\.loopDeps\s*=\s*\{([\s\S]*?)\n\s{6}\};/);
+  if (blockMatch) {
+    const block = blockMatch[1] ?? "";
+    if (block.includes("tools:") && !block.includes("wrapToolRegistryForSensitivity")) {
+      return "loopDeps assignment defines `tools:` but doesn't route through `wrapToolRegistryForSensitivity` — outbound tool dispatch would skip the sensitivity gate";
+    }
+  }
+  return null;
+}
+
 function main(): void {
   if (!existsSync(TARGET)) {
     console.error(`✗ check-sensitivity-routing: target file missing: ${TARGET}`);
@@ -167,20 +206,24 @@ function main(): void {
     const v = checkMethod(slice);
     if (v != null) violations.push(v);
   }
+  // Tool-call boundary check (independent of the per-method AI-call check).
+  const toolWrapViolation = checkToolWrapPresent(src);
+  if (toolWrapViolation != null) violations.push(toolWrapViolation);
+
   if (violations.length === 0) {
     console.log(
-      `✓ check-sensitivity-routing: every runtime AI-call entry in motebit-runtime.ts gates on \`assertSensitivityPermitsAiCall\` before invoking runTurn / runTurnStreaming.\n`,
+      `✓ check-sensitivity-routing: every runtime AI-call entry gates on \`assertSensitivityPermitsAiCall\`, and the tool registry is wrapped through \`wrapToolRegistryForSensitivity\` for outbound-tool gating.\n`,
     );
     return;
   }
   console.error(
-    `\n✗ check-sensitivity-routing: ${violations.length} runtime AI-call entry(s) skip the sensitivity gate.\n\n`,
+    `\n✗ check-sensitivity-routing: ${violations.length} sensitivity-gate violation(s).\n\n`,
   );
   for (const v of violations) {
     console.error(`  ${v}\n`);
   }
   console.error(
-    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"), every method that invokes runTurn or runTurnStreaming MUST call `this.assertSensitivityPermitsAiCall()` first. The gate throws `SovereignTierRequiredError` before any provider call when session is medical/financial/secret AND provider is not sovereign — fail-closed before any bytes leave the device.\n',
+    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"): every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming, AND the runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close at dispatch when session is medical/financial/secret AND provider is not sovereign. Both checks fire before any bytes leave the device.\n',
   );
   process.exit(1);
 }
