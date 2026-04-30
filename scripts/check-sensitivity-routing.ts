@@ -156,6 +156,66 @@ function checkMethod(slice: MethodSlice): string | null {
 }
 
 /**
+ * Surface-affordance registry. Each entry names a user-facing surface
+ * that hosts a chat/slash-dispatch and therefore MUST expose a
+ * `/sensitivity` affordance — without it, the runtime gate is
+ * unreachable from any user action on that surface and the doctrine
+ * claim "users can mark a session medical/financial/secret" is dead
+ * letter for that surface.
+ *
+ * `apps/spatial` is intentionally excluded: per `apps/spatial/CLAUDE.md`
+ * the surface is embodiment-only with no panels and no slash dispatch.
+ * If spatial ever grows a chat surface, it joins this list — the
+ * exclusion is structural, not policy.
+ */
+interface SurfaceAffordance {
+  surface: string;
+  /** Path (relative to repo root) of the file that hosts slash dispatch. */
+  path: string;
+}
+
+const SURFACE_AFFORDANCES: ReadonlyArray<SurfaceAffordance> = [
+  { surface: "cli", path: "apps/cli/src/slash-commands.ts" },
+  { surface: "desktop", path: "apps/desktop/src/ui/chat.ts" },
+  { surface: "mobile", path: "apps/mobile/src/slash-commands.ts" },
+  { surface: "web", path: "apps/web/src/ui/slash-commands.ts" },
+];
+
+/**
+ * Affordance check — every registered surface must wire `/sensitivity`
+ * to the runtime API. Two signals required: the literal string
+ * `"sensitivity"` must appear (the dispatch case) AND at least one of
+ * `setSessionSensitivity` / `getSessionSensitivity` must appear (proves
+ * the handler routes through the canonical runtime setter rather than
+ * forking its own state). Both signals together are what makes the
+ * affordance load-bearing — a `case "sensitivity"` that doesn't call
+ * the runtime API is decorative.
+ */
+function checkSurfaceAffordances(): string[] {
+  const violations: string[] = [];
+  for (const entry of SURFACE_AFFORDANCES) {
+    const abs = resolve(ROOT, entry.path);
+    if (!existsSync(abs)) {
+      violations.push(`${entry.surface}: dispatch file missing at ${entry.path}`);
+      continue;
+    }
+    const src = readFileSync(abs, "utf-8");
+    if (!/\bsensitivity\b/.test(src)) {
+      violations.push(
+        `${entry.surface} (${entry.path}): no \`sensitivity\` handler — users have no way to elevate session_sensitivity, so the runtime gate is unreachable from this surface`,
+      );
+      continue;
+    }
+    if (!/\bsetSessionSensitivity\b/.test(src)) {
+      violations.push(
+        `${entry.surface} (${entry.path}): \`sensitivity\` handler present but doesn't call \`setSessionSensitivity\` — display-only is not enough; users must be able to ELEVATE through the canonical runtime setter, otherwise the affordance is decorative`,
+      );
+    }
+  }
+  return violations;
+}
+
+/**
  * Tool-call-boundary check. Verifies that the runtime wraps the tool
  * registry through `wrapToolRegistryForSensitivity` when populating
  * `loopDeps.tools`. The wrapper is what enforces the sensitivity gate
@@ -210,9 +270,18 @@ function main(): void {
   const toolWrapViolation = checkToolWrapPresent(src);
   if (toolWrapViolation != null) violations.push(toolWrapViolation);
 
+  // Surface affordance check — every user-facing surface with chat/
+  // slash dispatch MUST expose `/sensitivity`. Without this, the
+  // runtime gate is unreachable from any user action on that
+  // surface (the v1 + v2 enforcement infrastructure exists but
+  // session_sensitivity stays pinned at "none" because no one can
+  // elevate). spatial is excluded by structure — see SURFACE_AFFORDANCES.
+  const affordanceViolations = checkSurfaceAffordances();
+  violations.push(...affordanceViolations);
+
   if (violations.length === 0) {
     console.log(
-      `✓ check-sensitivity-routing: every runtime AI-call entry gates on \`assertSensitivityPermitsAiCall\`, and the tool registry is wrapped through \`wrapToolRegistryForSensitivity\` for outbound-tool gating.\n`,
+      `✓ check-sensitivity-routing: AI-call entries gate on \`assertSensitivityPermitsAiCall\`, the tool registry is wrapped via \`wrapToolRegistryForSensitivity\`, and every registered surface (${SURFACE_AFFORDANCES.map((s) => s.surface).join(", ")}) exposes \`/sensitivity\` routed through the canonical runtime setter.\n`,
     );
     return;
   }
@@ -223,7 +292,7 @@ function main(): void {
     console.error(`  ${v}\n`);
   }
   console.error(
-    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"): every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming, AND the runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close at dispatch when session is medical/financial/secret AND provider is not sovereign. Both checks fire before any bytes leave the device.\n',
+    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"), the gate has three load-bearing pieces:\n  1. Every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming.\n  2. The runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close on high-sensitivity sessions.\n  3. Every user-facing surface with chat/slash dispatch MUST expose `/sensitivity` routed through `runtime.setSessionSensitivity` / `getSessionSensitivity` — without this affordance, the gate is enforced in code but unreachable from any user action.\n\nAll three together close the doctrine end-to-end: enforcement at the boundary + a path for users to actually trip the gate.\n',
   );
   process.exit(1);
 }

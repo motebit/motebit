@@ -1086,14 +1086,16 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
   {
     script: "check-sensitivity-routing",
     proves:
-      "flags a runtime AI-call entry that skips the sensitivity gate — the doctrine breach where the user elevates session sensitivity to medical and the runtime ships bytes to an external provider anyway",
+      "flags a runtime AI-call entry that skips the sensitivity gate AND a user-facing surface that drops the `/sensitivity` affordance — both shapes of the doctrine breach where bytes leak (gate skipped at the runtime) or the gate is unreachable (affordance missing on a surface)",
     perturb: () =>
-      // Disable every gate call in the runtime. The check should fire
-      // because every runTurn / runTurnStreaming call site no longer has
-      // the sentinel earlier in the same method body. mutateFile's
-      // restore reverses cleanly.
-      mutateFile("packages/runtime/src/motebit-runtime.ts", (src) =>
-        src.replace(/this\.assertSensitivityPermitsAiCall\(\)/g, "/* probe-disabled */ void 0"),
+      // Strip the canonical runtime setter from one surface's slash
+      // dispatch. The affordance arm fires because the file no longer
+      // routes through `runtime.setSessionSensitivity` — sensitivity
+      // case present but disconnected from the runtime API is exactly
+      // the "decorative affordance" failure mode the gate's surface
+      // arm exists to catch. mutateFile's restore reverses cleanly.
+      mutateFile("apps/cli/src/slash-commands.ts", (src) =>
+        src.replace(/runtime\.setSessionSensitivity\b/g, "runtime._disabledSetSessionSensitivity"),
       ),
   },
 ];
