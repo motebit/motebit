@@ -37,6 +37,7 @@ import {
   isSettlementPendingBatch,
 } from "./anchoring.js";
 import { createCredentialAnchoringTables } from "./credential-anchoring.js";
+import { enrichWithHardwareAttestation } from "./agents.js";
 import { nextRetryDelay, DEFAULT_RETRY_POLICY } from "./retry-policy.js";
 import type { RetryPolicy } from "./retry-policy.js";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
@@ -1371,7 +1372,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     // hop_count is 0-based: 0 = direct peer, 1 = peer-of-peer, etc.
     // At hop_count >= max_hops, we've reached the limit — return local only, no forwarding.
-    if (body.hop_count >= body.max_hops) return c.json({ agents: results });
+    // Enrich local agents with hardware_attestation from this relay's
+    // credential store so the originating relay can render the badge for
+    // agents discovered across federation. Without this, HA only flows
+    // through the public-facing /api/v1/agents/discover for the relay
+    // that holds the credential — federation-discovered peers always
+    // appear as unattested even when the originating relay had verified
+    // them. See docs/doctrine/self-attesting-system.md + the HA badge
+    // ship 2 review note that flagged this gap.
+    if (body.hop_count >= body.max_hops) {
+      return c.json({ agents: enrichWithHardwareAttestation(results, db) });
+    }
 
     // Forward to active peers
     const visited = [...body.visited, relayIdentity.relayMotebitId];
@@ -1424,7 +1435,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       }
     }
 
-    return c.json({ agents: [...merged.values()] });
+    // Enrich the merged set with hardware_attestation from THIS relay's
+    // credential store. The federation-passthrough rule preserves any
+    // HA peer relays already attached to peer-of-peer agents (their
+    // store is more authoritative for agents we've never directly
+    // transacted with) — we only fill in for agents that arrived without
+    // a claim AND about which we hold a verified credential locally.
+    const enriched = enrichWithHardwareAttestation(
+      [...merged.values()] as Array<Record<string, unknown> & { motebit_id: string }>,
+      db,
+    );
+    return c.json({ agents: enriched });
   });
 
   // ── Phase 4: Task Forwarding ──

@@ -640,6 +640,72 @@ describe("Federation E2E", () => {
       // Should still return local matches
       expect(body.agents.length).toBeGreaterThanOrEqual(1);
     });
+
+    // HA badge ship 4 — federation HA propagation. Closes the asymmetry
+    // flagged in the ship 2 review: hardware_attestation flowed through
+    // the user-facing /api/v1/agents/discover but not through federation,
+    // so cross-federation agents always rendered as unattested even when
+    // the originating relay had verified them. With this enrichment, peer
+    // relays see the badge for agents discovered across hops, faithful to
+    // self-attesting-system doctrine ("every routing-input claim MUST be
+    // visible to the user").
+    it("propagates hardware_attestation across federation hops", async () => {
+      const agent = await registerAgent(relayA, "ha-fed-agent", ["ha-fed"]);
+
+      // Insert a peer-issued AgentTrustCredential carrying a verified
+      // hardware_attestation claim about the local agent. Same shape as
+      // /credentials/submit would persist after signature + revocation
+      // checks (those filters are upstream of relay_credentials).
+      const issuedAt = Date.now();
+      relayA.moteDb.db
+        .prepare(
+          `INSERT INTO relay_credentials
+           (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "ha-fed-cred-1",
+          agent.motebitId,
+          "did:key:z-fed-issuer-test",
+          "AgentTrustCredential",
+          JSON.stringify({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            type: ["VerifiableCredential", "AgentTrustCredential"],
+            issuer: "did:key:z-fed-issuer-test",
+            validFrom: new Date(issuedAt).toISOString(),
+            credentialSubject: {
+              id: `did:motebit:${agent.motebitId}`,
+              hardware_attestation: { platform: "secure_enclave" },
+            },
+          }),
+          issuedAt,
+        );
+
+      // Simulate an inbound federation discover from a different relay.
+      const discoverRes = await relayA.app.request("/federation/v1/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: { capability: "ha-fed" },
+          hop_count: 0,
+          max_hops: 3,
+          visited: [],
+          query_id: crypto.randomUUID(),
+          origin_relay: "some-foreign-relay",
+        }),
+      });
+      expect(discoverRes.status).toBe(200);
+      const body = (await discoverRes.json()) as {
+        agents: Array<{
+          motebit_id: string;
+          hardware_attestation?: { platform: string; score: number };
+        }>;
+      };
+      const found = body.agents.find((a) => a.motebit_id === agent.motebitId);
+      expect(found).toBeDefined();
+      expect(found!.hardware_attestation?.platform).toBe("secure_enclave");
+      expect(found!.hardware_attestation?.score).toBe(1);
+    });
   });
 
   // --- Phase 4: Cross-Relay Task Forwarding ---
