@@ -8,5 +8,5 @@
   },
   "include": ["src"],
   "exclude": ["src/__tests__"],
-  "references": [{ "path": "../crypto" }]
+  "references": [{ "path": "../crypto" }, { "path": "../protocol" }]
 }

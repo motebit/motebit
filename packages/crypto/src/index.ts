@@ -147,6 +147,9 @@ import type {
   VerifiableCredential,
   VerifiablePresentation,
 } from "./credentials.js";
+import type { SkillEnvelope } from "@motebit/protocol";
+import { verifySkillEnvelopeDetailed, decodeSkillSignaturePublicKey } from "./skills.js";
+import type { SkillVerifyReason } from "./skills.js";
 
 // Hardware-attestation verification (secure_enclave today; additive
 // platform adapters for tpm / play_integrity / device_check later via
@@ -228,11 +231,68 @@ export interface PresentationVerifyResult extends BaseResult {
   credentials?: CredentialVerifyResult[];
 }
 
+/**
+ * Per-file verification outcome inside a `SkillVerifyResult`. Each entry
+ * cross-checks `envelope.files[].hash` against `sha256(<file bytes>)`.
+ * `actual === null` means the verifier had no on-disk bytes to compare —
+ * either the bundle didn't ship the file or a directory walker couldn't
+ * locate it. Distinct shape from envelope-signature failure: a missing
+ * file is an unverifiable claim, not a forged one.
+ */
+export interface SkillFileVerifyResult {
+  readonly path: string;
+  readonly valid: boolean;
+  readonly expected: string;
+  readonly actual: string | null;
+  /** `"ok" | "hash_mismatch" | "missing"`. */
+  readonly reason: "ok" | "hash_mismatch" | "missing";
+}
+
+/**
+ * Verification outcome for a `SkillEnvelope` (per `spec/skills-v1.md` §5)
+ * with optional on-disk body + file cross-checks.
+ *
+ * Three independent verification axes:
+ *   - `steps.envelope` — Ed25519 signature over canonical envelope bytes.
+ *     Always populated; the primitive lives in this package.
+ *   - `steps.body_hash` — `sha256(LF-normalized SKILL.md bytes)` cross-
+ *     checked against `envelope.body_hash`. Populated by callers that
+ *     read the body from disk (the `@motebit/verifier` directory walker
+ *     does this); `null` when this layer was called with bare envelope
+ *     JSON and had no body bytes to compare.
+ *   - `steps.files` — per-file `sha256` cross-checks. Empty array when
+ *     no file bytes were provided to compare; otherwise one entry per
+ *     `envelope.files[]` declaration.
+ *
+ * `valid` reflects "every attempted axis passed AND every declared
+ * cross-check was attempted." Calling crypto's `verify(envelope)`
+ * directly returns `valid: false` with `body_hash: null` and `files:
+ * []` because the bare envelope can only be sig-verified — full
+ * verification requires the on-disk bytes. The
+ * `@motebit/verifier::verifySkillDirectory` library completes the
+ * other two axes; that's the canonical full-verify entry point for
+ * skills.
+ */
+export interface SkillVerifyResult extends BaseResult {
+  type: "skill";
+  envelope: SkillEnvelope | null;
+  /** Compact identifier — `<name>@<version>` from `envelope.skill`. */
+  skill?: string;
+  /** Echoed from `envelope.signature.public_key`. */
+  signer?: string;
+  steps: {
+    envelope: { valid: boolean; reason: SkillVerifyReason };
+    body_hash: { valid: boolean; expected: string; actual: string } | null;
+    files: ReadonlyArray<SkillFileVerifyResult>;
+  };
+}
+
 export type VerifyResult =
   | IdentityVerifyResult
   | ReceiptVerifyResult
   | CredentialVerifyResult
-  | PresentationVerifyResult;
+  | PresentationVerifyResult
+  | SkillVerifyResult;
 
 export type ArtifactType = VerifyResult["type"];
 
@@ -586,6 +646,21 @@ function detectArtifactType(artifact: unknown): ArtifactType | null {
   // Execution Receipt: has "task_id" + "motebit_id" + "signature" + "prompt_hash"
   if ("task_id" in obj && "motebit_id" in obj && "signature" in obj && "prompt_hash" in obj) {
     return "receipt";
+  }
+
+  // Skill envelope: has "spec_version" + "skill" + "manifest" + "body_hash" + "signature".
+  // Distinct from credentials (no "credentialSubject"/"issuer"/"proof") and
+  // receipts (no "task_id"). The pinned `spec_version: "1.0"` plus the
+  // structural shape of `skill: { name, version, content_hash }` is the
+  // canonical fingerprint per `spec/skills-v1.md` §5.
+  if (
+    "spec_version" in obj &&
+    "skill" in obj &&
+    "manifest" in obj &&
+    "body_hash" in obj &&
+    "signature" in obj
+  ) {
+    return "skill";
   }
 
   return null;
@@ -1065,6 +1140,72 @@ async function verifyDataIntegrity(
   return verifyBySuite("eddsa-jcs-2022", combined, signature, publicKey);
 }
 
+/**
+ * Verify a `SkillEnvelope` at the signature layer only. Body-hash and
+ * per-file cross-checks require on-disk bytes (the
+ * `@motebit/verifier::verifySkillDirectory` walker populates them); this
+ * layer leaves those steps unattempted so the result honestly reports
+ * "envelope sig OK, full-verify pending" rather than false-positive a
+ * tampered body that happens to ship a valid envelope sig.
+ *
+ * Result discipline: `valid: true` iff envelope sig verifies AND body +
+ * file cross-checks were both attempted-and-passed. Bare envelope input
+ * here returns `valid: false` with `errors[]` naming the unattempted
+ * checks — the caller gets a clean signal that they need the on-disk
+ * walker to complete the verification.
+ */
+async function verifySkillEnvelopeArtifact(envelope: SkillEnvelope): Promise<SkillVerifyResult> {
+  let publicKey: Uint8Array;
+  try {
+    publicKey = decodeSkillSignaturePublicKey(envelope.signature);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      type: "skill",
+      valid: false,
+      envelope,
+      skill: `${envelope.skill.name}@${envelope.skill.version}`,
+      steps: {
+        envelope: { valid: false, reason: "bad_public_key" },
+        body_hash: null,
+        files: [],
+      },
+      errors: [{ message: `public key decode failed: ${msg}`, path: "signature.public_key" }],
+    };
+  }
+  const detail = await verifySkillEnvelopeDetailed(envelope, publicKey);
+  const errors: VerificationError[] = [];
+  if (!detail.valid) {
+    errors.push({
+      message: `envelope signature verification failed (${detail.reason})`,
+      path: "signature",
+    });
+  }
+  // Always emit the body/files-pending signal. A caller that has the
+  // on-disk bytes (the verifier package's directory walker) augments
+  // these axes; a caller that doesn't — the bare-envelope path used
+  // by motebit-verify on a single skill-envelope.json — sees them as
+  // skipped, which is structurally honest about what was checked.
+  errors.push({
+    message:
+      "body_hash and files[] cross-check were not attempted — verifying a bare envelope JSON only checks the envelope signature. Use `verifySkillDirectory` from @motebit/verifier (or `motebit-verify <skill-directory>`) for full verification.",
+    path: "body_hash",
+  });
+  return {
+    type: "skill",
+    valid: false,
+    envelope,
+    skill: `${envelope.skill.name}@${envelope.skill.version}`,
+    signer: envelope.signature.public_key,
+    steps: {
+      envelope: { valid: detail.valid, reason: detail.reason },
+      body_hash: null,
+      files: [],
+    },
+    errors,
+  };
+}
+
 const DEFAULT_CLOCK_SKEW_SECONDS = 60;
 
 async function verifyCredential(
@@ -1245,6 +1386,16 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
       ...(fallbackType === "receipt" ? { receipt: null } : {}),
       ...(fallbackType === "credential" ? { credential: null } : {}),
       ...(fallbackType === "presentation" ? { presentation: null } : {}),
+      ...(fallbackType === "skill"
+        ? {
+            envelope: null,
+            steps: {
+              envelope: { valid: false, reason: "wrong_suite" as SkillVerifyReason },
+              body_hash: null,
+              files: [],
+            },
+          }
+        : {}),
       errors: [{ message: "Unrecognized artifact format" }],
     } as VerifyResult;
   }
@@ -1257,6 +1408,16 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
       ...(detected === "receipt" ? { receipt: null } : {}),
       ...(detected === "credential" ? { credential: null } : {}),
       ...(detected === "presentation" ? { presentation: null } : {}),
+      ...(detected === "skill"
+        ? {
+            envelope: null,
+            steps: {
+              envelope: { valid: false, reason: "wrong_suite" as SkillVerifyReason },
+              body_hash: null,
+              files: [],
+            },
+          }
+        : {}),
       errors: [{ message: `Expected type "${options.expectedType}" but detected "${detected}"` }],
     } as VerifyResult;
   }
@@ -1273,6 +1434,16 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
         ...(detected === "receipt" ? { receipt: null } : {}),
         ...(detected === "credential" ? { credential: null } : {}),
         ...(detected === "presentation" ? { presentation: null } : {}),
+        ...(detected === "skill"
+          ? {
+              envelope: null,
+              steps: {
+                envelope: { valid: false, reason: "wrong_suite" as SkillVerifyReason },
+                body_hash: null,
+                files: [],
+              },
+            }
+          : {}),
         errors: [{ message: "Failed to parse JSON" }],
       } as VerifyResult;
     }
@@ -1295,6 +1466,8 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
         options?.clockSkewSeconds,
         options?.hardwareAttestation,
       );
+    case "skill":
+      return verifySkillEnvelopeArtifact(resolved as SkillEnvelope);
   }
 }
 

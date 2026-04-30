@@ -920,6 +920,19 @@ export function signVerifiablePresentation(unsignedVP: Omit<VerifiablePresentati
 // @public
 export const SKILL_SIGNATURE_SUITE: "motebit-jcs-ed25519-b64-v1";
 
+// @public
+export interface SkillFileVerifyResult {
+    // (undocumented)
+    readonly actual: string | null;
+    // (undocumented)
+    readonly expected: string;
+    // (undocumented)
+    readonly path: string;
+    readonly reason: "ok" | "hash_mismatch" | "missing";
+    // (undocumented)
+    readonly valid: boolean;
+}
+
 // @public (undocumented)
 export interface SkillVerifyDetail {
     // (undocumented)
@@ -930,6 +943,29 @@ export interface SkillVerifyDetail {
 
 // @public
 export type SkillVerifyReason = "ok" | "no_signature" | "wrong_suite" | "bad_public_key" | "bad_signature_value" | "ed25519_mismatch";
+
+// @public
+export interface SkillVerifyResult extends BaseResult {
+    // (undocumented)
+    envelope: SkillEnvelope | null;
+    signer?: string;
+    skill?: string;
+    // (undocumented)
+    steps: {
+        envelope: {
+            valid: boolean;
+            reason: SkillVerifyReason;
+        };
+        body_hash: {
+            valid: boolean;
+            expected: string;
+            actual: string;
+        } | null;
+        files: ReadonlyArray<SkillFileVerifyResult>;
+    };
+    // (undocumented)
+    type: "skill";
+}
 
 // @public
 export interface SovereignPaymentReceiptInput {
@@ -1149,7 +1185,7 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
 }>;
 
 // @public (undocumented)
-export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | CredentialVerifyResult | PresentationVerifyResult;
+export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult;
 
 // @public
 export function verifyRevocationAnchor(proof: RevocationAnchorProof, revocationPayload: string, chainVerifier?: (anchor: {

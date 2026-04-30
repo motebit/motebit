@@ -32,6 +32,11 @@
  *     supply their own; `@motebit/verify` wires the canonical bundle.
  */
 
-export { verifyFile, verifyArtifact, formatHuman } from "./lib.js";
+export { verifyFile, verifyArtifact, verifySkillDirectory, formatHuman } from "./lib.js";
 export type { VerifyFileOptions } from "./lib.js";
-export type { VerifyResult, ArtifactType } from "@motebit/crypto";
+export type {
+  VerifyResult,
+  ArtifactType,
+  SkillVerifyResult,
+  SkillFileVerifyResult,
+} from "@motebit/crypto";

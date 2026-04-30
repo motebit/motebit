@@ -56,6 +56,7 @@ const EXPECT_VALUES: readonly ArtifactType[] = [
   "receipt",
   "credential",
   "presentation",
+  "skill",
 ];
 
 interface ParsedArgs {
@@ -198,10 +199,17 @@ function usage(message: string): ParsedArgs {
 
 function renderHelp(): string {
   return [
-    "motebit-verify — hardware-attestation-aware verifier for Motebit credentials",
+    "motebit-verify — verify any signed Motebit artifact offline.",
     "",
     "USAGE",
-    "  motebit-verify <file> [options]",
+    "  motebit-verify <path> [options]",
+    "",
+    "  <path> may be a single file (identity, receipt, credential, presentation,",
+    "  or a skill envelope JSON) OR a skill directory containing SKILL.md +",
+    "  skill-envelope.json (plus any auxiliary files declared in",
+    "  envelope.files[]). Skill directories run the full envelope-sig +",
+    "  body-hash + per-file-hash cross-check; single-file inputs run the",
+    "  artifact's own signature check.",
     "",
     "OPTIONS",
     "  --json                    Print structured JSON instead of human-readable.",

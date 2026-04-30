@@ -63,7 +63,8 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@motebit/crypto": "workspace:*"
+    "@motebit/crypto": "workspace:*",
+    "@motebit/protocol": "workspace:*"
   },
   "devDependencies": {
     "@noble/ed25519": "~3.0.1",
