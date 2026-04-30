@@ -144,6 +144,83 @@ export function enrichWithHardwareAttestation<
   });
 }
 
+/**
+ * Layer the most-recent observed-latency snapshot onto each agent in a
+ * discover result list. Stats come from the relay's `relay_latency_stats`
+ * table — the same pool `task-routing.ts` queries for routing weights.
+ * Per agent, we take the most-recent N samples (N=100 to match the
+ * runtime/local-store contract) across all (motebit_id, remote_motebit_id)
+ * pairs where this agent was the worker, compute avg + p95 + count, and
+ * attach.
+ *
+ * Sibling to `enrichWithHardwareAttestation`. Both close
+ * `docs/doctrine/self-attesting-system.md`: every routing-input the
+ * relay computes against MUST be visible to the user. Latency factors
+ * into `task-routing.ts` ranking; the Agents-panel readout closes the
+ * gap.
+ *
+ * Federation merge passes through unchanged — peer relays may already
+ * have populated `latency_stats` on their merged-in agents from THEIR
+ * `relay_latency_stats` view. We only attach when this relay has local
+ * samples AND the agent has none yet, so peer-provided latency on
+ * cross-relay agents is preserved (that peer's view of latency is
+ * more authoritative for agents we've never directly routed to).
+ */
+export function enrichWithLatencyStats<T extends Record<string, unknown> & { motebit_id: string }>(
+  agents: T[],
+  db: DatabaseDriver,
+): T[] {
+  if (agents.length === 0) return agents;
+  const placeholders = agents.map(() => "?").join(",");
+  // Most-recent 100 samples per worker, across all submitters. The
+  // routing path uses the same window via `task-routing.ts:221`; matching
+  // the bound here keeps the displayed avg/p95 byte-aligned with what
+  // the router actually weighed.
+  const rows = db
+    .prepare(
+      `SELECT remote_motebit_id, latency_ms
+       FROM (
+         SELECT remote_motebit_id, latency_ms,
+                ROW_NUMBER() OVER (PARTITION BY remote_motebit_id ORDER BY recorded_at DESC) AS rn
+         FROM relay_latency_stats
+         WHERE remote_motebit_id IN (${placeholders})
+       )
+       WHERE rn <= 100`,
+    )
+    .all(...agents.map((a) => a.motebit_id)) as Array<{
+    remote_motebit_id: string;
+    latency_ms: number;
+  }>;
+  if (rows.length === 0) return agents;
+
+  type Projection = NonNullable<AgentTrustRecord["latency_stats"]>;
+  const samplesByAgent = new Map<string, number[]>();
+  for (const row of rows) {
+    const list = samplesByAgent.get(row.remote_motebit_id);
+    if (list == null) samplesByAgent.set(row.remote_motebit_id, [row.latency_ms]);
+    else list.push(row.latency_ms);
+  }
+  const projectedByAgent = new Map<string, Projection>();
+  for (const [agentId, samples] of samplesByAgent) {
+    if (samples.length === 0) continue;
+    const sum = samples.reduce((acc, v) => acc + v, 0);
+    const avg_ms = sum / samples.length;
+    const sorted = [...samples].sort((a, b) => a - b);
+    const p95Index = Math.min(Math.ceil(sorted.length * 0.95) - 1, sorted.length - 1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const p95_ms = sorted[p95Index]!;
+    projectedByAgent.set(agentId, { avg_ms, p95_ms, sample_count: samples.length });
+  }
+  if (projectedByAgent.size === 0) return agents;
+
+  return agents.map((a) => {
+    if (a.latency_stats != null) return a; // peer-provided latency wins for federated agents
+    const projection = projectedByAgent.get(a.motebit_id);
+    if (projection == null) return a;
+    return { ...a, latency_stats: projection };
+  });
+}
+
 export interface AgentsDeps {
   app: Hono;
   moteDb: MotebitDatabase;
@@ -1144,7 +1221,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         moteDb.db,
       );
       const withHa = enrichWithHardwareAttestation(enriched, moteDb.db);
-      return c.json({ agents: withHa });
+      const withLatency = enrichWithLatencyStats(withHa, moteDb.db);
+      return c.json({ agents: withLatency });
     }
 
     // Forward to active peers
@@ -1209,7 +1287,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       moteDb.db,
     );
     const withHa = enrichWithHardwareAttestation(final, moteDb.db);
-    return c.json({ agents: withHa });
+    const withLatency = enrichWithLatencyStats(withHa, moteDb.db);
+    return c.json({ agents: withLatency });
   });
 
   // GET /api/v1/agents/:motebitId — get specific agent

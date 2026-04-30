@@ -1092,11 +1092,24 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
       "flags an Agents-panel renderer that no longer surfaces the verifier name via `formatHardwarePlatform` — the doctrine breach where the runtime ranks peers on hardware attestation but the user can't see WHICH verifier attested the peer",
     perturb: () =>
       // Strip the formatHardwarePlatform import + use from the desktop
-      // renderer. The gate's two-condition check (field reference AND
+      // renderer. The gate's per-arm check (field reference AND
       // verifier-formatter import) should fire on the missing helper.
       // mutateFile's restore reverses cleanly.
       mutateFile("apps/desktop/src/ui/agents.ts", (src) =>
         src.replace(/\bformatHardwarePlatform\b/g, "_disabledFormatHardwarePlatform"),
+      ),
+  },
+  {
+    script: "check-trust-score-display",
+    proves:
+      "flags an Agents-panel renderer that no longer surfaces the latency readout via `formatLatency` — same doctrine breach class as the HA arm: latency factors into peer ranking via `agent-graph.ts` but the user can't see the avg/p95 the runtime ranks against",
+    perturb: () =>
+      // Strip the formatLatency import + use from the web renderer.
+      // Per-arm symmetry with the HA probe above; using a different
+      // surface so a regression in only one renderer's wiring still
+      // gets caught. mutateFile's restore reverses cleanly.
+      mutateFile("apps/web/src/ui/gated-panels.ts", (src) =>
+        src.replace(/\bformatLatency\b/g, "_disabledFormatLatency"),
       ),
   },
   {

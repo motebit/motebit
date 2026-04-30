@@ -4,7 +4,9 @@ import {
   createAgentsController,
   collectCapabilities,
   formatHardwarePlatform,
+  formatLatency,
   type AgentHardwareAttestation,
+  type AgentLatencyStats,
   type AgentRecord,
   type AgentsFetchAdapter,
   type AgentsState,
@@ -78,6 +80,26 @@ function appendHardwareBadge(
   const exportedSuffix = attestation.key_exported === true ? " · exported" : "";
   badge.title = `${verifier} (score ${attestation.score.toFixed(2)})${exportedSuffix}`;
   meta.appendChild(badge);
+}
+
+/**
+ * Render the observed-latency readout for a peer when the relay/runtime
+ * forwarded a non-zero `latency_stats` snapshot. Renders nothing when
+ * absent or when avg_ms is zero (defensive: zero-avg with samples would
+ * only appear from a malformed window). Tooltip carries the sample
+ * count so a user can judge confidence — same self-attesting-system
+ * doctrine probe as the HA badge: every routing-input MUST be visible.
+ */
+function appendLatencyReadout(
+  meta: HTMLElement,
+  latency_stats: AgentLatencyStats | undefined,
+): void {
+  if (latency_stats == null || latency_stats.avg_ms === 0) return;
+  const readout = document.createElement("span");
+  readout.className = "agent-latency-readout";
+  readout.textContent = formatLatency(latency_stats);
+  readout.title = `${latency_stats.sample_count} sample${latency_stats.sample_count === 1 ? "" : "s"}`;
+  meta.appendChild(readout);
 }
 
 interface BalanceSnapshot {
@@ -176,6 +198,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       meta.appendChild(badge);
 
       appendHardwareBadge(meta, agent.hardware_attestation);
+      appendLatencyReadout(meta, agent.latency_stats);
 
       const tasks = document.createElement("span");
       const ok = agent.successful_tasks ?? 0;
@@ -350,6 +373,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
         seen.textContent = `seen ${formatTimeAgo(agent.last_seen_at)}`;
         meta.appendChild(seen);
       }
+      appendLatencyReadout(meta, agent.latency_stats);
       item.appendChild(meta);
 
       const actions = document.createElement("div");

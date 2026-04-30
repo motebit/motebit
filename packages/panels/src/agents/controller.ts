@@ -90,6 +90,32 @@ export interface AgentHardwareAttestation {
 }
 
 /**
+ * Observed-latency snapshot per agent row. Non-null when the runtime's
+ * `LatencyStatsStore` (or the relay's `relay_latency_stats` table) has
+ * one or more samples for this peer. Surfaces render a per-row latency
+ * readout from this; absence shows "—".
+ *
+ * Same drift contract as `AgentHardwareAttestation`: this shape MUST
+ * stay byte-aligned with `AgentTrustRecord["latency_stats"]` in
+ * `@motebit/protocol` and with the relay's enricher output. Field
+ * names match `task-routing.ts` and `listings.ts` wire vocabulary
+ * (`avg_ms` / `p95_ms` / `sample_count`).
+ *
+ * Per `docs/doctrine/self-attesting-system.md`: every routing-input
+ * claim MUST be visible to the user. Latency factors into peer ranking
+ * via `agent-graph.ts` (default 3000ms when stats are absent); the
+ * latency readout closes the gap.
+ */
+export interface AgentLatencyStats {
+  /** Mean of the most-recent N samples, in milliseconds. */
+  avg_ms: number;
+  /** 95th-percentile of the most-recent N samples, in milliseconds. */
+  p95_ms: number;
+  /** Number of samples in the rolling window. */
+  sample_count: number;
+}
+
+/**
  * An agent the local motebit has interacted with before. The shape mirrors
  * the relay's `/api/v1/agents/{id}/trusted` response and the runtime's
  * `listTrustedAgents()` return type.
@@ -107,6 +133,8 @@ export interface AgentRecord {
   notes?: string;
   /** Hardware-attestation snapshot. Absent when the relay forwarded no claim. */
   hardware_attestation?: AgentHardwareAttestation;
+  /** Observed-latency snapshot. Absent when the local store has zero samples. */
+  latency_stats?: AgentLatencyStats;
 }
 
 /**
@@ -125,6 +153,8 @@ export interface DiscoveredAgent {
   freshness?: AgentFreshness;
   /** Hardware-attestation snapshot. Absent when the relay forwarded no claim. */
   hardware_attestation?: AgentHardwareAttestation;
+  /** Observed-latency snapshot. Absent when the relay has zero samples for this agent. */
+  latency_stats?: AgentLatencyStats;
 }
 
 /**
@@ -182,6 +212,34 @@ export function formatHardwarePlatform(platform: AgentHardwarePlatform): string 
     case "software":
       return "software";
   }
+}
+
+/**
+ * Concise display string for a latency snapshot. Returns the avg in
+ * milliseconds, plus the p95 ONLY when the tail diverges meaningfully
+ * (>20% above avg) — calm-software doctrine: render the noise that's
+ * actually informative, suppress the noise that isn't. Avg <1000ms
+ * stays in `ms`; >=1000ms switches to `s` with one decimal.
+ *
+ * Edge cases:
+ *   - `avg_ms === 0` → renders as "—" (defensive: zero would only
+ *     appear with a malformed sample window; surfaces should treat it
+ *     as no-data rather than imply an instant response).
+ *   - `sample_count === 0` → caller should render "—" instead of
+ *     calling this helper. The helper assumes ≥1 sample.
+ *
+ * Examples:
+ *   { avg_ms: 342, p95_ms: 380, sample_count: 12 } → "342ms"
+ *   { avg_ms: 342, p95_ms: 1200, sample_count: 12 } → "342ms · p95 1.2s"
+ *   { avg_ms: 1500, p95_ms: 1700, sample_count: 5 } → "1.5s"
+ *   { avg_ms: 0, p95_ms: 0, sample_count: 1 } → "—"
+ */
+export function formatLatency(stats: AgentLatencyStats): string {
+  if (stats.avg_ms === 0) return "—";
+  const fmt = (ms: number): string =>
+    ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+  const tailDiverges = stats.p95_ms > stats.avg_ms * 1.2;
+  return tailDiverges ? `${fmt(stats.avg_ms)} · p95 ${fmt(stats.p95_ms)}` : fmt(stats.avg_ms);
 }
 
 // ── Adapter ──────────────────────────────────────────────────────────

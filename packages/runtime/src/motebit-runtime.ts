@@ -125,6 +125,7 @@ import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
 import { CredentialManager } from "./credential-manager.js";
 import { readLatestHardwareAttestationClaim } from "./hardware-attestation-projection.js";
+import { readLatencyStats } from "./latency-stats-projection.js";
 import { scoreAttestation } from "@motebit/semiring";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
@@ -2802,12 +2803,23 @@ export class MotebitRuntime {
   async listTrustedAgents(): Promise<AgentTrustRecord[]> {
     if (this.agentTrustStore == null) return [];
     const records = await this.agentTrustStore.listAgentTrust(this.motebitId);
-    if (this.credentialStore == null || records.length === 0) return records;
-    const store = this.credentialStore;
-    return records.map((record) => {
-      const claim = readLatestHardwareAttestationClaim(store, record);
-      return claim == null ? record : { ...record, hardware_attestation: claim };
-    });
+    if (records.length === 0) return records;
+    const credStore = this.credentialStore;
+    const latStore = this.latencyStatsStore;
+    return Promise.all(
+      records.map(async (record) => {
+        let next: AgentTrustRecord = record;
+        if (credStore != null) {
+          const claim = readLatestHardwareAttestationClaim(credStore, record);
+          if (claim != null) next = { ...next, hardware_attestation: claim };
+        }
+        if (latStore != null) {
+          const latency = await readLatencyStats(latStore, this.motebitId, record);
+          if (latency != null) next = { ...next, latency_stats: latency };
+        }
+        return next;
+      }),
+    );
   }
 
   /** Update trust level for a remote motebit. */

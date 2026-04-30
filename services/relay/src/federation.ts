@@ -37,7 +37,7 @@ import {
   isSettlementPendingBatch,
 } from "./anchoring.js";
 import { createCredentialAnchoringTables } from "./credential-anchoring.js";
-import { enrichWithHardwareAttestation } from "./agents.js";
+import { enrichWithHardwareAttestation, enrichWithLatencyStats } from "./agents.js";
 import { nextRetryDelay, DEFAULT_RETRY_POLICY } from "./retry-policy.js";
 import type { RetryPolicy } from "./retry-policy.js";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
@@ -1381,7 +1381,9 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     // them. See docs/doctrine/self-attesting-system.md + the HA badge
     // ship 2 review note that flagged this gap.
     if (body.hop_count >= body.max_hops) {
-      return c.json({ agents: enrichWithHardwareAttestation(results, db) });
+      return c.json({
+        agents: enrichWithLatencyStats(enrichWithHardwareAttestation(results, db), db),
+      });
     }
 
     // Forward to active peers
@@ -1435,16 +1437,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       }
     }
 
-    // Enrich the merged set with hardware_attestation from THIS relay's
-    // credential store. The federation-passthrough rule preserves any
-    // HA peer relays already attached to peer-of-peer agents (their
-    // store is more authoritative for agents we've never directly
+    // Enrich the merged set with hardware_attestation + latency_stats
+    // from THIS relay's stores. The federation-passthrough rule preserves
+    // any peer-provided values already attached to peer-of-peer agents
+    // (their store is more authoritative for agents we've never directly
     // transacted with) — we only fill in for agents that arrived without
-    // a claim AND about which we hold a verified credential locally.
-    const enriched = enrichWithHardwareAttestation(
+    // the field AND about which we hold local data.
+    const withHa = enrichWithHardwareAttestation(
       [...merged.values()] as Array<Record<string, unknown> & { motebit_id: string }>,
       db,
     );
+    const enriched = enrichWithLatencyStats(withHa, db);
     return c.json({ agents: enriched });
   });
 

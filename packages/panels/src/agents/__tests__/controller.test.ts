@@ -14,6 +14,7 @@ import {
   createAgentsController,
   applySortFilter,
   collectCapabilities,
+  formatLatency,
   type AgentRecord,
   type AgentsFetchAdapter,
   type DiscoveredAgent,
@@ -372,5 +373,28 @@ describe("applySortFilter export", () => {
     const view = applySortFilter([discoveredA, discoveredB, discoveredC], "recent", "code_review");
     expect(view).toHaveLength(1);
     expect(view[0]?.motebit_id).toBe("mb_b");
+  });
+});
+
+describe("formatLatency helper", () => {
+  it("renders avg-only when p95 is within 20% of avg", () => {
+    expect(formatLatency({ avg_ms: 342, p95_ms: 380, sample_count: 12 })).toBe("342ms");
+  });
+
+  it("renders avg + p95 when the tail diverges meaningfully (>20% above avg)", () => {
+    expect(formatLatency({ avg_ms: 342, p95_ms: 1200, sample_count: 12 })).toBe("342ms · p95 1.2s");
+  });
+
+  it("switches to seconds with one decimal at >=1000ms", () => {
+    expect(formatLatency({ avg_ms: 1500, p95_ms: 1700, sample_count: 5 })).toBe("1.5s");
+  });
+
+  it("renders — for avg_ms === 0 (defensive — malformed sample window)", () => {
+    expect(formatLatency({ avg_ms: 0, p95_ms: 0, sample_count: 1 })).toBe("—");
+  });
+
+  it("rounds avg to integer milliseconds below 1000ms", () => {
+    expect(formatLatency({ avg_ms: 87.4, p95_ms: 90, sample_count: 3 })).toBe("87ms");
+    expect(formatLatency({ avg_ms: 87.6, p95_ms: 90, sample_count: 3 })).toBe("88ms");
   });
 });

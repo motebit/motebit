@@ -150,6 +150,31 @@ export interface AgentTrustRecord {
     key_exported?: boolean;
     score: number;
   };
+  /**
+   * Most-recent observed-latency snapshot for delegations to this peer.
+   * Projected from the local `LatencyStatsStore` at read time — never
+   * persisted on `agent_trust`. The store is the authoritative source;
+   * caching avg/p95 on the trust row would invite drift on every new
+   * task. Absent when the store has zero samples for this pair.
+   *
+   * Same surface contract as `hardware_attestation`: every routing-input
+   * the runtime computes against MUST be visible to the user, per
+   * `docs/doctrine/self-attesting-system.md`. Latency factors into peer
+   * ranking through `agent-graph.ts`'s latency map (default 3000ms when
+   * stats are absent); the Agents-panel latency render is the user-facing
+   * surface for that input.
+   *
+   * Shape mirrors `AgentLatencyStats` in `@motebit/panels` so surfaces
+   * can pass `AgentTrustRecord[]` straight to the Agents-panel adapter
+   * without per-field transformation. Numbers in milliseconds; integer
+   * sample counts. The relay-side enricher uses the same shape from its
+   * `relay_latency_stats` table.
+   */
+  latency_stats?: {
+    avg_ms: number;
+    p95_ms: number;
+    sample_count: number;
+  };
 }
 
 // ── Trust Level Transitions ──────────────────────────────────────────

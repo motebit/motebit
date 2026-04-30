@@ -186,6 +186,11 @@ export interface AgentTrustRecord {
     interaction_count: number;
     // (undocumented)
     last_seen_at: number;
+    latency_stats?: {
+        avg_ms: number;
+        p95_ms: number;
+        sample_count: number;
+    };
     // (undocumented)
     motebit_id: MotebitId;
     // (undocumented)

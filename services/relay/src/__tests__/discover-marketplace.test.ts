@@ -15,7 +15,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
-import { enrichWithCallerTrust, enrichWithHardwareAttestation } from "../agents.js";
+import {
+  enrichWithCallerTrust,
+  enrichWithHardwareAttestation,
+  enrichWithLatencyStats,
+} from "../agents.js";
 
 interface DiscoveredAgent {
   motebit_id: string;
@@ -26,11 +30,13 @@ interface DiscoveredAgent {
   trust_level?: string;
   interaction_count?: number;
   hardware_attestation?: { platform: string; key_exported?: boolean; score: number };
+  latency_stats?: { avg_ms: number; p95_ms: number; sample_count: number };
 }
 
 type EnricherInput = Record<string, unknown> & {
   motebit_id: string;
   hardware_attestation?: { platform: string; key_exported?: boolean; score: number };
+  latency_stats?: { avg_ms: number; p95_ms: number; sample_count: number };
 };
 
 function insertTrustCredential(
@@ -476,6 +482,102 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
       relay.moteDb.db,
     );
     expect(enriched[0]!.hardware_attestation?.platform).toBe("android_keystore");
+  });
+
+  // ── enrichWithLatencyStats: per-row observed-latency readout data ──
+  // Sibling to the HA enricher above. Same self-attesting-system doctrine
+  // probe: every routing-input MUST be visible to the user. The relay
+  // reads from the same `relay_latency_stats` pool the routing path
+  // queries — the row surfaces the same window the router weighed.
+
+  function insertLatencySample(
+    db: typeof relay.moteDb.db,
+    opts: {
+      motebit_id: string;
+      remote_motebit_id: string;
+      latency_ms: number;
+      recorded_at?: number;
+    },
+  ): void {
+    db.prepare(
+      `INSERT INTO relay_latency_stats (motebit_id, remote_motebit_id, latency_ms, recorded_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(opts.motebit_id, opts.remote_motebit_id, opts.latency_ms, opts.recorded_at ?? Date.now());
+  }
+
+  it("enrichWithLatencyStats attaches avg/p95/sample_count when samples exist", () => {
+    insertLatencySample(relay.moteDb.db, {
+      motebit_id: "submitter-a",
+      remote_motebit_id: "lat-agent",
+      latency_ms: 100,
+    });
+    insertLatencySample(relay.moteDb.db, {
+      motebit_id: "submitter-a",
+      remote_motebit_id: "lat-agent",
+      latency_ms: 200,
+    });
+    insertLatencySample(relay.moteDb.db, {
+      motebit_id: "submitter-b",
+      remote_motebit_id: "lat-agent",
+      latency_ms: 300,
+    });
+
+    const enriched = enrichWithLatencyStats(
+      [{ motebit_id: "lat-agent", capabilities: ["x"] } as EnricherInput],
+      relay.moteDb.db,
+    );
+    expect(enriched[0]!.latency_stats).toBeDefined();
+    expect(enriched[0]!.latency_stats!.sample_count).toBe(3);
+    expect(enriched[0]!.latency_stats!.avg_ms).toBeCloseTo(200);
+  });
+
+  it("enrichWithLatencyStats agents with no samples get no latency_stats field", () => {
+    const enriched = enrichWithLatencyStats(
+      [{ motebit_id: "no-lat-agent", capabilities: ["x"] } as EnricherInput],
+      relay.moteDb.db,
+    );
+    expect(enriched[0]!.latency_stats).toBeUndefined();
+  });
+
+  it("enrichWithLatencyStats preserves peer-provided latency on federated agents", () => {
+    // Same federation-passthrough rule as the HA enricher: the peer's
+    // latency view is more authoritative for agents we've never directly
+    // routed to. The local enricher must not overwrite it.
+    insertLatencySample(relay.moteDb.db, {
+      motebit_id: "submitter-x",
+      remote_motebit_id: "fed-lat-agent",
+      latency_ms: 9999,
+    });
+    const enriched = enrichWithLatencyStats(
+      [
+        {
+          motebit_id: "fed-lat-agent",
+          capabilities: ["x"],
+          latency_stats: { avg_ms: 50, p95_ms: 60, sample_count: 10 },
+        } as EnricherInput,
+      ],
+      relay.moteDb.db,
+    );
+    expect(enriched[0]!.latency_stats?.avg_ms).toBe(50);
+    expect(enriched[0]!.latency_stats?.sample_count).toBe(10);
+  });
+
+  it("/api/v1/agents/discover surfaces latency_stats on agents with samples", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "lat-discover-agent", bytesToHex(kp.publicKey));
+    insertLatencySample(relay.moteDb.db, {
+      motebit_id: "submitter",
+      remote_motebit_id: "lat-discover-agent",
+      latency_ms: 250,
+    });
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "lat-discover-agent");
+    expect(target).toBeDefined();
+    expect(target!.latency_stats).toBeDefined();
+    expect(target!.latency_stats!.avg_ms).toBe(250);
+    expect(target!.latency_stats!.sample_count).toBe(1);
   });
 
   it("revoked agent is filtered out even if freshness would be awake", async () => {

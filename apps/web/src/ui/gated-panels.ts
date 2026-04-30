@@ -21,7 +21,9 @@ import {
   createMemoryController,
   classifyCertainty,
   formatHardwarePlatform,
+  formatLatency,
   type AgentHardwareAttestation,
+  type AgentLatencyStats,
   type AgentRecord,
   type AgentsFetchAdapter,
   formatCountdownUntil,
@@ -519,6 +521,22 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     meta.appendChild(badge);
   }
 
+  // Render the observed-latency readout for a peer when stats are
+  // present. Same self-attesting-system doctrine probe as the HA badge:
+  // every routing-input the runtime/relay computes against MUST be
+  // visible to the user. Tooltip carries sample count for confidence.
+  function appendLatencyReadout(
+    meta: HTMLElement,
+    latency_stats: AgentLatencyStats | undefined,
+  ): void {
+    if (latency_stats == null || latency_stats.avg_ms === 0) return;
+    const readout = document.createElement("span");
+    readout.className = "agent-latency-readout";
+    readout.textContent = formatLatency(latency_stats);
+    readout.title = `${latency_stats.sample_count} sample${latency_stats.sample_count === 1 ? "" : "s"}`;
+    meta.appendChild(readout);
+  }
+
   const agentsAdapter: AgentsFetchAdapter = {
     get syncUrl() {
       return loadSyncUrl();
@@ -573,6 +591,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       meta.appendChild(badge);
 
       appendHardwareBadge(meta, agent.hardware_attestation);
+      appendLatencyReadout(meta, agent.latency_stats);
 
       const tasks = document.createElement("span");
       const ok = agent.successful_tasks ?? 0;
@@ -703,6 +722,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         seen.textContent = `seen ${formatTimeAgo(agent.last_seen_at)}`;
         meta.appendChild(seen);
       }
+      appendLatencyReadout(meta, agent.latency_stats);
       item.appendChild(meta);
 
       discoverList.appendChild(item);

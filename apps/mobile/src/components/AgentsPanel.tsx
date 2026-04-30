@@ -14,8 +14,10 @@ import { useTheme, type ThemeColors } from "../theme";
 import {
   createAgentsController,
   formatHardwarePlatform,
+  formatLatency,
   type AgentFreshness,
   type AgentHardwareAttestation,
+  type AgentLatencyStats,
   type AgentRecord,
   type AgentsFetchAdapter,
   type AgentsState,
@@ -76,6 +78,30 @@ function HardwareBadge({
     >
       <Text style={styles.haText}>hardware-attested</Text>
     </View>
+  );
+}
+
+/**
+ * Render the observed-latency readout for a peer when stats are present.
+ * Same self-attesting-system doctrine probe as the HA badge: every
+ * routing-input the runtime/relay computes against MUST be visible to
+ * the user. Sample count travels via `accessibilityLabel`.
+ */
+function LatencyReadout({
+  latency_stats,
+  styles,
+}: {
+  latency_stats: AgentLatencyStats | undefined;
+  styles: ReturnType<typeof createStyles>;
+}): React.ReactElement | null {
+  if (latency_stats == null || latency_stats.avg_ms === 0) return null;
+  return (
+    <Text
+      style={styles.latencyReadout}
+      accessibilityLabel={`latency ${formatLatency(latency_stats)}, ${latency_stats.sample_count} sample${latency_stats.sample_count === 1 ? "" : "s"}`}
+    >
+      {formatLatency(latency_stats)}
+    </Text>
   );
 }
 
@@ -204,6 +230,7 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                         </Text>
                       </View>
                       <HardwareBadge attestation={item.hardware_attestation} styles={styles} />
+                      <LatencyReadout latency_stats={item.latency_stats} styles={styles} />
                     </View>
                   </View>
                   <View style={styles.statsRow}>
@@ -267,6 +294,7 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                         </View>
                       )}
                       <HardwareBadge attestation={item.hardware_attestation} styles={styles} />
+                      <LatencyReadout latency_stats={item.latency_stats} styles={styles} />
                     </View>
                   </View>
                   {item.capabilities.length > 0 && (
@@ -410,6 +438,11 @@ function createStyles(c: ThemeColors) {
     capTextPriced: { color: c.textPrimary },
     statsRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: 4 },
     statText: { color: c.textMuted, fontSize: 11 },
+    latencyReadout: {
+      fontSize: 10,
+      color: c.textMuted,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
     seenText: { color: c.textMuted, fontSize: 10 },
     seenRow: { flexDirection: "row", alignItems: "center" },
     freshnessDot: { width: 6, height: 6, borderRadius: 3, marginRight: 4 },

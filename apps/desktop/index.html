@@ -3588,6 +3588,17 @@
         cursor: help;
       }
 
+      /* Observed-latency readout. Sibling to the HA badge — same
+         doctrine probe (every routing-input visible). Monospace +
+         muted color: this is informational, not a status. Tooltip
+         carries sample count for confidence. */
+      .agent-latency-readout {
+        font-size: 10px;
+        color: var(--text-muted, #94a3b8);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        cursor: help;
+      }
+
       /* Balance bar — subtle, monospace, the marketplace orientation */
       #agents-balance-bar {
         display: flex;
