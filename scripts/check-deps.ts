@@ -244,6 +244,12 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "verifySkillEnvelope",
     "verifySkillEnvelopeDetailed",
     "decodeSkillSignaturePublicKey",
+    // Bundle-shape full verify (envelope sig + body hash + per-file
+    // hashes). Pure, browser-safe; the canonical primitive every
+    // surface-level skill verifier delegates to (CLI directory walker
+    // and motebit.com/skills both end up here). No I/O, no policy —
+    // the shape on either side of the call is identical.
+    "verifySkillBundle",
   ]),
 };
 

@@ -596,6 +596,13 @@ async function sha256(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(buf);
 }
 
+/** Lowercase hex encoder used internally by `verifySkillBundle` and the credential paths. */
+function bytesToLowerHex(bytes: Uint8Array): string {
+  let out = "";
+  for (const b of bytes) out += b.toString(16).padStart(2, "0");
+  return out;
+}
+
 // ===========================================================================
 // Constants
 // ===========================================================================
@@ -1138,6 +1145,155 @@ async function verifyDataIntegrity(
   // field already declares this on-wire; the dispatcher routes the
   // primitive call.
   return verifyBySuite("eddsa-jcs-2022", combined, signature, publicKey);
+}
+
+/**
+ * Bundle-shape input for `verifySkillBundle`. The full-verify
+ * primitive — envelope signature + body hash + per-file hashes — runs
+ * pure on these bytes, no I/O, no environment-specific shape.
+ *
+ * Body bytes are LF-normalized SKILL.md content (the exact bytes the
+ * envelope's `body_hash` was computed over at sign time). Files map
+ * each path declared in `envelope.files[]` to its raw bytes. Callers
+ * with base64-encoded inputs (relay-served `SkillRegistryBundle`,
+ * tarball decoders) decode to `Uint8Array` before calling.
+ *
+ * Single canonical primitive across surfaces:
+ *   - `motebit-verify` CLI / `@motebit/verifier::verifySkillDirectory`
+ *     reads from disk → builds this shape → calls `verifySkillBundle`.
+ *   - Browser consumers (`motebit.com/skills`, third-party registries,
+ *     CI pipelines) decode from base64 → builds this shape → calls
+ *     `verifySkillBundle`.
+ *
+ * Both paths produce the same `SkillVerifyResult` with the same step
+ * semantics. Same primitive, swap the I/O.
+ */
+export interface SkillBundleInput {
+  readonly envelope: SkillEnvelope;
+  /** LF-normalized SKILL.md body bytes — the exact bytes signed at envelope-sign time. */
+  readonly body: Uint8Array;
+  /** Per-path raw bytes for every entry in `envelope.files[]`. Omit a path to mark it missing. */
+  readonly files?: Readonly<Record<string, Uint8Array>>;
+}
+
+/**
+ * Verify a skill bundle end-to-end. Pure function — no I/O. Performs
+ * the three independent verification axes:
+ *
+ *   1. Envelope signature — Ed25519 over the canonical envelope bytes.
+ *   2. Body hash — `sha256(body)` cross-checked against `envelope.body_hash`.
+ *   3. Per-file hashes — for each entry in `envelope.files[]`,
+ *      `sha256(files[path])` cross-checked against `entry.hash`. A
+ *      missing path (envelope declared it; bundle didn't ship bytes)
+ *      surfaces as `valid: false` with `reason: "missing"`.
+ *
+ * `valid: true` iff every axis passed AND every declared file was
+ * provided. The detailed step shape lets callers render per-axis
+ * outcomes — the canonical doctrine is "every routing-input claim
+ * MUST be visible to the user", and the same applies to verification:
+ * a one-bit valid/invalid throws away which axis failed.
+ *
+ * Faithful to `services/relay/CLAUDE.md` rule 6 ("relay is a
+ * convenience layer, not a trust root"): any consumer with a bundle
+ * — from any source, motebit-served or not — answers "is this signed
+ * AND do the bytes match what the publisher signed?" using only this
+ * primitive, no relay or runtime contact required.
+ */
+export async function verifySkillBundle(input: SkillBundleInput): Promise<SkillVerifyResult> {
+  const { envelope, body, files = {} } = input;
+
+  // Step 1 — envelope signature.
+  let publicKey: Uint8Array;
+  try {
+    publicKey = decodeSkillSignaturePublicKey(envelope.signature);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      type: "skill",
+      valid: false,
+      envelope,
+      skill: `${envelope.skill.name}@${envelope.skill.version}`,
+      steps: {
+        envelope: { valid: false, reason: "bad_public_key" },
+        body_hash: null,
+        files: [],
+      },
+      errors: [{ message: `public key decode failed: ${msg}`, path: "signature.public_key" }],
+    };
+  }
+  const sigDetail = await verifySkillEnvelopeDetailed(envelope, publicKey);
+  const envelopeStep = { valid: sigDetail.valid, reason: sigDetail.reason };
+
+  // Step 2 — body hash.
+  const bodyHashActual = bytesToLowerHex(await sha256(body));
+  const bodyHashStep = {
+    valid: bodyHashActual === envelope.body_hash.toLowerCase(),
+    expected: envelope.body_hash,
+    actual: bodyHashActual,
+  };
+
+  // Step 3 — per-file hashes.
+  const fileSteps: SkillFileVerifyResult[] = [];
+  for (const entry of envelope.files) {
+    const fileBytes = files[entry.path];
+    if (fileBytes === undefined) {
+      fileSteps.push({
+        path: entry.path,
+        valid: false,
+        expected: entry.hash,
+        actual: null,
+        reason: "missing",
+      });
+      continue;
+    }
+    const actual = bytesToLowerHex(await sha256(fileBytes));
+    fileSteps.push({
+      path: entry.path,
+      valid: actual === entry.hash.toLowerCase(),
+      expected: entry.hash,
+      actual,
+      reason: actual === entry.hash.toLowerCase() ? "ok" : "hash_mismatch",
+    });
+  }
+
+  // Aggregate verdict.
+  const filesAllOk = fileSteps.every((f) => f.valid);
+  const valid = envelopeStep.valid && bodyHashStep.valid && filesAllOk;
+
+  const errors: VerificationError[] = [];
+  if (!envelopeStep.valid) {
+    errors.push({
+      message: `envelope signature verification failed (${envelopeStep.reason})`,
+      path: "signature",
+    });
+  }
+  if (!bodyHashStep.valid) {
+    errors.push({
+      message: `body_hash mismatch — expected ${bodyHashStep.expected}, got ${bodyHashStep.actual}`,
+      path: "body_hash",
+    });
+  }
+  for (const f of fileSteps) {
+    if (!f.valid) {
+      errors.push({
+        message:
+          f.reason === "missing"
+            ? `file declared in envelope.files[] but not provided in bundle: ${f.path}`
+            : `file hash mismatch for ${f.path} — expected ${f.expected}, got ${f.actual ?? "<missing>"}`,
+        path: `files[${f.path}]`,
+      });
+    }
+  }
+
+  return {
+    type: "skill",
+    valid,
+    envelope,
+    skill: `${envelope.skill.name}@${envelope.skill.version}`,
+    signer: envelope.signature.public_key,
+    steps: { envelope: envelopeStep, body_hash: bodyHashStep, files: fileSteps },
+    ...(errors.length > 0 ? { errors } : {}),
+  };
 }
 
 /**

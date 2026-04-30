@@ -921,6 +921,14 @@ export function signVerifiablePresentation(unsignedVP: Omit<VerifiablePresentati
 export const SKILL_SIGNATURE_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
+export interface SkillBundleInput {
+    readonly body: Uint8Array;
+    // (undocumented)
+    readonly envelope: SkillEnvelope;
+    readonly files?: Readonly<Record<string, Uint8Array>>;
+}
+
+// @public
 export interface SkillFileVerifyResult {
     // (undocumented)
     readonly actual: string | null;
@@ -1200,6 +1208,9 @@ export function verifySettlement(settlement: SettlementRecord, issuerPublicKey: 
 
 // @public
 export function verifySignedToken(token: string, publicKey: Uint8Array): Promise<SignedTokenPayload | null>;
+
+// @public
+export function verifySkillBundle(input: SkillBundleInput): Promise<SkillVerifyResult>;
 
 // @public
 export function verifySkillEnvelope(envelope: SkillEnvelope, publicKey: Uint8Array): Promise<boolean>;

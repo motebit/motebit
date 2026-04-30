@@ -21,10 +21,9 @@ import { join, basename } from "node:path";
 
 import {
   verify,
-  hash as sha256Hex,
+  verifySkillBundle,
   type ArtifactType,
   type HardwareAttestationVerifiers,
-  type SkillFileVerifyResult,
   type SkillVerifyResult,
   type VerifyResult,
   type VerifyOptions,
@@ -133,6 +132,9 @@ export async function verifySkillDirectory(
   const envelopePath = join(dir, "skill-envelope.json");
   const skillMdPath = join(dir, "SKILL.md");
 
+  // Step 0 — read the envelope. Failures collapse to a structured
+  // valid-false rather than throwing so the CLI's --json output stays
+  // uniform across signature-fails and disk-fails.
   let envelopeJson: string;
   try {
     envelopeJson = await readFile(envelopePath, "utf-8");
@@ -148,8 +150,6 @@ export async function verifySkillDirectory(
     return invalidSkillResult(`failed to parse ${basename(envelopePath)}: ${msg}`);
   }
 
-  // Honor an explicit `--expect skill` override at this layer too —
-  // mirrors the opts.expectedType plumb-through the JSON path uses.
   if (opts?.expectedType !== undefined && opts.expectedType !== "skill") {
     return invalidSkillResult(
       `Expected type "${opts.expectedType}" but found a skill directory`,
@@ -157,77 +157,45 @@ export async function verifySkillDirectory(
     );
   }
 
-  // Step 1 — envelope signature (delegated to crypto's primitive via
-  // the unified verify dispatcher; result already includes the
-  // body_hash/files-pending error which we'll discard once the on-disk
-  // checks land below).
-  const sigResult = (await verify(envelope)) as SkillVerifyResult;
-
-  // Step 2 — body_hash cross-check.
-  let skillMd: string | null = null;
+  // Step 1 — read SKILL.md, extract LF-normalized body bytes. Same I/O
+  // separation as before; the actual verification (sig + body + files)
+  // delegates to `verifySkillBundle` in @motebit/crypto so browser
+  // consumers and this directory walker run the same code.
+  let skillMd: string;
   try {
     skillMd = await readFile(skillMdPath, "utf-8");
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return composeSkillResult(
-      envelope,
-      sigResult.steps.envelope,
-      null,
-      [],
-      [{ message: `failed to read ${basename(skillMdPath)}: ${msg}`, path: "body_hash" }],
-    );
+    return ioFailureSkillResult(envelope, [
+      { message: `failed to read ${basename(skillMdPath)}: ${msg}`, path: "body_hash" },
+    ]);
   }
   const bodyBytes = extractSkillBody(skillMd);
   if (bodyBytes === null) {
-    return composeSkillResult(
-      envelope,
-      sigResult.steps.envelope,
-      null,
-      [],
-      [
-        {
-          message: `${basename(skillMdPath)} is not a valid SKILL.md (missing frontmatter delimiters)`,
-          path: "body_hash",
-        },
-      ],
-    );
+    return ioFailureSkillResult(envelope, [
+      {
+        message: `${basename(skillMdPath)} is not a valid SKILL.md (missing frontmatter delimiters)`,
+        path: "body_hash",
+      },
+    ]);
   }
-  const bodyHashActual = await sha256Hex(bodyBytes);
-  const bodyHashStep = {
-    valid: bodyHashActual === envelope.body_hash.toLowerCase(),
-    expected: envelope.body_hash,
-    actual: bodyHashActual,
-  };
 
-  // Step 3 — per-file cross-check.
-  const fileSteps: SkillFileVerifyResult[] = [];
+  // Step 2 — read every file declared in envelope.files[]. Missing
+  // bytes are passed through as `undefined` so verifySkillBundle can
+  // surface `reason: "missing"` per-entry uniformly with the bundle
+  // path.
+  const fileBytes: Record<string, Uint8Array> = {};
   for (const entry of envelope.files) {
     const filePath = join(dir, entry.path);
-    let fileBytes: Uint8Array;
     try {
       const buf = await readFile(filePath);
-      fileBytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      fileBytes[entry.path] = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
     } catch {
-      fileSteps.push({
-        path: entry.path,
-        valid: false,
-        expected: entry.hash,
-        actual: null,
-        reason: "missing",
-      });
-      continue;
+      // Leave undefined — verifySkillBundle reports "missing".
     }
-    const actual = await sha256Hex(fileBytes);
-    fileSteps.push({
-      path: entry.path,
-      valid: actual === entry.hash.toLowerCase(),
-      expected: entry.hash,
-      actual,
-      reason: actual === entry.hash.toLowerCase() ? "ok" : "hash_mismatch",
-    });
   }
 
-  return composeSkillResult(envelope, sigResult.steps.envelope, bodyHashStep, fileSteps, []);
+  return verifySkillBundle({ envelope, body: bodyBytes, files: fileBytes });
 }
 
 function invalidSkillResult(message: string, envelope?: SkillEnvelope): SkillVerifyResult {
@@ -246,52 +214,31 @@ function invalidSkillResult(message: string, envelope?: SkillEnvelope): SkillVer
   };
 }
 
-function composeSkillResult(
+/**
+ * Surface a SKILL.md-read failure (or malformed-frontmatter) with the
+ * envelope already loaded. We DON'T re-run sig verification here
+ * because verifySkillBundle is the single source of truth for that —
+ * a SKILL.md failure means we couldn't even feed bytes to the bundle
+ * primitive, so we report the structural issue directly. This keeps
+ * the directory walker's role purely "I/O shim" while
+ * verifySkillBundle owns all verification semantics.
+ */
+function ioFailureSkillResult(
   envelope: SkillEnvelope,
-  envelopeStep: SkillVerifyResult["steps"]["envelope"],
-  bodyHashStep: SkillVerifyResult["steps"]["body_hash"],
-  fileSteps: ReadonlyArray<SkillFileVerifyResult>,
   extraErrors: ReadonlyArray<{ message: string; path?: string }>,
 ): SkillVerifyResult {
-  const filesAllOk = fileSteps.every((f) => f.valid);
-  const valid =
-    envelopeStep.valid &&
-    bodyHashStep !== null &&
-    bodyHashStep.valid &&
-    filesAllOk &&
-    extraErrors.length === 0;
-  const errors: Array<{ message: string; path?: string }> = [...extraErrors];
-  if (!envelopeStep.valid) {
-    errors.push({
-      message: `envelope signature verification failed (${envelopeStep.reason})`,
-      path: "signature",
-    });
-  }
-  if (bodyHashStep !== null && !bodyHashStep.valid) {
-    errors.push({
-      message: `body_hash mismatch — expected ${bodyHashStep.expected}, got ${bodyHashStep.actual}`,
-      path: "body_hash",
-    });
-  }
-  for (const f of fileSteps) {
-    if (!f.valid) {
-      errors.push({
-        message:
-          f.reason === "missing"
-            ? `file declared in envelope.files[] but not found on disk: ${f.path}`
-            : `file hash mismatch for ${f.path} — expected ${f.expected}, got ${f.actual ?? "<missing>"}`,
-        path: `files[${f.path}]`,
-      });
-    }
-  }
   return {
     type: "skill",
-    valid,
+    valid: false,
     envelope,
     skill: `${envelope.skill.name}@${envelope.skill.version}`,
     signer: envelope.signature.public_key,
-    steps: { envelope: envelopeStep, body_hash: bodyHashStep, files: fileSteps },
-    ...(errors.length > 0 ? { errors } : {}),
+    steps: {
+      envelope: { valid: true, reason: "ok" },
+      body_hash: null,
+      files: [],
+    },
+    errors: [...extraErrors],
   };
 }
 

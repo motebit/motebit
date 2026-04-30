@@ -15,7 +15,23 @@
 import type { WebContext } from "../types";
 import { DEFAULT_RELAY_URL, loadSyncUrl } from "../storage";
 import type { SkillRegistryBundle, SkillRegistryEntry, SkillRegistryListing } from "@motebit/sdk";
-import { verifyBundleLocally, type VerifyResult } from "../skill-bundle-verifier";
+import { verifySkillBundle, type SkillVerifyResult } from "@motebit/encryption";
+
+/**
+ * Decode base64 (URL-safe or standard) to bytes. The relay serves
+ * `SkillRegistryBundle` body + files as base64 strings; the canonical
+ * `verifySkillBundle` primitive in `@motebit/crypto` accepts raw
+ * `Uint8Array`, so the browser does the decode here. Tolerant of both
+ * alphabets so callers don't have to normalize.
+ */
+function base64ToBytes(b64: string): Uint8Array {
+  const normalized = b64.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
 export interface SkillsPanelAPI {
   open(): void;
@@ -228,22 +244,30 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
    * can see exactly which axis (signature / body / per-file) passed or
    * failed. The header carries the verdict and the canonical reason
    * shape (e.g. `ed25519_mismatch`) for users who want to dig in.
+   *
+   * Consumes the canonical `SkillVerifyResult` from `@motebit/crypto`
+   * — same shape the CLI's `motebit-verify` JSON output prints, so
+   * users debugging across surfaces see identical step semantics.
    */
-  function renderVerifyResult(result: VerifyResult): string {
-    const heading = result.ok
-      ? `<div class="skills-verify-heading">✓ verified locally</div>`
-      : `<div class="skills-verify-heading">✗ verification failed: ${escapeHtml(result.outcome.kind)}</div>`;
-    const envIcon = result.steps.envelope.ok ? "✓" : "✗";
+  function renderVerifyResult(result: SkillVerifyResult): string {
+    const headerLabel = result.valid
+      ? "✓ verified locally"
+      : `✗ verification failed${result.errors?.[0] ? ": " + escapeHtml(result.errors[0].message.split("—")[0]?.trim() ?? "") : ""}`;
+    const heading = `<div class="skills-verify-heading">${headerLabel}</div>`;
+    const envIcon = result.steps.envelope.valid ? "✓" : "✗";
     const envLine = `<div class="skills-verify-step">${envIcon} envelope signature — ${escapeHtml(result.steps.envelope.reason)}</div>`;
-    const bodyIcon = result.steps.bodyHash.ok ? "✓" : "✗";
-    const bodyLine = `<div class="skills-verify-step">${bodyIcon} body hash — sha256 of decoded body ${result.steps.bodyHash.ok ? "matches" : "differs from"} envelope.body_hash</div>`;
+    const bodyStep = result.steps.body_hash;
+    const bodyLine =
+      bodyStep === null
+        ? `<div class="skills-verify-step">— body hash not checked</div>`
+        : `<div class="skills-verify-step">${bodyStep.valid ? "✓" : "✗"} body hash — sha256 of decoded body ${bodyStep.valid ? "matches" : "differs from"} envelope.body_hash</div>`;
     const fileLines = result.steps.files
       .map((f) => {
-        const icon = f.ok ? "✓" : "✗";
+        const icon = f.valid ? "✓" : "✗";
         const detail =
-          f.actual === null
+          f.reason === "missing"
             ? "envelope declares this file but the bundle didn't ship it"
-            : f.ok
+            : f.valid
               ? "matches"
               : "differs from envelope.files[].hash";
         return `<div class="skills-verify-step">${icon} ${escapeHtml(f.path)} — ${escapeHtml(detail)}</div>`;
@@ -332,12 +356,27 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
         verifyBtn.textContent = "verifying…";
         verifyResult.style.display = "block";
         verifyResult.innerHTML = `<div class="skills-verify-pending">running envelope + hash checks in this browser…</div>`;
-        void verifyBundleLocally(bundle)
+        // Decode base64 bytes and delegate to the canonical
+        // verifySkillBundle primitive in @motebit/crypto. Same code
+        // path the CLI directory walker runs after reading bytes from
+        // disk — single source of truth across surfaces.
+        const bodyBytes = base64ToBytes(bundle.body);
+        const fileBytes: Record<string, Uint8Array> = {};
+        for (const [path, b64] of Object.entries(bundle.files ?? {})) {
+          try {
+            fileBytes[path] = base64ToBytes(b64);
+          } catch {
+            // Leave undefined → verifySkillBundle reports "missing".
+          }
+        }
+        void verifySkillBundle({ envelope: bundle.envelope, body: bodyBytes, files: fileBytes })
           .then((result) => {
             verifyResult.innerHTML = renderVerifyResult(result);
             verifyResult.classList.remove("skills-verify-failed", "skills-verify-passed");
-            verifyResult.classList.add(result.ok ? "skills-verify-passed" : "skills-verify-failed");
-            verifyBtn.textContent = result.ok ? "verified" : "verify failed";
+            verifyResult.classList.add(
+              result.valid ? "skills-verify-passed" : "skills-verify-failed",
+            );
+            verifyBtn.textContent = result.valid ? "verified" : "verify failed";
           })
           .catch((err: unknown) => {
             verifyResult.innerHTML = renderEmpty(

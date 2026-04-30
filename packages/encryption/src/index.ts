@@ -120,6 +120,15 @@ export {
   SKILL_SIGNATURE_SUITE,
   type SkillVerifyReason,
   type SkillVerifyDetail,
+  // Skill bundle full-verify (envelope sig + body hash + per-file
+  // hash). Pure, browser-safe; the canonical primitive consumed by the
+  // CLI directory walker, motebit.com/skills, and any third-party
+  // browser/CI verifier. Faithful to the relay-as-convenience-not-
+  // trust-root doctrine: bytes from any source verify the same way.
+  verifySkillBundle,
+  type SkillBundleInput,
+  type SkillVerifyResult,
+  type SkillFileVerifyResult,
 } from "@motebit/crypto";
 
 // ── Re-export credential signing from @motebit/crypto ───────────────
