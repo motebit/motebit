@@ -15,6 +15,7 @@
 import type { WebContext } from "../types";
 import { DEFAULT_RELAY_URL, loadSyncUrl } from "../storage";
 import type { SkillRegistryBundle, SkillRegistryEntry, SkillRegistryListing } from "@motebit/sdk";
+import { verifyBundleLocally, type VerifyResult } from "../skill-bundle-verifier";
 
 export interface SkillsPanelAPI {
   open(): void;
@@ -222,6 +223,35 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     return `<div class="skills-empty">${html}</div>`;
   }
 
+  /**
+   * Render the local-verify checklist. Each step shows ✓ or ✗ — the user
+   * can see exactly which axis (signature / body / per-file) passed or
+   * failed. The header carries the verdict and the canonical reason
+   * shape (e.g. `ed25519_mismatch`) for users who want to dig in.
+   */
+  function renderVerifyResult(result: VerifyResult): string {
+    const heading = result.ok
+      ? `<div class="skills-verify-heading">✓ verified locally</div>`
+      : `<div class="skills-verify-heading">✗ verification failed: ${escapeHtml(result.outcome.kind)}</div>`;
+    const envIcon = result.steps.envelope.ok ? "✓" : "✗";
+    const envLine = `<div class="skills-verify-step">${envIcon} envelope signature — ${escapeHtml(result.steps.envelope.reason)}</div>`;
+    const bodyIcon = result.steps.bodyHash.ok ? "✓" : "✗";
+    const bodyLine = `<div class="skills-verify-step">${bodyIcon} body hash — sha256 of decoded body ${result.steps.bodyHash.ok ? "matches" : "differs from"} envelope.body_hash</div>`;
+    const fileLines = result.steps.files
+      .map((f) => {
+        const icon = f.ok ? "✓" : "✗";
+        const detail =
+          f.actual === null
+            ? "envelope declares this file but the bundle didn't ship it"
+            : f.ok
+              ? "matches"
+              : "differs from envelope.files[].hash";
+        return `<div class="skills-verify-step">${icon} ${escapeHtml(f.path)} — ${escapeHtml(detail)}</div>`;
+      })
+      .join("");
+    return `${heading}${envLine}${bodyLine}${fileLines}`;
+  }
+
   async function showDetail(submitter: string, name: string, version: string): Promise<void> {
     detail.style.display = "flex";
     detailBody.innerHTML = renderEmpty("Loading…");
@@ -263,6 +293,11 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
         <button class="skills-install-copy" id="skills-install-copy">copy</button>
         ${escapeHtml(installCmd)}
       </div>
+      <div class="skills-verify-block" id="skills-verify-block">
+        <button class="skills-verify-btn" id="skills-verify-btn">verify locally</button>
+        <span class="skills-verify-hint">re-runs envelope signature + body/file hashes against the bytes the relay just served (no relay trust required)</span>
+      </div>
+      <div class="skills-verify-result" id="skills-verify-result" style="display:none"></div>
       <pre class="skills-detail-md">${escapeHtml(body)}</pre>
     `;
 
@@ -279,6 +314,36 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
           })
           .catch(() => {
             copyBtn.textContent = "copy failed";
+          });
+      });
+    }
+
+    // "verify locally" — re-derives every hash and re-runs the envelope
+    // signature check using the noble-based primitives in @motebit/crypto.
+    // Closes the relay-as-trust-root gap on the most public motebit
+    // surface (services/relay/CLAUDE.md rule 6). The relay served these
+    // bytes; the user's own browser proves whether they match what the
+    // publisher signed.
+    const verifyBtn = document.getElementById("skills-verify-btn") as HTMLButtonElement | null;
+    const verifyResult = document.getElementById("skills-verify-result") as HTMLDivElement | null;
+    if (verifyBtn !== null && verifyResult !== null) {
+      verifyBtn.addEventListener("click", () => {
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = "verifying…";
+        verifyResult.style.display = "block";
+        verifyResult.innerHTML = `<div class="skills-verify-pending">running envelope + hash checks in this browser…</div>`;
+        void verifyBundleLocally(bundle)
+          .then((result) => {
+            verifyResult.innerHTML = renderVerifyResult(result);
+            verifyResult.classList.remove("skills-verify-failed", "skills-verify-passed");
+            verifyResult.classList.add(result.ok ? "skills-verify-passed" : "skills-verify-failed");
+            verifyBtn.textContent = result.ok ? "verified" : "verify failed";
+          })
+          .catch((err: unknown) => {
+            verifyResult.innerHTML = renderEmpty(
+              `Verification crashed unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            verifyBtn.textContent = "verify error";
           });
       });
     }
