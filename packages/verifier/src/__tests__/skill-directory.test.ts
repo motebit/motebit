@@ -203,4 +203,70 @@ describe("verifySkillDirectory", () => {
     expect(human).toContain("body:");
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("formatHuman includes the files line when the verified skill carries auxiliary files", async () => {
+    const fileBytes = new TextEncoder().encode("aux\n");
+    const { dir } = await buildFixtureDir({ files: { "scripts/x.sh": fileBytes } });
+    const result = await verifySkillDirectory(dir);
+    const human = formatHuman(result);
+    expect(human).toContain("files:");
+    expect(human).toContain("1/1 verified");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // I/O failure paths — the directory walker surfaces missing-envelope,
+  // missing-SKILL.md, malformed-JSON, and malformed-frontmatter as
+  // structured `valid: false` results rather than throwing, so the CLI
+  // can render them through the same JSON output as signature failures.
+
+  it("returns valid=false when skill-envelope.json is missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "motebit-skill-missing-env-"));
+    writeFileSync(join(dir, "SKILL.md"), `---\n---\n# body\n`);
+    const result = await verifySkillDirectory(dir);
+    expect(result.valid).toBe(false);
+    expect(result.envelope).toBeNull();
+    expect(result.errors?.[0]?.message).toMatch(/skill-envelope\.json/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns valid=false when skill-envelope.json is malformed JSON", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "motebit-skill-bad-json-"));
+    writeFileSync(join(dir, "skill-envelope.json"), "{not-valid-json");
+    writeFileSync(join(dir, "SKILL.md"), `---\n---\n# body\n`);
+    const result = await verifySkillDirectory(dir);
+    expect(result.valid).toBe(false);
+    expect(result.envelope).toBeNull();
+    expect(result.errors?.[0]?.message).toMatch(/parse/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns valid=false when SKILL.md is missing", async () => {
+    const { dir } = await buildFixtureDir();
+    rmSync(join(dir, "SKILL.md"), { force: true });
+    const result = await verifySkillDirectory(dir);
+    expect(result.valid).toBe(false);
+    expect(result.steps.envelope.valid).toBe(true); // envelope still verifies
+    expect(result.steps.body_hash).toBeNull();
+    expect(result.errors?.some((e) => e.path === "body_hash")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns valid=false when SKILL.md has no frontmatter delimiters", async () => {
+    const { dir } = await buildFixtureDir();
+    writeFileSync(join(dir, "SKILL.md"), `# body without frontmatter\n`);
+    const result = await verifySkillDirectory(dir);
+    expect(result.valid).toBe(false);
+    expect(result.steps.body_hash).toBeNull();
+    expect(result.errors?.some((e) => e.message.includes("frontmatter"))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns valid=false when SKILL.md is missing the closing frontmatter delimiter", async () => {
+    const { dir } = await buildFixtureDir();
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: x\n# never closes\n`);
+    const result = await verifySkillDirectory(dir);
+    expect(result.valid).toBe(false);
+    expect(result.steps.body_hash).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
