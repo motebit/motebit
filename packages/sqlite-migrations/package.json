@@ -1,5 +1,5 @@
 {
-  "name": "@motebit/persistence",
+  "name": "@motebit/sqlite-migrations",
   "version": "0.0.0-private",
   "license": "BUSL-1.1",
   "private": true,
@@ -14,21 +14,7 @@
     "lint": "eslint src/",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
-  "dependencies": {
-    "@motebit/core-identity": "workspace:*",
-    "@motebit/event-log": "workspace:*",
-    "@motebit/memory-graph": "workspace:*",
-    "@motebit/policy": "workspace:*",
-    "@motebit/privacy-layer": "workspace:*",
-    "@motebit/sdk": "workspace:*",
-    "@motebit/sqlite-migrations": "workspace:*",
-    "sql.js": "^1.14.1"
-  },
-  "optionalDependencies": {
-    "better-sqlite3": "^12.0.0"
-  },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

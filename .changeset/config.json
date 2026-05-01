@@ -49,6 +49,7 @@
     "@motebit/semiring",
     "@motebit/settlement-rails",
     "@motebit/spatial",
+    "@motebit/sqlite-migrations",
     "@motebit/state-vector",
     "@motebit/summarize",
     "@motebit/sync-engine",

@@ -54,6 +54,7 @@ const LAYER: Record<string, number> = {
   "@motebit/policy-invariants": 1,
   "@motebit/wallet-solana": 1,
   "@motebit/circuit-breaker": 1,
+  "@motebit/sqlite-migrations": 1,
   "@motebit/settlement-rails": 1,
   "@motebit/evm-rpc": 1,
   "@motebit/virtual-accounts": 1,

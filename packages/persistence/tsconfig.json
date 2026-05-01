@@ -23,6 +23,9 @@
     },
     {
       "path": "../sdk"
+    },
+    {
+      "path": "../sqlite-migrations"
     }
   ]
 }

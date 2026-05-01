@@ -10,6 +10,8 @@
 /* eslint-disable @typescript-eslint/require-await -- sync SQLite methods implementing async interfaces */
 
 import * as SQLite from "expo-sqlite";
+import { runMigrations, type SyncSqliteDriver } from "@motebit/sqlite-migrations";
+import { MOBILE_MIGRATIONS } from "./expo-sqlite-migrations.js";
 import type {
   EventLogEntry,
   EventType,
@@ -434,6 +436,21 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
     return before?.cnt ?? 0;
   }
 
+  async truncateBeforeHorizon(motebitId: string, horizonTs: number): Promise<number> {
+    // `append_only_horizon` whole-prefix truncation. Strict less-than
+    // per the cert's "entries BEFORE horizon" claim. expo-sqlite's
+    // runSync doesn't return changes count directly; pre-count then delete.
+    const before = this.db.getFirstSync<{ cnt: number }>(
+      "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ? AND timestamp < ?",
+      [motebitId, horizonTs],
+    );
+    this.db.runSync("DELETE FROM events WHERE motebit_id = ? AND timestamp < ?", [
+      motebitId,
+      horizonTs,
+    ]);
+    return before?.cnt ?? 0;
+  }
+
   async countEvents(motebitId: string): Promise<number> {
     const row = this.db.getFirstSync<{ cnt: number }>(
       "SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ?",
@@ -553,6 +570,19 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
 
   async tombstoneNode(nodeId: string): Promise<void> {
     this.db.runSync("UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ?", [nodeId]);
+  }
+
+  async eraseNode(nodeId: string): Promise<void> {
+    // Erase semantics for `mutable_pruning` certs (decision 7) — bytes
+    // unrecoverable, edge cascade. expo-sqlite supports synchronous
+    // transactions via withExclusiveTransactionAsync; runSync ordering
+    // is sufficient for the two-statement cascade since both rows live
+    // in the same DB connection.
+    this.db.runSync("DELETE FROM memory_edges WHERE source_id = ? OR target_id = ?", [
+      nodeId,
+      nodeId,
+    ]);
+    this.db.runSync("DELETE FROM memory_nodes WHERE node_id = ?", [nodeId]);
   }
 
   async pinNode(nodeId: string, pinned: boolean): Promise<void> {
@@ -2077,471 +2107,47 @@ export interface ExpoStorageResult extends StorageAdapters {
   toolAuditSink: ExpoToolAuditSink;
 }
 
+/**
+ * Adapt expo-sqlite's `SQLiteDatabase` (sync API) into the minimal driver
+ * shape `@motebit/sqlite-migrations`' runner consumes. Mobile doesn't use
+ * a typed transaction primitive elsewhere, so the runner's transaction
+ * boundary maps to BEGIN/COMMIT strings — same effect, smaller surface.
+ */
+function expoSqliteDriver(db: SQLite.SQLiteDatabase): SyncSqliteDriver {
+  return {
+    exec(sql: string): void {
+      db.execSync(sql);
+    },
+    pragma(sql: string): unknown {
+      const trimmed = sql.trim();
+      if (/^user_version$/i.test(trimmed)) {
+        const row = db.getFirstSync<{ user_version: number }>("PRAGMA user_version");
+        return [{ user_version: row?.user_version ?? 0 }];
+      }
+      db.execSync(`PRAGMA ${trimmed}`);
+      return [];
+    },
+    transaction<T>(fn: () => T): T {
+      db.execSync("BEGIN");
+      try {
+        const result = fn();
+        db.execSync("COMMIT");
+        return result;
+      } catch (err) {
+        db.execSync("ROLLBACK");
+        throw err;
+      }
+    },
+  };
+}
+
 export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   const db = SQLite.openDatabaseSync(dbName);
   db.execSync("PRAGMA journal_mode = WAL");
   db.execSync("PRAGMA foreign_keys = ON");
-
-  const versionRow = db.getFirstSync<{ user_version: number }>("PRAGMA user_version");
-  const userVersion = versionRow?.user_version ?? 0;
-
   db.execSync(SCHEMA);
 
-  if (userVersion < 1) {
-    try {
-      db.execSync("ALTER TABLE events ADD COLUMN device_id TEXT");
-    } catch {
-      // Column may already exist on new DBs that have it in CREATE TABLE
-    }
-    db.execSync("PRAGMA user_version = 1");
-  }
-
-  if (userVersion < 2) {
-    try {
-      db.execSync(
-        "ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0",
-      );
-    } catch {
-      // Column may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 2");
-  }
-
-  // Migration 3: conversation tables (added in schema above, but need migration for existing DBs)
-  if (userVersion < 3) {
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS conversations (
-          conversation_id TEXT PRIMARY KEY,
-          motebit_id TEXT NOT NULL,
-          started_at INTEGER NOT NULL,
-          last_active_at INTEGER NOT NULL,
-          title TEXT,
-          summary TEXT,
-          message_count INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_conversations_motebit
-          ON conversations (motebit_id, last_active_at DESC);
-        CREATE TABLE IF NOT EXISTS conversation_messages (
-          message_id TEXT PRIMARY KEY,
-          conversation_id TEXT NOT NULL,
-          motebit_id TEXT NOT NULL,
-          role TEXT NOT NULL,
-          content TEXT NOT NULL,
-          tool_calls TEXT,
-          tool_call_id TEXT,
-          created_at INTEGER NOT NULL,
-          token_estimate INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_conv_messages
-          ON conversation_messages (conversation_id, created_at ASC);
-      `);
-    } catch {
-      // Tables may already exist on new DBs that have them in the main SCHEMA
-    }
-    db.execSync("PRAGMA user_version = 3");
-  }
-
-  // Migration 4: goals and goal_outcomes tables
-  if (userVersion < 4) {
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS goals (
-          goal_id TEXT PRIMARY KEY,
-          motebit_id TEXT NOT NULL,
-          prompt TEXT NOT NULL,
-          interval_ms INTEGER NOT NULL,
-          last_run_at INTEGER,
-          enabled INTEGER NOT NULL DEFAULT 1,
-          created_at INTEGER NOT NULL,
-          mode TEXT NOT NULL DEFAULT 'recurring',
-          status TEXT NOT NULL DEFAULT 'active',
-          parent_goal_id TEXT,
-          max_retries INTEGER NOT NULL DEFAULT 3,
-          consecutive_failures INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
-
-        CREATE TABLE IF NOT EXISTS goal_outcomes (
-          outcome_id TEXT PRIMARY KEY,
-          goal_id TEXT NOT NULL,
-          motebit_id TEXT NOT NULL,
-          ran_at INTEGER NOT NULL,
-          status TEXT NOT NULL,
-          summary TEXT,
-          tool_calls_made INTEGER NOT NULL DEFAULT 0,
-          memories_formed INTEGER NOT NULL DEFAULT 0,
-          error_message TEXT,
-          FOREIGN KEY (goal_id) REFERENCES goals(goal_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
-      `);
-    } catch {
-      // Tables may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 4");
-  }
-
-  if (userVersion < 5) {
-    try {
-      db.execSync("ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
-    } catch {
-      // Column already exists on new DBs
-    }
-    db.execSync("PRAGMA user_version = 5");
-  }
-
-  // Migration 6: plan tables
-  if (userVersion < 6) {
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS plans (
-          plan_id TEXT PRIMARY KEY,
-          goal_id TEXT NOT NULL,
-          motebit_id TEXT NOT NULL,
-          title TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'active',
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          current_step_index INTEGER NOT NULL DEFAULT 0,
-          total_steps INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
-
-        CREATE TABLE IF NOT EXISTS plan_steps (
-          step_id TEXT PRIMARY KEY,
-          plan_id TEXT NOT NULL,
-          ordinal INTEGER NOT NULL,
-          description TEXT NOT NULL,
-          prompt TEXT NOT NULL,
-          depends_on TEXT NOT NULL DEFAULT '[]',
-          optional INTEGER NOT NULL DEFAULT 0,
-          status TEXT NOT NULL DEFAULT 'pending',
-          result_summary TEXT,
-          error_message TEXT,
-          tool_calls_made INTEGER NOT NULL DEFAULT 0,
-          started_at INTEGER,
-          completed_at INTEGER,
-          retry_count INTEGER NOT NULL DEFAULT 0,
-          FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps (plan_id, ordinal ASC);
-      `);
-    } catch {
-      // Tables may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 6");
-  }
-
-  // Migration 7: memory consolidation columns
-  if (userVersion < 7) {
-    try {
-      db.execSync("ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'");
-    } catch {
-      /* already exists */
-    }
-    try {
-      db.execSync("ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER");
-    } catch {
-      /* already exists */
-    }
-    try {
-      db.execSync("ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER");
-    } catch {
-      /* already exists */
-    }
-    db.execSync("PRAGMA user_version = 7");
-  }
-
-  // Migration 8: gradient_snapshots table
-  if (userVersion < 8) {
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS gradient_snapshots (
-          snapshot_id TEXT PRIMARY KEY,
-          motebit_id TEXT NOT NULL,
-          timestamp INTEGER NOT NULL,
-          gradient REAL NOT NULL,
-          delta REAL NOT NULL,
-          knowledge_density REAL NOT NULL,
-          knowledge_density_raw REAL NOT NULL,
-          knowledge_quality REAL NOT NULL,
-          graph_connectivity REAL NOT NULL,
-          graph_connectivity_raw REAL NOT NULL,
-          temporal_stability REAL NOT NULL,
-          stats TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_gradient_motebit_ts ON gradient_snapshots (motebit_id, timestamp DESC);
-      `);
-    } catch {
-      // Table may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 8");
-  }
-
-  // Migration 9: composite index for memory query optimization
-  if (userVersion < 9) {
-    try {
-      db.execSync(
-        "CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)",
-      );
-    } catch {
-      // Index may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 9");
-  }
-
-  // Migration 10: retrieval index for ORDER BY last_accessed DESC + LIMIT
-  if (userVersion < 10) {
-    try {
-      db.execSync(
-        "CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)",
-      );
-    } catch {
-      // Index may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 10");
-  }
-
-  // Migration 11: add retrieval_quality column to gradient_snapshots
-  if (userVersion < 11) {
-    try {
-      db.execSync(
-        "ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0",
-      );
-    } catch {
-      // Column may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 11");
-  }
-
-  // Migration 12: add interaction_efficiency and tool_efficiency to gradient_snapshots
-  if (userVersion < 12) {
-    try {
-      db.execSync(
-        "ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0",
-      );
-    } catch {
-      // Column may already exist on new DBs
-    }
-    try {
-      db.execSync(
-        "ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0",
-      );
-    } catch {
-      // Column may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 12");
-  }
-
-  // Migration 13: agent_trust table
-  if (userVersion < 13) {
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS agent_trust (
-          motebit_id TEXT NOT NULL,
-          remote_motebit_id TEXT NOT NULL,
-          trust_level TEXT NOT NULL DEFAULT 'unknown',
-          public_key TEXT,
-          first_seen_at INTEGER NOT NULL,
-          last_seen_at INTEGER NOT NULL,
-          interaction_count INTEGER NOT NULL DEFAULT 0,
-          successful_tasks INTEGER NOT NULL DEFAULT 0,
-          failed_tasks INTEGER NOT NULL DEFAULT 0,
-          notes TEXT,
-          PRIMARY KEY (motebit_id, remote_motebit_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_agent_trust_motebit ON agent_trust (motebit_id);
-      `);
-    } catch {
-      // Table may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 13");
-  }
-
-  // Migration 14: add curiosity_pressure to gradient_snapshots
-  if (userVersion < 14) {
-    try {
-      db.execSync(
-        "ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0",
-      );
-    } catch {
-      // Column may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 14");
-  }
-
-  if (userVersion < 15) {
-    try {
-      db.execSync("ALTER TABLE plan_steps ADD COLUMN required_capabilities TEXT DEFAULT NULL");
-    } catch {
-      /* Column may already exist on new DBs */
-    }
-    try {
-      db.execSync("ALTER TABLE plan_steps ADD COLUMN delegation_task_id TEXT DEFAULT NULL");
-    } catch {
-      /* Column may already exist on new DBs */
-    }
-    try {
-      db.execSync("ALTER TABLE plan_steps ADD COLUMN updated_at INTEGER DEFAULT 0");
-    } catch {
-      /* Column may already exist on new DBs */
-    }
-    db.execSync(
-      "UPDATE plan_steps SET updated_at = COALESCE(completed_at, started_at, (SELECT created_at FROM plans WHERE plans.plan_id = plan_steps.plan_id)) WHERE updated_at = 0",
-    );
-    try {
-      db.execSync("CREATE INDEX IF NOT EXISTS idx_plan_steps_updated ON plan_steps(updated_at)");
-    } catch {
-      /* Index may already exist */
-    }
-    db.execSync("PRAGMA user_version = 15");
-  }
-
-  // Migration 16: market tables (service_listings, budget_allocations, settlements, latency_stats)
-  if (userVersion < 16) {
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS service_listings (
-          listing_id TEXT PRIMARY KEY,
-          motebit_id TEXT NOT NULL,
-          capabilities TEXT NOT NULL DEFAULT '[]',
-          pricing TEXT NOT NULL DEFAULT '[]',
-          sla_max_latency_ms INTEGER NOT NULL DEFAULT 5000,
-          sla_availability REAL NOT NULL DEFAULT 0.99,
-          description TEXT NOT NULL DEFAULT '',
-          updated_at INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_service_listings_motebit ON service_listings(motebit_id);
-      `);
-    } catch {
-      // Table may already exist on new DBs
-    }
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS budget_allocations (
-          allocation_id TEXT PRIMARY KEY,
-          goal_id TEXT NOT NULL,
-          candidate_motebit_id TEXT NOT NULL,
-          amount_locked REAL NOT NULL,
-          currency TEXT NOT NULL DEFAULT 'USD',
-          created_at INTEGER NOT NULL,
-          status TEXT NOT NULL DEFAULT 'locked'
-        );
-        CREATE INDEX IF NOT EXISTS idx_budget_allocations_goal ON budget_allocations(goal_id);
-      `);
-    } catch {
-      // Table may already exist on new DBs
-    }
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS settlements (
-          settlement_id TEXT PRIMARY KEY,
-          allocation_id TEXT NOT NULL,
-          receipt_hash TEXT NOT NULL,
-          ledger_hash TEXT,
-          amount_settled REAL NOT NULL,
-          platform_fee REAL NOT NULL DEFAULT 0,
-          platform_fee_rate REAL NOT NULL DEFAULT 0.05,
-          status TEXT NOT NULL,
-          settled_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_settlements_allocation ON settlements(allocation_id);
-      `);
-    } catch {
-      // Table may already exist on new DBs
-    }
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS latency_stats (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          motebit_id TEXT NOT NULL,
-          remote_motebit_id TEXT NOT NULL,
-          latency_ms REAL NOT NULL,
-          recorded_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_latency_stats_pair ON latency_stats(motebit_id, remote_motebit_id);
-      `);
-    } catch {
-      // Table may already exist on new DBs
-    }
-    db.execSync("PRAGMA user_version = 16");
-  }
-
-  // Migration 17: collaborative plan fields
-  if (userVersion < 17) {
-    try {
-      db.execSync("ALTER TABLE plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
-    } catch {
-      /* Column may already exist on new DBs */
-    }
-    try {
-      db.execSync("ALTER TABLE plans ADD COLUMN proposal_id TEXT DEFAULT NULL");
-    } catch {
-      /* Column may already exist on new DBs */
-    }
-    try {
-      db.execSync("ALTER TABLE plans ADD COLUMN collaborative INTEGER DEFAULT 0");
-    } catch {
-      /* Column may already exist on new DBs */
-    }
-    db.execSync("PRAGMA user_version = 17");
-  }
-
-  // Migration 18: issued_credentials, approvals, tool_audit tables
-  if (userVersion < 18) {
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS issued_credentials (
-          credential_id TEXT PRIMARY KEY,
-          subject_motebit_id TEXT NOT NULL,
-          issuer_did TEXT NOT NULL,
-          credential_type TEXT NOT NULL,
-          credential_json TEXT NOT NULL,
-          issued_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_credentials_subject ON issued_credentials(subject_motebit_id);
-        CREATE INDEX IF NOT EXISTS idx_credentials_type ON issued_credentials(credential_type);
-      `);
-    } catch {
-      /* Table may already exist */
-    }
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS approvals (
-          approval_id TEXT PRIMARY KEY,
-          required INTEGER NOT NULL DEFAULT 1,
-          approvers TEXT NOT NULL DEFAULT '[]',
-          collected TEXT NOT NULL DEFAULT '[]'
-        );
-      `);
-    } catch {
-      /* Table may already exist */
-    }
-    try {
-      db.execSync(`
-        CREATE TABLE IF NOT EXISTS tool_audit (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          turn_id TEXT NOT NULL,
-          run_id TEXT,
-          call_id TEXT NOT NULL,
-          tool TEXT NOT NULL,
-          args TEXT NOT NULL,
-          decision TEXT NOT NULL,
-          result TEXT,
-          injection TEXT,
-          cost_units REAL,
-          timestamp INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit(turn_id);
-        CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit(run_id);
-        CREATE INDEX IF NOT EXISTS idx_tool_audit_ts ON tool_audit(timestamp);
-      `);
-    } catch {
-      /* Table may already exist */
-    }
-    db.execSync("PRAGMA user_version = 18");
-  }
+  runMigrations(expoSqliteDriver(db), MOBILE_MIGRATIONS);
 
   return {
     eventStore: new ExpoSqliteEventStore(db),

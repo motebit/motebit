@@ -1,8 +1,11 @@
 /* eslint-disable @typescript-eslint/require-await -- Sync SQLite methods implementing async interfaces */
 import { createRequire } from "node:module";
+import { runMigrations } from "@motebit/sqlite-migrations";
 import type { DatabaseDriver, PreparedStatement } from "./driver.js";
+import { PERSISTENCE_MIGRATIONS } from "./migrations-registry.js";
 export type { DatabaseDriver, PreparedStatement, RunResult } from "./driver.js";
 export { SqlJsDriver } from "./sqljs-driver.js";
+export { PERSISTENCE_MIGRATIONS } from "./migrations-registry.js";
 import type {
   EventLogEntry,
   EventType,
@@ -397,6 +400,17 @@ export class SqliteEventStore implements EventStoreAdapter {
     return info.changes;
   }
 
+  async truncateBeforeHorizon(motebitId: string, horizonTs: number): Promise<number> {
+    // `append_only_horizon` whole-prefix truncation per
+    // docs/doctrine/retention-policy.md §"Decision 4". Strict less-than
+    // — entries at exactly `horizonTs` survive (the cert claims
+    // unrecoverability of entries BEFORE the horizon).
+    const info = this.db
+      .prepare("DELETE FROM events WHERE motebit_id = ? AND timestamp < ?")
+      .run(motebitId, horizonTs);
+    return info.changes;
+  }
+
   async countEvents(motebitId: string): Promise<number> {
     const row = this.db
       .prepare("SELECT COUNT(*) as cnt FROM events WHERE motebit_id = ?")
@@ -575,6 +589,17 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       .prepare(`UPDATE memory_nodes SET tombstoned = 1 WHERE node_id = ? AND motebit_id = ?`)
       .run(nodeId, motebitId);
     return info.changes > 0;
+  }
+
+  async eraseNode(nodeId: string): Promise<void> {
+    // Atomic: erase the node row and every edge referencing it.
+    // mutable_pruning cert (decision 7) attests bytes-unrecoverable.
+    this.db.transaction(() => {
+      this.db
+        .prepare(`DELETE FROM memory_edges WHERE source_id = ? OR target_id = ?`)
+        .run(nodeId, nodeId);
+      this.db.prepare(`DELETE FROM memory_nodes WHERE node_id = ?`).run(nodeId);
+    });
   }
 
   async getAllNodes(motebitId: string): Promise<MemoryNode[]> {
@@ -2503,21 +2528,6 @@ export interface MotebitDatabase {
   close(): void;
 }
 
-/**
- * Run an idempotent ALTER TABLE. Silences "duplicate column" / "already exists" errors
- * but re-throws anything unexpected (disk full, permission denied, corrupt DB).
- */
-function migrateExec(driver: DatabaseDriver, sql: string): void {
-  try {
-    driver.exec(sql);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // SQLite returns "duplicate column name: X" or "table X already exists" / "index X already exists"
-    if (/duplicate column|already exists/i.test(msg)) return;
-    throw err;
-  }
-}
-
 /** Run schema creation and migrations on a DatabaseDriver, return MotebitDatabase. */
 export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): MotebitDatabase {
   driver.pragma("journal_mode = WAL");
@@ -2528,343 +2538,8 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   // new databases (no-op if tables already exist with a different mode).
   driver.pragma("auto_vacuum = INCREMENTAL");
 
-  const userVersion = (driver.pragma("user_version") as { user_version: number }[])[0]!
-    .user_version;
-
   initSchema(driver);
-
-  if (userVersion < 1) {
-    migrateExec(driver, "ALTER TABLE events ADD COLUMN device_id TEXT");
-    driver.pragma("user_version = 1");
-  }
-
-  if (userVersion < 2) {
-    migrateExec(
-      driver,
-      "ALTER TABLE state_snapshots ADD COLUMN version_clock INTEGER NOT NULL DEFAULT 0",
-    );
-    driver.pragma("user_version = 2");
-  }
-
-  if (userVersion < 3) {
-    driver.pragma("user_version = 3");
-  }
-
-  if (userVersion < 4) {
-    driver.pragma("user_version = 4");
-  }
-
-  if (userVersion < 5) {
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN mode TEXT NOT NULL DEFAULT 'recurring'");
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN parent_goal_id TEXT");
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3");
-    migrateExec(
-      driver,
-      "ALTER TABLE goals ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
-    );
-    driver.pragma("user_version = 5");
-  }
-
-  if (userVersion < 6) {
-    driver.pragma("user_version = 6");
-  }
-
-  if (userVersion < 7) {
-    driver.pragma("user_version = 7");
-  }
-
-  if (userVersion < 8) {
-    migrateExec(driver, "ALTER TABLE memory_nodes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
-    driver.pragma("user_version = 8");
-  }
-
-  if (userVersion < 9) {
-    migrateExec(driver, "ALTER TABLE tool_audit_log ADD COLUMN run_id TEXT");
-    migrateExec(driver, "CREATE INDEX IF NOT EXISTS idx_tool_audit_run ON tool_audit_log (run_id)");
-    driver.pragma("user_version = 9");
-  }
-
-  if (userVersion < 10) {
-    migrateExec(driver, "ALTER TABLE tool_audit_log ADD COLUMN injection TEXT");
-    driver.pragma("user_version = 10");
-  }
-
-  if (userVersion < 11) {
-    migrateExec(driver, "ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER");
-    driver.pragma("user_version = 11");
-  }
-
-  if (userVersion < 12) {
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN wall_clock_ms INTEGER");
-    driver.pragma("user_version = 12");
-  }
-
-  if (userVersion < 13) {
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN project_id TEXT");
-    driver.exec("CREATE INDEX IF NOT EXISTS idx_goals_project ON goals (project_id)");
-    driver.pragma("user_version = 13");
-  }
-
-  if (userVersion < 14) {
-    migrateExec(driver, "ALTER TABLE memory_nodes ADD COLUMN memory_type TEXT DEFAULT 'semantic'");
-    migrateExec(driver, "ALTER TABLE memory_nodes ADD COLUMN valid_from INTEGER");
-    migrateExec(driver, "ALTER TABLE memory_nodes ADD COLUMN valid_until INTEGER");
-    driver.pragma("user_version = 14");
-  }
-
-  if (userVersion < 15) {
-    driver.pragma("user_version = 15");
-  }
-
-  if (userVersion < 16) {
-    driver.exec(
-      "CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned)",
-    );
-    driver.pragma("user_version = 16");
-  }
-
-  if (userVersion < 17) {
-    driver.exec(
-      "CREATE INDEX IF NOT EXISTS idx_memory_nodes_retrieve ON memory_nodes (motebit_id, tombstoned, last_accessed DESC)",
-    );
-    driver.pragma("user_version = 17");
-  }
-
-  if (userVersion < 18) {
-    migrateExec(
-      driver,
-      "ALTER TABLE gradient_snapshots ADD COLUMN retrieval_quality REAL NOT NULL DEFAULT 0",
-    );
-    driver.pragma("user_version = 18");
-  }
-
-  if (userVersion < 19) {
-    driver.pragma("user_version = 19");
-  }
-
-  if (userVersion < 20) {
-    migrateExec(
-      driver,
-      "ALTER TABLE gradient_snapshots ADD COLUMN interaction_efficiency REAL NOT NULL DEFAULT 0",
-    );
-    migrateExec(
-      driver,
-      "ALTER TABLE gradient_snapshots ADD COLUMN tool_efficiency REAL NOT NULL DEFAULT 0",
-    );
-    driver.pragma("user_version = 20");
-  }
-
-  if (userVersion < 21) {
-    migrateExec(
-      driver,
-      "ALTER TABLE agent_trust ADD COLUMN successful_tasks INTEGER NOT NULL DEFAULT 0",
-    );
-    migrateExec(
-      driver,
-      "ALTER TABLE agent_trust ADD COLUMN failed_tasks INTEGER NOT NULL DEFAULT 0",
-    );
-    driver.pragma("user_version = 21");
-  }
-
-  if (userVersion < 22) {
-    migrateExec(driver, "ALTER TABLE tool_audit_log ADD COLUMN cost_units INTEGER DEFAULT 0");
-    driver.pragma("user_version = 22");
-  }
-
-  if (userVersion < 23) {
-    migrateExec(
-      driver,
-      "ALTER TABLE gradient_snapshots ADD COLUMN curiosity_pressure REAL NOT NULL DEFAULT 0",
-    );
-    driver.pragma("user_version = 23");
-  }
-
-  if (userVersion < 24) {
-    migrateExec(
-      driver,
-      "ALTER TABLE plan_steps ADD COLUMN required_capabilities TEXT DEFAULT NULL",
-    );
-    driver.pragma("user_version = 24");
-  }
-
-  if (userVersion < 25) {
-    migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN delegation_task_id TEXT DEFAULT NULL");
-    driver.pragma("user_version = 25");
-  }
-
-  if (userVersion < 26) {
-    migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN updated_at INTEGER DEFAULT 0");
-    migrateExec(
-      driver,
-      "UPDATE plan_steps SET updated_at = COALESCE(completed_at, started_at, (SELECT created_at FROM plans WHERE plans.plan_id = plan_steps.plan_id))",
-    );
-    migrateExec(
-      driver,
-      "CREATE INDEX IF NOT EXISTS idx_plan_steps_updated ON plan_steps(updated_at)",
-    );
-    driver.pragma("user_version = 26");
-  }
-
-  if (userVersion < 27) {
-    migrateExec(
-      driver,
-      `CREATE TABLE IF NOT EXISTS service_listings (
-      listing_id TEXT PRIMARY KEY,
-      motebit_id TEXT NOT NULL,
-      capabilities TEXT NOT NULL DEFAULT '[]',
-      pricing TEXT NOT NULL DEFAULT '[]',
-      sla_max_latency_ms INTEGER NOT NULL DEFAULT 5000,
-      sla_availability REAL NOT NULL DEFAULT 0.99,
-      description TEXT NOT NULL DEFAULT '',
-      updated_at INTEGER NOT NULL DEFAULT 0
-    )`,
-    );
-    migrateExec(
-      driver,
-      "CREATE INDEX IF NOT EXISTS idx_service_listings_motebit ON service_listings(motebit_id)",
-    );
-
-    migrateExec(
-      driver,
-      `CREATE TABLE IF NOT EXISTS budget_allocations (
-      allocation_id TEXT PRIMARY KEY,
-      goal_id TEXT NOT NULL,
-      candidate_motebit_id TEXT NOT NULL,
-      amount_locked REAL NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'USD',
-      created_at INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'locked'
-    )`,
-    );
-    migrateExec(
-      driver,
-      "CREATE INDEX IF NOT EXISTS idx_budget_allocations_goal ON budget_allocations(goal_id)",
-    );
-
-    migrateExec(
-      driver,
-      `CREATE TABLE IF NOT EXISTS settlements (
-      settlement_id TEXT PRIMARY KEY,
-      allocation_id TEXT NOT NULL,
-      receipt_hash TEXT NOT NULL,
-      ledger_hash TEXT,
-      amount_settled REAL NOT NULL,
-      platform_fee REAL NOT NULL DEFAULT 0,
-      platform_fee_rate REAL NOT NULL DEFAULT 0.05,
-      status TEXT NOT NULL,
-      settled_at INTEGER NOT NULL
-    )`,
-    );
-    migrateExec(
-      driver,
-      "CREATE INDEX IF NOT EXISTS idx_settlements_allocation ON settlements(allocation_id)",
-    );
-
-    migrateExec(
-      driver,
-      `CREATE TABLE IF NOT EXISTS latency_stats (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      motebit_id TEXT NOT NULL,
-      remote_motebit_id TEXT NOT NULL,
-      latency_ms REAL NOT NULL,
-      recorded_at INTEGER NOT NULL
-    )`,
-    );
-    migrateExec(
-      driver,
-      "CREATE INDEX IF NOT EXISTS idx_latency_stats_pair ON latency_stats(motebit_id, remote_motebit_id)",
-    );
-
-    driver.pragma("user_version = 27");
-  }
-
-  if (userVersion < 28) {
-    migrateExec(driver, "ALTER TABLE plan_steps ADD COLUMN assigned_motebit_id TEXT DEFAULT NULL");
-    migrateExec(driver, "ALTER TABLE plans ADD COLUMN proposal_id TEXT DEFAULT NULL");
-    migrateExec(driver, "ALTER TABLE plans ADD COLUMN collaborative INTEGER DEFAULT 0");
-    driver.pragma("user_version = 28");
-  }
-
-  if (userVersion < 29) {
-    migrateExec(
-      driver,
-      `CREATE TABLE IF NOT EXISTS issued_credentials (
-        credential_id TEXT PRIMARY KEY,
-        subject_motebit_id TEXT NOT NULL,
-        issuer_did TEXT NOT NULL,
-        credential_type TEXT NOT NULL,
-        credential_json TEXT NOT NULL,
-        issued_at INTEGER NOT NULL
-      )`,
-    );
-    migrateExec(
-      driver,
-      "CREATE INDEX IF NOT EXISTS idx_creds_subject ON issued_credentials(subject_motebit_id)",
-    );
-    migrateExec(
-      driver,
-      "CREATE INDEX IF NOT EXISTS idx_creds_type ON issued_credentials(credential_type)",
-    );
-    driver.pragma("user_version = 29");
-  }
-
-  if (userVersion < 30) {
-    migrateExec(
-      driver,
-      "ALTER TABLE approval_queue ADD COLUMN quorum_required INTEGER NOT NULL DEFAULT 1",
-    );
-    migrateExec(
-      driver,
-      "ALTER TABLE approval_queue ADD COLUMN quorum_approvers TEXT NOT NULL DEFAULT '[]'",
-    );
-    migrateExec(
-      driver,
-      "ALTER TABLE approval_queue ADD COLUMN quorum_collected TEXT NOT NULL DEFAULT '[]'",
-    );
-    driver.pragma("user_version = 30");
-  }
-
-  if (userVersion < 31) {
-    // Declarative-routine metadata for goals. Compiled from motebit.yaml via
-    // `motebit up`; NULL for imperatively-added goals. See CLI doctrine —
-    // `--prune` never touches rows with routine_id IS NULL.
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN routine_id TEXT");
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN routine_source TEXT");
-    migrateExec(driver, "ALTER TABLE goals ADD COLUMN routine_hash TEXT");
-    driver.exec(
-      "CREATE INDEX IF NOT EXISTS idx_goals_routine ON goals (motebit_id, routine_id) WHERE routine_id IS NOT NULL",
-    );
-    driver.pragma("user_version = 31");
-  }
-
-  if (userVersion < 32) {
-    // Self-attesting settlements (audit follow-up #1, delegation-v1 §6.4):
-    // SettlementRecord wire format now MUST carry issuer_relay_id + suite +
-    // signature. Adds the three columns to the local persistence settlements
-    // table; nullable for backward-compat with rows persisted before the
-    // protocol-layer change. `rowToSettlement` surfaces legacy NULLs as
-    // empty strings — wire-schema validation downstream rejects them, the
-    // intended fail-closed signal that the row predates self-attestation.
-    migrateExec(driver, "ALTER TABLE settlements ADD COLUMN issuer_relay_id TEXT");
-    migrateExec(driver, "ALTER TABLE settlements ADD COLUMN suite TEXT");
-    migrateExec(driver, "ALTER TABLE settlements ADD COLUMN signature TEXT");
-    driver.pragma("user_version = 32");
-  }
-
-  if (userVersion < 33) {
-    // Hardware-attestation peer flow Phase 1 (spec/identity-v1.md §3):
-    // device record optionally carries a self-issued AgentTrustCredential
-    // bearing a `hardware_attestation` claim. Identity metadata (not a
-    // credential-index entry) — peers pull via /agent/:motebitId/
-    // capabilities, verify the eddsa-jcs-2022 proof, then issue their own
-    // peer AgentTrustCredential about the subject for routing aggregation.
-    // The /credentials/submit doctrine ("rejects self-issued") remains
-    // unchanged. See docs/doctrine/promoting-private-to-public.md companion
-    // + lesson_hardware_attestation_self_issued_dead_drop.md memory.
-    migrateExec(driver, "ALTER TABLE devices ADD COLUMN hardware_attestation_credential TEXT");
-    driver.pragma("user_version = 33");
-  }
+  runMigrations(driver, PERSISTENCE_MIGRATIONS);
 
   const eventStore = new SqliteEventStore(driver);
   const memoryStorage = new SqliteMemoryStorage(driver);

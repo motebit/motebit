@@ -16,7 +16,7 @@ MCP defines capability but not identity. A2A defines communication but has no tr
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 48 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 5 supporting apps, 8 services, 23 open protocol specs.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 49 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 5 supporting apps, 8 services, 23 open protocol specs.
 
 Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
@@ -60,6 +60,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/motebit-computer.md`](docs/doctrine/motebit-computer.md) — the slab: liquid-glass plane beside the creature, first-person perceptual field made visible. Six embodiment modes unified on one surface (mind / tool_result / virtual_browser / shared_gaze / desktop_drive / peer_viewport), three organs (eye / hand / mind), three end states (dissolve / rest / detach) rooted in droplet physics, supervised agency via gestures on items. Cross-surface Ring-1 capability
 - [`docs/doctrine/coverage-graduation.md`](docs/doctrine/coverage-graduation.md) — money/identity packages below 80 carry a raise-by date; soft signal via `pnpm coverage-graduation`
 - [`docs/doctrine/proactive-interior.md`](docs/doctrine/proactive-interior.md) — presence mode + 4-phase consolidation cycle + fail-closed proactive tool scope; `runtime.consolidationCycle()` is the only loop
+- [`docs/doctrine/retention-policy.md`](docs/doctrine/retention-policy.md) — three retention shapes (mutable pruning / append-only horizon / consolidation flush), one signed `DeletionCertificate` discriminated union, sensitivity ceilings as interop law + reference defaults; closes the asymmetry where memory enforces retention and three sibling stores don't
 - [`docs/doctrine/readme-as-glass.md`](docs/doctrine/readme-as-glass.md) — README is a surface; interior links out
 - [`docs/doctrine/migration-cleanup.md`](docs/doctrine/migration-cleanup.md) — state-holder analysis for migrations + legacy-compat paths; pre-GA is when you reduce holder counts, not when you slogan-strip
 - [`docs/doctrine/deprecation-lifecycle.md`](docs/doctrine/deprecation-lifecycle.md) — partner to migration-cleanup; three signals (major / deprecate+sunset / forbidden-silent-compat), four-field `@deprecated` contract (`since`, `removed in`, replacement, reason), minimum windows adapted from Kubernetes

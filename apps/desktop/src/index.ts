@@ -79,6 +79,7 @@ import {
   type InvokeFn,
 } from "./tauri-storage.js";
 import { TauriKeyringAdapter, TauriToolAuditSink } from "./tauri-system-adapters.js";
+import { runDesktopMigrations } from "./tauri-migrations.js";
 import * as memoryCommands from "./memory-commands.js";
 import * as rendererCommands from "./renderer-commands.js";
 import { IdentityManager } from "./identity-manager.js";
@@ -797,6 +798,14 @@ export class DesktopApp {
     // Track the active provider on the surface for the model indicator.
     this._activeProvider = config.provider;
 
+    // Apply pending schema migrations before any storage adapter touches a
+    // table. Runs through Tauri IPC against the rusqlite-hosted DB; the
+    // empty registry today is a no-op, but the boot wiring is in place so
+    // phase 5-ship's first entry lands without further surface change.
+    if (config.isTauri && config.invoke) {
+      await runDesktopMigrations(config.invoke);
+    }
+
     // State snapshot + conversation persistence — preload before runtime construction
     let stateSnapshot: TauriStateSnapshotStorage | undefined;
     let conversationStore: TauriConversationStore | undefined;
@@ -1442,9 +1451,9 @@ export class DesktopApp {
     return memoryCommands.formMemoryDirect(this.runtime, content, confidence);
   }
 
-  /** Soft-delete a memory with audit trail. */
-  deleteMemory(nodeId: string): Promise<import("@motebit/encryption").DeletionCertificate | null> {
-    return memoryCommands.deleteMemory(this.runtime, this.motebitId, nodeId);
+  /** Erase a memory and emit a signed `mutable_pruning` deletion certificate. */
+  deleteMemory(nodeId: string): Promise<import("@motebit/sdk").DeletionCertificate | null> {
+    return memoryCommands.deleteMemory(this.runtime, nodeId);
   }
 
   /** List deletion certificates from the audit log. */

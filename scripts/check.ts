@@ -460,6 +460,12 @@ const GATES: ReadonlyArray<Gate> = [
       'every runtime method that invokes `runTurn` or `runTurnStreaming` in `packages/runtime/src/motebit-runtime.ts` calls `this.assertSensitivityPermitsAiCall()` first (invariant #65, added 2026-04-30 closing the doctrine drift class audited the same day — CLAUDE.md asserts "Medical/financial/secret never reach external AI" but `provider-resolver.ts` had zero sensitivity references and the runtime hardcoded `session_sensitivity: "none"`. The gate throws `SovereignTierRequiredError` before any provider call when session is medical/financial/secret AND provider is not sovereign — fail-closed before any bytes leave the device. Sibling to `CONTEXT_SAFE_SENSITIVITY` in ai-core (filters memory injection); this one closes the request-side gap).',
     script: "check-sensitivity-routing",
   },
+  {
+    name: "check-sqlite-migration-runner",
+    defends:
+      "schema-version advancement (`PRAGMA user_version = N`) only happens through `runMigrations` / `runMigrationsAsync` in `@motebit/sqlite-migrations`, never inline at a call site (invariant #66, added 2026-04-30 closing the migration-ladder drift class — three SQLite surfaces (mobile expo-sqlite, desktop Tauri-IPC rusqlite, persistence better-sqlite3 / sql.js) had three independently-evolved ladders with three different version lines, three different error-swallow disciplines, and two of three had no transaction wrapping. The runner is the canonical source of truth; surfaces register `Migration` entries against per-surface registries and the runner advances the pragma. Three legitimate driver-internal pragma sites are allowlisted with reasons: the runner itself, the sql.js driver pragma() implementation, and the desktop async driver shim setUserVersion.",
+    script: "check-sqlite-migration-runner",
+  },
 ];
 
 interface Result {
