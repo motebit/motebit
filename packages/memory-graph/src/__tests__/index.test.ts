@@ -268,6 +268,24 @@ describe("MemoryGraph", () => {
     graph = new MemoryGraph(storage, eventStore, motebitId);
   });
 
+  describe("getNode (delegate to storage)", () => {
+    it("returns a stored node by id", async () => {
+      const node = await graph.formMemory(
+        { content: "fetchable", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+      const fetched = await graph.getNode(node.node_id);
+      expect(fetched).not.toBeNull();
+      expect(fetched?.node_id).toBe(node.node_id);
+      expect(fetched?.content).toBe("fetchable");
+    });
+
+    it("returns null for an unknown id", async () => {
+      const fetched = await graph.getNode("does-not-exist");
+      expect(fetched).toBeNull();
+    });
+  });
+
   describe("formMemory", () => {
     it("creates a memory node with correct fields", async () => {
       const candidate: MemoryCandidate = {

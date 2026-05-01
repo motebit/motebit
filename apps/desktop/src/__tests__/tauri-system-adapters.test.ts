@@ -121,4 +121,66 @@ describe("TauriToolAuditSink", () => {
       failed: 0,
     });
   });
+
+  it("preloadFlushCandidates loads tool_audit_log rows + enumerateForFlush returns them", async () => {
+    const rows = [
+      {
+        call_id: "c1",
+        turn_id: "t1",
+        run_id: "r1",
+        tool: "web_search",
+        args: '{"q":"x"}',
+        decision: '{"allowed":true}',
+        result: '{"ok":true}',
+        injection: null,
+        cost_units: 5,
+        timestamp: 1000,
+        sensitivity: "personal",
+      },
+      {
+        call_id: "c2",
+        turn_id: "t2",
+        run_id: null,
+        tool: "calc",
+        args: "{}",
+        decision: '{"allowed":true}',
+        result: null,
+        injection: null,
+        cost_units: 1,
+        timestamp: 2000,
+        sensitivity: null,
+      },
+    ];
+    const invoke = vi.fn(async (cmd: string) => {
+      if (cmd === "db_query") return rows;
+      return 1;
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sink = new TauriToolAuditSink(invoke as any);
+    await sink.preloadFlushCandidates(3000);
+    const out = sink.enumerateForFlush(3000);
+    expect(out).toHaveLength(2);
+    expect(out[0]!.callId).toBe("c1");
+    expect(out[1]!.callId).toBe("c2");
+  });
+
+  it("erase forwards a DELETE for the given call_id (fire-and-forget)", () => {
+    const invoke = vi.fn(async () => 1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sink = new TauriToolAuditSink(invoke as any);
+    sink.erase("c-erase-me");
+    expect(invoke).toHaveBeenCalledOnce();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const call = invoke.mock.calls[0] as any;
+    expect(call[0]).toBe("db_execute");
+    expect(call[1].sql).toMatch(/DELETE FROM tool_audit_log/);
+    expect(call[1].params).toEqual(["c-erase-me"]);
+  });
+
+  it("query returns empty array (sync stub — Tauri uses preloadFlushCandidates)", () => {
+    const invoke = vi.fn(async () => 1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sink = new TauriToolAuditSink(invoke as any);
+    expect(sink.query("any-turn-id")).toEqual([]);
+  });
 });

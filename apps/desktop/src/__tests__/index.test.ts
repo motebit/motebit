@@ -460,6 +460,28 @@ describe("DesktopApp.currentModel", () => {
   });
 });
 
+describe("DesktopApp sync delegators", () => {
+  let app: DesktopApp;
+
+  afterEach(() => {
+    if (app != null) app.stop();
+  });
+
+  it("activeTaskCount delegates to sync (returns 0 before any tasks)", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "local-server", isTauri: false });
+    expect(typeof app.activeTaskCount()).toBe("number");
+    expect(app.activeTaskCount()).toBe(0);
+  });
+
+  it("discoverAgents delegates to sync (returns array shape)", async () => {
+    app = new DesktopApp();
+    await app.initAI({ provider: "local-server", isTauri: false });
+    const agents = await app.discoverAgents();
+    expect(Array.isArray(agents)).toBe(true);
+  });
+});
+
 describe("DesktopApp.setModel", () => {
   let app: DesktopApp;
 
