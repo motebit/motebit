@@ -260,3 +260,14 @@ export {
   RETENTION_MANIFEST_SCHEMA_ID,
   buildRetentionManifestJsonSchema,
 } from "./retention-manifest.js";
+export {
+  WitnessOmissionDisputeSchema,
+  WITNESS_OMISSION_DISPUTE_SCHEMA_ID,
+  buildWitnessOmissionDisputeJsonSchema,
+  WitnessSolicitationRequestSchema,
+  WITNESS_SOLICITATION_REQUEST_SCHEMA_ID,
+  buildWitnessSolicitationRequestJsonSchema,
+  WitnessSolicitationResponseSchema,
+  WITNESS_SOLICITATION_RESPONSE_SCHEMA_ID,
+  buildWitnessSolicitationResponseJsonSchema,
+} from "./witness-omission-dispute.js";

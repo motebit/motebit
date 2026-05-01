@@ -1531,6 +1531,23 @@ export interface HorizonWitness {
 }
 
 // @public
+export interface HorizonWitnessRequestBody {
+    readonly federation_graph_anchor?: FederationGraphAnchor;
+    // (undocumented)
+    readonly horizon_ts: number;
+    // (undocumented)
+    readonly issued_at: number;
+    // (undocumented)
+    readonly kind: "append_only_horizon";
+    // (undocumented)
+    readonly store_id: string;
+    // (undocumented)
+    readonly subject: HorizonSubject;
+    // (undocumented)
+    readonly suite: SuiteId;
+}
+
+// @public
 export interface IdentityGuardian {
     established_at: string;
     organization?: string;
@@ -3173,6 +3190,22 @@ export interface WitnessOmissionInclusionProofEvidence {
     kind: "inclusion_proof";
     leaf_hash: string;
     proof: MerkleInclusionProof;
+}
+
+// @public
+export interface WitnessSolicitationRequest {
+    // (undocumented)
+    readonly cert_body: HorizonWitnessRequestBody;
+    readonly issuer_id: string;
+    readonly issuer_signature: string;
+}
+
+// @public
+export interface WitnessSolicitationResponse {
+    readonly inclusion_proof?: MerkleInclusionProof;
+    // (undocumented)
+    readonly motebit_id: MotebitId;
+    readonly signature: string;
 }
 
 // (No @packageDocumentation comment for this package)

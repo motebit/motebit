@@ -173,6 +173,14 @@ import {
   buildSkillRegistrySubmitRequestJsonSchema,
   buildSkillRegistrySubmitResponseJsonSchema,
 } from "../skill-registry.js";
+import {
+  WITNESS_OMISSION_DISPUTE_SCHEMA_ID,
+  WITNESS_SOLICITATION_REQUEST_SCHEMA_ID,
+  WITNESS_SOLICITATION_RESPONSE_SCHEMA_ID,
+  buildWitnessOmissionDisputeJsonSchema,
+  buildWitnessSolicitationRequestJsonSchema,
+  buildWitnessSolicitationResponseJsonSchema,
+} from "../witness-omission-dispute.js";
 
 interface SchemaCase {
   name: string;
@@ -546,6 +554,26 @@ const CASES: SchemaCase[] = [
     filename: "skill-registry-bundle-v1.json",
     expectedId: SKILL_REGISTRY_BUNDLE_SCHEMA_ID,
     build: buildSkillRegistryBundleJsonSchema,
+  },
+  // Phase 4b-3 — federation co-witness solicitation + omission dispute.
+  // Three artifacts on the same solicitation/cert/dispute triangle.
+  {
+    name: "witness-solicitation-request-v1",
+    filename: "witness-solicitation-request-v1.json",
+    expectedId: WITNESS_SOLICITATION_REQUEST_SCHEMA_ID,
+    build: buildWitnessSolicitationRequestJsonSchema,
+  },
+  {
+    name: "witness-solicitation-response-v1",
+    filename: "witness-solicitation-response-v1.json",
+    expectedId: WITNESS_SOLICITATION_RESPONSE_SCHEMA_ID,
+    build: buildWitnessSolicitationResponseJsonSchema,
+  },
+  {
+    name: "witness-omission-dispute-v1",
+    filename: "witness-omission-dispute-v1.json",
+    expectedId: WITNESS_OMISSION_DISPUTE_SCHEMA_ID,
+    build: buildWitnessOmissionDisputeJsonSchema,
   },
 ];
 

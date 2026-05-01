@@ -1,0 +1,99 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/witness-solicitation-response-v1.json",
+  "title": "WitnessSolicitationResponse (v1)",
+  "description": "Peer's signed response to a witness solicitation. Structurally identical to a `cert.witnessed_by[]` entry; the issuer copies the response verbatim into the assembled cert before producing its final cert.signature. See spec/relay-federation-v1.md §15.",
+  "type": "object",
+  "properties": {
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The witnessing peer's motebit identity. The pubkey resolves through the same `resolveMotebitPublicKey` path the cert verifier uses for `cert.witnessed_by[i].motebit_id`."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url-encoded Ed25519 signature over the same canonical bytes the issuer signed in `WitnessSolicitationRequest.issuer_signature` (i.e. `canonicalJson(cert_body)` under `cert_body.suite`). The issuer copies this signature verbatim into `cert.witnessed_by[].signature`."
+    },
+    "inclusion_proof": {
+      "type": "object",
+      "properties": {
+        "siblings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Hex-encoded sibling hashes ordered leaf-to-root. Same shape as credential-anchor-v1 §6 and the `inclusion_proof` field on `cert.witnessed_by[i]`."
+        },
+        "leaf_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based index of the disputant's pubkey in the sorted peer set at horizon_ts."
+        },
+        "layer_sizes": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "Per-layer node counts, used to detect odd-leaf promotion when reconstructing the root."
+        }
+      },
+      "required": ["siblings", "leaf_index", "layer_sizes"],
+      "additionalProperties": false,
+      "description": "Optional Merkle inclusion proof for the peer's federation pubkey against `cert_body.federation_graph_anchor.merkle_root`. Phase 4b-3 verifier policy admits signature-only witnesses; future tightening to mandatory-inclusion-proof lands by changing verifier policy alone — the wire shape is forward-compatible."
+    }
+  },
+  "required": ["motebit_id", "signature"],
+  "additionalProperties": false,
+  "definitions": {
+    "WitnessSolicitationResponse": {
+      "type": "object",
+      "properties": {
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The witnessing peer's motebit identity. The pubkey resolves through the same `resolveMotebitPublicKey` path the cert verifier uses for `cert.witnessed_by[i].motebit_id`."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over the same canonical bytes the issuer signed in `WitnessSolicitationRequest.issuer_signature` (i.e. `canonicalJson(cert_body)` under `cert_body.suite`). The issuer copies this signature verbatim into `cert.witnessed_by[].signature`."
+        },
+        "inclusion_proof": {
+          "type": "object",
+          "properties": {
+            "siblings": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Hex-encoded sibling hashes ordered leaf-to-root. Same shape as credential-anchor-v1 §6 and the `inclusion_proof` field on `cert.witnessed_by[i]`."
+            },
+            "leaf_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "0-based index of the disputant's pubkey in the sorted peer set at horizon_ts."
+            },
+            "layer_sizes": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "description": "Per-layer node counts, used to detect odd-leaf promotion when reconstructing the root."
+            }
+          },
+          "required": ["siblings", "leaf_index", "layer_sizes"],
+          "additionalProperties": false,
+          "description": "Optional Merkle inclusion proof for the peer's federation pubkey against `cert_body.federation_graph_anchor.merkle_root`. Phase 4b-3 verifier policy admits signature-only witnesses; future tightening to mandatory-inclusion-proof lands by changing verifier policy alone — the wire shape is forward-compatible."
+        }
+      },
+      "required": ["motebit_id", "signature"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -218,6 +218,122 @@ export interface HorizonWitness {
   readonly inclusion_proof?: MerkleInclusionProof;
 }
 
+// ── Witness solicitation — federation RPC envelope (phase 4b-3) ──────
+//
+// Operationalizes the `append_only_horizon` co-witness solicitation
+// flow: the issuer relay broadcasts a request to each federation peer
+// holding a witness-eligible position at `horizon_ts`; each peer
+// independently verifies, signs, and returns its `HorizonWitness`. The
+// issuer assembles `witnessed_by[]` from the returned signatures, then
+// produces its final cert signature over the assembled body.
+//
+// Why these are separate from the cert itself:
+//   - The cert is the durable artifact (terminal, signed, audited).
+//   - The request/response pair is the transient RPC envelope. Different
+//     audience (peer-to-peer fan-out vs published cert), different
+//     canonicalization scope (request body excludes `witnessed_by`,
+//     matching `canonicalizeHorizonCertForWitness` in `@motebit/crypto`).
+//
+// The peer's signature is portable — it commits to subject + store_id +
+// horizon_ts + federation_graph_anchor + issued_at + suite, NOT to who
+// else witnesses. The issuer's final cert.signature binds the assembled
+// `witnessed_by[]`; that's where witness-array tampering becomes
+// detectable. See `canonicalizeHorizonCert` vs
+// `canonicalizeHorizonCertForWitness` in `@motebit/crypto/deletion-certificate.ts`.
+
+/**
+ * Cert body the witness canonicalizes and signs. Mirrors the
+ * `append_only_horizon` arm of `DeletionCertificate` minus
+ * `witnessed_by[]` and minus `signature` — exactly the shape
+ * `canonicalizeHorizonCertForWitness` in `@motebit/crypto` derives at
+ * verification time. A peer recomputes `canonicalJson(cert_body)`,
+ * verifies the issuer's `issuer_signature` against it, then signs the
+ * same bytes with its own federation key.
+ */
+export interface HorizonWitnessRequestBody {
+  readonly kind: "append_only_horizon";
+  readonly subject: HorizonSubject;
+  readonly store_id: string;
+  readonly horizon_ts: number;
+  readonly issued_at: number;
+  /**
+   * Mandatory from phase 4b-3 onward when the issuer has any federation
+   * peers at `horizon_ts` — the `EMPTY_FEDERATION_GRAPH_ANCHOR`
+   * sentinel signals self-witnessed deployments. Optional in the type
+   * for grandfathered pre-4b-3 callers.
+   */
+  readonly federation_graph_anchor?: FederationGraphAnchor;
+  readonly suite: SuiteId;
+}
+
+/**
+ * `POST /federation/v1/horizon/witness` request body — issuer asks a
+ * federation peer to co-witness a pending `append_only_horizon` cert.
+ *
+ * Peer-side flow (fail-closed throughout):
+ *   1. Resolve `issuer_id` → issuer's federation Ed25519 public key
+ *      from the local `relay_peers` table; reject if unknown.
+ *   2. Verify `issuer_signature` against `canonicalJson(cert_body)`
+ *      under `cert_body.suite`. The issuer-signature payload is
+ *      byte-equal to what the witness will sign, so verification +
+ *      signing share canonical-bytes derivation.
+ *   3. Sign the same bytes; return a `WitnessSolicitationResponse`
+ *      carrying the peer's `motebit_id`, signature, and (if available)
+ *      a Merkle inclusion proof for its pubkey against
+ *      `cert_body.federation_graph_anchor.merkle_root`.
+ *
+ * Non-goals: the request does NOT carry `witnessed_by[]`. Witnesses
+ * are portable across compositions of the same body; the issuer's
+ * eventual cert.signature is what binds the assembled witness array.
+ */
+export interface WitnessSolicitationRequest {
+  readonly cert_body: HorizonWitnessRequestBody;
+  /**
+   * Issuer's identifier — MUST match the id projected from
+   * `cert_body.subject` (the `motebit_id` for per-motebit horizons,
+   * the `operator_id` for operator-wide horizons). Disagreement is
+   * fail-closed at the peer.
+   */
+  readonly issuer_id: string;
+  /**
+   * Base64url-encoded Ed25519 signature by the issuer's federation key
+   * over `canonicalJson(cert_body)` under `cert_body.suite`. Same
+   * canonical bytes the witness signs — the request authenticates
+   * itself by the issuer's pre-commitment to the body.
+   */
+  readonly issuer_signature: string;
+}
+
+/**
+ * `POST /federation/v1/horizon/witness` response body — the peer's
+ * `HorizonWitness`. Same shape as `cert.witnessed_by[]` entries; the
+ * issuer copies the response verbatim into the assembled cert before
+ * producing its final cert.signature.
+ *
+ * Distinct named type from `HorizonWitness` for RPC-surface clarity:
+ * the response is the on-the-wire envelope between two relays;
+ * `HorizonWitness` is the type as embedded inside a published cert.
+ * Structurally identical — issuer-side code passes the response
+ * directly into `witnessed_by[]` without transformation.
+ */
+export interface WitnessSolicitationResponse {
+  readonly motebit_id: MotebitId;
+  /**
+   * Base64url-encoded Ed25519 signature over the same canonical bytes
+   * the issuer signed in `WitnessSolicitationRequest.issuer_signature`
+   * (i.e. `canonicalJson(cert_body)` under `cert_body.suite`).
+   */
+  readonly signature: string;
+  /**
+   * Optional Merkle inclusion proof for the peer's federation pubkey
+   * against `cert_body.federation_graph_anchor.merkle_root`. Phase
+   * 4b-3 verifier policy admits signature-only witnesses; future
+   * tightening to mandatory-inclusion-proof lands by changing verifier
+   * policy alone — the wire shape is forward-compatible.
+   */
+  readonly inclusion_proof?: MerkleInclusionProof;
+}
+
 // ── Per-arm signature blocks ─────────────────────────────────────────
 
 /** Subject (motebit) signature block. */
